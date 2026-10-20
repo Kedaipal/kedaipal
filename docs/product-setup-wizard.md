@@ -242,31 +242,90 @@ Pure, unit-tested helpers (`product-wizard.test.ts`): `wizardStepIssues`,
 ## Edit = the question-first full form
 
 A stepper is wrong for editing (sellers jump straight to "change Medium's
-price"), so `ProductForm` keeps all sections visible but now mirrors the
-wizard's mental model:
+price"), so `ProductForm` keeps everything on one page — but since
+[`z8r3fdv1z2`](https://app.clickup.com/t/z8r3fdv1z2) only the CORE is open.
+Every optional capability is a collapsed **question row** whose line carries
+its current **answer**.
+
+**Why.** Each capability shipped after the last cleanup (promotion + flash
+extras, event, buyer questions, prep time, pickup note, weekend rate, instant
+book, deposit) landed as one more full-weight card or field, and custom orders
++ mockup approval sat in a dashed "Advanced" box under the price grid. The
+switch that turns a capability on was the third thing inside a card named
+after the feature, so a seller who never read a release note never learned
+the product *could* be a flash sale, an event, or take custom requests. A
+question ("Is it on sale right now?") names the capability in the seller's
+words; the answer ("No" / "Yes · 20% off · ends Fri 6:00 PM") says whether it
+is on without opening anything. **The answer line is the design** — a question
+alone is an FAQ accordion; with its answer it is state.
 
 - **Summary strip first, in words** — "Chocolate fudge brownies — 3 choices by
   Size · Made to order · RM 12–28", live-derived by `describeProduct`
   (`src/lib/product-summary.ts`, unit-tested). Create/skip mode keeps the old
   readiness checklist instead (a create-time concept).
-- **Card order:** Product basics → Photos → **Pricing & choices** → **Order
-  rules** → **Where it appears** (Visibility + Categories — publishing concerns
-  come after what the product *is*; they used to sit above the name).
-  `CategoryPicker` gained an `embedded` prop so it nests in the publishing card
-  without double chrome.
-- **"Order rules" card** (added when staging's min-order rules merged in):
-  minimum order quantity (`86ey9unyx`) + the per-product minimum notice
-  (`minNoticeDays`) live together, because both constrain *how a buyer may
-  order* — neither is about price/choices (what it costs) nor publishing
-  (where it shows). Staging had min-notice floating above the product name
-  (that slot is now the summary strip) and min-quantity tacked onto the
-  pricing card. Since `z8r3fdff97` the card holds four rules in this order:
-  minimum quantity, minimum notice, **prep time** directly under notice (its
-  hours-scale sibling; an amber note says when a notice of a day or more makes
-  it inert), and **pickup note** last (an instruction, not a limit). Both new
-  fields are hidden on a booking listing, and the note degrades to a pointer at
-  Settings → Fulfilment on a store without self-collect. See
-  [`fulfilment-date.md`](./fulfilment-date.md) and [`fulfilment.md`](./fulfilment.md).
+- **Open core cards:** Product basics → Photos → **Pricing & choices** (a
+  booking: **Pricing & capacity** — package length, open-days counting, price,
+  capacity: what DEFINES the stay).
+- **Question groups, by meaning** (`src/components/ui/question-row.tsx`):
+
+  | Group | Physical / food / service / event | Booking |
+  | --- | --- | --- |
+  | **Selling options** — what it is or costs | Is it on sale right now? · Is it a fixed-date event? · Do you take custom requests on it? · Does the buyer approve a mockup first? | Do weekend nights cost more? · Is it on sale right now? · Confirm bookings instantly? · Take a refundable security deposit? |
+  | **At checkout** — how it is ordered | Do buyers answer any questions? · Any rules on how it's ordered? (min qty · notice · prep) · Anything to know when collecting? | How much notice do you need? |
+  | **Publishing** | Where does it show? (visibility + categories) | same |
+
+  A **made-to-order** product is never asked the custom-orders or mockup
+  question: it already IS both, and its price card says so inline.
+- **Answers** are pure derivers in `src/components/forms/product-answers.ts`
+  (one per row, unit-tested), reading the same as-typed drafts the fields edit.
+  Tone: `off` muted, `set` mint, `warn` amber (in use but needs a look — an
+  ended sale, a passed event date, prep made inert by notice, a minimum the
+  stock can't reach). After a refused save a row with a problem inside reads
+  "Needs a fix before you can save" in red (`rowAnswer` in the form).
+  Answers wrap to **two lines** rather than truncating, because a row's
+  warning comes last ("· prep has no effect while notice is on") — exactly
+  where a one-line cut would hide it on a phone.
+- **An answer never claims more than the save or the storefront will do**
+  (found in the `/test-code` pass, 16 Oct): a sale price at or above the normal
+  price is not counted as a discount ("1 sale price needs fixing") — and,
+  like the save (`buildSubmitVariants`, `if (row.active)`), only lines that
+  are ON SALE are counted or policed, so a stale price on an off-sale line
+  neither turns the row red nor reads as a discount (PR #384 review); "Where does
+  it show?" says **Off your storefront** for a past event or a product whose
+  every category is hidden, whatever the visibility switch says; switching
+  custom orders off and on again restores the seller's line (name, price,
+  prompt, photo) instead of a blank one, the way the event and promotion rows
+  keep their drafts.
+- **Rules the row owns:** collapsed by default **on every visit, even when on**
+  (Zaki, 16 Oct — the answer already says what is on, and a page that changes
+  shape per product is harder to learn); rows open independently; the switch
+  lives INSIDE the panel, never on the header (one tap must not end a live
+  sale whose terms you can't see); a Pro-gated row wears the Pro pill on its
+  header (a `badge` slot, so the `ui/` primitive imports no app component); the panel stays **mounted while closed** (`hidden`) so a half-typed
+  draft survives a collapse.
+- **"Take me to the error" opens the row.** `focusFirstInvalidField` checks
+  whether the first invalid field sits inside a closed `[data-disclosure-panel]`;
+  if so it dispatches `REVEAL_EVENT` on it and reports "not yet", and the
+  submit path's existing timer retry focuses the field once it renders. One
+  generic hook, so any future row inherits it.
+- **Deep links** (`?spot=promo|prep_time|weekend_rate`) scroll to the ROW,
+  ring it and open it (`defaultOpen`), so the seller lands on the field.
+- **Custom orders + mockup approval moved out of Advanced** in the full form:
+  `VariantEditor` takes `capabilitiesOutside`, which drops both (and the
+  per-choice mockup checkbox) from Advanced; the form renders them as rows via
+  the extracted `CustomLineFields` and `MockupApprovalFields`. Mockup approval
+  is **tri-state** (all / none / some, `aria-checked="mixed"`) with the
+  per-choice list it summarises right under it, so the flag has one home. The
+  wizard leaves `capabilitiesOutside` off and keeps both in Advanced — same
+  `VariantEditorState`, two skins, the parity invariant above.
+- **Pickup note is its own row**, not folded into the order rules (Zaki, 16
+  Oct): it is an instruction, not a limit, and its disabled-with-reason state
+  ("Needs self-collect on · Settings → Fulfilment") needs its own line.
+- The order-rules contents are unchanged from `z8r3fdff97`: minimum quantity,
+  minimum notice, **prep time** under notice (an amber note when a notice of a
+  day or more makes it inert); on an event the two timing rules are replaced by
+  one sentence. See [`fulfilment-date.md`](./fulfilment-date.md) and
+  [`fulfilment.md`](./fulfilment.md).
 - Photos moved to a shared `ProductImagesField`
   (`src/components/forms/product-images-field.tsx`), used by both the form and
   the wizard. Both it and the variant editor render through staging's shared
@@ -420,6 +479,10 @@ surface:
 - `src/lib/product-summary.ts` (+ `.test.ts`) — summary strip derivation
 - `src/routes/app.products.new.tsx` (+ `.test.ts`) — wizard route, `?form=full`, `?card=`
 - `src/components/forms/product-wizard-card-link.test.tsx` — the `?card=` arrival, rendered
+- `src/components/ui/question-row.tsx` (+ `.test.tsx`) — `QuestionGroup` / `QuestionRow`, the collapsed question + answer primitive (z8r3fdv1z2)
+- `src/components/forms/product-answers.ts` (+ `.test.ts`) — every row's answer line
+- `src/components/forms/product-form-questions.test.tsx` — which rows each kind gets, tri-state mockup, custom line as a row, refused save opens its row
+- `src/components/forms/focus-error.ts` — opens a collapsed row holding the first error
 
 ## Follow-ups (named, not hidden)
 
@@ -427,3 +490,9 @@ surface:
   the draft today).
 - A step-2 third card ("Fully custom — buyer describes what they want") if
   custom-cake sellers turn out to need the custom line on day one.
+- The wizard's Review "More options" and Settings' two home-grown expandable
+  rows (`message-templates-form`, `order-flows-card`) could converge on
+  `QuestionRow` — separate tickets, not part of `z8r3fdv1z2`.
+- Older What's-new entries in `src/content/releases.ts` still say "the
+  Promotion card"; they are dated release records and were left as written.
+  The next release's note should describe the question rows.

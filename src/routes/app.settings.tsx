@@ -90,6 +90,7 @@ import {
 	SettingsSection,
 } from "../components/settings/settings-primitives";
 import { StoreStatusCard } from "../components/settings/store-status-card";
+import { StorefrontChatCard } from "../components/settings/storefront-chat-card";
 import { TeamTab } from "../components/settings/team-tab";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -522,6 +523,10 @@ function SettingsRoute() {
 		[renameSlugMutation, actAsRetailerId],
 	);
 	const updateSettings = useUpdateSettings();
+	// The store page's "Ask on WhatsApp" switch (z8r3fdvwcy) — its own
+	// verb-shaped mutation, owner-only on the server; the card disables with
+	// the reason for a teammate or an acting admin.
+	const setStorefrontChat = useMutation(api.retailers.setStorefrontChat);
 	// A teammate can't change the account-level alert channels (owner-only on
 	// the server) — the alerts card disables those rows with the reason.
 	const storePerm = usePermission("store_settings");
@@ -869,6 +874,21 @@ function SettingsRoute() {
 														onSave={(patch) => updateSettings(patch)}
 													/>
 												</Card>
+												{/* Beside the listing: both are "what the public sees
+										    of my store" switches, and the island card on the
+										    store home is where this one shows (z8r3fdvwcy). */}
+												<Card id="settings-storefront-chat">
+													<StorefrontChatCard
+														enabled={retailer.storefrontChatEnabled !== false}
+														hasWaPhone={!!retailer.waPhone}
+														onChange={(enabled) =>
+															setStorefrontChat({
+																retailerId: retailer._id,
+																enabled,
+															})
+														}
+													/>
+												</Card>
 											</SettingsSection>
 											<SettingsSection label="Brand">
 												<Card>
@@ -983,15 +1003,14 @@ function SettingsRoute() {
 														whatsapp={
 															retailer.waOrderAlertsAvailable
 																? {
-																		enabled: retailer.orderWaAlerts === true,
+																		// Absent = on (z8r3fdv55f).
+																		switchedOn:
+																			retailer.orderWaAlerts !== false,
 																		currentPhone: retailer.notifyWaPhone ?? "",
 																		fallbackPhone: retailer.waPhone ?? "",
 																		optedOut:
 																			retailer.notifyWaPhoneOptedOut === true,
-																		canUse: hasFeature(
-																			retailer.subscription,
-																			"waOrderAlerts",
-																		),
+																		covered: retailer.waAlertsCovered === true,
 																	}
 																: undefined
 														}

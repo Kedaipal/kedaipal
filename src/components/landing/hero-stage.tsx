@@ -388,7 +388,20 @@ function OrderRow({
 	);
 }
 
-function AfterPhone({ beat, still }: { beat: number; still: boolean }) {
+/**
+ * The Kedaipal half of the stage: the orders inbox on a phone. Exported for
+ * the seller-flow walkthrough (phase 01), which passes its own beat and
+ * drops the label — the frame there already says which side this is.
+ */
+export function AfterPhone({
+	beat,
+	still,
+	showLabel = true,
+}: {
+	beat: number;
+	still: boolean;
+	showLabel?: boolean;
+}) {
 	const stage = still
 		? STATUS.length
 		: Math.min(Math.max(beat, 0), STATUS.length);
@@ -405,7 +418,9 @@ function AfterPhone({ beat, still }: { beat: number; still: boolean }) {
 		// toast above the tab bar is always inside the frame; on desktop it is a
 		// whole phone at a fixed height beside the chat list.
 		<div className="flex min-h-0 flex-1 flex-col items-center gap-[1em] md:flex-none">
-			<StageLabel tone="after">{m.hero_after_label()}</StageLabel>
+			{showLabel ? (
+				<StageLabel tone="after">{m.hero_after_label()}</StageLabel>
+			) : null}
 			{/* Device shell — the same body the old hero phone wore, scaled in em. */}
 			<div className="relative flex min-h-0 w-[19em] flex-1 flex-col rounded-t-[2.6em] bg-slate-950 p-[0.55em] pb-0 shadow-[0_44px_80px_-24px_hsl(222_47%_11%_/_0.5)] ring-1 ring-white/15 md:flex-none md:rounded-[2.6em] md:pb-[0.55em]">
 				<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[2.1em] bg-slate-50 text-left text-slate-800 md:h-[36em] md:flex-none md:rounded-[2.1em]">

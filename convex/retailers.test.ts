@@ -11,7 +11,7 @@ import {
 	vi,
 } from "vitest";
 import { api, internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { AUP_VERSION, PRIVACY_VERSION, TERMS_VERSION } from "./lib/legal";
 import { STORE_DESCRIPTION_MAX } from "./lib/storeProfile";
 import schema from "./schema";
@@ -2039,31 +2039,26 @@ describe("seller WhatsApp order alerts config (86eyhw9zy)", () => {
 		).rejects.toThrow(/Kedaipal's own WhatsApp number/i);
 	});
 
-	test("enabling requires a number (same call or already saved)", async () => {
+	test("the switch is ON by default, needs no number, and is never written for the seller (z8r3fdv55f)", async () => {
 		const t = setup();
-		const asUser = await seed(t, USER_A, "wa-alerts-no-phone");
-		await expect(
-			asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: true }),
-		).rejects.toThrow(/number/i);
-		// Number in the same call is enough (covered by the happy-path test);
-		// number saved earlier is too.
-		await asUser.mutation(api.retailers.updateSettings, {
-			notifyWaPhone: "0198765432",
-		});
+		const asUser = await seed(t, USER_A, "wa-alerts-default");
+		// A brand-new store has never touched the switch — absent reads as on.
+		let retailer = await asUser.query(api.retailers.getMyRetailer);
+		expect(retailer?.orderWaAlerts).toBeUndefined();
+		// Switching off and back on works with no number saved: the number is
+		// what makes an alert SEND, not what makes the switch legal.
+		await asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: false });
 		await asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: true });
-		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		retailer = await asUser.query(api.retailers.getMyRetailer);
 		expect(retailer?.orderWaAlerts).toBe(true);
+		expect(retailer?.notifyWaPhone).toBeUndefined();
 	});
 
-	test("Starter can't enable (Pro gate) but can always disable", async () => {
+	test("every plan can switch it on — Starter included — and off", async () => {
 		const t = setup();
 		const asUser = await seed(t, USER_A, "wa-alerts-starter");
 		const retailer = await asUser.query(api.retailers.getMyRetailer);
 		if (!retailer) throw new Error("seed failed");
-		// Saving the number alone is un-gated (it's inert without the toggle).
-		await asUser.mutation(api.retailers.updateSettings, {
-			notifyWaPhone: "0198765432",
-		});
 		await t.run(async (ctx) => {
 			const sub = await ctx.db
 				.query("subscriptions")
@@ -2071,22 +2066,21 @@ describe("seller WhatsApp order alerts config (86eyhw9zy)", () => {
 				.first();
 			if (!sub) throw new Error("no subscription row");
 			await ctx.db.patch(sub._id, { plan: "starter", status: "active" });
-		});
-		await expect(
-			asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: true }),
-		).rejects.toThrow(/Pro plan/i);
-		// A downgraded seller with the toggle already on can still turn it off.
-		await t.run(async (ctx) => {
-			await ctx.db.patch(retailer._id, { orderWaAlerts: true });
+			await ctx.db.patch(retailer._id, { orderWaAlerts: false });
 		});
 		await asUser.mutation(api.retailers.updateSettings, {
-			orderWaAlerts: false,
+			notifyWaPhone: "0198765432",
+			orderWaAlerts: true,
 		});
-		const after = await asUser.query(api.retailers.getMyRetailer);
+		let after = await asUser.query(api.retailers.getMyRetailer);
+		expect(after?.orderWaAlerts).toBe(true);
+		expect(after?.waAlertsCovered).toBe(true);
+		await asUser.mutation(api.retailers.updateSettings, { orderWaAlerts: false });
+		after = await asUser.query(api.retailers.getMyRetailer);
 		expect(after?.orderWaAlerts).toBe(false);
 	});
 
-	test("clearing the number switches the alerts off with it", async () => {
+	test("clearing the number leaves the switch alone — saving a number again resumes WhatsApp", async () => {
 		const t = setup();
 		const asUser = await seed(t, USER_A, "wa-alerts-clear");
 		await asUser.mutation(api.retailers.updateSettings, {
@@ -2096,7 +2090,37 @@ describe("seller WhatsApp order alerts config (86eyhw9zy)", () => {
 		await asUser.mutation(api.retailers.updateSettings, { notifyWaPhone: "" });
 		const retailer = await asUser.query(api.retailers.getMyRetailer);
 		expect(retailer?.notifyWaPhone).toBeUndefined();
-		expect(retailer?.orderWaAlerts).toBe(false);
+		expect(retailer?.orderWaAlerts).toBe(true);
+	});
+
+	test("waAlertsCovered follows the subscription: trial + active yes, locked / held / cancelled no, comped yes", async () => {
+		const t = setup();
+		const asUser = await seed(t, USER_A, "wa-alerts-covered");
+		const retailer = await asUser.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		const setSub = (patch: Partial<Doc<"subscriptions">>) =>
+			t.run(async (ctx) => {
+				const sub = await ctx.db
+					.query("subscriptions")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+					.first();
+				if (!sub) throw new Error("no subscription row");
+				await ctx.db.patch(sub._id, patch);
+			});
+		const covered = async () =>
+			(await asUser.query(api.retailers.getMyRetailer))?.waAlertsCovered;
+		await setSub({ status: "trialing" });
+		expect(await covered()).toBe(true);
+		await setSub({ status: "active" });
+		expect(await covered()).toBe(true);
+		await setSub({ status: "past_due" });
+		expect(await covered()).toBe(false);
+		await setSub({ status: "on_hold" });
+		expect(await covered()).toBe(false);
+		await setSub({ status: "cancelled" });
+		expect(await covered()).toBe(false);
+		await setSub({ status: "past_due", comped: true });
+		expect(await covered()).toBe(true);
 	});
 
 	test("a STOP'd alert number is surfaced on the payload (and cleared by START)", async () => {
@@ -2701,7 +2725,7 @@ describe("country switch carries no wrong-country WhatsApp numbers (SG-lite inva
 		expect(mine?.waPhone).toBe("6591234567");
 	});
 
-	test("a stored notifyWaPhone is kept and listed; clearing it in-call still auto-disables alerts", async () => {
+	test("a stored notifyWaPhone is kept and listed; clearing it in-call leaves the switch untouched", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "switch-stale-notify");
 		await asA.mutation(api.retailers.updateSettings, {
@@ -2720,7 +2744,8 @@ describe("country switch carries no wrong-country WhatsApp numbers (SG-lite inva
 		const mine = await asA.query(api.retailers.getMyRetailer);
 		expect(mine?.country).toBe("SG");
 		expect(mine?.notifyWaPhone).toBeUndefined();
-		expect(mine?.orderWaAlerts).toBeFalsy();
+		// Never switched → still the default (on); with no number nothing sends.
+		expect(mine?.orderWaAlerts).toBeUndefined();
 	});
 
 	test("symmetric — SG→MY keeps a stored SG number and lists it too", async () => {
@@ -3577,4 +3602,104 @@ describe("rider options save without touching the arm switch (86eye9xd4)", () =>
 			expect(booking?.hasCredentials).toBe(true);
 		});
 	}
+});
+
+describe("storefront chat action (z8r3fdvwcy)", () => {
+	// The "Ask on WhatsApp" button on the store home is ON by default: the
+	// stamp is an opt-OUT, like the marketplace listing, so absent reads as on
+	// and nothing needs a backfill.
+	test("both reads say the chat action is on until the owner turns it off", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "chat-on");
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.storefrontChatEnabled).toBe(true);
+		const pub = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "chat-on",
+		});
+		expect(pub.status).toBe("ok");
+		if (pub.status !== "ok") return;
+		expect(pub.retailer.storefrontChatEnabled).toBe(true);
+
+		await asA.mutation(api.retailers.setStorefrontChat, {
+			retailerId: mine?._id as Id<"retailers">,
+			enabled: false,
+		});
+		expect(
+			(await asA.query(api.retailers.getMyRetailer))?.storefrontChatEnabled,
+		).toBe(false);
+		const off = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "chat-on",
+		});
+		if (off.status !== "ok") throw new Error("expected ok");
+		expect(off.retailer.storefrontChatEnabled).toBe(false);
+
+		await asA.mutation(api.retailers.setStorefrontChat, {
+			retailerId: mine?._id as Id<"retailers">,
+			enabled: true,
+		});
+		expect(
+			(await asA.query(api.retailers.getMyRetailer))?.storefrontChatEnabled,
+		).toBe(true);
+	});
+
+	test("turning it off twice keeps the first 'since when' stamp", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "chat-stamp");
+		const retailerId = (await asA.query(api.retailers.getMyRetailer))
+			?._id as Id<"retailers">;
+		await asA.mutation(api.retailers.setStorefrontChat, {
+			retailerId,
+			enabled: false,
+		});
+		const first = await t.run(
+			async (ctx) => (await ctx.db.get(retailerId))?.storefrontChatDisabledAt,
+		);
+		expect(typeof first).toBe("number");
+		await asA.mutation(api.retailers.setStorefrontChat, {
+			retailerId,
+			enabled: false,
+		});
+		const second = await t.run(
+			async (ctx) => (await ctx.db.get(retailerId))?.storefrontChatDisabledAt,
+		);
+		expect(second).toBe(first);
+	});
+
+	test("owner-only: a teammate with store_settings write is refused in the gate's words, a stranger is forbidden", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "chat-owner-only");
+		const retailerId = (await asA.query(api.retailers.getMyRetailer))
+			?._id as Id<"retailers">;
+		const helper = { subject: "user_helper_chat", email: "helper@example.com" };
+		const { memberId } = await asA.mutation(api.team.invite, {
+			retailerId,
+			email: helper.email,
+			permissions: { store_settings: "write" },
+		});
+		await t
+			.withIdentity(helper)
+			.mutation(api.team.acceptPendingInvite, { memberId });
+		await expect(
+			t
+				.withIdentity(helper)
+				.mutation(api.retailers.setStorefrontChat, {
+					retailerId,
+					enabled: false,
+				}),
+		).rejects.toThrow(/Only the store owner/);
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.mutation(api.retailers.setStorefrontChat, {
+					retailerId,
+					enabled: false,
+				}),
+		).rejects.toThrow(/Forbidden/);
+		// The refusals changed nothing.
+		const pub = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "chat-owner-only",
+		});
+		if (pub.status !== "ok") throw new Error("expected ok");
+		expect(pub.retailer.storefrontChatEnabled).toBe(true);
+	});
 });

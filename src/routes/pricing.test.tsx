@@ -227,7 +227,7 @@ describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
 			screen.getAllByRole("link", { name: /Start free — pay when you sell/ }),
 		).toHaveLength(3); // two cards + the closing CTA
 		const talk = within(enterpriseCard()).getByRole("link", {
-			name: /Talk to Arif/,
+			name: /Get an Enterprise quote/,
 		});
 		const href = decodeURIComponent(talk.getAttribute("href") ?? "");
 		expect(href).toContain("wa.me/60123456789");
@@ -237,6 +237,15 @@ describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
 		// The only "Coming soon" left is on unbuilt table rows.
 		for (const badge of screen.queryAllByText("Coming soon")) {
 			expect(badge.closest("tr")).not.toBeNull();
+		}
+	});
+
+	it("signed out, no tier card carries the mint pill — the demo is the page's one accent ask", () => {
+		renderPage();
+		for (const link of screen.getAllByRole("link", {
+			name: /Start free — pay when you sell/,
+		})) {
+			expect(link.className).not.toContain("bg-accent");
 		}
 	});
 
@@ -271,7 +280,9 @@ describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
 		).toBe("/app/settings?tab=billing");
 		expect(screen.queryByRole("link", { name: /Upgrade/ })).toBeNull();
 		expect(
-			within(enterpriseCard()).getByRole("link", { name: /Talk to Arif/ }),
+			within(enterpriseCard()).getByRole("link", {
+				name: /Get an Enterprise quote/,
+			}),
 		).toBeTruthy();
 	});
 
@@ -281,7 +292,9 @@ describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
 		renderPage();
 		expect(screen.getAllByRole("link", { name: /^Subscribe/ })).toHaveLength(2);
 		expect(
-			within(enterpriseCard()).getByRole("link", { name: /Talk to Arif/ }),
+			within(enterpriseCard()).getByRole("link", {
+				name: /Get an Enterprise quote/,
+			}),
 		).toBeTruthy();
 	});
 
@@ -292,9 +305,9 @@ describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
 		expect(within(enterpriseCard()).getByText("Current plan")).toBeTruthy();
 		// A contract changes by talking to us — never a self-serve door the
 		// server would refuse.
-		expect(screen.getAllByRole("link", { name: /Talk to Arif/ })).toHaveLength(
-			2,
-		);
+		expect(
+			screen.getAllByRole("link", { name: /Get an Enterprise quote/ }),
+		).toHaveLength(2);
 		expect(
 			screen.queryByRole("link", { name: /^Subscribe|Upgrade|Manage plan/ }),
 		).toBeNull();
@@ -309,7 +322,9 @@ describe("/pricing — Enterprise is a conversation (T6, z8r3fdkp8h)", () => {
 		state.auth = { isLoaded: true, isSignedIn: true };
 		state.plan = { plan: "pro", status: "active", comped: true };
 		renderPage();
-		expect(screen.queryByRole("link", { name: /Talk to Arif/ })).toBeNull();
+		expect(
+			screen.queryByRole("link", { name: /Get an Enterprise quote/ }),
+		).toBeNull();
 		expect(
 			within(enterpriseCard()).queryByText(/Talk to Arif|Current plan/),
 		).toBeNull();

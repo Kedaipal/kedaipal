@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 /**
  * A looping "beat" counter for the landing's acted-out mocks (payment
@@ -13,7 +13,23 @@ import { useEffect, useState } from "react";
  *   of setting identical state (which would never re-run the effect and would
  *   kill the loop permanently).
  */
-export function useBeatLoop(active: boolean, beats: readonly number[]): number {
+export interface Timeline {
+	/** The current step index into `holds`. */
+	beat: number;
+	/** Jump to a step (clamped); the clock re-arms from that step's hold. */
+	goTo: (beat: number) => void;
+}
+
+/**
+ * The clock under `useBeatLoop`, with a way to jump: the seller-flow
+ * walkthrough lets a reader click a step, so its timeline must be seekable.
+ * Same two guards as the loop (inactive = frozen; hidden tab = frozen, wakes
+ * when the tab returns).
+ */
+export function useTimeline(
+	active: boolean,
+	holds: readonly number[],
+): Timeline {
 	const [beat, setBeat] = useState(0);
 
 	useEffect(() => {
@@ -24,18 +40,28 @@ export function useBeatLoop(active: boolean, beats: readonly number[]): number {
 			id = setTimeout(() => {
 				if (cancelled) return;
 				if (document.visibilityState === "visible") {
-					setBeat((b) => (b + 1) % beats.length);
+					setBeat((b) => (b + 1) % holds.length);
 				} else {
 					arm(1000);
 				}
 			}, delay);
 		};
-		arm(beats[beat] ?? 1000);
+		arm(holds[beat] ?? 1000);
 		return () => {
 			cancelled = true;
 			clearTimeout(id);
 		};
-	}, [active, beat, beats]);
+	}, [active, beat, holds]);
 
-	return beat;
+	const goTo = useCallback(
+		(next: number) =>
+			setBeat(Math.max(0, Math.min(next, Math.max(holds.length - 1, 0)))),
+		[holds.length],
+	);
+
+	return { beat, goTo };
+}
+
+export function useBeatLoop(active: boolean, beats: readonly number[]): number {
+	return useTimeline(active, beats).beat;
 }

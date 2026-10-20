@@ -4,7 +4,7 @@ import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { Clock, MessageCircle } from "lucide-react";
 import { useCallback, useState } from "react";
 import { api } from "../../convex/_generated/api";
-import { claimVoucherDiscount } from "../../convex/lib/voucherRedemption";
+import { claimVoucherDiscount } from "../../convex/lib/vouchers";
 import type { ClaimPagePayload } from "../../convex/orderClaims";
 import { ClaimCheckoutPage } from "../components/claim/claim-checkout-page";
 import { ClaimTimerBar } from "../components/claim/claim-timer-bar";

@@ -7,6 +7,7 @@ import type { PublicShowcase } from "../../convex/showcases";
 import {
 	dateRange,
 	joinShowcaseMembers,
+	matchShowcases,
 	PILE_FAN_MAX,
 	resolveShowcaseFocus,
 	SHOWCASE_THEME_CLASS,
@@ -18,6 +19,7 @@ import {
 	showcaseThemeClass,
 	showcaseTimeFacts,
 	splitStage,
+	storeSearchPlaceholder,
 } from "./showcase";
 
 /** Sat 17 Oct 2026 12:00 MYT. */
@@ -251,5 +253,124 @@ describe("resolveShowcaseFocus — a booth link opens its showcase whatever the 
 			overridden: false,
 			missing: false,
 		});
+	});
+});
+
+describe("matchShowcases — a refined /stores keeps each store inside its showcase", () => {
+	const bearcamp = card("bearcamp", { storeName: "Bearcamp Tent Wash" });
+	const kopi = card("kopi", { storeName: "Kopi Hutan", offersDelivery: false });
+	const rimba = card("rimba", { storeName: "Rimba Gear" });
+	const campfest = {
+		showcase: showcase({ slug: "campfest-2026" }),
+		tickets: [
+			{ card: bearcamp, label: "Booth A12" },
+			{ card: kopi, label: "Booth B4" },
+			{ card: rimba },
+		],
+	};
+	const bazaar = {
+		showcase: showcase({ slug: "raya-bazaar", title: "Raya Bazaar" }),
+		tickets: [{ card: kopi, label: "Lot 7" }, { card: rimba }],
+	};
+	const all = { chip: "all" as const, now: NOW };
+
+	test("a name search keeps only the matching tickets, and counts the whole showcase", () => {
+		const { matches, slugs } = matchShowcases([campfest], {
+			...all,
+			search: "bearcamp",
+		});
+		expect(matches).toHaveLength(1);
+		expect(matches[0].tickets.map((t) => t.card.slug)).toEqual(["bearcamp"]);
+		expect(matches[0].total).toBe(3);
+		expect([...slugs]).toEqual(["bearcamp"]);
+	});
+
+	test("a showcase with no matching store is not shown at all", () => {
+		const { matches } = matchShowcases([campfest, bazaar], {
+			...all,
+			search: "bearcamp",
+		});
+		expect(matches.map((m) => m.showcase.slug)).toEqual(["campfest-2026"]);
+	});
+
+	test("the booth label is searchable — only the ticket prints it", () => {
+		const { matches, slugs } = matchShowcases([campfest, bazaar], {
+			...all,
+			search: "a12",
+		});
+		expect(matches.map((m) => m.showcase.slug)).toEqual(["campfest-2026"]);
+		expect([...slugs]).toEqual(["bearcamp"]);
+	});
+
+	test("a store in two showcases matches in BOTH — each ticket carries its own booth", () => {
+		const { matches, slugs } = matchShowcases([campfest, bazaar], {
+			...all,
+			search: "kopi",
+		});
+		expect(matches.map((m) => [m.showcase.slug, m.tickets[0].label])).toEqual([
+			["campfest-2026", "Booth B4"],
+			["raya-bazaar", "Lot 7"],
+		]);
+		expect([...slugs]).toEqual(["kopi"]);
+	});
+
+	test("a chip applies inside showcases exactly as it does to the plain list", () => {
+		const { matches } = matchShowcases([campfest, bazaar], {
+			chip: "delivers",
+			search: "",
+			now: NOW,
+		});
+		expect(matches.map((m) => m.tickets.map((t) => t.card.slug))).toEqual([
+			["bearcamp", "rimba"],
+			["rimba"],
+		]);
+	});
+
+	test("the focused showcase leads; the rest keep admin order", () => {
+		const { matches } = matchShowcases(
+			[campfest, bazaar],
+			{ ...all, search: "rimba" },
+			"raya-bazaar",
+		);
+		expect(matches.map((m) => m.showcase.slug)).toEqual([
+			"raya-bazaar",
+			"campfest-2026",
+		]);
+	});
+
+	test("nothing matches anywhere: no showcases, nothing for the plain list to leave out", () => {
+		const { matches, slugs } = matchShowcases([campfest, bazaar], {
+			...all,
+			search: "durian",
+		});
+		expect(matches).toEqual([]);
+		expect(slugs.size).toBe(0);
+	});
+});
+
+describe("storeSearchPlaceholder — the box only offers booths when one is searchable", () => {
+	test("a live showcase with a booth label: say booths are searchable", () => {
+		expect(
+			storeSearchPlaceholder([
+				{
+					tickets: [
+						{ card: card("a") },
+						{ card: card("b"), label: "Stall 12" },
+					],
+				},
+			]),
+		).toEqual({
+			full: "Search stores or booths…",
+			compact: "Stores or booths…",
+		});
+	});
+	test("no showcase, or none with a label (blank counts as none): stores only", () => {
+		const storesOnly = { full: "Search stores…", compact: "Search stores…" };
+		expect(storeSearchPlaceholder([])).toEqual(storesOnly);
+		expect(
+			storeSearchPlaceholder([
+				{ tickets: [{ card: card("a") }, { card: card("b"), label: "  " }] },
+			]),
+		).toEqual(storesOnly);
 	});
 });

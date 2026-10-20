@@ -85,10 +85,12 @@ export default defineSchema({
 		// the normalized inbound form ("60…"/"65…", via
 		// assertValidMobileForCountry). Unset ⇒ no WhatsApp alerts.
 		notifyWaPhone: v.optional(v.string()),
-		// Opt-in switch for the seller WhatsApp order alerts (new order +
-		// payment claim, sent as Meta utility templates to notifyWaPhone).
-		// Off/unset by default — each alert is a billable Meta send. Enabling is
-		// Pro-gated (PLAN_FEATURES.waOrderAlerts); disabling is always allowed.
+		// The seller's switch for WhatsApp order alerts (new order + payment
+		// claim + payment received, Meta utility templates to notifyWaPhone).
+		// TRI-STATE (z8r3fdv55f): unset = ON (the default, every plan), only an
+		// explicit `false` (the seller switched it off) = off. Whether an alert
+		// actually sends also needs a number and a subscription that covers it
+		// (`subscriptionCoversWaAlerts`), both checked at send time.
 		orderWaAlerts: v.optional(v.boolean()),
 		// Convex storage ID for the store's logo. Public — surfaced on the
 		// storefront header, dashboard hero, and as the OG image fallback.
@@ -814,6 +816,12 @@ export default defineSchema({
 		// (orderingPausedAt): "since when" costs nothing and answers support
 		// questions a flag cannot.
 		marketplaceUnlistedAt: v.optional(v.number()),
+		// Storefront chat opt-OUT (z8r3fdvwcy). The store home carries an "Ask
+		// on WhatsApp" action — a buyer-initiated wa.me link to `waPhone` — on by
+		// default; this stamp is the owner saying "not on my store page". Same
+		// shape as the listing stamp above: absent = on, no backfill, "since
+		// when" for free. Set/cleared by `retailers.setStorefrontChat`.
+		storefrontChatDisabledAt: v.optional(v.number()),
 		// Marketplace "Store highlights" sponsorship window (z8r3fdkmyp): the
 		// store rides the labelled sponsored rail on /stores while this epoch-ms
 		// is in the future. ADMIN-set only (admin.setMarketplaceSponsorship,
