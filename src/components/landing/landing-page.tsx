@@ -1,26 +1,26 @@
 import type { ReferralInvite } from "../../../convex/referrals";
 import { LandingRegionProvider } from "../../hooks/useLandingRegion";
 import { useMarketingLanding } from "../../hooks/useMarketingLanding";
-import { Delivery } from "./delivery";
 import { Faq } from "./faq";
 import { FinalCta } from "./final-cta";
+import { FitCheck } from "./fit-check";
 import { Footer } from "./footer";
 import { Hero } from "./hero";
 import { Nav } from "./nav";
-import { PaymentHandshake } from "./payment-handshake";
 import { PaymentMethods } from "./payment-methods";
 import { PricingTeaser } from "./pricing-teaser";
-import { RealSellers } from "./real-sellers";
+import { SellerFlow } from "./seller-flow";
 import { VideoDemo } from "./video-demo";
+import { WaDock } from "./wa-dock";
 
 /**
- * Eight sections (landing v2, z8r3fdegej — design approved 12 Sep 2026):
- * the promise, the product moving, the proof, then the three things the
- * target tier is sold on (payment handshake, courier booking, payment rails),
- * then the price, the objections, the close. The problem strip, how-it-works
- * timeline, features bento and money-math block were cut: fourteen sections
- * was too long for a seller who already knows the pain, and the video says
- * "how it works" better than the timeline did.
+ * Landing v2 (z8r3fdegej, 12 Sep 2026) trimmed fourteen sections to eight:
+ * the promise, the product moving, the proof, the three things the target
+ * tier is sold on, the price, the objections, the close. The 19 Oct 2026
+ * showcase pass (z8r3fdtpub) folded the Payment Handshake and Delivery
+ * sections into ONE seller-flow walkthrough — the order landing, paid,
+ * shipped, on the real UI — because the page's ask is a demo and its job is
+ * to show the product moving, not to describe it. See docs/landing-v2.md.
  *
  * One component, two routes: `/` and a referral link's `/referral/<slug>`
  * (z8r3fdetf5), which is this same page with the referrer's invite at the top
@@ -46,14 +46,14 @@ export function LandingPage({
 				<Nav />
 				<Hero invite={invite} />
 				<VideoDemo />
-				<RealSellers />
-				<PaymentHandshake />
-				<Delivery />
+				<SellerFlow />
 				<PaymentMethods />
+				<FitCheck />
 				<PricingTeaser />
 				<Faq />
 				<FinalCta />
 				<Footer />
+				<WaDock />
 			</main>
 		</LandingRegionProvider>
 	);

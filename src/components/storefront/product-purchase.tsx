@@ -19,9 +19,10 @@ import { formatEventMoment } from "../../../convex/lib/productEvent";
 import type { UseCart } from "../../hooks/useCart";
 import { usePromoClock } from "../../hooks/usePromoClock";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
+import { IMAGE_ACCEPT } from "../../lib/image-upload";
 import { effectivePriceFrom, effectiveVariantPrice } from "../../lib/promo";
 import { shareLink } from "../../lib/share";
+import { uploadImage } from "../../lib/storage-upload";
 import { cn } from "../../lib/utils";
 import {
 	availableValuesPerAxis,
@@ -191,25 +192,17 @@ export function useProductPurchase({
 		setImageError(null);
 		setUploadingImage(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				setImageError(prepared.message);
+			const upload = await uploadImage(file, () =>
+				generateCustomImageUploadUrl({ retailerId }),
+			);
+			if (!upload.ok) {
+				setImageError(upload.message);
 				return;
 			}
-			const url = await generateCustomImageUploadUrl({ retailerId });
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const body = (await res.json()) as { storageId?: unknown };
-			if (typeof body.storageId !== "string")
-				throw new Error("Upload failed: unexpected response");
 			if (blobRef.current) URL.revokeObjectURL(blobRef.current);
-			const preview = URL.createObjectURL(prepared.blob);
+			const preview = URL.createObjectURL(upload.blob);
 			blobRef.current = preview;
-			setCustomImage({ storageId: body.storageId, preview });
+			setCustomImage({ storageId: upload.storageId, preview });
 		} catch (err) {
 			setImageError(convexErrorMessage(err));
 		} finally {

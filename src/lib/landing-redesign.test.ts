@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	INVOICE_DUE_GRACE_DAYS,
@@ -203,6 +204,74 @@ const REMOVED_LANDING_V2_KEYS = [
 	"pricing_feat_radius",
 	// The hero trust line's render site (TrustLine) went with the old hero.
 	"hero_trust",
+	// The Payment Handshake and Delivery SECTIONS folded into the seller-flow
+	// walkthrough (19 Oct 2026, z8r3fdtpub T3): their mocks moved, their copy
+	// columns did not — the walkthrough's `flow_*` step text carries the claim.
+	"handshake_label",
+	"handshake_heading",
+	"handshake_body_1",
+	"handshake_body_strong",
+	"handshake_body_2",
+	"handshake_point_1",
+	"handshake_point_2",
+	"handshake_point_3",
+	"handshake_note",
+	"delivery_label",
+	"delivery_heading",
+	"delivery_heading_rider",
+	"delivery_sub",
+	"delivery_sub_rider",
+	"delivery_point_1",
+	"delivery_point_1_rider",
+	"delivery_point_2",
+	"delivery_point_3",
+	"delivery_cold_note",
+	"nav_delivery",
+	// /pricing's bottom trial button became the shared StartFreeLink (final_cta).
+	"pricingpage_cta_trial_btn",
+	// The dock's per-section question chips (docket.io décor) were cut on
+	// sight: the dock is one pill.
+	"dock_chip_fit",
+	"dock_chip_store",
+	"dock_chip_plan",
+	// The Real sellers section (five anonymised kind cards) was cut on 19 Oct
+	// 2026 (Arif): stock photos under "real sellers" proved nothing a buyer
+	// could check. Its one real proof — the door to /stores — moved under the
+	// video as `proof_browse_stores`; `proof_label/heading/sub` stay for the
+	// /pricing proof block.
+	"proof_kind_5",
+	"proof_kind_5_body",
+	"proof_kind_7",
+	"proof_kind_7_body",
+	"proof_kind_8",
+	"proof_kind_8_body",
+	"proof_kind_10",
+	"proof_kind_10_body",
+	"proof_kind_12",
+	"proof_kind_12_body",
+	"proof_rail_prev",
+	"proof_rail_next",
+	"proof_directory_strong",
+	"proof_directory_body",
+	// Phase 02's first cut acted out a flow the product doesn't have (19 Oct
+	// 2026, Arif: "the mockup is wrong"): an in-page HitPay sheet, a bank-
+	// transfer door a HitPay store withholds, invented seller copy, and a
+	// WhatsApp to the buyer on paid/confirmed/shipped that one-message-per-
+	// order never sends. The keys that carried those claims stay gone.
+	"paynow_transfer_instead",
+	"paynow_powered",
+	"paynow_sheet_label",
+	"paynow_sheet_pay",
+	"paynow_paid_title",
+	"paynow_paid_body",
+	"paynow_seller_waiting",
+	"paynow_seller_paid_meta",
+	"paynow_seller_body",
+	"flow_bubble_label",
+	// The handshake phone's "Status: Confirmed · pickup Sat" line: the status
+	// is a pill in the phone's header now and the pickup day is in the real
+	// page's "Pick up at" section, so the line said both twice.
+	"handshake_buyer_status",
 ];
 
 describe("landing v2 — cut sections stay cut", () => {
@@ -219,7 +288,7 @@ describe("landing v2 — cut sections stay cut", () => {
 
 	// Prefixes = every section on `/`.
 	const onLanding =
-		/^(nav_|hero_|demo_video_|proof_|handshake_|delivery_|pay_|pricing_|faq_|final_|footer_|guarantee_|region_)/;
+		/^(nav_|hero_|demo_video_|proof_|handshake_|delivery_|flow_|fit_|dock_|commission_|pay_|pricing_|faq_|final_|footer_|guarantee_|region_)/;
 
 	it("never quotes the retired calendar trial or RM299 on a key the landing renders", () => {
 		// Start-when-you-sell replaced the calendar trial, and RM299 was Scale's
@@ -264,6 +333,117 @@ describe("landing v2 — cut sections stay cut", () => {
 			expect(lone, `${locale}: ${lone.join(", ")}`).toEqual([]);
 			expect(catalog.faq_a_8, `${locale}.faq_a_8`).toMatch(days);
 			expect(catalog.faq_a_8, `${locale}.faq_a_8`).toMatch(orders);
+		}
+	});
+});
+
+/**
+ * The hero's inbox, the handshake and the courier card tell ONE order, from
+ * one shop (truth fix 4, z8r3fdhj8p): a meat shop whose inbox listed a Muay
+ * Thai pack and a tent wash, beside a bakery's cake on the next section, read
+ * as three stock mocks. ORD-0182 · Aina · RM 181 from Kedai Daging Amir is the
+ * order on every surface; a key that names another is a stray.
+ */
+describe("landing — one order through the page", () => {
+	const strays =
+		/Muay Thai|Tent wash|Bearcamp|Kek Sayang|Brownie|cake|泰拳|帐篷|布朗尼|蛋糕|khemah|brownie|\bkek\b/i;
+	it("names ORD-0182 on every handshake key that names an order", () => {
+		for (const [locale, catalog] of catalogs) {
+			const wrong = Object.entries(catalog)
+				.filter(
+					([k, v]) =>
+						k.startsWith("handshake_") &&
+						/ORD-/.test(String(v)) &&
+						!String(v).includes("ORD-0182"),
+				)
+				.map(([k]) => k);
+			expect(wrong, `${locale}: ${wrong.join(", ")}`).toEqual([]);
+			expect(catalog.handshake_amount, locale).toBe(catalog.hero_after_amount);
+		}
+	});
+
+	it("keeps every hero and handshake line inside the one shop", () => {
+		for (const [locale, catalog] of catalogs) {
+			const hits = Object.entries(catalog)
+				.filter(
+					([k, v]) =>
+						/^(hero_|handshake_)/.test(k) &&
+						// The marquee lists the roster's KINDS of seller, not this shop's orders.
+						k !== "hero_marquee" &&
+						strays.test(String(v)),
+				)
+				.map(([k]) => k);
+			expect(hits, `${locale}: ${hits.join(", ")}`).toEqual([]);
+		}
+	});
+});
+
+/**
+ * The route composes the walkthrough, not the two sections it replaced. A
+ * source scan, like landing-seo.test.ts: the sections' components are gone,
+ * so a merge that resurrects an import is the only way they could come back.
+ */
+describe("landing v2 — the walkthrough replaces Handshake and Delivery", () => {
+	// The section list lives in the shared LandingPage component, not the
+	// route: `/` and a referral link's `/referral/<slug>` render the same
+	// page (z8r3fdetf5), so there is ONE list to pin.
+	const route = readFileSync(
+		new URL("../components/landing/landing-page.tsx", import.meta.url),
+		"utf8",
+	);
+	it("mounts SellerFlow and none of the retired sections", () => {
+		expect(route).toMatch(/<SellerFlow \/>/);
+		expect(route).not.toMatch(/PaymentHandshake|<Delivery|RealSellers/);
+	});
+});
+
+/**
+ * One time-to-live story (truth fix 3, z8r3fdhj8p): the page used to claim
+ * "live in under 5 minutes" (FAQ), "live in 5 minutes" (final CTA) and "live
+ * in one demo, running by the weekend" (proof) at once. Demo-first keeps the
+ * one a demo can promise — the guarantee line — and nothing else on the
+ * landing names a time to live.
+ */
+describe("landing — one time-to-live claim", () => {
+	const onLanding =
+		/^(nav_|hero_|demo_video_|proof_|handshake_|delivery_|flow_|fit_|dock_|commission_|pay_|pricing_|faq_|final_|footer_|region_)/;
+	it("never promises five minutes, in any locale", () => {
+		const fiveMinutes = /\b5 ?min|5 分钟|5 minit/i;
+		for (const [locale, catalog] of catalogs) {
+			const hits = Object.entries(catalog)
+				.filter(([k, v]) => onLanding.test(k) && fiveMinutes.test(String(v)))
+				.map(([k]) => k);
+			expect(hits, `${locale}: ${hits.join(", ")}`).toEqual([]);
+		}
+	});
+
+	it("drops the founder-facing proof metrics and the seven surplus seller cards", () => {
+		const gone = [
+			"proof_stat_label",
+			"proof_stat_heading",
+			"proof_stat_body",
+			"proof_stat_1_label",
+			"proof_stat_1_value",
+			"proof_stat_2_label",
+			"proof_stat_2_value",
+			"proof_kind_1",
+			"proof_kind_1_body",
+			"proof_kind_2",
+			"proof_kind_2_body",
+			"proof_kind_3",
+			"proof_kind_3_body",
+			"proof_kind_4",
+			"proof_kind_4_body",
+			"proof_kind_6",
+			"proof_kind_6_body",
+			"proof_kind_9",
+			"proof_kind_9_body",
+			"proof_kind_11",
+			"proof_kind_11_body",
+		];
+		for (const [locale, catalog] of catalogs) {
+			const left = gone.filter((k) => k in catalog);
+			expect(left, `${locale}: ${left.join(", ")}`).toEqual([]);
 		}
 	});
 });

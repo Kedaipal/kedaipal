@@ -3603,3 +3603,103 @@ describe("rider options save without touching the arm switch (86eye9xd4)", () =>
 		});
 	}
 });
+
+describe("storefront chat action (z8r3fdvwcy)", () => {
+	// The "Ask on WhatsApp" button on the store home is ON by default: the
+	// stamp is an opt-OUT, like the marketplace listing, so absent reads as on
+	// and nothing needs a backfill.
+	test("both reads say the chat action is on until the owner turns it off", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "chat-on");
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		expect(mine?.storefrontChatEnabled).toBe(true);
+		const pub = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "chat-on",
+		});
+		expect(pub.status).toBe("ok");
+		if (pub.status !== "ok") return;
+		expect(pub.retailer.storefrontChatEnabled).toBe(true);
+
+		await asA.mutation(api.retailers.setStorefrontChat, {
+			retailerId: mine?._id as Id<"retailers">,
+			enabled: false,
+		});
+		expect(
+			(await asA.query(api.retailers.getMyRetailer))?.storefrontChatEnabled,
+		).toBe(false);
+		const off = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "chat-on",
+		});
+		if (off.status !== "ok") throw new Error("expected ok");
+		expect(off.retailer.storefrontChatEnabled).toBe(false);
+
+		await asA.mutation(api.retailers.setStorefrontChat, {
+			retailerId: mine?._id as Id<"retailers">,
+			enabled: true,
+		});
+		expect(
+			(await asA.query(api.retailers.getMyRetailer))?.storefrontChatEnabled,
+		).toBe(true);
+	});
+
+	test("turning it off twice keeps the first 'since when' stamp", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "chat-stamp");
+		const retailerId = (await asA.query(api.retailers.getMyRetailer))
+			?._id as Id<"retailers">;
+		await asA.mutation(api.retailers.setStorefrontChat, {
+			retailerId,
+			enabled: false,
+		});
+		const first = await t.run(
+			async (ctx) => (await ctx.db.get(retailerId))?.storefrontChatDisabledAt,
+		);
+		expect(typeof first).toBe("number");
+		await asA.mutation(api.retailers.setStorefrontChat, {
+			retailerId,
+			enabled: false,
+		});
+		const second = await t.run(
+			async (ctx) => (await ctx.db.get(retailerId))?.storefrontChatDisabledAt,
+		);
+		expect(second).toBe(first);
+	});
+
+	test("owner-only: a teammate with store_settings write is refused in the gate's words, a stranger is forbidden", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "chat-owner-only");
+		const retailerId = (await asA.query(api.retailers.getMyRetailer))
+			?._id as Id<"retailers">;
+		const helper = { subject: "user_helper_chat", email: "helper@example.com" };
+		const { memberId } = await asA.mutation(api.team.invite, {
+			retailerId,
+			email: helper.email,
+			permissions: { store_settings: "write" },
+		});
+		await t
+			.withIdentity(helper)
+			.mutation(api.team.acceptPendingInvite, { memberId });
+		await expect(
+			t
+				.withIdentity(helper)
+				.mutation(api.retailers.setStorefrontChat, {
+					retailerId,
+					enabled: false,
+				}),
+		).rejects.toThrow(/Only the store owner/);
+		await expect(
+			t
+				.withIdentity({ subject: USER_B })
+				.mutation(api.retailers.setStorefrontChat, {
+					retailerId,
+					enabled: false,
+				}),
+		).rejects.toThrow(/Forbidden/);
+		// The refusals changed nothing.
+		const pub = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "chat-owner-only",
+		});
+		if (pub.status !== "ok") throw new Error("expected ok");
+		expect(pub.retailer.storefrontChatEnabled).toBe(true);
+	});
+});

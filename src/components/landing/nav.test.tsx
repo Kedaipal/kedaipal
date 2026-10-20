@@ -75,7 +75,7 @@ describe("landing nav", () => {
 			a.textContent?.trim(),
 		);
 		expect(labels).toEqual([
-			m.nav_delivery(),
+			m.nav_flow(),
 			m.nav_payments(),
 			m.nav_faq(),
 			m.nav_pricing(),
@@ -95,7 +95,7 @@ describe("landing nav", () => {
 		// for the wider bar.
 		const anchorGroup = screen
 			.getAllByRole("link")
-			.find((el) => el.getAttribute("href") === "/#delivery")?.parentElement;
+			.find((el) => el.getAttribute("href") === "/#flow")?.parentElement;
 		expect(anchorGroup?.className).toContain("xl:flex");
 	});
 });

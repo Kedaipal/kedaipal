@@ -129,7 +129,7 @@ import {
 	parsePriceInput,
 } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { IMAGE_ACCEPT, type PreparedImage } from "../lib/image-upload";
 import { buildNotifyManagerMessage } from "../lib/notify-manager-message";
 import { withLineKeys } from "../lib/order-card-items";
 import {
@@ -141,6 +141,7 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
+import { prepareImage, uploadPrepared } from "../lib/storage-upload";
 import { isCrmLocked, isOrderInboxLocked } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
@@ -2609,9 +2610,9 @@ function MockupCard({
 			// mirror of an unreadable payment proof — they're asked to approve a
 			// design that renders as a broken box — so nothing is uploaded until
 			// every file has been proven decodable. See lib/image-upload.ts.
-			const prepared: { blob: Blob; contentType: string }[] = [];
+			const prepared: PreparedImage[] = [];
 			for (const file of Array.from(files)) {
-				const result = await prepareImageUpload(file);
+				const result = await prepareImage(file);
 				if (!result.ok) {
 					toast.error(result.message);
 					setUploading(false);
@@ -2622,15 +2623,12 @@ function MockupCard({
 			// Upload each selected image, then send them together as the mockup set
 			// (replacing any previous one). Sequential keeps it simple + ordered.
 			for (const item of prepared) {
-				const url = await generateUploadUrl({ orderId: order._id });
-				const res = await fetch(url, {
-					method: "POST",
-					headers: { "Content-Type": item.contentType },
-					body: item.blob,
-				});
-				if (!res.ok) throw new Error("Upload failed");
-				const { storageId } = (await res.json()) as { storageId: string };
-				storageIds.push(storageId);
+				const uploaded = await uploadPrepared(item, () =>
+					generateUploadUrl({ orderId: order._id }),
+				);
+				// Into the catch below, which discards what already went up.
+				if (!uploaded.ok) throw new Error(uploaded.message);
+				storageIds.push(uploaded.storageId);
 			}
 			await submitMockup({
 				orderId: order._id,

@@ -90,6 +90,7 @@ import {
 	SettingsSection,
 } from "../components/settings/settings-primitives";
 import { StoreStatusCard } from "../components/settings/store-status-card";
+import { StorefrontChatCard } from "../components/settings/storefront-chat-card";
 import { TeamTab } from "../components/settings/team-tab";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -123,7 +124,7 @@ import {
 	currencySymbol,
 	formatMobile,
 } from "../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { IMAGE_ACCEPT } from "../lib/image-upload";
 import { NOTE_LINK_HINT } from "../lib/linkify";
 import { LOCALE_LABELS } from "../lib/message-templates";
 import type { StatusLabels } from "../lib/orderStatus";
@@ -136,6 +137,7 @@ import {
 	type SettingsSpotlightKey,
 	SPOTLIGHT_ANCHOR,
 } from "../lib/spotlight";
+import { uploadImage } from "../lib/storage-upload";
 import { hasFeature, tierPill } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
@@ -522,6 +524,10 @@ function SettingsRoute() {
 		[renameSlugMutation, actAsRetailerId],
 	);
 	const updateSettings = useUpdateSettings();
+	// The store page's "Ask on WhatsApp" switch (z8r3fdvwcy) — its own
+	// verb-shaped mutation, owner-only on the server; the card disables with
+	// the reason for a teammate or an acting admin.
+	const setStorefrontChat = useMutation(api.retailers.setStorefrontChat);
 	// A teammate can't change the account-level alert channels (owner-only on
 	// the server) — the alerts card disables those rows with the reason.
 	const storePerm = usePermission("store_settings");
@@ -867,6 +873,21 @@ function SettingsRoute() {
 														area={retailer.storeArea ?? ""}
 														readiness={listingReadiness}
 														onSave={(patch) => updateSettings(patch)}
+													/>
+												</Card>
+												{/* Beside the listing: both are "what the public sees
+										    of my store" switches, and the island card on the
+										    store home is where this one shows (z8r3fdvwcy). */}
+												<Card id="settings-storefront-chat">
+													<StorefrontChatCard
+														enabled={retailer.storefrontChatEnabled !== false}
+														hasWaPhone={!!retailer.waPhone}
+														onChange={(enabled) =>
+															setStorefrontChat({
+																retailerId: retailer._id,
+																enabled,
+															})
+														}
 													/>
 												</Card>
 											</SettingsSection>
@@ -1624,20 +1645,13 @@ function LogoForm({
 		if (!file) return;
 		setUploading(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () => generateLogoUploadUrl());
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const url = await generateLogoUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
-			setLocalPreview(URL.createObjectURL(prepared.blob));
+			const { storageId } = upload;
+			setLocalPreview(URL.createObjectURL(upload.blob));
 			await onSave(storageId);
 			toast.success("Logo saved.");
 		} catch (err) {
@@ -1731,20 +1745,15 @@ function CoverImageForm({
 		if (!file) return;
 		setUploading(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () =>
+				generateCoverImageUploadUrl(),
+			);
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const url = await generateCoverImageUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
-			setLocalPreview(URL.createObjectURL(prepared.blob));
+			const { storageId } = upload;
+			setLocalPreview(URL.createObjectURL(upload.blob));
 			await onSave(storageId);
 			toast.success("Cover image saved.");
 		} catch (err) {
@@ -2081,22 +2090,15 @@ function PaymentMethodsForm({
 		if (!file) return;
 		setUploadingKey(key);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () => generateQrUploadUrl());
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const url = await generateQrUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
+			const { storageId } = upload;
 			update(key, {
 				qrImageStorageId: storageId,
-				qrPreviewUrl: URL.createObjectURL(prepared.blob),
+				qrPreviewUrl: URL.createObjectURL(upload.blob),
 			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));

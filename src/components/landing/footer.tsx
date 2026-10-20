@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { Instagram, Mail, Music2 } from "lucide-react";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
-import { BLOG_URL } from "../../lib/site-links";
+import { BLOG_URL, INSTAGRAM_URL, TIKTOK_URL } from "../../lib/site-links";
 import { m } from "../../paraglide/messages";
 import { AppImage } from "../ui/app-image";
 import { PaymentStripCompact } from "./payment-methods";
@@ -13,7 +13,10 @@ export function Footer() {
 		"inline-flex min-h-11 items-center transition-colors hover:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
 	return (
-		<footer className="bg-primary pb-[max(2rem,env(safe-area-inset-bottom))] text-primary-foreground">
+		<footer
+			id="site-footer"
+			className="bg-primary pb-[max(2rem,env(safe-area-inset-bottom))] text-primary-foreground"
+		>
 			<div className="mx-auto max-w-6xl px-5 py-14 md:px-8">
 				<div className="grid gap-10 md:grid-cols-[minmax(0,1fr)_minmax(24rem,auto)] md:items-start">
 					<div className="max-w-sm">
@@ -42,7 +45,7 @@ export function Footer() {
 									<span>{LEGAL_CONTACT_EMAIL}</span>
 								</a>
 								<a
-									href="https://www.instagram.com/kedaipal_my/"
+									href={INSTAGRAM_URL}
 									target="_blank"
 									rel="noopener noreferrer"
 									className={contactLinkClass}
@@ -51,7 +54,7 @@ export function Footer() {
 									<span>{m.footer_instagram()}</span>
 								</a>
 								<a
-									href="https://www.tiktok.com/@kedaipal"
+									href={TIKTOK_URL}
 									target="_blank"
 									rel="noopener noreferrer"
 									className={contactLinkClass}

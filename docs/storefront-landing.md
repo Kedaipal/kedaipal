@@ -9,6 +9,104 @@ locked 20 Jul 2026). Buyer-facing, all-tier. Follows
 [`storefront-checkout-page.md`](./storefront-checkout-page.md) (PR1) and
 [`storefront-product-pages.md`](./storefront-product-pages.md) (PR2).
 
+## Island store card over the cover (ClickUp `z8r3fdvwcy`, 20 Oct 2026)
+
+T1 of the island storefront (parent `z8r3fdvmxw`; mockups: the
+[Island storefront canvas](https://claude.ai/artifact/6YcjMwf5SuSYGb8jVJnbwm),
+boards *Main*, *Storefront-NoCover*, *Storefront-Desktop*). It replaces the
+"hero trimmed and re-tinted" cover below, which painted the identity ON the
+photo under a navy scrim. T2 (`z8r3fdvwcz`, the compact scrolled bar and the
+search hand-over) is separate; this task leaves the page's scroll behaviour,
+the grid's sticky search and the cart pill untouched.
+
+**Anatomy** (`storefront-header.tsx`, static markup — SSR paints all of it):
+
+- **Cover band**: 224px on a phone, 280px from `lg`, photo only under a light
+  scrim (heavier at the top where the icons sit, near-clear through the
+  middle, a touch at the base). The cover `AppImage` keeps `priority` and
+  `sizes="100vw"`, so the route's `<link rel="preload">` still names the
+  same LCP candidate. **No cover**: a soft mint band (`from-accent/15 to-accent/5`)
+  with a faint dot grid, 176px / 224px — shorter than a photo band, since an
+  empty band has nothing to show (the NoCover board's height, not the
+  photo's).
+- **Island**: overlaps the band by 72px (88px `lg`), inset 16px (32px `lg`),
+  `rounded-3xl`, the soft navy lift + hairline ring from
+  [`design-system.md` → Islands](./design-system.md#islands--the-storefronts-floating-surfaces-2026-10-20-clickup-z8r3fdvwcy).
+  Inside: the **64px logo/initials tile** (84px `lg`; `StoreLogoTile`
+  `size="hero"` — navy initials with a card-coloured border now that it sits
+  on the card, never on the photo), the **`h1`** (`font-heading`, 22px →
+  32px, wraps, never truncates) with the **founding badge** beside it (the
+  existing emblem-with-popover, not a text chip — one badge component across
+  the hero and the app bar), and the **blurb** clamped to two lines. No
+  blurb → no row; the identity row is `items-center` so a name alone sits
+  against the tile rather than floating at its top edge.
+- **Facts block**, ruled off above (a left rule beside the identity from
+  `lg`): the **hours row** (`OpeningHoursLine variant="island"` — 8px status
+  dot, the lead word in mint/muted, the rest in the foreground, a chevron;
+  tap opens the weekly schedule), the **closed-dates heads-up** as its own
+  amber line when `closureHeadsUp` has one AND the status row is already
+  taken (a 24/7 store with only a closure ahead shows the closure AS the
+  hours row, once), and **"Delivery & pickup · <area>"** from the enabled
+  fulfilment methods (`fulfilmentLabel`: `offerDelivery` absent = on,
+  `offerSelfCollect` absent = off; "Delivery" / "Pickup" / neither → no
+  line) with the marketplace card's `storeArea` after it. No hours, no
+  closure → only the fulfilment line; nothing at all → no block, no rule.
+  `storeArea` joined the public `getRetailerBySlug` payload for this (it
+  already printed on the `/stores` card).
+- **Actions**: on a phone, **two 44px icon circles at the cover's top-right**
+  — WhatsApp then Share, frosted on a photo, outline on the mint band,
+  `lg:hidden`. From `lg`, the **labelled row inside the island** (`Share
+  store` / `Ask on WhatsApp`, 44px outline pills, `hidden lg:flex`), and the
+  cover carries no buttons. `flex-wrap` on the island drops the row under
+  the identity when the facts column needs the width. Share is the existing
+  `shareLink` (OS share sheet, clipboard fallback) and needs the `slug`.
+  Neither action → no empty strip, no empty row.
+
+**Ask on WhatsApp** — `buildStoreChatLink(retailer, locale)` in
+`src/lib/store-chat.ts` is the ONE author: a `wa.me/<waPhone>?text=…` link
+(`target="_blank" rel="noopener"`) whose prefill names the store in the
+STORE's locale (paraglide `storefront_chat_prefill`: EN "Hi <store>, I'm
+looking at your Kedaipal store and have a question." / MS "Hai <store>, saya
+sedang lihat kedai Kedaipal anda dan ada soalan." / ZH), URL-encoded. The
+helper returns `null` — and the action is not rendered, on either surface —
+when the store has no `waPhone` (already on the public payload; no new
+field) or when the owner switched it off. Share is never affected.
+Buyer-initiated, so it never touches `wabaProtection` or `sendingPaused`;
+it stays live on an Off-Season Hold (asking "when do you reopen" is the
+point).
+
+**The seller's switch** — Settings → Store, beside the marketplace listing
+(`storefront-chat-card.tsx`): "Let buyers message you from your store page"
++ "Shows an Ask on WhatsApp button on your store. Orders still arrive the
+same way with it off." Saves on flip, **on by default, owner-only** (a
+teammate and an acting admin see it disabled with the reason). The status
+line tells the truth, not the switch: ON with no WhatsApp number is "not
+shown yet" with a link to the WhatsApp tab; the glance chip reads On / Off
+/ No number. Storage follows the marketplace opt-out shape:
+`retailers.storefrontChatDisabledAt` (absent = on, no backfill, "since when"
+for free, a re-save keeps the first stamp), derived as
+`storefrontChatEnabled` on BOTH reads (owner + by-slug), written by
+`retailers.setStorefrontChat({ retailerId, enabled })` under
+`requireRetailerAccess(…, { ownerOnly: true })` and the view-only lock like
+every settings write; the credit gate never touches it (`retailers` is a
+way-back module in `creditLockCoverage.test.ts`).
+
+**Tests**: `storefront-header.test.tsx` (island with/without cover, frosted
+vs outline icons, the LCP image stays eager, no blurb → no row, cover icons
+labelled and `lg:hidden`, the labelled row inside the island and `hidden
+lg:flex`, link shape + locale + new tab, Share from either surface, no slug
+→ no Share, switch off → no chat on either surface while Share stays, no
+number → same, neither action → no empty strip, the facts block in every
+combination, the heads-up line only beside a status row),
+`store-chat.test.ts` (link shape, MY/SG numbers, EN/MS/ZH prefill,
+encoding of `&` and an emoji, null on no number / switched off),
+`convex/retailers.test.ts` (flag derivation on both reads, the first stamp
+survives a re-save, owner-only: a `store_settings`-write teammate is refused
+in the gate's words, a stranger is forbidden, neither refusal changes the
+row), `storefront-chat-card.test.tsx` (on/off/no-number lines and glance,
+flip saves and toasts, teammate and acting-admin disabled-with-reason, a
+refused save reads as a sentence and re-enables the switch).
+
 ## UI polish v2 — T1+T2 (ClickUp `z8r3fdegb5`, Arif's 12 Sep review)
 
 The first two tranches of Arif's storefront polish (design:
@@ -23,7 +121,8 @@ page follow separately):
   page's canonical URL (`shareLink` in `src/lib/share.ts` — OS share sheet,
   clipboard fallback; one author with the product page's Copy-link chip). Not
   sticky, deliberately: T3's category search/chips bar sticks to `top-0`.
-- **Hero trimmed and re-tinted**: scrim `from-black/80…` →
+- **Hero trimmed and re-tinted** _(superseded by the island card above,
+  `z8r3fdvwcy`)_: scrim `from-black/80…` →
   `from-primary/90 via-primary/45 to-primary/15`; logo 64 → 56px
   `rounded-[18px]` with an **initials tile** fallback (`storeInitials` —
   a hole where the brand should be reads as broken); the Kedaipal mark left

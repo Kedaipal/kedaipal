@@ -20,6 +20,7 @@ Defined as HSL CSS vars in `:root` + `.dark` and exposed as Tailwind colors (`bg
 | `background` / `foreground` | page base |
 | `card` / `popover` | raised surfaces |
 | `primary` | navy — primary emphasis, dark surfaces |
+| `segment` | the selected half of a pill toggle (MY/SG, Monthly/Annual) — the house navy one step lighter than `primary`, because at 11% a 40px pill reads black (Arif, 19 Oct 2026); lifts further in dark, never mint (a current value is a state, not an action) |
 | `accent` | **mint — the brand action color** (primary buttons default to this) |
 | `secondary` | soft slate — low-emphasis fills |
 | `muted` / `muted-foreground` | subtle bg / secondary text |
@@ -231,6 +232,42 @@ Every settings surface is built from `src/components/settings/settings-primitive
 - **`ModeRowGroup` / `ModeRow`** (`src/components/ui/mode-row.tsx`) — every pick-one MODE with a real sentence per option. A real radio under a styled label. **Built-in vs partner** (Arif, `z8r3fdcx5k`) is carried by `SourceLabel` above the rows — navy "Kedaipal built-in", mint + plug "Partner integration — runs on your account" — and the partner row's dashed border, never by a second selector. Delivery pricing and *How buyers pay* are the same control with the same meaning: the rows **choose**.
 - **`SetupChecklist` / `SetupStep`** — a third-party account's setup, numbered, each step a mint tick, an amber "Action needed" with its fix **in the step**, or not started. It stays readable after onboarding: a fully set-up account reads as quiet ticked rows and one header chip.
 - **Layout** — desktop is the section rail (`SettingsRail`, each row carrying its tab's glance) beside the content; mobile is the grouped index (`SettingsIndex`, the same glances). A rail glance follows the same tones: the Store row normally reads the store's name, but a store that isn't taking orders reads **Paused** / **Offline** in warn (`storeGlance`), so it's visible from every other tab. The store on/off card sits first on the Store tab, full width above the columns. `SettingsColumns` puts two independent card columns from `xl`; `SettingsSection` labels a group of cards ("Identity", "Business & country"). Where the mobile order must differ from the desktop columns, use `contents` + `order-*` rather than rendering a card twice.
+
+### Islands — the storefront's floating surfaces (2026-10-20, ClickUp `z8r3fdvwcy`)
+
+The store home has one family of raised surfaces that float over content
+rather than sit in the flow, and they share one recipe so the page reads as
+one app: the **island store card** (`storefront-header.tsx`), the **cart pill**
+(`cart-bar.tsx`), and T2's compact scrolled bar (`z8r3fdvwcz`, to come).
+
+- **Inset 16px** from the screen edges (`mx-4` / `inset-x-4`; 32px from `lg`
+  where the page column already has `px-8`).
+- **Pill or 24px radius** — `rounded-full` for a one-line capsule (the cart
+  pill), `rounded-3xl` for a card.
+- **Soft navy lift**: `shadow-xl shadow-primary/15` plus a hairline
+  `ring-1 ring-foreground/5`, and in dark mode **no shadow, a lighter ring**
+  (`dark:shadow-none dark:ring-white/10`) — a shadow on a dark page is
+  invisible and the ring is what separates the card from the band.
+- **Frosted over content**: anything that sits on a photo is
+  `bg-primary/45 backdrop-blur ring-1 ring-white/25` with a white glyph.
+  Never lightened to match the outline variant — a pale sky would swallow
+  a pale circle.
+- The island **overlaps the band it floats over** (`-mt-18`, `lg:-mt-22`),
+  with no `z-index` of its own: it is a positioned later sibling, so it
+  paints above the band's absolute children without entering the stacking
+  fight with the grid's sticky search (`z-30`) or the cart pill.
+
+**Cover icon buttons** — actions on a cover photo or on the no-cover mint
+band are **44px icon circles** (`size-11 rounded-full`) at the band's
+top-right, right-aligned, 8px apart, each with an `aria-label` that names
+the action and its object ("Ask Kek Sayang Bakery on WhatsApp", "Share this
+store"). Two variants, chosen by what is under them: *frosted* (above) on a
+photo, *outline* (`bg-card border-border text-foreground shadow-sm`) on the
+mint band. From `lg` the same actions become a labelled row of 44px outline
+pills **inside** the island (`Share store` / `Ask on WhatsApp`) and the cover
+carries no buttons — a desktop has room for words, a phone has room for
+glyphs. Both surfaces render from the same props, so neither can offer an
+action the other lacks.
 
 ## Patterns & anti-patterns
 - **Focus:** every interactive element needs the visible ring (`focus-visible:ring-3 ring-ring/50`) — primitives already do; preserve it on custom elements.
