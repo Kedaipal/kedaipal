@@ -45,6 +45,9 @@ export function clerkAppearance(
 		// setting), so in dark the logo box is hidden rather than shown wrong —
 		// the card's own title names Kedaipal. A light-ink upload in the Clerk
 		// dashboard, or a Clerk version with `layout.logoImageUrl`, restores it.
-		elements: { logoBox: "dark:hidden" },
+		// A CSS object, not a Tailwind class: Clerk injects its element styles
+		// after our stylesheet, so `dark:hidden` loses the cascade; its own emotion
+		// rule wins. Only passed in dark, so no `dark:` is needed anyway.
+		elements: { logoBox: { display: "none" } },
 	};
 }
