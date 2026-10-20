@@ -3722,6 +3722,53 @@ export default defineSchema({
 		// one bounded range (Credits T3 × T5).
 		.index("by_status_paid", ["status", "paidAt"]),
 
+	// ── Seller referrals (z8r3fdetf5, docs/referrals.md) ──────────────────────
+	// One row per REFEREE: the store that signed up through another store's
+	// `/referral/<slug>` link, and the store that referred it. Written only when
+	// the referrer could refer at that moment (`referrerStanding` in
+	// lib/referral.ts — an active plan, or comped) — so a row is a promise the
+	// referee was shown, and the reward (credits for both sides when the
+	// referee's first plan invoice is paid) keys off THIS row, never off the
+	// `retailers.signupSource` analytics tag. Its own table rather than fields
+	// on `retailers`: the dashboard card counts a referrer's rows by index, and
+	// new fields on `retailers` poison the shared dev deployment.
+	//
+	// `referrerId` can dangle — a referrer deleted after the signup leaves the
+	// referee's row (and their reward) standing, like an invoice's refs.
+	referrals: defineTable({
+		refereeId: v.id("retailers"),
+		referrerId: v.id("retailers"),
+		// How it was recorded: the link at signup, or an admin putting right a
+		// referral the link didn't capture (closed tab, off-link intro).
+		via: v.union(v.literal("link"), v.literal("admin")),
+		// "system" for the link; the admin's Clerk subject otherwise.
+		recordedBy: v.string(),
+		createdAt: v.number(),
+		// The reward (T2, 86ey82hke) — stamped ONCE, in the same transaction as
+		// the credits, when the referee's first plan invoice is paid. Set =
+		// done: the stamp is the idempotency guard, so a second settle path
+		// (webhook + manual mark-paid) can never pay twice.
+		rewardedAt: v.optional(v.number()),
+		// Credits each side received. `referrerCredits` is absent when the
+		// referrer got nothing — `referrerOutcome` says why.
+		refereeCredits: v.optional(v.number()),
+		referrerCredits: v.optional(v.number()),
+		// `granted`; `unmetered` (a comped or Kedaipal-owned referrer — already
+		// unlimited, so nothing to give); `deleted` (the referrer store is
+		// gone); `self` (the referee shares the referrer's email or WhatsApp
+		// number — one person, two stores, so the referrer half is withheld).
+		referrerOutcome: v.optional(
+			v.union(
+				v.literal("granted"),
+				v.literal("unmetered"),
+				v.literal("deleted"),
+				v.literal("self"),
+			),
+		),
+	})
+		.index("by_referee", ["refereeId"])
+		.index("by_referrer_created", ["referrerId", "createdAt"]),
+
 	// Per-period invoice. Admin marks it paid out-of-band (DuitNow / bank). The
 	// founding pending invoice carries a `dueDate` that drives the active→past_due
 	// overdue cron flip.

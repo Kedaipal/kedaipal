@@ -12,15 +12,19 @@ import { captureMarketingSource } from "../lib/marketing-attribution";
  * routes is one landing, not three (GA4's own page_location says which route
  * it was); capture still runs on every mount so a later tagged hit keeps
  * last-touch semantics.
+ *
+ * `search` overrides `window.location.search` for the capture — a route whose
+ * URL IS the tag (`/referral/<slug>`, z8r3fdetf5) passes the query string its
+ * path stands for, so the capture still runs before the landing event fires.
  */
 
 let landed = false;
 
-export function useMarketingLanding(): void {
+export function useMarketingLanding(search?: string): void {
 	useEffect(() => {
-		captureMarketingSource(window.location.search);
+		captureMarketingSource(search ?? window.location.search);
 		if (landed) return;
 		landed = true;
 		trackEvent("land_marketing");
-	}, []);
+	}, [search]);
 }

@@ -12,7 +12,7 @@ import {
 	useNavigate,
 } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Sparkles } from "lucide-react";
+import { Gift, Sparkles } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -22,6 +22,7 @@ import {
 	COUNTRY_LABELS,
 	type Country,
 } from "../../convex/lib/country";
+import { parseReferralInput } from "../../convex/lib/referral";
 import {
 	MOBILE_EXAMPLE,
 	MOBILE_KIND,
@@ -29,10 +30,13 @@ import {
 	otherCountryMobile,
 } from "../../convex/lib/slug";
 import type { ClaimRefusal } from "../../convex/lib/unclaimedStore";
+import type { ReferralInvite } from "../../convex/referrals";
 import { OnboardingTopBar } from "../components/onboarding/onboarding-top-bar";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { InputPrefixFrame } from "../components/ui/input-prefix-frame";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
+import { Skeleton } from "../components/ui/skeleton";
 import { clearStoredActAs } from "../hooks/useActAs";
 import { useLandingRegion } from "../hooks/useLandingRegion";
 import { useOnboardingStart } from "../hooks/useOnboardingStart";
@@ -47,6 +51,7 @@ import {
 	decodeOnboardingPrefill,
 	type OnboardingPrefill,
 } from "../lib/onboarding-link";
+import { clearReferralCookie, readReferralSlug } from "../lib/referral-cookie";
 import { waPhoneCheckoutSchema } from "../lib/schemas";
 import { slugify, validateStoreName } from "../lib/slug";
 
@@ -121,6 +126,29 @@ function OnboardingForm() {
 	// "no store yet" — an already-onboarded seller landing here gets redirected
 	// below and must not count as a funnel entry.
 	useOnboardingStart(retailer);
+	// Who referred them (z8r3fdetf5): a typeable field, seeded from the 30-day
+	// referral cookie. The field — not the cookie — is what signup sends, so a
+	// referee who tapped the link on their phone and signs up on a laptop can
+	// still name the store, and one who was seeded can clear it. The live
+	// query answers "will this store be credited?" as they type; the note at
+	// the top of the form restates the offer for whatever it resolves to.
+	const [referralInput, setReferralInput] = useState("");
+	useEffect(() => {
+		const seeded = readReferralSlug(document.cookie);
+		if (seeded) setReferralInput(seeded);
+	}, []);
+	const referralSlug = parseReferralInput(referralInput);
+	const invite = useQuery(
+		convexQuery(
+			api.referrals.invite,
+			referralSlug ? { slug: referralSlug } : "skip",
+		),
+	).data;
+	// `undefined` only while a typed slug is still resolving; an empty field
+	// is simply "no referral", never a placeholder.
+	const referralNote: ReferralInvite | null | undefined = referralSlug
+		? invite
+		: null;
 
 	const [storeName, setStoreName] = useState(prefill?.store ?? "");
 	const [slug, setSlug] = useState(prefill?.slug ?? "");
@@ -239,6 +267,9 @@ function OnboardingForm() {
 			// GA client id, so server-side key events (first_order/subscribe_paid)
 			// stitch to this browser's funnel — validated server-side, hint only.
 			const gaClientId = readGaClientId();
+			// The referral (z8r3fdetf5) — whatever the field says, cookie-seeded
+			// or typed. The server records it only when the store behind it can
+			// refer right now.
 			await createRetailer({
 				storeName: storeName.trim(),
 				slug,
@@ -250,7 +281,11 @@ function OnboardingForm() {
 				...(signupSource !== undefined ? { signupSource } : {}),
 				...(signupReferrerSlug !== undefined ? { signupReferrerSlug } : {}),
 				...(gaClientId !== undefined ? { gaClientId } : {}),
+				...(referralSlug !== undefined ? { referralSlug } : {}),
 			});
+			// Recorded — the cookie has nothing left to do, and must not decide
+			// anything this browser does next.
+			clearReferralCookie();
 			// The funnel's terminal key event — after the mutation succeeds, so a
 			// slug collision or validation error can't inflate conversions.
 			trackEvent("store_created");
@@ -294,6 +329,8 @@ function OnboardingForm() {
 					</span>
 				</p>
 			</header>
+
+			<ReferralInviteNote invite={referralNote} />
 
 			{assisted ? (
 				<div className="flex items-start gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
@@ -410,6 +447,54 @@ function OnboardingForm() {
 					</Field>
 				) : null}
 
+				<Field label="Referred by a Kedaipal seller? (optional)">
+					<InputPrefixFrame
+						prefix={<span className="text-sm">kedaipal.com/referral/</span>}
+						invalid={referralSlug !== undefined && invite === null}
+					>
+						<Input
+							type="text"
+							value={referralInput}
+							onChange={(e) => {
+								const raw = e.target.value;
+								// A pasted LINK collapses to its slug at once, so the field
+								// never reads "kedaipal.com/referral/ https://kedaipal…" —
+								// the plate already says the rest. Bare typing is left alone.
+								const slug = raw.includes("/")
+									? parseReferralInput(raw)
+									: undefined;
+								setReferralInput(slug ?? raw);
+							}}
+							placeholder="their-store"
+							variant="bare"
+							autoCapitalize="none"
+							autoCorrect="off"
+							spellCheck={false}
+							aria-invalid={referralSlug !== undefined && invite === null}
+							className="min-h-11 flex-1 px-3 font-mono text-base"
+						/>
+					</InputPrefixFrame>
+					{referralSlug === undefined ? (
+						<span className="text-xs text-muted-foreground">
+							{referralInput.trim() === ""
+								? "Paste their referral link, or the store name from it. Filled in for you when you arrived through one."
+								: "That doesn't look like a store link."}
+						</span>
+					) : invite === undefined ? (
+						<span className="text-xs text-muted-foreground">Checking…</span>
+					) : invite === null ? (
+						<span className="text-xs font-medium text-destructive">
+							✗ No store on an active plan at that link — check it with them, or
+							leave this blank.
+						</span>
+					) : (
+						<span className="text-xs text-accent-emphasis">
+							✓ {invite.storeName} referred you — bonus credits for you both
+							when you pay your first invoice.
+						</span>
+					)}
+				</Field>
+
 				<label className="flex items-start gap-3 text-sm text-muted-foreground">
 					<input
 						type="checkbox"
@@ -460,6 +545,51 @@ function OnboardingForm() {
 				</div>
 			</div>
 		</main>
+	);
+}
+
+/**
+ * The referral, restated where the store is born (z8r3fdetf5): who invited
+ * them, and the bonus they get when they pay their first invoice — the one
+ * moment it lands, so "when you start your plan" is never a surprise later.
+ * While the invite resolves (the cookie says one is coming) the same shell
+ * holds the place with skeleton bars, so the form below doesn't jump; nothing
+ * renders when there's no live invite. Same shape as the assisted-setup note
+ * beneath it, so the two read as one family of callouts.
+ */
+const INVITE_NOTE_CLASS =
+	"flex min-h-[6.25rem] items-start gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-sm sm:min-h-[5rem]";
+
+export function ReferralInviteNote({
+	invite,
+}: {
+	invite: ReferralInvite | null | undefined;
+}) {
+	if (invite === null) return null;
+	if (invite === undefined)
+		return (
+			<div aria-hidden className={INVITE_NOTE_CLASS}>
+				<Gift className="mt-0.5 size-4 shrink-0 text-accent" />
+				<div className="flex min-w-0 flex-1 flex-col gap-2 pt-0.5">
+					<Skeleton className="h-4 w-44" />
+					<Skeleton className="h-3 w-full" />
+					<Skeleton className="h-3 w-3/4 sm:hidden" />
+				</div>
+			</div>
+		);
+	return (
+		<div className={INVITE_NOTE_CLASS}>
+			<Gift className="mt-0.5 size-4 shrink-0 text-accent" />
+			<div className="flex min-w-0 flex-col gap-0.5">
+				<p className="font-medium text-foreground">
+					{invite.storeName} invited you
+				</p>
+				<p className="text-xs leading-snug text-muted-foreground">
+					Pay your first invoice and {invite.offer.pro} bonus credits land on
+					Pro, or {invite.offer.starter} on Starter. They last 12 months.
+				</p>
+			</div>
+		</div>
 	);
 }
 
