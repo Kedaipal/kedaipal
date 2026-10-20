@@ -27,7 +27,7 @@
 import { sanitizeAttributionSource } from "./attribution";
 import type { CreditBillingStatus } from "./credits";
 import { isListedPlan, type ListedPlan, PLAN_CREDIT_GRANT, type Plan } from "./plans";
-import { MARKETING_SITE_URL } from "./poweredBy";
+import { MARKETING_SITE_URL, sanitizeReferrerSlug } from "./poweredBy";
 
 /** The marketing route a referral link lands on: `/referral/<slug>`. `referral`
  * is a reserved slug (`reservedSlugs.ts`), so no store can shadow it. */
@@ -153,4 +153,49 @@ export function referrerStanding(args: {
 export function referralShareMessage(link: string): string {
 	const offer = referralRefereeOffer();
 	return `I use Kedaipal for my WhatsApp orders — no more orders lost in the chat, and payments are tracked for me. Sign up through my link and you get ${offer.pro} bonus credits when you start Pro (${offer.starter} on Starter). 1 credit = 1 order:\n${link}`;
+}
+
+/**
+ * One person, two stores? A self-referral is the one way to farm the
+ * programme: pay a first invoice on a second login and collect both halves.
+ * The guard is the referee sharing the referrer's contact — the owner's email
+ * or the store's WhatsApp number — which a second account for the same
+ * business almost always does. Not airtight (a fresh email and number slip
+ * through), but a real RM79+ invoice buys at most ~90 credits, so there is
+ * little left to game. The referee still gets THEIR half: they are a paying
+ * store either way; only the referrer's half is withheld.
+ */
+export function looksLikeSelfReferral(args: {
+	refereeEmails: Array<string | undefined>;
+	refereePhone: string | undefined;
+	referrerEmails: Array<string | undefined>;
+	referrerPhone: string | undefined;
+}): boolean {
+	const norm = (list: Array<string | undefined>) =>
+		new Set(
+			list
+				.filter((e): e is string => typeof e === "string" && e.trim() !== "")
+				.map((e) => e.trim().toLowerCase()),
+		);
+	const a = norm(args.refereeEmails);
+	for (const e of norm(args.referrerEmails)) if (a.has(e)) return true;
+	const digits = (p: string | undefined) => (p ?? "").replace(/\D/g, "");
+	const rp = digits(args.refereePhone);
+	return rp.length > 0 && rp === digits(args.referrerPhone);
+}
+
+/**
+ * What a referee types or pastes into onboarding's "Referred by" field,
+ * reduced to the store slug: a bare slug, the full
+ * `https://kedaipal.com/referral/<slug>` link, or the storefront link
+ * `kedaipal.com/<slug>` all resolve to `<slug>`. Shape-checked only — whether
+ * a store can refer is the server's answer (`referrals.invite`).
+ */
+export function parseReferralInput(raw: string): string | undefined {
+	let s = raw.trim();
+	if (s === "") return undefined;
+	s = s.replace(/[?#].*$/, "").replace(/\/+$/, "");
+	const slash = s.lastIndexOf("/");
+	if (slash >= 0) s = s.slice(slash + 1);
+	return sanitizeReferrerSlug(s);
 }

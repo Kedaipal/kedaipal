@@ -155,7 +155,7 @@ export type AdminSellerRow = {
 		reward?: {
 			refereeCredits: number;
 			referrerCredits?: number;
-			referrerOutcome: "granted" | "unmetered" | "deleted";
+			referrerOutcome: "granted" | "unmetered" | "deleted" | "self";
 		};
 	};
 	/** Whether an admin can still set, change or remove the referral: the

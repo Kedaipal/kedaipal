@@ -555,7 +555,7 @@ async function referredPair(
 }
 
 describe("referral reward at the first paid invoice (T2)", () => {
-	test("a referee paying Pro gets 60; an active Starter referrer gets 30", async () => {
+	test("a Pro referee: 60 to the referee AND 60 to the referrer, whatever the referrer's tier", async () => {
 		const t = setup();
 		const { referrerId, refereeId } = await referredPair(t, {
 			status: "active",
@@ -575,14 +575,14 @@ describe("referral reward at the first paid invoice (T2)", () => {
 		const referrerRows = await referralRows(t, referrerId);
 		expect(referrerRows).toHaveLength(1);
 		expect(referrerRows[0]).toMatchObject({
-			amount: 30,
+			amount: 60,
 			reason: "referral_referrer",
 			refLabel: "Store new-kedai",
 		});
 		const row = await referralOf(t, refereeId);
 		expect(row).toMatchObject({
 			refereeCredits: 60,
-			referrerCredits: 30,
+			referrerCredits: 60,
 			referrerOutcome: "granted",
 		});
 		expect(row?.rewardedAt).toBeTypeOf("number");
@@ -601,11 +601,27 @@ describe("referral reward at the first paid invoice (T2)", () => {
 		]);
 	});
 
-	test("a referee paying Starter gets 30", async () => {
+	test("a Starter referee: 30 each, even for a Pro referrer", async () => {
 		const t = setup();
-		const { refereeId } = await referredPair(t);
+		const { referrerId, refereeId } = await referredPair(t);
 		await payInvoice(t, refereeId, "starter");
 		expect((await referralRows(t, refereeId))[0]?.amount).toBe(30);
+		expect((await referralRows(t, referrerId))[0]?.amount).toBe(30);
+	});
+
+	test("self-referral (same email or number): the referee is paid, the referrer half is withheld", async () => {
+		const t = setup();
+		const { referrerId, refereeId } = await referredPair(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(referrerId, { notifyEmail: "owner@example.com" });
+			await ctx.db.patch(refereeId, { notifyEmail: "Owner@Example.com" });
+		});
+		await payInvoice(t, refereeId, "pro");
+		expect((await referralRows(t, refereeId))[0]?.amount).toBe(60);
+		expect(await referralRows(t, referrerId)).toHaveLength(0);
+		expect(await referralOf(t, refereeId)).toMatchObject({
+			referrerOutcome: "self",
+		});
 	});
 
 	test("lands once — a second paid invoice grants nothing more", async () => {
@@ -672,7 +688,7 @@ describe("referral reward at the first paid invoice (T2)", () => {
 		});
 	});
 
-	test("an Enterprise referrer earns Pro's 60, never 30% of its contract", async () => {
+	test("an Enterprise referrer earns the referee's tier (60), never 30% of its contract", async () => {
 		const t = setup();
 		const { referrerId, refereeId } = await referredPair(t, {
 			plan: "enterprise",
@@ -718,11 +734,11 @@ describe("referrals.myCard (T3)", () => {
 			slug: "siti-kitchen",
 			link: "https://kedaipal.com/referral/siti-kitchen",
 			standing: { canRefer: true, earnsReward: true },
-			refereeOffer: { starter: 30, pro: 60 },
-			referrerReward: 30,
+			offer: { starter: 30, pro: 60 },
+			earns: true,
 			signedUp: 2,
 			started: 1,
-			creditsEarned: 30,
+			creditsEarned: 60,
 			capped: false,
 		});
 		expect(referrerId).toBeDefined();
@@ -735,7 +751,7 @@ describe("referrals.myCard (T3)", () => {
 			.withIdentity({ subject: REFERRER })
 			.query(api.referrals.myCard, {});
 		expect(card?.standing).toEqual({ canRefer: false, reason: "trial" });
-		expect(card?.referrerReward).toBe(0);
+		expect(card?.earns).toBe(false);
 	});
 
 	test("a comped partner can refer but earns nothing", async () => {
@@ -747,7 +763,7 @@ describe("referrals.myCard (T3)", () => {
 			.query(api.referrals.myCard, {});
 		expect(card).toMatchObject({
 			standing: { canRefer: true, earnsReward: false },
-			referrerReward: 0,
+			earns: false,
 		});
 	});
 

@@ -22,6 +22,7 @@ import {
 	COUNTRY_LABELS,
 	type Country,
 } from "../../convex/lib/country";
+import { parseReferralInput } from "../../convex/lib/referral";
 import {
 	MOBILE_EXAMPLE,
 	MOBILE_KIND,
@@ -29,15 +30,16 @@ import {
 	otherCountryMobile,
 } from "../../convex/lib/slug";
 import type { ClaimRefusal } from "../../convex/lib/unclaimedStore";
+import type { ReferralInvite } from "../../convex/referrals";
 import { OnboardingTopBar } from "../components/onboarding/onboarding-top-bar";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { InputPrefixFrame } from "../components/ui/input-prefix-frame";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
 import { Skeleton } from "../components/ui/skeleton";
 import { clearStoredActAs } from "../hooks/useActAs";
 import { useLandingRegion } from "../hooks/useLandingRegion";
 import { useOnboardingStart } from "../hooks/useOnboardingStart";
-import { useReferralInvite } from "../hooks/useReferralInvite";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
 import { readGaClientId, trackEvent } from "../lib/ga-events";
@@ -124,10 +126,29 @@ function OnboardingForm() {
 	// "no store yet" — an already-onboarded seller landing here gets redirected
 	// below and must not count as a funnel entry.
 	useOnboardingStart(retailer);
-	// The referral this seller arrived through (z8r3fdetf5), when they hold
-	// one — said before they create the store, so the promise they followed
-	// the link for is visibly still in hand.
-	const invite = useReferralInvite();
+	// Who referred them (z8r3fdetf5): a typeable field, seeded from the 30-day
+	// referral cookie. The field — not the cookie — is what signup sends, so a
+	// referee who tapped the link on their phone and signs up on a laptop can
+	// still name the store, and one who was seeded can clear it. The live
+	// query answers "will this store be credited?" as they type; the note at
+	// the top of the form restates the offer for whatever it resolves to.
+	const [referralInput, setReferralInput] = useState("");
+	useEffect(() => {
+		const seeded = readReferralSlug(document.cookie);
+		if (seeded) setReferralInput(seeded);
+	}, []);
+	const referralSlug = parseReferralInput(referralInput);
+	const invite = useQuery(
+		convexQuery(
+			api.referrals.invite,
+			referralSlug ? { slug: referralSlug } : "skip",
+		),
+	).data;
+	// `undefined` only while a typed slug is still resolving; an empty field
+	// is simply "no referral", never a placeholder.
+	const referralNote: ReferralInvite | null | undefined = referralSlug
+		? invite
+		: null;
 
 	const [storeName, setStoreName] = useState(prefill?.store ?? "");
 	const [slug, setSlug] = useState(prefill?.slug ?? "");
@@ -246,9 +267,9 @@ function OnboardingForm() {
 			// GA client id, so server-side key events (first_order/subscribe_paid)
 			// stitch to this browser's funnel — validated server-side, hint only.
 			const gaClientId = readGaClientId();
-			// The referral link (z8r3fdetf5), from its 30-day cookie — the server
-			// records it only when the store behind it can refer right now.
-			const referralSlug = readReferralSlug(document.cookie);
+			// The referral (z8r3fdetf5) — whatever the field says, cookie-seeded
+			// or typed. The server records it only when the store behind it can
+			// refer right now.
 			await createRetailer({
 				storeName: storeName.trim(),
 				slug,
@@ -309,7 +330,7 @@ function OnboardingForm() {
 				</p>
 			</header>
 
-			<ReferralInviteNote invite={invite} />
+			<ReferralInviteNote invite={referralNote} />
 
 			{assisted ? (
 				<div className="flex items-start gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
@@ -426,6 +447,45 @@ function OnboardingForm() {
 					</Field>
 				) : null}
 
+				<Field label="Referred by a Kedaipal seller? (optional)">
+					<InputPrefixFrame
+						prefix={<span className="text-sm">kedaipal.com/referral/</span>}
+						invalid={referralSlug !== undefined && invite === null}
+					>
+						<Input
+							type="text"
+							value={referralInput}
+							onChange={(e) => setReferralInput(e.target.value)}
+							placeholder="their-store"
+							variant="bare"
+							autoCapitalize="none"
+							autoCorrect="off"
+							spellCheck={false}
+							aria-invalid={referralSlug !== undefined && invite === null}
+							className="min-h-11 flex-1 px-3 font-mono text-base"
+						/>
+					</InputPrefixFrame>
+					{referralSlug === undefined ? (
+						<span className="text-xs text-muted-foreground">
+							{referralInput.trim() === ""
+								? "Paste their referral link, or the store name from it. Filled in for you when you arrived through one."
+								: "That doesn't look like a store link."}
+						</span>
+					) : invite === undefined ? (
+						<span className="text-xs text-muted-foreground">Checking…</span>
+					) : invite === null ? (
+						<span className="text-xs font-medium text-destructive">
+							✗ No store on an active plan at that link — check it with them, or
+							leave this blank.
+						</span>
+					) : (
+						<span className="text-xs text-accent-emphasis">
+							✓ {invite.storeName} referred you — bonus credits for you both
+							when you pay your first invoice.
+						</span>
+					)}
+				</Field>
+
 				<label className="flex items-start gap-3 text-sm text-muted-foreground">
 					<input
 						type="checkbox"
@@ -494,7 +554,7 @@ const INVITE_NOTE_CLASS =
 export function ReferralInviteNote({
 	invite,
 }: {
-	invite: ReturnType<typeof useReferralInvite>;
+	invite: ReferralInvite | null | undefined;
 }) {
 	if (invite === null) return null;
 	if (invite === undefined)

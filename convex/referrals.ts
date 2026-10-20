@@ -39,6 +39,7 @@ import { sanitizeReferrerSlug } from "./lib/poweredBy";
 import {
 	type ReferrerIneligibleReason,
 	type ReferrerStanding,
+	looksLikeSelfReferral,
 	referralHref,
 	referralRefereeOffer,
 	referralRewardCredits,
@@ -49,6 +50,15 @@ import {
 	renderReferralEmail,
 } from "./lib/referralEmailCopy";
 import { addMonthsMyt } from "./lib/usagePeriod";
+import {
+	referralRefereeTemplateName,
+	referralReferrerTemplateName,
+	templateParam,
+	WhatsAppSendError,
+} from "./lib/whatsapp";
+import { TEMPLATE_LANGUAGE } from "./lib/whatsappCopy";
+import { classifyPushFailure } from "./lib/confirmationPush";
+import { makeGuardedSender } from "./wabaProtection";
 import { isUnclaimed } from "./lib/unclaimedStore";
 import { loadSubscription } from "./subscriptions";
 
@@ -365,11 +375,15 @@ export const adminClearReferral = mutation({
  * settle transaction, so the stamp IS the idempotency guard: a second settle
  * finds `rewardedAt` and does nothing.
  *
- *  - Referee: 30% of a month of the tier they paid for (`referralRewardCredits`).
- *  - Referrer: 30% of a month of THEIR tier — unless they are unmetered
- *    (comped or Kedaipal-owned: already unlimited) or deleted; the row says
- *    which. Whether they could still refer TODAY doesn't matter: the referral
- *    was valid when it was made, and that was the promise.
+ * Both halves are sized by the tier the REFEREE paid for (Zaki, 20 Oct 2026):
+ * 30% of a month of its list grant — Pro 60 / Starter 30 — to each side. The
+ * referrer's own plan doesn't enter it, so bringing in a Pro store pays more
+ * than bringing in a Starter: the incentive tracks the revenue. The referrer
+ * half is withheld when they are unmetered (comped or Kedaipal-owned —
+ * already unlimited), deleted, or the same person as the referee
+ * (`looksLikeSelfReferral`); the row says which. Whether they could still
+ * refer TODAY doesn't matter: the referral was valid when it was made, and
+ * that was the promise.
  *
  * No referral row ⇒ nothing (most stores). Returns what happened, for tests.
  */
@@ -383,10 +397,10 @@ export async function grantReferralRewards(
 	if (!referee) return null;
 	const referrer = await ctx.db.get(row.referrerId);
 
-	const refereeCredits = referralRewardCredits(args.paidPlan);
+	const credits = referralRewardCredits(args.paidPlan);
 	const landed = await addPurchasedCredits(ctx, {
 		retailerId: args.refereeId,
-		credits: refereeCredits,
+		credits,
 		source: "referral",
 		type: "grant",
 		reason: "referral_referee",
@@ -400,20 +414,20 @@ export async function grantReferralRewards(
 	let referrerOutcome: NonNullable<Doc<"referrals">["referrerOutcome"]>;
 	if (!referrer) {
 		referrerOutcome = "deleted";
+	} else if (
+		looksLikeSelfReferral({
+			refereeEmails: [referee.notifyEmail],
+			refereePhone: referee.waPhone ?? referee.notifyWaPhone,
+			referrerEmails: [referrer.notifyEmail],
+			referrerPhone: referrer.waPhone ?? referrer.notifyWaPhone,
+		})
+	) {
+		referrerOutcome = "self";
 	} else {
-		const standing = await standingOf(ctx, referrer);
 		const sub = await loadSubscription(ctx, referrer._id);
-		// Unmetered = comped or Kedaipal-owned. `standing` answers that for a
-		// store that can still refer; a lapsed paid store can't refer NOW but
-		// still earns for the referral it made while it could.
-		const unmetered =
-			(standing.canRefer && !standing.earnsReward) ||
-			sub?.comped === true ||
-			storeOwnerIsAdmin(referrer);
-		if (unmetered) {
+		if (sub?.comped === true || storeOwnerIsAdmin(referrer)) {
 			referrerOutcome = "unmetered";
 		} else {
-			const credits = referralRewardCredits(sub?.plan ?? "pro");
 			const granted = await addPurchasedCredits(ctx, {
 				retailerId: referrer._id,
 				credits,
@@ -432,34 +446,37 @@ export async function grantReferralRewards(
 
 	const patch = {
 		rewardedAt: args.now,
-		...(landed ? { refereeCredits } : {}),
+		...(landed ? { refereeCredits: credits } : {}),
 		...(referrerCredits !== undefined ? { referrerCredits } : {}),
 		referrerOutcome,
 	};
 	await ctx.db.patch(row._id, patch);
 
 	const expiresAt = addMonthsMyt(args.now, PURCHASED_CREDIT_LIFETIME_MONTHS);
-	if (landed) {
-		await ctx.scheduler.runAfter(0, internal.referrals.sendRewardEmail, {
-			to: args.refereeId,
-			kind: "referee",
-			otherStoreId: row.referrerId,
-			credits: refereeCredits,
-			expiresAt,
+	const tell = async (
+		to: Id<"retailers">,
+		kind: ReferralEmailKind,
+		otherStoreId: Id<"retailers">,
+		amount: number,
+	) => {
+		const payload = { to, kind, otherStoreId, credits: amount, expiresAt };
+		await ctx.scheduler.runAfter(0, internal.referrals.sendRewardEmail, payload);
+		// The WhatsApp half sends only once Meta has approved the template
+		// (env set) — until then the email carries it. Same shape as the
+		// credit balance notices.
+		await ctx.scheduler.runAfter(0, internal.referrals.sendRewardWhatsApp, {
+			to,
+			kind,
+			otherStoreId,
+			credits: amount,
 		});
-	}
-	if (referrerCredits !== undefined) {
-		await ctx.scheduler.runAfter(0, internal.referrals.sendRewardEmail, {
-			to: row.referrerId,
-			kind: "referrer",
-			otherStoreId: args.refereeId,
-			credits: referrerCredits,
-			expiresAt,
-		});
-	}
+	};
+	if (landed) await tell(args.refereeId, "referee", row.referrerId, credits);
+	if (referrerCredits !== undefined)
+		await tell(row.referrerId, "referrer", args.refereeId, referrerCredits);
 	console.info("[referral] rewarded", {
 		referralId: row._id,
-		refereeCredits: landed ? refereeCredits : 0,
+		refereeCredits: landed ? credits : 0,
 		referrerOutcome,
 	});
 	return { ...row, ...patch };
@@ -473,10 +490,18 @@ export const rewardEmailContext = internalQuery({
 		const other = await ctx.db.get(otherStoreId);
 		return {
 			storeName: store.storeName,
+			// Meta-param hygiene: a store name with a tab or 4+ spaces is a
+			// terminal template rejection, and the seller types it themselves.
+			templateStoreName: templateParam(store.storeName, "your store"),
 			slug: store.slug,
 			notifyEmail: store.notifyEmail,
+			notifyWaPhone: store.notifyWaPhone,
 			locale: pickLocale(store.locale),
 			otherStoreName: other?.storeName ?? null,
+			templateOtherStoreName: templateParam(
+				other?.storeName ?? "",
+				"a Kedaipal seller",
+			),
 		};
 	},
 });
@@ -520,6 +545,83 @@ export const sendRewardEmail = internalAction({
 	},
 });
 
+/**
+ * The WhatsApp half of the reward notice — the approved utility template for
+ * the side, when Meta has approved it (env set) and the seller has an alert
+ * number. Gated by the WABA gateway like every seller template; a transient
+ * send failure retries on the push-failure schedule, a terminal one is logged
+ * (the email already went). Params: store, credits, the other store.
+ */
+export const sendRewardWhatsApp = internalAction({
+	args: {
+		to: v.id("retailers"),
+		kind: v.union(v.literal("referee"), v.literal("referrer")),
+		otherStoreId: v.id("retailers"),
+		credits: v.number(),
+		attempt: v.optional(v.number()),
+	},
+	handler: async (ctx, args): Promise<void> => {
+		const attempt = args.attempt ?? 1;
+		const templateName =
+			args.kind === "referrer"
+				? referralReferrerTemplateName()
+				: referralRefereeTemplateName();
+		if (!templateName) return; // not approved yet — the email carries it
+		const meta = await ctx.runQuery(internal.referrals.rewardEmailContext, {
+			to: args.to,
+			otherStoreId: args.otherStoreId,
+		});
+		if (!meta?.notifyWaPhone) return;
+		const wa = makeGuardedSender(ctx, args.to, "utility_template");
+		try {
+			const receipt = await wa.send(meta.notifyWaPhone, {
+				kind: "template",
+				templateName,
+				languageCode: TEMPLATE_LANGUAGE[meta.locale],
+				bodyParams: [
+					meta.templateStoreName,
+					String(args.credits),
+					meta.templateOtherStoreName,
+				],
+				// Registered button URL: https://kedaipal.com/app/settings?tab={{1}}
+				urlButtonParam: "billing",
+			});
+			if (receipt?.blocked) {
+				console.warn("[referral] reward WhatsApp suppressed by gateway", {
+					to: args.to,
+					kind: args.kind,
+					status: receipt.blocked,
+				});
+			}
+		} catch (err) {
+			const outcome = classifyPushFailure(
+				err instanceof WhatsAppSendError
+					? {
+							httpStatus: err.httpStatus,
+							metaCode: err.metaCode,
+							responded: err.responded,
+						}
+					: { responded: true },
+				attempt,
+			);
+			console.error("[referral] reward WhatsApp failed", {
+				to: args.to,
+				kind: args.kind,
+				attempt,
+				outcome,
+				err,
+			});
+			if (outcome.retry) {
+				await ctx.scheduler.runAfter(
+					outcome.delayMs,
+					internal.referrals.sendRewardWhatsApp,
+					{ ...args, attempt: attempt + 1 },
+				);
+			}
+		}
+	},
+});
+
 // ---------------------------------------------------------------------------
 // T3 (z8r3fdfp97): the "Refer a kedai" card
 // ---------------------------------------------------------------------------
@@ -533,11 +635,12 @@ export type MyReferralCard = {
 	link: string;
 	/** Whether this store's link counts right now, and why not. */
 	standing: ReferrerStanding;
-	/** What the referee gets, per tier. */
-	refereeOffer: Record<ListedPlan, number>;
-	/** What THIS store gets per referral that starts its plan — 0 when it
-	 * earns nothing (comped / Kedaipal-owned). */
-	referrerReward: number;
+	/** The bonus, per tier the REFEREE starts on — the same number lands on
+	 * each side, so this is also what THIS store earns (when `earns`). */
+	offer: Record<ListedPlan, number>;
+	/** Whether this store earns the referrer half — false for a comped or
+	 * Kedaipal-owned store (already unlimited). */
+	earns: boolean;
 	signedUp: number;
 	/** Referees who paid their first invoice (the reward moment). */
 	started: number;
@@ -563,7 +666,6 @@ export const myCard = query({
 		const retailer = access?.retailer ?? null;
 		if (!retailer) return null;
 		const standing = await standingOf(ctx, retailer);
-		const sub = await loadSubscription(ctx, retailer._id);
 		const rows = await ctx.db
 			.query("referrals")
 			.withIndex("by_referrer_created", (q) => q.eq("referrerId", retailer._id))
@@ -574,13 +676,12 @@ export const myCard = query({
 			if (r.rewardedAt !== undefined) started += 1;
 			creditsEarned += r.referrerCredits ?? 0;
 		}
-		const earns = standing.canRefer && standing.earnsReward;
 		return {
 			slug: retailer.slug,
 			link: referralHref(retailer.slug),
 			standing,
-			refereeOffer: referralRefereeOffer(),
-			referrerReward: earns ? referralRewardCredits(sub?.plan ?? "pro") : 0,
+			offer: referralRefereeOffer(),
+			earns: standing.canRefer && standing.earnsReward,
 			signedUp: rows.length,
 			started,
 			creditsEarned,

@@ -877,6 +877,17 @@ function SellerSheetBody({
  * but nobody's here"), and disappears with a reason once the first invoice is
  * paid and the referral can no longer change.
  */
+/** Why the referrer half did or didn't land — the admin's CAC view. */
+const REFERRER_OUTCOME_LABEL: Record<
+	"granted" | "unmetered" | "deleted" | "self",
+	(credits: number) => string
+> = {
+	granted: (c) => `+${c} referrer`,
+	unmetered: () => "referrer on the house",
+	deleted: () => "referrer deleted",
+	self: () => "referrer is the same person, nothing paid",
+};
+
 function ReferralRow({ seller, now }: { seller: AdminSellerRow; now: number }) {
 	const [open, setOpen] = useState(false);
 	const referral = seller.referral;
@@ -902,12 +913,10 @@ function ReferralRow({ seller, now }: { seller: AdminSellerRow; now: number }) {
 				)}
 				{referral?.reward ? (
 					<span className="shrink-0 text-xs text-muted-foreground">
-						Rewarded · +{referral.reward.refereeCredits} them
-						{referral.reward.referrerOutcome === "granted"
-							? ` · +${referral.reward.referrerCredits ?? 0} referrer`
-							: referral.reward.referrerOutcome === "unmetered"
-								? " · referrer on the house"
-								: " · referrer deleted"}
+						Rewarded · +{referral.reward.refereeCredits} them ·{" "}
+						{REFERRER_OUTCOME_LABEL[referral.reward.referrerOutcome](
+							referral.reward.referrerCredits ?? 0,
+						)}
 					</span>
 				) : seller.referralEditable ? (
 					<Button

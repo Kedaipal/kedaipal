@@ -30,8 +30,8 @@ const base: MyReferralCard = {
 	slug: "siti-kitchen",
 	link: "https://kedaipal.com/referral/siti-kitchen",
 	standing: { canRefer: true, earnsReward: true },
-	refereeOffer: { starter: 30, pro: 60 },
-	referrerReward: 30,
+	offer: { starter: 30, pro: 60 },
+	earns: true,
 	signedUp: 0,
 	started: 0,
 	creditsEarned: 0,
@@ -44,7 +44,7 @@ describe("ReferCard", () => {
 		render(<ReferCard retailerId={RID} />);
 		expect(screen.getByRole("heading", { name: "Refer a kedai" })).toBeTruthy();
 		expect(screen.getByText("60 bonus credits")).toBeTruthy();
-		expect(screen.getByText("30 credits")).toBeTruthy();
+		expect(screen.getByText("and so do you")).toBeTruthy();
 		expect(screen.getByText("siti-kitchen")).toBeTruthy();
 		const wa = screen.getByRole("link", { name: /Share on WhatsApp/ });
 		expect(wa.getAttribute("href")).toBe(
@@ -71,12 +71,12 @@ describe("ReferCard", () => {
 		card = {
 			...base,
 			standing: { canRefer: true, earnsReward: false },
-			referrerReward: 0,
+			earns: false,
 			signedUp: 2,
 		};
 		render(<ReferCard retailerId={RID} />);
 		expect(screen.getByText(/on the house/)).toBeTruthy();
-		expect(screen.queryByText(/and you get/)).toBeNull();
+		expect(screen.queryByText(/and so do you/)).toBeNull();
 		expect(screen.queryByText("Credits earned")).toBeNull();
 	});
 

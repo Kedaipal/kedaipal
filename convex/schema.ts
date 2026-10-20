@@ -3748,12 +3748,15 @@ export default defineSchema({
 		refereeCredits: v.optional(v.number()),
 		referrerCredits: v.optional(v.number()),
 		// `granted`; `unmetered` (a comped or Kedaipal-owned referrer — already
-		// unlimited, so nothing to give); `deleted` (the referrer store is gone).
+		// unlimited, so nothing to give); `deleted` (the referrer store is
+		// gone); `self` (the referee shares the referrer's email or WhatsApp
+		// number — one person, two stores, so the referrer half is withheld).
 		referrerOutcome: v.optional(
 			v.union(
 				v.literal("granted"),
 				v.literal("unmetered"),
 				v.literal("deleted"),
+				v.literal("self"),
 			),
 		),
 	})

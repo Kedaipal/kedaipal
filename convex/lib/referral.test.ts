@@ -3,6 +3,8 @@ import { ATTRIBUTION_MAX_LENGTH } from "./attribution";
 import { PLAN_CREDIT_GRANT } from "./plans";
 import {
 	isReferralSource,
+	looksLikeSelfReferral,
+	parseReferralInput,
 	referralHref,
 	referralPath,
 	referralRefereeOffer,
@@ -138,5 +140,61 @@ describe("referral share message", () => {
 		expect(msg).toContain("60 bonus credits");
 		expect(msg).toContain("30 on Starter");
 		expect(msg).not.toMatch(/RM|commission|affiliate|earn/i);
+	});
+});
+
+describe("parseReferralInput", () => {
+	test("accepts a slug, the referral link or the storefront link", () => {
+		expect(parseReferralInput("siti-kitchen")).toBe("siti-kitchen");
+		expect(parseReferralInput(" Siti-Kitchen ")).toBe("siti-kitchen");
+		expect(
+			parseReferralInput("https://kedaipal.com/referral/siti-kitchen"),
+		).toBe("siti-kitchen");
+		expect(parseReferralInput("kedaipal.com/siti-kitchen/?src=x")).toBe(
+			"siti-kitchen",
+		);
+	});
+	test("rejects empty and non-slug input", () => {
+		expect(parseReferralInput("")).toBeUndefined();
+		expect(parseReferralInput("<script>")).toBeUndefined();
+	});
+});
+
+describe("looksLikeSelfReferral", () => {
+	test("matches on email (case-insensitive) or on the phone digits", () => {
+		expect(
+			looksLikeSelfReferral({
+				refereeEmails: ["Owner@Example.com"],
+				refereePhone: undefined,
+				referrerEmails: ["owner@example.com"],
+				referrerPhone: "60123456789",
+			}),
+		).toBe(true);
+		expect(
+			looksLikeSelfReferral({
+				refereeEmails: ["a@x.com"],
+				refereePhone: "+60 12-345 6789",
+				referrerEmails: ["b@x.com"],
+				referrerPhone: "60123456789",
+			}),
+		).toBe(true);
+	});
+	test("different contacts are not a self-referral; blanks never match", () => {
+		expect(
+			looksLikeSelfReferral({
+				refereeEmails: ["a@x.com"],
+				refereePhone: "60111111111",
+				referrerEmails: ["b@x.com"],
+				referrerPhone: "60122222222",
+			}),
+		).toBe(false);
+		expect(
+			looksLikeSelfReferral({
+				refereeEmails: [undefined, ""],
+				refereePhone: undefined,
+				referrerEmails: [undefined],
+				referrerPhone: undefined,
+			}),
+		).toBe(false);
 	});
 });

@@ -39,7 +39,7 @@ export function ReferCard({ retailerId }: { retailerId: Id<"retailers"> }) {
 			return <PausedReferCard reason={standing.reason} />;
 		return null;
 	}
-	return <LiveReferCard card={card} earns={standing.earnsReward} />;
+	return <LiveReferCard card={card} earns={card.earns} />;
 }
 
 function Heading({ id }: { id?: string }) {
@@ -80,21 +80,18 @@ function LiveReferCard({
 		<section className="flex flex-col gap-3" aria-labelledby="refer-heading">
 			<Heading id="refer-heading" />
 			<div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4">
+				{/* One number for both sides, sized by the tier the kawan starts on
+				    (Zaki, 20 Oct 2026) — so the sentence says it once: "and so do
+				    you". A comped store's sentence stops at the kawan. */}
 				<p className="text-sm leading-relaxed">
 					Know another kedai that sells on WhatsApp? When they sign up through
 					your link and pay their first invoice, they get{" "}
-					<span className="font-semibold">
-						{card.refereeOffer.pro} bonus credits
-					</span>{" "}
-					on Pro ({card.refereeOffer.starter} on Starter)
+					<span className="font-semibold">{card.offer.pro} bonus credits</span>{" "}
+					on Pro ({card.offer.starter} on Starter)
 					{earns ? (
 						<>
 							{" "}
-							— and you get{" "}
-							<span className="font-semibold">
-								{card.referrerReward} credits
-							</span>
-							.
+							— <span className="font-semibold">and so do you</span>.
 						</>
 					) : (
 						"."
