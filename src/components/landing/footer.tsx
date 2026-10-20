@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { Instagram, Mail, Music2 } from "lucide-react";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
-import { BLOG_URL } from "../../lib/site-links";
+import { BLOG_URL, INSTAGRAM_URL, TIKTOK_URL } from "../../lib/site-links";
 import { m } from "../../paraglide/messages";
 import { AppImage } from "../ui/app-image";
 import { PaymentStripCompact } from "./payment-methods";
@@ -45,7 +45,7 @@ export function Footer() {
 									<span>{LEGAL_CONTACT_EMAIL}</span>
 								</a>
 								<a
-									href="https://www.instagram.com/kedaipal_my/"
+									href={INSTAGRAM_URL}
 									target="_blank"
 									rel="noopener noreferrer"
 									className={contactLinkClass}
@@ -54,7 +54,7 @@ export function Footer() {
 									<span>{m.footer_instagram()}</span>
 								</a>
 								<a
-									href="https://www.tiktok.com/@kedaipal"
+									href={TIKTOK_URL}
 									target="_blank"
 									rel="noopener noreferrer"
 									className={contactLinkClass}
