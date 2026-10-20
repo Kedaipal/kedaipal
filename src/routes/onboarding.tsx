@@ -455,7 +455,16 @@ function OnboardingForm() {
 						<Input
 							type="text"
 							value={referralInput}
-							onChange={(e) => setReferralInput(e.target.value)}
+							onChange={(e) => {
+								const raw = e.target.value;
+								// A pasted LINK collapses to its slug at once, so the field
+								// never reads "kedaipal.com/referral/ https://kedaipal…" —
+								// the plate already says the rest. Bare typing is left alone.
+								const slug = raw.includes("/")
+									? parseReferralInput(raw)
+									: undefined;
+								setReferralInput(slug ?? raw);
+							}}
 							placeholder="their-store"
 							variant="bare"
 							autoCapitalize="none"
