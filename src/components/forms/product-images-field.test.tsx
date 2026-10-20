@@ -182,6 +182,59 @@ describe("ProductImagesField — upload tiles", () => {
 		expect(states.at(-1)).toEqual({ kind: "failed", count: 1 });
 	});
 
+	it("unmounting with a failed tile tells the parent 'idle' and frees the preview — no parent left holding 'failed' for a grid that's gone (PR #392 review)", async () => {
+		uploadImage.mockResolvedValueOnce(timedOut);
+		const { unmount } = render(<Harness />);
+		pick("a.jpg");
+		await screen.findByText("Didn't upload");
+		expect(states.at(-1)).toEqual({ kind: "failed", count: 1 });
+
+		unmount();
+		expect(states.at(-1)).toEqual({ kind: "idle" });
+		expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview");
+	});
+
+	it("unmounting mid-upload tells the parent 'idle' too", async () => {
+		uploadImage.mockReturnValue(deferred().promise);
+		const { unmount } = render(<Harness />);
+		pick("a.jpg");
+		await screen.findByText("Uploading…");
+		expect(states.at(-1)).toEqual({ kind: "uploading" });
+
+		unmount();
+		expect(states.at(-1)).toEqual({ kind: "idle" });
+	});
+
+	it("a parent that throws inside onChange fails THAT tile and keeps the queue alive", async () => {
+		uploadImage
+			.mockResolvedValueOnce(ok("s-a"))
+			.mockResolvedValueOnce(ok("s-b"));
+		let calls = 0;
+		function Throwing() {
+			const [images, setImages] = useState<ProductImage[]>([]);
+			latest = images;
+			return (
+				<ProductImagesField
+					images={images}
+					onChange={(next) => {
+						// First landing blows up in the parent; the second must still land.
+						if (++calls === 1) throw new Error("parent boom");
+						setImages(next);
+					}}
+					onUploadStateChange={(s) => states.push(s)}
+				/>
+			);
+		}
+		render(<Throwing />);
+		pick("a.jpg", "b.jpg");
+
+		await screen.findByText("Didn't upload");
+		await waitFor(() => expect(latest.map((i) => i.id)).toEqual(["s-b"]));
+		expect(screen.getByRole("alert").textContent).toMatch(
+			/Something went wrong adding this photo/,
+		);
+	});
+
 	it("photos still uploading count toward the 5-photo limit", async () => {
 		uploadImage.mockReturnValue(deferred().promise);
 		render(
@@ -195,6 +248,8 @@ describe("ProductImagesField — upload tiles", () => {
 		);
 		pick("a.jpg");
 		await screen.findByText("Uploading…");
+		// The count says what the cap counts: a photo on its way up holds a slot.
+		expect(screen.getByText("(4/5)")).toBeTruthy();
 		pick("b.jpg", "c.jpg");
 		expect(screen.getByRole("alert").textContent).toBe(
 			"Maximum 5 images per product",

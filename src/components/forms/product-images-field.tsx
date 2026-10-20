@@ -103,6 +103,27 @@ export function ProductImagesField({
 				: { kind: uploadKind },
 		);
 	}, [uploadKind, failedCount, onUploadStateChange]);
+	// Unmounting takes the tiles with it, so the parent must not keep hearing
+	// "uploading" / "failed" from a grid that no longer exists — in the wizard
+	// that left Continue disabled on every later step with nothing to retry
+	// (PR #392 review). The old grid reset its parent in a `finally`; this is
+	// that reset, for the effect-driven report.
+	useEffect(
+		() => () => {
+			onUploadStateChange?.({ kind: "idle" });
+		},
+		[onUploadStateChange],
+	);
+	// The tiles' preview URLs die with the grid.
+	const pendingRef = useRef(pending);
+	pendingRef.current = pending;
+	useEffect(
+		() => () => {
+			for (const tile of pendingRef.current)
+				URL.revokeObjectURL(tile.previewUrl);
+		},
+		[],
+	);
 
 	function patchTile(key: string, next: PendingTile | null) {
 		setPending((now) =>
@@ -113,32 +134,54 @@ export function ProductImagesField({
 	}
 
 	function enqueue(tile: PendingTile) {
-		queueRef.current = queueRef.current.then(async () => {
-			const result = await uploadImage(tile.file, () => generateUploadUrl());
-			if (result.ok) {
-				const next = [
-					...imagesRef.current,
-					{ id: result.storageId, url: URL.createObjectURL(result.blob) },
-				];
-				imagesRef.current = next;
-				onChange(next);
-				URL.revokeObjectURL(tile.previewUrl);
-				patchTile(tile.key, null);
-			} else if (result.retryable) {
+		queueRef.current = queueRef.current
+			.then(async () => {
+				const result = await uploadImage(tile.file, () => generateUploadUrl());
+				if (result.ok) {
+					const before = imagesRef.current;
+					const next = [
+						...before,
+						{ id: result.storageId, url: URL.createObjectURL(result.blob) },
+					];
+					imagesRef.current = next;
+					try {
+						onChange(next);
+					} catch (err) {
+						// The parent never took it: back the list out, or the photo
+						// would ride in on the NEXT landing while its tile reads
+						// failed and Retry adds it twice.
+						imagesRef.current = before;
+						throw err;
+					}
+					URL.revokeObjectURL(tile.previewUrl);
+					patchTile(tile.key, null);
+				} else if (result.retryable) {
+					patchTile(tile.key, {
+						...tile,
+						status: "failed",
+						message: result.message,
+					});
+				} else {
+					// The file itself (a HEIC, too large) or a refusal naming its own
+					// fix — a Retry would be a button that can't work, so the tile
+					// goes and the reason is said once, where the seller is looking.
+					URL.revokeObjectURL(tile.previewUrl);
+					patchTile(tile.key, null);
+					setRefusal(result.message);
+				}
+			})
+			.catch(() => {
+				// `uploadImage` never throws, but `onChange` runs the PARENT's code
+				// inside this chain. A rejected link would skip every later tile's
+				// `.then` and leave them on "Uploading…" forever — the symptom this
+				// grid exists to end — so a throw here fails THIS tile, retryable,
+				// and the chain stays sound.
 				patchTile(tile.key, {
 					...tile,
 					status: "failed",
-					message: result.message,
+					message: "Something went wrong adding this photo. Try again.",
 				});
-			} else {
-				// The file itself (a HEIC, too large) or a refusal naming its own
-				// fix — a Retry would be a button that can't work, so the tile
-				// goes and the reason is said once, where the seller is looking.
-				URL.revokeObjectURL(tile.previewUrl);
-				patchTile(tile.key, null);
-				setRefusal(result.message);
-			}
-		});
+			});
 	}
 
 	function handleFiles(files: readonly File[]) {
@@ -184,7 +227,7 @@ export function ProductImagesField({
 				<span className="whitespace-nowrap text-sm font-medium">
 					Product images{" "}
 					<span className="text-muted-foreground">
-						({images.length}/{MAX_IMAGES})
+						({images.length + pending.length}/{MAX_IMAGES})
 					</span>
 				</span>
 				{autosaveStatus?.kind === "saving" ? (

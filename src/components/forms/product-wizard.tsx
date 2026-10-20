@@ -1977,8 +1977,28 @@ export function ProductWizard({
 				<button
 					type="button"
 					onClick={goBack}
-					aria-label={stepPos === 0 ? "Back to products" : "Previous step"}
-					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+					// Back unmounts the photo grid: an upload in flight would land
+					// with no tile to show it, a failed one would be dropped without
+					// a word. Held with the reason until the photos settle — the
+					// same reason Continue carries (PR #392 review).
+					disabled={uploading || photosFailed > 0}
+					aria-label={
+						uploading
+							? "Back — wait for the photo to finish uploading"
+							: photosFailed > 0
+								? `Back — ${failedPhotosLabel(photosFailed)}, retry or remove it first`
+								: stepPos === 0
+									? "Back to products"
+									: "Previous step"
+					}
+					title={
+						uploading
+							? "Wait for the photo to finish uploading"
+							: photosFailed > 0
+								? `${failedPhotosLabel(photosFailed)} — retry or remove it first`
+								: undefined
+					}
+					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
 				>
 					<ChevronLeft className="size-5" />
 				</button>

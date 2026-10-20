@@ -109,10 +109,75 @@ describe("wizard — Continue is held while a photo sits failed", () => {
 		);
 		expect(continueButton().disabled).toBe(true);
 
+		// Back is held with the same reason: it would unmount the grid and drop
+		// the failed photo without a word (PR #392 review).
+		const back = screen.getByRole("button", {
+			name: /^Back — 1 photo didn't upload/,
+		}) as HTMLButtonElement;
+		expect(back.disabled).toBe(true);
+
 		fireEvent.click(
 			screen.getByRole("button", { name: "Remove photo that didn't upload" }),
 		);
 		await waitFor(() => expect(continueButton().textContent).toBe("Continue"));
 		expect(continueButton().disabled).toBe(false);
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "Previous step",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
+	});
+
+	it("Back is held while a photo is still uploading, and frees when it lands", async () => {
+		let resolve!: (r: UploadResult) => void;
+		uploadImage.mockReturnValueOnce(
+			new Promise<UploadResult>((r) => {
+				resolve = r;
+			}),
+		);
+		render(
+			<ProductWizard
+				retailerId={"r1" as never}
+				categoriesLocked={false}
+				eventsLocked={false}
+				promoLocked={false}
+				currency="MYR"
+				onSubmit={vi.fn()}
+				onSkipToFullForm={vi.fn()}
+				onOpenFullForm={vi.fn()}
+				onExit={vi.fn()}
+				initialState={atNameStep()}
+			/>,
+		);
+		const input = document.querySelector(
+			'input[type="file"]',
+		) as HTMLInputElement;
+		fireEvent.change(input, {
+			target: { files: [new File(["x"], "a.jpg", { type: "image/jpeg" })] },
+		});
+		// The tile AND the Continue button both read "Uploading…".
+		await screen.findAllByText("Uploading…");
+		await waitFor(() =>
+			expect(
+				(
+					screen.getByRole("button", {
+						name: /^Back — wait/,
+					}) as HTMLButtonElement
+				).disabled,
+			).toBe(true),
+		);
+
+		resolve({ ok: true, storageId: "s-a", blob: new Blob(["y"]) });
+		await waitFor(() =>
+			expect(
+				(
+					screen.getByRole("button", {
+						name: "Previous step",
+					}) as HTMLButtonElement
+				).disabled,
+			).toBe(false),
+		);
 	});
 });
