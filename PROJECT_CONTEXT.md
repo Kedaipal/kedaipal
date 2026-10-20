@@ -170,13 +170,13 @@ Online payments are deferred to the first paid release — see [Payments Archite
 ## Business Model
 
 - Solo dev-founder. Sub-USD$5K initial budget.
-- **Pricing locked (May 2026):** 3 tiers, 14-day free trial (no card), no free tier yet.
+- **Pricing (May 2026, reset 30 Aug 2026):** 3 flat tiers, **free until your first live order or day 15** (no card), an **Off-Season Hold** status at RM19/S$9 for paid sellers between seasons, no free tier yet. SGD parity for Singapore.
 
 | Tier | Monthly | Annual | Orders/mo | Users | Target customer |
 |---|---|---|---|---|---|
-| **Starter** | RM79 | RM790 | 100 | 1 | Just starting to feel pain (10–50 orders/mo) |
-| **Pro** ★ | RM149 | RM1,490 | 500 | 2 | **Target tier** — established seller (50–300 orders/mo) |
-| **Scale** | RM299 | RM2,990 | Unlimited | 5 | Reseller + wholesale models (300+ orders/mo) |
+| **Starter** | RM79 · S$29 | RM790 | 100 | 1 | Just starting to feel pain (10–50 orders/mo) |
+| **Pro** ★ | RM149 · S$59 | RM1,490 | 200 | 2 | **Target tier** — established seller (50–300 orders/mo) |
+| **Scale** | RM399 · S$149 (Coming soon) | RM3,990 | 400 | 5 | Multi-outlet / team tier (up to 3 outlets, +RM49 · S$18 each) |
 
 - Annual = 10 months paid, 12 received (~17% off).
 - No transaction fees, no per-user surcharges, no per-message billing (Meta charges WA template messages directly — transparent pass-through).

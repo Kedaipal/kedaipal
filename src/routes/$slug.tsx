@@ -2,29 +2,39 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
+import type { ClosedDateRange } from "../../convex/lib/closedDates";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import {
+	closedDatesSpecification,
 	type OpeningHours,
 	openingHoursSpecification,
 } from "../../convex/lib/openingHours";
 import { CartBar } from "../components/storefront/cart-bar";
 import { CategoryRail } from "../components/storefront/category-rail";
 import { FeaturedProduct } from "../components/storefront/featured-product";
+import { ProductGrid } from "../components/storefront/product-grid";
 import {
-	AllProductsDivider,
-	ProductGrid,
-} from "../components/storefront/product-grid";
+	OrderingPausedProvider,
+	SeasonalBreakNotice,
+} from "../components/storefront/seasonal-break";
+import {
+	StoreUnavailable,
+	type StoreUnavailableLoaderData,
+	storeUnavailableHead,
+} from "../components/storefront/store-unavailable";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
+import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import {
 	absoluteProxiedImageUrl,
 	imageSrcSet,
 	proxiedImageUrl,
 } from "../lib/image-proxy";
+import { jsonLdScript } from "../lib/json-ld";
 import { ssrRead } from "../lib/ssr-read";
 
 interface StorefrontLoaderData {
@@ -45,10 +55,15 @@ interface StorefrontLoaderData {
 	// Store opening hours (86eyp5rav) — feeds the Store JSON-LD's
 	// openingHoursSpecification (local SEO). Undefined = open 24/7, no block.
 	openingHours: OpeningHours | undefined;
+	// Closed dates (z8r3fdhpm7) — the JSON-LD's holiday hours
+	// (specialOpeningHoursSpecification). Undefined = none.
+	closedDates: ClosedDateRange[] | undefined;
 }
 
 export const Route = createFileRoute("/$slug")({
-	loader: async ({ params }): Promise<StorefrontLoaderData | null> => {
+	loader: async ({
+		params,
+	}): Promise<StorefrontLoaderData | StoreUnavailableLoaderData | null> => {
 		const client = getConvexHttpClient();
 		const read = await ssrRead(() =>
 			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
@@ -70,6 +85,11 @@ export const Route = createFileRoute("/$slug")({
 		if (result.status === "notFound") {
 			throw notFound();
 		}
+		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
+		// the component renders the neutral unavailable page, and head()
+		// takes it out of search in the SSR HTML.
+		if (result.status === "unavailable")
+			return { unavailable: true, storeName: result.storeName };
 
 		const retailer = result.retailer;
 
@@ -116,10 +136,13 @@ export const Route = createFileRoute("/$slug")({
 				: undefined,
 			coverImageUrl: retailer.coverImageUrl ?? undefined,
 			openingHours: retailer.openingHours,
+			closedDates: retailer.closedDates,
 		};
 	},
 	head: ({ loaderData }) => {
 		if (!loaderData) return {};
+		if ("unavailable" in loaderData)
+			return storeUnavailableHead(loaderData.storeName);
 		const {
 			storeName,
 			description,
@@ -129,6 +152,7 @@ export const Route = createFileRoute("/$slug")({
 			checkoutPhone,
 			locale,
 			openingHours,
+			closedDates,
 		} = loaderData;
 		const title = `${storeName} — Order on WhatsApp | Kedaipal`;
 		const ogLocale = OG_LOCALE[locale];
@@ -174,6 +198,14 @@ export const Route = createFileRoute("/$slug")({
 						openingHoursSpecification: openingHoursSpecification(openingHours),
 					}
 				: {}),
+			// Upcoming closed dates as schema.org holiday hours (z8r3fdhpm7) —
+			// search shows "Closed" on Raya instead of the weekly hours.
+			...(closedDatesSpecification(closedDates).length > 0
+				? {
+						specialOpeningHoursSpecification:
+							closedDatesSpecification(closedDates),
+					}
+				: {}),
 		};
 
 		return {
@@ -201,12 +233,7 @@ export const Route = createFileRoute("/$slug")({
 						]
 					: []),
 			],
-			scripts: [
-				{
-					type: "application/ld+json",
-					children: JSON.stringify(jsonLd),
-				},
-			],
+			scripts: [jsonLdScript(jsonLd)],
 		};
 	},
 	notFoundComponent: StoreNotFound,
@@ -216,11 +243,17 @@ export const Route = createFileRoute("/$slug")({
 function StoreNotFound() {
 	const { slug } = Route.useParams();
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-3xl font-bold">Store not found</h1>
-			<p className="text-sm text-muted-foreground">
-				No retailer uses <span className="font-mono">/{slug}</span>.
-			</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="text-3xl font-bold">Store not found</h1>
+				<p className="text-sm text-muted-foreground">
+					No retailer uses <span className="font-mono">/{slug}</span>.
+				</p>
+			</div>
+			{/* No store to attribute to — the slug names nobody. The directory
+			    link turns the dead end into a next step; the badge stays the
+			    way to Kedaipal itself. */}
+			<StorefrontFooter discover />
 		</main>
 	);
 }
@@ -228,13 +261,18 @@ function StoreNotFound() {
 function StorefrontSkeleton() {
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
-			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8">
-				<Skeleton className="h-5 w-24" />
-				<div className="flex items-center gap-4">
-					<Skeleton className="h-16 w-16 shrink-0 rounded-2xl" />
-					<div className="flex flex-col gap-2">
-						<Skeleton className="h-7 w-40" />
-						<Skeleton className="h-4 w-48" />
+			{/* Mirrors the island shape (z8r3fdvwcy) — a band, then the card
+			    floating over its edge with the tile beside a name + blurb stack,
+			    no Kedaipal mark (the footer carries "Powered by"). */}
+			<header>
+				<div className="h-44 bg-gradient-to-b from-accent/15 to-accent/5 lg:h-56 lg:rounded-b-3xl" />
+				<div className="relative -mt-18 mx-4 rounded-3xl bg-card p-4 ring-1 ring-foreground/5 lg:-mt-22 lg:mx-8 lg:px-7 lg:py-6 dark:ring-white/10">
+					<div className="flex items-start gap-3.5">
+						<Skeleton className="size-16 shrink-0 rounded-[18px] lg:size-21 lg:rounded-[22px]" />
+						<div className="flex flex-col gap-2 pt-1">
+							<Skeleton className="h-6 w-40" />
+							<Skeleton className="h-4 w-48" />
+						</div>
 					</div>
 				</div>
 			</header>
@@ -261,6 +299,9 @@ function StorefrontRoute() {
 	// Persist the visit's ?src=/utm_source tag for this session (86eyq0eq9) —
 	// checkout stamps it onto the order so Insights can report per-source.
 	useCaptureAttribution(slug);
+	// A `?voucher=` link lands on an EMPTY cart, so the code has to survive the
+	// browsing that follows (`z8r3fdr617`) — same reason as the line above.
+	useCaptureVoucherParam(slug);
 	// Live query keeps the catalog reactive after the SSR'd loader response.
 	const result = useQuery(
 		convexQuery(api.retailers.getRetailerBySlug, { slug }),
@@ -269,6 +310,9 @@ function StorefrontRoute() {
 		result && result.status === "ok" ? result.retailer._id : undefined,
 	);
 
+	if (result?.status === "unavailable") {
+		return <StoreUnavailable storeName={result.storeName} />;
+	}
 	if (result === undefined || result.status !== "ok") {
 		return <StorefrontSkeleton />;
 	}
@@ -276,30 +320,39 @@ function StorefrontRoute() {
 	const retailer = result.retailer;
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
-			{/* Shared brand header (cover/logo/name) — identical on the category
-			    pages so buyers always know whose store they're in. */}
-			<StorefrontHeader retailer={retailer} />
+		<OrderingPausedProvider
+			paused={retailer.orderingPaused === true}
+			pausedBy={retailer.orderingPausedBy}
+		>
+			{/* pb-28 keeps ≥96px clear under the content for the floating cart
+			    pill (z8r3fdegb5) so it never sits on the footer. */}
+			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-28">
+				{/* The full brand hero renders ONLY here (z8r3fdegb5) — subpages
+			    carry the compact StorefrontAppBar so deep links reach their
+			    subject on the first screen. */}
+				<StorefrontHeader retailer={retailer} slug={retailer.slug} />
+				{/* Off-Season Hold: the store is browsable, not orderable. */}
+				<SeasonalBreakNotice storeName={retailer.storeName} />
 
-			<section className="mt-2 px-5 lg:px-8">
-				{/* Search first (sticky inside the grid), then the merchandised lead:
+				<section className="mt-2 px-5 lg:px-8">
+					{/* Search first (sticky inside the grid), then the merchandised lead:
 				    the category rail + the "Popular this week" shelf, then
 				    the full grid (86eybrhrt PR3). Both lead pieces render nothing when
 				    they have nothing honest to show (no categories / no qualifying
 				    orders), so quiet stores stay search + grid. */}
-				<ProductGrid
-					retailerId={retailer._id}
-					cart={cart}
-					storeSlug={retailer.slug}
-					beforeGrid={
-						<>
-							{/* `gap-6` owns the rhythm between the two lead sections
-							    rather than either one carrying a trailing margin: each
-							    renders null on a store with no categories / no qualifying
-							    orders, and a gap only applies between siblings that
-							    actually exist — so neither can leave a dangling space.
-							    `peer` lets the divider below detect whether either one
-							    rendered at all. */}
+					<ProductGrid
+						retailerId={retailer._id}
+						cart={cart}
+						storeSlug={retailer.slug}
+						beforeGrid={
+							// `gap-6` owns the rhythm between the two lead sections
+							// rather than either one carrying a trailing margin: each
+							// renders null on a store with no categories / no qualifying
+							// orders, and a gap only applies between siblings that
+							// actually exist — so neither can leave a dangling space.
+							// `peer` lets the grid's "All products" heading (rendered as
+							// this wrapper's next sibling) detect whether either one
+							// rendered at all.
 							<div className="peer flex flex-col gap-6">
 								<CategoryRail
 									retailerId={retailer._id}
@@ -311,17 +364,17 @@ function StorefrontRoute() {
 									cart={cart}
 								/>
 							</div>
-							{/* Shows only when something above it rendered — otherwise the
-							    grid follows the search bar directly. */}
-							<AllProductsDivider />
-						</>
-					}
+						}
+					/>
+				</section>
+
+				<StorefrontFooter
+					slug={slug}
+					discover={retailer.marketplaceUnlisted !== true}
 				/>
-			</section>
 
-			<StorefrontFooter />
-
-			<CartBar cart={cart} storeSlug={retailer.slug} />
-		</div>
+				<CartBar cart={cart} storeSlug={retailer.slug} />
+			</div>
+		</OrderingPausedProvider>
 	);
 }

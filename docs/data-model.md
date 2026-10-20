@@ -19,6 +19,12 @@ erDiagram
     retailers ||--o{ slugHistory : "renamed from"
     customers ||--o{ orders : "places (nullable)"
     orders ||--o{ orderEvents : "audited by"
+    orders ||--o{ paymentClaims : "buyer payment submissions"
+    retailers ||--|| creditAccounts : "credit balance"
+    retailers ||--o{ creditLedger : "credit movements"
+    retailers ||--o{ creditLots : "purchased credits"
+    retailers ||--o{ creditPurchases : "top-up packs"
+    creditPurchases ||--o| creditLots : "lands as"
     products ||--o{ productVariants : "varies into"
     productVariants ||--o{ orders : "snapshotted into items[]"
 
@@ -137,7 +143,7 @@ Catalog items, scoped to a retailer. **Soft-deleted** via `active: boolean` — 
 | `name` | string | Listing title. |
 | `description` | string? | Rendered as **sanitized markdown** on the storefront (specs, "what's included"). |
 | `currency` | string | Must match the order currency at checkout. |
-| `options` | object[]? | 0–2 **option axes** `{name, values[]}`, ordered (drives picker order). Empty/undefined = no axes. Capped at 2 axes / 50 variants. |
+| `options` | object[]? | 0–2 **option axes** `{name, values[]}`, ordered (drives picker order). Empty/undefined = no axes. Capped at 2 axes / 100 variants (`convex/lib/variant.ts`). |
 | `imageStorageIds` | string[] | Product-level hero gallery (up to 5). **Order is meaningful** — index 0 is the storefront cover. The listing editor lets the seller drag-to-reorder the gallery (same `SortableList` primitive as elsewhere); the array is persisted in display order, no separate "primary" flag. |
 | `active` | boolean | Soft-delete flag. |
 | `sortOrder` | number | Custom storefront ranking. **Storefront** `list` (active-only) orders ascending `sortOrder`, then `createdAt`. **Dashboard** `listAll` orders **active-first, then `sortOrder`, then `createdAt`** — so archived products sink to the end (archiving moves a product down with no renumber). `create` sets `sortOrder: Date.now()` so new products append. Inline drag-and-drop in the dashboard "All" view reorders the **active** products and calls `products.reorder({ retailerId, orderedIds })` (full set: reordered active + archived kept last), which assigns `sortOrder = index`. |
@@ -181,7 +187,7 @@ First-class CRM entity, **keyed by `(retailerId, waPhone)`**. Full lifecycle in 
 | `searchText` | string | Lowercase haystack (name + pushname + phone) powering the search index. |
 | `orderCount`, `totalSpent`, `firstOrderAt`, `lastOrderAt` | number | **Denormalized aggregates**, refreshed on order create/cancel. |
 
-Display name resolves `name → waProfileName → formatted phone` via `getDisplayName` (mirrored in [`convex/lib/customer.ts`](../convex/lib/customer.ts) + [`src/lib/customer.ts`](../src/lib/customer.ts)).
+Display name resolves `name → waProfileName → formatted phone` via `getDisplayName` — one implementation in [`convex/lib/customer.ts`](../convex/lib/customer.ts), re-exported for the dashboard by [`src/lib/customer.ts`](../src/lib/customer.ts). `waPhone` is E.164 digits without the `+` (`60123456789`, `447911123456`), exactly Meta's inbound `from` — buyers may give a number from any country, so no country column exists or is needed; see [`phone-numbers.md`](./phone-numbers.md).
 
 **Indexes:** `by_retailer`, `by_retailer_phone` (find-or-create key), `by_retailer_lastOrder` (recency sort), `by_retailer_ltv` (lifetime-value sort), `by_retailer_orderCount` (order-count sort). **Search index:** `search_customers` (filtered by `retailerId`).
 
@@ -196,13 +202,14 @@ The core transactional entity. Two independent dimensions:
 |---|---|---|
 | `shortId` | string | `ORD-XXXX`. Alphabet excludes `O/0/I/1` (visual clarity in WhatsApp). Acts as a capability token for public mutations. |
 | `customerId` | id? | Link to aggregated customer. Optional — null for phone-less link-in-bio checkouts until the phone is known. |
-| `items` | object[] | Line **snapshots** `{productId, variantId?, name, variantLabel?, price, quantity}` — immune to later product/variant edits. `variantId`/`variantLabel` absent only on legacy (pre-variant) orders. |
+| `items` | object[] | Line **snapshots** `{productId, variantId?, name, variantLabel?, price, quantity, …}` — immune to later product/variant edits. `variantId`/`variantLabel` absent only on legacy (pre-variant) orders. Other frozen line fields include `stockReserved`, `categoryNames` and `pickupNote` (the product's collection instruction, `z8r3fdff97` — see [`fulfilment.md`](./fulfilment.md)). |
 | `subtotal`, `total`, `currency` | — | Computed by `computeOrderTotals` ([`convex/lib/order.ts`](../convex/lib/order.ts)); currently `total === subtotal`. |
 | `status` | union | Fulfilment pipeline (see above). |
 | `customer` | object | Denormalized `{name?, waPhone?}` snapshot — channel-agnostic checkout capture. |
 | `deliveryMethod` | `"delivery"\|"self_collect"`? | Defaults to `"delivery"`. |
 | `deliveryAddress` | object? | **Invariant:** required when `delivery`, forbidden when `self_collect`. Validated by [`convex/lib/address.ts`](../convex/lib/address.ts). |
 | `fulfilmentDate` | number? | When the buyer needs it (delivery **or** pickup) — epoch-ms of a MYT-midnight day. Drives the inbox default sort + "Due" chips. Validated to `[today + retailer notice, today + 30]`. See [`fulfilment-date.md`](./fulfilment-date.md). |
+| `fulfilmentTimeMinutes` | number? | The time on that day, minutes since MYT midnight (0..1439) — a delivery slot, or a pickup time when checkout asked for one (`z8r3fdff97`). Stored apart from the date so the date keeps its whole-day invariant. Floored by per-product prep time today. |
 | `carrierTrackingUrl` | string? | Set by retailer on `shipped`; surfaced in tracking + WhatsApp. |
 | `paymentStatus`, `paymentReference`, `paymentClaimedAt`, `paymentReceivedAt`, `paymentProofStorageId` | — | Payment handshake (independent of `status`). |
 | `mockupStatus`, `mockupImageStorageId`, `mockupChangeNote`, `mockupSubmittedAt`, `mockupApprovedAt`, `mockupWaivedAt` | — | **Mockup/proof approval** — a *third* independent dimension (like payment), gating `confirmed→packed`. `mockupStatus`: `pending → submitted → approved` (+ `changes_requested` loop). Undefined = order has no proof-required item. ⚠️ "mockup" ≠ payment "proof". See [`proof-approval.md`](./proof-approval.md). |
@@ -215,16 +222,52 @@ Immutable append-only audit log. One row per status transition or notable action
 
 **Index:** `by_order`.
 
+### `paymentClaims`
+
+One row per buyer "I've paid" submission (ClickUp `z8r3fdn2uj`): `orderId`, `reference?`, `proofStorageId?`, `createdAt`. Each row is what THAT submission carried; `orders.paymentReference` / `paymentProofStorageId` stay as the latest values. Capped at 20 per order. Pre-table orders are rebuilt from the order's own fields until `migrations:backfillPaymentClaims` runs. Rows and their screenshots are freed with the order (`lib/orderBlobs.ts`). See [`payment-handshake.md`](./payment-handshake.md#payment-proof-history-z8r3fdn2uj).
+
+**Index:** `by_order_createdAt`.
+
+### Kedaipal Credits: `creditAccounts`, `creditLedger`, `creditLots`, `creditPurchases`
+
+The order-credit ledger (ClickUp `86eye2ccu`). 1 credit = 1 order, debited when an
+order is created. Full model: [`credits.md`](./credits.md).
+
+| Table | One row per | What it holds |
+| --- | --- | --- |
+| `creditAccounts` | store | The CACHED `planBalance` (may be negative — a debt) and `purchasedBalance`, the usage period (`periodKey` `YYYY-MM`, `periodGrant`), an admin `grantOverride`, the `annualGrant` locked for a prepaid year, the seller refund count, and `exhaustedAt`. Written only by `applyEntry` in `convex/credits.ts`, in the same mutation as its ledger row. |
+| `creditLedger` | credit movement | Append-only source of truth: `type` (grant / purchase / debit / refund / adjust / expire), `bucket`, signed `amount`, `reason`, `refId` (the order id for debits and refunds — the idempotency key), `refLabel` (`ORD-XXXX`), the running `planAfter` / `purchasedAfter`, and for admin adjustments a `note`. **Retained** when a store is deleted — a financial record, like `invoices`. |
+| `creditLots` | batch of purchased credits | `credits`, `remaining`, `open`, `expiresAt` (12 calendar months after landing), `source` (purchase / referral / adjust). Spent oldest-first; `purchasedBalance` always equals the sum of `remaining`. |
+| `creditPurchases` | top-up checkout (Credits T2, `z8r3fdf8ht`) | The pack frozen at purchase (`packId`, `credits`, `amountMinor`, `currency` — the store's BILLING currency), `status` (pending → paid / expired / failed), `source` (`manual`), `createdBy` (the buyer — owner or a teammate with credits write), `purchaseNumber` (`CRD-YYYYMM-XXXX`), the HitPay `gatewayRequestId` + `gatewayPayment` (`url`, settled `paymentId` — the settle's idempotency key), `paymentMethod`, `gatewayIssue` (an uncredited late / mismatched payment), `lotId`, `receiptPdfStorageId`, `paidAt` / `expiredAt`. Deliberately NOT `invoices` (a pending invoice past its due date locks the store). **Retained** when a store is deleted; its pending rows are expired. See [`credits.md`](./credits.md#top-up-packs-t2). |
+
+**Indexes:** `creditAccounts.by_retailer`, `by_period` (the month-boundary sweep);
+`creditLedger.by_retailer_created`, `by_retailer_ref_type` (per-order idempotency);
+`creditLots.by_retailer_open_expiry` (spend + expiry order), `by_open_expiry` (the
+daily expiry sweep); `creditPurchases.by_retailer_created` (the return view's
+newest purchase), `by_retailer_status_created` (paid history, pending reconcile,
+the deletion phase), `by_gateway_request` (webhook resolution), `by_status_paid`
+(Admin → Billing's this-month top-up revenue — one bounded range, T3).
+
+`creditAccounts.notices` (`{periodKey, sent}`) is the balance-notice dedupe and
+`creditLots.expiryNoticeAt` stamps a lot's 14-day expiry heads-up (Credits T3 —
+[`credits.md`](./credits.md#the-notices)); both are written directly, never
+through `applyEntry`, because neither is a balance.
+
+Deliberately **not** fields on `retailers`: the storefront reads the retailer doc,
+and a per-order balance patch there would re-run every open storefront tab.
+
 ## The mirrored-validation pattern
 
-Validation helpers that must run on **both** the Convex backend and the React frontend are duplicated, not shared, because Convex bundles from `convex/` and the frontend bundles from `src/`:
+Some validation helpers that run on **both** the Convex backend and the React frontend are duplicated rather than shared:
 
 | Concern | Backend | Frontend |
 |---|---|---|
-| Slug / phone / email | [`convex/lib/slug.ts`](../convex/lib/slug.ts) | [`src/lib/slug.ts`](../src/lib/slug.ts) |
-| Customer display name | [`convex/lib/customer.ts`](../convex/lib/customer.ts) | [`src/lib/customer.ts`](../src/lib/customer.ts) |
+| Slug / store-name shape | [`convex/lib/slug.ts`](../convex/lib/slug.ts) | [`src/lib/slug.ts`](../src/lib/slug.ts) |
+| Email | [`convex/lib/slug.ts`](../convex/lib/slug.ts) | [`src/lib/schemas.ts`](../src/lib/schemas.ts) |
 | Variant helpers (label, cartesian, caps) | [`convex/lib/variant.ts`](../convex/lib/variant.ts) | [`src/lib/variant.ts`](../src/lib/variant.ts) |
 | Legal versions | [`convex/lib/legal.ts`](../convex/lib/legal.ts) | [`src/lib/legal.ts`](../src/lib/legal.ts) |
 | Address (backend) / form schema (frontend) | [`convex/lib/address.ts`](../convex/lib/address.ts) | [`src/lib/schemas.ts`](../src/lib/schemas.ts) |
 
 **Rule:** when you change one side, change the mirror in the same PR. The backend copy is the security boundary; the frontend copy is UX.
+
+Phone validation and the customer display helpers are **not** mirrored: the client imports the server's own pure modules (`convex/lib/slug.ts`, `convex/lib/buyerPhone.ts`, and `convex/lib/customer.ts` via its `src/lib/customer.ts` re-export), so the two sides can't drift. See [`validation-and-rate-limits.md`](./validation-and-rate-limits.md#the-mirrored-validation-pattern).

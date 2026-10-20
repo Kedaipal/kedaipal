@@ -8,7 +8,6 @@ import {
 	BadgeCheck,
 	Banknote,
 	Check,
-	CheckCircle2,
 	ChevronDown,
 	ChevronRight,
 	Clock,
@@ -16,6 +15,7 @@ import {
 	Image as ImageIcon,
 	LayoutGrid,
 	List,
+	Lock,
 	Minus,
 	Pencil,
 	Phone,
@@ -28,12 +28,29 @@ import {
 	UserX,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import QRCode from "react-qr-code";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { sourceLabel } from "../../convex/lib/attribution";
+import {
+	answerLabelPrefix,
+	answerPrompt,
+	answersById,
+	answersForSubmit,
+	type BuyerQuestion,
+	firstMissingRequired,
+	type ItemAnswerInput,
+	visibleQuestions,
+} from "../../convex/lib/buyerQuestions";
 import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import {
@@ -53,10 +70,13 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../convex/lib/paymentMethod";
+import { formatEventMoment } from "../../convex/lib/productEvent";
 import { ClaimsPanel } from "../components/claim/send-claim";
 import { WaitingOnBuyerScreen } from "../components/claim/waiting-on-buyer";
+import { DoneScreen } from "../components/counter/done-screen";
+import { ManualBindDialog } from "../components/counter/manual-bind-dialog";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
-import { OrderDocumentActions } from "../components/order/order-document-actions";
+import { BuyerQuestionsFields } from "../components/order/buyer-questions-fields";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
@@ -76,6 +96,13 @@ import {
 	DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
 import { Input } from "../components/ui/input";
+import { Select } from "../components/ui/select";
+import {
+	type AppliedVoucher,
+	previewDiscount,
+	VoucherField,
+} from "../components/vouchers/voucher-field";
+import { useCounterClosedReason } from "../hooks/useCounterClosed";
 import {
 	useActAsRetailerId,
 	useDashboardRetailer,
@@ -86,6 +113,7 @@ import {
 	counterPrimaryAction,
 	showsSellerPaymentControls,
 } from "../lib/counter-panel";
+import { centsToRm, rmToCents } from "../lib/counter-price";
 import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
 import {
 	canAddToCounterCart,
@@ -95,6 +123,7 @@ import {
 } from "../lib/counter-stock";
 import { convexErrorMessage, currencySymbol, formatPrice } from "../lib/format";
 import { priceDelta } from "../lib/price-delta";
+import { effectiveVariantPrice, type PromoState } from "../lib/promo";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/checkout")({
@@ -117,6 +146,16 @@ type CreatedOrder = {
 	shortId: string;
 	orderId: Id<"orders">;
 	paidInPerson: boolean;
+	/** Born completed — handed over at the counter (the server's answer, so
+	 * the Done screen's heading is right before its order query resolves). */
+	completed: boolean;
+	/** The order is an RSVP (`z8r3fdff9u`) — the done screen must not offer
+	 * "Mark as completed": the guest attends LATER; the RSVP completes at the
+	 * event ("Checked In"), not at the counter. */
+	eventRsvp?: boolean;
+	/** RM0 with nothing unsettled — the push said "no payment needed", so the
+	 * done screen must not claim it said "how to pay". */
+	free?: boolean;
 };
 
 function CounterCheckoutRoute() {
@@ -126,6 +165,7 @@ function CounterCheckoutRoute() {
 	const [created, setCreated] = useState<CreatedOrder | null>(null);
 
 	const cancelSession = useMutation(api.counterCheckout.cancelCheckoutSession);
+	const closedReason = useCounterClosedReason();
 
 	const openSession = useCallback(
 		(id: string) => navigate({ search: { session: id } }),
@@ -178,9 +218,22 @@ function CounterCheckoutRoute() {
 					// (buyer scans), or the escape hatches for a buyer who won't/can't
 					// scan — manual phone entry or an anonymous cash sale. Management
 					// (rotate/print) lives on /app/poster.
-					<CounterCheckoutActions onStarted={openSession} />
+					<CounterCheckoutActions
+						onStarted={openSession}
+						closedReason={closedReason}
+					/>
 				)}
 			</header>
+
+			{/* A closed counter says so where the seller is about to ring up —
+			    not only as a refusal at the last tap. Open checkouts stay listed
+			    (they can still be cancelled); nothing can be placed. */}
+			{closedReason ? (
+				<div className="flex items-start gap-2.5 rounded-xl border border-border bg-muted/50 p-3 text-muted-foreground">
+					<Lock className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+					<p className="text-sm leading-relaxed">{closedReason}</p>
+				</div>
+			) : null}
 
 			{activeSessionId ? (
 				<ActiveSession
@@ -235,9 +288,12 @@ function ActiveSession({
 	if (created || session.status === "completed")
 		return (
 			<DoneScreen
-				shortId={created?.shortId}
+				shortId={created?.shortId ?? session.orderShortId}
 				orderId={created?.orderId ?? session.orderId}
 				paidInPerson={created?.paidInPerson ?? false}
+				completed={created?.completed}
+				eventRsvp={created?.eventRsvp}
+				free={created?.free}
 				buyerName={session.displayName}
 				anonymous={!session.waPhone}
 				onBackToList={onBackToList}
@@ -262,6 +318,7 @@ function ActiveSession({
 			<BuildOrderScreen
 				retailerId={retailer._id}
 				sessionId={sessionId}
+				acceptsVouchers={session.acceptsVouchers}
 				buyer={{
 					displayName: session.displayName,
 					waPhone: session.waPhone,
@@ -456,29 +513,19 @@ function EmptyCheckouts() {
  *   3. Cash sale — fully anonymous, no WhatsApp (86ey8vqp6).
  * Management (rotate / print the poster) lives on /app/poster.
  */
-
-// Manual-bind copy per store country (SG-lite, 86eynw28q). "We'll add the
-// country code automatically" is the loose server normalizer's promise: MY
-// bridges `012…`→`60…`, SG bridges a bare 8-digit `8/9…`→`65…` — while a
-// number typed WITH its own country code (a foreign walk-in) passes through.
-const MANUAL_BIND_PLACEHOLDER: Record<Country, string> = {
-	MY: "e.g. 012-345 6789",
-	SG: "e.g. 9123 4567",
-};
-const MANUAL_BIND_HELP: Record<Country, string> = {
-	MY: "Malaysian mobile number. We'll add the country code automatically.",
-	SG: "Singapore mobile number. We'll add the country code automatically.",
-};
 function CounterCheckoutActions({
 	onStarted,
+	closedReason,
 }: {
 	onStarted: (sessionId: string) => void;
+	/** Set while the counter is closed — the menu can't open, and the note
+	 * under the header says why. */
+	closedReason: string | null;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
-	// Store country drives the manual-bind helper copy + example (SG-lite). The
-	// input itself stays deliberately loose and plate-less — a cashier may key
-	// a foreign number for a walk-in — but the copy should name the store's own
-	// country, and the server prefixes bare local numbers with its dial code.
+	// Store country is the manual bind's picker default (z8r3fdh274). It reads
+	// "MY" while the retailer loads, which is why the dialog derives from it on
+	// every render instead of copying it into state.
 	const retailer = useDashboardRetailer();
 	const country = retailer?.country ?? "MY";
 
@@ -501,11 +548,8 @@ function CounterCheckoutActions({
 	const [qrOpen, setQrOpen] = useState(false);
 
 	// --- No-scan escape hatches: manual phone bind + anonymous cash sale ---
-	const bindManual = useMutation(api.counterCheckout.bindSessionManualPhone);
 	const startAnon = useMutation(api.counterCheckout.startAnonymousSession);
 	const [phoneOpen, setPhoneOpen] = useState(false);
-	const [name, setName] = useState("");
-	const [phone, setPhone] = useState("");
 	const [busy, setBusy] = useState(false);
 
 	// Auto-provision the counter QR token on first mount so the "Show store QR"
@@ -546,38 +590,6 @@ function CounterCheckoutActions({
 	// (the phone + cash paths stay available) rather than the whole control.
 	const qrReady = Boolean(storeQr?.waUrl);
 
-	function changePhone(next: boolean) {
-		setPhoneOpen(next);
-		if (!next) {
-			setName("");
-			setPhone("");
-			setBusy(false);
-		}
-	}
-
-	// A name is at least 3 chars (a single letter isn't a name) — mirrors the
-	// storefront checkout + the server validator. Phone: enough digits to be
-	// plausible; the server does the authoritative MY normalization + validation.
-	const nameReady = name.trim().length >= 3;
-	const phoneReady = phone.replace(/\D/g, "").length >= 8;
-
-	async function submitPhone() {
-		if (busy || !phoneReady || !nameReady) return;
-		setBusy(true);
-		try {
-			const { sessionId } = await bindManual({
-				retailerId: actAsRetailerId,
-				waPhone: phone,
-				name,
-			});
-			changePhone(false);
-			onStarted(sessionId);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-			setBusy(false);
-		}
-	}
-
 	async function submitAnonymous() {
 		if (busy) return;
 		setBusy(true);
@@ -598,7 +610,9 @@ function CounterCheckoutActions({
 				<DropdownMenuTrigger asChild>
 					<button
 						type="button"
-						className="flex h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-xl bg-accent px-3.5 text-sm font-semibold text-accent-foreground shadow-sm transition-colors hover:bg-accent/90 aria-expanded:bg-accent/90 sm:w-auto"
+						disabled={closedReason !== null}
+						title={closedReason ?? undefined}
+						className="flex h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-xl bg-accent px-3.5 text-sm font-semibold text-accent-foreground shadow-sm transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50 aria-expanded:bg-accent/90 sm:w-auto"
 					>
 						<Plus className="size-4" />
 						New order
@@ -681,74 +695,13 @@ function CounterCheckoutActions({
 			</Dialog>
 
 			{/* Manual phone bind — buyer still gets the one WhatsApp confirmation. */}
-			<Dialog open={phoneOpen} onOpenChange={changePhone}>
-				<DialogContent className="sm:max-w-sm">
-					<DialogHeader>
-						<DialogTitle>Enter buyer's number</DialogTitle>
-						<DialogDescription>
-							We'll send one WhatsApp confirming the order, with a link to their
-							order page — no scan needed. That message includes our
-							privacy-policy link.
-						</DialogDescription>
-					</DialogHeader>
-					<div className="flex flex-col gap-3">
-						<label className="block">
-							<span className="text-xs font-medium text-muted-foreground">
-								Buyer's name
-							</span>
-							<Input
-								type="text"
-								autoComplete="off"
-								autoFocus
-								value={name}
-								onChange={(e) => setName(e.target.value)}
-								placeholder="e.g. Aiman"
-								className="mt-1 h-12 text-base"
-							/>
-						</label>
-						<label className="block">
-							<span className="text-xs font-medium text-muted-foreground">
-								WhatsApp number
-							</span>
-							<Input
-								type="tel"
-								inputMode="tel"
-								autoComplete="off"
-								value={phone}
-								onChange={(e) => setPhone(e.target.value)}
-								onKeyDown={(e) => {
-									if (e.key === "Enter" && phoneReady && nameReady)
-										void submitPhone();
-								}}
-								placeholder={MANUAL_BIND_PLACEHOLDER[country]}
-								className="mt-1 h-12 text-base"
-							/>
-							<span className="mt-1 block text-xs text-muted-foreground">
-								{MANUAL_BIND_HELP[country]}
-							</span>
-						</label>
-						<DialogFooter className="gap-2 sm:gap-2">
-							<Button
-								type="button"
-								variant="outline"
-								onClick={() => changePhone(false)}
-								className="h-11"
-							>
-								Cancel
-							</Button>
-							<Button
-								type="button"
-								onClick={submitPhone}
-								isLoading={busy}
-								disabled={busy || !phoneReady || !nameReady}
-								className="h-11"
-							>
-								Start checkout
-							</Button>
-						</DialogFooter>
-					</div>
-				</DialogContent>
-			</Dialog>
+			<ManualBindDialog
+				open={phoneOpen}
+				onOpenChange={setPhoneOpen}
+				retailerId={actAsRetailerId}
+				storeCountry={country}
+				onStarted={onStarted}
+			/>
 		</>
 	);
 }
@@ -865,148 +818,6 @@ function ExpiredScreen({ onBackToList }: { onBackToList: () => void }) {
 	);
 }
 
-function DoneScreen({
-	shortId,
-	orderId,
-	paidInPerson,
-	buyerName,
-	anonymous,
-	onBackToList,
-}: {
-	shortId: string | undefined;
-	orderId: Id<"orders"> | undefined;
-	paidInPerson: boolean;
-	buyerName: string | undefined;
-	// Anonymous cash sale — no buyer to notify (86ey8vqp6), so not even the one
-	// confirmation goes out and the document below is their only copy.
-	anonymous?: boolean;
-	onBackToList: () => void;
-}) {
-	const updateStatus = useMutation(api.orders.updateStatus);
-	const [completed, setCompleted] = useState(false);
-	const [completing, setCompleting] = useState(false);
-
-	// Offer one-tap completion only for a paid-in-person sale — they've paid and
-	// taken the item, so the seller can close it out here instead of clicking
-	// through the status pipeline. Optional, not automatic: a paid deposit on an
-	// item that isn't ready yet is left as a normal confirmed order.
-	const canComplete = paidInPerson && !!orderId && !completed;
-
-	// Say exactly what left the building. A counter order sends the buyer ONE
-	// WhatsApp (86eyd63r8) — the confirmation, carrying the link to their order
-	// page — and an anonymous cash sale sends nothing at all. The receipt/invoice
-	// PDF is never messaged; it's handed over below.
-	const sentSummary = anonymous
-		? "is confirmed. Cash sale with no contact, so nothing was sent."
-		: paidInPerson
-			? "is confirmed. We sent the buyer one WhatsApp with a link to their order."
-			: "is confirmed. We sent the buyer one WhatsApp with how to pay and a link to their order.";
-
-	async function markCompleted() {
-		if (!orderId) return;
-		setCompleting(true);
-		try {
-			await updateStatus({ orderId, status: "delivered" });
-			setCompleted(true);
-			toast.success("Order marked as completed.");
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setCompleting(false);
-		}
-	}
-
-	return (
-		<div className="mx-auto flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm dark:border-emerald-900 dark:bg-emerald-950 sm:p-6">
-			<div className="flex items-start gap-4">
-				{/* The saturated emerald-600 plate + white glyph is theme-invariant —
-				    it reads as the "done" mark against either panel tint. */}
-				<span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white">
-					<CheckCircle2 className="size-7" />
-				</span>
-				<div className="min-w-0">
-					<p className="text-xs font-semibold uppercase tracking-widest text-emerald-700 dark:text-emerald-300">
-						Checkout saved
-					</p>
-					<h2 className="mt-1 text-2xl font-bold text-emerald-950 dark:text-emerald-100">
-						{completed ? "Order completed" : "Order created"}
-					</h2>
-					<p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">
-						{shortId ? (
-							<>
-								Order <span className="font-mono font-semibold">{shortId}</span>{" "}
-								{completed ? "is marked completed." : sentSummary}
-							</>
-						) : completed ? (
-							"The order is marked completed."
-						) : anonymous ? (
-							"The order is confirmed — a cash sale with no contact, so nothing was sent."
-						) : (
-							// Resumed a completed session: we don't have the created order's
-							// paid state here, so stay on what's true either way.
-							"The order is confirmed. We sent the buyer one WhatsApp with a link to their order."
-						)}
-					</p>
-				</div>
-			</div>
-			{/* The inner plate lifts off the panel tint — a white veil in light, a
-			    lighter emerald one in dark (white/70 would blow out against it). */}
-			{shortId ? (
-				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4 dark:border-emerald-900 dark:bg-emerald-900/40">
-					<p className="text-sm font-semibold text-emerald-950 dark:text-emerald-100">
-						{paidInPerson ? "Receipt" : "Invoice"}
-					</p>
-					<OrderDocumentActions
-						shortId={shortId}
-						paid={paidInPerson}
-						buyerName={buyerName}
-						hasBuyer={!anonymous}
-						className="mt-3"
-					/>
-				</div>
-			) : null}
-			<div className="grid gap-2 sm:grid-cols-2">
-				{canComplete ? (
-					<Button
-						onClick={markCompleted}
-						isLoading={completing}
-						disabled={completing}
-						// Saturated emerald + white label: the same solid button in both
-						// themes, so no dark: pair.
-						className="h-11 bg-emerald-600 text-white hover:bg-emerald-700 sm:col-span-2"
-					>
-						{completing ? "Completing…" : "Mark as completed"}
-					</Button>
-				) : null}
-				{completed ? (
-					<p className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/70 px-3 py-2 text-sm font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 sm:col-span-2">
-						<CheckCircle2 className="size-4" />
-						Marked completed
-					</p>
-				) : null}
-				<Button
-					onClick={onBackToList}
-					variant={canComplete ? "outline" : "default"}
-					className="h-11"
-				>
-					Back to checkouts
-				</Button>
-				{shortId ? (
-					<Button asChild variant="outline" className="h-11">
-						<Link to="/app/orders/$shortId" params={{ shortId }}>
-							View order
-						</Link>
-					</Button>
-				) : orderId ? (
-					<Button asChild variant="outline" className="h-11">
-						<Link to="/app/orders">Go to orders</Link>
-					</Button>
-				) : null}
-			</div>
-		</div>
-	);
-}
-
 // ---------------------------------------------------------------------------
 // Build order (buyer bound) — catalog search → cart → pay → create
 // ---------------------------------------------------------------------------
@@ -1025,6 +836,9 @@ type CartLine = {
 	// adjusted price is sent as `unitPrice` (the server trusts it because the
 	// caller is the authenticated seller, not a buyer).
 	catalogPrice?: number;
+	// Buyer-question answers the seller keyed for the walk-in (`z8r3fdkjek`),
+	// by question id. Entered in the line's edit sheet.
+	answers?: Record<string, string>;
 };
 
 /** A standard line whose price the seller changed from the catalog price. */
@@ -1065,27 +879,43 @@ function PriceDeltaChip({
 	);
 }
 
+/**
+ * What a variant costs AT THE COUNTER right now (`z8r3fdcw72` × `z8r3fdr617`).
+ *
+ * The counter is a seller surface, so it reads `listForCounter`, which hands
+ * back `promoState` and the variants' `promoPrice` exactly as the storefront
+ * payload does — it simply never used them, while
+ * `counterCheckout.createOrderFromSession` has always resolved the promo
+ * server-side. The result was a panel quoting the LIST price and an order
+ * recording the PROMO one; with a voucher on top the two bases diverged
+ * further still. One helper, the same `effectiveVariantPrice` the storefront
+ * prices with, so the seller's number and the server's cannot drift again.
+ *
+ * `Date.now()` is read per call rather than held: a counter panel is open for
+ * minutes, and a sale that lapses mid-sale must stop discounting at the next
+ * render rather than at the next reload.
+ */
+function counterPrice(
+	variant: { price: number; promoPrice?: number },
+	product: { promoState?: PromoState },
+): number {
+	return effectiveVariantPrice(variant, product.promoState, Date.now());
+}
+
 type SessionDraft = {
 	items: Array<{
 		variantId: Id<"productVariants">;
 		quantity: number;
 		unitPrice?: number;
+		answers?: ItemAnswerInput[];
 	}>;
 	fulfilmentDate?: number;
 	paidInPerson?: boolean;
 	paymentMethod?: OrderPaymentMethod;
+	/** Canonical voucher code (`z8r3fdr617`) — a scratchpad value like the
+	 * prices above, re-resolved at whichever door the session goes through. */
+	voucherCode?: string;
 };
-
-/** "2500" cents → "25.00" for the custom-price input. */
-function centsToRm(cents: number): string {
-	return (cents / 100).toFixed(2);
-}
-/** "25" / "25.50" → cents (integer). NaN when blank or not a positive amount. */
-function rmToCents(rm: string): number {
-	const n = Number(rm);
-	if (!Number.isFinite(n) || n <= 0) return Number.NaN;
-	return Math.round(n * 100);
-}
 
 type CounterProduct = FunctionReturnType<
 	typeof api.products.listForCounter
@@ -1164,8 +994,8 @@ function counterProductMeta(
 		nonCustom.length === 0
 			? "Custom price"
 			: (() => {
-					const lo = Math.min(...nonCustom.map((v) => v.price));
-					const hi = Math.max(...nonCustom.map((v) => v.price));
+					const lo = Math.min(...nonCustom.map((v) => counterPrice(v, p)));
+					const hi = Math.max(...nonCustom.map((v) => counterPrice(v, p)));
 					const base =
 						lo === hi
 							? formatPrice(lo, currency)
@@ -1187,6 +1017,7 @@ function ProductVariantRows({
 	customPriceInput,
 	setCustomPriceInput,
 	setQty,
+	mixReason,
 	className,
 }: {
 	product: CounterProduct;
@@ -1197,10 +1028,20 @@ function ProductVariantRows({
 		React.SetStateAction<Record<string, string>>
 	>;
 	setQty: (variantId: string, line: CartLine, qty: number) => void;
+	/** Why this product can't JOIN the current cart (`z8r3fdhh45`) — an RSVP is
+	 * its own order. Blocks the Add buttons and says so once, above the rows.
+	 * Lines already in the cart keep their steppers: the seller has to be able
+	 * to remove the offending one, and a disabled row is a trap, not a guard. */
+	mixReason?: string;
 	className?: string;
 }) {
 	return (
 		<div className={cn("flex flex-col divide-y divide-border", className)}>
+			{mixReason ? (
+				<p className="py-2 text-xs leading-relaxed text-amber-600 dark:text-amber-500">
+					{mixReason}
+				</p>
+			) : null}
 			{product.variants.map((vr) => {
 				const isCustom = vr.isCustom === true;
 				const label = isCustom
@@ -1237,7 +1078,8 @@ function ProductVariantRows({
 								<div className="min-w-0">
 									<p className="truncate text-sm">{label}</p>
 									<p className="text-xs text-muted-foreground">
-										Custom — set the agreed price
+										Custom — set the agreed price ({formatPrice(0, currency)}{" "}
+										for a free line)
 									</p>
 								</div>
 								{inCart ? (
@@ -1301,9 +1143,9 @@ function ProductVariantRows({
 
 				// Stock is stated on the row and enforced on the control, so the
 				// seller never builds a cart the server will refuse (Zaki, 27 Aug).
-				const stockNote = variantStockNote(vr);
-				const sellable = canAddToCounterCart(vr);
-				const maxQty = maxAddableQty(vr);
+				const stockNote = variantStockNote(vr, product.eventSeatsLeft);
+				const sellable = canAddToCounterCart(vr, product.eventSeatsLeft);
+				const maxQty = maxAddableQty(vr, product.eventSeatsLeft);
 				return (
 					<div
 						key={vr._id}
@@ -1315,7 +1157,19 @@ function ProductVariantRows({
 						<div className="min-w-0">
 							<p className="truncate text-sm">{label || "Default"}</p>
 							<p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-								<span>{formatPrice(vr.price, currency)}</span>
+								{/* The PROMO price when one is live (z8r3fdcw72). The
+								    counter used to price from the list while
+								    `createOrderFromSession` resolved the promo, so the
+								    seller confirmed one number and the order recorded a
+								    lower one — on a cash sale, real money (found in the
+								    z8r3fdr617 /test-code pass). Same helper the
+								    storefront prices with. */}
+								<span>{formatPrice(counterPrice(vr, product), currency)}</span>
+								{counterPrice(vr, product) !== vr.price ? (
+									<span className="line-through opacity-60">
+										{formatPrice(vr.price, currency)}
+									</span>
+								) : null}
 								{stockNote ? (
 									<span
 										className={cn(
@@ -1341,16 +1195,20 @@ function ProductVariantRows({
 						) : (
 							<Button
 								variant="secondary"
-								disabled={!sellable}
+								disabled={!sellable || mixReason !== undefined}
+								title={mixReason}
 								onClick={() =>
 									setQty(
 										vr._id,
 										{
 											name: product.name,
 											label,
-											price: vr.price,
+											price: counterPrice(vr, product),
 											qty: 0,
-											catalogPrice: vr.price,
+											// The price an unadjusted line is "at" — the promo
+											// price when one is live, so the adjusted-price
+											// badge compares against what is really charged.
+											catalogPrice: counterPrice(vr, product),
 										},
 										1,
 									)
@@ -1381,6 +1239,7 @@ function BuildOrderScreen({
 	currency,
 	country,
 	draft,
+	acceptsVouchers,
 	defaultClaimWindowMinutes,
 	defaultClaimSource,
 	onCreated,
@@ -1404,6 +1263,10 @@ function BuildOrderScreen({
 	 * offers (SG has no DuitNow/TnG/FPX). See lib/paymentMethod.ts. */
 	country: Country;
 	draft: SessionDraft | undefined;
+	/** Show the voucher field (`z8r3fdr617`) — false when the store is below
+	 * the plan carrying vouchers, or has never issued one, so no code the
+	 * seller could key would be accepted. */
+	acceptsVouchers: boolean;
 	/** Claim links (86eyq0epn): the store's remembered payment window. */
 	defaultClaimWindowMinutes: number | undefined;
 	/** Claim links: the store's remembered marketing origin (86eyq0eq9). */
@@ -1412,6 +1275,9 @@ function BuildOrderScreen({
 		shortId: string;
 		orderId: Id<"orders">;
 		paidInPerson: boolean;
+		completed: boolean;
+		eventRsvp?: boolean;
+		free?: boolean;
 	}) => void;
 	// Cancel the whole checkout (customer walked / changed their mind). Drops the
 	// session + any items and returns to the open-checkouts list.
@@ -1426,6 +1292,7 @@ function BuildOrderScreen({
 		convexQuery(api.products.listForCounter, { retailerId }),
 	).data;
 	const createOrder = useMutation(api.counterCheckout.createOrderFromSession);
+	const closedReason = useCounterClosedReason();
 	const saveDraft = useMutation(api.counterCheckout.saveSessionDraft);
 	const saveName = useMutation(api.counterCheckout.setSessionCustomerName);
 	const [query, setQuery] = useState("");
@@ -1445,6 +1312,7 @@ function BuildOrderScreen({
 	// A resumed draft can hold a rail this store no longer offers (its country
 	// was switched mid-checkout) — seeding the <select> with a value that isn't
 	// an <option> renders it blank, so fall back to the country's first rail.
+	const paymentMethodId = useId();
 	const [method, setMethod] = useState<OrderPaymentMethod>(() =>
 		draft?.paymentMethod && methodChoices.includes(draft.paymentMethod)
 			? draft.paymentMethod
@@ -1457,6 +1325,16 @@ function BuildOrderScreen({
 	const anonymous = !buyer.waPhone;
 	const paid = anonymous ? true : paidInPerson;
 	const [submitting, setSubmitting] = useState(false);
+	// The voucher the seller keyed off the buyer's QR (`z8r3fdr617`). Seeded
+	// from the draft so a refresh or a jump to another customer keeps it, and
+	// re-resolved authoritatively at whichever door this session goes through:
+	// `createOrderFromSession` spends it, `sendClaim` freezes it onto the claim.
+	const [voucher, setVoucher] = useState<AppliedVoucher | null>(null);
+	// Seed the FIELD from the draft's code. Only the code is stored (the draft
+	// is a scratchpad, not a validated row), so it is re-checked on mount —
+	// which is the right behaviour anyway: a code that lapsed while the cart sat
+	// open must show as refused here, not be honoured silently.
+	const draftVoucherCode = draft?.voucherCode;
 	// Final review modal — a deliberate last look at items/prices/total before the
 	// order is created, so a busy vendor can't fat-finger a price or quantity and
 	// only notice after the buyer has paid. (Counter-only: the storefront buyer
@@ -1496,6 +1374,21 @@ function BuildOrderScreen({
 	// total never flickers through half-typed values and there is no in-between
 	// state for the debounced autosave to persist.
 	const [editingLineId, setEditingLineId] = useState<string | null>(null);
+	// Buyer questions per variant (`z8r3fdkjek`), read from the LIVE catalog
+	// like `cartEvent` — so an edit made mid-sale is what gets asked.
+	const questionsByVariant = useMemo(() => {
+		const map = new Map<string, readonly BuyerQuestion[]>();
+		for (const p of products ?? []) {
+			if (!p.buyerQuestions?.length) continue;
+			for (const vr of p.variants) map.set(vr._id, p.buyerQuestions);
+		}
+		return map;
+	}, [products]);
+	const lineAnswers = useCallback(
+		(variantId: string, l: CartLine) =>
+			answersForSubmit(questionsByVariant.get(variantId), l.answers ?? {}),
+		[questionsByVariant],
+	);
 
 	// Send the claim link straight from the panel. Same mutation the dialog
 	// called; the dialog is gone because its two controls (window, origin) now
@@ -1510,9 +1403,12 @@ function BuildOrderScreen({
 					variantId: variantId as Id<"productVariants">,
 					quantity: l.qty,
 					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
+					answers: lineAnswers(variantId, l),
 				})),
 				windowMinutes,
 				attributionSource: claimSource,
+				// Explicit, for the same reason as the create path above.
+				voucherCode: voucher?.code,
 			});
 			toast.success(
 				`WhatsApp link sent to ${buyer.displayName ?? "the buyer"} — you'll see the order the moment they complete it.`,
@@ -1562,7 +1458,9 @@ function BuildOrderScreen({
 				lookup.set(vr._id, {
 					name: p.name,
 					label,
-					price: vr.price,
+					// Promo-aware, like the picker above: a draft resumed after a
+					// sale opened must not re-seed the list price.
+					price: counterPrice(vr, p),
 					isCustom: vr.isCustom === true,
 				});
 			}
@@ -1581,6 +1479,7 @@ function BuildOrderScreen({
 				qty: it.quantity,
 				isCustom: v.isCustom,
 				catalogPrice: v.isCustom ? undefined : v.price,
+				answers: it.answers ? answersById(it.answers) : undefined,
 			});
 		}
 		if (next.size > 0) setCart(next);
@@ -1644,6 +1543,15 @@ function BuildOrderScreen({
 	}
 
 	function setQty(variantId: string, line: CartLine, qty: number) {
+		// A NEW line whose product asks a required question opens its sheet
+		// straight away (`z8r3fdkjek`) — the walk-in is standing there, so ask
+		// now rather than discover it at Review.
+		if (
+			qty > 0 &&
+			!cart.has(variantId) &&
+			firstMissingRequired(questionsByVariant.get(variantId), {}) !== undefined
+		)
+			setEditingLineId(variantId);
 		setCart((prev) => {
 			const next = new Map(prev);
 			if (qty <= 0) next.delete(variantId);
@@ -1653,7 +1561,14 @@ function BuildOrderScreen({
 	}
 
 	const cartEntries = [...cart.entries()];
-	const total = cartEntries.reduce((s, [, l]) => s + l.price * l.qty, 0);
+	// Gross of the voucher — the figure the discount is computed FROM, and what
+	// the receipt's item lines sum to.
+	const itemsTotal = cartEntries.reduce((s, [, l]) => s + l.price * l.qty, 0);
+	const voucherDiscount = previewDiscount(voucher, itemsTotal);
+	// What the buyer actually pays. Everything downstream — the panel total, the
+	// review modal, the free-order rule that suppresses "Paid now · Cash" —
+	// reads this, so a voucher can't leave one of them quoting the old price.
+	const total = itemsTotal - voucherDiscount;
 
 	// Autosave the in-progress order to the session (debounced) so a refresh,
 	// reconnect, or jumping to another customer never loses it. We only start
@@ -1672,13 +1587,15 @@ function BuildOrderScreen({
 					// Custom lines always carry their price; a standard line only when the
 					// seller adjusted it (otherwise the server charges the catalog price).
 					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
+					answers: lineAnswers(variantId, l),
 				})),
 				fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
 				paidInPerson: paid,
 				paymentMethod: paid ? method : undefined,
+				voucherCode: voucher?.code,
 			};
 		},
-		[fulfilmentDate, paid, method],
+		[fulfilmentDate, paid, method, lineAnswers, voucher],
 	);
 	const draftPayload = useMemo<SessionDraft>(
 		() => buildDraftPayload(cart),
@@ -1702,20 +1619,35 @@ function BuildOrderScreen({
 		setSubmitting(true);
 		try {
 			const fulfilmentEpoch = mytMidnightFromYmd(fulfilmentDate);
-			const { shortId, orderId } = await createOrder({
+			// A FREE order records no payment — the server enforces the same rule,
+			// this just keeps the client's story identical.
+			const effectivePaid = paid && total > 0;
+			const { shortId, orderId, completed } = await createOrder({
 				sessionId,
 				items: cartEntries.map(([variantId, l]) => ({
 					variantId: variantId as Id<"productVariants">,
 					quantity: l.qty,
 					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
+					answers: lineAnswers(variantId, l),
 				})),
-				paidInPerson: paid,
-				paymentMethod: paid ? method : undefined,
+				// Explicit, like `items` — the draft's copy is a DEBOUNCED
+				// autosave and would lose a code applied seconds ago, after the
+				// review modal had already shown the discount (`z8r3fdr617`).
+				voucherCode: voucher?.code,
+				paidInPerson: effectivePaid,
+				paymentMethod: effectivePaid ? method : undefined,
 				fulfilmentDate: Number.isNaN(fulfilmentEpoch)
 					? undefined
 					: fulfilmentEpoch,
 			});
-			onCreated({ shortId, orderId, paidInPerson: paid });
+			onCreated({
+				shortId,
+				orderId,
+				paidInPerson: effectivePaid,
+				completed,
+				eventRsvp: cartEvent !== undefined || undefined,
+				free: total <= 0 || undefined,
+			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -1724,9 +1656,75 @@ function BuildOrderScreen({
 	}
 
 	const totalItems = cartEntries.reduce((s, [, l]) => s + l.qty, 0);
+	const unansweredQuestion = (() => {
+		for (const [variantId, l] of cartEntries) {
+			const missing = firstMissingRequired(
+				questionsByVariant.get(variantId),
+				l.answers ?? {},
+			);
+			if (missing)
+				return `${answerPrompt(missing.label)} for ${l.name} — tap the line`;
+		}
+		return undefined;
+	})();
+	// The cart's EVENT, if any line is an RSVP (`z8r3fdff9u`) — the server will
+	// force the order onto this moment whatever date the panel holds, so every
+	// date this screen SAYS must be the event's. Before this, the Collection
+	// panel read "Today / now" and the review dialog told the walk-in guest
+	// "Collection: today" while the order landed on the event day.
+	const cartEvent = useMemo(() => {
+		if (!products) return undefined;
+		for (const p of products) {
+			if (p.event === undefined) continue;
+			for (const vr of p.variants) {
+				if (cart.has(vr._id))
+					return { productId: p._id as string, name: p.name, ...p.event };
+			}
+		}
+		return undefined;
+	}, [products, cart]);
+	// The counter follows the storefront's rule (`z8r3fdhh45`): an RSVP is its
+	// own order. Named here so the catalog can DISABLE what would break it and
+	// the primary action can refuse a draft that already has.
+	const mixedRsvp = useMemo(() => {
+		if (!products || cartEvent === undefined) return undefined;
+		for (const p of products) {
+			if (p.event !== undefined) continue;
+			for (const vr of p.variants) {
+				if (cart.has(vr._id)) return p.name;
+			}
+		}
+		return undefined;
+	}, [products, cart, cartEvent]);
+	// Does the cart hold anything the BUYER would schedule? Then an event can't
+	// join it — the mirror of `mixedRsvp`, for the rows not yet added.
+	const cartHasBuyerScheduled = useMemo(() => {
+		if (!products) return false;
+		for (const p of products) {
+			if (p.event !== undefined) continue;
+			for (const vr of p.variants) {
+				if (cart.has(vr._id)) return true;
+			}
+		}
+		return false;
+	}, [products, cart]);
+	// Why this product can't join the cart as it stands. One author, read by
+	// both catalog surfaces (the list accordion and the grid's modal) so they
+	// can't disagree about what is addable.
+	const rsvpMixReason = (p: CounterProduct): string | undefined => {
+		if (cartEvent !== undefined) {
+			if (p.event !== undefined && (p._id as string) === cartEvent.productId)
+				return undefined;
+			return `This order is an RSVP for ${cartEvent.name} — everything else goes on a separate order.`;
+		}
+		if (p.event !== undefined && cartHasBuyerScheduled)
+			return "An RSVP is its own order — finish this one first, or clear the cart to ring up the event.";
+		return undefined;
+	};
 	const collectionEpoch = mytMidnightFromYmd(fulfilmentDate);
-	const collectionLabel =
-		Number.isNaN(collectionEpoch) || fulfilmentDate === minYmd
+	const collectionLabel = cartEvent
+		? formatEventMoment(cartEvent)
+		: Number.isNaN(collectionEpoch) || fulfilmentDate === minYmd
 			? "Today / now"
 			: formatFulfilmentDate(collectionEpoch);
 
@@ -1852,8 +1850,15 @@ function BuildOrderScreen({
 											) : null}
 											{/* Sold out veils the tile instead of hiding it: the
 											    seller still needs to open it — to see WHICH size
-											    ran out, or to sell a made-to-order sibling. */}
-											{soldOut ? (
+											    ran out, or to sell a made-to-order sibling. A full
+											    event gets the same veil in its own word. */}
+											{p.eventSeatsLeft === 0 ? (
+												<span className="absolute inset-0 flex items-center justify-center bg-background/65">
+													<span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
+														Fully booked
+													</span>
+												</span>
+											) : soldOut ? (
 												<span className="absolute inset-0 flex items-center justify-center bg-background/65">
 													<span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
 														Sold out
@@ -1917,7 +1922,11 @@ function BuildOrderScreen({
 												) : null}
 												{/* Every choice is at zero — say it on the closed row,
 												    not at checkout with a customer waiting. */}
-												{soldOut ? (
+												{p.eventSeatsLeft === 0 ? (
+													<span className="inline-flex shrink-0 items-center rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
+														Fully booked
+													</span>
+												) : soldOut ? (
 													<span className="inline-flex shrink-0 items-center rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-destructive">
 														Sold out
 													</span>
@@ -1926,6 +1935,11 @@ function BuildOrderScreen({
 											<p className="text-xs text-muted-foreground">
 												{p.variants.length} option
 												{p.variants.length === 1 ? "" : "s"} · {priceLabel}
+												{/* The event's binding number, said at the product
+												    grain — the per-option rows show the same ceiling. */}
+												{p.eventSeatsLeft !== undefined && p.eventSeatsLeft > 0
+													? ` · ${p.eventSeatsLeft} seat${p.eventSeatsLeft === 1 ? "" : "s"} left`
+													: null}
 											</p>
 										</div>
 										<div className="flex shrink-0 items-center gap-2">
@@ -1950,6 +1964,7 @@ function BuildOrderScreen({
 											customPriceInput={customPriceInput}
 											setCustomPriceInput={setCustomPriceInput}
 											setQty={setQty}
+											mixReason={rsvpMixReason(p)}
 											className="rounded-b-2xl border-t border-border bg-muted/20 px-3 pb-1"
 										/>
 									) : null}
@@ -2046,6 +2061,10 @@ function BuildOrderScreen({
 														</>
 													) : null}
 												</span>
+												<CounterLineAnswers
+													questions={questionsByVariant.get(variantId) ?? []}
+													answers={l.answers ?? {}}
+												/>
 											</button>
 											<div className="flex shrink-0 items-center gap-2">
 												<span className="text-sm font-semibold tabular-nums">
@@ -2109,106 +2128,144 @@ function BuildOrderScreen({
 
 						{showsSellerPaymentControls(payMode) ? (
 							<>
-								<div className="rounded-xl border border-border bg-muted/20 p-3">
-									<button
-										type="button"
-										onClick={() => setDateOpen((open) => !open)}
-										className="flex w-full items-center justify-between gap-3 text-left"
-									>
-										<span>
-											<span className="block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-												Collection
-											</span>
-											<span className="block text-sm font-medium">
-												{collectionLabel}
-											</span>
-											<span className="block text-xs text-muted-foreground">
-												Optional: open this only for preorder or later
-												collection.
-											</span>
+								{/* An RSVP's collection moment belongs to the EVENT — the
+								    server forces it whatever this panel holds, so the panel
+								    reads it back instead of offering a date the order will
+								    ignore. Everything the seller says out loud at the counter
+								    should be what the order stores. */}
+								{cartEvent ? (
+									<div className="rounded-xl border border-border bg-muted/20 p-3">
+										<span className="block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+											Collection
 										</span>
-										<ChevronDown
-											className={cn(
-												"size-4 shrink-0 text-muted-foreground transition-transform",
-												dateOpen && "rotate-180",
-											)}
-										/>
-									</button>
-									{dateOpen ? (
-										<div className="mt-3 border-t border-border pt-3">
-											<label
-												htmlFor="counter-fulfilment-date"
-												className="text-xs font-medium text-muted-foreground"
-											>
-												Change collection date
-											</label>
-											<input
-												id="counter-fulfilment-date"
-												type="date"
-												value={fulfilmentDate}
-												min={minYmd}
-												max={maxYmd}
-												onChange={(e) => setFulfilmentDate(e.target.value)}
-												className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+										<span className="block text-sm font-medium">
+											{collectionLabel}
+										</span>
+										<span className="block text-xs text-muted-foreground">
+											Set by the event &ldquo;{cartEvent.name}&rdquo; — the same
+											for every guest.
+										</span>
+									</div>
+								) : (
+									<div className="rounded-xl border border-border bg-muted/20 p-3">
+										<button
+											type="button"
+											onClick={() => setDateOpen((open) => !open)}
+											className="flex w-full items-center justify-between gap-3 text-left"
+										>
+											<span>
+												<span className="block text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+													Collection
+												</span>
+												<span className="block text-sm font-medium">
+													{collectionLabel}
+												</span>
+												<span className="block text-xs text-muted-foreground">
+													Optional: open this only for preorder or later
+													collection.
+												</span>
+											</span>
+											<ChevronDown
+												className={cn(
+													"size-4 shrink-0 text-muted-foreground transition-transform",
+													dateOpen && "rotate-180",
+												)}
 											/>
-										</div>
-									) : null}
-								</div>
+										</button>
+										{dateOpen ? (
+											<div className="mt-3 border-t border-border pt-3">
+												<label
+													htmlFor="counter-fulfilment-date"
+													className="text-xs font-medium text-muted-foreground"
+												>
+													Change collection date
+												</label>
+												<input
+													id="counter-fulfilment-date"
+													type="date"
+													value={fulfilmentDate}
+													min={minYmd}
+													max={maxYmd}
+													onChange={(e) => setFulfilmentDate(e.target.value)}
+													className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+												/>
+											</div>
+										) : null}
+									</div>
+								)}
 
 								<div className="rounded-xl border border-border bg-muted/20 p-3">
 									<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 										Payment
 									</p>
-									<div className="mt-3 grid gap-2">
-										<ChoiceCard
-											active={paid}
-											onSelect={() => setPaidInPerson(true)}
-											icon={Banknote}
-											title="Paid now"
-											subtitle="Settled at counter"
-										/>
-										<ChoiceCard
-											active={!paid}
-											disabled={anonymous}
-											reason="A cash sale has no buyer to send a payment link to."
-											onSelect={() => setPaidInPerson(false)}
-											icon={Clock}
-											title="Pay later"
-											subtitle="Send payment link"
-										/>
-									</div>
-
-									{anonymous ? (
+									{cartEntries.length > 0 && total <= 0 ? (
+										/* A FREE order (an RM0 RSVP, a comp'd item) has no payment
+										   to ask about — "Paid now · Cash" on it would write a
+										   payment record the order page then contradicts with
+										   "Free order". The server enforces the same rule. */
 										<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
-											Cash sale — no contact on file, so it's settled in person
-											and no WhatsApp is sent.
+											Free order — there&apos;s nothing to collect, and no
+											payment is recorded.
 										</p>
-									) : null}
-
-									{paid ? (
-										<label className="mt-3 block">
-											<span className="text-xs font-medium text-muted-foreground">
-												Payment method
-											</span>
-											<select
-												value={method}
-												onChange={(e) =>
-													setMethod(e.target.value as OrderPaymentMethod)
-												}
-												className="mt-1 min-h-11 w-full rounded-xl border border-input bg-background px-4 text-base font-medium outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-											>
-												{methodChoices.map((m) => (
-													<option key={m} value={m}>
-														{PAYMENT_METHOD_LABELS[m]}
-													</option>
-												))}
-											</select>
-										</label>
 									) : (
-										<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
-											We'll send one WhatsApp with how to pay and a link to
-											track the order.
-										</p>
+										<>
+											<div className="mt-3 grid gap-2">
+												<ChoiceCard
+													active={paid}
+													onSelect={() => setPaidInPerson(true)}
+													icon={Banknote}
+													title="Paid now"
+													subtitle="Settled at counter"
+												/>
+												<ChoiceCard
+													active={!paid}
+													disabled={anonymous}
+													reason="A cash sale has no buyer to send a payment link to."
+													onSelect={() => setPaidInPerson(false)}
+													icon={Clock}
+													title="Pay later"
+													subtitle="Send payment link"
+												/>
+											</div>
+
+											{anonymous ? (
+												<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
+													Cash sale — no contact on file, so it's settled in
+													person and no WhatsApp is sent.
+												</p>
+											) : null}
+
+											{paid ? (
+												<div className="mt-3 block">
+													<label
+														htmlFor={paymentMethodId}
+														className="text-xs font-medium text-muted-foreground"
+													>
+														Payment method
+													</label>
+													<Select
+														id={paymentMethodId}
+														variant="field"
+														className="mt-1 w-full font-medium"
+														value={method}
+														onChange={(e) =>
+															setMethod(e.target.value as OrderPaymentMethod)
+														}
+													>
+														{methodChoices.map((m) => (
+															<option key={m} value={m}>
+																{PAYMENT_METHOD_LABELS[m]}
+															</option>
+														))}
+													</Select>
+												</div>
+											) : (
+												<p className="mt-3 rounded-xl bg-background px-3 py-2 text-xs text-muted-foreground">
+													We'll send one WhatsApp with how to pay and a link to
+													track the order.
+												</p>
+											)}
+										</>
 									)}
 								</div>
 							</>
@@ -2307,6 +2364,42 @@ function BuildOrderScreen({
 					</div>
 
 					<div className="shrink-0 border-t border-border bg-muted/20 p-4">
+						{/* The voucher, right above the total it changes (`z8r3fdr617`).
+						    Both pay modes take one: ringing it up spends the code, and
+						    SEND freezes it into the claim beside the line prices — so a
+						    seller never has to work out which path honours it. */}
+						{acceptsVouchers ? (
+							<div className="mb-3">
+								<VoucherField
+									retailerId={retailerId}
+									currency={currency}
+									itemSubtotal={itemsTotal}
+									applied={voucher}
+									onApply={setVoucher}
+									onRemove={() => setVoucher(null)}
+									initialCode={draftVoucherCode}
+									label="Add a voucher"
+								/>
+							</div>
+						) : null}
+						{voucherDiscount > 0 ? (
+							<div className="mb-1.5 flex items-center justify-between text-sm">
+								<span className="text-muted-foreground">Items</span>
+								<span className="tabular-nums text-muted-foreground">
+									{formatPrice(itemsTotal, currency)}
+								</span>
+							</div>
+						) : null}
+						{voucherDiscount > 0 ? (
+							<div className="mb-1.5 flex items-center justify-between text-sm">
+								<span className="truncate text-accent-emphasis">
+									Voucher · {voucher?.code}
+								</span>
+								<span className="shrink-0 tabular-nums font-medium text-accent-emphasis">
+									−{formatPrice(voucherDiscount, currency)}
+								</span>
+							</div>
+						) : null}
 						<div className="mb-3 flex items-center justify-between text-sm">
 							{/* Send mode is a price COMMITMENT, not a sum — and it is the
 							    items total, since the buyer's delivery is added on their
@@ -2325,9 +2418,24 @@ function BuildOrderScreen({
 							const action = counterPrimaryAction({
 								mode: payMode,
 								empty: cartEntries.length === 0,
-								// A claim freezes prices at send, so an unpriced line
-								// would lock a zero.
-								unpriced: cartEntries.some(([, l]) => l.price <= 0),
+								// A claim link takes a payment and its door refuses a RM0
+								// line; the counter rings a free line up as a free order.
+								freeLine: (() => {
+									const l = cartEntries.find(([, l]) => l.price === 0)?.[1];
+									if (l === undefined) return undefined;
+									// The LINE's name, not the product's — "Cempedak" names
+									// nothing when three Cempedak lines sit in the cart.
+									return l.label ? `${l.name} · ${l.label}` : l.name;
+								})(),
+								// Blocks SEND with the event's own words (a claim lets the
+								// buyer pick a date and holds no seat) — outranks `freeLine`,
+								// or a free RSVP line reads as a comped custom item.
+								eventName: cartEvent?.name,
+								// Refuses a mixed cart in BOTH modes (`z8r3fdhh45`) —
+								// `orders.create` rejects it at either door.
+								mixedRsvp,
+								unansweredQuestion,
+								closed: closedReason ?? undefined,
 								money: formatPrice(total, currency),
 								windowMinutes,
 								buyerName: buyer.displayName,
@@ -2396,6 +2504,9 @@ function BuildOrderScreen({
 				key={editingLineId ?? "closed"}
 				variantId={editingLineId}
 				line={editingLineId ? (cart.get(editingLineId) ?? null) : null}
+				questions={
+					editingLineId ? (questionsByVariant.get(editingLineId) ?? []) : []
+				}
 				currency={currency}
 				onClose={() => setEditingLineId(null)}
 				onRemove={(id) => {
@@ -2403,11 +2514,11 @@ function BuildOrderScreen({
 					if (line) setQty(id, line, 0);
 					setEditingLineId(null);
 				}}
-				onSave={(id, price, qty) => {
+				onSave={(id, price, qty, answers) => {
 					const line = cart.get(id);
 					if (!line) return;
 					const next = new Map(cart);
-					next.set(id, { ...line, price, qty });
+					next.set(id, { ...line, price, qty, answers });
 					setCart(next);
 					setEditingLineId(null);
 					// Flush the save immediately instead of waiting out the 700ms
@@ -2429,16 +2540,24 @@ function BuildOrderScreen({
 				}}
 				buyerName={buyer.displayName}
 				lines={cartEntries.map(([variantId, l]) => ({ variantId, line: l }))}
+				itemsTotal={itemsTotal}
+				voucherDiscount={voucherDiscount}
+				voucherCode={voucher?.code}
 				total={total}
 				currency={currency}
 				fulfilmentLabel={(() => {
+					// The review the seller reads to the buyer must state the date the
+					// ORDER will carry — for an RSVP that's the event's, not the panel's.
+					if (cartEvent) return formatEventMoment(cartEvent);
 					const e = mytMidnightFromYmd(fulfilmentDate);
 					return Number.isNaN(e) ? "—" : formatFulfilmentDate(e);
 				})()}
 				paymentLabel={
-					paid
-						? `Paid now · ${PAYMENT_METHOD_LABELS[method]}`
-						: "Pay later — we send the buyer a payment link on WhatsApp"
+					total <= 0
+						? "Free order — nothing to collect"
+						: paid
+							? `Paid now · ${PAYMENT_METHOD_LABELS[method]}`
+							: "Pay later — we send the buyer a payment link on WhatsApp"
 				}
 				submitting={submitting}
 				onConfirm={submit}
@@ -2484,6 +2603,7 @@ function BuildOrderScreen({
 									customPriceInput={customPriceInput}
 									setCustomPriceInput={setCustomPriceInput}
 									setQty={setQty}
+									mixReason={rsvpMixReason(modalProduct)}
 								/>
 							</div>
 							<div className="shrink-0 border-t border-border p-3">
@@ -2519,9 +2639,44 @@ function BuildOrderScreen({
  * ATOMICALLY on Save: the running total never flickers through half-typed
  * values, and Cancel/dismiss discards cleanly.
  */
+/**
+ * Under a counter cart line: what's been answered, or — for a required
+ * question still blank — an amber "needs an answer" hint, so the seller sees
+ * WHICH line the blocked primary action is talking about.
+ */
+function CounterLineAnswers({
+	questions,
+	answers,
+}: {
+	questions: readonly BuyerQuestion[];
+	answers: Record<string, string>;
+}) {
+	if (questions.length === 0) return null;
+	const missing = firstMissingRequired(questions, answers);
+	const answered = visibleQuestions(questions, answers).filter(
+		(q) => (answers[q.id] ?? "").trim().length > 0,
+	);
+	return (
+		<span className="mt-0.5 flex flex-col text-xs">
+			{answered.map((q) => (
+				<span key={q.id} className="truncate text-muted-foreground">
+					{answerLabelPrefix(q.label)}{" "}
+					<span className="text-foreground">{answers[q.id]}</span>
+				</span>
+			))}
+			{missing ? (
+				<span className="font-medium text-amber-700 dark:text-amber-400">
+					Needs an answer: {missing.label}
+				</span>
+			) : null}
+		</span>
+	);
+}
+
 function CartLineEditDialog({
 	variantId,
 	line,
+	questions,
 	currency,
 	onClose,
 	onRemove,
@@ -2529,18 +2684,32 @@ function CartLineEditDialog({
 }: {
 	variantId: string | null;
 	line: CartLine | null;
+	/** The product's buyer questions (`z8r3fdkjek`) — the seller answers them
+	 * on the walk-in's behalf here. */
+	questions: readonly BuyerQuestion[];
 	currency: string;
 	onClose: () => void;
 	onRemove: (variantId: string) => void;
-	onSave: (variantId: string, price: number, qty: number) => void;
+	onSave: (
+		variantId: string,
+		price: number,
+		qty: number,
+		answers: Record<string, string> | undefined,
+	) => void;
 }) {
 	// Seeded once per open — the parent keys this component on the line id.
 	const [priceText, setPriceText] = useState(() =>
 		line ? centsToRm(line.price) : "",
 	);
 	const [qty, setLocalQty] = useState(() => line?.qty ?? 1);
+	const [answers, setAnswers] = useState<Record<string, string>>(
+		() => line?.answers ?? {},
+	);
 
 	if (!variantId || !line) return null;
+	// Answers are optional to SAVE (the seller may come back to them); the
+	// primary action is what refuses an unanswered required question.
+	const savedAnswers = Object.keys(answers).length > 0 ? answers : undefined;
 
 	const cents = rmToCents(priceText);
 	const validPrice = !Number.isNaN(cents);
@@ -2581,7 +2750,7 @@ function CartLineEditDialog({
 								onFocus={(e) => e.target.select()}
 								onKeyDown={(e) => {
 									if (e.key === "Enter" && validPrice)
-										onSave(variantId, cents, qty);
+										onSave(variantId, cents, qty, savedAnswers);
 								}}
 								placeholder={centsToRm(line.price)}
 								variant="field"
@@ -2617,9 +2786,18 @@ function CartLineEditDialog({
 								Agreed in person — no catalog price.
 							</span>
 						)}
+						{/* RM0 is a real price here (a comped item, a freebie with a
+						    purchase) — said where the seller is typing, so "can I make
+						    this free?" is answered before they try. */}
 						{!validPrice ? (
 							<span className="mt-1 block text-xs text-destructive">
-								Enter a price above RM 0.00 to save.
+								Enter a price to save — {formatPrice(0, currency)} makes the
+								line free.
+							</span>
+						) : cents === 0 ? (
+							<span className="mt-1 block text-xs text-muted-foreground">
+								Free line — nothing to collect for it. An order of only free
+								lines is a free order.
 							</span>
 						) : null}
 					</label>
@@ -2638,6 +2816,30 @@ function CartLineEditDialog({
 							) : null}
 						</p>
 					) : null}
+					{questions.length > 0 ? (
+						<div className="flex flex-col gap-3 border-t border-border pt-4">
+							<div>
+								<p className="text-sm font-semibold">Ask the buyer</p>
+								<p className="text-xs text-muted-foreground">
+									Answer for them — it goes on the order like any storefront
+									answer.
+								</p>
+							</div>
+							<BuyerQuestionsFields
+								questions={questions}
+								answers={answers}
+								idPrefix={`counter-q-${variantId}`}
+								onChange={(questionId, answer) =>
+									setAnswers((prev) => {
+										const { [questionId]: _cleared, ...rest } = prev;
+										return answer === undefined
+											? rest
+											: { ...rest, [questionId]: answer };
+									})
+								}
+							/>
+						</div>
+					) : null}
 				</div>
 				<DialogFooter className="gap-2 sm:justify-between">
 					<Button
@@ -2650,7 +2852,9 @@ function CartLineEditDialog({
 					</Button>
 					<Button
 						disabled={!validPrice}
-						onClick={() => validPrice && onSave(variantId, cents, qty)}
+						onClick={() =>
+							validPrice && onSave(variantId, cents, qty, savedAnswers)
+						}
 					>
 						Save
 					</Button>
@@ -2665,6 +2869,9 @@ function ConfirmCheckoutDialog({
 	onOpenChange,
 	buyerName,
 	lines,
+	itemsTotal,
+	voucherDiscount,
+	voucherCode,
 	total,
 	currency,
 	fulfilmentLabel,
@@ -2676,6 +2883,15 @@ function ConfirmCheckoutDialog({
 	onOpenChange: (open: boolean) => void;
 	buyerName: string | undefined;
 	lines: Array<{ variantId: string; line: CartLine }>;
+	/** Σ lines, gross of the voucher. */
+	itemsTotal: number;
+	/** What the voucher takes off (`z8r3fdr617`), 0 for none. This dialog is
+	 * the seller's deliberate last look before the order exists, so a
+	 * subtotal→total gap it does not explain is the one thing it must never
+	 * show — found in its own /test-code pass, where it printed items RM50
+	 * over a total of RM45. */
+	voucherDiscount: number;
+	voucherCode?: string;
 	total: number;
 	currency: string;
 	fulfilmentLabel: string;
@@ -2735,6 +2951,24 @@ function ConfirmCheckoutDialog({
 					</ul>
 
 					<div className="flex flex-col gap-1.5 rounded-xl bg-muted/50 p-3 text-sm">
+						{voucherDiscount > 0 ? (
+							<>
+								<div className="flex items-center justify-between gap-3">
+									<span className="text-muted-foreground">Items</span>
+									<span className="tabular-nums text-muted-foreground">
+										{formatPrice(itemsTotal, currency)}
+									</span>
+								</div>
+								<div className="flex items-center justify-between gap-3">
+									<span className="min-w-0 truncate text-accent-emphasis">
+										Voucher{voucherCode ? ` · ${voucherCode}` : ""}
+									</span>
+									<span className="shrink-0 font-medium tabular-nums text-accent-emphasis">
+										−{formatPrice(voucherDiscount, currency)}
+									</span>
+								</div>
+							</>
+						) : null}
 						<div className="flex items-center justify-between gap-3">
 							<span className="text-muted-foreground">Collection</span>
 							<span className="font-medium">{fulfilmentLabel}</span>

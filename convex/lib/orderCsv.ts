@@ -13,10 +13,19 @@
 // in orderCsv.test.ts. See docs/invoices-receipts.md + docs/order-inbox.md.
 
 import { sourceLabel } from "./attribution";
+import { formatItemAnswers } from "./buyerQuestions";
+import { gatedNameCell } from "./credits";
 import { orderCustomerLabel } from "./customer";
 import { formatFulfilmentTime } from "./fulfilmentDate";
-import { ORDER_STATUS_KEYS, type OrderStatus } from "./orderStatus";
+import {
+	orderFlowKind,
+	type OrderFlowKind,
+	ORDER_STATUS_KEYS,
+	type OrderStatus,
+} from "./orderStatus";
 import { PAYMENT_METHOD_LABELS } from "./paymentMethod";
+import { promoDiscountTotal } from "./promo";
+import { orderPickupNotes } from "./pickupNote";
 
 // Malaysia is UTC+8, no DST — render the calendar day with a fixed offset.
 const MYT_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -51,12 +60,48 @@ function csvFlag(on: boolean | undefined): string {
  * attribution through `sourceLabel`. The raw enums were the inconsistency, not
  * this. Idempotent, so a value that is already prose passes through unchanged.
  */
-/** Which fulfilment key a row reads as — the collection DIRECTION wins over the
- * method, since it is the opposite trip (86eyg0n8e). */
-function fulfilmentKey(o: CsvOrder): string {
-	return o.deliveryDirection === "collection"
-		? "collection"
-		: (o.deliveryMethod ?? "");
+/**
+ * Which fulfilment key a row reads as — **the single source for the Fulfilment
+ * column, its header filter and the Filters panel** (z8r3fdfau9), the same rule
+ * `ORDER_SOURCE_LABELS` follows and for the same reason.
+ *
+ * Built ON `orderFlowKind`, never on `deliveryMethod` directly. That is not
+ * tidiness: an **event RSVP is STORED `self_collect`** (it is collected at the
+ * venue) and identified only by the frozen `eventRsvp` marker, so reading the
+ * method would file every RSVP under "Self-collect" — the same flattening this
+ * function exists to undo for drop-off. `orderStatus.ts` says it in one line:
+ * derive with `orderFlowKind`, never by re-reading products.
+ *
+ * On top of the flow kind, two REFINEMENTS the stage flow doesn't care about
+ * but the seller's day does — both cases where the method names the wrong trip:
+ *  - `collection` — the rider goes buyer → store, the opposite direction
+ *    (86eyg0n8e);
+ *  - `drop_off` — pickup at an agreed meetup point (pasar/surau/LRT) rather
+ *    than the seller's own place (86ey30yhr). It is already its own word in
+ *    buyer emails, WhatsApp copy and the Settings badges; flattening it to
+ *    "Self-collect" here meant a seller running three pasar meetups could not
+ *    tell them apart in the table without also adding the Pickup-location
+ *    column, and could not filter to them at all.
+ *
+ * Neither refinement can apply to a booking or an RSVP — nothing is shipped or
+ * ridden for either — which is why each is gated on its own kind rather than
+ * tested alone. Legacy orders carry no `deliveryMethod` and read as `delivery`,
+ * the schema's own default, so the cell names the trip that actually happened
+ * instead of going blank.
+ */
+export function fulfilmentKey(o: CsvOrder): FulfilmentKey {
+	const kind = orderFlowKind(o);
+	// Each refinement is GATED ON ITS OWN KIND rather than tested in isolation,
+	// so the flow kind always wins: a booking and an RSVP can never be
+	// relabelled by a stray direction or a pickup snapshot they had no business
+	// carrying. Written as an early return for those two instead, the branch
+	// would be unreachable — the same value comes out of the tail — and an
+	// unreachable guard is one no test can hold.
+	if (kind === "delivery" && o.deliveryDirection === "collection")
+		return "collection";
+	if (kind === "self_collect" && o.pickupSnapshot?.locationType === "drop_off")
+		return "drop_off";
+	return FLOW_KIND_FULFILMENT[kind];
 }
 
 export function humanizeEnum(raw: string): string {
@@ -108,26 +153,96 @@ export const PAYMENT_STATUS_LABELS: Record<string, string> = {
 
 export const PAYMENT_STATUS_KEYS = ["unpaid", "claimed", "received"] as const;
 
+/**
+ * Every value `fulfilmentKey` can return, in the order a picker offers them:
+ * the two common trips first, then the two that only some stores ever see.
+ *
+ * Exported because the Fulfilment filter is built from exactly this list
+ * (z8r3fdfau9) — an option the column can never print is the `storefront` /
+ * "Online" drift all over again, so the picker doesn't get to hold its own copy.
+ */
+export const FULFILMENT_KEYS = [
+	"delivery",
+	"self_collect",
+	"drop_off",
+	"collection",
+	"booking",
+	"event",
+] as const;
+
+export type FulfilmentKey = (typeof FULFILMENT_KEYS)[number];
+
+/**
+ * Every `OrderFlowKind`, as the fulfilment key it reads as — and the actual
+ * tail of `fulfilmentKey`, so this is a proof rather than a comment.
+ *
+ * `fulfilmentKey` returns the flow kind verbatim whenever no refinement
+ * applies, so a flow kind missing from `FULFILMENT_KEYS` would render through
+ * `humanizeEnum`, be absent from both pickers, and be unfilterable — silently,
+ * on the one store that uses it. Adding a fifth kind to `OrderFlowKind` is now
+ * a **type error here** until it has a key and a label, which is the only kind
+ * of reminder that survives (the lesson `NARROWING_FILTER_KEYS` already
+ * learned the hard way).
+ */
+const FLOW_KIND_FULFILMENT: Record<OrderFlowKind, FulfilmentKey> = {
+	delivery: "delivery",
+	self_collect: "self_collect",
+	booking: "booking",
+	event: "event",
+};
+
 /** How the order reaches the buyer. `self_collect` humanizes to "Self collect";
- * the app has always written it hyphenated, so it is spelled out here. */
-const FULFILMENT_LABELS: Record<string, string> = {
+ * the app has always written it hyphenated, so it is spelled out here. Every
+ * key is listed rather than left to `humanizeEnum` — a label that is only
+ * accidentally right is a label nobody will think to change. */
+export const FULFILMENT_LABELS: Record<FulfilmentKey, string> = {
 	delivery: "Delivery",
-	// The buyer collects from the seller.
+	// The buyer collects from the seller's own place.
 	self_collect: "Self-collect",
+	// The buyer collects from an agreed meetup point — pasar, surau, LRT
+	// (86ey30yhr). Both are "Pickup" to the buyer, but to the SELLER they are
+	// different days out, which is the whole reason to filter on them.
+	drop_off: "Drop-off",
 	// The seller collects from the BUYER (86eyg0n8e) — the opposite trip. Named
 	// "We collect", the buyer-facing wording, because "Collection" sitting next
 	// to "Self-collect" in a column is two words for opposite directions.
 	collection: "We collect",
+	// Nothing ships and nothing is collected: the guest turns up on check-in day
+	// (86eyj70z1).
+	booking: "Booking",
+	// An RSVP to a fixed-moment event (z8r3fdff9u). Stored `self_collect`
+	// because the buyer collects at the venue, but to the seller it is neither a
+	// counter pickup nor a stay — the guest arrives at a time the SELLER set.
+	event: "Event",
 };
+
+/**
+ * The seller-facing word for a fulfilment key — **the one author**, used by the
+ * Fulfilment column, the CSV, the column funnel and the Filters panel.
+ *
+ * It exists because those four sites each had their own fallback and they did
+ * not agree: the column humanised an unknown key (`Drop Off`) while the three
+ * pickers printed it raw (`drop_off`). Unreachable while the union is closed —
+ * but "four call sites, two behaviours, one idea" is the exact drift this whole
+ * registry exists to prevent, so it is a function rather than four `??`s.
+ *
+ * Takes `string`, not `FulfilmentKey`: the callers hold values that came off the
+ * URL and the wire, and a lookup is the honest place to absorb that rather than
+ * a cast at each site.
+ */
+export function fulfilmentLabel(key: string): string {
+	return FULFILMENT_LABELS[key as FulfilmentKey] ?? humanizeEnum(key);
+}
 
 export type CsvOrder = {
 	shortId: string;
 	createdAt: number;
 	fulfilmentDate?: number;
-	/** Buyer's chosen time slot, minutes since MYT midnight. Stored separately
-	 * from `fulfilmentDate` (which keeps a whole-day invariant), so it needs its
-	 * own column — a date alone can't tell a made-to-order seller when the
-	 * customer is actually coming. */
+	/** Buyer's chosen time slot, minutes since MYT midnight — a delivery slot or,
+	 * since z8r3fdff97, a self-collect pickup time. Stored separately from
+	 * `fulfilmentDate` (which keeps a whole-day invariant), so it needs its own
+	 * column — a date alone can't tell a made-to-order seller when the customer
+	 * is actually coming. */
 	fulfilmentTimeMinutes?: number;
 	status: string;
 	paymentStatus?: string;
@@ -139,6 +254,10 @@ export type CsvOrder = {
 	 * accounting is keyed on the date PAID, not the date ordered. */
 	paymentReceivedAt?: number;
 	deliveryMethod?: string;
+	/** Frozen "this is an RSVP" marker (z8r3fdff9u). An RSVP is STORED
+	 * `deliveryMethod: "self_collect"`, so this is the only thing that tells it
+	 * apart — `fulfilmentKey` reads it through `orderFlowKind`. */
+	eventRsvp?: boolean;
 	/** Frozen trip direction (86eyg0n8e). A collection order's rider went
 	 * buyer -> store, so the Fulfilment CELL reads "collection" instead of
 	 * "delivery". Deliberately a value, not a column: one export can hold
@@ -152,6 +271,15 @@ export type CsvOrder = {
 	/** Marketing origin the buyer arrived from (86eyq0eq9). Insights reports it;
 	 * the export now carries it so the two can be reconciled. */
 	attributionSource?: string;
+	/** Waiting on credits (Credits T3.1). Carried so the CUSTOMER cell can say
+	 * so rather than printing a blank — a redacted row with no explanation is
+	 * exactly the silent gap the house rule forbids, and a seller reconciling a
+	 * spreadsheet needs to know the row is incomplete ON PURPOSE.
+	 *
+	 * Deliberately a VALUE in an existing cell, not a new column: a seller's
+	 * bookkeeping template keys on column names, so the header set stays fixed
+	 * (the same reasoning as `deliveryDirection` above). */
+	creditGated?: boolean;
 	customer: { name?: string; waPhone?: string };
 	items: Array<{
 		name: string;
@@ -161,6 +289,16 @@ export type CsvOrder = {
 		 * frozen per line at order create, not looked up. See
 		 * `orders.items[].categoryNames` in convex/schema.ts. */
 		categoryNames?: string[];
+		/** The product's pickup note AS THE BUYER WAS TOLD IT (z8r3fdff97) —
+		 * frozen per line at order create. See `orders.items[].pickupNote`. */
+		pickupNote?: string;
+		/** Buyer-question answers, frozen with their labels (z8r3fdkjek). */
+		answers?: Array<{ label: string; answer: string }>;
+		/** Frozen unit price (minor units). */
+		price: number;
+		/** Frozen list price, present only when the line sold BELOW it
+		 * (z8r3fdcw72) — the pair the "Promo discount" column reads. */
+		listPrice?: number;
 	}>;
 	subtotal: number;
 	/** Accepted/proposed mockup quote on a made-to-order order (minor units).
@@ -176,6 +314,21 @@ export type CsvOrder = {
 	/** Frozen delivery charge (minor units) — same "0.00 never blank" rule as
 	 * pickupFee so the totals identity sums. */
 	deliveryFee?: number;
+	/** Refundable booking security deposit (minor units, S5) — same "0.00 never
+	 * blank" rule as the other money columns. HELD money, not revenue: it sits
+	 * inside `total`, so a bookkeeper subtracts this column to reconcile
+	 * against Insights, which already excludes it. */
+	securityDeposit?: number;
+	/** Voucher discount (minor units, `z8r3fdr617`) — the ONLY SUBTRACTIVE
+	 * member of the money run, so its column prints a NEGATIVE amount. That is
+	 * what keeps the stated identity true by inspection: a column printing
+	 * `10.00` for money that came OFF the total would make every voucher order
+	 * fail to balance, which is the exact bug `Custom work` was added to fix.
+	 * Same "0.00 never blank" rule as its neighbours. */
+	voucherDiscount?: number;
+	/** The code spent, so a seller reconciling a giveaway run can tell which
+	 * voucher paid for which order. Outside the money run (it isn't an addend). */
+	voucherCode?: string;
 	/** True while the delivery charge is still unquoted: `total` is provisional
 	 * and understates the final bill. Without this column the Total column lies
 	 * with no way to tell which rows are affected. */
@@ -197,7 +350,15 @@ export type CsvOrder = {
 	/** Frozen pickup location for self-collect orders. The sibling of the address
 	 * gap: without it a multi-outlet seller cannot split self-collect orders by
 	 * outlet. Survives the location being deleted later (it's a snapshot). */
-	pickupSnapshot?: { label: string; address: string };
+	pickupSnapshot?: {
+		label: string;
+		address: string;
+		/** Which kind of pickup point this was, frozen at create (86ey30yhr).
+		 * Read by `fulfilmentKey` so a meetup point reads "Drop-off" rather than
+		 * being flattened into "Self-collect"; `undefined` on pre-drop-off orders
+		 * reads as the seller's own place, matching the schema. */
+		locationType?: "self_collect" | "drop_off";
+	};
 	/** Manual parcel-courier shipment info (delivery orders marked shipped via
 	 * J&T/DD Cold Chain/etc). Blank when not attached — most orders. */
 	courierName?: string;
@@ -239,6 +400,7 @@ export type OrderColumnKey =
 	| "addressNotes"
 	| "pickupLocation"
 	| "pickupAddress"
+	| "pickupNotes"
 	| "courierName"
 	| "trackingNo"
 	| "status"
@@ -254,10 +416,15 @@ export type OrderColumnKey =
 	| "customWork"
 	| "pickupFee"
 	| "deliveryFee"
+	| "securityDeposit"
+	| "voucherDiscount"
+	| "voucherCode"
 	| "total"
+	| "promoDiscount"
 	| "currency"
 	| "feePending"
 	| "note"
+	| "answers"
 	| "cancelledReason"
 	| "pinned";
 
@@ -326,7 +493,7 @@ export interface OrderColumn {
 	 */
 	display?: (o: CsvOrder) => string;
 	/** In the table's default column set. The rest are opt-in via the picker —
-	 * every column is available, but 36 at once is unreadable. */
+	 * every column is available, but all of them at once is unreadable. */
 	defaultVisible?: boolean;
 	/** Table column width in px — the DEFAULT. The seller can drag it between
 	 * `ORDER_COLUMN_MIN_WIDTH` and `ORDER_COLUMN_MAX_WIDTH`, and double-clicking
@@ -347,6 +514,23 @@ export interface OrderColumn {
 	sortKey?: (o: CsvOrder) => number | string | undefined;
 }
 
+/** A millisecond short of the next midnight — where an untimed order sits
+ * within its day: after every timed one (the latest slot is 11:59 PM) and
+ * before anything on the following day. */
+const UNTIMED_WITHIN_DAY_MS = 24 * 60 * 60 * 1000 - 1;
+
+/**
+ * The Fulfilment date column's sort value: the day plus the chosen time, so
+ * same-day orders fall in pickup/delivery-time order and untimed ones follow
+ * them. `undefined` for a dateless order, which sinks in either direction.
+ */
+export function fulfilmentMomentSortKey(o: CsvOrder): number | undefined {
+	if (o.fulfilmentDate === undefined) return undefined;
+	return o.fulfilmentTimeMinutes === undefined
+		? o.fulfilmentDate + UNTIMED_WITHIN_DAY_MS
+		: o.fulfilmentDate + o.fulfilmentTimeMinutes * 60_000;
+}
+
 /**
  * Every column, in export order.
  *
@@ -354,8 +538,10 @@ export interface OrderColumn {
  * relative order — new columns are interleaved where they belong rather than
  * bolted on the end, so a seller's name-keyed spreadsheet template still reads
  * left-to-right in the same sequence. The one thing that MUST stay adjacent is
- * the money run: `Subtotal · Custom work · Pickup fee · Delivery fee · Total`
- * reconciles by inspection, which is the whole point of adding Custom work.
+ * the money run: `Subtotal · Custom work · Pickup fee · Delivery fee ·
+ * Security deposit · Voucher · Total` reconciles by inspection, which is the
+ * whole point of adding Custom work. `Voucher` prints NEGATIVE — it is an
+ * addend like the rest, just a subtractive one.
  *
  * DELIBERATELY ABSENT: `trackingToken`. It is the capability that unlocks the
  * buyer's no-auth tracking page (see schema `orders.trackingToken`), so it must
@@ -388,7 +574,11 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		defaultVisible: true,
 		width: 128,
 		value: (o) => csvDate(o.fulfilmentDate),
-		sortKey: (o) => o.fulfilmentDate,
+		// The moment, not just the day: same-day pickups sort by the hour the
+		// buyer arrives (z8r3fdff97), untimed ones after them — the inbox's
+		// "due" order (`compareInboxOrder`), so a kitchen's pickup list reads
+		// the same in both views.
+		sortKey: fulfilmentMomentSortKey,
 	},
 	{
 		key: "fulfilmentTime",
@@ -411,7 +601,15 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		// "" (not "Anonymous") stays the default for a phone-only order with no
 		// name, so existing exports are unchanged; an anonymous walk-in (no phone)
 		// reads "Walk-in customer" instead of blank.
-		value: (o) => orderCustomerLabel(o.customer, ""),
+		//
+		// A row waiting on credits says so HERE (Credits T3.1): the buyer's name
+		// and every other buyer column are redacted server-side, and a line of
+		// blanks with no reason is the silent gap the no-silent-skip rule exists
+		// to stop. The Phone cell stays empty — one explanation per row.
+		value: (o) =>
+			o.creditGated
+				? gatedNameCell(o.status)
+				: orderCustomerLabel(o.customer, ""),
 	},
 	{
 		key: "phone",
@@ -430,7 +628,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		value: (o) => fulfilmentKey(o),
 		display: (o) => {
 			const key = fulfilmentKey(o);
-			return FULFILMENT_LABELS[key] ?? humanizeEnum(key);
+			return fulfilmentLabel(key);
 		},
 	},
 	{
@@ -488,6 +686,21 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "fulfilment",
 		width: 200,
 		value: (o) => o.pickupSnapshot?.address ?? "",
+	},
+	{
+		// The third fact about a pickup, after where and the address (z8r3fdff97):
+		// what the buyer was told to do when they get there. The same deduped
+		// list the WhatsApp confirmation and /track show (`orderPickupNotes`), so
+		// the cell is the seller's record of it — blank on delivery and counter
+		// orders even though their lines froze a note. " | " joins, because
+		// notes are sentences that already carry their own commas and periods.
+		// Not default-visible: in a table it would repeat the seller's own
+		// sentence on every row of that product.
+		key: "pickupNotes",
+		label: "Pickup notes",
+		group: "fulfilment",
+		width: 220,
+		value: (o) => orderPickupNotes(o).join(" | "),
 	},
 	{
 		key: "courierName",
@@ -665,6 +878,29 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		sortKey: (o) => o.deliveryFee ?? 0,
 	},
 	{
+		key: "securityDeposit",
+		label: "Security deposit",
+		group: "money",
+		numeric: true,
+		width: 132,
+		value: (o) => csvAmount(o.securityDeposit ?? 0),
+		sortKey: (o) => o.securityDeposit ?? 0,
+	},
+	{
+		// The one subtractive addend — see `voucherDiscount` on CsvOrder for why
+		// the printed figure is negative.
+		key: "voucherDiscount",
+		label: "Voucher",
+		group: "money",
+		numeric: true,
+		width: 110,
+		value: (o) =>
+			o.voucherDiscount && o.voucherDiscount > 0
+				? csvAmount(-o.voucherDiscount)
+				: csvAmount(0),
+		sortKey: (o) => -(o.voucherDiscount ?? 0),
+	},
+	{
 		key: "total",
 		label: "Total",
 		group: "money",
@@ -675,11 +911,37 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		sortKey: (o) => o.total,
 	},
 	{
+		// What the sale cost the seller on this order (z8r3fdcw72): the sum of
+		// (listPrice − price) × quantity over the lines that sold below list.
+		// Derived from the FROZEN pair on each line, so it stays true after the
+		// promo ends, is re-run, or is deleted. 0 for every ordinary order.
+		//
+		// Deliberately OUTSIDE the Subtotal→Total addend run: the discount is
+		// already baked into each line's frozen price, so it is reported, never
+		// summed. Dropping it between the addends would make the left-to-right
+		// arithmetic read false — which is what `the money run stays adjacent`
+		// pins, and what it caught when this column first landed there.
+		key: "promoDiscount",
+		label: "Promo discount",
+		group: "money",
+		numeric: true,
+		width: 126,
+		value: (o) => csvAmount(promoDiscountTotal(o)),
+		sortKey: (o) => promoDiscountTotal(o),
+	},
+	{
 		key: "currency",
 		label: "Currency",
 		group: "money",
 		width: 96,
 		value: (o) => o.currency,
+	},
+	{
+		key: "voucherCode",
+		label: "Voucher code",
+		group: "money",
+		width: 132,
+		value: (o) => o.voucherCode ?? "",
 	},
 	{
 		key: "feePending",
@@ -694,6 +956,17 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "items",
 		width: 220,
 		value: (o) => o.customerNote ?? "",
+	},
+	{
+		// Buyer questions (z8r3fdkjek). Sits beside Note because both are "what
+		// the buyer told us", and in the items group because answers belong to
+		// a LINE. Lines are joined with " | " (the pickup-notes precedent)
+		// because "; " already separates answers within a line.
+		key: "answers",
+		label: "Answers",
+		group: "items",
+		width: 260,
+		value: (o) => orderAnswersCell(o),
 	},
 	{
 		key: "cancelledReason",
@@ -760,12 +1033,6 @@ export function resolveOrderColumns(
 }
 
 /**
- * Comparable value for a column, for the table's per-column sort.
- *
- * Falls back to the lowercased display string, so a column that never declared
- * a `sortKey` still sorts sensibly (alphabetically) instead of not at all.
- */
-/**
  * A cell as it reads on screen. The one way the table (and free-text search)
  * should ask for text — going straight to `column.value` gets the stored value,
  * which is what the CSV wants and not what a person should read.
@@ -774,6 +1041,12 @@ export function orderColumnDisplay(column: OrderColumn, o: CsvOrder): string {
 	return (column.display ?? column.value)(o);
 }
 
+/**
+ * Comparable value for a column, for the table's per-column sort.
+ *
+ * Falls back to the lowercased display string, so a column that never declared
+ * a `sortKey` still sorts sensibly (alphabetically) instead of not at all.
+ */
 export function orderColumnSortValue(
 	column: OrderColumn,
 	o: CsvOrder,
@@ -833,4 +1106,20 @@ export function ordersToCsv(
 		csvHeaderRow(columns),
 		...orders.map((o) => orderToCsvRow(o, columns)),
 	]);
+}
+
+/**
+ * The Answers cell: `Label: answer; Label: answer` per line that carries
+ * answers. When more than one line does, each is prefixed with its product
+ * (and option) so the reader knows which line answered what.
+ */
+export function orderAnswersCell(o: Pick<CsvOrder, "items">): string {
+	const answered = o.items.filter((it) => (it.answers?.length ?? 0) > 0);
+	if (answered.length === 1) return formatItemAnswers(answered[0].answers);
+	return answered
+		.map(
+			(it) =>
+				`${it.name}${it.variantLabel ? ` (${it.variantLabel})` : ""} — ${formatItemAnswers(it.answers)}`,
+		)
+		.join(" | ");
 }

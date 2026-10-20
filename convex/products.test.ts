@@ -62,11 +62,20 @@ const baseProduct = (retailerId: string, opts: BaseOpts = {}) => ({
 /** Build a single-variant import product (the grouped bulkUpsert shape). */
 function importSingle(
 	name: string,
-	opts: { sku?: string; price: number; stock: number; description?: string },
+	opts: {
+		sku?: string;
+		price: number;
+		stock: number;
+		description?: string;
+		prepMinutes?: number;
+		pickupNote?: string;
+	},
 ) {
 	return {
 		name,
 		description: opts.description,
+		prepMinutes: opts.prepMinutes,
+		pickupNote: opts.pickupNote,
 		options: [] as { name: string; values: string[] }[],
 		variants: [
 			{
@@ -262,11 +271,10 @@ describe("products", () => {
 		).rejects.toThrow(/At most 2 option axes/);
 	});
 
-	test("create rejects a grid exceeding the 50-variant cap", async () => {
+	test("create rejects a grid exceeding the 100-variant cap", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
-		const values = Array.from({ length: 8 }, (_, i) => `v${i}`);
 		await expect(
 			asA.mutation(api.products.create, {
 				retailerId: retailer._id,
@@ -275,12 +283,46 @@ describe("products", () => {
 				imageStorageIds: [],
 				sortOrder: 0,
 				options: [
-					{ name: "A", values }, // 8 × 8 = 64 > 50
-					{ name: "B", values },
+					// 11 × 10 = 110 > 100, with both axes inside MAX_VALUES_PER_AXIS.
+					{ name: "A", values: Array.from({ length: 11 }, (_, i) => `a${i}`) },
+					{ name: "B", values: Array.from({ length: 10 }, (_, i) => `b${i}`) },
 				],
 				variants: [],
 			}),
-		).rejects.toThrow(/max 50 per product/);
+		).rejects.toThrow(/110 choices — 10 over the limit of 100/);
+	});
+
+	// The grid the cap was raised for (z8r3fdjgvd): one event listing carrying
+	// both adult T-shirt sizes as required choices, so a shared seat pool stays
+	// on ONE product. 7 × 8 = 56 — refused by the old cap of 50.
+	test("create accepts the 56-variant two-size event grid", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const sizes = ["S", "M", "L", "XL", "2XL", "3XL", "4XL"];
+		const second = ["None", ...sizes];
+		const variants = sizes.flatMap((a) =>
+			second.map((b) => ({
+				optionValues: [a, b],
+				price: b === "None" ? 55000 : 68000,
+				onHand: 0,
+			})),
+		);
+		expect(variants).toHaveLength(56);
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Into The Falls registration",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [
+				{ name: "Adult 1 size", values: sizes },
+				{ name: "Adult 2 size", values: second },
+			],
+			variants,
+		});
+		const saved = await asA.query(api.products.get, { productId });
+		expect(saved?.variants).toHaveLength(56);
 	});
 
 	// --- SKU uniqueness (now on the variant) --------------------------------
@@ -611,33 +653,311 @@ describe("products", () => {
 
 	// --- Per-variant edits ---------------------------------------------------
 
-	test("updateVariant changes price + stock", async () => {
+	test("updateVariant changes price, and cannot touch stock at all", async () => {
+		// Stock has exactly one door (`adjustStock`, 86eypn8ye). `updateVariant`
+		// writes whatever it is handed, so accepting `onHand` here would be a
+		// second absolute-write path onto the field the ticket exists to protect.
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
 		const id = await asA.mutation(api.products.create, baseProduct(retailer._id));
 		const product = await asA.query(api.products.get, { productId: id });
 		const variantId = product?.variants[0]?._id as Id<"productVariants">;
-		await asA.mutation(api.products.updateVariant, {
-			variantId,
-			price: 13500,
-			onHand: 9,
-		});
+		const before = product?.variants[0]?.onHand as number;
+
+		await asA.mutation(api.products.updateVariant, { variantId, price: 13500 });
+
 		const after = await asA.query(api.products.get, { productId: id });
 		expect(after?.variants[0]?.price).toBe(13500);
-		expect(after?.variants[0]?.onHand).toBe(9);
+		expect(after?.variants[0]?.onHand).toBe(before);
+		// The argument does not exist — a caller that still sends it is rejected
+		// by the validator rather than silently ignored.
+		await expect(
+			asA.mutation(
+				api.products.updateVariant,
+				{ variantId, onHand: 9 } as unknown as { variantId: Id<"productVariants"> },
+			),
+		).rejects.toThrow();
 	});
 
-	test("updateVariant rejects negative stock", async () => {
+	// --- Stock is its own control (86eypn8ye) --------------------------------
+
+	/** Create a product and return its single variant id + starting count. */
+	async function seedStock(
+		t: ReturnType<typeof setup>,
+		stock: number,
+	): Promise<{
+		asA: ReturnType<ReturnType<typeof setup>["withIdentity"]>;
+		productId: Id<"products">;
+		variantId: Id<"productVariants">;
+	}> {
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { stock }),
+		);
+		const product = await asA.query(api.products.get, { productId });
+		return {
+			asA,
+			productId,
+			variantId: product?.variants[0]?._id as Id<"productVariants">,
+		};
+	}
+
+	test("saveVariantGrid never writes stock onto an existing variant", async () => {
+		// THE bug (86eypn8ye Hole 2). The seller opens the editor at 14:00 with 50
+		// rendered into the form, 30 units sell, and at 14:04 they fix a typo in
+		// the name and tap Save. The old code wrote 50 back, resurrecting all 30.
+		const t = setup();
+		const { asA, productId, variantId } = await seedStock(t, 50);
+
+		// 30 sell while the form is open.
+		await asA.mutation(api.products.adjustStock, {
+			adjustments: [{ variantId, delta: -30 }],
+		});
+
+		// The seller saves the stale form — its stock field still says 50.
+		await asA.mutation(api.products.saveVariantGrid, {
+			productId,
+			options: [],
+			variants: [
+				{
+					optionValues: [],
+					price: 12000,
+					onHand: 50,
+					blockWhenOutOfStock: true,
+				},
+			],
+		});
+
+		const after = await asA.query(api.products.get, { productId });
+		expect(after?.variants[0]?.onHand).toBe(20);
+	});
+
+	test("saveVariantGrid DOES set stock on a combination it inserts", async () => {
+		// The other half of the rule: a brand-new row has no stock of its own to
+		// protect, so the number the seller just typed is the only truth there is.
+		const t = setup();
+		const { asA, productId } = await seedStock(t, 5);
+
+		await asA.mutation(api.products.saveVariantGrid, {
+			productId,
+			options: [{ name: "Size", values: ["S", "M"] }],
+			variants: [
+				{ optionValues: ["S"], price: 12000, onHand: 5, blockWhenOutOfStock: true },
+				{ optionValues: ["M"], price: 14000, onHand: 33, blockWhenOutOfStock: true },
+			],
+		});
+
+		const after = await asA.query(api.products.get, { productId });
+		const m = after?.variants.find((vr) => vr.optionValues[0] === "M");
+		expect(m?.onHand).toBe(33);
+	});
+
+	test("adjustStock moves by a delta and floors at zero", async () => {
+		const t = setup();
+		const { asA, productId, variantId } = await seedStock(t, 5);
+
+		await asA.mutation(api.products.adjustStock, {
+			adjustments: [{ variantId, delta: 20 }],
+		});
+		expect(
+			(await asA.query(api.products.get, { productId }))?.variants[0]?.onHand,
+		).toBe(25);
+
+		// Over-subtracting self-heals to 0 rather than dead-ending the seller —
+		// matching decrementAggregatesForCancel and the usage meter.
+		const res = await asA.mutation(api.products.adjustStock, {
+			adjustments: [{ variantId, delta: -999 }],
+		});
+		expect(res).toEqual([{ variantId, onHand: 0 }]);
+	});
+
+	test("adjustStock refuses an exact count that reality has moved past", async () => {
+		// The stale-overwrite guard. Deliberately NOT a silent merge: only the
+		// seller knows whether they counted before or after those units left.
+		const t = setup();
+		const { asA, productId, variantId } = await seedStock(t, 20);
+
+		// Two sell after the seller's screen last painted 20.
+		await asA.mutation(api.products.adjustStock, {
+			adjustments: [{ variantId, delta: -2 }],
+		});
+
+		await expect(
+			asA.mutation(api.products.adjustStock, {
+				adjustments: [{ variantId, setTo: 17, expectedOnHand: 20 }],
+			}),
+		).rejects.toThrow(/changed to 18/);
+		// Nothing was written — the count still reflects the sales.
+		expect(
+			(await asA.query(api.products.get, { productId }))?.variants[0]?.onHand,
+		).toBe(18);
+
+		// Re-confirming against the number they can now see goes through.
+		await asA.mutation(api.products.adjustStock, {
+			adjustments: [{ variantId, setTo: 17, expectedOnHand: 18 }],
+		});
+		expect(
+			(await asA.query(api.products.get, { productId }))?.variants[0]?.onHand,
+		).toBe(17);
+	});
+
+	test("adjustStock requires expectedOnHand for an exact count", async () => {
+		const t = setup();
+		const { asA, variantId } = await seedStock(t, 20);
+		await expect(
+			asA.mutation(api.products.adjustStock, {
+				adjustments: [{ variantId, setTo: 17 }],
+			}),
+		).rejects.toThrow(/expectedOnHand/);
+	});
+
+	test("adjustStock rejects an adjustment that is neither a delta nor a set", async () => {
+		const t = setup();
+		const { asA, variantId } = await seedStock(t, 20);
+		await expect(
+			asA.mutation(api.products.adjustStock, { adjustments: [{ variantId }] }),
+		).rejects.toThrow(/exactly one/);
+		await expect(
+			asA.mutation(api.products.adjustStock, {
+				adjustments: [{ variantId, delta: 1, setTo: 5, expectedOnHand: 20 }],
+			}),
+		).rejects.toThrow(/exactly one/);
+	});
+
+	test("a batch applies whole or not at all", async () => {
+		// Why the mutation takes a LIST: the multi-variant sheet moves several
+		// counts in one pass, and half-applying would leave the seller with some
+		// rows moved, some not, and no way to tell which.
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const asA = t.withIdentity({ subject: USER_A });
-		const id = await asA.mutation(api.products.create, baseProduct(retailer._id));
-		const product = await asA.query(api.products.get, { productId: id });
-		const variantId = product?.variants[0]?._id as Id<"productVariants">;
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Lekor",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Flavour", values: ["Original", "Pedas"] }],
+			variants: [
+				{ optionValues: ["Original"], price: 1200, onHand: 20 },
+				{ optionValues: ["Pedas"], price: 1200, onHand: 8 },
+			],
+		});
+		const before = await asA.query(api.products.get, { productId });
+		const [a, b] = (before?.variants ?? []).map(
+			(vr) => vr._id as Id<"productVariants">,
+		);
+
 		await expect(
-			asA.mutation(api.products.updateVariant, { variantId, onHand: -3 }),
-		).rejects.toThrow(/non-negative integer/);
+			asA.mutation(api.products.adjustStock, {
+				adjustments: [
+					{ variantId: a, delta: -12 }, // fine
+					{ variantId: b, setTo: 3 }, // missing expectedOnHand
+				],
+			}),
+		).rejects.toThrow();
+
+		const after = await asA.query(api.products.get, { productId });
+		expect(after?.variants.map((vr) => vr.onHand)).toEqual([20, 8]);
+	});
+
+	test("adjustStock refuses a custom line and a non-owner", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const asB = t.withIdentity({ subject: USER_B });
+		const productId = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Cake",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [],
+			variants: [
+				{ optionValues: [], price: 12000, onHand: 5 },
+				{ optionValues: [], price: 0, onHand: 0, isCustom: true },
+			],
+		});
+		const product = await asA.query(api.products.get, { productId });
+		const custom = product?.variants.find((vr) => vr.isCustom);
+		const normal = product?.variants.find((vr) => !vr.isCustom);
+
+		await expect(
+			asA.mutation(api.products.adjustStock, {
+				adjustments: [
+					{ variantId: custom?._id as Id<"productVariants">, delta: 3 },
+				],
+			}),
+		).rejects.toThrow(/no stock to count/);
+
+		await expect(
+			asB.mutation(api.products.adjustStock, {
+				adjustments: [
+					{ variantId: normal?._id as Id<"productVariants">, delta: 3 },
+				],
+			}),
+		).rejects.toThrow(/Forbidden/);
+	});
+
+	test("adjustStock rejects a duplicated variant in one batch", async () => {
+		// Two entries for the same row would apply in array order and the seller
+		// would have no idea which one won.
+		const t = setup();
+		const { asA, variantId } = await seedStock(t, 20);
+		await expect(
+			asA.mutation(api.products.adjustStock, {
+				adjustments: [
+					{ variantId, delta: 1 },
+					{ variantId, delta: 2 },
+				],
+			}),
+		).rejects.toThrow(/only once/);
+	});
+
+	test("a booking listing carries no stock flag — so no stock control is offered", async () => {
+		// The products list decides whether to offer the Stock button by reading
+		// the RESOLVED `blockWhenOutOfStock` off each variant (86eypn8ye). A stay
+		// has capacity, not stock: bookings are held by `bookingsOverlapping`, not
+		// by `onHand`, so an Adjust dialog there would let a seller move a number
+		// nothing reads. This pins the server-side contract that client filter
+		// depends on — if a booking listing ever starts resolving the flag true,
+		// this fires rather than a stock stepper quietly appearing on a campsite.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Standard Plot",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			kind: "booking",
+			booking: { capacityPerNight: 5 },
+			options: [],
+			variants: [{ optionValues: [], price: 12000, onHand: 0 }],
+		});
+
+		const list = await asA.query(api.products.listAll, {
+			retailerId: retailer._id,
+		});
+		const stay = list.find((p) => p.name === "Standard Plot");
+		expect(stay?.variants[0]?.blockWhenOutOfStock).toBeFalsy();
+
+		// The converse, so the test proves the filter discriminates rather than
+		// always returning false: a LEGACY product carrying the flag only at
+		// product level still resolves it onto the variant, and does get one.
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Keropok", stock: 7 }),
+		);
+		const after = await asA.query(api.products.listAll, {
+			retailerId: retailer._id,
+		});
+		const goods = after.find((p) => p.name === "Keropok");
+		expect(goods?.variants[0]?.blockWhenOutOfStock).toBe(true);
 	});
 
 	// --- saveVariantGrid reconcile ------------------------------------------
@@ -977,8 +1297,98 @@ describe("products", () => {
 		const s = after?.variants.find((vr) => vr.sku === "TEE-S");
 		const m = after?.variants.find((vr) => vr.sku === "TEE-M");
 		expect(s?.price).toBe(5500); // updated
-		expect(s?.onHand).toBe(1);
+		// Stock is NOT applied without `updateStock` (86eypn8ye): the sheet was
+		// exported hours ago, so its count would undo every sale made since.
+		expect(s?.onHand).toBe(3);
 		expect(m?.onHand).toBe(9); // untouched
+	});
+
+	test("bulkUpsert applies the sheet's stock only when updateStock is set", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Tee",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [],
+			variants: [{ optionValues: [], sku: "TEE-1", price: 5000, onHand: 3 }],
+		});
+		const sheet = [
+			{
+				name: "Tee",
+				options: [],
+				variants: [
+					{ optionValues: [], sku: "TEE-1", price: 5000, onHand: 40, active: true },
+				],
+			},
+		];
+
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: sheet,
+			updateStock: false,
+		});
+		let after = await asA.query(api.products.get, { productId: id });
+		expect(after?.variants[0]?.onHand).toBe(3);
+
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: sheet,
+			updateStock: true,
+		});
+		after = await asA.query(api.products.get, { productId: id });
+		expect(after?.variants[0]?.onHand).toBe(40);
+	});
+
+	test("bulkUpsertPreview counts the stock it would overwrite, and which way", async () => {
+		// The numbers the import screen puts on the checkbox before the seller
+		// ticks it. `stockIncreases` is the load-bearing one — that direction
+		// INVENTS units, and its likeliest cause is a sale made after the export.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Tee",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [{ name: "Size", values: ["S", "M", "L"] }],
+			variants: [
+				{ optionValues: ["S"], sku: "TEE-S", price: 5000, onHand: 3 },
+				{ optionValues: ["M"], sku: "TEE-M", price: 5000, onHand: 9 },
+				{ optionValues: ["L"], sku: "TEE-L", price: 5000, onHand: 7 },
+			],
+		});
+
+		const preview = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [
+				{
+					name: "Tee",
+					options: [{ name: "Size", values: ["S", "M", "L"] }],
+					variants: [
+						// up: the resurrection direction
+						{ optionValues: ["S"], sku: "TEE-S", price: 5000, onHand: 12, active: true },
+						// down: a deliberate reduction
+						{ optionValues: ["M"], sku: "TEE-M", price: 5000, onHand: 4, active: true },
+						// unchanged
+						{ optionValues: ["L"], sku: "TEE-L", price: 5000, onHand: 7, active: true },
+					],
+				},
+			],
+		});
+
+		expect(preview.summary.stockChanges).toBe(2);
+		expect(preview.summary.stockIncreases).toBe(1);
+		expect(preview.plan[0]?.stockIncreaseSamples).toEqual([
+			{ sku: "TEE-S", from: 3, to: 12 },
+		]);
 	});
 
 	test("bulkUpsert rejects intra-batch duplicate sku", async () => {
@@ -2062,6 +2472,125 @@ describe("product cap", () => {
 		).rejects.toThrow(/limit/i);
 	});
 
+	/** Switch a store's subscription to a live comp, the way an admin's toggle
+	 *  does. The cap exemption is the STORE's here, not the caller's. */
+	async function comp(t: ReturnType<typeof setup>, retailerId: Id<"retailers">) {
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			if (!sub) throw new Error("no subscription");
+			await ctx.db.patch(sub._id, {
+				comped: true,
+				comp: {
+					kind: "partner",
+					label: "Campfest",
+					grantedBy: ADMIN,
+					grantedAt: Date.now(),
+				},
+			});
+		});
+	}
+
+	test("a SPONSORED store is uncapped on the SELLER's own login (z8r3fdrph7)", async () => {
+		// Zaki, 10 Oct 2026: a comp means admin limits — "no restrictions in
+		// number of products". Unlike admin act-as this is the store's, so the
+		// seller adds their 201st product themselves, with no admin present.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await fillCatalog(t, retailer._id, CAP);
+		const asA = t.withIdentity({ subject: USER_A });
+		// Capped before the comp — so this test can't pass by never reaching
+		// the gate.
+		await expect(
+			asA.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { name: "Before comp", sortOrder: 900 }),
+			),
+		).rejects.toThrow(/limit/i);
+
+		await comp(t, retailer._id);
+		await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "After comp", sortOrder: 901 }),
+		);
+		const state = await asA.query(api.products.capState, {
+			retailerId: retailer._id,
+		});
+		expect(state.used).toBe(CAP + 1);
+		expect(state.exempt).toBe(true);
+		// No ceiling, so no ratio: the counter would otherwise print
+		// "201 of 200 used" to a store that has no 200.
+		expect(state.showCounter).toBe(false);
+	});
+
+	test("an ADMIN's own store is uncapped too — act-as was never the point", async () => {
+		// Before this, `actingAsAdmin` was false on an admin's OWN store
+		// (`retailer.userId === adminUserId`), so the one account with no
+		// limits was the one still capped at 200.
+		const t = setup();
+		const retailer = await seedRetailer(t, ADMIN);
+		await fillCatalog(t, retailer._id, CAP);
+		const asAdmin = t.withIdentity({ subject: ADMIN });
+		await asAdmin.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Dogfood", sortOrder: 900 }),
+		);
+		const state = await asAdmin.query(api.products.capState, {
+			retailerId: retailer._id,
+		});
+		expect(state.used).toBe(CAP + 1);
+		expect(state.showCounter).toBe(false);
+	});
+
+	test("a sponsored store imports a sheet that would never fit a Pro store", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await fillCatalog(t, retailer._id, CAP - 1);
+		const asA = t.withIdentity({ subject: USER_A });
+		const sheet = {
+			retailerId: retailer._id,
+			currency: "MYR" as const,
+			products: [
+				importSingle("Sheet A", { price: 1000, stock: 1 }),
+				importSingle("Sheet B", { price: 1000, stock: 1 }),
+				importSingle("Sheet C", { price: 1000, stock: 1 }),
+			],
+		};
+		await expect(asA.mutation(api.products.bulkUpsert, sheet)).rejects.toThrow(
+			/Only 1 of these 3/,
+		);
+		await comp(t, retailer._id);
+		const result = await asA.mutation(api.products.bulkUpsert, sheet);
+		expect(result.created).toBe(3);
+	});
+
+	test("a plain Pro seller is still capped — the cap is not a tier lever", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_B);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (sub) await ctx.db.patch(sub._id, { status: "active", plan: "pro" });
+		});
+		await fillCatalog(t, retailer._id, CAP);
+		const asB = t.withIdentity({ subject: USER_B });
+		await expect(
+			asB.mutation(
+				api.products.create,
+				baseProduct(retailer._id, { name: "Pro try", sortOrder: 900 }),
+			),
+		).rejects.toThrow(/limit/i);
+		const state = await asB.query(api.products.capState, {
+			retailerId: retailer._id,
+		});
+		expect(state.exempt).toBe(false);
+		expect(state.atCap).toBe(true);
+	});
+
 	test("bulk import refuses a sheet that doesn't fit, and says how many would", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -2332,5 +2861,690 @@ describe("orderedAt is seller-only", () => {
 		expect(dashboard.find((p) => p._id === productId)?.orderedAt).toBeGreaterThan(
 			0,
 		);
+	});
+});
+
+/**
+ * Product kind + booking config (booking bundle S1, ClickUp 86eyn4kap; spec
+ * 86eyj70z1). Kind is a vocabulary/question router stored minimally — and the
+ * kind ⟷ booking-config pairing is enforced both directions so a booking
+ * listing can never exist without availability semantics, nor capacity sit
+ * dead on a product that will never read it.
+ */
+describe("product kind + booking config", () => {
+	test("booking create stores kind + capacity; physical stays unset", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const bookingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+		});
+		const listing = await asA.query(api.products.get, {
+			productId: bookingId,
+		});
+		expect(listing?.kind).toBe("booking");
+		expect(listing?.booking).toEqual({ capacityPerNight: 5 });
+
+		// "physical" is the DEFAULT spelling — stored as unset so pre-kind and
+		// post-kind rows read identically (minQuantity's 0-normalizes posture).
+		const physicalId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Tent 2P plain" }),
+			kind: "physical" as const,
+		});
+		const physical = await asA.query(api.products.get, {
+			productId: physicalId,
+		});
+		expect(physical?.kind).toBeUndefined();
+		expect(physical?.booking).toBeUndefined();
+	});
+
+	test("security deposit: stored in sen, 0 normalizes to unset, bad values refused (S5)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const listingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Hilltop Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 2, securityDeposit: 10_000 },
+		});
+		let listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.securityDeposit).toBe(10_000);
+		// 0 clears — "no deposit" has one spelling (sanitizeFee posture).
+		await asA.mutation(api.products.update, {
+			productId: listingId,
+			booking: { capacityPerNight: 2, securityDeposit: 0 },
+		});
+		listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.securityDeposit).toBeUndefined();
+		// Non-integer / negative / over the RM10k ceiling: refused.
+		for (const bad of [10.5, -1, 1_000_001]) {
+			await expect(
+				asA.mutation(api.products.update, {
+					productId: listingId,
+					booking: { capacityPerNight: 2, securityDeposit: bad },
+				}),
+			).rejects.toThrow(/RM 0 and RM 10,000/);
+		}
+	});
+
+	test("package length + instant book + unlimited capacity round-trip (S7)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const listingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Monthly Gym Pass" }),
+			kind: "booking" as const,
+			// No capacity at all — a gym has no daily member cap.
+			booking: { packageLength: 30, autoAccept: true },
+		});
+		let listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.capacityPerNight).toBeUndefined();
+		expect(listing?.booking?.packageLength).toBe(30);
+		expect(listing?.booking?.autoAccept).toBe(true);
+
+		// 0 clears the package back to a free-range stay; false clears instant book.
+		await asA.mutation(api.products.update, {
+			productId: listingId,
+			booking: { capacityPerNight: 5, packageLength: 0, autoAccept: false },
+		});
+		listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.booking?.packageLength).toBeUndefined();
+		expect(listing?.booking?.autoAccept).toBeUndefined();
+		expect(listing?.booking?.capacityPerNight).toBe(5);
+
+		for (const bad of [10.5, -1, 400]) {
+			await expect(
+				asA.mutation(api.products.update, {
+					productId: listingId,
+					booking: { packageLength: bad },
+				}),
+			).rejects.toThrow(/Package length/);
+		}
+	});
+
+	test("weekend rate + nights round-trip, default to Fri + Sat, and 0 clears both (S13)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5, weekendPrice: 12_000 },
+		});
+		let listing = await asA.query(api.products.get, { productId });
+		expect(listing?.booking?.weekendPrice).toBe(12_000);
+		expect(listing?.booking?.weekendDays).toEqual([5, 6]);
+
+		// A custom night set is deduped + sorted on the way in.
+		await asA.mutation(api.products.update, {
+			productId,
+			booking: {
+				capacityPerNight: 5,
+				weekendPrice: 15_000,
+				weekendDays: [6, 0, 6],
+			},
+		});
+		listing = await asA.query(api.products.get, { productId });
+		expect(listing?.booking?.weekendDays).toEqual([0, 6]);
+
+		// 0 clears — and clears the nights with it (one spelling for "no rate").
+		await asA.mutation(api.products.update, {
+			productId,
+			booking: { capacityPerNight: 5, weekendPrice: 0, weekendDays: [5, 6] },
+		});
+		listing = await asA.query(api.products.get, { productId });
+		expect(listing?.booking?.weekendPrice).toBeUndefined();
+		expect(listing?.booking?.weekendDays).toBeUndefined();
+		expect(listing?.booking?.capacityPerNight).toBe(5);
+	});
+
+	test("weekend rate validation: no nights, every night, bad night, package pairing", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const cases: Array<
+			[
+				{
+					weekendPrice?: number;
+					weekendDays?: number[];
+					packageLength?: number;
+				},
+				RegExp,
+			]
+		> = [
+			[{ weekendPrice: 12_000, weekendDays: [] }, /at least one night/],
+			[
+				{ weekendPrice: 12_000, weekendDays: [0, 1, 2, 3, 4, 5, 6] },
+				/every night/,
+			],
+			[{ weekendPrice: 12_000, weekendDays: [7] }, /days of the week/],
+			[{ weekendPrice: -1 }, /Weekend rate must be/],
+			[
+				{ weekendPrice: 12_000, packageLength: 30 },
+				/package has one flat price/,
+			],
+		];
+		for (const [booking, message] of cases) {
+			await expect(
+				asA.mutation(api.products.create, {
+					...baseProduct(retailer._id, { name: "Bad Plot" }),
+					kind: "booking" as const,
+					booking,
+				}),
+			).rejects.toThrow(message);
+		}
+	});
+
+	test("booking kind without its settings object is refused (capacity itself is optional since S7)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		// The kind ⟷ config pairing still holds both directions...
+		await expect(
+			asA.mutation(api.products.create, {
+				...baseProduct(retailer._id),
+				kind: "booking" as const,
+			}),
+		).rejects.toThrow(/booking settings/);
+		// ...but an EMPTY settings object is valid: no capacity = unlimited (S7),
+		// the shape a gym selling memberships needs.
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Unlimited listing" }),
+			kind: "booking" as const,
+			booking: {},
+		});
+		const listing = await asA.query(api.products.get, { productId: id });
+		expect(listing?.kind).toBe("booking");
+		expect(listing?.booking?.capacityPerNight).toBeUndefined();
+	});
+
+	test("capacity on a non-booking product is refused", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.products.create, {
+				...baseProduct(retailer._id),
+				booking: { capacityPerNight: 3 },
+			}),
+		).rejects.toThrow(/Booking kind/);
+	});
+
+	test("capacity is a whole number between 1 and 100", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		for (const capacityPerNight of [0, 101, 2.5]) {
+			await expect(
+				asA.mutation(api.products.create, {
+					...baseProduct(retailer._id),
+					kind: "booking" as const,
+					booking: { capacityPerNight },
+				}),
+			).rejects.toThrow(/whole number between 1 and 100/);
+		}
+	});
+
+	test("update re-tunes capacity on a booking listing only", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const bookingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+		});
+		await asA.mutation(api.products.update, {
+			productId: bookingId,
+			booking: { capacityPerNight: 8 },
+		});
+		const listing = await asA.query(api.products.get, {
+			productId: bookingId,
+		});
+		expect(listing?.booking).toEqual({ capacityPerNight: 8 });
+
+		// A physical product refuses the knob — capacity can't be parked on a
+		// row that will never read it.
+		const physicalId = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Tent 2P plain" }),
+		);
+		await expect(
+			asA.mutation(api.products.update, {
+				productId: physicalId,
+				booking: { capacityPerNight: 3 },
+			}),
+		).rejects.toThrow(/booking listing/);
+	});
+});
+
+describe("prep time + pickup note (z8r3fdff97)", () => {
+	test("both store, and 0 / blank are the one spelling for 'no rule'", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Ice Cream Puff" }),
+			prepMinutes: 120,
+			pickupNote: "  Bring an ice bag — these melt in 20 min.  ",
+		});
+		let row = await asA.query(api.products.get, { productId: id });
+		expect(row?.prepMinutes).toBe(120);
+		// Trimmed on the way in, so no surface has to trim on the way out.
+		expect(row?.pickupNote).toBe("Bring an ice bag — these melt in 20 min.");
+
+		// 0 and "" CLEAR, rather than storing a falsy value that every reader
+		// would then have to special-case (the minQuantity / securityDeposit
+		// posture — one spelling for "no rule").
+		await asA.mutation(api.products.update, {
+			productId: id,
+			prepMinutes: 0,
+			pickupNote: "",
+		});
+		row = await asA.query(api.products.get, { productId: id });
+		expect(row?.prepMinutes).toBeUndefined();
+		expect(row?.pickupNote).toBeUndefined();
+	});
+
+	test("a note's inner newlines collapse — one line stays one line", async () => {
+		// It rides a cart row, a WhatsApp message and a PDF; a seller pasting a
+		// paragraph must not be able to break any of those layouts.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Bento Set" }),
+			pickupNote: "Side counter.\n\nAsk for Amirah.",
+		});
+		const row = await asA.query(api.products.get, { productId: id });
+		expect(row?.pickupNote).toBe("Side counter. Ask for Amirah.");
+	});
+
+	test("refuses a prep window that is not whole minutes inside the cap", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		for (const bad of [-1, 90.5, 1441]) {
+			await expect(
+				asA.mutation(api.products.create, {
+					...baseProduct(retailer._id, { name: `Bad ${bad}` }),
+					prepMinutes: bad,
+				}),
+			).rejects.toThrow(/Prep time must be/);
+		}
+		// The cap itself is allowed — a full day of prep is a real answer.
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Wedding tier" }),
+			prepMinutes: 1440,
+		});
+		const row = await asA.query(api.products.get, { productId: id });
+		expect(row?.prepMinutes).toBe(1440);
+	});
+
+	test("refuses a note longer than the cap, counted AFTER collapsing", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await expect(
+			asA.mutation(api.products.create, {
+				...baseProduct(retailer._id, { name: "Chatty" }),
+				pickupNote: "x".repeat(201),
+			}),
+		).rejects.toThrow(/200 characters or fewer/);
+		// 201 chars of padding that collapse to 200 real ones must PASS — the
+		// limit is on what we store, not on what the seller happened to type.
+		const id = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Padded" }),
+			pickupNote: `${"y".repeat(200)}   `,
+		});
+		const row = await asA.query(api.products.get, { productId: id });
+		expect(row?.pickupNote?.length).toBe(200);
+	});
+
+	test("both reach the BUYER — they are useless anywhere else", async () => {
+		// The whole point is that a buyer reads them before ordering, so the
+		// public read must carry them (unlike orderedAt, which it strips).
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Cream Puff Box" }),
+			prepMinutes: 90,
+			pickupNote: "Collect from the side counter.",
+		});
+		const pub = await t.query(api.products.list, {
+			retailerId: retailer._id,
+		});
+		const row = pub.find((r) => r.name === "Cream Puff Box");
+		expect(row?.prepMinutes).toBe(90);
+		expect(row?.pickupNote).toBe("Collect from the side counter.");
+		expect(row?.orderedAt).toBeUndefined();
+	});
+});
+
+describe("prep time + pickup note — spreadsheet import (z8r3fdff97)", () => {
+	async function seedPuff(
+		t: ReturnType<typeof setup>,
+		extra: { prepMinutes?: number; pickupNote?: string; minNoticeDays?: number } = {},
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Ice Cream Puff", sku: "PUFF-1" }),
+			...extra,
+		});
+		return { retailer, asA, productId };
+	}
+	const puffRow = (opts: { prepMinutes?: number; pickupNote?: string }) =>
+		importSingle("Ice Cream Puff", { sku: "PUFF-1", price: 450, stock: 40, ...opts });
+
+	test("a created product stores both through the same sanitizers as the form", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [
+				importSingle("Puff", {
+					price: 450,
+					stock: 40,
+					prepMinutes: 120,
+					pickupNote: "  Side counter.\n\nBring an ice bag.  ",
+				}),
+				importSingle("Tart", { price: 300, stock: 20, prepMinutes: 0, pickupNote: "" }),
+			],
+		});
+		const all = await asA.query(api.products.listAll, { retailerId: retailer._id });
+		const puff = all.find((p) => p.name === "Puff");
+		expect(puff?.prepMinutes).toBe(120);
+		expect(puff?.pickupNote).toBe("Side counter. Bring an ice bag.");
+		// 0 and "" store nothing — the one spelling for "no rule".
+		const tart = all.find((p) => p.name === "Tart");
+		expect(tart?.prepMinutes).toBeUndefined();
+		expect(tart?.pickupNote).toBeUndefined();
+	});
+
+	test("blank cells KEEP what an existing product has", async () => {
+		// The template now carries both columns, so a price-update sheet built
+		// from it arrives with them blank. That must never wipe a kitchen's
+		// prep windows.
+		const t = setup();
+		const { retailer, asA, productId } = await seedPuff(t, {
+			prepMinutes: 90,
+			pickupNote: "Side counter.",
+		});
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [puffRow({})],
+		});
+		const row = await asA.query(api.products.get, { productId });
+		expect(row?.variants[0]?.price).toBe(450);
+		expect(row?.prepMinutes).toBe(90);
+		expect(row?.pickupNote).toBe("Side counter.");
+	});
+
+	test("0 clears prep; a new note replaces the old one", async () => {
+		const t = setup();
+		const { retailer, asA, productId } = await seedPuff(t, {
+			prepMinutes: 90,
+			pickupNote: "Side counter.",
+		});
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [puffRow({ prepMinutes: 0, pickupNote: "Front counter." })],
+		});
+		const row = await asA.query(api.products.get, { productId });
+		expect(row?.prepMinutes).toBeUndefined();
+		expect(row?.pickupNote).toBe("Front counter.");
+	});
+
+	test("a bad prep or note refuses the whole chunk before anything is written", async () => {
+		const t = setup();
+		const { retailer, asA, productId } = await seedPuff(t, { prepMinutes: 90 });
+		for (const [bad, message] of [
+			[{ prepMinutes: 1441 }, /Prep time must be/],
+			[{ pickupNote: "x".repeat(201) }, /200 characters or fewer/],
+		] as const) {
+			await expect(
+				asA.mutation(api.products.bulkUpsert, {
+					retailerId: retailer._id,
+					currency: "MYR",
+					products: [
+						importSingle("Fresh Tart", { price: 300, stock: 5 }),
+						puffRow(bad),
+					],
+				}),
+			).rejects.toThrow(message);
+		}
+		const all = await asA.query(api.products.listAll, { retailerId: retailer._id });
+		expect(all.map((p) => p.name)).toEqual(["Ice Cream Puff"]);
+		const row = await asA.query(api.products.get, { productId });
+		expect(row?.prepMinutes).toBe(90);
+	});
+
+	test("a booking listing matched by SKU never takes either value", async () => {
+		// Its form hides both and its orders can never carry a note — a value
+		// written here would be a setting the seller can't see.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const listingId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot", sku: "PLOT-1" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+		});
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [
+				importSingle("Riverside Plot", {
+					sku: "PLOT-1",
+					price: 9000,
+					stock: 5,
+					prepMinutes: 120,
+					pickupNote: "Gate on the left.",
+				}),
+			],
+		});
+		const listing = await asA.query(api.products.get, { productId: listingId });
+		expect(listing?.variants[0]?.price).toBe(9000);
+		expect(listing?.prepMinutes).toBeUndefined();
+		expect(listing?.pickupNote).toBeUndefined();
+	});
+
+	test("preview: an invalid value is that product's error line, never a thrown query", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedPuff(t);
+		const preview = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [
+				puffRow({ prepMinutes: 90.5 }),
+				importSingle("Fresh Tart", { price: 300, stock: 5, prepMinutes: 30 }),
+			],
+		});
+		expect(preview.plan[0]?.action).toBe("error");
+		expect(preview.plan[0]?.warnings[0]).toMatch(/Prep time must be/);
+		expect(preview.plan[1]?.action).toBe("create");
+		expect(preview.plan[1]?.prepChange).toEqual({ from: null, to: 30 });
+	});
+
+	test("preview: reports what changes, and nothing for a repeated value", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedPuff(t, { prepMinutes: 30 });
+		const changed = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [puffRow({ prepMinutes: 120, pickupNote: "Side counter." })],
+		});
+		expect(changed.plan[0]?.prepChange).toEqual({ from: 30, to: 120 });
+		expect(changed.plan[0]?.pickupNoteChange).toBe("added");
+
+		const repeated = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [puffRow({ prepMinutes: 30 })],
+		});
+		expect(repeated.plan[0]?.prepChange).toBeNull();
+		expect(repeated.plan[0]?.pickupNoteChange).toBeNull();
+
+		const cleared = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [puffRow({ prepMinutes: 0 })],
+		});
+		expect(cleared.plan[0]?.prepChange).toEqual({ from: 30, to: null });
+	});
+
+	test("preview: a replaced note reads 'changed'", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedPuff(t, { pickupNote: "Side counter." });
+		const preview = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [puffRow({ pickupNote: "Front counter." })],
+		});
+		expect(preview.plan[0]?.pickupNoteChange).toBe("changed");
+	});
+
+	test("an exported sheet matches its own products by handle — the SKU-less booking listing is skipped, not duplicated", async () => {
+		// The gap this closes: matching was SKU-only, a booking listing has no
+		// SKU at all, so exporting a catalogue and importing it back created a
+		// second, non-booking "Riverside Plot" — and the booking guard, which
+		// only fires on a MATCHED booking, never got to skip it.
+		const t = setup();
+		const { retailer, asA } = await seedPuff(t);
+		const plotId = await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+		});
+		// What the export writes in product_handle: the product's own id.
+		const row = {
+			...importSingle("Riverside Plot", {
+				price: 9000,
+				stock: 5,
+				prepMinutes: 90,
+				pickupNote: "Gate on the left.",
+			}),
+			handle: plotId as string,
+		};
+
+		const preview = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [row],
+		});
+		expect(preview.summary.creates).toBe(0);
+		expect(preview.plan[0]?.action).toBe("update");
+		expect(preview.plan[0]?.warnings).toContain(
+			"Booking listing — prep time and pickup note don't apply, so they're skipped",
+		);
+
+		const result = await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [row],
+		});
+		expect(result).toEqual({ created: 0, updated: 1 });
+		const after = await t.run((ctx) => ctx.db.get(plotId));
+		// The booking kept its kind, and neither order rule was written.
+		expect(after?.kind).toBe("booking");
+		expect(after?.prepMinutes).toBeUndefined();
+		expect(after?.pickupNote).toBeUndefined();
+		const plots = await t.run(async (ctx) =>
+			(
+				await ctx.db
+					.query("products")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+					.collect()
+			).filter((pr) => pr.name === "Riverside Plot"),
+		);
+		expect(plots).toHaveLength(1);
+	});
+
+	test("a handle updates a product with no SKU; a handle-less sheet still matches by SKU", async () => {
+		const t = setup();
+		const { retailer, asA, productId } = await seedPuff(t);
+		// No SKU anywhere on this product — only the handle can find it.
+		const noSku = await asA.mutation(
+			api.products.create,
+			baseProduct(retailer._id, { name: "Counter cake", price: 4000 }),
+		);
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [
+				{
+					...importSingle("Counter cake", { price: 4500, stock: 2, prepMinutes: 45 }),
+					handle: noSku as string,
+				},
+			],
+		});
+		const cake = await t.run((ctx) => ctx.db.get(noSku));
+		expect(cake?.prepMinutes).toBe(45);
+
+		// A hand-made sheet's handle is a slug, not an id: it groups rows and
+		// nothing more, so SKU matching still decides.
+		await asA.mutation(api.products.bulkUpsert, {
+			retailerId: retailer._id,
+			currency: "MYR",
+			products: [
+				{ ...puffRow({ prepMinutes: 15 }), handle: "ice-cream-puff" },
+			],
+		});
+		expect((await t.run((ctx) => ctx.db.get(productId)))?.prepMinutes).toBe(15);
+	});
+
+	test("a handle from another store is refused, never silently imported", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedPuff(t);
+		const otherRetailer = await seedRetailer(t, USER_B);
+		const theirs = await t
+			.withIdentity({ subject: USER_B })
+			.mutation(
+				api.products.create,
+				baseProduct(otherRetailer._id, { name: "Their cake" }),
+			);
+		await expect(
+			asA.mutation(api.products.bulkUpsert, {
+				retailerId: retailer._id,
+				currency: "MYR",
+				products: [
+					{
+						...importSingle("Their cake", { price: 1000, stock: 1 }),
+						handle: theirs as string,
+					},
+				],
+			}),
+		).rejects.toThrow(/product_handle from another store/);
+	});
+
+	test("preview: says where a value won't bite — a booking listing, a product needing days of notice", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedPuff(t, { minNoticeDays: 2 });
+		await asA.mutation(api.products.create, {
+			...baseProduct(retailer._id, { name: "Riverside Plot", sku: "PLOT-1" }),
+			kind: "booking" as const,
+			booking: { capacityPerNight: 5 },
+		});
+		const preview = await asA.query(api.products.bulkUpsertPreview, {
+			retailerId: retailer._id,
+			products: [
+				puffRow({ prepMinutes: 120 }),
+				importSingle("Riverside Plot", {
+					sku: "PLOT-1",
+					price: 9000,
+					stock: 5,
+					pickupNote: "Gate on the left.",
+				}),
+			],
+		});
+		expect(preview.plan[0]?.warnings).toContain(
+			"Needs 2 days' notice, so prep time won't change what buyers can pick",
+		);
+		expect(preview.plan[1]?.warnings).toContain(
+			"Booking listing — prep time and pickup note don't apply, so they're skipped",
+		);
+		expect(preview.plan[1]?.pickupNoteChange).toBeNull();
 	});
 });

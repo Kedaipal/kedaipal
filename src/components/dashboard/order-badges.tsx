@@ -1,4 +1,5 @@
-import { Package, Truck } from "lucide-react";
+import { CalendarRange, Package, Truck } from "lucide-react";
+import { isDefaultedCounterDate } from "../../../convex/lib/order";
 import {
 	type OrderStatus,
 	statusAgeMs,
@@ -13,6 +14,8 @@ interface BadgeOrder {
 	updatedAt?: number;
 	createdAt: number;
 	fulfilmentDate?: number;
+	/** Pickup/delivery time on that day (z8r3fdff97) — shown on the card's badge. */
+	fulfilmentTimeMinutes?: number;
 	mockupStatus?: string;
 	/** Checkout surface — counter orders get a defaulted date, so no date badge. */
 	source?: string;
@@ -83,13 +86,17 @@ export function OrderContextBadge({
 			</span>
 		);
 	}
-	// Counter orders carry a date only because checkout defaults it to today — it's
-	// not a promised-by date, so it would only add noise (and false "Overdue").
-	if (order.fulfilmentDate !== undefined && order.source !== "counter") {
+	// A counter date is hidden only while it IS the checkout default (created-day
+	// = noise, false "Overdue"). A counter date anyone chose — a preorder's later
+	// day, or the day an event forced onto a walk-in RSVP (`z8r3fdff9u`) — is a
+	// real promise and shows like any storefront date. Shared predicate with the
+	// order detail's "Collect on" row, so the two surfaces can't disagree.
+	if (order.fulfilmentDate !== undefined && !isDefaultedCounterDate(order)) {
 		return (
 			<FulfilmentDateBadge
 				epoch={order.fulfilmentDate}
 				now={now}
+				timeMinutes={order.fulfilmentTimeMinutes}
 				muted={isTerminalStatus(order.status) || isCollectedCollection(order)}
 			/>
 		);
@@ -115,11 +122,20 @@ export function OrderContextBadge({
 export function DeliveryMethodIcon({
 	method,
 }: {
-	method: "delivery" | "self_collect";
+	method: "delivery" | "self_collect" | "booking";
 }) {
-	const isPickup = method === "self_collect";
-	const Icon = isPickup ? Package : Truck;
-	const label = isPickup ? "Self-collect" : "Delivery";
+	const Icon =
+		method === "self_collect"
+			? Package
+			: method === "booking"
+				? CalendarRange
+				: Truck;
+	const label =
+		method === "self_collect"
+			? "Self-collect"
+			: method === "booking"
+				? "Booking"
+				: "Delivery";
 	return (
 		<span title={label} className="text-muted-foreground/70">
 			<Icon className="size-4" aria-hidden="true" />

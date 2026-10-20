@@ -8,6 +8,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import {
 	formatFulfilmentDateTime,
+	formatFulfilmentTime,
 	hhmmFromMinutes,
 	MAX_NOTICE_DAYS,
 	mytMidnightFromYmd,
@@ -47,11 +48,25 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * server guard. It does the same while a claim link's payment window is live
  * (86eyq0epn): the buyer holds a receipt with a running countdown and may be
  * mid-payment, so the date can't move under them.
+ *
+ * The time rides along for delivery AND self-collect (z8r3fdff97). A pickup
+ * time is optional and can be cleared ("come any time that day"); a delivery
+ * keeps one, since dispatch composes the rider's moment from it. A drop-off
+ * meet-up stays date-only, exactly as checkout offers it — the point's own
+ * schedule note governs the hour, and it is shown here beside the date.
+ * Bookings never get the trigger: their dates are the check-in and check-out.
  */
 export function RescheduleFulfilmentDialog({
 	order,
+	lockedReason,
 }: {
 	order: Doc<"orders">;
+	/** Set while the STORE can't do order work right now — out of credits
+	 * (Credits T3) or view-only. Same treatment as the payment-window lock and
+	 * for the same reason: the trigger stays tappable (a `title` is invisible
+	 * on a phone) and the dialog opens onto this sentence instead of a form
+	 * the server would refuse. */
+	lockedReason?: string;
 }) {
 	const [open, setOpen] = useState(false);
 	const [dateValue, setDateValue] = useState("");
@@ -73,7 +88,9 @@ export function RescheduleFulfilmentDialog({
 	>({ state: "idle" });
 	const previewGenRef = useRef(0);
 
-	const isDelivery = order.deliveryMethod !== "self_collect";
+	const method = order.deliveryMethod ?? "delivery";
+	const isDelivery = method === "delivery";
+	const isSelfCollect = method === "self_collect";
 	// Only delivery orders can carry a rider booking — skip the read otherwise.
 	const dispatch = useQuery(
 		convexQuery(
@@ -87,8 +104,9 @@ export function RescheduleFulfilmentDialog({
 	// delivery method AND this order is bookable right now. Flat/radius/weight
 	// stores never see it — their fees aren't time-sensitive.
 	const canPreviewFee =
+		lockedReason === undefined &&
 		isDelivery &&
-		dispatch?.bookingEnabled === true &&
+		dispatch?.riderOnlyStore === true &&
 		dispatch.blockReason === null &&
 		!hasActiveRiderJob;
 
@@ -153,6 +171,7 @@ export function RescheduleFulfilmentDialog({
 			order.status === "confirmed" ||
 			order.status === "packed") &&
 		order.source !== "counter" &&
+		method !== "booking" &&
 		order.collectedAt === undefined;
 	if (!inWindow) return null;
 
@@ -165,6 +184,16 @@ export function RescheduleFulfilmentDialog({
 		: dropOff
 			? "Meet-up date"
 			: "Pickup date";
+	// Drop-off meet-ups are date-only, like checkout offers them.
+	const showTime = isDelivery || (isSelfCollect && !dropOff);
+	const timeLabel = isDelivery
+		? collection
+			? "Collection time"
+			: "Delivery time"
+		: "Pickup time";
+	const scheduleNote = dropOff
+		? order.pickupSnapshot?.scheduleNote?.trim()
+		: undefined;
 
 	const today = todayMytMidnight();
 	const minYmd = ymdFromEpoch(today);
@@ -191,6 +220,10 @@ export function RescheduleFulfilmentDialog({
 	// Claim links (86eyq0epn): the receipt is out and a countdown is running
 	// against THIS date. Mirrors the server guard in orders.rescheduleFulfilment.
 	const paymentWindowLocked = isPaymentWindowLocked(order);
+	// The store-wide lock outranks the order's own: it stops every change,
+	// and it's the one the seller can clear today.
+	const storeLocked = lockedReason !== undefined;
+	const locked = storeLocked || paymentWindowLocked;
 
 	// Live preview of exactly what the buyer's order page will say — parse
 	// failures (mid-typing) just hide the line.
@@ -200,8 +233,15 @@ export function RescheduleFulfilmentDialog({
 		? null
 		: formatFulfilmentDateTime(
 				previewDate,
-				isDelivery && !Number.isNaN(previewTime) ? previewTime : undefined,
+				showTime && !Number.isNaN(previewTime) ? previewTime : undefined,
 			);
+	// A self-collect time emptied in the field is a CLEAR, and says what it
+	// removes — only when there was one to remove.
+	const clearsPickupTime =
+		isSelfCollect &&
+		showTime &&
+		timeValue.trim() === "" &&
+		order.fulfilmentTimeMinutes !== undefined;
 
 	// Live validation with a visible reason — the native min/max only grey the
 	// picker; typed or stepped values below them still land in state. A past
@@ -215,8 +255,17 @@ export function RescheduleFulfilmentDialog({
 			return "That day has already passed — pick today or later.";
 		if (previewDate > today + MAX_NOTICE_DAYS * DAY_MS)
 			return "The date can be at most 30 days from today.";
+		// Emptying a delivery's time used to preview as date-only while the save
+		// quietly kept the old time — the preview lied. A delivery keeps a time
+		// (dispatch composes the rider's moment from it), so say so instead.
 		if (
 			isDelivery &&
+			timeValue.trim() === "" &&
+			order.fulfilmentTimeMinutes !== undefined
+		)
+			return "A delivery keeps a time — pick a new one rather than clearing it.";
+		if (
+			showTime &&
 			!Number.isNaN(previewTime) &&
 			previewDate + previewTime * 60000 < Date.now()
 		)
@@ -231,20 +280,26 @@ export function RescheduleFulfilmentDialog({
 			return;
 		}
 		if (scheduleIssue) return; // Save is disabled; belt-and-braces.
-		let timeMinutes: number | undefined;
-		if (isDelivery && timeValue.trim() !== "") {
+		// number = set, null = clear (self-collect only), undefined = keep.
+		let timeMinutes: number | null | undefined;
+		if (showTime && timeValue.trim() !== "") {
 			timeMinutes = timeMinutesFromHhmm(timeValue);
 			if (Number.isNaN(timeMinutes)) {
 				toast.error("Pick a valid time first.");
 				return;
 			}
+		} else if (clearsPickupTime) {
+			timeMinutes = null;
 		}
 		// Fresh-clock re-check (PR #201 review): scheduleIssue was computed at
 		// render time — a dialog left open while the picked moment passed would
 		// otherwise fire the mutation, and the server's time-of-day check is
 		// deliberately range-only. Past DAYS are server-rejected regardless;
 		// only passed-time-today slips, so that's what gets re-judged here.
-		if (timeMinutes !== undefined && date + timeMinutes * 60000 < Date.now()) {
+		if (
+			typeof timeMinutes === "number" &&
+			date + timeMinutes * 60000 < Date.now()
+		) {
 			toast.error("That time has just passed — pick a later time.");
 			return;
 		}
@@ -258,7 +313,9 @@ export function RescheduleFulfilmentDialog({
 			toast.success(
 				`Updated — the buyer's order page now shows ${formatFulfilmentDateTime(
 					date,
-					timeMinutes ?? (isDelivery ? order.fulfilmentTimeMinutes : undefined),
+					timeMinutes === null
+						? undefined
+						: (timeMinutes ?? order.fulfilmentTimeMinutes),
 				)}.`,
 			);
 			setOpen(false);
@@ -280,16 +337,16 @@ export function RescheduleFulfilmentDialog({
 				variant="outline"
 				className={cn(
 					"h-11 shrink-0 px-3 text-xs",
-					paymentWindowLocked && "text-muted-foreground",
+					locked && "text-muted-foreground",
 				)}
 				onClick={openDialog}
 			>
-				{paymentWindowLocked ? (
+				{locked ? (
 					<Lock className="size-4" />
 				) : (
 					<CalendarClock className="size-4" />
 				)}
-				{paymentWindowLocked
+				{paymentWindowLocked && !storeLocked
 					? "Locked"
 					: order.fulfilmentDate !== undefined
 						? "Reschedule"
@@ -299,23 +356,44 @@ export function RescheduleFulfilmentDialog({
 				<DialogContent>
 					<DialogHeader>
 						<DialogTitle>
-							{paymentWindowLocked
-								? "Locked while they pay"
-								: order.fulfilmentDate !== undefined
-									? "Reschedule this order"
-									: "Set a fulfilment date"}
+							{storeLocked
+								? "Changing the date is paused"
+								: paymentWindowLocked
+									? "Locked while they pay"
+									: order.fulfilmentDate !== undefined
+										? "Reschedule this order"
+										: "Set a fulfilment date"}
 						</DialogTitle>
 						<DialogDescription>
-							{paymentWindowLocked
-								? "This date is part of what the buyer is paying for."
-								: isDelivery
-									? collection
-										? "Change when the rider collects from your customer."
-										: "Change when this order should be delivered."
-									: "Change when the buyer picks this order up."}
+							{storeLocked
+								? "The buyer's order page keeps the date it shows now."
+								: paymentWindowLocked
+									? "This date is part of what the buyer is paying for."
+									: isDelivery
+										? collection
+											? "Change when the rider collects from your customer."
+											: "Change when this order should be delivered."
+										: dropOff
+											? "Change when you meet the buyer at the drop-off point."
+											: "Change when the buyer picks this order up."}
 						</DialogDescription>
 					</DialogHeader>
-					{paymentWindowLocked ? (
+					{storeLocked ? (
+						<div className="flex flex-col gap-3">
+							<p className="rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+								{lockedReason}
+							</p>
+							<DialogFooter>
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => setOpen(false)}
+								>
+									Close
+								</Button>
+							</DialogFooter>
+						</div>
+					) : paymentWindowLocked ? (
 						<div className="flex flex-col gap-3">
 							<p className="rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
 								This buyer is paying against this date right now — their order
@@ -354,7 +432,7 @@ export function RescheduleFulfilmentDialog({
 						</div>
 					) : (
 						<div className="flex flex-col gap-3">
-							<div className={isDelivery ? "grid grid-cols-2 gap-2" : ""}>
+							<div className={showTime ? "grid grid-cols-2 gap-2" : ""}>
 								<label className="flex flex-col gap-1.5 text-sm font-medium">
 									{dateLabel}
 									<Input
@@ -366,9 +444,9 @@ export function RescheduleFulfilmentDialog({
 										onChange={(e) => setDateValue(e.target.value)}
 									/>
 								</label>
-								{isDelivery ? (
+								{showTime ? (
 									<label className="flex flex-col gap-1.5 text-sm font-medium">
-										{collection ? "Collection time" : "Delivery time"}
+										{timeLabel}
 										<Input
 											type="time"
 											variant="field"
@@ -379,6 +457,37 @@ export function RescheduleFulfilmentDialog({
 									</label>
 								) : null}
 							</div>
+							{/* A pickup time is optional — say so where the seller is
+							    clicking, and make clearing a visible action rather than
+							    a native-picker trick most sellers never find. */}
+							{isSelfCollect && showTime ? (
+								<div className="flex min-h-11 items-center justify-between gap-2">
+									<p className="text-xs text-muted-foreground">
+										{clearsPickupTime &&
+										order.fulfilmentTimeMinutes !== undefined
+											? `Removes the ${formatFulfilmentTime(order.fulfilmentTimeMinutes)} pickup time — the buyer can come any time that day.`
+											: "Optional — leave blank for any time that day."}
+									</p>
+									{timeValue.trim() !== "" ? (
+										<Button
+											type="button"
+											variant="ghost"
+											className="h-11 shrink-0 px-3 text-xs"
+											onClick={() => setTimeValue("")}
+										>
+											Clear time
+										</Button>
+									) : null}
+								</div>
+							) : null}
+							{scheduleNote ? (
+								<p className="text-xs text-muted-foreground">
+									Drop-off schedule:{" "}
+									<span className="font-medium text-foreground">
+										{scheduleNote}
+									</span>
+								</p>
+							) : null}
 							{scheduleIssue ? (
 								<p className="text-xs font-medium text-destructive">
 									{scheduleIssue}
@@ -456,7 +565,7 @@ export function RescheduleFulfilmentDialog({
 										saving || dateValue === "" || scheduleIssue !== null
 									}
 								>
-									Save new date
+									Save changes
 								</Button>
 							</DialogFooter>
 						</div>

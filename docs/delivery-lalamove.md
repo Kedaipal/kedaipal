@@ -327,16 +327,43 @@ doesn't fire the dialog (no modal-spam). This replaced the briefly-built
 silent auto-book (`autoBookForOrder`/`getAutoBookContext`, removed) — see
 git history if a zero-tap option is ever wanted for high-volume sellers.
 
-### Phones — Lalamove MY only accepts +60
+### Phones — contacts come from the booking's market
 
-Lalamove validates the rider-contact area code per market (a +65 buyer
-422'd in testing — real JB cross-border case). `toLalamoveMyPhone`
-normalizes to `+60…` or returns null: a non-MY **buyer** number falls back
-to the seller as rider contact (buyer's real number in the rider remarks;
-the confirm dialog says so up front), while a non-MY **seller** number
-blocks dispatch with "add a Malaysian (+60) WhatsApp number in Settings →
-Store". `friendlyBookingError` names phone rejections honestly if one ever
-slips through.
+Lalamove validates the contact's area code per market (a +65 buyer 422'd on a
+Malaysian booking in testing — the real JB cross-border case — and a +60 one
+fails the same way on a Singapore booking). Buyers can give a WhatsApp number
+from any country ([`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274), see
+[`phone-numbers.md`](./phone-numbers.md)), so a foreign buyer number is an
+everyday path, not an edge case. `toLalamoveContactPhone(phone, market)`
+delegates to the provider-neutral `toDomesticContactPhone`
+(`convex/lib/courierContact.ts` — Delyva applies the same rule): `+60…` with
+60 + 9–11 digits in MY, `+65…` with exactly 8 in SG, else null. It is a
+country check, not a mobile check — a rider can phone a landline.
+
+- **A foreign buyer number** falls back to the **store's** number as the
+  buyer-side contact, and `Buyer WhatsApp: +…` rides the remarks second, right
+  after the order ref, so the 400-character cut can never reach it. In
+  **collection** mode the buyer's stop is the pickup, so the fallback lands on
+  the sender; the remarks still ride the **recipient** stop — the only remarks
+  slot in v3 — which on a collection trip is the store.
+- **The confirm dialog says so before the tap**, naming the store's own market
+  and the direction (`riderContactFallbackCopy`, `src/lib/dispatch-block.ts`):
+  *"This buyer's WhatsApp number isn't a Malaysian number, and Lalamove only
+  takes Malaysian contacts — the rider gets your store's number instead, with
+  the buyer's real number in the rider notes."* — "a Singapore number" on an SG
+  store, "the rider collecting from the buyer" on a collection trip.
+  `prepareBooking` returns the booking's `market` for it, because the client
+  can't read the market off the order (its currency can diverge from the
+  store's country).
+- **A non-domestic seller number** blocks dispatch with `no_seller_phone` —
+  "Add a local WhatsApp number for your store's country in Settings → Store
+  first (+60 in Malaysia, +65 in Singapore)".
+- `friendlyBookingError` names phone rejections honestly (`bad_phone`) if one
+  ever slips through.
+
+The buyer hears about the reroute too: a store that books couriers shows an
+overseas buyer a note on the checkout's delivery step (`booksCouriers` —
+[`phone-numbers.md` § Telling the buyer](./phone-numbers.md#telling-the-buyer-at-checkout--bookscouriers)).
 
 ### Webhook
 
@@ -378,7 +405,7 @@ secrets → verify → act → ack. Lalamove-specific twists:
 | `ORDER_AMOUNT_CHANGED` | **after** matching/completion when the final charge differs from the quote — waiting-time fees, priority fee/tip added, toll adjustments | `costActual` updated on the job | the card's "Booking cost" updates reactively (the drift ledger vs buyer-paid fee) | nothing — buyer price is frozen |
 | `ORDER_REPLACED` | Lalamove's **cancel-and-clone**: for post-match adjustments THEY cancel the original and re-create it under a new orderId (sequence: CANCELED old → ORDER_REPLACED → clone's own events) | job repointed to the new id, **revived** to "assigning", stale failure cleared | card returns to active; if the clone-cancel briefly emailed a failure, the booking visibly recovers (rare, self-healing) | nothing |
 | `POD_STATUS_CHANGED` | rider uploaded the drop-off photo / signature | trigger only — the truth is read from `GET /v3/orders` by the idempotent `fetchPodImages` (also scheduled at COMPLETED, whichever lands first wins; the loser's blobs are cleaned) | photo thumbnails on the delivered dispatch card | **"Delivery photo" card on the order page** — page-only (`86eyd63r8`) |
-| `WALLET_BALANCE_CHANGED` | vendor wallet balance moved | logged only (proactive low-balance banner = named follow-up) | — | — |
+| `WALLET_BALANCE_CHANGED` | vendor wallet balance moved | stored on `courierWallets` (attributed by key fingerprint, verified by the store's secret) → the low-wallet banner + balance on Deliveries / Home / Integrations ([`deliveries.md`](./deliveries.md#the-courier-wallet)) | — | — |
 | `ORDER_CREATED` (undocumented but real) | at booking | logged only | — | — |
 
 **Proof of delivery (POD) — rider drop-off photo:** every placed order
@@ -447,15 +474,36 @@ Terminal failures email the seller (EN+BM `deliveryJobFailed` template),
 raise a browser alert on devices with order alerts on, leave the order
 untouched, and the card offers one-tap rebook.
 
-**Registration is per SELLER** (BYO-only): each vendor pastes OUR webhook
-URL into THEIR Partner Portal → Developers → Webhook URL (Version 3). The
-settings card surfaces the exact URL with a copy button and the vendor
-guide walks it (Step E5). Graceful degradation if a seller skips it:
+**Registration is per SELLER** (BYO-only), and since 86eye9xd4 (5A) it is
+**one tap**: the Integrations card's setup checklist (pickup address → API
+key → webhook) calls `lalamove.registerWebhook`, which sends Lalamove's free
+`PATCH /v3/webhook` with `{ data: { url: <CONVEX_SITE_URL>/webhook/lalamove } }`
+on the seller's own keys and stamps `deliveryBooking.webhookRegisteredAt`.
+Lalamove keeps ONE webhook URL per account, so this replaces whatever the
+account pointed at. The manual paste (Partner Portal → Developers → Webhook
+URL, Version 3; vendor guide Step E5) stays as the fallback the card opens
+when Lalamove refuses. A **verified event** for one of the store's jobs also
+stamps `webhookRegisteredAt` (once — `stampWebhookKnown` in
+`applyWebhookEvent`), so a hand-pasted webhook ticks the step too; **typing
+a new key clears it**, because a different account has its own webhook
+setting. Stores whose bookings heard back BEFORE the checklist existed are
+stamped by `npx convex run lalamove:backfillWebhookKnown` (operator step,
+once per deployment) — without it every working store would read "Action
+needed" after the deploy. Graceful degradation if a seller skips it:
 bookings still work, but shipped/delivered stop being automatic — the
 order stays where it is until the seller advances it by hand, which since
 3 Aug costs one confirm per transition while a booking is active (the
 "Update manually" escape; see the manual-advance gate below). Dev
 deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
+
+**Tip a booking stuck finding a rider (86eye9xd4):** while a job is
+`assigning`, the rider card and its Deliveries row offer **Add tip** —
+Lalamove's priority fee (`POST /v3/orders/{id}/priority-fee`, body
+`{ data: { priorityFee: "5.00" } }`), fixed steps and a per-booking cap from
+`convex/lib/lalamoveTip.ts` (reserved against the cap in one transaction
+before the call, released if Lalamove refuses), charged to the seller's wallet
+and added to the job's `priorityFee` + `costActual`. See
+[`deliveries.md`](./deliveries.md#add-a-tip--a-booking-still-finding-a-rider).
 
 **Manual-advance gate while the rider drives (26 Jul hotfix; tightened
 3 Aug; server-enforced 14 Aug, ClickUp `86eydum6y`):** while an order has
@@ -580,8 +628,10 @@ Three freezes, one setting:
 - **`deliveryJobs.deliveryDirection`** — snapshotted at `reserveBooking` so
   the webhook obeys what was BOOKED, not the live setting.
 - **Dispatch swap** — `dispatchContextForOrder` swaps stops AND contacts:
-  origin/sender = buyer (same +60 fallback → seller number, buyer's real
-  number in remarks), destination/recipient = the outlet. The checkout
+  origin/sender = buyer (same store-number fallback when the buyer's number
+  isn't from the store's market, buyer's real number in the remarks — which
+  ride the recipient stop, here the outlet), destination/recipient = the
+  outlet. The checkout
   quote (`quoteForCheckout`) prices the same buyer→store direction (route
   prices aren't guaranteed symmetric), so buyer-paid fee and dispatch
   re-quote can't systematically drift.
@@ -722,6 +772,10 @@ order left the vendor choosing between a 3 AM rider and no rider.
 - The seller-side reschedule of the ORDER's fulfilment moment (what the buyer
   sees) is `orders.rescheduleFulfilment` — see docs/fulfilment-date.md
   ("Seller reschedule"). Its hard guard: refused while a rider job is ACTIVE.
+- **A self-collect order's time is never a rider schedule** (`z8r3fdff97`,
+  when pickups gained a time): `dispatchBlockReason` returns `not_delivery`
+  before `requestedMoment` is ever composed, here and in Delyva — pinned by a
+  test in each provider's suite.
 
 ### Rebook path + order sync (canonical bug 86eyp63xn, Wagyu Walid)
 
@@ -885,6 +939,106 @@ Rejected: pointer-move scroll-vs-tap discrimination (it would guard a gesture
 that can't happen, per the scroll-lock above) and hold-to-confirm (friction on
 every seller's happy path for an accident the arm delay already covers).
 
+## Markets — how Singapore gets riders (z8r3fdch3r)
+
+**Lalamove serves Singapore.** Its REST API is segmented by a `Market` header
+across 11+ markets and `SG` is one of them. SG sellers couldn't see rider
+booking because of OUR gate, not their coverage — and the fit is better there
+than here: Lalamove is intra-city, and in Singapore the city IS the country,
+so it would cover every SG→SG delivery. That matters more than "one more
+market", because Delyva SG turned out to be bring-your-own-courier with an
+empty catalogue: **Lalamove is the Singapore delivery story, not Delyva.**
+
+### The market is a property of the STORE
+
+It used to be `LALAMOVE_MARKET = "MY"`, a module constant. It now resolves
+from the store's country (`lalamoveMarketForCountry`) and **rides on the
+credentials object**, because every call site already carries those — passing
+it as a second argument through ten signatures would have been ten chances to
+forget one, and a forgotten market silently prices the wrong country.
+
+`resolveLalamoveCredentials(booking, country)` therefore takes the country as
+a **required** argument. Deliberately no default: a default is exactly how a
+new call site quietly bills a Singapore store against the Malaysian market.
+Callers that only ask *"has this seller connected Lalamove"* — a question with
+no market in it — use `hasLalamoveCredentials()` instead of inventing one.
+
+### Phone numbers are per market
+
+`toLalamoveContactPhone(phone, market)` replaced `toLalamoveMyPhone`; the
+`My` in the old name was the bug. Lalamove validates the contact's AREA CODE
+per market, so a foreign number is a 422 at booking time — returning `null`
+routes dispatch to its fallback (seller's number as rider contact, buyer's in
+the remarks). The old helper's test carried a warning that a future "accept
++65 everywhere" sweep would break real bookings; that warning still holds and
+is honoured — **+65 is accepted in SG and still rejected in MY**, and the
+mirror case (+60 in SG) now fails the same way. The Johor cross-border buyer
+exists in both directions. (Since z8r3fdh274 the rule itself is the
+provider-neutral `toDomesticContactPhone` in `convex/lib/courierContact.ts`,
+which this helper delegates to — see
+[§ Phones](#phones--contacts-come-from-the-bookings-market).)
+
+### Swept late: the quotation locale
+
+The PR #255 review caught the one market-scoped field the sweep missed:
+`language` in the v3 quotation body was hardcoded `en_MY`. Each market has
+its own locale list (MY: `en_MY`/`ms_MY`; SG: `en_SG`) and a mismatch is a
+422 — which `classifyQuoteFailure` has no branch for, so every SG quote
+would have failed as a generic "unavailable". It now derives from the market
+the request already carries (`MARKET_LANGUAGE`), with tests pinning both
+markets.
+
+### Verified NOT to need changing
+
+- **Money.** SG quotes in SGD with **one** decimal place (`"10.5"`), and
+  `lalamoveAmountToSen` already pads that to `1050` correctly. Checked before
+  anything else was written, because "tidying" that padding is how you ship a
+  ten-fold error.
+- **Scheduling.** SG shares UTC+8 with Malaysia, so the `MYT`-named helpers
+  (`NOON_MYT_OFFSET_MS`, `mytMidnightFromYmd`) are already correct for SG
+  despite their names.
+
+### The gate is OPEN (`COUNTRY_RIDER_BOOKING.SG = true`)
+
+Every blocker was closed with evidence rather than a sandbox run, because no
+SG sandbox account could be created (4 Sep, Zaki) and the ticket's whole point
+is SG vendors using their live keys:
+
+- **Service types**: Lalamove's own published SG catalogue
+  (developers.lalamove.com, `specialRequests_Key_Update_2023_SG.pdf`) lists
+  SG's API serviceTypes as `MOTORCYCLE`, `CAR`, `MINIVAN`, `MPV`, `VAN`,
+  `TRUCK330`, `TRUCK550` — **both of ours appear verbatim**, so the hardcoded
+  union cannot 422 an SG quote. (SG's Courier tier IS `MOTORCYCLE` in the
+  API even though the app calls it "Courier".)
+- **Money**: SGD's one-decimal amounts already parse (`"10.5"` → 1050).
+- **Phones**: `toLalamoveContactPhone` accepts +65 in the SG market.
+- **Timezone**: SG is UTC+8 — the MYT helpers hold.
+- **Failure posture**: an SG store with a wrong setup gets a NAMED reason at
+  every step (`no_seller_phone`, `out_of_range`, the market-neutral
+  `bad_phone` copy), never a dead end — so a live-first vendor run degrades
+  to a clear message, not a mystery.
+
+What the flip changed on each surface: the Courier-booking row renders for SG
+(same toggle as MY), `updateSettings` accepts enabling booking on an SG store,
+`dispatchBlockReason` proceeds past the country check, and `bookingEnabled` /
+`riderOnlyStore` read true where earned. Copy that named Malaysia
+(`no_seller_phone`, the `bad_phone` booking failure, the SG mode-grid line)
+is market-neutral now.
+
+**Cross-market keys are the one new hazard.** Lalamove issues API keys per
+market app, so a store that switches country keeps booking armed while its
+stored keys belong to the old market — quotes then fail at the point of use.
+The country-switch checklist's `delivery_booking` item now covers exactly
+this (money severity, ACKABLE — we cannot see which market a stored key was
+created for, so the seller confirms), and the switch dialog warns in the same
+sentence.
+
+**Still genuinely unverified: one live SG booking end to end.** The first SG
+vendor run is the verification. If anything surprises, it will surface as a
+named quote/booking failure on their dispatch card — collect the message and
+it locates the layer immediately. `COUNTRY_DELIVERY_MODES.SG` gaining
+`"live"` pricing waits for z8r3fdbvdy to merge (one line there).
+
 ## Sandbox E2E — verified 21 Jul 2026
 
 Real sandbox pass with test keys (then platform-env-based; the same keys
@@ -941,8 +1095,6 @@ Full step table, credential rules + the POD injector: [`dev-scripts.md`](./dev-s
 
 ## Follow-ups (named, not built)
 
-- Low-balance banner from `WALLET_BALANCE_CHANGED` (store last-known
-  balance, warn before a booking ever fails).
 - Prompt to cancel the Lalamove job inside the order-cancel flow (today the
   job card's cancel button is the path).
 - Multi-outlet origin (per-dispatch origin picker) — dispatch already reads

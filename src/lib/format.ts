@@ -8,14 +8,30 @@
 
 import { isRateLimitError } from "@convex-dev/rate-limiter";
 import { ConvexError } from "convex/values";
-import { COUNTRIES, type Country } from "../../convex/lib/country";
+import {
+	COUNTRIES,
+	COUNTRY_DIAL_CODE,
+	type Country,
+} from "../../convex/lib/country";
+import {
+	type CreditLockErrorData,
+	isCreditLockErrorData,
+} from "../../convex/lib/credits";
+import { formatInternational } from "../../convex/lib/phoneDial";
+import {
+	isPriceChangedErrorData,
+	type PriceChangedErrorData,
+} from "../../convex/lib/promo";
 import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
+import { isVoucherRefusalErrorData } from "../../convex/lib/vouchers";
 
 /**
- * Extract a clean error message from a Convex mutation error.
- * Convex wraps plain Error messages with a `[CONVEX M(...)] Uncaught Error:`
- * prefix. Using ConvexError on the backend and this helper on the frontend
- * ensures users see only the original message.
+ * Extract a clean error message from a Convex mutation error — the one thing
+ * every `toast.error` / inline server error in the dashboard and the storefront
+ * passes through, so the machinery Convex wraps around a thrown message can
+ * never reach a person (see `unwrapServerError` below). `ConvexError` on the
+ * backend remains the way to put deliberate copy on screen; anything else
+ * degrades to a sentence rather than a stack trace.
  */
 export function convexErrorMessage(err: unknown): string {
 	// Checked FIRST: the rate limiter throws a STRUCTURED payload ({kind, name,
@@ -39,9 +55,108 @@ export function convexErrorMessage(err: unknown): string {
 		return `Busy right now — please try again in ${wait}. Nothing was submitted.`;
 	}
 	if (err instanceof ConvexError) {
-		return typeof err.data === "string" ? err.data : String(err.data);
+		// The credit lock (Credits T3) is typed so a surface can offer its way
+		// back (`creditLockErrorOf`); everywhere else it reads as its sentence.
+		if (isCreditLockErrorData(err.data)) return err.data.message;
+		if (typeof err.data === "string") return err.data;
+		// A TYPED payload no branch above claimed. Never `String(...)` it:
+		// that yields the literal "[object Object]", which a buyer has now
+		// read twice — once from the rate limiter's payload (see the note at
+		// the top of this function) and once from the price-changed guard's
+		// (z8r3fdcw72). A payload that carries its own sentence can still
+		// speak; anything else becomes the generic line and stays in the
+		// console, where the Convex client already logs the whole thing.
+		//
+		// This is the FALLBACK, not the pattern: a typed error meant for a
+		// person gets a branch above, next to its own guard.
+		if (
+			typeof err.data === "object" &&
+			err.data !== null &&
+			typeof (err.data as { message?: unknown }).message === "string"
+		) {
+			return (err.data as { message: string }).message;
+		}
+		return GENERIC_SERVER_FAILURE;
 	}
-	return (err as Error).message;
+	return unwrapServerError(
+		err instanceof Error ? err.message : String(err ?? ""),
+	);
+}
+
+/** The credit lock's typed refusal inside a caught error, or `null` — for the
+ * surfaces that put the way back next to the sentence (Credits T3). */
+export function creditLockErrorOf(err: unknown): CreditLockErrorData | null {
+	return err instanceof ConvexError && isCreditLockErrorData(err.data)
+		? err.data
+		: null;
+}
+
+/** The price-changed guard's typed refusal inside a caught error, or `null`
+ * (z8r3fdcw72). Checkout switches into a fixable state on it rather than
+ * printing it: `convexErrorMessage` would stringify the payload. */
+export function priceChangedErrorOf(
+	err: unknown,
+): PriceChangedErrorData | null {
+	return err instanceof ConvexError && isPriceChangedErrorData(err.data)
+		? err.data
+		: null;
+}
+
+/**
+ * A voucher the server refused at ORDER CREATE (`z8r3fdr617`). Same shape as
+ * `priceChangedErrorOf` and for the same reason: it is not an error to read,
+ * it is a state to fix — the code has to come OFF the ticket, or the buyer is
+ * left reading a discount they are not getting under a banner saying it
+ * failed.
+ */
+export function voucherRefusedErrorOf(err: unknown): string | null {
+	return err instanceof ConvexError && isVoucherRefusalErrorData(err.data)
+		? err.data.message
+		: null;
+}
+
+/** Re-exported so a surface can read the payload without reaching past
+ * this module into `convex/lib` — `priceChangedErrorOf` is the only way in. */
+export type { PriceChangedErrorData };
+
+/**
+ * Convex hands a server-side failure to the client as ONE string with the
+ * machinery wrapped around the thrown message:
+ *
+ *   [CONVEX M(products:save)] [Request ID: 9c2f…] Server Error
+ *   Uncaught Error: Maps URL must use https
+ *       at assertValidMapsUrl (../convex/lib/mapsUrl.ts:54:9)
+ *
+ * so `err.message` in a toast puts a stack trace in front of a seller. That is
+ * what a refused teammate read during the 25 Sep Chrome round, and the same
+ * blob had been reachable for a while on every plain `throw new Error` the
+ * backend still has — the slug, maps-URL and opening-hours validators included.
+ * Unwrapping HERE, in the one helper every toast and inline error already
+ * calls, fixes all of them at once and costs a new call site nothing to
+ * remember.
+ *
+ * Which line survives is decided by the error's CLASS, never by how its words
+ * read: a plain `Error` (or a `ConvexError` whose class identity didn't
+ * survive the bundle boundary) is something we threw on purpose, so its
+ * sentence goes to the user. A `TypeError`/`RangeError`/… is the runtime
+ * reporting a bug of ours — nobody can act on "Cannot read properties of
+ * undefined", so it becomes the generic line and stays in the console, where
+ * the Convex client already logs the whole thing.
+ */
+const CONVEX_WRAPPED = /^\[CONVEX [^\]]*\]/;
+const THROWN_LINE = /^\s*Uncaught\s+(\w*Error):[ \t]*(.*)$/m;
+const DELIBERATE_THROW = new Set(["Error", "ConvexError"]);
+
+export const GENERIC_SERVER_FAILURE =
+	"Something went wrong on our side — please try again.";
+
+function unwrapServerError(message: string): string {
+	if (!CONVEX_WRAPPED.test(message)) return message;
+	const thrown = message.match(THROWN_LINE);
+	if (!thrown || !DELIBERATE_THROW.has(thrown[1]))
+		return GENERIC_SERVER_FAILURE;
+	const sentence = thrown[2].trim();
+	return sentence.length > 0 ? sentence : GENERIC_SERVER_FAILURE;
 }
 
 /**
@@ -50,7 +165,7 @@ export function convexErrorMessage(err: unknown): string {
  * and "try again in 5400s" is a number nobody converts under checkout stress.
  * Always rounds UP, so the message never invites a retry that will fail again.
  */
-function retryWait(retryAfterMs: number): string {
+export function retryWait(retryAfterMs: number): string {
 	const seconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
 	if (seconds < 90) return `${seconds}s`;
 	const minutes = Math.ceil(seconds / 60);
@@ -139,9 +254,9 @@ const MOBILE_GROUPING: Record<Country, (digits: string) => string> = {
  * Purpose is **typo-spotting**, not decoration: checkout echoes the number back
  * to the buyer before they commit (86eyf1rck), and a transposed digit is only
  * catchable when the grouping matches how they typed it. Deliberately separate
- * from `formatPhone` (src/lib/customer.ts), which renders one ungrouped run
- * (`+60 1159399791`) and is mirrored into `convex/` for the seller dashboard —
- * regrouping that shared helper is a cross-surface change, not this field's job.
+ * from `formatPhone` (`convex/lib/customer.ts`), which renders one ungrouped
+ * run (`+60 1159399791`) on the seller dashboard and the PDFs — regrouping
+ * that shared helper is a cross-surface change, not this field's job.
  *
  * Keys off the STORED digits, not a country parameter, on purpose: the input
  * validators must branch on the retailer's country (typed input is ambiguous),
@@ -149,7 +264,21 @@ const MOBILE_GROUPING: Record<Country, (digits: string) => string> = {
  * truthful by reading it — e.g. an MY number a store saved before switching its
  * country to SG still renders as the MY number it is.
  *
- * Unrecognised shapes fall back to `+<digits>` rather than guessing.
+ * Any other country's number (buyers can pick any country, z8r3fdh274) reads
+ * `+CC` and then the national part in 3s and 4s — `+44 791 112 3456` — via
+ * `formatInternational`/`groupNational` (`convex/lib/phoneDial.ts`). The code
+ * the buyer picked stands apart from the number they typed, and the run is
+ * broken up enough to check a digit at a time. That grouping is a READING AID,
+ * not the country's own convention (a UK mobile conventionally reads
+ * `7911 123456`): honouring every convention means shipping every country's
+ * numbering plan, so MY and SG get their real grouping here and everyone else
+ * gets the generic one — `groupNational` carries the reasoning for that trade.
+ * An MY/SG number that isn't a mobile (a landline, a legacy row) stays one
+ * unbroken `+60312345678`: `toNationalPhoneInput` (`./phone.ts`) peels a
+ * seller field's `+60 `/`+65 ` plate by string prefix, so splitting it would
+ * seed the field with the national part and silently drop the country code.
+ * A number whose code is unknown — or whose national part is not a length that
+ * code uses — falls back to `+<digits>` rather than guessing.
  */
 export function formatMobile(waPhone: string): string {
 	const digits = waPhone.replace(/\D/g, "");
@@ -162,7 +291,12 @@ export function formatMobile(waPhone: string): string {
 			return MOBILE_GROUPING[country](digits);
 		}
 	}
-	return `+${digits}`;
+	// A supported country's non-mobile stays unbroken (see above).
+	const supportedCode = COUNTRIES.some((country) =>
+		digits.startsWith(COUNTRY_DIAL_CODE[country]),
+	);
+	if (supportedCode) return `+${digits}`;
+	return formatInternational(digits) ?? `+${digits}`;
 }
 
 /**
@@ -255,6 +389,44 @@ export function currencySymbol(currency: string): string {
 		// Unknown code — mirror formatPrice's fallback and show the code itself.
 		return currency;
 	}
+}
+
+/**
+ * A seller-TYPED amount (major units, already parsed by `parsePriceInput`)
+ * for the product wizard and edit form's summaries and review rows — "RM 12",
+ * "S$ 1,250.50". Spelled the way `formatPrice` spells money (the store's
+ * symbol from its ISO code, a non-breaking space, en-MY grouping) minus a
+ * trailing ".00", so a summary line reads like speech rather than a receipt.
+ *
+ * Exists because both product forms printed their `currency` prop — the
+ * retailer's ISO code — raw: sellers read "MYR 12" where every other
+ * dashboard surface says "RM 12", and an SG store read "SGD" for "S$".
+ * Stored minor-unit amounts keep `formatPrice`.
+ */
+export function formatDraftPrice(major: number, currency: string): string {
+	return `${currencySymbol(currency)}${NBSP}${formatDraftAmount(major)}`;
+}
+
+/** The number half of `formatDraftPrice` — "1,250" / "12.50", no symbol.
+ * For the far end of a range, where the symbol is said once. */
+export function formatDraftAmount(major: number): string {
+	return new Intl.NumberFormat("en-MY", {
+		minimumFractionDigits: Number.isInteger(major) ? 0 : 2,
+		maximumFractionDigits: 2,
+	}).format(major);
+}
+
+/** "RM 12" when the ends meet, "RM 12–28.50" when they don't — the symbol
+ * once, like speech. Shared by the wizard's review and the edit form's
+ * summary strip so the two can't describe the same prices differently. */
+export function formatDraftPriceRange(
+	min: number,
+	max: number,
+	currency: string,
+): string {
+	return min === max
+		? formatDraftPrice(min, currency)
+		: `${formatDraftPrice(min, currency)}–${formatDraftAmount(max)}`;
 }
 
 export function formatPrice(minorUnits: number, currency: string): string {

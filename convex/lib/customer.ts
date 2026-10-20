@@ -3,9 +3,15 @@
  * and the denormalized search haystack. Reused from queries, mutations, and the
  * backfill migration. The only Convex dependency is `ConvexError` (a plain error
  * class) so validators surface a clean, user-facing message to the client.
+ *
+ * Also the dashboard's copy: `src/lib/customer.ts` re-exports the display
+ * helpers from here, so the seller's screen and the PDFs/server can't render
+ * the same buyer differently (it used to be a hand-kept mirror).
  */
 
 import { ConvexError } from "convex/values";
+import { GATED_CELL_LABEL, GATED_CLOSED_LABEL } from "./credits";
+import { formatInternational } from "./phoneDial";
 
 /** Min/max length for a buyer name — one rule for every capture point. */
 export const MIN_CUSTOMER_NAME = 3;
@@ -62,7 +68,9 @@ export type DisplayableCustomer = {
 /**
  * Format a digits-only WhatsApp phone for display. Malaysian (country code 60)
  * and Singaporean (65 — SG-lite, 86eynw2dy) numbers get a "+60 " / "+65 "
- * prefix; everything else is prefixed with a bare "+". Keyed off the STORED
+ * prefix; any other country's number — buyers can pick any country since
+ * z8r3fdh274 — is split at its calling code the same way (`+44 7911123456`).
+ * A number with no known code falls back to a bare "+". Keyed off the STORED
  * digits, not a country setting — a stored number already says what it is.
  * Returns an empty string for empty input.
  */
@@ -71,7 +79,7 @@ export function formatPhone(waPhone: string): string {
 	if (digits.length === 0) return "";
 	if (digits.startsWith("60")) return `+60 ${digits.slice(2)}`;
 	if (digits.startsWith("65")) return `+65 ${digits.slice(2)}`;
-	return `+${digits}`;
+	return formatInternational(digits) ?? `+${digits}`;
 }
 
 /**
@@ -85,6 +93,35 @@ export function getDisplayName(customer: DisplayableCustomer): string {
 	const profile = customer.waProfileName?.trim();
 	if (profile) return profile;
 	return formatPhone(customer.waPhone);
+}
+
+/**
+ * The name a SELLER surface shows for a customer row (Credits T3.1).
+ *
+ * A gated customer is redacted server-side down to their aggregates — blank
+ * name, blank phone — so `getDisplayName` falls all the way through to
+ * `formatPhone("")` and returns an EMPTY STRING. That rendered as a nameless
+ * row with a lifetime value next to it, which reads as corrupt data rather
+ * than a deliberate state, and a seller who thinks the record is broken files
+ * a bug instead of topping up.
+ *
+ * `convex/customers.ts` already documented the intended row ("Waiting on
+ * credits · RM 340 · 2 orders") — this is the function that makes the screen
+ * match that comment, and it is one author for all three surfaces (the list
+ * table, the mobile card, the detail page title).
+ */
+export function sellerCustomerName(
+	customer: DisplayableCustomer & {
+		creditGated?: boolean;
+		neverFunded?: boolean;
+	},
+): string {
+	if (customer.creditGated !== true) return getDisplayName(customer);
+	// Every order this buyer ever placed was cancelled while gated, so nothing
+	// is waiting on them — `gatedNameCell` draws the same distinction on the
+	// order card, and a row saying "Waiting on credits" next to no waiting
+	// order is the list contradicting itself.
+	return customer.neverFunded === true ? GATED_CLOSED_LABEL : GATED_CELL_LABEL;
 }
 
 /**

@@ -41,6 +41,9 @@ interface AddressEditDialogProps {
 	/** Order item subtotal (sen) — feeds the reactive delivery quote (the flat
 	 * mode's free-above threshold needs it; live-mode detection ignores it). */
 	subtotal: number;
+	/** The order's line items — a live re-quote must weigh the same cart the
+	 * checkout did (Delyva prices on weight; PR #253 review, HIGH). */
+	orderItems: Doc<"orders">["items"];
 	/** The order's frozen currency — prices the live re-quote line ("S$ 12.00
 	 * to this address"), same source every other money line on the page uses. */
 	currency: string;
@@ -81,6 +84,7 @@ export function AddressEditDialog({
 	retailerId,
 	country,
 	subtotal,
+	orderItems,
 	currency,
 	fulfilmentDate,
 	fulfilmentTimeMinutes,
@@ -100,6 +104,8 @@ export function AddressEditDialog({
 		),
 	).data;
 	const isLiveMode = deliveryQuote?.kind === "live";
+	const providerAware =
+		deliveryQuote?.kind === "live" && deliveryQuote.providerAware;
 
 	const form = useAppForm({
 		defaultValues: toFormValues(currentAddress),
@@ -158,6 +164,7 @@ export function AddressEditDialog({
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
 	const liveQuote = useLiveDeliveryQuote({
 		enabled: isLiveMode && open,
+		providerAware,
 		retailerId,
 		latitude: hasCoords ? latNum : undefined,
 		longitude: hasCoords ? lngNum : undefined,
@@ -172,6 +179,27 @@ export function AddressEditDialog({
 				.filter((part) => part && part.trim().length > 0)
 				.join(", ");
 		},
+		getAddressParts: () => {
+			const v = form.store.state.values;
+			return {
+				city: v.city?.trim() || undefined,
+				state: displayAddressState(v) || undefined,
+				postcode: v.postcode?.trim() || undefined,
+			};
+		},
+		// The order's lines — a re-priced address must weigh the same cart the
+		// checkout did, or Delyva can't bid here (PR #253 review, HIGH).
+		// Legacy pre-variant lines carry no variantId and aren't summable;
+		// dropping them makes the server refuse the bid rather than under-weigh.
+		items: orderItems
+			.filter(
+				(item): item is typeof item & { variantId: Id<"productVariants"> } =>
+					item.variantId !== undefined,
+			)
+			.map((item) => ({
+				variantId: item.variantId,
+				quantity: item.quantity,
+			})),
 		fulfilmentDate,
 		fulfilmentTimeMinutes,
 	});
@@ -269,6 +297,17 @@ export function AddressEditDialog({
 										{collectsFromCustomer ? "collection" : "delivery"} rider
 										service doesn&apos;t cover it. Pick an address closer to the
 										store, or message the store to sort it out.
+									</p>
+								) : liveQuote.state === "no_cold_service" ? (
+									// The address is fine — the store has no cold courier. Do
+									// not tell them to pick a different address.
+									<p
+										role="alert"
+										className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+									>
+										This store can&apos;t ship chilled or frozen items to this
+										address right now. Message them on WhatsApp to arrange
+										delivery.
 									</p>
 								) : liveQuote.state === "store_unavailable" ? (
 									// Seller-side breakage — retrying can't help the buyer.

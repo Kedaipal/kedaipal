@@ -12,14 +12,18 @@ import { useEffect, useRef } from "react";
 import { api } from "../../convex/_generated/api";
 import { ActingAsBanner } from "../components/admin/acting-as-banner";
 import { ConsentBanner } from "../components/app/consent-banner";
+import { DashboardLoadError } from "../components/app/dashboard-load-error";
+import { RouteAreaGuard } from "../components/app/route-area-guard";
 import { SendingPausedBanner } from "../components/app/sending-paused-banner";
+import { StoreAvailabilityBanner } from "../components/app/store-availability-banner";
 import { SubscriptionBanner } from "../components/app/subscription-banner";
 import { BottomNav } from "../components/dashboard/bottom-nav";
 import { MobileHeader } from "../components/dashboard/mobile-header";
 import { Sidebar } from "../components/dashboard/sidebar";
 import { WhatsNewProvider } from "../components/dashboard/whats-new";
 import { ActAsProvider, useActAs } from "../hooks/useActAs";
-import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { useDashboardRetailerRead } from "../hooks/useDashboardRetailer";
+import { useExitActAs } from "../hooks/useExitActAs";
 import { OrderNotificationsBridge } from "../hooks/useOrderNotifications";
 import { useOrderToastNotifications } from "../hooks/useOrderToastNotifications";
 import { hasFeature } from "../lib/subscription";
@@ -33,24 +37,27 @@ export const Route = createFileRoute("/app")({
 
 function AppLayout() {
 	return (
-		<Show
-			when="signed-in"
-			fallback={<RedirectToSignIn signInForceRedirectUrl="/app" />}
-		>
-			{/* The act-as session wraps the whole dashboard so it holds across every
-			    navigation + CRUD until the admin Exits. See docs/admin-console.md. */}
-			<ActAsProvider>
+		// The act-as session wraps the whole dashboard so it holds across every
+		// navigation + CRUD until the admin Exits — and it sits OUTSIDE the
+		// sign-in gate, so it is still mounted when the admin signs out and ends
+		// the session right there (z8r3fdkqn6). See docs/admin-console.md.
+		<ActAsProvider>
+			<Show
+				when="signed-in"
+				fallback={<RedirectToSignIn signInForceRedirectUrl="/app" />}
+			>
 				<AppShell />
-			</ActAsProvider>
-		</Show>
+			</Show>
+		</ActAsProvider>
 	);
 }
 
 function AppShell() {
 	const navigate = useNavigate();
 	const location = useLocation();
-	const { actAsRetailerId, setActAs } = useActAs();
-	const retailer = useDashboardRetailer();
+	const { actAsRetailerId } = useActAs();
+	const exitActAs = useExitActAs();
+	const { retailer, error: retailerError } = useDashboardRetailerRead();
 	const actingAsAdmin = retailer?.actingAsAdmin === true;
 	const counts = useQuery(
 		convexQuery(
@@ -87,8 +94,7 @@ function AppShell() {
 		// Acting-as but the store resolved null → the id is stale/foreign; clear the
 		// session and return to the directory.
 		if (actAsRetailerId) {
-			setActAs(undefined);
-			navigate({ to: "/app/admin/sellers" });
+			exitActAs();
 			return;
 		}
 		// Wait for the admin check before deciding where a storeless user goes.
@@ -107,7 +113,7 @@ function AppShell() {
 		isAdminResult,
 		onAdminRoute,
 		navigate,
-		setActAs,
+		exitActAs,
 	]);
 
 	// One-shot backfill: if the retailer has no notifyEmail yet, copy it from
@@ -132,6 +138,18 @@ function AppShell() {
 		});
 	}, [retailer, actingAsAdmin, ensureNotifyEmail]);
 
+	// A failed read is said, not shown as loading: an adapter read that throws
+	// settles as "no data", and before this the skeleton below spun forever
+	// (z8r3fdkqn6).
+	if (retailerError) {
+		return (
+			<DashboardLoadError
+				error={retailerError}
+				actingAs={actAsRetailerId !== undefined}
+				onExitActAs={exitActAs}
+			/>
+		);
+	}
 	// Render the shell once we have a store (own or act-as) OR the caller is a
 	// storeless admin on an admin route. Everything else (loading, or redirecting
 	// a non-admin to onboarding) shows the skeleton.
@@ -150,16 +168,34 @@ function AppShell() {
 					isAdmin={isAdmin}
 					adminBadge={adminOwnStore}
 				/>
-				<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none print:max-w-none">
+				{/* min-w-0: this column is a flex item beside the sidebar, and a flex
+				    item's default `min-width: auto` refuses to shrink below its
+				    content. Any page whose content is wider than the space left
+				    (the orders TABLE with a few columns switched on) therefore
+				    pushed the whole shell past the viewport — the page scrolled
+				    sideways and the toolbar's right-hand controls went off screen.
+				    With min-w-0 the column takes the space it is given and the
+				    inner `overflow-x-auto` scroller does the scrolling, as designed. */}
+				<div className="mx-auto flex w-full min-w-0 max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none print:max-w-none">
 					{retailer?.actingAsAdmin ? (
 						<div className="print:hidden">
-							<ActingAsBanner storeName={retailer.storeName} />
+							<ActingAsBanner
+								storeName={retailer.storeName}
+								unclaimed={retailer.unclaimed === true}
+								pendingOwnerEmail={retailer.pendingOwnerEmail}
+							/>
 						</div>
 					) : null}
 					<MobileHeader retailer={retailer} adminBadge={adminOwnStore} />
 					{/* Store-specific banners only when operating a store. */}
 					{retailer ? (
 						<div className="print:hidden">
+							{/* Not taking orders (z8r3fdudf7) — first: it is what the
+							    store's buyers are feeling right now. */}
+							<StoreAvailabilityBanner
+								retailerId={retailer._id}
+								storeName={retailer.storeName}
+							/>
 							<SendingPausedBanner
 								paused={retailer.sendingPaused}
 								reason={retailer.sendingPauseReason}
@@ -176,14 +212,18 @@ function AppShell() {
 							{adminOwnStore ? null : (
 								<SubscriptionBanner
 									subscription={retailer.subscription}
-									ordersThisMonth={retailer.ordersThisMonth}
 									slug={retailer.slug}
 								/>
 							)}
 						</div>
 					) : null}
 					<main className="flex-1 px-5 py-6 lg:mx-auto lg:w-full lg:max-w-6xl lg:px-8 lg:py-8 print:max-w-none print:p-0">
-						<Outlet />
+						{/* Team members (86exr91r4): the one route-level permission gate —
+						    deep links into sections a member can't read explain themselves
+						    instead of surfacing a raw Forbidden. */}
+						<RouteAreaGuard>
+							<Outlet />
+						</RouteAreaGuard>
 						{/* Invisible: browser order alerts (chime + system notification)
 					    for this device — see Settings → Store → Order alerts. */}
 						<OrderNotificationsBridge retailerId={retailer?._id} />
@@ -204,6 +244,16 @@ function AppShell() {
 							!!retailer &&
 							!retailer.actingAsAdmin &&
 							!hasFeature(retailer.subscription, "insights")
+						}
+						vouchersLocked={
+							!!retailer &&
+							!retailer.actingAsAdmin &&
+							!hasFeature(retailer.subscription, "vouchers")
+						}
+						promotionsLocked={
+							!!retailer &&
+							!retailer.actingAsAdmin &&
+							!hasFeature(retailer.subscription, "promo")
 						}
 					/>
 				</div>
@@ -234,7 +284,9 @@ function ShellSkeleton() {
 				</div>
 			</aside>
 
-			<div className="mx-auto flex w-full max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none">
+			{/* Same min-w-0 as the loaded shell, so the skeleton and the real
+			    page lay out identically. */}
+			<div className="mx-auto flex w-full min-w-0 max-w-md flex-1 flex-col lg:mx-0 lg:max-w-none">
 				{/* Mobile header placeholder */}
 				<header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-background/95 px-5 py-3 backdrop-blur lg:hidden">
 					<div className="flex items-center gap-2.5">

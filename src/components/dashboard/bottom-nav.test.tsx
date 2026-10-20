@@ -15,10 +15,37 @@ import {
 	screen,
 	waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BottomNav, type BottomNavProps } from "./bottom-nav";
 
-afterEach(cleanup);
+// Team permissions (86exr91r4): the nav now reads usePermission to decide
+// which tabs a MEMBER sees. Mocked at the hook seam (the adapter-pair pattern
+// one level up) with a mutable fixture so the member cases flip it per test;
+// the default is the owner, for whom every pre-existing assertion holds.
+const permFixture = {
+	role: "owner" as "owner" | "member" | "admin",
+	grants: {} as Record<string, "read" | "write">,
+};
+vi.mock("../../hooks/usePermission", () => ({
+	usePermission: (area: string) => {
+		if (permFixture.role !== "member")
+			return { canRead: true, canWrite: true, role: permFixture.role };
+		const held = permFixture.grants[area];
+		return {
+			canRead: held !== undefined,
+			canWrite: held === "write",
+			role: "member",
+		};
+	},
+	useStoreRole: () => permFixture.role,
+	useIsStoreOwner: () => permFixture.role !== "member",
+}));
+
+afterEach(() => {
+	cleanup();
+	permFixture.role = "owner";
+	permFixture.grants = {};
+});
 
 // jsdom has no ResizeObserver (the nav publishes --app-bottomnav-h with one).
 class RO {
@@ -59,6 +86,7 @@ function renderNav(props: Partial<BottomNavProps> = {}, initialPath = "/app") {
 		stub("/app/settings"),
 		stub("/app/admin/sellers"),
 		stub("/app/admin/billing"),
+		stub("/app/admin/showcases"),
 		stub("/app/admin/waba"),
 	]);
 	const router = createRouter({
@@ -159,10 +187,11 @@ describe("BottomNav — 5-tab bar + More sheet", () => {
 		expect(screen.getByText("Home").className).not.toContain("font-bold");
 	});
 
-	it("admin nav keeps the 3 admin tabs and no More (storeless admin)", async () => {
+	it("admin nav keeps the 4 admin tabs and no More (storeless admin)", async () => {
 		renderNav({ adminNav: true }, "/app/admin/sellers");
 		await waitFor(() => expect(screen.getByText("Sellers")).toBeTruthy());
 		expect(screen.getByText("Billing")).toBeTruthy();
+		expect(screen.getByText("Showcases")).toBeTruthy();
 		expect(screen.getByText("WABA")).toBeTruthy();
 		expect(screen.queryByText("More")).toBeNull();
 		// Storeless admin has no seller app to return to → no "App" tab.
@@ -178,5 +207,32 @@ describe("BottomNav — 5-tab bar + More sheet", () => {
 		expect(screen.getByText("Sellers")).toBeTruthy();
 		fireEvent.click(screen.getByText("App"));
 		await waitFor(() => expect(router.state.location.pathname).toBe("/app"));
+	});
+});
+
+describe("BottomNav — team-member gating (86exr91r4)", () => {
+	it("a member sees only the tabs their grants cover", async () => {
+		permFixture.role = "member";
+		permFixture.grants = { orders: "read" };
+		renderNav();
+		expect(await screen.findByText("Orders")).toBeTruthy();
+		// No orders WRITE → no Counter; no insights grant → no Insights tab.
+		expect(screen.queryByText("Counter")).toBeNull();
+		expect(screen.queryByText("Insights")).toBeNull();
+		expect(screen.getByText("Home")).toBeTruthy();
+	});
+
+	it("the More sheet hides Products/Customers without their grants but keeps Settings (Team lives there)", async () => {
+		permFixture.role = "member";
+		permFixture.grants = { orders: "write" };
+		renderNav();
+		fireEvent.click(await screen.findByText("More"));
+		await waitFor(() => {
+			expect(screen.getByText("Settings")).toBeTruthy();
+		});
+		expect(screen.queryByText("Products")).toBeNull();
+		expect(screen.queryByText("Customers")).toBeNull();
+		// Counter exists for orders:write.
+		expect(screen.getByText("Counter")).toBeTruthy();
 	});
 });

@@ -5,10 +5,19 @@
 // docs/order-inbox.md + docs/invoices-receipts.md.
 
 import { attributionBucket } from "./attribution";
+import {
+	type BookingPeriod,
+	matchesAnyBookingPeriod,
+} from "./bookingPeriod";
 import { matchesFulfilmentWindow } from "./fulfilmentDate";
-import { type OrderBucket, orderBucket, type OrderStatus } from "./orderBuckets";
+import {
+	type InboxStatusLeaf,
+	orderLeaf,
+	type OrderStatus,
+} from "./orderBuckets";
 import {
 	type CsvOrder,
+	fulfilmentKey,
 	ORDER_COLUMNS,
 	orderColumnDisplay,
 } from "./orderCsv";
@@ -19,7 +28,7 @@ import {
  *
  * Built from the SAME registry the table renders and the CSV writes, so a
  * seller can search anything they can see. Built lazily (only when there IS a
- * term) because it allocates ~36 strings per order.
+ * term) because it allocates a string per column, per order.
  *
  * Every column participates, categories included — they are frozen onto the
  * order at checkout, so no lookup is needed. Sellers who want the precise
@@ -51,26 +60,44 @@ function searchHaystack(o: CsvOrder): string {
  * added without touching it (86eyrtz74) — a gate that quietly stops guarding is
  * worse than no gate, because nothing looks wrong.
  *
- * Excluded on purpose: `searchText` (blank is not a search) and `showPinned`,
- * which WIDENS the result and is all-tier because pinning is.
+ * Excluded on purpose: `searchText` (blank is not a search); `pinMode`, because
+ * pinning is all-tier in every one of its modes — a Starter who can pin but
+ * can't ask to see only their pins would be paywalled out of the feature's
+ * point; and `bookingPeriods`, all-tier because BOOKING is — S4 put the seller
+ * calendar deliberately outside this same gate, and a store that gets a free
+ * calendar but must pay to ask "who is here right now" is incoherent. It cannot
+ * be used to dodge the gate either: a period only ever matches an order carrying
+ * a booking span, so on a product inbox it returns nothing.
+ *
+ * `creditGated` (Credits T3.1) is excluded for the same reason as `pinMode`:
+ * the credit gate applies at EVERY tier, so a Starter store with 40 orders
+ * waiting must be able to see exactly those forty. Paywalling the one filter
+ * that finds the orders a seller is being asked to pay to open would be
+ * absurd. It can't be used to dodge the gate either — it only ever NARROWS to
+ * rows that are already redacted.
  */
 const NARROWING_FILTER_KEYS: Record<
-	Exclude<keyof InboxFilterArgs, "searchText" | "showPinned">,
+	Exclude<
+		keyof InboxFilterArgs,
+		"searchText" | "pinMode" | "bookingPeriods" | "creditGated"
+	>,
 	true
 > = {
-	buckets: true,
 	paymentStatuses: true,
 	paymentMethods: true,
 	methodUnspecified: true,
 	dateFrom: true,
 	dateTo: true,
 	fulfilmentWindow: true,
+	fulfilmentFrom: true,
+	fulfilmentTo: true,
 	mockupPending: true,
 	statuses: true,
 	categories: true,
 	categoriesUnspecified: true,
 	sources: true,
 	attributionSources: true,
+	fulfilments: true,
 };
 
 /** True when these args ask for anything beyond "the newest orders, unfiltered"
@@ -82,6 +109,12 @@ export function narrowsTheInbox(args: InboxFilterArgs): boolean {
 		// An empty array narrows nothing (the predicate treats it as "no filter"),
 		// so it must not trip the Pro gate either — the two answer one question.
 		if (Array.isArray(value)) return value.length > 0;
+		// Same rule for the boolean flags: every one of them is read as
+		// `=== true` by the predicate, so an explicit `false` narrows nothing and
+		// must not gate. Without this the gate is stricter than the filter it
+		// claims to describe, and a client that sends `false` instead of omitting
+		// the field gets a paywall for a filter that is switched off.
+		if (typeof value === "boolean") return value;
 		return value !== undefined;
 	});
 }
@@ -109,34 +142,51 @@ function matchesAnyCategory(o: CsvOrder, wanted: ReadonlySet<string>): boolean {
 export type InboxBucket = "all" | "new" | "in_progress" | "completed" | "cancelled";
 
 export type InboxFilterArgs = {
-	/**
-	 * Workflow buckets to keep — MULTI since 86eyrtz74 (was one `bucket` with an
-	 * "all" sentinel). "Completed or Cancelled" — everything closed — is a real
-	 * question the single value could not ask, and every other enumerable filter
-	 * on the inbox is already a multi-select, so a seller who has learnt "tap
-	 * several chips" everywhere else expects it here too. Empty or undefined =
-	 * every bucket, which retires the "all" sentinel from this shape entirely
-	 * (the wire still accepts the old singular; see `toInboxFilterArgs`).
-	 */
-	buckets?: OrderBucket[];
 	paymentStatuses?: Array<"unpaid" | "claimed" | "received">;
 	paymentMethods?: string[];
 	methodUnspecified?: boolean;
 	dateFrom?: number;
 	dateTo?: number;
 	fulfilmentWindow?: "today" | "tomorrow" | "this_week";
+	/**
+	 * Orders DUE in a window — `fulfilmentDate` between these two, inclusive.
+	 *
+	 * The deliberate twin of `dateFrom`/`dateTo` above, and its neighbour for
+	 * that reason: those bound when the order was PLACED, these bound when it is
+	 * PROMISED. Home's "Plan ahead" strip counts by fulfilment date, so without
+	 * this a tile saying "2 due Thursday" could only ever open "orders placed on
+	 * Thursday" — a different question with a different answer (z8r3fdrgzj).
+	 *
+	 * `fulfilmentWindow` answers the same axis for the three named windows a
+	 * seller picks from a chip; this one answers an arbitrary day or span, which
+	 * a chip cannot express. An order with no fulfilment date is never due, so it
+	 * never matches — the same rule `fulfilmentWindow` already applies.
+	 */
+	fulfilmentFrom?: number;
+	fulfilmentTo?: number;
 	mockupPending?: boolean;
 	/**
-	 * Exact order status (86eyrtz74), multi-select — OR within itself, AND with
-	 * everything else.
+	 * THE status axis — one flat set of leaves (1 Sep). Empty or undefined = no
+	 * status filtering.
 	 *
-	 * Deliberately a SEPARATE dimension from `bucket`, not a replacement for it.
-	 * A bucket is the coarse workflow stage a seller navigates by ("what's in
-	 * progress"); this is the precise state a seller *questions* ("what is packed
-	 * or shipped — out of my hands but not delivered"), which no single bucket
-	 * expresses. They compose: bucket narrows, statuses narrow further.
+	 * It used to be two fields: `buckets` (coarse, what the chip row wrote) AND
+	 * `statuses` (exact, what the filter panel wrote), which **ANDed**. That gave
+	 * the seller two filter states wearing the same word — ticking every row under
+	 * the panel's "IN PROGRESS" heading left the "In progress" chip dark, and
+	 * combining the two surfaces could produce an empty list from two selections
+	 * that each had orders. Buckets were never expressible as statuses anyway (see
+	 * `INBOX_LEAF_KEYS`), so the fix was to give both surfaces the same atom.
+	 *
+	 * A bucket chip now writes its bucket's leaves — it IS the group control over
+	 * the panel's rows, so the two surfaces are one state and can only agree. The
+	 * coarse/exact distinction the old split was reaching for survives as
+	 * granularity of selection, not as a second dimension: "everything in
+	 * progress" is one tap, "packed or shipped — out of my hands but not
+	 * delivered" is two ticks, and both write this field.
+	 *
+	 * Legacy `buckets` on the wire folds in here; see `toInboxFilterArgs`.
 	 */
-	statuses?: OrderStatus[];
+	statuses?: InboxStatusLeaf[];
 	/**
 	 * Category names frozen on the order's lines (86eyrtz74), multi-select. An
 	 * order matches when ANY of its lines carries ANY of these names — a mixed
@@ -164,6 +214,25 @@ export type InboxFilterArgs = {
 	// not counter" is a real question and a single value can't ask it. Empty or
 	// undefined = no source filtering. See orders.source in convex/schema.ts.
 	sources?: Array<"storefront" | "counter" | "claim">;
+	/**
+	 * How the order LEAVES — the `fulfilmentKey` values: delivery, self_collect,
+	 * drop_off, collection, booking (z8r3fdfau9). Multi-select; empty or
+	 * undefined = no fulfilment filtering.
+	 *
+	 * The deliberate twin of `sources` above, and its neighbour for that reason:
+	 * that field is how the order came IN (which checkout surface), this one is
+	 * how it goes OUT. They answer opposite halves of the same question and a
+	 * seller reaches for them together — "today's counter sales" and "today's
+	 * deliveries" are the same kind of ask.
+	 *
+	 * Matched through `fulfilmentKey`, never through `deliveryMethod` directly,
+	 * so the filter, the table column and the CSV cell are physically incapable
+	 * of disagreeing — including on the two refinements that override the bare
+	 * method (a collection order is not a delivery; a meetup point is not the
+	 * seller's shop). A legacy order with no method matches **Delivery**, which
+	 * is what its row already says on screen.
+	 */
+	fulfilments?: string[];
 	// Marketing origin (86eyq0eq9) — the `attributionBucket` keys the seller
 	// picked: a stamped `?src=` tag, "counter", or "direct". MULTI-select (an
 	// OR within the filter, ANDed with the rest), because "how did my socials
@@ -172,21 +241,74 @@ export type InboxFilterArgs = {
 	// (storefront vs counter vs claim link), this one is where the buyer came
 	// FROM. Empty or undefined = no attribution filtering.
 	attributionSources?: string[];
+	/**
+	 * Where a booking sits in TIME (S8) — active, ending soon, upcoming, ended.
+	 *
+	 * **ORs with `statuses`, in ONE flat set** (owner call, 1 Sep). These two
+	 * fields are separate on the wire only because they are computed from
+	 * different data — a leaf from `status` + seen-state, a period from the
+	 * booking span — but to the seller they are one row of status chips, and
+	 * "In progress + Active now" means *either*, exactly like "New + Completed"
+	 * does. A period is not part of the leaf partition (an active booking also
+	 * has a leaf), so it is the one member of the set that never rolls up into a
+	 * bucket chip.
+	 *
+	 * It shipped first as a separate AND dimension, on the reasoning that
+	 * buckets are a partition (every order in exactly one, so the counts sum)
+	 * while an active booking is *simultaneously* `in_progress`. That reasoning
+	 * is sound about the data and wrong about the product: it produced a chip row
+	 * where two visually identical chips combined by different rules, an "All"
+	 * that stayed lit while a booking chip narrowed the list, and — once "no
+	 * status" existed — a chip reading `1` above an empty list. A distinction the
+	 * seller cannot see is not a distinction worth having.
+	 *
+	 * The partition property survives where it is actually load-bearing: the
+	 * COUNTS are still per-chip tallies over the full window, which under a union
+	 * is exactly the honest reading ("this is what tapping me adds").
+	 *
+	 * Non-bookings and cancelled bookings never match — see
+	 * `matchesBookingPeriod` for why those exclusions live in the predicate
+	 * rather than being left to compose.
+	 */
+	bookingPeriods?: BookingPeriod[];
 	searchText?: string;
 	/**
-	 * Pin privilege (86eyrtz74). When true, a PINNED order is kept even if it
-	 * fails every other rule above; when false, pins are filtered like any other
-	 * order.
+	 * What the seller's pins do to this list (86eyrtz74, extended 1 Sep):
 	 *
-	 * This is deliberately not "filter to pinned only". Sellers pin an order so
-	 * they can then filter the inbox to something else and compare against it —
-	 * so the pin has to survive the filter, or the feature does nothing for its
-	 * main use. Turning the toggle off is how they get a filter that means
-	 * exactly what it says. Applied by `buildInboxPredicate` so the live inbox
-	 * and the export can't diverge (the invariant this module exists for).
+	 * - `"top"` (default) — a pinned order is kept even if it fails every other
+	 *   rule. Sellers pin an order so they can then filter to something else and
+	 *   compare against it, so the pin has to survive the filter or the feature
+	 *   does nothing for its main use.
+	 * - `"off"` — pins are filtered like any other order, for when they want a
+	 *   filter that means exactly what it says.
+	 * - `"only"` — show ONLY pinned orders. Deliberately still ANDs with every
+	 *   other filter rather than short-circuiting them: "pinned + New" is a
+	 *   sensible question, and a mode that silently ignored the lit status chips
+	 *   would leave them on screen asserting something false.
+	 *
+	 * One field rather than two booleans, so `{off, only}` can't both be set.
+	 * Applied by `buildInboxPredicate` so the live inbox and the export can't
+	 * diverge (the invariant this module exists for).
 	 */
-	showPinned?: boolean;
+	pinMode?: PinMode;
+	/**
+	 * Only orders WAITING ON CREDITS (Credits T3.1), or only ones that aren't.
+	 *
+	 * `true` is the one a seller reaches for — "show me what my next top-up
+	 * opens" — and the inbox offers it as a chip whenever the count is above
+	 * zero. `false` is its twin, for getting the waiting rows out of the way
+	 * and working the orders that ARE open; absent means no filtering, so a
+	 * client sending `false` is asking a real question, not switching the
+	 * filter off.
+	 *
+	 * Reads `creditGated`, which the server stamps during redaction — so the
+	 * filter can only ever agree with what the row actually shows.
+	 */
+	creditGated?: boolean;
 };
+
+/** See `InboxFilterArgs.pinMode`. */
+export type PinMode = "top" | "off" | "only";
 
 /**
  * The order fields the predicate reads. A structural subset of Doc<"orders">.
@@ -205,6 +327,16 @@ export type FilterableOrder = CsvOrder & {
 	confirmationPushStatus?: string;
 	mockupStatus?: string;
 	paymentStatus?: "unpaid" | "claimed" | "received";
+	/** Booking span (S8) — the period filter's inputs. Deliberately NOT on
+	 * `CsvOrder`: the inbox filters on these, the table and the export don't
+	 * render them, and widening the column registry for a filter would put a
+	 * column on every seller's export to serve a chip. */
+	bookingCheckIn?: number;
+	bookingCheckOut?: number;
+	/** Waiting on credits (Credits T3.1) — stamped by the server's redaction,
+	 * never computed here: the filter and the row's own contents then come from
+	 * one decision and cannot disagree. */
+	creditGated?: boolean;
 };
 
 /** An order is awaiting the seller's mockup action. */
@@ -219,9 +351,15 @@ export function needsMockup(mockupStatus: string | undefined): boolean {
  */
 export function buildInboxPredicate(
 	args: InboxFilterArgs,
+	/** Sampled ONCE per build, not per order: a list evaluated across midnight
+	 * must not classify its first rows against one day and its last against the
+	 * next. Injected for the same reason `matchesFulfilmentWindow` takes it. */
+	now: number = Date.now(),
 ): (o: FilterableOrder) => boolean {
 	const term = (args.searchText ?? "").trim().toLowerCase();
 	const digits = term.replace(/\D/g, "");
+	// The same digits without a leading trunk 0 — see the phone rule below.
+	const trunkless = digits.replace(/^0+/, "");
 	const payset =
 		args.paymentStatuses && args.paymentStatuses.length > 0
 			? new Set(args.paymentStatuses)
@@ -235,9 +373,7 @@ export function buildInboxPredicate(
 		args.attributionSources && args.attributionSources.length > 0
 			? new Set(args.attributionSources)
 			: null;
-	const bucketSet =
-		args.buckets && args.buckets.length > 0 ? new Set(args.buckets) : null;
-	const statusSet =
+	const leafSet =
 		args.statuses && args.statuses.length > 0 ? new Set(args.statuses) : null;
 	const categorySet =
 		args.categories && args.categories.length > 0
@@ -250,17 +386,46 @@ export function buildInboxPredicate(
 		args.sources && args.sources.length > 0
 			? new Set<string>(args.sources)
 			: null;
-	const pinPrivilege = args.showPinned === true;
+	const fulfilmentSet =
+		args.fulfilments && args.fulfilments.length > 0
+			? new Set<string>(args.fulfilments)
+			: null;
+	const periodList =
+		args.bookingPeriods && args.bookingPeriods.length > 0
+			? args.bookingPeriods
+			: null;
+	const pinMode = args.pinMode ?? "top";
 	return (o) => {
-		// Pin privilege short-circuits EVERY rule below (86eyrtz74) — see
-		// InboxFilterArgs.showPinned for why a pin outranks the filter.
-		if (pinPrivilege && o.pinnedAt !== undefined) return true;
-		// Bucket membership goes through the same seen-aware resolver the counts
-		// use, so the chip count and the list can't disagree: an unseen push-path
-		// order shows under "New" and NOT under "In progress" (86eyf1rck).
-		if (bucketSet && !bucketSet.has(orderBucket(o))) return false;
+		// "Only pinned" is a narrowing gate, so it runs before everything and then
+		// falls through to the rest of the filters — see InboxFilterArgs.pinMode.
+		if (pinMode === "only" && o.pinnedAt === undefined) return false;
+		// Pin privilege short-circuits EVERY rule below (86eyrtz74).
+		if (pinMode === "top" && o.pinnedAt !== undefined) return true;
+		// Waiting on credits (Credits T3.1). Placed with the ordinary filters
+		// rather than above the pin short-circuit, so it behaves like every other
+		// one: a pinned order still rides on top, which is what pinning is for.
+		if (
+			args.creditGated !== undefined &&
+			(o.creditGated === true) !== args.creditGated
+		)
+			return false;
+		// ONE flat status set: status leaves and booking periods OR together
+		// (owner call, 1 Sep — see InboxFilterArgs.statuses). Same shape as the
+		// category arm below, and for the same reason: two ways of naming a
+		// member of one set must not become an intersection.
+		//
+		// Membership goes through `orderLeaf`, never `o.status`, so the chip
+		// count and the list can't disagree: an unseen push-path order is
+		// `confirmed_unseen` and shows under "New", NOT under "In progress"
+		// (86eyf1rck).
+		if (leafSet || periodList) {
+			const byLeaf = leafSet ? leafSet.has(orderLeaf(o)) : false;
+			const byPeriod = periodList
+				? matchesAnyBookingPeriod(o, periodList, now)
+				: false;
+			if (!byLeaf && !byPeriod) return false;
+		}
 		if (args.mockupPending && !needsMockup(o.mockupStatus)) return false;
-		if (statusSet && !statusSet.has(o.status)) return false;
 		// Category filter — the same shape as the method filter below: the named
 		// set ORs with the "none recorded" arm, so selecting every category plus
 		// Uncategorized genuinely matches every order.
@@ -273,6 +438,12 @@ export function buildInboxPredicate(
 		}
 		// Source filter — legacy/undefined source reads as "storefront".
 		if (sourceSet && !sourceSet.has(o.source ?? "storefront")) return false;
+		// Fulfilment filter — through the registry's own `fulfilmentKey`, so the
+		// rows this keeps are exactly the rows whose Fulfilment cell shows the
+		// ticked word. It already folds in the two overrides (collection beats
+		// delivery, drop-off beats self-collect) and the legacy default, so none
+		// of that logic gets a second, drifting copy here.
+		if (fulfilmentSet && !fulfilmentSet.has(fulfilmentKey(o))) return false;
 		// Marketing-origin filter — bucketed through the SAME resolver Insights
 		// reports with (attribution.ts), so a row in the by-source breakdown and
 		// the inbox it drills into can never disagree about which orders count.
@@ -295,13 +466,30 @@ export function buildInboxPredicate(
 			if (!matchesFulfilmentWindow(o.fulfilmentDate, args.fulfilmentWindow))
 				return false;
 		}
+		// Due-date bounds. An order with no fulfilment date is not due at all, so
+		// it falls out of any due window — never "undated therefore everything".
+		if (args.fulfilmentFrom !== undefined || args.fulfilmentTo !== undefined) {
+			if (o.fulfilmentDate === undefined) return false;
+			if (
+				args.fulfilmentFrom !== undefined &&
+				o.fulfilmentDate < args.fulfilmentFrom
+			)
+				return false;
+			if (args.fulfilmentTo !== undefined && o.fulfilmentDate > args.fulfilmentTo)
+				return false;
+		}
 		if (term.length > 0) {
 			// Phone keeps its own rule: match on TRAILING digits, so "123456789"
-			// finds "+60123456789" however the seller stored or typed it. Plain
+			// finds "60123456789" with or without its country code. Plain
 			// substring matching can't do that, which is why it survives the
-			// move to the column haystack.
+			// move to the column haystack. A local number typed with its trunk 0
+			// is tried without it too: MY only matched by luck (`60` ends in the
+			// trunk `0`), so a foreign buyer's "07911 123456" missed the stored
+			// "447911123456" (z8r3fdh274).
 			const phone = (o.customer.waPhone ?? "").replace(/\D/g, "");
-			const phoneHit = digits.length >= 4 && phone.endsWith(digits);
+			const phoneHit =
+				(digits.length >= 4 && phone.endsWith(digits)) ||
+				(trunkless.length >= 4 && phone.endsWith(trunkless));
 			if (!phoneHit && !searchHaystack(o).includes(term)) return false;
 		}
 		return true;
@@ -325,17 +513,28 @@ export type InboxSort = "recent" | "due";
  * urgent orders sort to the top. Dateless orders sink to the bottom; the caller
  * must pass an already-createdAt-desc list so the stable sort keeps that as the
  * tiebreaker within each group.
+ *
+ * Same day → by TIME (z8r3fdff97): a pickup counter with orders due at 11:00
+ * and 17:00 works them in that order, not in the order they were placed. A
+ * timed order comes before an untimed one on the same day (it names a moment
+ * the seller has to hit; the untimed one can be done any time that day).
  */
 export function compareInboxOrder(
-	a: { fulfilmentDate?: number },
-	b: { fulfilmentDate?: number },
+	a: { fulfilmentDate?: number; fulfilmentTimeMinutes?: number },
+	b: { fulfilmentDate?: number; fulfilmentTimeMinutes?: number },
 ): number {
 	const ad = a.fulfilmentDate;
 	const bd = b.fulfilmentDate;
 	if (ad === undefined && bd === undefined) return 0; // keep createdAt-desc
 	if (ad === undefined) return 1; // a (dateless) after b
 	if (bd === undefined) return -1; // b (dateless) after a
-	return ad - bd; // both dated → soonest first
+	if (ad !== bd) return ad - bd; // both dated → soonest first
+	const at = a.fulfilmentTimeMinutes;
+	const bt = b.fulfilmentTimeMinutes;
+	if (at === undefined && bt === undefined) return 0; // keep createdAt-desc
+	if (at === undefined) return 1; // untimed after timed, same day
+	if (bt === undefined) return -1;
+	return at - bt; // earliest moment first
 }
 
 /**
@@ -357,7 +556,11 @@ export function compareInboxOrder(
  * obeying different rules.
  */
 export function sortInboxOrders<
-	T extends { fulfilmentDate?: number; pinnedAt?: number },
+	T extends {
+		fulfilmentDate?: number;
+		fulfilmentTimeMinutes?: number;
+		pinnedAt?: number;
+	},
 >(orders: readonly T[], sort: InboxSort): T[] {
 	const pinned: T[] = [];
 	const rest: T[] = [];

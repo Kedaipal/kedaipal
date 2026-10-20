@@ -7,13 +7,28 @@ import {
 	redirect,
 } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
-import { ProductPageView } from "../components/storefront/product-page";
+import {
+	GALLERY_PRELOAD_SIZES,
+	ProductPageView,
+} from "../components/storefront/product-page";
+import { OrderingPausedProvider } from "../components/storefront/seasonal-break";
+import {
+	StoreUnavailable,
+	type StoreUnavailableLoaderData,
+	storeUnavailableHead,
+} from "../components/storefront/store-unavailable";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
+import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
-import { absoluteProxiedImageUrl } from "../lib/image-proxy";
+import {
+	absoluteProxiedImageUrl,
+	imageSrcSet,
+	proxiedImageUrl,
+} from "../lib/image-proxy";
+import { jsonLdScript } from "../lib/json-ld";
 import { ssrRead } from "../lib/ssr-read";
 import { hasStartingPrice } from "../lib/variant";
 
@@ -35,6 +50,10 @@ interface ProductLoaderData {
 	/** The price is only a floor (custom line the seller quotes on top of) — the
 	 * offers block must not advertise it as the settled price. See 86eyhn4mr. */
 	startingPrice: boolean;
+	/** The gallery's first photo — this page's LCP element now that the app
+	 * bar replaced the cover hero (z8r3fdegb5), so head() preloads it. Raw
+	 * storage URL; head() mirrors the gallery's proxied srcset. */
+	firstImageUrl: string | undefined;
 }
 
 /**
@@ -45,7 +64,9 @@ interface ProductLoaderData {
  * routing trick as the category + checkout pages ($slug.tsx is a leaf).
  */
 export const Route = createFileRoute("/$slug_/p/$productSlug")({
-	loader: async ({ params }): Promise<ProductLoaderData | null> => {
+	loader: async ({
+		params,
+	}): Promise<ProductLoaderData | StoreUnavailableLoaderData | null> => {
 		const client = getConvexHttpClient();
 		const retailerRead = await ssrRead(() =>
 			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
@@ -67,6 +88,11 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 		if (result.status === "notFound") {
 			throw notFound();
 		}
+		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
+		// the component renders the neutral unavailable page, and head()
+		// takes it out of search in the SSR HTML.
+		if (result.status === "unavailable")
+			return { unavailable: true, storeName: result.storeName };
 		const retailer = result.retailer;
 
 		// Unknown, archived, hidden or category-suppressed → 404, never a leak.
@@ -114,10 +140,13 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			inStock: product.inStock,
 			quoteOnly: product.hasQuotePricing && product.priceTo === 0,
 			startingPrice: hasStartingPrice(product.variants),
+			firstImageUrl: product.imageUrls[0],
 		};
 	},
 	head: ({ loaderData }) => {
 		if (!loaderData) return {};
+		if ("unavailable" in loaderData)
+			return storeUnavailableHead(loaderData.storeName);
 		const {
 			storeName,
 			productName,
@@ -130,6 +159,7 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			inStock,
 			quoteOnly,
 			startingPrice,
+			firstImageUrl,
 		} = loaderData;
 		const title = `${productName} — ${storeName} | Kedaipal`;
 
@@ -198,10 +228,31 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 
 		return {
 			meta,
-			links: [{ rel: "canonical", href: canonicalUrl }],
-			scripts: [
-				{ type: "application/ld+json", children: JSON.stringify(jsonLd) },
+			links: [
+				{ rel: "canonical", href: canonicalUrl },
+				// LCP preload (z8r3fdegb5): with the cover hero gone from subpages,
+				// the gallery's first photo is this page's LCP element. The hint
+				// must name the same candidate the gallery will actually request —
+				// it renders through AppImage (proxied + srcset), so
+				// imagesrcset/imagesizes mirror the component's own sizes.
+				//
+				// `imagesizes` comes from the gallery itself (GALLERY_PRELOAD_SIZES)
+				// so the hint can never drift from the branch that paints — it
+				// covers the mobile carousel tile below lg AND the desktop hero
+				// above it. See that constant for what the drift cost.
+				...(firstImageUrl
+					? [
+							{
+								rel: "preload",
+								as: "image",
+								href: proxiedImageUrl(firstImageUrl),
+								imagesrcset: imageSrcSet(firstImageUrl) ?? undefined,
+								imagesizes: GALLERY_PRELOAD_SIZES,
+							},
+						]
+					: []),
 			],
+			scripts: [jsonLdScript(jsonLd)],
 		};
 	},
 	notFoundComponent: ProductNotFound,
@@ -211,20 +262,23 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 function ProductNotFound() {
 	const { slug } = Route.useParams();
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-3xl font-bold">Product not found</h1>
-			<p className="text-sm text-muted-foreground">
-				It may have sold out for good or been renamed — the store&apos;s full
-				catalog is still open.
-			</p>
-			<Link
-				to="/$slug"
-				params={{ slug }}
-				activeOptions={{ exact: true }}
-				className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
-			>
-				Browse the store
-			</Link>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="text-3xl font-bold">Product not found</h1>
+				<p className="text-sm text-muted-foreground">
+					It may have sold out for good or been renamed — the store&apos;s full
+					catalog is still open.
+				</p>
+				<Link
+					to="/$slug"
+					params={{ slug }}
+					activeOptions={{ exact: true }}
+					className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
+				>
+					Browse the store
+				</Link>
+			</div>
+			<StorefrontFooter slug={slug} />
 		</main>
 	);
 }
@@ -232,15 +286,12 @@ function ProductNotFound() {
 function ProductSkeleton() {
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
-			{/* Mirrors the shared StorefrontHeader shape so the swap-in is seamless. */}
-			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8">
-				<Skeleton className="h-5 w-24" />
-				<div className="flex items-center gap-4">
-					<Skeleton className="h-16 w-16 shrink-0 rounded-2xl" />
-					<div className="flex flex-col gap-2">
-						<Skeleton className="h-7 w-40" />
-						<Skeleton className="h-4 w-48" />
-					</div>
+			{/* Mirrors the compact StorefrontAppBar so the swap-in is seamless. */}
+			<header className="border-b border-border">
+				<div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 lg:h-16">
+					<Skeleton className="size-6 rounded-full" />
+					<Skeleton className="size-8 rounded-[10px]" />
+					<Skeleton className="h-4 w-32" />
 				</div>
 			</header>
 			<div className="mt-4 px-5 lg:flex lg:gap-10 lg:px-8">
@@ -259,6 +310,9 @@ function ProductRoute() {
 	const { slug, productSlug } = Route.useParams();
 	// Product links are the ones pasted in bios/lives — capture the ?src= tag.
 	useCaptureAttribution(slug);
+	// A `?voucher=` link lands on an EMPTY cart, so the code has to survive the
+	// browsing that follows (`z8r3fdr617`) — same reason as the line above.
+	useCaptureVoucherParam(slug);
 	// Live queries keep the page reactive after the SSR'd loader response —
 	// stock, prices and visibility update in place.
 	const result = useQuery(
@@ -282,6 +336,9 @@ function ProductRoute() {
 	// The store/category pages deliberately DON'T gate on this: their CartBar
 	// degrades additively ("Empty" → filled), and holding the catalog on
 	// localStorage would be a worse trade.
+	if (result?.status === "unavailable") {
+		return <StoreUnavailable storeName={result.storeName} />;
+	}
 	if (!retailer || product === undefined || !cart.hydrated) {
 		return <ProductSkeleton />;
 	}
@@ -298,18 +355,26 @@ function ProductRoute() {
 		// bar publishes its measured height as --storefront-bar-h, so the
 		// reservation is exact rather than a guess with dead space under the
 		// badge. The fallback only applies for the frame before first measure.
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
-			<ProductPageView
-				product={product}
-				retailerId={retailer._id}
-				retailer={retailer}
-				storeSlug={retailer.slug}
-				cart={cart}
-				canonicalUrl={`${SITE_URL}/${retailer.slug}/p/${productSlug}`}
-			/>
-			{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
+		<OrderingPausedProvider
+			paused={retailer.orderingPaused === true}
+			pausedBy={retailer.orderingPausedBy}
+		>
+			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
+				<ProductPageView
+					product={product}
+					retailerId={retailer._id}
+					retailer={retailer}
+					storeSlug={retailer.slug}
+					cart={cart}
+					canonicalUrl={`${SITE_URL}/${retailer.slug}/p/${productSlug}`}
+				/>
+				{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
 			    page — same placement as the store home and category pages. */}
-			<StorefrontFooter />
-		</div>
+				<StorefrontFooter
+					slug={slug}
+					discover={retailer.marketplaceUnlisted !== true}
+				/>
+			</div>
+		</OrderingPausedProvider>
 	);
 }

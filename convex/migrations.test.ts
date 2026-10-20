@@ -414,3 +414,99 @@ describe("backfillOrderCategoryNames", () => {
 		expect(modern?.items[0].categoryNames).toEqual([]);
 	});
 });
+
+describe("migrateLalamoveModeToLive (z8r3fdbvdy)", () => {
+	// The old mode priced with ONE provider while dispatch could use another.
+	// Migrating is safe because it only bites where the leak already did: a
+	// store with a single armed provider prices identically either way.
+	async function seedRetailer(
+		t: ReturnType<typeof setup>,
+		mode: "lalamove" | "live" | "flat",
+		slug: string,
+	) {
+		return t.run(async (ctx) => {
+			const now = Date.now();
+			return ctx.db.insert("retailers", {
+				userId: `user_${slug}`,
+				storeName: slug,
+				slug,
+				channel: "whatsapp",
+				createdAt: now,
+				updatedAt: now,
+				deliveryConfig:
+					mode === "flat"
+						? { mode: "flat", fee: 500 }
+						: { mode, onUnquotable: "block" },
+			});
+		});
+	}
+
+	test("flips a stored lalamove mode to live", async () => {
+		const t = setup();
+		const id = await seedRetailer(t, "lalamove", "old-mode");
+		const result = await t.mutation(
+			internal.migrations.migrateLalamoveModeToLive,
+			{},
+		);
+		expect(result.migrated).toBe(1);
+		const after = await t.run(async (ctx) => ctx.db.get(id));
+		expect(after?.deliveryConfig).toEqual({
+			mode: "live",
+			onUnquotable: "block",
+		});
+	});
+
+	test("leaves every other pricing mode alone", async () => {
+		const t = setup();
+		const flat = await seedRetailer(t, "flat", "flat-store");
+		const result = await t.mutation(
+			internal.migrations.migrateLalamoveModeToLive,
+			{},
+		);
+		expect(result.migrated).toBe(0);
+		const after = await t.run(async (ctx) => ctx.db.get(flat));
+		expect(after?.deliveryConfig?.mode).toBe("flat");
+	});
+
+	test("is idempotent — a second run migrates nothing", async () => {
+		const t = setup();
+		await seedRetailer(t, "lalamove", "twice");
+		await t.mutation(internal.migrations.migrateLalamoveModeToLive, {});
+		const second = await t.mutation(
+			internal.migrations.migrateLalamoveModeToLive,
+			{},
+		);
+		expect(second.migrated).toBe(0);
+	});
+})
+
+describe("resyncSubscriptionCaps — every row carries PLAN_CAPS for its plan (z8r3fday24)", () => {
+	test("re-syncs stale denormalized caps, skips canonical rows, never touches updatedAt", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		// Simulate a row denormalized under the OLD table (Pro 500) carrying a
+		// past_due flip moment on updatedAt — the founder report reads that.
+		const flippedAt = 1_700_000_000_000;
+		const subId = await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (!sub) throw new Error("no sub");
+			await ctx.db.patch(sub._id, { orderCap: 500, updatedAt: flippedAt });
+			return sub._id;
+		});
+
+		const first = await t.mutation(internal.migrations.resyncSubscriptionCaps, {});
+		expect(first).toEqual({ scanned: 1, patched: 1 });
+		const after = await t.run((ctx) => ctx.db.get(subId));
+		expect(after?.orderCap).toBe(200);
+		expect(after?.userCap).toBe(3);
+		expect(after?.broadcastQuota).toBe(100);
+		expect(after?.updatedAt).toBe(flippedAt);
+
+		// Idempotent: a second run finds nothing to patch.
+		const second = await t.mutation(internal.migrations.resyncSubscriptionCaps, {});
+		expect(second).toEqual({ scanned: 1, patched: 0 });
+	});
+});

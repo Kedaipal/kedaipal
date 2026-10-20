@@ -8,6 +8,14 @@ export type BulkAction = {
 	status: "confirmed" | "packed" | "shipped" | "delivered" | "cancelled";
 	label: string;
 	destructive?: boolean;
+	/** No selected order has a step at this milestone, so the action would skip
+	 * every one of them. Offered-but-disabled rather than hidden: "why can't I
+	 * mark these as packed?" needs an answer, and a silently missing row isn't
+	 * one (z8r3fdh3w1). */
+	disabled?: boolean;
+	/** Why it's disabled — rendered under the label, so the constraint is
+	 * surfaced where the seller is clicking rather than enforced in silence. */
+	reason?: string;
 };
 
 /**
@@ -52,6 +60,7 @@ export type BulkAction = {
 export function OrderBulkBar({
 	count,
 	actions,
+	actionsNote,
 	allSelected,
 	onApply,
 	onDelete,
@@ -64,11 +73,18 @@ export function OrderBulkBar({
 	count: number;
 	/** Every bulk transition, in order; the destructive one(s) sort last. */
 	actions: BulkAction[];
+	/** One line under the "Mark N orders as" heading, for when the selection
+	 * spans kinds whose words differ and the list falls back to the shared
+	 * milestone names. */
+	actionsNote?: string;
 	/** Whether every visible order is already selected (drives Select all/Clear). */
 	allSelected: boolean;
 	// May return a promise — the destructive confirm awaits it so the confirm
 	// button shows its in-flight spinner and stays open if the apply rejects.
-	onApply: (status: BulkAction["status"]) => void | Promise<void>;
+	onApply: (
+		status: BulkAction["status"],
+		cancellationNote?: string,
+	) => void | Promise<void>;
 	// Permanent hard delete of the selection. Omit to hide the delete item.
 	onDelete?: () => void | Promise<void>;
 	// Open the despatch-label print dialog for the selection. Omit to hide.
@@ -88,6 +104,7 @@ export function OrderBulkBar({
 	const hasSelection = count > 0;
 
 	function handleAction(a: BulkAction) {
+		if (a.disabled) return;
 		setOpen(false);
 		if (a.destructive) setPendingDestructive(a);
 		// Forward transitions apply immediately and fire-and-forget — the apply
@@ -165,6 +182,11 @@ export function OrderBulkBar({
 						<p className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
 							Mark {count} {orderWord} as
 						</p>
+						{actionsNote ? (
+							<p className="px-3 pb-1.5 text-[11px] leading-snug text-muted-foreground">
+								{actionsNote}
+							</p>
+						) : null}
 						<div className="flex flex-col">
 							{actions.map((a, i) => {
 								const prevDestructive =
@@ -174,9 +196,14 @@ export function OrderBulkBar({
 										key={a.status}
 										type="button"
 										onClick={() => handleAction(a)}
+										disabled={a.disabled}
 										className={cn(
-											"flex h-11 items-center gap-2 rounded-md px-3 text-left text-sm transition-colors hover:bg-muted",
+											"flex min-h-11 items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm transition-colors",
+											a.disabled
+												? "cursor-not-allowed text-muted-foreground"
+												: "hover:bg-muted",
 											a.destructive &&
+												!a.disabled &&
 												"text-destructive hover:bg-destructive/10",
 											prevDestructive && "mt-1 border-t border-border pt-2",
 										)}
@@ -186,7 +213,14 @@ export function OrderBulkBar({
 										) : (
 											<Check className="size-4 shrink-0" aria-hidden="true" />
 										)}
-										{a.label}
+										<span className="min-w-0 flex-1">
+											{a.label}
+											{a.reason ? (
+												<span className="block text-[11px] leading-snug text-muted-foreground">
+													{a.reason}
+												</span>
+											) : null}
+										</span>
 									</button>
 								);
 							})}
@@ -214,15 +248,29 @@ export function OrderBulkBar({
 					if (!o) setPendingDestructive(null);
 				}}
 				title={`Cancel ${count} ${orderWord}?`}
-				description={`${count === 1 ? "The customer is" : "Customers are"} NOT notified — the cancellation shows on their order page, so message them yourself if it can't wait. Reserved stock is returned and your totals are adjusted. This can't be undone.`}
+				description={`${count === 1 ? "The customer is" : "Customers are"} NOT sent a WhatsApp — your reason below is what they see on their order page. Reserved stock is returned and your totals are adjusted. This can't be undone.`}
 				confirmLabel={`Cancel ${count} ${orderWord}`}
 				cancelLabel={`Keep ${orderWord}`}
 				destructive
-				onConfirm={() => {
+				reason={{
+					label: "Why are you cancelling?",
+					placeholder: "e.g. Closed for maintenance this weekend",
+					maxLength: 200,
+					// Deliberately not `required` here even though a booking demands
+					// one: the selection may be all ordinary orders. The SERVER
+					// applies the booking rule per order, so a batch containing a
+					// booking is refused with the reason named — one prompt, and the
+					// rule still can't be bypassed.
+					helper:
+						count === 1
+							? "The customer sees this on their order page. Required if it's a booking."
+							: `All ${count} customers see this on their order page. Required if any is a booking.`,
+				}}
+				onConfirm={(cancellationNote) => {
 					const action = pendingDestructive;
 					// Return the promise so ConfirmDialog can show its spinner while the
 					// bulk op runs and keep itself open if it rejects.
-					if (action) return onApply(action.status);
+					if (action) return onApply(action.status, cancellationNote);
 				}}
 			/>
 

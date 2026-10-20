@@ -48,11 +48,11 @@ describe("DespatchLabelCard", () => {
 	it("offers both paper sizes, with A4 4-up preselected", () => {
 		renderCard();
 		expect(
-			screen.getByRole("button", { name: /A4 sheet, 4 labels/i }),
-		).toHaveProperty("ariaPressed", "true");
+			screen.getByRole("radio", { name: /A4 sheet, 4 labels/i }),
+		).toHaveProperty("checked", true);
 		expect(
-			screen.getByRole("button", { name: /A6 label roll/i }),
-		).toHaveProperty("ariaPressed", "false");
+			screen.getByRole("radio", { name: /A6 label roll/i }),
+		).toHaveProperty("checked", false);
 	});
 
 	it("Save is disabled until something actually changes", () => {
@@ -61,13 +61,13 @@ describe("DespatchLabelCard", () => {
 			name: "Save",
 		}) as HTMLButtonElement;
 		expect(save.disabled).toBe(true);
-		fireEvent.click(screen.getByRole("button", { name: /A6 label roll/i }));
+		fireEvent.click(screen.getByRole("radio", { name: /A6 label roll/i }));
 		expect(save.disabled).toBe(false);
 	});
 
 	it("saves the whole resolved template, not just the changed field", async () => {
 		const onSave = renderCard();
-		fireEvent.click(screen.getByRole("button", { name: /A6 label roll/i }));
+		fireEvent.click(screen.getByRole("radio", { name: /A6 label roll/i }));
 		fireEvent.click(screen.getByRole("button", { name: "Save" }));
 		await waitFor(() =>
 			expect(onSave).toHaveBeenCalledWith({
@@ -123,13 +123,11 @@ describe("DespatchLabelCard", () => {
 
 	it("discards edits back to the saved template", () => {
 		renderCard({ paperSize: "a6" });
-		fireEvent.click(
-			screen.getByRole("button", { name: /A4 sheet, 4 labels/i }),
-		);
+		fireEvent.click(screen.getByRole("radio", { name: /A4 sheet, 4 labels/i }));
 		fireEvent.click(screen.getByRole("button", { name: /Discard changes/i }));
 		expect(
-			screen.getByRole("button", { name: /A6 label roll/i }),
-		).toHaveProperty("ariaPressed", "true");
+			screen.getByRole("radio", { name: /A6 label roll/i }),
+		).toHaveProperty("checked", true);
 		expect(
 			(screen.getByRole("button", { name: "Save" }) as HTMLButtonElement)
 				.disabled,

@@ -76,9 +76,19 @@ describe("CategoryRail", () => {
 		expect(
 			screen.getByRole("link", { name: /Cakes/ }).getAttribute("href"),
 		).toBe("/herb/c/cakes");
-		// The count badge is what tells a buyer a category is worth opening.
-		expect(screen.getByText("6")).toBeTruthy();
-		expect(screen.getByText("8")).toBeTruthy();
+		// The count line under the name is what tells a buyer a category is
+		// worth opening (z8r3fdegb5 moved it off the photo's corner pill).
+		expect(screen.getByText("6 items")).toBeTruthy();
+		expect(screen.getByText("8 items")).toBeTruthy();
+	});
+
+	it("labels the section with a real heading, singularising a 1-item count", () => {
+		categories.push(cat("cakes", "Cakes", 1));
+		render(<CategoryRail retailerId={RID} storeSlug="herb" />);
+		expect(
+			screen.getByRole("heading", { level: 2, name: "Browse by category" }),
+		).toBeTruthy();
+		expect(screen.getByText("1 item")).toBeTruthy();
 	});
 
 	// The rail is store-home-only, so no tile is ever "the page you're on" —

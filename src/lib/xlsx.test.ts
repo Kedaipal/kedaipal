@@ -44,6 +44,28 @@ describe("parseProductsXlsx", () => {
 		expect(result.products[0].variants[0].price).toBe(49950);
 	});
 
+	test("a numeric prep_minutes cell reads as minutes (z8r3fdff97)", async () => {
+		const buf = await buildWorkbook(
+			["name", "price", "stock", "prep_minutes"],
+			[["Puff", 4.5, 40, 120]],
+		);
+		const result = await parseProductsXlsx(buf);
+		expect(result.errorRows).toEqual([]);
+		expect(result.products[0].prepMinutes).toBe(120);
+	});
+
+	test("an empty prep_minutes cell is blank — keep — not a row error", async () => {
+		// ExcelJS hands an empty cell back as undefined, not "".
+		const buf = await buildWorkbook(
+			["name", "price", "stock", "prep_minutes", "pickup_note"],
+			[["Puff", 4.5, 40, undefined, undefined]],
+		);
+		const result = await parseProductsXlsx(buf);
+		expect(result.errorRows).toEqual([]);
+		expect(result.products[0].prepMinutes).toBeUndefined();
+		expect(result.products[0].pickupNote).toBeUndefined();
+	});
+
 	test("flags missing required columns", async () => {
 		const buf = await buildWorkbook(["name", "price"], [["Tent", "499"]]);
 		const result = await parseProductsXlsx(buf);

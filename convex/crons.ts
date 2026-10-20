@@ -43,6 +43,17 @@ crons.interval(
 	{},
 );
 
+// Booking requests the seller never answered auto-release after 24 h
+// (86eyj70z1 decision 3 — the buyer was promised "confirms within 24 hours"
+// up front, so the hold must actually die on schedule, not at the next
+// midnight). 15-min cadence keeps the worst-case overshoot ~1% of the window.
+crons.interval(
+	"expire stale booking requests",
+	{ minutes: 15 },
+	internal.bookings.expireStaleRequests,
+	{},
+);
+
 // PDPA retention: DELETE dead counter sessions (expired/cancelled) ~30 days
 // after they died — they hold buyer phone numbers, and the store QR poster
 // (86ey5m35w) increases junk-scan volume, so they must not live forever.
@@ -114,11 +125,51 @@ crons.daily(
 	{},
 );
 
+// wabaTemplateEvents older than 90 days — the newest row PER TEMPLATE is
+// always kept (it is the admin console's live view of that template's
+// status + billing category; Meta only posts on change).
+crons.daily(
+	"purge expired waba template events",
+	{ hourUTC: 4, minuteUTC: 20 },
+	internal.wabaProtection.purgeExpiredWabaTemplateEvents,
+	{},
+);
+
 // adminAuditLog rows older than 24 months (the stated compliance window).
 crons.daily(
 	"purge expired admin audit log",
 	{ hourUTC: 4, minuteUTC: 25 },
 	internal.admin.purgeExpiredAdminAudit,
+	{},
+);
+
+// Kedaipal Credits (86eye2ccu, docs/credits.md): roll every credit account a
+// month boundary has passed — the plan grant lands and a positive leftover is
+// forfeited. 16:05 UTC = 00:05 MYT/SGT, so the new month's credits arrive at the
+// seller's own midnight on the 1st, not UTC's. Daily, so a missed run heals the
+// next day; every debit also rolls its own account lazily.
+crons.daily(
+	"roll credit periods",
+	{ hourUTC: 16, minuteUTC: 5 },
+	internal.credits.internalRollPeriods,
+	{},
+);
+
+// Credits: retire whatever is left of each purchased lot 12 months after it
+// landed (00:10 MYT), one `expire` ledger row per lot.
+crons.daily(
+	"expire purchased credits",
+	{ hourUTC: 16, minuteUTC: 10 },
+	internal.credits.internalExpireLots,
+	{},
+);
+
+// Credits T3: email each store 14 days before any of its bought credits expire
+// (00:15 MYT), once per lot, one email per store.
+crons.daily(
+	"credit expiry notices",
+	{ hourUTC: 16, minuteUTC: 15 },
+	internal.creditNotices.internalExpiryNotices,
 	{},
 );
 

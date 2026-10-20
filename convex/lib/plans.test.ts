@@ -1,18 +1,45 @@
 import { describe, expect, test } from "vitest";
 import {
 	ANNUAL_MONTHS_CHARGED,
+	ANNUAL_MONTHS_FREE,
+	ANNUAL_MONTHS_RECEIVED,
+	annualQuote,
 	BILLING_CURRENCIES,
 	capsForPlan,
+	ENTERPRISE_FROM_ORDERS,
+	enterprisePrice,
 	featuresForPlan,
 	FOUNDING_MONTHLY_PRICE,
 	FOUNDING_MONTHLY_PRICES,
+	FOUNDING_PLAN,
+	FOUNDING_BENEFIT_WARNING_MS,
+	FOUNDING_PRICE_LAPSE_MS,
+	foundingBenefitsAtRisk,
+	foundingBenefitsEndAt,
+	foundingBenefitsRevocable,
+	foundingBenefitsWarningDue,
+	foundingPlanLocked,
+	foundingPriceEligible,
+	foundingPricingApplies,
+	HOLD_MONTHLY_PRICES,
+	isListedPlan,
 	isPlanSelectable,
+	isPlanUpgrade,
+	planChangeCarryover,
+	planChangeCarryoverDays,
 	isUnlimited,
+	LISTED_PLANS,
+	PLAN_CAPS,
+	PLAN_CREDIT_GRANT,
 	PLAN_MONTHLY_PRICE,
 	PLAN_MONTHLY_PRICES,
-	PLANS,
 	planPrice,
 	planQualifiesForFounding,
+	PLANS,
+	renewalCurrency,
+	renewalQuote,
+	starterPricePerDay,
+	subscriptionPrice,
 	UNLIMITED,
 } from "./plans";
 
@@ -29,11 +56,13 @@ describe("plans — feature entitlements", () => {
 			radiusDelivery: false,
 			delivery: false,
 			onlinePayments: false,
-			waOrderAlerts: false,
+			events: false,
+			promo: false,
+			vouchers: false,
 		});
 	});
 
-	test("Pro and Scale have all", () => {
+	test("Pro and Enterprise have all — Enterprise's extras are seats and terms, not flags", () => {
 		expect(featuresForPlan("pro")).toEqual({
 			crm: true,
 			orderInbox: true,
@@ -43,9 +72,11 @@ describe("plans — feature entitlements", () => {
 			radiusDelivery: true,
 			delivery: true,
 			onlinePayments: true,
-			waOrderAlerts: true,
+			events: true,
+			promo: true,
+			vouchers: true,
 		});
-		expect(featuresForPlan("scale")).toEqual({
+		expect(featuresForPlan("enterprise")).toEqual({
 			crm: true,
 			orderInbox: true,
 			chargeablePickup: true,
@@ -54,7 +85,9 @@ describe("plans — feature entitlements", () => {
 			radiusDelivery: true,
 			delivery: true,
 			onlinePayments: true,
-			waOrderAlerts: true,
+			events: true,
+			promo: true,
+			vouchers: true,
 		});
 	});
 
@@ -66,10 +99,11 @@ describe("plans — feature entitlements", () => {
 });
 
 describe("plans — pricing", () => {
-	test("monthly price is the table price", () => {
+	test("monthly price is the table price — Starter and Pro; Enterprise has none", () => {
 		expect(planPrice("starter", "monthly")).toBe(7900);
 		expect(planPrice("pro", "monthly")).toBe(14900);
-		expect(planPrice("scale", "monthly")).toBe(29900);
+		expect(Object.keys(PLAN_MONTHLY_PRICES.MYR)).toEqual(["starter", "pro"]);
+		expect(Object.keys(PLAN_MONTHLY_PRICES.SGD)).toEqual(["starter", "pro"]);
 	});
 
 	test("annual = monthly × 10 (10 months paid, 12 received)", () => {
@@ -77,17 +111,56 @@ describe("plans — pricing", () => {
 		expect(planPrice("pro", "annual")).toBe(14900 * 10);
 	});
 
-	test("founding applies the discounted monthly to pro/scale only", () => {
+	test("2 months free is derived, not asserted", () => {
+		expect(ANNUAL_MONTHS_RECEIVED).toBe(12);
+		expect(ANNUAL_MONTHS_FREE).toBe(2);
+		expect(ANNUAL_MONTHS_CHARGED + ANNUAL_MONTHS_FREE).toBe(
+			ANNUAL_MONTHS_RECEIVED,
+		);
+	});
+
+	test("founding applies the discounted monthly to Pro only", () => {
 		expect(planPrice("pro", "monthly", true)).toBe(FOUNDING_MONTHLY_PRICE.pro);
 		expect(planPrice("pro", "monthly", true)).toBe(10400);
 		// Starter has no founding price → falls back to its standard price.
 		expect(planPrice("starter", "monthly", true)).toBe(PLAN_MONTHLY_PRICE.starter);
 	});
 
-	test("SGD table prices per the Aug 2026 SG deck (S$29 / S$59 / S$119)", () => {
+	test("Enterprise bills its contract: the fee, × 10 for a prepaid year — never founding (T6)", () => {
+		const hsl = { baseFeeMinor: 88800, currency: "MYR" as const };
+		expect(enterprisePrice(hsl, "monthly")).toBe(88800);
+		// RM888 a month, RM8,880 a year — the same 2 months free.
+		expect(enterprisePrice(hsl, "annual")).toBe(888000);
+		expect(
+			subscriptionPrice("enterprise", "annual", {
+				founding: true,
+				currency: "MYR",
+				enterprise: hsl,
+			}),
+		).toBe(888000);
+		// A listed tier through the same door is the table price.
+		expect(
+			subscriptionPrice("pro", "monthly", {
+				founding: false,
+				currency: "SGD",
+				enterprise: undefined,
+			}),
+		).toBe(5900);
+	});
+
+	test("an Enterprise subscription without a contract is never priced — a money path doesn't guess", () => {
+		expect(() =>
+			subscriptionPrice("enterprise", "monthly", {
+				founding: false,
+				currency: "MYR",
+				enterprise: undefined,
+			}),
+		).toThrow(/priced by its contract/);
+	});
+
+	test("SGD table prices — S$29 / S$59 (Aug 2026 SG deck)", () => {
 		expect(planPrice("starter", "monthly", false, "SGD")).toBe(2900);
 		expect(planPrice("pro", "monthly", false, "SGD")).toBe(5900);
-		expect(planPrice("scale", "monthly", false, "SGD")).toBe(11900);
 		// Annual keeps the same 10-months-charged rule in every currency.
 		expect(planPrice("pro", "annual", false, "SGD")).toBe(5900 * 10);
 	});
@@ -101,43 +174,84 @@ describe("plans — pricing", () => {
 
 	test("SGD founding prices — same ~30%-rounded-down rule as MYR", () => {
 		expect(planPrice("pro", "monthly", true, "SGD")).toBe(4100); // S$41
-		expect(FOUNDING_MONTHLY_PRICES.SGD.scale).toBe(8300); // S$83
+		expect(FOUNDING_MONTHLY_PRICES.SGD).toEqual({ pro: 4100 });
+		expect(FOUNDING_MONTHLY_PRICES.MYR).toEqual({ pro: 10400 });
 		// Starter has no founding price → falls back to its standard SGD price.
 		expect(planPrice("starter", "monthly", true, "SGD")).toBe(2900);
 	});
 
-	test("every billing currency prices every plan (exhaustive tables)", () => {
+	test("Off-Season Hold is RM19 / S$9 — priced in every billing currency, below Starter", () => {
+		expect(HOLD_MONTHLY_PRICES.MYR).toBe(1900);
+		expect(HOLD_MONTHLY_PRICES.SGD).toBe(900);
 		for (const currency of BILLING_CURRENCIES) {
-			for (const plan of PLANS) {
+			expect(HOLD_MONTHLY_PRICES[currency]).toBeGreaterThan(0);
+			expect(HOLD_MONTHLY_PRICES[currency]).toBeLessThan(
+				PLAN_MONTHLY_PRICES[currency].starter,
+			);
+		}
+		// A hold is a status, not a tier — the Plan union must not have grown.
+		expect(PLANS).toEqual(["starter", "pro", "enterprise"]);
+	});
+
+	test("every billing currency prices every LISTED plan (exhaustive tables)", () => {
+		for (const currency of BILLING_CURRENCIES) {
+			for (const plan of LISTED_PLANS) {
 				expect(PLAN_MONTHLY_PRICES[currency][plan]).toBeGreaterThan(0);
 			}
 			// Founding is always cheaper than standard, in every currency.
-			for (const plan of ["pro", "scale"] as const) {
-				expect(FOUNDING_MONTHLY_PRICES[currency][plan]).toBeLessThan(
-					PLAN_MONTHLY_PRICES[currency][plan],
-				);
-			}
+			expect(FOUNDING_MONTHLY_PRICES[currency].pro).toBeLessThan(
+				PLAN_MONTHLY_PRICES[currency].pro,
+			);
 		}
 	});
 });
 
-describe("plans — public tier set", () => {
-	// Enterprise is drafted in strategy but must not appear on any pricing surface
-	// yet (ClickUp 86ey4gaju). The exposed plan set is exactly the three public
-	// tiers — a guard against an Enterprise enum sneaking back into rendering.
-	test("exactly Starter, Pro, Scale — no Enterprise", () => {
-		expect(PLANS).toEqual(["starter", "pro", "scale"]);
-		expect(PLANS).not.toContain("enterprise");
+describe("plans — \"less than X a day\"", () => {
+	/**
+	 * The landing anchor renders this as "less than {perDay} a day", so the
+	 * number has to make that sentence TRUE, not merely close. `Math.ceil`
+	 * returns the daily rate itself at a price that divides evenly (RM90 → 3,
+	 * and "less than RM3 a day" is then false); `floor + 1` cannot.
+	 */
+	test("is strictly greater than the actual daily rate", () => {
+		for (const currency of BILLING_CURRENCIES) {
+			const daily = PLAN_MONTHLY_PRICES[currency].starter / 100 / 30;
+			expect(starterPricePerDay(currency)).toBeGreaterThan(daily);
+		}
+	});
+
+	test("holds the copy today's prices produce", () => {
+		// RM79/mo → "less than RM3 a day"; S$29/mo → "less than S$1 a day".
+		expect(starterPricePerDay("MYR")).toBe(3);
+		expect(starterPricePerDay("SGD")).toBe(1);
+	});
+});
+
+describe("plans — the tier set (Credits T6, z8r3fdkp8h)", () => {
+	// Scale was retired before it ever went public; the third tier is
+	// Enterprise — contact us, no list price. Guards against Scale sneaking
+	// back and against Enterprise growing a price table.
+	test("exactly Starter, Pro, Enterprise — and only Starter and Pro are listed", () => {
+		expect(PLANS).toEqual(["starter", "pro", "enterprise"]);
+		expect(PLANS).not.toContain("scale");
+		expect(LISTED_PLANS).toEqual(["starter", "pro"]);
+		expect(isListedPlan("enterprise")).toBe(false);
+		expect(isListedPlan("pro")).toBe(true);
+	});
+
+	test("Enterprise begins at 1,500 orders a month — a volume, never a price", () => {
+		expect(ENTERPRISE_FROM_ORDERS).toBe(1500);
 	});
 });
 
 describe("plans — gating helpers", () => {
-	test("Scale is not selectable at v1; only Pro qualifies for founding", () => {
+	test("Starter and Pro are for sale; Enterprise never self-serve — only Pro qualifies for founding", () => {
 		expect(isPlanSelectable("starter")).toBe(true);
 		expect(isPlanSelectable("pro")).toBe(true);
-		expect(isPlanSelectable("scale")).toBe(false);
+		// Reached only by a contract an admin attaches (T6).
+		expect(isPlanSelectable("enterprise")).toBe(false);
 		expect(planQualifiesForFounding("pro")).toBe(true);
-		expect(planQualifiesForFounding("scale")).toBe(false);
+		expect(planQualifiesForFounding("enterprise")).toBe(false);
 		expect(planQualifiesForFounding("starter")).toBe(false);
 	});
 
@@ -147,25 +261,851 @@ describe("plans — gating helpers", () => {
 			userCap: 1,
 			broadcastQuota: 0,
 		});
+		// Pro 200 — the Credits grant (86eye2ccu). userCap is TOTAL people
+		// incl. the owner: Pro = "You + 2 teammates" (team seats, 86exr91r4).
+		// Changing these needs migrations.resyncSubscriptionCaps on prod (caps
+		// are denormalized).
 		expect(capsForPlan("pro")).toEqual({
-			orderCap: 500,
-			userCap: 2,
+			orderCap: 200,
+			userCap: 3,
 			broadcastQuota: 100,
 		});
-		// Scale's "unlimited" was dropped for finite soft caps (Arif 2026-06-28):
-		// orders 2,000/mo (~4× Pro), broadcasts 500/mo (~5× Pro). All finite now.
-		expect(capsForPlan("scale")).toEqual({
-			orderCap: 2000,
-			userCap: 5,
-			broadcastQuota: 500,
+		// Enterprise: Pro plus unlimited seats. Its volume is the contract's
+		// included credits, metered by the ledger — the cap is never the gate.
+		expect(capsForPlan("enterprise")).toEqual({
+			orderCap: UNLIMITED,
+			userCap: UNLIMITED,
+			broadcastQuota: 100,
 		});
 	});
 
-	// The UNLIMITED/isUnlimited sentinel is retained for a future Enterprise tier
-	// even though no v1 plan uses it.
+	test("the order allowance IS the credit grant — one number, one source (100 / 200)", () => {
+		expect(PLAN_CREDIT_GRANT).toEqual({ starter: 100, pro: 200 });
+		for (const plan of LISTED_PLANS) {
+			expect(PLAN_CAPS[plan].orderCap).toBe(PLAN_CREDIT_GRANT[plan]);
+		}
+	});
+
 	test("isUnlimited recognises the unlimited sentinel", () => {
 		expect(isUnlimited(UNLIMITED)).toBe(true);
 		expect(isUnlimited(2000)).toBe(false);
 		expect(isUnlimited(500)).toBe(false);
+	});
+});
+
+describe("foundingPricingApplies (3-month lapse window, 86eyb6z4r)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+	const base = {
+		plan: "pro" as const,
+		isFoundingMember: true,
+		foundingIntent: true, // never cleared after the claim — must not bypass the window
+		benefitsRevokedAt: undefined,
+		benefitsRestoredAt: undefined,
+		now: NOW,
+	};
+
+	test("claimed member inside the window keeps the founding price", () => {
+		expect(
+			foundingPricingApplies({ ...base, paidThrough: NOW - 89 * DAY }),
+		).toBe(true);
+		// The renewal-cron case: paid through the future (active).
+		expect(
+			foundingPricingApplies({ ...base, paidThrough: NOW + 30 * DAY }),
+		).toBe(true);
+	});
+
+	test("claimed member lapsed past 3 months bills at list — intent flag can't rescue it", () => {
+		expect(
+			foundingPricingApplies({ ...base, paidThrough: NOW - 91 * DAY }),
+		).toBe(false);
+		expect(FOUNDING_PRICE_LAPSE_MS).toBe(90 * DAY);
+	});
+
+	test("unclaimed onboard intent always qualifies (no lapse to measure)", () => {
+		expect(
+			foundingPricingApplies({
+				...base,
+				isFoundingMember: false,
+				paidThrough: undefined,
+			}),
+		).toBe(true);
+	});
+
+	test("a claimed member with no paid period fails toward the promise", () => {
+		expect(foundingPricingApplies({ ...base, paidThrough: undefined })).toBe(
+			true,
+		);
+	});
+
+	test("only founding-priced tiers qualify; plain stores never do", () => {
+		expect(
+			foundingPricingApplies({ ...base, plan: "starter", paidThrough: undefined }),
+		).toBe(false);
+		expect(
+			foundingPricingApplies({
+				plan: "pro",
+				isFoundingMember: false,
+				foundingIntent: false,
+				benefitsRevokedAt: undefined,
+				benefitsRestoredAt: undefined,
+				paidThrough: NOW - DAY,
+				now: NOW,
+			}),
+		).toBe(false);
+	});
+});
+
+describe("foundingPriceEligible — the STORE is on founding pricing (z8r3fdfty4)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+	const claimed = {
+		isFoundingMember: true,
+		foundingIntent: false, // marked founding by admin — the v1 path
+		benefitsRevokedAt: undefined,
+		benefitsRestoredAt: undefined,
+		now: NOW,
+	};
+
+	test("tier-agnostic: a founding member is eligible whatever plan they sit on", () => {
+		// The trap it closes: asking foundingPricingApplies with the store's
+		// CURRENT plan says "no" for a member on Starter, pricing their move back
+		// up to Founding Pro at list.
+		expect(foundingPriceEligible({ ...claimed, paidThrough: NOW - DAY })).toBe(
+			true,
+		);
+		expect(
+			foundingPricingApplies({
+				...claimed,
+				plan: "starter",
+				paidThrough: NOW - DAY,
+			}),
+		).toBe(false);
+	});
+
+	test("an admin-marked member with foundingIntent unset is eligible", () => {
+		expect(foundingPriceEligible({ ...claimed, paidThrough: NOW + DAY })).toBe(
+			true,
+		);
+	});
+
+	test("the lapse window revokes it; rank flags alone never rescue it", () => {
+		expect(
+			foundingPriceEligible({ ...claimed, paidThrough: NOW - 90 * DAY }),
+		).toBe(true);
+		expect(
+			foundingPriceEligible({
+				...claimed,
+				foundingIntent: true,
+				paidThrough: NOW - 91 * DAY,
+			}),
+		).toBe(false);
+	});
+
+	test("foundingPricingApplies is eligibility narrowed to founding-priced tiers", () => {
+		for (const plan of PLANS) {
+			for (const paidThrough of [undefined, NOW - DAY, NOW - 91 * DAY]) {
+				const args = { ...claimed, paidThrough };
+				expect(foundingPricingApplies({ ...args, plan })).toBe(
+					plan === "pro" && foundingPriceEligible(args),
+				);
+			}
+		}
+	});
+});
+
+describe("foundingPlanLocked — Founding Members stay on Founding Pro (Zaki, 17 Sep 2026)", () => {
+	test("a store on founding pricing may only be billed for Founding Pro", () => {
+		expect(FOUNDING_PLAN).toBe("pro");
+		expect(foundingPlanLocked("pro", true)).toBe(false);
+		expect(foundingPlanLocked("starter", true)).toBe(true);
+		expect(foundingPlanLocked("enterprise", true)).toBe(true);
+	});
+
+	test("once the founding price is revoked, every plan is open again", () => {
+		for (const plan of PLANS) expect(foundingPlanLocked(plan, false)).toBe(false);
+	});
+});
+
+describe("renewalCurrency", () => {
+	test("follows the last PAID invoice, else the country", () => {
+		expect(renewalCurrency({ lastPaidCurrency: "SGD", country: "MY" })).toBe(
+			"SGD",
+		);
+		expect(renewalCurrency({ lastPaidCurrency: "MYR", country: "SG" })).toBe(
+			"MYR",
+		);
+		expect(renewalCurrency({ lastPaidCurrency: undefined, country: "SG" })).toBe(
+			"SGD",
+		);
+		// An unreadable currency on an old row never beats the country.
+		expect(renewalCurrency({ lastPaidCurrency: "USD", country: "SG" })).toBe(
+			"SGD",
+		);
+		expect(
+			renewalCurrency({ lastPaidCurrency: undefined, country: undefined }),
+		).toBe("MYR");
+	});
+});
+
+describe("renewalQuote — the one author of the next renewal bill (z8r3fdfty4)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+	const activePro = {
+		status: "active" as const,
+		plan: "pro" as const,
+		billingCycle: "monthly" as const,
+		pendingPlanChange: undefined,
+		isFoundingMember: false,
+		foundingIntent: false,
+		benefitsRevokedAt: undefined,
+		benefitsRestoredAt: undefined,
+		paidThrough: NOW - 1000,
+		lastPaidCurrency: undefined,
+		country: "MY" as const,
+		enterprise: undefined,
+		now: NOW,
+	};
+	const founding = { ...activePro, isFoundingMember: true };
+
+	test("an Enterprise renewal bills the contract, in its own currency — never a list price or founding (T6)", () => {
+		const ent = {
+			...activePro,
+			isFoundingMember: true,
+			plan: "enterprise" as const,
+			enterprise: { baseFeeMinor: 88800, currency: "MYR" as const },
+		};
+		expect(renewalQuote(ent)).toEqual({
+			kind: "plan",
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+			currency: "MYR",
+			amount: 88800,
+		});
+		expect(renewalQuote({ ...ent, billingCycle: "annual" }).amount).toBe(
+			888000,
+		);
+		// An SG deal stays SGD whatever the last paid invoice said — no FX.
+		expect(
+			renewalQuote({
+				...ent,
+				lastPaidCurrency: "MYR",
+				enterprise: { baseFeeMinor: 99900, currency: "SGD" as const },
+			}),
+		).toMatchObject({ currency: "SGD", amount: 99900 });
+		// The way off a contract: a scheduled move to Pro bills Pro at list.
+		expect(
+			renewalQuote({ ...ent, isFoundingMember: false, pendingPlanChange: "pro" }),
+		).toMatchObject({ plan: "pro", amount: 14900, founding: false });
+		// No contract, no guessed amount.
+		expect(() => renewalQuote({ ...ent, enterprise: undefined })).toThrow(
+			/priced by its contract/,
+		);
+	});
+
+	test("the four-cell matrix: founding / list × MYR / SGD (Pro monthly)", () => {
+		expect(renewalQuote(founding)).toEqual({
+			kind: "plan",
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: true,
+			currency: "MYR",
+			amount: 10400,
+		});
+		expect(renewalQuote({ ...founding, country: "SG" })).toMatchObject({
+			currency: "SGD",
+			amount: 4100,
+		});
+		expect(renewalQuote(activePro)).toMatchObject({
+			founding: false,
+			currency: "MYR",
+			amount: 14900,
+		});
+		expect(renewalQuote({ ...activePro, country: "SG" })).toMatchObject({
+			currency: "SGD",
+			amount: 5900,
+		});
+	});
+
+	test("annual bills 10 months at the store's own rate", () => {
+		expect(
+			renewalQuote({ ...founding, billingCycle: "annual" }).amount,
+		).toBe(104000);
+		expect(
+			renewalQuote({ ...founding, billingCycle: "annual", country: "SG" })
+				.amount,
+		).toBe(41000);
+	});
+
+	test("the currency follows the last paid invoice, not the country", () => {
+		expect(
+			renewalQuote({ ...founding, country: "MY", lastPaidCurrency: "SGD" }),
+		).toMatchObject({ currency: "SGD", amount: 4100 });
+	});
+
+	test("a lapsed founding member renews at list", () => {
+		expect(
+			renewalQuote({ ...founding, paidThrough: NOW - 91 * DAY }),
+		).toMatchObject({ founding: false, amount: 14900 });
+	});
+
+	test("a scheduled downgrade lands with the renewal — plan AND price", () => {
+		expect(
+			renewalQuote({ ...activePro, pendingPlanChange: "starter" }),
+		).toMatchObject({ plan: "starter", founding: false, amount: 7900 });
+	});
+
+	test("a Founding Member's scheduled downgrade is cancelled — Founding Pro renews (Zaki, 17 Sep 2026)", () => {
+		expect(
+			renewalQuote({ ...founding, pendingPlanChange: "starter" }),
+		).toMatchObject({ plan: "pro", founding: true, amount: 10400 });
+		// Once the founding price is revoked they are an ordinary seller, and a
+		// change they scheduled is theirs to keep.
+		expect(
+			renewalQuote({
+				...founding,
+				pendingPlanChange: "starter",
+				paidThrough: NOW - 91 * DAY,
+			}),
+		).toMatchObject({ plan: "starter", founding: false, amount: 7900 });
+	});
+
+	test("a paused store renews the hold: flat, monthly, never founding, tier kept", () => {
+		const held = {
+			...founding,
+			status: "on_hold" as const,
+			billingCycle: "annual" as const,
+			pendingPlanChange: "starter" as const,
+		};
+		expect(renewalQuote(held)).toEqual({
+			kind: "hold",
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+			currency: "MYR",
+			amount: HOLD_MONTHLY_PRICES.MYR,
+		});
+		expect(renewalQuote({ ...held, country: "SG" }).amount).toBe(
+			HOLD_MONTHLY_PRICES.SGD,
+		);
+	});
+});
+
+describe("plans — annualQuote", () => {
+	/**
+	 * The regression this type exists for: `/pricing` used to render its yearly
+	 * total as `floor(monthly × 10 / 12) × 10`, which quotes a year at 8.33
+	 * months of list price. Every tier under-quoted by two months of the
+	 * ROUNDING error on top of the real discount.
+	 */
+	test("annualTotal IS planPrice(annual) — the two can never diverge", () => {
+		for (const currency of BILLING_CURRENCIES) {
+			for (const plan of LISTED_PLANS) {
+				for (const founding of [false, true]) {
+					expect(annualQuote(plan, founding, currency).annualTotal).toBe(
+						planPrice(plan, "annual", founding, currency),
+					);
+				}
+			}
+		}
+	});
+
+	test("the old page arithmetic is NOT what we charge", () => {
+		const q = annualQuote("starter");
+		const oldPageTotal = Math.floor((7900 / 100) * 10 / 12) * 10 * 100;
+		expect(oldPageTotal).toBe(65_000); // RM650 — what the card used to say
+		expect(q.annualTotal).toBe(79_000); // RM790 — what the invoice says
+		expect(q.annualTotal).toBeGreaterThan(oldPageTotal);
+	});
+
+	test("saving is exactly the free months, in every currency and plan", () => {
+		for (const currency of BILLING_CURRENCIES) {
+			for (const plan of LISTED_PLANS) {
+				const q = annualQuote(plan, false, currency);
+				expect(q.saving).toBe(q.monthly * ANNUAL_MONTHS_FREE);
+				expect(q.monthsFree).toBe(ANNUAL_MONTHS_FREE);
+				// 12 monthly invoices vs one annual one.
+				expect(q.monthly * 12 - q.annualTotal).toBe(q.saving);
+			}
+		}
+	});
+
+	test("MYR headline numbers", () => {
+		expect(annualQuote("starter")).toEqual({
+			monthly: 7900,
+			annualTotal: 79_000,
+			effectiveMonthly: 6584, // RM65.84 — rounded UP; 6583 × 12 < 79,000
+			saving: 15_800, // RM158 = 2 × RM79
+			monthsFree: 2,
+		});
+		expect(annualQuote("pro")).toEqual({
+			monthly: 14_900,
+			annualTotal: 149_000,
+			effectiveMonthly: 12_417, // RM124.17 (149,000 / 12 = 12,416.6…)
+			saving: 29_800,
+			monthsFree: 2,
+		});
+	});
+
+	test("SGD headline numbers", () => {
+		expect(annualQuote("pro", false, "SGD")).toEqual({
+			monthly: 5900,
+			annualTotal: 59_000,
+			effectiveMonthly: 4917, // S$49.17 (59,000 / 12 = 4,916.6…)
+			saving: 11_800,
+			monthsFree: 2,
+		});
+	});
+
+	test("a Founding member's annual is 10 × their discounted rate", () => {
+		const q = annualQuote("pro", true);
+		expect(q.monthly).toBe(FOUNDING_MONTHLY_PRICE.pro);
+		expect(q.annualTotal).toBe(FOUNDING_MONTHLY_PRICE.pro * 10);
+		expect(q.saving).toBe(FOUNDING_MONTHLY_PRICE.pro * 2);
+		// Never quotes a founding member the standard-price saving.
+		expect(q.saving).toBeLessThan(annualQuote("pro", false).saving);
+	});
+
+	test("effectiveMonthly never understates the year — 12 × it covers the bill", () => {
+		for (const currency of BILLING_CURRENCIES) {
+			for (const plan of LISTED_PLANS) {
+				for (const founding of [false, true]) {
+					const q = annualQuote(plan, founding, currency);
+					// The whole point: a seller multiplying the small number by 12 must
+					// never arrive under what we will invoice them.
+					expect(q.effectiveMonthly * 12).toBeGreaterThanOrEqual(q.annualTotal);
+					// …and it is still visibly cheaper than paying monthly.
+					expect(q.effectiveMonthly).toBeLessThan(q.monthly);
+				}
+			}
+		}
+	});
+});
+
+describe("plan changes — direction and carried-over days (86eyb6z4r)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+
+	test("direction is tier RANK, never price", () => {
+		expect(isPlanUpgrade("starter", "pro")).toBe(true);
+		expect(isPlanUpgrade("pro", "starter")).toBe(false);
+		expect(isPlanUpgrade("pro", "enterprise")).toBe(true);
+		// Same tier is not an upgrade in either direction.
+		expect(isPlanUpgrade("pro", "pro")).toBe(false);
+		// The trap price comparison falls into: an ANNUAL Starter (RM790) moving
+		// to a MONTHLY Pro (RM149) is unmistakably a tier upgrade, but costs less.
+		expect(planPrice("starter", "annual")).toBeGreaterThan(
+			planPrice("pro", "monthly"),
+		);
+		expect(isPlanUpgrade("starter", "pro")).toBe(true);
+	});
+
+	test("unused Starter days buy proportionally fewer Pro days", () => {
+		// 10 of 30 days left on RM79 Starter = RM26.33 of value; Pro costs
+		// RM149/30 = RM4.97 a day → 5.3 → 5 days.
+		expect(
+			planChangeCarryoverDays({
+				fromPlan: "starter",
+				fromCycle: "monthly",
+				toPlan: "pro",
+				toCycle: "monthly",
+				founding: false,
+				currency: "MYR",
+				periodEnd: NOW + 10 * DAY,
+				now: NOW,
+			}),
+		).toBe(5);
+	});
+
+	test("the breakdown reconciles: days left, their value, what that buys", () => {
+		// The case a seller queried (Zaki, 13 Sep 2026): subscribed to Starter
+		// and upgraded the SAME day, all 30 days untouched, and the dialog said
+		// 16 days. Nothing is confiscated — RM79 is RM79; it just buys fewer
+		// days of a plan that costs RM4.97 a day instead of RM2.63.
+		const carry = planChangeCarryover({
+			fromPlan: "starter",
+			fromCycle: "monthly",
+			toPlan: "pro",
+			toCycle: "monthly",
+			founding: false,
+			currency: "MYR",
+			periodEnd: NOW + 30 * DAY,
+			now: NOW,
+		});
+		expect(carry.daysLeft).toBe(30);
+		// A full untouched period is worth exactly what was paid for it.
+		expect(carry.valueLeftSen).toBe(PLAN_MONTHLY_PRICES.MYR.starter);
+		expect(carry.days).toBe(16);
+		// The seller ends up with 46 days of Pro for RM79 + RM149, which is
+		// what 46 days of Pro costs. No money appears or disappears.
+		const paid = PLAN_MONTHLY_PRICES.MYR.starter + PLAN_MONTHLY_PRICES.MYR.pro;
+		const served = ((30 + carry.days) * PLAN_MONTHLY_PRICES.MYR.pro) / 30;
+		expect(Math.abs(paid - served)).toBeLessThan(100); // within RM1 of rounding
+	});
+
+	test("the days it reports are the days planChangeCarryoverDays grants", () => {
+		// One conversion, two readers — the copy can never quote a number the
+		// settle path wouldn't grant.
+		const args = {
+			fromPlan: "starter" as const,
+			fromCycle: "monthly" as const,
+			toPlan: "pro" as const,
+			toCycle: "monthly" as const,
+			founding: false,
+			currency: "MYR" as const,
+			now: NOW,
+		};
+		for (const daysLeft of [0, 1, 7, 10, 23, 30]) {
+			const periodEnd = NOW + daysLeft * DAY;
+			expect(planChangeCarryover({ ...args, periodEnd }).days).toBe(
+				planChangeCarryoverDays({ ...args, periodEnd }),
+			);
+		}
+	});
+
+	test("a lapsed or missing period reports nothing in every field", () => {
+		const args = {
+			fromPlan: "starter" as const,
+			fromCycle: "monthly" as const,
+			toPlan: "pro" as const,
+			toCycle: "monthly" as const,
+			founding: false,
+			currency: "MYR" as const,
+			now: NOW,
+		};
+		for (const periodEnd of [NOW - DAY, NOW, undefined]) {
+			expect(planChangeCarryover({ ...args, periodEnd })).toEqual({
+				daysLeft: 0,
+				valueLeftSen: 0,
+				days: 0,
+			});
+		}
+	});
+
+	test("moving DOWN carries more days than were left, never fewer", () => {
+		// RM124 of Pro left buys a lot of RM79 Starter.
+		const days = planChangeCarryoverDays({
+			fromPlan: "pro",
+			fromCycle: "monthly",
+			toPlan: "starter",
+			toCycle: "monthly",
+			founding: false,
+			currency: "MYR",
+			periodEnd: NOW + 25 * DAY,
+			now: NOW,
+		});
+		expect(days).toBeGreaterThan(25);
+	});
+
+	test("crossing cycles uses DAY RATES, not a price ratio", () => {
+		// RM26.33 left on monthly Starter, spent at annual Pro's daily rate
+		// (149000/365 = RM4.08) → 6 days. A naive price ratio would have said
+		// 10 × 7900/149000 ≈ 0.5 → 1 day, robbing the seller of five days.
+		const crossed = planChangeCarryoverDays({
+			fromPlan: "starter",
+			fromCycle: "monthly",
+			toPlan: "pro",
+			toCycle: "annual",
+			founding: false,
+			currency: "MYR",
+			periodEnd: NOW + 10 * DAY,
+			now: NOW,
+		});
+		expect(crossed).toBe(6);
+		// And it must exceed the same-cycle answer, because a year bought
+		// upfront is cheaper per day than a month is.
+		expect(crossed).toBeGreaterThan(
+			planChangeCarryoverDays({
+				fromPlan: "starter",
+				fromCycle: "monthly",
+				toPlan: "pro",
+				toCycle: "monthly",
+				founding: false,
+				currency: "MYR",
+				periodEnd: NOW + 10 * DAY,
+				now: NOW,
+			}),
+		);
+	});
+
+	test("a lapsed or missing period carries nothing — never resurrects time", () => {
+		const base = {
+			fromPlan: "starter" as const,
+			fromCycle: "monthly" as const,
+			toPlan: "pro" as const,
+			toCycle: "monthly" as const,
+			founding: false,
+			currency: "MYR" as const,
+			now: NOW,
+		};
+		expect(planChangeCarryoverDays({ ...base, periodEnd: NOW - DAY })).toBe(0);
+		expect(planChangeCarryoverDays({ ...base, periodEnd: NOW })).toBe(0);
+		expect(planChangeCarryoverDays({ ...base, periodEnd: undefined })).toBe(0);
+	});
+
+	test("a founding member's carryover is computed at THEIR prices", () => {
+		const shared = {
+			fromPlan: "starter" as const,
+			fromCycle: "monthly" as const,
+			toPlan: "pro" as const,
+			toCycle: "monthly" as const,
+			currency: "MYR" as const,
+			periodEnd: NOW + 10 * DAY,
+			now: NOW,
+		};
+		// Founding Pro is cheaper (RM104), so the same leftover Starter value
+		// buys MORE days of it than at list price.
+		const founding = planChangeCarryoverDays({ ...shared, founding: true });
+		const list = planChangeCarryoverDays({ ...shared, founding: false });
+		expect(founding).toBeGreaterThan(list);
+	});
+
+	test("SGD is computed in SGD, not converted from ringgit", () => {
+		// Both tiers scale together, so the day count matches MYR's — what must
+		// NOT happen is an FX-shaped number.
+		expect(
+			planChangeCarryoverDays({
+				fromPlan: "starter",
+				fromCycle: "monthly",
+				toPlan: "pro",
+				toCycle: "monthly",
+				founding: false,
+				currency: "SGD",
+				periodEnd: NOW + 10 * DAY,
+				now: NOW,
+			}),
+		).toBe(5);
+	});
+});
+
+describe("founding benefit REVOCATION — membership is permanent, benefits aren't (z8r3fdfyw5)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const NOW = 1_900_000_000_000;
+	const WINDOW = FOUNDING_PRICE_LAPSE_MS;
+	/** A claimed member whose never-cleared `foundingIntent` is still set — the
+	 * exact shape of the trap this feature had to close. */
+	const claimed = {
+		isFoundingMember: true,
+		foundingIntent: true,
+		paidThrough: NOW - 10 * DAY,
+		benefitsRevokedAt: undefined as number | undefined,
+		benefitsRestoredAt: undefined as number | undefined,
+		now: NOW,
+	};
+	const gate = {
+		status: "past_due" as const,
+		comped: false,
+		paidThrough: NOW - (WINDOW + DAY),
+		benefitsRevokedAt: undefined as number | undefined,
+		benefitsRestoredAt: undefined as number | undefined,
+		now: NOW,
+	};
+
+	test("THE TRAP: revocation beats a still-set foundingIntent", () => {
+		// Un-revoked, this store is eligible only via the window; revoked, it must
+		// be ineligible EVEN THOUGH `foundingIntent` is true. Delete the
+		// `benefitsRevokedAt` short-circuit in foundingPriceEligible and this
+		// flips to `true` — the store would keep founding pricing forever, which
+		// is the opposite of revoking it.
+		expect(foundingPriceEligible(claimed)).toBe(true);
+		expect(
+			foundingPriceEligible({ ...claimed, benefitsRevokedAt: NOW - DAY }),
+		).toBe(false);
+		// And with the retailer flag cleared too (the shape a naive revocation
+		// would leave behind), intent alone still must not resurrect it.
+		expect(
+			foundingPriceEligible({
+				...claimed,
+				isFoundingMember: false,
+				benefitsRevokedAt: NOW - DAY,
+			}),
+		).toBe(false);
+	});
+
+	test("revocation ends founding pricing for every tier that has one", () => {
+		for (const plan of PLANS) {
+			expect(
+				foundingPricingApplies({
+					...claimed,
+					plan,
+					benefitsRevokedAt: NOW - DAY,
+				}),
+			).toBe(false);
+		}
+	});
+
+	test("foundingBenefitsEndAt is paid-through + the window, or nothing to measure", () => {
+		expect(foundingBenefitsEndAt(NOW)).toBe(NOW + WINDOW);
+		expect(foundingBenefitsEndAt(undefined)).toBeUndefined();
+	});
+
+	test("the day-90 boundary: window−1 and window are safe, window+1 revokes", () => {
+		const at = (age: number) =>
+			foundingBenefitsRevocable({ ...gate, paidThrough: NOW - age });
+		expect(at(WINDOW - DAY)).toBe(false);
+		expect(at(WINDOW)).toBe(false);
+		expect(at(WINDOW + DAY)).toBe(true);
+	});
+
+	test("INVARIANT: revocable is the exact complement of eligible", () => {
+		// The pairing that makes "quoted the discount on the page, revoked the
+		// same day" impossible. Walk the boundary hour by hour around day 90.
+		for (let h = -26; h <= 26; h++) {
+			const paidThrough = NOW - WINDOW - h * 60 * 60 * 1000;
+			const eligible = foundingPriceEligible({ ...claimed, paidThrough });
+			const revocable = foundingBenefitsRevocable({ ...gate, paidThrough });
+			expect(revocable).toBe(!eligible);
+		}
+	});
+
+	test("never revoked: on hold, active, comped, no paid period, or already done", () => {
+		// An Off-Season Hold is a PAYING store. Both guards are deliberate, so
+		// each is asserted with the OTHER one made unsafe.
+		expect(foundingBenefitsRevocable({ ...gate, status: "on_hold" })).toBe(
+			false,
+		);
+		expect(foundingBenefitsRevocable({ ...gate, status: "active" })).toBe(false);
+		expect(foundingBenefitsRevocable({ ...gate, comped: true })).toBe(false);
+		// A founding trial that never paid has nothing to lapse — fail toward the
+		// promise, exactly as foundingPriceEligible does.
+		expect(
+			foundingBenefitsRevocable({ ...gate, paidThrough: undefined }),
+		).toBe(false);
+		expect(
+			foundingPriceEligible({ ...claimed, paidThrough: undefined }),
+		).toBe(true);
+		// Revocation happens once.
+		expect(
+			foundingBenefitsRevocable({ ...gate, benefitsRevokedAt: NOW - DAY }),
+		).toBe(false);
+	});
+
+	test("the T-14 warning fires inside its window, and only inside it", () => {
+		const warn = (age: number, sentForPeriodEnd?: number) =>
+			foundingBenefitsWarningDue({
+				...gate,
+				paidThrough: NOW - age,
+				sentForPeriodEnd,
+			});
+		// Too early: benefits end more than 14 days out.
+		expect(warn(WINDOW - FOUNDING_BENEFIT_WARNING_MS - DAY)).toBe(false);
+		// Exactly T-14, mid-window, and the last day all warn.
+		expect(warn(WINDOW - FOUNDING_BENEFIT_WARNING_MS)).toBe(true);
+		expect(warn(WINDOW - 3 * DAY)).toBe(true);
+		expect(warn(WINDOW)).toBe(true);
+		// Past the end it's revocation's job, not the warning's.
+		expect(warn(WINDOW + DAY)).toBe(false);
+	});
+
+	test("the warning dedupes per PAID PERIOD, so a later lapse warns again", () => {
+		const paidThrough = NOW - (WINDOW - 3 * DAY);
+		const args = { ...gate, paidThrough };
+		expect(
+			foundingBenefitsWarningDue({ ...args, sentForPeriodEnd: undefined }),
+		).toBe(true);
+		// Already sent for THIS period → silent.
+		expect(
+			foundingBenefitsWarningDue({ ...args, sentForPeriodEnd: paidThrough }),
+		).toBe(false);
+		// A stamp from an earlier period doesn't suppress the new one.
+		expect(
+			foundingBenefitsWarningDue({
+				...args,
+				sentForPeriodEnd: paidThrough - 40 * DAY,
+			}),
+		).toBe(true);
+	});
+
+	test("warning and revocation never both fire, and neither touches a hold", () => {
+		for (const age of [WINDOW - DAY, WINDOW, WINDOW + DAY]) {
+			const args = { ...gate, paidThrough: NOW - age };
+			const w = foundingBenefitsWarningDue({
+				...args,
+				sentForPeriodEnd: undefined,
+			});
+			const r = foundingBenefitsRevocable(args);
+			expect(w && r).toBe(false);
+			// On hold, both are silent whatever the age.
+			const held = { ...args, status: "on_hold" as const };
+			expect(foundingBenefitsRevocable(held)).toBe(false);
+			expect(
+				foundingBenefitsWarningDue({ ...held, sentForPeriodEnd: undefined }),
+			).toBe(false);
+		}
+	});
+
+	test("INVARIANT: a date is only SHOWN when the pass would actually act on it", () => {
+		// The bug this closes: the ribbon derived its countdown from paid-through
+		// alone, so a store the pass skips — most plausibly a COMPED founding
+		// member — was shown a red "your founding price ends on 29 Sept" alert
+		// for a deadline that could never arrive. Whatever surface shows a date
+		// must gate on the same predicate the cron warns and revokes on.
+		const skipped = [
+			{ ...gate, status: "active" as const },
+			{ ...gate, status: "on_hold" as const },
+			{ ...gate, comped: true },
+			{ ...gate, paidThrough: undefined },
+			{ ...gate, benefitsRevokedAt: NOW - DAY },
+		];
+		for (const args of skipped) {
+			expect(foundingBenefitsAtRisk(args)).toBe(false);
+			// …and therefore neither gate can fire, at ANY point on the clock.
+			for (const age of [0, WINDOW - DAY, WINDOW, WINDOW + DAY]) {
+				const at = { ...args, paidThrough: args.paidThrough && NOW - age };
+				expect(foundingBenefitsRevocable(at)).toBe(false);
+				expect(
+					foundingBenefitsWarningDue({ ...at, sentForPeriodEnd: undefined }),
+				).toBe(false);
+			}
+		}
+		// A lapsing store IS at risk, and both gates become reachable.
+		expect(foundingBenefitsAtRisk(gate)).toBe(true);
+	});
+
+	test("at-risk is the shared precondition, never the whole answer", () => {
+		// Being at risk must not by itself warn or revoke — the clock still rules.
+		const fresh = { ...gate, paidThrough: NOW - DAY };
+		expect(foundingBenefitsAtRisk(fresh)).toBe(true);
+		expect(foundingBenefitsRevocable(fresh)).toBe(false);
+		expect(
+			foundingBenefitsWarningDue({ ...fresh, sentForPeriodEnd: undefined }),
+		).toBe(false);
+	});
+
+	test("AC: the Founding Pro plan lock OPENS on revocation, with no extra code", () => {
+		// The lock keys off eligibility, so this follows automatically — pinned
+		// because "a revoked seller can pick Starter again" is an acceptance
+		// criterion, not an implementation detail.
+		const live = foundingPriceEligible(claimed);
+		const gone = foundingPriceEligible({
+			...claimed,
+			benefitsRevokedAt: NOW - DAY,
+		});
+		expect(foundingPlanLocked("starter", live)).toBe(true);
+		for (const plan of PLANS) expect(foundingPlanLocked(plan, gone)).toBe(false);
+	});
+
+	test("AC: the next renewal bills LIST price once revoked", () => {
+		const base = {
+			status: "past_due" as const,
+			plan: "pro" as const,
+			billingCycle: "monthly" as const,
+			pendingPlanChange: undefined,
+			isFoundingMember: true,
+			foundingIntent: true,
+			paidThrough: NOW - 10 * DAY,
+			lastPaidCurrency: undefined,
+			country: "MY" as const,
+			benefitsRestoredAt: undefined,
+			enterprise: undefined,
+			now: NOW,
+		};
+		const founding = renewalQuote({ ...base, benefitsRevokedAt: undefined });
+		const revoked = renewalQuote({ ...base, benefitsRevokedAt: NOW - DAY });
+		expect(founding.founding).toBe(true);
+		expect(revoked.founding).toBe(false);
+		expect(revoked.amount).toBeGreaterThan(founding.amount);
+		expect(revoked.amount).toBe(planPrice("pro", "monthly", false, "MYR"));
 	});
 });

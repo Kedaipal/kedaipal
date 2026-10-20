@@ -9,8 +9,14 @@ import { buildWaContactLink } from "../../lib/contact";
 /**
  * One-time celebratory card shown to a freshly-minted Founding Member, prompting
  * them to schedule the white-glove onboarding call. Dismisses (and never returns)
- * once they tap the CTA or close it (`markWhiteGloveScheduled`). See
- * docs/manual-subscription.md.
+ * once they tap the CTA or close it (`markWhiteGloveScheduled`).
+ *
+ * Hidden once founding BENEFITS are revoked (z8r3fdfyw5): white-glove sits
+ * beside the discount in the agreement's offer, so a member whose entitlements
+ * lapsed must not still be offered Arif's personal setup session — the app
+ * would be taking with one hand and giving with the other. Their rank is
+ * untouched, which is why this reads `benefitsRevoked` and not the rank.
+ * See docs/manual-subscription.md.
  */
 export function WhiteGloveCard({ slug }: { slug: string }) {
 	const status = useQuery(convexQuery(api.foundingMembers.myStatus, {})).data;
@@ -19,7 +25,8 @@ export function WhiteGloveCard({ slug }: { slug: string }) {
 		api.foundingMembers.markWhiteGloveScheduled,
 	);
 
-	if (!status || status.whiteGloveScheduled) return null;
+	if (!status || status.whiteGloveScheduled || status.benefitsRevoked)
+		return null;
 
 	const waUrl = buildWaContactLink(
 		`Hi Arif! I'm Founding Member #${status.rank} (/${slug}) — I'd like to schedule my white-glove onboarding call.`,

@@ -6,6 +6,8 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { OPEN_SESSION_TTL_MS } from "./counterCheckout";
+import { UNKNOWN_DIAL_COUNTRY_MESSAGE } from "./lib/buyerPhone";
+import { DAY_MS, todayMytMidnight } from "./lib/fulfilmentDate";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -236,7 +238,7 @@ async function boundSession(t: ReturnType<typeof setup>, retailerId: Id<"retaile
 }
 
 describe("counterCheckout — createOrderFromSession", () => {
-	test("creates a confirmed self-collect order, paid in person, and completes the session", async () => {
+	test("creates a COMPLETED self-collect order, paid in person, and completes the session", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
@@ -253,7 +255,7 @@ describe("counterCheckout — createOrderFromSession", () => {
 		expect(shortId).toMatch(/^ORD-/);
 
 		const order = await t.run((ctx) => ctx.db.get(orderId));
-		expect(order?.status).toBe("confirmed");
+		expect(order?.status).toBe("delivered");
 		expect(order?.source).toBe("counter"); // stamped as a walk-in sale
 		expect(order?.deliveryMethod).toBe("self_collect");
 		expect(order?.paymentStatus).toBe("received");
@@ -397,7 +399,7 @@ describe("counterCheckout — createOrderFromSession", () => {
 				paymentMethod: "cash",
 			});
 		const order = await t.run((ctx) => ctx.db.get(orderId));
-		expect(order?.status).toBe("confirmed");
+		expect(order?.status).toBe("delivered");
 		expect(order?.items[0]?.price).toBe(3000);
 		expect(order?.mockupStatus).toBeUndefined(); // no gate — sold in person
 	});
@@ -462,13 +464,78 @@ describe("counterCheckout — createOrderFromSession", () => {
 		await expect(
 			asA.mutation(api.counterCheckout.createOrderFromSession, {
 				sessionId,
-				items: [{ variantId, quantity: 1, unitPrice: 0 }], // zero
+				items: [{ variantId, quantity: 1, unitPrice: -100 }], // negative
 				paidInPerson: true,
 			}),
 		).rejects.toThrow(/Set a price/);
 		// Session survives the rejections — the vendor can fix and retry.
 		const session = await t.run((ctx) => ctx.db.get(sessionId));
 		expect(session?.status).toBe("buyer_identified");
+	});
+
+	// RM0 is a real price at the counter (a comped item, a freebie with a
+	// purchase, a warranty redo). A custom line priced at zero makes a FREE
+	// order: no payment is recorded whatever the client sent, so the order
+	// page reads "Free order — nothing to collect" instead of "Paid now · Cash".
+	test("a custom line priced at RM0 creates a free order with no payment recorded", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedCustomVariant(t, USER_A, retailer._id);
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 0 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0]?.price).toBe(0);
+		expect(order?.total).toBe(0);
+		// Handed over now → born completed (a free sale changes hands like a paid one).
+		expect(order?.status).toBe("delivered");
+		expect(order?.paymentStatus).toBe("unpaid");
+		expect(order?.paymentMethod).toBeUndefined();
+		expect(order?.paymentReceivedAt).toBeUndefined();
+		const events = await t.run((ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		expect(events.some((e) => e.note?.startsWith("payment_received"))).toBe(
+			false,
+		);
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.status).toBe("completed");
+	});
+
+	// A free line beside a paid one is still a paid order — the zero only
+	// makes the whole order free when every line is.
+	test("a RM0 line beside a paid line leaves the order paid in person", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const freeId = await seedCustomVariant(t, USER_A, retailer._id);
+		const paidId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [
+					{ variantId: freeId, quantity: 1, unitPrice: 0 },
+					{ variantId: paidId, quantity: 1 },
+				],
+				paidInPerson: true,
+				paymentMethod: "cash",
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.total).toBe(1500);
+		expect(order?.paymentStatus).toBe("received");
+		expect(order?.paymentMethod).toBe("cash");
 	});
 
 	// Seller price adjustment on a STANDARD line (Wagyu Walid's ask): the counter
@@ -516,6 +583,30 @@ describe("counterCheckout — createOrderFromSession", () => {
 		expect(order?.items[0]?.price).toBe(1200);
 	});
 
+	// Comping a catalog item: the seller adjusts a standard line down to RM0
+	// (free with purchase, a goodwill replacement). The snapshot keeps the
+	// catalog price struck through on the review, same as any adjustment.
+	test("a standard line adjusted to RM0 is charged nothing", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			price: 1200,
+		});
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 2, unitPrice: 0 }],
+				paidInPerson: true,
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0]?.price).toBe(0);
+		expect(order?.total).toBe(0);
+		expect(order?.paymentStatus).toBe("unpaid");
+	});
+
 	test("an invalid adjusted price on a standard line is rejected", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -528,7 +619,7 @@ describe("counterCheckout — createOrderFromSession", () => {
 		await expect(
 			asA.mutation(api.counterCheckout.createOrderFromSession, {
 				sessionId,
-				items: [{ variantId, quantity: 1, unitPrice: 0 }], // zero
+				items: [{ variantId, quantity: 1, unitPrice: -1 }], // negative
 				paidInPerson: true,
 			}),
 		).rejects.toThrow(/Set a price/);
@@ -1146,7 +1237,7 @@ describe("counterCheckout — anonymous walk-in (86ey8vqp6)", () => {
 			});
 
 		const order = await t.run((ctx) => ctx.db.get(orderId));
-		expect(order?.status).toBe("confirmed");
+		expect(order?.status).toBe("delivered");
 		expect(order?.source).toBe("counter");
 		expect(order?.customer.waPhone).toBeUndefined();
 		expect(order?.customer.name).toBeUndefined();
@@ -1184,6 +1275,33 @@ describe("counterCheckout — anonymous walk-in (86ey8vqp6)", () => {
 					paidInPerson: false,
 				}),
 		).rejects.toThrow(/paid in person/i);
+	});
+
+	// A FREE cash sale (a comped line, an RM0 RSVP) has no payment to take, so
+	// "must be paid in person" has nothing to protect — and the client sends
+	// `paidInPerson: false` for a free total on purpose (no payment is
+	// recorded). Found by the hands-on pass: the rule fired before the total
+	// was known and every anonymous free order was a dead end.
+	test("a free anonymous sale is accepted without the paid-in-person flag", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 2000 });
+		const { sessionId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.startAnonymousSession, {});
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 0 }],
+				paidInPerson: false,
+			});
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.total).toBe(0);
+		expect(order?.paymentStatus).toBe("unpaid");
+		expect(order?.paymentMethod).toBeUndefined();
+		expect(order?.customer.waPhone).toBeUndefined();
 	});
 
 	test("anonymous session creation is ownership-checked", async () => {
@@ -1357,7 +1475,7 @@ describe("counterCheckout — opening hours exemption (86eyp5rav)", () => {
 			});
 		const order = await t.run((ctx) => ctx.db.get(orderId));
 		expect(order?.fulfilmentDate).toBe(today);
-		expect(order?.status).toBe("confirmed");
+		expect(order?.status).toBe("delivered");
 	});
 });
 
@@ -1398,9 +1516,11 @@ describe("counterCheckout — SG store manual phone (SG-lite, 86eynw28q)", () =>
 		expect(session?.customerId).toBeDefined();
 	});
 
-	test("a foreign number still passes through for a walk-in from anywhere", async () => {
-		// The counter bind stays loose on purpose — an MY tourist at an SG stall
-		// keys their full international number and it is stored as typed.
+	test("an explicit +CC typed for a walk-in is honoured over the store's country", async () => {
+		// The cashier TYPED the country code, so it wins over the +65 default
+		// even from a counter screen that sends no dial country (z8r3fdh274) —
+		// an MY tourist at an SG stall still binds. Bare digits are never
+		// sniffed; that is what the picker is for.
 		const t = setup();
 		await seedSgRetailer(t);
 		const { sessionId } = await t
@@ -1411,5 +1531,276 @@ describe("counterCheckout — SG store manual phone (SG-lite, 86eynw28q)", () =>
 			});
 		const session = await t.run((ctx) => ctx.db.get(sessionId));
 		expect(session?.waPhone).toBe("60123456789");
+	});
+});
+
+describe("counterCheckout — manual phone from any country (z8r3fdh274)", () => {
+	// The manual bind now runs the BUYER validator against the country the
+	// cashier picked (absent = the store's). That opens the walk-in from
+	// anywhere without the old loose pass-through — which also let landlines
+	// and junk in, and stored a bare MY national number unprefixed.
+
+	function bind(
+		t: ReturnType<typeof setup>,
+		args: { waPhone: string; waDialCountry?: string; name?: string },
+	) {
+		return t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.bindSessionManualPhone, {
+				name: "Walk-in Buyer",
+				...args,
+			});
+	}
+
+	test("a UK walk-in binds with the picked country, stored as Meta delivers it", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const { sessionId } = await bind(t, {
+			waPhone: "07911 123456",
+			waDialCountry: "GB",
+		});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waPhone).toBe("447911123456");
+	});
+
+	test("a 7-digit Brunei number binds — the old >= 8-digit rule would have refused it", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		const { sessionId } = await bind(t, {
+			waPhone: "712 3456",
+			waDialCountry: "BN",
+		});
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waPhone).toBe("6737123456");
+	});
+
+	test("an MY landline is refused now — it can never receive the confirmation", async () => {
+		// Intended tightening: the loose arm stored this as 60312345678.
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		await expect(bind(t, { waPhone: "03-1234 5678" })).rejects.toThrow(
+			/Malaysian mobile/,
+		);
+	});
+
+	test("a bare MY national number folds to the inbound form instead of forking the CRM", async () => {
+		// The loose arm stored "123456789" as typed, while Meta delivers the same
+		// buyer as "60123456789" — a second customer row and a dead number.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await seedCustomer(t, retailer._id, "60123456789", "Aiman");
+		const { sessionId } = await bind(t, { waPhone: "12-345 6789" });
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.waPhone).toBe("60123456789");
+		expect(session?.isNewCustomer).toBe(false);
+	});
+
+	test("an unknown dial country is refused", async () => {
+		const t = setup();
+		await seedRetailer(t, USER_A);
+		await expect(
+			bind(t, { waPhone: "07911 123456", waDialCountry: "XX" }),
+		).rejects.toThrow(UNKNOWN_DIAL_COUNTRY_MESSAGE);
+	});
+
+	test("a lapsed store's cashier hears the lock before any complaint about the number", async () => {
+		// The store-level gates run first (the pause is pinned the same way in
+		// seasonalHold.test.ts): fixing the number wouldn't help a view-only
+		// store, so it must not be what the cashier is told. Unusable numbers on
+		// purpose — a valid one couldn't tell which check ran first.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (!sub) throw new Error("no subscription row");
+			await ctx.db.patch(sub._id, { status: "past_due" });
+		});
+		for (const phone of [
+			{ waPhone: "123" },
+			{ waPhone: "07911 123456", waDialCountry: "XX" },
+		]) {
+			await expect(bind(t, phone)).rejects.toThrow(/past due/);
+		}
+	});
+
+	test("a foreign manual bind is re-claimed by that buyer's store-QR scan", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const { token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.ensureCounterQrToken, {});
+		const { sessionId } = await bind(t, {
+			waPhone: "07911 123456",
+			waDialCountry: "GB",
+		});
+
+		// The same buyer scans the poster; Meta hands us their bare E.164 digits.
+		const res = await t.mutation(
+			internal.counterCheckout.startSessionFromStoreQr,
+			{ token, waPhone: "447911123456", profileName: "Oliver" },
+		);
+		expect(res.result === "started" && res.reclaimed).toBe(true);
+		expect(await openSessionsForPhone(t, retailer._id, "447911123456")).toBe(
+			1,
+		);
+		const session = await t.run((ctx) => ctx.db.get(sessionId));
+		expect(session?.status).toBe("buyer_identified");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Born completed — a counter sale is handed over at the counter, so the order
+// that records it is already done. The exceptions are the sales where nothing
+// changed hands yet: a collection dated for later, and an RSVP (completes at
+// the event). Payment is its own axis — a pay-later sale is still handed over.
+// ---------------------------------------------------------------------------
+describe("counterCheckout — a sale handed over now is born completed", () => {
+	async function timeline(t: ReturnType<typeof setup>, orderId: Id<"orders">) {
+		const events = await t.run((ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+		);
+		return events.map((e) => ({ status: e.status, note: e.note }));
+	}
+
+	test("paid now, collecting now → delivered, with a confirmed→delivered timeline the seller can read", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId, completed } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+				fulfilmentDate: todayMytMidnight(),
+			});
+		expect(completed).toBe(true);
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("delivered");
+		expect(order?.statusChangedAt).toBe(order?.createdAt);
+		expect(await timeline(t, orderId)).toEqual([
+			{ status: "confirmed", note: "counter_checkout" },
+			{ status: "confirmed", note: "payment_received: in-person (cash)" },
+			{ status: "delivered", note: "counter_handover" },
+		]);
+	});
+
+	test("pay-later is still handed over → delivered AND unpaid; the buyer's link is how they pay", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId, completed } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: false,
+			});
+		expect(completed).toBe(true);
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("delivered");
+		expect(order?.paymentStatus).toBe("unpaid");
+	});
+
+	test("a collection dated for later stays confirmed — nothing has been handed over yet", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId, completed } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+				fulfilmentDate: todayMytMidnight() + 2 * DAY_MS,
+			});
+		expect(completed).toBe(false);
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("confirmed");
+		expect(
+			(await timeline(t, orderId)).some((e) => e.status === "delivered"),
+		).toBe(false);
+	});
+
+	test("the buyer's confirmation is tracked on the order: 'sending' at create, and already seen by the seller who rang it up", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+			});
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.confirmationPushStatus).toBe("sending");
+		// Carrying the push stamp would otherwise drop it into the inbox's New
+		// (unseen) bucket — but the seller is the one who created it.
+		expect(order?.seenAt).toBeTypeOf("number");
+	});
+
+	test("a completed session names its order by shortId, so a reopened Done screen reads the live order", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		const before = await asA.query(api.counterCheckout.getCheckoutSession, {
+			sessionId,
+		});
+		expect(before?.orderShortId).toBeUndefined();
+
+		const { shortId } = await asA.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{ sessionId, items: [{ variantId, quantity: 1 }], paidInPerson: true },
+		);
+		const after = await asA.query(api.counterCheckout.getCheckoutSession, {
+			sessionId,
+		});
+		expect(after?.status).toBe("completed");
+		expect(after?.orderShortId).toBe(shortId);
+	});
+
+	test("an anonymous cash sale carries no push stamp — there is no message to track", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const { sessionId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.startAnonymousSession, {});
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+			});
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("delivered");
+		expect(order?.confirmationPushStatus).toBeUndefined();
+		expect(order?.seenAt).toBeUndefined();
 	});
 });

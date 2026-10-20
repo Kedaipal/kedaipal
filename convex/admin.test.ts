@@ -1,9 +1,10 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { devStorePurgeAllowed } from "./admin";
 import schema from "./schema";
 
 // Admin Console act-as (ClickUp 86ey25er1). Proves the owner-OR-admin access
@@ -259,7 +260,7 @@ describe("admin console reads", () => {
 	test("listSellersForAdmin lists sellers for an admin and rejects others", async () => {
 		const t = setup();
 		await seedRetailer(t, OWNER);
-		const rows = await t
+		const { sellers: rows } = await t
 			.withIdentity({ subject: ADMIN })
 			.query(api.admin.listSellersForAdmin, {});
 		expect(rows.some((r) => r.ownerUserId === OWNER)).toBe(true);
@@ -269,16 +270,179 @@ describe("admin console reads", () => {
 		).rejects.toThrow(/Not authorized/);
 	});
 
+	test("listSellersForAdmin carries each store's cached credits — balances, period, out-since, custom grant (Credits T5)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		const find = async () =>
+			(
+				await t
+					.withIdentity({ subject: ADMIN })
+					.query(api.admin.listSellersForAdmin, {})
+			).sellers.find((r) => r.ownerUserId === OWNER);
+		// A new store opens with the trial allowance at signup (T1).
+		const fresh = await find();
+		expect(fresh?.credits).toMatchObject({ plan: 200, purchased: 0 });
+		expect(fresh?.credits?.exhaustedAt).toBeUndefined();
+		expect(fresh?.credits?.customGrant).toBeUndefined();
+
+		const outSince = Date.now() - 3 * 24 * 60 * 60 * 1000;
+		await t.run(async (ctx) => {
+			const account = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (!account) throw new Error("no credit account");
+			await ctx.db.patch(account._id, {
+				planBalance: -15,
+				exhaustedAt: outSince,
+				grantOverride: 1000,
+			});
+		});
+		expect((await find())?.credits).toMatchObject({
+			plan: -15,
+			purchased: 0,
+			exhaustedAt: outSince,
+			customGrant: 1000,
+		});
+
+		// No account yet (a store the backfill hasn't reached) → no credits
+		// facts at all, never a zero that reads as "out of credits".
+		await t.run(async (ctx) => {
+			const account = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.first();
+			if (account) await ctx.db.delete(account._id);
+		});
+		expect((await find())?.credits).toBeUndefined();
+	});
+
+	test("listSellersForAdmin carries signupSource so acquisition is checkable in the console", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { signupSource: "spotlight-thg" });
+		});
+		const { sellers: rows } = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.admin.listSellersForAdmin, {});
+		expect(rows.find((r) => r.ownerUserId === OWNER)?.signupSource).toBe(
+			"spotlight-thg",
+		);
+	});
+
+	test("listSellersForAdmin resolves the powered-by referrer to its CURRENT slug + name (z8r3fdcwd0)", async () => {
+		const t = setup();
+		const referrer = await seedRetailer(t, "user_referrer_owner");
+		const retailer = await seedRetailer(t, OWNER);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				signupSource: "powered-by-track",
+				signupReferrerId: referrer._id,
+			});
+			// Renamed AFTER the signup — the console must show the name as it is
+			// now, which is why the row stores an id and not the slug.
+			await ctx.db.patch(referrer._id, { storeName: "Hermoolah (renamed)" });
+		});
+		const { sellers: rows } = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.admin.listSellersForAdmin, {});
+		expect(rows.find((r) => r.ownerUserId === OWNER)?.signupReferrer).toEqual({
+			slug: referrer.slug,
+			storeName: "Hermoolah (renamed)",
+		});
+	});
+
+	test("listSellersForAdmin reads a purged referrer as no referrer, never throws", async () => {
+		const t = setup();
+		const referrer = await seedRetailer(t, "user_referrer_owner");
+		const retailer = await seedRetailer(t, OWNER);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { signupReferrerId: referrer._id });
+			await ctx.db.delete(referrer._id);
+		});
+		const { sellers: rows } = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.admin.listSellersForAdmin, {});
+		expect(
+			rows.find((r) => r.ownerUserId === OWNER)?.signupReferrer,
+		).toBeUndefined();
+	});
+
 	test("listSellersForAdmin flags admin-owned stores via ownerIsAdmin", async () => {
 		const t = setup();
 		await seedRetailer(t, OWNER);
 		await seedRetailer(t, ADMIN);
-		const rows = await t
+		const { sellers: rows } = await t
 			.withIdentity({ subject: ADMIN })
 			.query(api.admin.listSellersForAdmin, {});
 		// The seller's store is not admin-owned; the admin's own store is.
 		expect(rows.find((r) => r.ownerUserId === OWNER)?.ownerIsAdmin).toBe(false);
 		expect(rows.find((r) => r.ownerUserId === ADMIN)?.ownerIsAdmin).toBe(true);
+	});
+
+	test("listSellersForAdmin carries the contact + billing facts the directory shows (z8r3fdh37c)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				notifyEmail: "owner@example.com",
+				waPhone: "60123456789",
+				notifyWaPhone: "60198765432",
+			});
+		});
+		const { sellers: rows } = await t
+			.withIdentity({ subject: ADMIN })
+			.query(api.admin.listSellersForAdmin, {});
+		const mine = rows.find((r) => r.ownerUserId === OWNER);
+		expect(mine).toMatchObject({
+			ownerEmail: "owner@example.com",
+			waPhone: "60123456789",
+			notifyWaPhone: "60198765432",
+			country: "MY",
+			currency: "MYR",
+			subscriptionStatus: "trialing",
+		});
+		// A fresh store's free period has a backstop date and no invoice yet.
+		expect(typeof mine?.trialEndsAt).toBe("number");
+		expect(mine?.pendingInvoice).toBeUndefined();
+		expect(mine?.lastPaidInvoice).toBeUndefined();
+		expect(mine?.lastActAsAt).toBeUndefined();
+	});
+
+	test("listSellersForAdmin surfaces the open bill, then the last settled one, and the last act-as entry", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		const admin = t.withIdentity({ subject: ADMIN });
+		const { invoiceId } = await admin.mutation(api.invoices.issueInvoice, {
+			retailerId: retailer._id,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const pending = (
+			await admin.query(api.admin.listSellersForAdmin, {})
+		).sellers.find((r) => r.ownerUserId === OWNER);
+		expect(pending?.pendingInvoice).toMatchObject({
+			hasPayNowLink: false,
+			currency: "MYR",
+		});
+		expect(pending?.pendingInvoice?.invoiceNumber).toMatch(/\S/);
+		expect(typeof pending?.pendingInvoice?.dueDate).toBe("number");
+
+		await admin.mutation(api.invoices.markPaid, { invoiceId });
+		await admin.mutation(api.admin.startActAsSession, { retailerId: retailer._id });
+		const paid = (
+			await admin.query(api.admin.listSellersForAdmin, {})
+		).sellers.find((r) => r.ownerUserId === OWNER);
+		expect(paid?.pendingInvoice).toBeUndefined();
+		expect(paid?.lastPaidInvoice?.invoiceNumber).toBe(
+			pending?.pendingInvoice?.invoiceNumber,
+		);
+		expect(typeof paid?.lastPaidInvoice?.paidAt).toBe("number");
+		expect(paid?.subscriptionStatus).toBe("active");
+		expect(typeof paid?.currentPeriodEnd).toBe("number");
+		expect(typeof paid?.lastActAsAt).toBe("number");
 	});
 
 	test("recentAuditForRetailer is admin-only", async () => {
@@ -368,5 +532,187 @@ describe("counter checkout act-as", () => {
 			.query(api.counterCheckout.listOpenSessions, { retailerId: retailer._id });
 		expect(open.length).toBe(1);
 		expect(open[0]?.origin).toBe("store_qr");
+	});
+});
+
+// Dev-only store purge (z8r3fdbmc9) — the admin test-reset that reuses the
+// PDPA erasure cascade. The gate is mutation-tested guard by guard: the env
+// flag fails closed, and the prod deny-list beats even a set flag.
+describe("dev-only store purge", () => {
+	let prevPurgeFlag: string | undefined;
+	beforeAll(() => {
+		prevPurgeFlag = process.env.DEV_STORE_PURGE_ENABLED;
+		process.env.DEV_STORE_PURGE_ENABLED = "true";
+	});
+	afterAll(() => {
+		if (prevPurgeFlag === undefined) delete process.env.DEV_STORE_PURGE_ENABLED;
+		else process.env.DEV_STORE_PURGE_ENABLED = prevPurgeFlag;
+	});
+
+	test("devStorePurgeAllowed fails closed without the exact opt-in flag", () => {
+		const prev = process.env.DEV_STORE_PURGE_ENABLED;
+		try {
+			delete process.env.DEV_STORE_PURGE_ENABLED;
+			expect(devStorePurgeAllowed()).toBe(false);
+			process.env.DEV_STORE_PURGE_ENABLED = "";
+			expect(devStorePurgeAllowed()).toBe(false);
+			process.env.DEV_STORE_PURGE_ENABLED = "yes";
+			expect(devStorePurgeAllowed()).toBe(false);
+			process.env.DEV_STORE_PURGE_ENABLED = "true";
+			expect(devStorePurgeAllowed()).toBe(true);
+			process.env.DEV_STORE_PURGE_ENABLED = "1";
+			expect(devStorePurgeAllowed()).toBe(true);
+		} finally {
+			if (prev === undefined) delete process.env.DEV_STORE_PURGE_ENABLED;
+			else process.env.DEV_STORE_PURGE_ENABLED = prev;
+		}
+	});
+
+	test("the prod deployment is denied even with the flag set", () => {
+		const prev = process.env.CONVEX_CLOUD_URL;
+		try {
+			process.env.CONVEX_CLOUD_URL =
+				"https://peaceful-falcon-152.convex.cloud";
+			expect(devStorePurgeAllowed()).toBe(false);
+		} finally {
+			if (prev === undefined) delete process.env.CONVEX_CLOUD_URL;
+			else process.env.CONVEX_CLOUD_URL = prev;
+		}
+	});
+
+	test("non-admins cannot purge; a wrong slug echo is refused", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		await expect(
+			t.withIdentity({ subject: STRANGER }).mutation(
+				api.admin.purgeStoreForAdmin,
+				{ retailerId: retailer._id, confirmSlug: retailer.slug },
+			),
+		).rejects.toThrow(/Not authorized/);
+		await expect(
+			t.withIdentity({ subject: ADMIN }).mutation(
+				api.admin.purgeStoreForAdmin,
+				{ retailerId: retailer._id, confirmSlug: "some-other-store" },
+			),
+		).rejects.toThrow(/doesn't match/);
+		// Neither attempt touched the store.
+		await t.run(async (ctx) => {
+			expect(await ctx.db.get(retailer._id)).not.toBeNull();
+		});
+	});
+
+	test("refused outright when the flag is off — the gate, mutation-proofed", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		const prev = process.env.DEV_STORE_PURGE_ENABLED;
+		try {
+			delete process.env.DEV_STORE_PURGE_ENABLED;
+			await expect(
+				t.withIdentity({ subject: ADMIN }).mutation(
+					api.admin.purgeStoreForAdmin,
+					{ retailerId: retailer._id, confirmSlug: retailer.slug },
+				),
+			).rejects.toThrow(/dev-deployment/);
+		} finally {
+			process.env.DEV_STORE_PURGE_ENABLED = prev;
+		}
+	});
+
+	test("a running purge locks the store — no second purge, no act-as entry, and the directory says so", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		const admin = t.withIdentity({ subject: ADMIN });
+		await admin.mutation(api.admin.purgeStoreForAdmin, {
+			retailerId: retailer._id,
+			confirmSlug: retailer.slug,
+		});
+		// Scheduled cascade NOT driven — the store sits mid-purge.
+		await expect(
+			admin.mutation(api.admin.purgeStoreForAdmin, {
+				retailerId: retailer._id,
+				confirmSlug: retailer.slug,
+			}),
+		).rejects.toThrow(/already running/);
+		await expect(
+			admin.mutation(api.admin.startActAsSession, {
+				retailerId: retailer._id,
+			}),
+		).rejects.toThrow(/being purged/);
+		const { sellers: rows } = await admin.query(api.admin.listSellersForAdmin, {});
+		expect(rows.find((r) => r._id === retailer._id)?.purging).toBe(true);
+	});
+
+	test("a stale purge stamp (crashed cascade) can be re-run — the recovery path", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		// Simulate a cascade that died 11 minutes ago, past PURGE_RETRY_AFTER_MS.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				purgeStartedAt: Date.now() - 11 * 60 * 1000,
+			});
+		});
+		await t.withIdentity({ subject: ADMIN }).mutation(
+			api.admin.purgeStoreForAdmin,
+			{ retailerId: retailer._id, confirmSlug: retailer.slug },
+		);
+		// Re-armed: the stamp is fresh again.
+		await t.run(async (ctx) => {
+			const row = await ctx.db.get(retailer._id);
+			expect(
+				Date.now() - (row?.purgeStartedAt ?? 0),
+			).toBeLessThan(60 * 1000);
+		});
+	});
+
+	test("purge erases the tenant, spares bystanders, audits itself, and frees the login for onboarding", async () => {
+		vi.useFakeTimers();
+		try {
+			const t = setup();
+			const victim = await seedRetailer(t, OWNER);
+			const bystander = await seedRetailer(t, STRANGER);
+			await t
+				.withIdentity({ subject: OWNER })
+				.mutation(api.products.create, baseProduct(victim._id));
+			await t
+				.withIdentity({ subject: STRANGER })
+				.mutation(api.products.create, baseProduct(bystander._id));
+
+			await t.withIdentity({ subject: ADMIN }).mutation(
+				api.admin.purgeStoreForAdmin,
+				{ retailerId: victim._id, confirmSlug: victim.slug },
+			);
+			// The cascade self-chains through the scheduler — drive it to the end.
+			await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+			await t.run(async (ctx) => {
+				expect(await ctx.db.get(victim._id)).toBeNull();
+				const products = await ctx.db.query("products").collect();
+				// Only the bystander's catalog survives.
+				expect(products.length).toBe(1);
+				expect(products[0]?.retailerId).toBe(bystander._id);
+				expect(await ctx.db.get(bystander._id)).not.toBeNull();
+				// The destructive action is audited, and the audit row outlives the
+				// tenant (adminAuditLog is retained by the cascade, by decision).
+				const audit = await ctx.db.query("adminAuditLog").collect();
+				expect(
+					audit.some(
+						(row) =>
+							row.action === "admin.purgeStore" &&
+							row.retailerId === victim._id &&
+							row.adminUserId === ADMIN,
+					),
+				).toBe(true);
+			});
+
+			// The whole point: the owner's login now has no store, so /onboarding
+			// treats it as a fresh account.
+			expect(
+				await t
+					.withIdentity({ subject: OWNER })
+					.query(api.retailers.getMyRetailer),
+			).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

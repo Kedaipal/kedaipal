@@ -7,6 +7,7 @@ import {
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
+import type { PermissionLevel } from "./lib/permissions";
 import {
 	isProductVisible,
 	recomputeCategoryCount,
@@ -15,8 +16,14 @@ import {
 } from "./lib/categoryCounts";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertValidCategorySlug } from "./lib/slug";
+import { hiddenFromStorefront } from "./lib/productEvent";
 import { productWithVariants } from "./products";
-import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
+import {
+	assertPlanFeature,
+	assertSubscriptionActive,
+	getAccess,
+} from "./subscriptions";
+import { isStoreOffline } from "./storeAvailability";
 
 const NAME_MAX = 60;
 const DESCRIPTION_MAX = 280;
@@ -37,20 +44,27 @@ const CATEGORY_PAGE_PRODUCT_LIMIT = 100;
 
 // Owner-OR-admin access (see convex/lib/auth.ts) so a Kedaipal admin can set up
 // a seller's categories during white-glove onboarding.
+// Categories ride the PRODUCTS grant (86exr91r4) — they're catalog structure,
+// and a separate row on the permissions page would gate nothing meaningful.
 async function requireRetailerOwner(
 	ctx: QueryCtx | MutationCtx,
 	retailerId: Id<"retailers">,
+	level: PermissionLevel,
 ): Promise<RetailerAccess> {
-	return requireRetailerAccess(ctx, retailerId);
+	return requireRetailerAccess(ctx, retailerId, { area: "products", level });
 }
 
 async function requireOwnedCategory(
 	ctx: QueryCtx | MutationCtx,
 	categoryId: Id<"categories">,
+	level: PermissionLevel,
 ): Promise<{ category: Doc<"categories">; access: RetailerAccess }> {
 	const category = await ctx.db.get(categoryId);
 	if (!category) throw new Error("Category not found");
-	const access = await requireRetailerAccess(ctx, category.retailerId);
+	const access = await requireRetailerAccess(ctx, category.retailerId, {
+		area: "products",
+		level,
+	});
 	return { category, access };
 }
 
@@ -136,7 +150,7 @@ export const listForRetailer = query({
 	): Promise<
 		Array<Doc<"categories"> & { productCount: number; imageUrl: string | null }>
 	> => {
-		await requireRetailerOwner(ctx, retailerId);
+		await requireRetailerOwner(ctx, retailerId, "read");
 		const rows = await ctx.db
 			.query("categories")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
@@ -177,6 +191,8 @@ export const listActivePublic = query({
 			productCount: number;
 		}>
 	> => {
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return [];
 		const rows = await ctx.db
 			.query("categories")
 			.withIndex("by_retailer_active", (q) =>
@@ -215,6 +231,8 @@ export const getPublicPage = query({
 	handler: async (ctx, { retailerId, categorySlug }) => {
 		const normalized = categorySlug.trim().toLowerCase();
 		if (normalized.length === 0) return null;
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return null;
 		const category = await ctx.db
 			.query("categories")
 			.withIndex("by_retailer_slug", (q) =>
@@ -231,12 +249,15 @@ export const getPublicPage = query({
 			.withIndex("by_category_sort", (q) => q.eq("categoryId", category._id))
 			.take(CATEGORY_PAGE_PRODUCT_LIMIT);
 		const products = [];
+		const plan = (await getAccess(ctx, retailerId)).plan;
 		for (const junction of junctions) {
 			const product = await ctx.db.get(junction.productId);
-			// Same visibility rules as products.list: active + not hidden.
+			// Same visibility rules as products.list: active, not hidden, and not
+			// a finished event (which takes itself off the storefront).
 			if (!product || !product.active || product.hidden === true) continue;
+			if (hiddenFromStorefront(product)) continue;
 			products.push(
-				await productWithVariants(ctx, product, { activeOnly: true }),
+				await productWithVariants(ctx, product, { activeOnly: true, plan }),
 			);
 		}
 		return {
@@ -274,7 +295,7 @@ export const listProductsForCategory = query({
 			imageUrl: string | null;
 		}>
 	> => {
-		await requireOwnedCategory(ctx, categoryId);
+		await requireOwnedCategory(ctx, categoryId, "read");
 		const junctions = await ctx.db
 			.query("productCategories")
 			.withIndex("by_category_sort", (q) => q.eq("categoryId", categoryId))
@@ -324,7 +345,7 @@ export const listProductsForCategory = query({
 export const namesByProduct = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<Record<string, string[]>> => {
-		await requireRetailerOwner(ctx, retailerId);
+		await requireRetailerOwner(ctx, retailerId, "read");
 		const joins = await ctx.db
 			.query("productCategories")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
@@ -351,7 +372,7 @@ export const getProductCategoryIds = query({
 	handler: async (ctx, { productId }): Promise<Id<"categories">[]> => {
 		const product = await ctx.db.get(productId);
 		if (!product) return [];
-		await requireRetailerOwner(ctx, product.retailerId);
+		await requireRetailerOwner(ctx, product.retailerId, "read");
 		const rows = await ctx.db
 			.query("productCategories")
 			.withIndex("by_product", (q) => q.eq("productId", productId))
@@ -383,7 +404,7 @@ export const create = mutation({
 		ctx,
 		{ retailerId, name, slug, description, imageStorageId },
 	): Promise<{ categoryId: Id<"categories"> }> => {
-		const access = await requireRetailerOwner(ctx, retailerId);
+		const access = await requireRetailerOwner(ctx, retailerId, "write");
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses (white-glove).
@@ -440,12 +461,17 @@ export const update = mutation({
 		ctx,
 		{ categoryId, name, slug, description, imageStorageId },
 	): Promise<void> => {
-		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const { category, access } = await requireOwnedCategory(
+			ctx,
+			categoryId,
+			"write",
+		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
+		}
 		// Editing category structure is Pro; archive/restore (setActive) is the
 		// un-gated escape hatch, not this. Admin act-as bypasses.
 		if (!access.actingAsAdmin)
@@ -504,12 +530,17 @@ export const update = mutation({
 export const setActive = mutation({
 	args: { categoryId: v.id("categories"), active: v.boolean() },
 	handler: async (ctx, { categoryId, active }): Promise<void> => {
-		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const { category, access } = await requireOwnedCategory(
+			ctx,
+			categoryId,
+			"write",
+		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
+		}
 		if (category.active === active) return; // idempotent
 
 		const patch: Partial<Doc<"categories">> = {
@@ -546,7 +577,7 @@ export const reorder = mutation({
 		orderedIds: v.array(v.id("categories")),
 	},
 	handler: async (ctx, { retailerId, orderedIds }): Promise<void> => {
-		const access = await requireRetailerOwner(ctx, retailerId);
+		const access = await requireRetailerOwner(ctx, retailerId, "write");
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
@@ -597,12 +628,17 @@ export const reorderProducts = mutation({
 		orderedProductIds: v.array(v.id("products")),
 	},
 	handler: async (ctx, { categoryId, orderedProductIds }): Promise<void> => {
-		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const { category, access } = await requireOwnedCategory(
+			ctx,
+			categoryId,
+			"write",
+		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
+		}
 		// Structure-building — Pro. Admin act-as bypasses.
 		if (!access.actingAsAdmin)
 			await assertPlanFeature(ctx, category.retailerId, "categories");
@@ -658,12 +694,13 @@ export const setProductCategories = mutation({
 	handler: async (ctx, { productId, categoryIds }): Promise<void> => {
 		const product = await ctx.db.get(productId);
 		if (!product) throw new Error("Product not found");
-		const access = await requireRetailerOwner(ctx, product.retailerId);
+		const access = await requireRetailerOwner(ctx, product.retailerId, "write");
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, product.retailerId);
+		}
 
 		const requested = new Set(categoryIds);
 		if (requested.size !== categoryIds.length) {
@@ -774,11 +811,16 @@ export const setProductCategories = mutation({
 export const setHidden = mutation({
 	args: { categoryId: v.id("categories"), hidden: v.boolean() },
 	handler: async (ctx, { categoryId, hidden }): Promise<void> => {
-		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const { category, access } = await requireOwnedCategory(
+			ctx,
+			categoryId,
+			"write",
+		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
+		}
 		if ((category.hidden ?? false) === hidden) return; // idempotent
 
 		await ctx.db.patch(categoryId, { hidden, updatedAt: Date.now() });

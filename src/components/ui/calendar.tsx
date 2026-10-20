@@ -16,11 +16,33 @@ function CalendarChevron({ orientation, className, ...props }: ChevronProps) {
 	return <Icon className={cn("size-4", className)} {...props} />;
 }
 
+/**
+ * The grid shape for a calendar a THUMB drives: cells stretch to the container
+ * instead of the compact `size-9` the Insights range picker wants, and every
+ * day button clears the 44px tap-target floor.
+ *
+ * Exported (z8r3fdm36y) rather than copied: the booking checkout and the
+ * fulfilment-date picker are two call sites for one idea, and the mobile rule
+ * is the kind of thing that silently drifts when it lives twice.
+ */
+export const TOUCH_CALENDAR_CLASSNAMES = {
+	month_grid: "w-full border-collapse",
+	weekdays: "grid grid-cols-7",
+	weekday: "w-auto text-[11px] font-medium text-muted-foreground",
+	week: "mt-1 grid w-full grid-cols-7 gap-0",
+	day: "relative p-0 text-center text-sm",
+} as const;
+
+export const TOUCH_CALENDAR_STYLES = {
+	day_button: { width: "100%", minHeight: "2.75rem" },
+} as const;
+
 export type CalendarProps = React.ComponentProps<typeof DayPicker>;
 
 export function Calendar({
 	className,
 	classNames,
+	modifiersClassNames,
 	showOutsideDays = true,
 	...props
 }: CalendarProps) {
@@ -30,7 +52,16 @@ export function Calendar({
 			showOutsideDays={showOutsideDays}
 			className={cn("w-fit", className)}
 			classNames={{
-				root: cn(defaults.root, "select-none"),
+				// `relative` is LOAD-BEARING, not decoration. The nav (chevrons) is
+				// `position: absolute; inset-x-0`, and react-day-picker's own
+				// stylesheet — which we deliberately don't import, theming from
+				// scratch instead — is the only thing that would otherwise make the
+				// root a containing block. Without it the chevrons resolve against
+				// whatever ancestor happens to be positioned (the BODY, on the
+				// booking checkout) and render in the page margins, so the month is
+				// unnavigable. Measured before the fix: nav x=0 w=1280 against a
+				// 510px-wide calendar.
+				root: cn(defaults.root, "relative select-none"),
 				months: cn(defaults.months, "flex flex-col gap-4"),
 				month: cn(defaults.month, "flex flex-col gap-3"),
 				month_caption: cn(
@@ -63,8 +94,6 @@ export function Calendar({
 				day: cn(
 					defaults.day,
 					"relative size-9 p-0 text-center text-sm [&:has(button)]:hover:bg-transparent",
-					// Range band — a soft mint fill behind the middle days.
-					"[&.rdp-range_middle]:bg-accent/12 [&.rdp-range_start]:rounded-l-full [&.rdp-range_end]:rounded-r-full [&.rdp-range_middle]:rounded-none",
 				),
 				day_button: cn(
 					defaults.day_button,
@@ -80,13 +109,29 @@ export function Calendar({
 				hidden: cn(defaults.hidden, "invisible"),
 				...classNames,
 			}}
+			// The range band lives HERE, on the modifier classes, and nowhere else.
+			// It used to be `[&.rdp-range_middle]:bg-accent/12` on the day, which
+			// never rendered: Tailwind reads `_` in an arbitrary variant as a space,
+			// so the selector compiled to `&.rdp-range middle` and matched nothing
+			// — and a `modifiersClassNames` entry REPLACES react-day-picker's own
+			// `rdp-range_start/end` class, so the rounded-end rules had nothing to
+			// hook onto either. The picked middle days showed as plain dates
+			// (z8r3fdhpm7, found rendering the closed-dates sheet; the Insights
+			// custom range had the same flat look).
 			modifiersClassNames={{
-				// The endpoints get the filled mint pill (overrides the hover state).
+				// The endpoints get the filled mint pill (overrides the hover
+				// state), rounded on their outer side so the band reads as one
+				// shape; a one-day range is both, so it is a full circle.
 				range_start:
-					"!bg-accent !text-primary-foreground hover:!bg-accent font-semibold",
+					"rounded-l-full !bg-accent !text-primary-foreground hover:!bg-accent font-semibold",
 				range_end:
-					"!bg-accent !text-primary-foreground hover:!bg-accent font-semibold",
+					"rounded-r-full !bg-accent !text-primary-foreground hover:!bg-accent font-semibold",
+				// A soft mint fill behind the days in between.
+				range_middle: "rounded-none bg-accent/12",
 				selected: "font-semibold",
+				// MERGED, never replacing: a caller adding its own modifier (the
+				// closed-dates sheet's hatch) must not wipe the band above.
+				...modifiersClassNames,
 			}}
 			components={{ Chevron: CalendarChevron }}
 			{...props}

@@ -14,7 +14,8 @@
 /**
  * Why a push ultimately failed, as told to the humans involved:
  *  - `unreachable` — the number itself is the problem (typo'd, not on
- *    WhatsApp, not reachable). The buyer can fix it; retrying cannot.
+ *    WhatsApp, not reachable, or in a country our WhatsApp account may not
+ *    message). The buyer can fix it by giving another number; retrying cannot.
  *  - `system` — our side or Meta's (outage, throttle, misconfigured template).
  *    The number is probably fine, so we never ask the buyer to compensate.
  */
@@ -63,6 +64,7 @@ export const PUSH_MAX_ATTEMPTS = PUSH_RETRY_DELAYS_MS.length + 1;
  * Retrying any of these produces the identical rejection, so they terminate
  * immediately — and they split into the two buyer-facing kinds:
  *
+ *   130497  Business account restricted from messaging users in this country
  *   131026  Message undeliverable — recipient not on WhatsApp / can't receive
  *   131030  Recipient not in allowed list (test-number restriction)
  *   131047  Re-engagement required (no template, outside window)
@@ -76,8 +78,28 @@ export const PUSH_MAX_ATTEMPTS = PUSH_RETRY_DELAYS_MS.length + 1;
  *   132016  Template is disabled
  *   132068  Flow is blocked
  *   132069  Flow is throttled
+ *
+ * 130497 counts as `unreachable` since buyers could pick any country
+ * (z8r3fdh274): the shared WABA can be barred from messaging a whole country,
+ * which no retry fixes, and reporting it as `system` would hide the buyer's
+ * "Update my number" repair and tell the seller the number looks fine — when
+ * the buyer's way forward is exactly a number from a country we can reach.
  */
-const UNREACHABLE_CODES = new Set([131026, 131030, 131047, 131051]);
+const UNREACHABLE_CODES = new Set([130497, 131026, 131030, 131047, 131051]);
+
+/**
+ * 131047 — a free-form message to a buyer with no open 24h service window.
+ * Unreachable for THAT shape only: the approved utility template is delivered
+ * with no window at all, so a sender holding one treats this code as "switch
+ * shape", not "give up". Counter confirmations do exactly that (a manual-phone
+ * walk-in never messaged us; a scan buyer's window closes a day later).
+ */
+export const OUT_OF_WINDOW_META_CODE = 131047;
+
+/** True for a Meta code no retry of the SAME message could ever get past. */
+export function isUnreachableMetaCode(code: number | undefined): boolean {
+	return code !== undefined && UNREACHABLE_CODES.has(code);
+}
 const TEMPLATE_CODES = new Set([
 	132000, 132001, 132005, 132007, 132012, 132015, 132016, 132068, 132069,
 ]);

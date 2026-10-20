@@ -17,16 +17,30 @@
  *    (expired ⇒ dead link + released price); at commit it CARRIES onto the
  *    order as `paymentDueAt` and runs until real money, with the sweep below
  *    auto-cancelling a due unpaid order so the stock comes back (Zaki,
- *    27 Aug — the Agoda model). Resend never moves the deadline.
+ *    27 Aug — the Agoda model). Resend never moves the deadline. A store
+ *    whose buyer payments are PAUSED (lapsed, z8r3fdr6gg) gets no deadline:
+ *    a window the buyer cannot pay inside is a trap, not a hold — commit
+ *    stamps none, and the sweep lifts one that falls due during a pause
+ *    instead of cancelling the order.
  *  - Resend is cooled down + capped (convex/lib/orderClaims.ts) so the seller
  *    can't spam the buyer's WhatsApp.
  *  - Commit mirrors the STOREFRONT validation set (address shape, delivery
- *    on offer, pickup resolution, notice floor, opening hours, live stock) but
- *    deliberately skips the min-order rules and the mockup gate — the seller
- *    keyed the lines and agreed the price, the counter posture.
+ *    on offer, pickup resolution, notice floor, opening hours, the prep floor
+ *    and a kept self-collect time — z8r3fdff97 — live stock) but deliberately
+ *    skips the min-order rules and the mockup gate — the seller keyed the
+ *    lines and agreed the price, the counter posture.
+ *  - A line's pickup note is frozen from the LIVE product at commit, like
+ *    orders.create: it is what the claim page showed the buyer, and a seller
+ *    correcting a typo between send and commit still reaches them. The claim
+ *    lines stay the price-lock snapshot and carry no note.
  */
 
 import { ConvexError, v } from "convex/values";
+import { takesCounterOrders } from "./lib/storeAvailability";
+import {
+	assertTakesCounterOrders,
+	storeAvailabilityOf,
+} from "./storeAvailability";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -38,11 +52,27 @@ import {
 import { linkOrderToCustomer } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import { stampProductsOrdered } from "./lib/productOrdered";
+import {
+	isChoosablePickupPoint,
+	pickupChoiceRefusal,
+} from "./lib/pickupChoice";
 import { recordOrderCreated } from "./subscriptionUsage";
 import { assertValidAddress } from "./lib/address";
 import { sanitizeAttributionSource } from "./lib/attribution";
-import { logAdminAction, requireRetailerAccess } from "./lib/auth";
+import {
+	logAdminAction,
+	requireRetailerAccess,
+	resolveMyRetailer,
+} from "./lib/auth";
+import {
+	assertSubscriptionActive,
+	buyerPaymentsPaused,
+	getAccess,
+} from "./subscriptions";
+import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
+import { tallyPromoUnits } from "./lib/promoTally";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import { storeBooksCouriers } from "./lib/courierBooking";
 import { getDisplayName, requireCustomerName } from "./lib/customer";
 import type { CartWeightItem } from "./lib/delivery";
 import {
@@ -59,13 +89,36 @@ import {
 } from "./lib/orderClaims";
 import {
 	computeOrderTotals,
+	storedDiscount,
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import {
+	claimVoucherState,
+	redeemVoucher,
+	resolveVoucherOrThrow,
+} from "./lib/voucherRedemption";
+import {
+	type ClaimVoucherState,
+	claimVoucherDiscount,
+	type VoucherSnapshot,
+} from "./lib/vouchers";
+import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
 import type { OpeningHours } from "./lib/openingHours";
+import { type ClosedDateRange, closedDateIssue } from "./lib/closedDates";
 import { assertWithinOpeningHours } from "./lib/openingHours";
-import { summarizeCartWeight } from "./lib/delivery";
+import { orderPrepFloorIssue, slowestPrep } from "./lib/prepFloor";
+import {
+	storablePendingReason,
+	summarizeCartWeight,
+} from "./lib/delivery";
+import { creditGateFor, forSeller } from "./creditLock";
 import { rateLimiter } from "./lib/rateLimiter";
+import {
+	freezeLineAnswers,
+	itemAnswerInputValidator,
+	type ItemAnswerInput,
+} from "./lib/buyerQuestions";
 import { variantLabel } from "./lib/variant";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
 import { type Locale, pickLocale, type PickupSnapshot } from "./lib/whatsappCopy";
@@ -104,12 +157,25 @@ async function freezeClaimLines(
 		variantId: Id<"productVariants">;
 		quantity: number;
 		unitPrice?: number;
+		answers?: ItemAnswerInput[];
 	}[],
 ): Promise<ClaimLine[]> {
 	const lines: ClaimLine[] = [];
 	const requestedByVariant = new Map<
 		Id<"productVariants">,
 		{ qty: number; block: boolean; onHand: number }
+	>();
+	// Promo pricing at SEND (z8r3fdcw72): the claim's default price is the
+	// effective price the storefront is showing right now, and it LOCKS with
+	// the claim (the price-lock rule wins even if the cap is hit before the
+	// buyer commits — the unit only counts against the pool at commit, when
+	// the order line carries the runId). Seller-entered prices override and
+	// are not promo sales. One bounded tally per distinct product.
+	const now = Date.now();
+	const storePlan = (await getAccess(ctx, retailerId)).plan;
+	const promoByProduct = new Map<
+		Id<"products">,
+		{ runId: string; unitsLeft: number | undefined } | null
 	>();
 	for (const item of items) {
 		if (!Number.isInteger(item.quantity) || item.quantity < 1)
@@ -125,14 +191,64 @@ async function freezeClaimLines(
 		const displayName = label ? `${product.name} (${label})` : product.name;
 		if (!product.active || !variant.active)
 			throw new ConvexError(`"${displayName}" is not available`);
+		// Event products are out of scope for claim links in v1 (`z8r3fdff9u`).
+		// A claim freezes a price and lets the BUYER pick their fulfilment date,
+		// which is the one thing an event forbids — and a claim carries no seat
+		// reservation, so an event sold through one could oversell the room
+		// between the send and the commit. Refused at the seller's door, where
+		// the alternative is one tap away, rather than at the buyer's.
+		if (product.event !== undefined)
+			throw new ConvexError(
+				`"${product.name}" is an event — share its storefront link so guests RSVP to the fixed date.`,
+			);
 		let unitPrice: number;
+		let soldOnPromo = false;
+		let promoRunId: string | undefined;
 		if (variant.isCustom === true || item.unitPrice !== undefined) {
 			const entered = item.unitPrice;
 			if (entered === undefined || !Number.isInteger(entered) || entered <= 0)
 				throw new ConvexError(`Set a price for "${displayName}"`);
 			unitPrice = entered;
 		} else {
-			unitPrice = variant.price;
+			let promoCtx = promoByProduct.get(variant.productId);
+			if (promoCtx === undefined) {
+				promoCtx = null;
+				const promo = product.promo;
+				if (promo !== undefined && isPromoActive({ promo }, storePlan, now)) {
+					const unitsLeft =
+						promo.unitCap !== undefined
+							? promoUnitsLeft(
+									promo.unitCap,
+									await tallyPromoUnits(ctx, {
+										retailerId,
+										productId: variant.productId,
+										runId: promo.runId,
+										startsAt: promo.startsAt ?? 0,
+										endsAt: promo.endsAt,
+									}),
+								)
+							: undefined;
+					promoCtx = { runId: promo.runId, unitsLeft };
+				}
+				promoByProduct.set(variant.productId, promoCtx);
+			}
+			// A send that would overshoot the remaining pool locks LIST for that
+			// line (the seller can still key a price by hand); otherwise the
+			// sale price locks, and the pool drains for lines later in this
+			// same claim.
+			const straddlesCap =
+				promoCtx !== null &&
+				promoCtx.unitsLeft !== undefined &&
+				item.quantity > promoCtx.unitsLeft;
+			unitPrice = straddlesCap
+				? variant.price
+				: effectivePrice(variant, product, storePlan, now, promoCtx?.unitsLeft);
+			if (unitPrice < variant.price && promoCtx !== null) {
+				soldOnPromo = true;
+				promoRunId = promoCtx.runId;
+				if (promoCtx.unitsLeft !== undefined)
+					promoCtx.unitsLeft -= item.quantity;
+			}
 		}
 		const block =
 			(variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock) === true;
@@ -153,7 +269,14 @@ async function freezeClaimLines(
 			name: product.name,
 			variantLabel: label || undefined,
 			price: unitPrice,
+			listPrice: soldOnPromo ? variant.price : undefined,
+			promoRunId,
 			quantity: item.quantity,
+			// The seller answers the product's questions at the counter before
+			// sending (z8r3fdkjek); frozen here, copied verbatim at commit. The
+			// buyer's claim page shows them read-only — required ones are
+			// enforced now, so a link is never dead on arrival over one.
+			answers: freezeLineAnswers(product, item.answers),
 		});
 	}
 	return lines;
@@ -175,12 +298,18 @@ export const sendClaim = mutation({
 				variantId: v.id("productVariants"),
 				quantity: v.number(),
 				unitPrice: v.optional(v.number()),
+				answers: v.optional(v.array(itemAnswerInputValidator)),
 			}),
 		),
 		windowMinutes: v.number(),
 		// Where this buyer came from (86eyq0eq9) — the seller's own answer,
 		// remembered as the store default for the rest of the session.
 		attributionSource: v.optional(v.string()),
+		// The voucher to freeze onto the claim (`z8r3fdr617`), passed
+		// EXPLICITLY like `items` — see the note on
+		// `counterCheckout.createOrderFromSession`: the session draft is a
+		// debounced autosave and would lose a just-applied code.
+		voucherCode: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
@@ -192,8 +321,17 @@ export const sendClaim = mutation({
 	}> => {
 		const session = await ctx.db.get(args.sessionId);
 		if (!session) throw new ConvexError("Session not found");
-		const access = await requireRetailerAccess(ctx, session.retailerId);
+		const access = await requireRetailerAccess(ctx, session.retailerId, {
+			area: "orders",
+			level: "write",
+		});
+		await assertSubscriptionActive(ctx, session.retailerId);
 		const retailer = access.retailer;
+		// Off-Season Hold (z8r3fday24): a paused store sends no claim links.
+		// A claim link is a COUNTER sale finished on the buyer's phone, so it
+		// follows the counter's rule (z8r3fdudf7): open under the seller's own
+		// pause, closed by a hold or Kedaipal's switch.
+		await assertTakesCounterOrders(ctx, retailer, "seller");
 		if (session.status !== "buyer_identified")
 			throw new ConvexError("This checkout isn't open any more");
 		if (!session.waPhone)
@@ -215,6 +353,24 @@ export const sendClaim = mutation({
 		// Never throws (ticket AC) — a bad tag must not block a send.
 		const sanitizedSource = sanitizeAttributionSource(args.attributionSource);
 		const now = Date.now();
+
+		// The voucher (`z8r3fdr617`), FROZEN onto the claim beside the line prices — the buyer's ticket has to show the
+		// price they were promised. Deliberately NOT redeemed here: a claim is an
+		// offer, not an order, so the code stays spendable until the buyer
+		// commits (which is also what stops an abandoned link burning a voucher).
+		// Refuses the SEND on a bad code — the seller is at the counter and can
+		// fix it before the buyer ever sees a price.
+		let voucherId: Id<"vouchers"> | undefined;
+		let voucherSnapshot: VoucherSnapshot | undefined;
+		if (args.voucherCode?.trim()) {
+			const resolved = await resolveVoucherOrThrow(ctx, {
+				retailerId: retailer._id,
+				code: args.voucherCode,
+				now,
+			});
+			voucherId = resolved.voucher._id;
+			voucherSnapshot = { code: resolved.voucher.code, ...resolved.terms };
+		}
 
 		// Supersede: the previous open claim for this session dies with this send
 		// (its link renders "cancelled" from the next read).
@@ -239,6 +395,8 @@ export const sendClaim = mutation({
 			buyerName: session.waProfileName,
 			lines,
 			currency: retailer.currency ?? "MYR",
+			voucherId,
+			voucherSnapshot,
 			token,
 			status: "open",
 			expiresAt,
@@ -281,7 +439,14 @@ export const resendClaim = mutation({
 	handler: async (ctx, { claimId }): Promise<void> => {
 		const claim = await ctx.db.get(claimId);
 		if (!claim) throw new ConvexError("Claim not found");
-		const access = await requireRetailerAccess(ctx, claim.retailerId);
+		const access = await requireRetailerAccess(ctx, claim.retailerId, {
+			area: "orders",
+			level: "write",
+		});
+		await assertSubscriptionActive(ctx, claim.retailerId);
+		// Re-sending pushes a fresh link into the buyer's chat — a new order
+		// invitation, refused while paused exactly like sendClaim.
+		await assertTakesCounterOrders(ctx, access.retailer, "seller");
 		const now = Date.now();
 		if (effectiveClaimStatus(claim, now) !== "open")
 			throw new ConvexError(
@@ -314,7 +479,11 @@ export const cancelClaim = mutation({
 	handler: async (ctx, { claimId }): Promise<void> => {
 		const claim = await ctx.db.get(claimId);
 		if (!claim) throw new ConvexError("Claim not found");
-		const access = await requireRetailerAccess(ctx, claim.retailerId);
+		const access = await requireRetailerAccess(ctx, claim.retailerId, {
+			area: "orders",
+			level: "write",
+		});
+		await assertSubscriptionActive(ctx, claim.retailerId);
 		if (effectiveClaimStatus(claim, Date.now()) !== "open") return; // already dead — idempotent
 		await ctx.db.patch(claimId, {
 			status: "cancelled",
@@ -332,7 +501,27 @@ export interface ClaimListRow {
 	buyerName: string;
 	waPhone: string;
 	itemCount: number;
-	itemsTotal: number;
+	/**
+	 * What this claim COMES TO — net of its voucher, not the items figure
+	 * (`z8r3fdr617`). It replaced `itemsTotal`, which was the same number until
+	 * a voucher could subtract from it and then had the seller's list reading
+	 * "RM 40.00" for a claim they had sent at RM 32.00.
+	 *
+	 * Per status, because "what it comes to" genuinely differs:
+	 * - **completed** — the ORDER's recorded total, the only real money here.
+	 *   It also sidesteps a trap: a completed claim's voucher is now
+	 *   `redeemed`, so asking `claimVoucherState` would answer `dropped` and
+	 *   hand back the gross for the very rows where the discount definitely
+	 *   happened.
+	 * - **anything else** — items minus the LIVE voucher state, the same read
+	 *   the buyer's own claim page prices from, so the two can't disagree. A
+	 *   voucher voided after sending stops discounting here too, which is the
+	 *   truth about the offer as it now stands.
+	 *
+	 * Fees are deliberately absent on an open claim: they depend on choices the
+	 * buyer hasn't made yet, and they only ever ADD.
+	 */
+	total: number;
 	currency: string;
 	token: string;
 	expiresAt: number;
@@ -362,17 +551,21 @@ export const listClaims = query({
 		// explicit retailerId = admin act-as, otherwise the caller's own store.
 		let resolvedRetailerId: Id<"retailers">;
 		if (retailerId) {
-			const access = await requireRetailerAccess(ctx, retailerId);
+			const access = await requireRetailerAccess(ctx, retailerId, {
+				area: "orders",
+				level: "read",
+			});
 			resolvedRetailerId = access.retailer._id;
 		} else {
-			const identity = await ctx.auth.getUserIdentity();
-			if (!identity) throw new ConvexError("Not authenticated");
-			const retailer = await ctx.db
-				.query("retailers")
-				.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-				.unique();
-			if (!retailer) throw new ConvexError("No store found for this account");
-			resolvedRetailerId = retailer._id;
+			// Membership-aware "my store" (86exr91r4): a team member's claim list
+			// is the store they work in, not a store they own.
+			const my = await resolveMyRetailer(ctx);
+			if (!my) throw new ConvexError("No store found for this account");
+			const access = await requireRetailerAccess(ctx, my.retailer._id, {
+				area: "orders",
+				level: "read",
+			});
+			resolvedRetailerId = access.retailer._id;
 		}
 
 		const now = Date.now();
@@ -395,13 +588,38 @@ export const listClaims = query({
 			settled.push(...rows);
 		}
 
+		// A completed claim names the order it became, so this is a seller read
+		// of ORDER data under T3.1 — a claim that commits while the store is at
+		// or below zero credits produces a GATED order. Every row goes through
+		// `forSeller`, so the allowlist governs rather than a promise that the
+		// two fields taken here happen to be safe.
+		//
+		// `buyerName`/`waPhone` below come from the CLAIM, not the order, and
+		// are deliberately not redacted: the seller TYPED that number into the
+		// counter to send the link. The gate exists to withhold a contact the
+		// seller never had, and there is nothing to withhold from someone about
+		// a number they entered themselves.
+		const gate = await creditGateFor(ctx, resolvedRetailerId, now);
 		const out: ClaimListRow[] = [];
 		for (const claim of [...open, ...settled]) {
 			let orderShortId: string | undefined;
+			let orderTotal: number | undefined;
 			if (claim.orderId) {
-				const order = await ctx.db.get(claim.orderId);
+				const raw = await ctx.db.get(claim.orderId);
+				const order = raw ? forSeller(gate, raw) : null;
 				orderShortId = order?.shortId;
+				orderTotal = order?.total;
 			}
+			const itemsTotal = claimItemsTotal(claim.lines);
+			// See `ClaimListRow.total` for why completed reads the order and
+			// everything else judges the voucher live.
+			const total =
+				orderTotal ??
+				itemsTotal -
+					claimVoucherDiscount(
+						await claimVoucherState(ctx, claim, now),
+						itemsTotal,
+					);
 			out.push({
 				claimId: claim._id,
 				sessionId: claim.sessionId,
@@ -414,7 +632,7 @@ export const listClaims = query({
 				}),
 				waPhone: claim.waPhone,
 				itemCount: claim.lines.reduce((n, l) => n + l.quantity, 0),
-				itemsTotal: claimItemsTotal(claim.lines),
+				total,
 				currency: claim.currency,
 				token: claim.token,
 				expiresAt: claim.expiresAt,
@@ -455,19 +673,50 @@ export interface ClaimPagePayload {
 		offerDelivery: boolean;
 		offerSelfCollect: boolean;
 		collectsFromCustomer: boolean;
+		/** The store hands delivery orders to a courier (z8r3fdh274) — the page
+		 * tells a buyer whose number is from another country that the rider
+		 * will phone the store instead. One bit, like `collectsFromCustomer`;
+		 * the courier config itself never leaves the owner reads. */
+		booksCouriers: boolean;
 		/** max(store notice, strictest per-product override on the claim). */
 		minNoticeDays: number;
 		openingHours?: OpeningHours;
+		/** Closed dates (z8r3fdhpm7) — skipped by the date picker, refused by
+		 * commit with the same sentence. */
+		closedDates?: ClosedDateRange[];
 		confirmPushEnabled: boolean;
+		/** Off-Season Hold (z8r3fday24): the store paused ordering after this
+		 * link was sent. The page renders a dead end instead of the form — the
+		 * buyer learns on LOAD, not after filling in an address the commit
+		 * would refuse. */
+		orderingPaused: boolean;
+		/** Why, when it is (`z8r3fdudf7`) — the page words a hold and
+		 * Kedaipal's switch differently. Never "seller": their own pause leaves
+		 * the counter (and so a claim) open. */
+		orderingPausedBy?: "seller" | "hold" | "admin";
+		/** The store is lapsed, so the order this commits can't be paid yet
+		 * (z8r3fdr6gg). One bit — never the subscription status. */
+		paymentsPaused: boolean;
 	};
 	/** Present only while the claim is OPEN. */
 	open?: {
-		lines: ClaimLine[];
+		/** The frozen lines, each decorated with its product's LIVE order rules
+		 * (z8r3fdff97) — the prep window that floors today's times and the
+		 * pickup note the buyer reads before collecting. */
+		lines: Array<ClaimLine & { prepMinutes?: number; pickupNote?: string }>;
 		itemsTotal: number;
 		buyerName?: string;
 		waPhone: string;
 		expiresAt: number;
 		windowMinutes: number;
+		/**
+		 * The seller's voucher, as it stands RIGHT NOW (`z8r3fdr617`) — not as
+		 * it was at send. `applied` prices the ticket; `dropped` tells the buyer
+		 * why the discount they may have been promised isn't there, BEFORE they
+		 * fill the form, and the commit then charges exactly what the page
+		 * showed. Absent = no voucher on this claim.
+		 */
+		voucher?: ClaimVoucherState;
 	};
 	/** Present once COMPLETED — the idempotent re-open shows the order. */
 	completed?: { trackingToken?: string; shortId: string };
@@ -494,19 +743,32 @@ export const getByToken = query({
 		const status = effectiveClaimStatus(claim, now);
 
 		// Strictest per-product notice across the frozen lines (storefront rule —
-		// the buyer picks the date, so the floor applies here too).
+		// the buyer picks the date, so the floor applies here too). The same read
+		// collects each product's prep window and pickup note (z8r3fdff97), so
+		// the page applies the storefront's prep floor and shows the notes.
 		let minNoticeDays = retailer.minFulfilmentNoticeDays ?? 0;
+		const rulesByProduct = new Map<
+			Id<"products">,
+			{ prepMinutes?: number; pickupNote?: string }
+		>();
 		if (status === "open") {
-			const seen = new Set<Id<"products">>();
 			for (const line of claim.lines) {
-				if (seen.has(line.productId)) continue;
-				seen.add(line.productId);
+				if (rulesByProduct.has(line.productId)) continue;
 				const product = await ctx.db.get(line.productId);
+				rulesByProduct.set(line.productId, {
+					...(product?.prepMinutes !== undefined
+						? { prepMinutes: product.prepMinutes }
+						: {}),
+					...(product?.pickupNote !== undefined
+						? { pickupNote: product.pickupNote }
+						: {}),
+				});
 				if (product && (product.minNoticeDays ?? 0) > minNoticeDays)
 					minNoticeDays = product.minNoticeDays ?? 0;
 			}
 		}
 
+		const availability = await storeAvailabilityOf(ctx, retailer);
 		const payload: ClaimPagePayload = {
 			status,
 			store: {
@@ -525,19 +787,31 @@ export const getByToken = query({
 				offerSelfCollect: retailer.offerSelfCollect === true,
 				collectsFromCustomer:
 					retailer.deliveryBooking?.deliveryDirection === "collection",
+				booksCouriers: storeBooksCouriers(retailer),
 				minNoticeDays,
 				openingHours: retailer.openingHours as OpeningHours | undefined,
+				closedDates: retailer.closedDates,
 				confirmPushEnabled: orderConfirmTemplateName() !== undefined,
+				// Counter rule (a claim is a counter sale): closed only by a hold
+				// or Kedaipal's switch, and the page words each its own way.
+				orderingPaused: !takesCounterOrders(availability),
+				orderingPausedBy:
+					availability.state === "open" ? undefined : availability.by,
+				paymentsPaused: await buyerPaymentsPaused(ctx, retailer._id),
 			},
 		};
 		if (status === "open") {
 			payload.open = {
-				lines: claim.lines,
+				lines: claim.lines.map((line) => ({
+					...line,
+					...rulesByProduct.get(line.productId),
+				})),
 				itemsTotal: claimItemsTotal(claim.lines),
 				buyerName: claim.buyerName,
 				waPhone: claim.waPhone,
 				expiresAt: claim.expiresAt,
 				windowMinutes: claim.windowMinutes,
+				voucher: await claimVoucherState(ctx, claim, now),
 			};
 		}
 		if (status === "completed" && claim.orderId) {
@@ -621,7 +895,16 @@ export const commit = mutation({
 
 		const retailer = await ctx.db.get(claim.retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
+		// Off-Season Hold (z8r3fday24): a claim sent BEFORE the seller paused is
+		// still a live link in a buyer's chat, so this is the stale-tab guard the
+		// other four create paths already have — "every order-create path refuses"
+		// has no exceptions, or the invariant isn't one. The buyer normally never
+		// reaches here: getByToken carries `orderingPaused` and the page renders a
+		// dead end on load. Idempotent re-commits are handled ABOVE this line, so
+		// a buyer who already completed still gets their order back.
+		await assertTakesCounterOrders(ctx, retailer, "buyer");
 		const retailerCountry = retailer.country ?? DEFAULT_COUNTRY;
+		const paymentsPaused = await buyerPaymentsPaused(ctx, retailer._id);
 
 		// Same spend ceiling as any public order create — the commit schedules
 		// the same Meta-billed confirmation push.
@@ -671,13 +954,17 @@ export const commit = mutation({
 			args.deliveryMethod === "self_collect" &&
 			retailer.offerSelfCollect === true
 		) {
-			const activeCount = await ctx.db
-				.query("pickupLocations")
-				.withIndex("by_retailer_active", (q) =>
-					q.eq("retailerId", claim.retailerId).eq("isActive", true),
-				)
-				.first();
-			if (activeCount !== null) {
+			// Event venues are active but never choosable — same probe as
+			// `orders.create`, same reason (z8r3fdm32x).
+			const choosable = (
+				await ctx.db
+					.query("pickupLocations")
+					.withIndex("by_retailer_active", (q) =>
+						q.eq("retailerId", claim.retailerId).eq("isActive", true),
+					)
+					.collect()
+			).filter(isChoosablePickupPoint);
+			if (choosable.length > 0) {
 				if (!args.pickupLocationId)
 					throw new ConvexError(
 						"Pick a pickup location to continue with self-collect",
@@ -685,8 +972,8 @@ export const commit = mutation({
 				const location = await ctx.db.get(args.pickupLocationId);
 				if (!location || location.retailerId !== claim.retailerId)
 					throw new ConvexError("Pickup location not found");
-				if (!location.isActive)
-					throw new ConvexError("That pickup location is no longer available");
+				const refusal = pickupChoiceRefusal(location);
+				if (refusal !== null) throw new ConvexError(refusal);
 				resolvedPickupLocationId = location._id;
 				sanitizedPickupSnapshot = buildPickupSnapshot(location);
 			}
@@ -717,6 +1004,10 @@ export const commit = mutation({
 		>();
 		const weightItems: CartWeightItem[] = [];
 		let maxItemNoticeDays = 0;
+		// The live order rules (z8r3fdff97): prep for the floor below, and the
+		// pickup note each line freezes — read in the same loop, like notice.
+		const prepLines: { name: string; prepMinutes?: number }[] = [];
+		const pickupNoteByProduct = new Map<Id<"products">, string>();
 		for (const line of claim.lines) {
 			const variant = await ctx.db.get(line.variantId);
 			if (!variant)
@@ -724,8 +1015,23 @@ export const commit = mutation({
 					`"${line.name}" is no longer available — message the store to sort it out`,
 				);
 			const product = await ctx.db.get(line.productId);
+			// Backstop for a product that BECAME an event after the link was sent
+			// (freezeClaimLines refuses one at send time). The buyer can't be made
+			// to RSVP through a surface that has no date lock.
+			if (product?.event !== undefined)
+				throw new ConvexError(
+					`"${product.name}" is now an event — message the store to RSVP.`,
+				);
 			if ((product?.minNoticeDays ?? 0) > maxItemNoticeDays)
 				maxItemNoticeDays = product?.minNoticeDays ?? 0;
+			if (product) {
+				prepLines.push({
+					name: product.name,
+					prepMinutes: product.prepMinutes,
+				});
+				if (product.pickupNote !== undefined)
+					pickupNoteByProduct.set(product._id, product.pickupNote);
+			}
 			const block =
 				(variant.blockWhenOutOfStock ?? product?.blockWhenOutOfStock) === true;
 			const prior = requestedByVariant.get(line.variantId);
@@ -761,11 +1067,12 @@ export const commit = mutation({
 				throw new ConvexError((err as Error).message);
 			}
 		}
+		// A self-collect time is kept too (z8r3fdff97), exactly as orders.create
+		// keeps it — it was silently dropped here before.
 		let sanitizedFulfilmentTime: number | undefined;
 		if (
 			args.fulfilmentTimeMinutes !== undefined &&
-			sanitizedFulfilmentDate !== undefined &&
-			args.deliveryMethod === "delivery"
+			sanitizedFulfilmentDate !== undefined
 		) {
 			try {
 				sanitizedFulfilmentTime = assertValidFulfilmentTime(
@@ -774,6 +1081,50 @@ export const commit = mutation({
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
 			}
+		}
+		// Closed dates (z8r3fdhpm7) — orders.create's rule, word for word:
+		// judged before prep and hours, the truest reason a date can't work.
+		if (sanitizedFulfilmentDate !== undefined) {
+			const closed = closedDateIssue(
+				retailer.closedDates,
+				sanitizedFulfilmentDate,
+			);
+			if (closed !== null) throw new ConvexError(closed);
+		}
+		// Prep floor — orders.create's rule, word for word (convex/lib/prepFloor):
+		// the slowest line decides the earliest moment, a collection trip is
+		// exempt (the rider collects first; the work comes after).
+		const cartPrep = slowestPrep(prepLines);
+		const orderFulfilmentKind = fulfilmentKind(
+			args.deliveryMethod,
+			retailer.deliveryBooking?.deliveryDirection === "collection",
+		);
+		const isCollectionTrip = orderFulfilmentKind === "collection";
+		const prepFloorApplies = cartPrep.minutes > 0 && !isCollectionTrip;
+		if (prepFloorApplies && sanitizedFulfilmentDate !== undefined) {
+			const issue = orderPrepFloorIssue({
+				hours: retailer.openingHours,
+				// What prep races. The CHECKOUT's question (`asksForTime`,
+				// z8r3fdg9aa), not "did a time arrive?": both sides ask the
+				// same one, so a request that omits a time the form would
+				// have required is still held to the store's real hours
+				// instead of being widened to the whole day. The missing time
+				// is accepted — a date-only order is a legitimate shape — it
+				// is just judged honestly. A drop-off meet-up still races
+				// midnight: its hour is its point's own.
+				timed: asksForTime({
+					kind: orderFulfilmentKind,
+					isDropOff: sanitizedPickupSnapshot?.locationType === "drop_off",
+					openingHours: retailer.openingHours,
+					prepMinutes: cartPrep.minutes,
+				}),
+				dateEpoch: sanitizedFulfilmentDate,
+				timeMinutes: sanitizedFulfilmentTime,
+				now,
+				prep: cartPrep,
+				kind: args.deliveryMethod === "self_collect" ? "pickup" : "delivery",
+			});
+			if (issue !== null) throw new ConvexError(issue);
 		}
 		if (sanitizedFulfilmentDate !== undefined) {
 			try {
@@ -800,6 +1151,7 @@ export const commit = mutation({
 				claim.retailerId,
 				args.deliveryQuoteId,
 				sanitizedAddress,
+				claim.lines,
 			);
 			const resolved = resolveDeliveryForOrder(
 				retailer,
@@ -810,17 +1162,29 @@ export const commit = mutation({
 			);
 			deliverySnapshot = resolved.snapshot;
 			deliveryFeePending = resolved.pending;
-			deliveryFeePendingReason = resolved.pendingReason;
+			deliveryFeePendingReason = storablePendingReason(resolved.pendingReason);
 		}
-		const deliveryDirection =
-			args.deliveryMethod === "delivery" &&
-			retailer.deliveryBooking?.deliveryDirection === "collection"
-				? ("collection" as const)
-				: undefined;
+		const deliveryDirection = isCollectionTrip
+			? ("collection" as const)
+			: undefined;
 
-		const { subtotal, total } = computeOrderTotals(claim.lines, {
+		// The claim's frozen voucher (`z8r3fdr617`), re-validated at the door like
+		// everything else — it was checked at SEND and may have been spent at the
+		// counter or voided since.
+		//
+		// This is the ONE door that does not refuse a bad code, and the reason is
+		// the buyer: they followed a link, filled in an address and a date, and
+		// refusing here would dead-end them with no way through (only the seller
+		// can resend). So an unspendable voucher DROPS, and the claim page — which
+		// asks `claimVoucherState` on every read — has already said so above the
+		// ticket, so the total the buyer confirms is the total they are charged.
+		// Silently honouring it, or silently charging full price, are the two
+		// things this must never do. See docs/vouchers.md.
+		const voucherState = await claimVoucherState(ctx, claim, now);
+		const { subtotal, discount, total } = computeOrderTotals(claim.lines, {
 			pickupFee: sanitizedPickupSnapshot?.fee,
 			deliveryFee: deliverySnapshot?.fee,
+			voucher: voucherState.kind === "applied" ? voucherState.terms : undefined,
 		});
 
 		// Decrement hard-block stock — the commit IS the sale (OCC transaction,
@@ -856,9 +1220,37 @@ export const commit = mutation({
 			retailerId: claim.retailerId,
 			shortId,
 			trackingToken,
-			items: claim.lines,
+			// `stockReserved` is stamped HERE, not carried on the claim line
+			// (86eypn8ye). Whether a line reserved stock is a fact about the
+			// COMMIT — the flag is resolved in the live re-read above, and the
+			// decrement below acts on that same answer — so freezing it at claim
+			// time would record an intention rather than what happened. Without
+			// this, cancelling a claim order re-resolves the flag from the current
+			// docs and restore goes asymmetric the moment a seller flips a product
+			// between "from stock" and made-to-order.
+			//
+			// This is the THIRD create path to need it (storefront, counter, claim)
+			// — each builds its own snapshot, so a new frozen field has to be
+			// stamped in three places. See docs/stock-adjustments.md.
+			items: claim.lines.map((line) => {
+				const pickupNote = pickupNoteByProduct.get(line.productId);
+				return {
+					...line,
+					stockReserved: requestedByVariant.get(line.variantId)?.block === true,
+					// Frozen from the live product at commit — see the header.
+					...(pickupNote !== undefined ? { pickupNote } : {}),
+				};
+			}),
 			subtotal,
 			total,
+			// Only recorded when the voucher actually applied — an order that
+			// dropped a lapsed code carries no voucher at all, which is the
+			// honest record of what was charged.
+			voucherId:
+				voucherState.kind === "applied" ? voucherState.voucherId : undefined,
+			voucherSnapshot:
+				voucherState.kind === "applied" ? voucherState.snapshot : undefined,
+			voucherDiscount: storedDiscount(discount),
 			currency: claim.currency,
 			status: confirmedAtCreate ? "confirmed" : "pending",
 			channel: "whatsapp",
@@ -885,13 +1277,25 @@ export const commit = mutation({
 			// The claim's window CONTINUES onto the order (Zaki, 27 Aug — the
 			// Agoda model): stock just decremented, so the hold must run until
 			// real money. Floored to a full runway so a buyer who spent most of
-			// the window on the form still has a real chance to pay.
-			paymentDueAt: paymentDueAtCommit(claim.expiresAt, now),
+			// the window on the form still has a real chance to pay. None while
+			// the store can't take payment (z8r3fdr6gg — see the file header).
+			paymentDueAt: paymentsPaused
+				? undefined
+				: paymentDueAtCommit(claim.expiresAt, now),
 			confirmationPushStatus: confirmedAtCreate ? "sending" : undefined,
 			statusChangedAt: now,
 			createdAt: now,
 			updatedAt: now,
 		});
+
+		// Spend the voucher in the transaction that created the order — the claim
+		// held it only as an offer until now (lib/voucherRedemption.ts).
+		if (voucherState.kind === "applied")
+			await redeemVoucher(ctx, {
+				voucherId: voucherState.voucherId,
+				orderId,
+				now,
+			});
 
 		await ctx.db.insert("orderEvents", {
 			orderId,
@@ -909,7 +1313,12 @@ export const commit = mutation({
 			await stampRetailerActivation(ctx, claim.retailerId, now);
 		}
 
-		await recordOrderCreated(ctx, claim.retailerId, now);
+		await recordOrderCreated(ctx, {
+			retailerId: claim.retailerId,
+			orderId,
+			orderShortId: shortId,
+			createdAt: now,
+		});
 		await stampProductsOrdered(ctx, claim.lines, now);
 
 		await linkOrderToCustomer(ctx, {
@@ -1009,10 +1418,25 @@ export const cancelUnpaidDueOrders = internalMutation({
 			)
 			.paginate({ numItems: 50, cursor: cursor ?? null });
 		let cancelled = 0;
+		// One subscription read per store per page, not per order.
+		const pausedByStore = new Map<Id<"retailers">, boolean>();
 		for (const order of page.page) {
 			if (!isAutoCancelDue(order, now)) continue;
+			let paused = pausedByStore.get(order.retailerId);
+			if (paused === undefined) {
+				paused = await buyerPaymentsPaused(ctx, order.retailerId);
+				pausedByStore.set(order.retailerId, paused);
+			}
+			if (paused) {
+				// The buyer couldn't pay inside this window (z8r3fdr6gg), so it
+				// isn't theirs to have missed: lift the deadline, keep the order.
+				// The seller can still cancel it by hand once they're back.
+				await ctx.db.patch(order._id, { paymentDueAt: undefined });
+				continue;
+			}
 			await applyStatusTransition(ctx, order, "cancelled", {
 				note: "payment_window_expired",
+				cancelCause: "system",
 			});
 			// applyStatusTransition clears paymentDueAt on every cancel; the
 			// reason stamp is this sweep's own signature.
@@ -1062,8 +1486,9 @@ export const expireStaleClaims = internalMutation({
 /**
  * Daily purge: DELETE dead claims (expired / cancelled) past the retention
  * window — they hold buyer PII (phone + name) and serve no further purpose.
- * Completed claims are kept (they link to an order; order retention is the
- * PDPA pack's job). Mirrors counterCheckout.purgeStaleSessions.
+ * Completed claims are kept (they link to an order); account deletion is what
+ * erases those, via the `orderClaims` phase in lib/accountDeletion.ts. Mirrors
+ * counterCheckout.purgeStaleSessions.
  */
 export const purgeStaleClaims = internalMutation({
 	args: {

@@ -42,9 +42,23 @@ Where the fallback lands on PNG and the source has **no alpha to lose** (`ALPHA_
 
 **Safari gets HEIC for free.** It *can* decode HEIC, so step 1 succeeds and step 2 converts it to WebP. Those users never see a refusal.
 
-**Batches are all-or-nothing** (product images, mockups): every file is prepared before any is uploaded, because a partial upload leaves the seller guessing which photos actually made it.
+**Batches: the mockup is all-or-nothing, product photos are per-tile.** A mockup set is prepared whole before any of it is uploaded, and a mid-set failure discards what already went up — the buyer must never be asked to approve half a design. Product photos used to work the same way, for the same reason ("a partial upload leaves the seller guessing which photos made it"); since z8r3fdtk85 each photo has its own tile that says whether it made it, which answers that question directly, so a pick of five no longer fails whole because one file was bad.
 
-## Where it runs — 12 inputs
+## Every step has a deadline — `src/lib/storage-upload.ts` (z8r3fdtk85)
+
+**The bug:** during the Campfest admin pass a product photo tile sat on "Uploading…" forever, and DevTools showed no upload request. Prod was quiet at the time (7–8 uploads an hour store-wide; the 158-file bulk upload came *after* the report, and the same store's photos all uploaded fine the next day), so it was not a busy server. Every upload ran four **unbounded** awaits — prepare (`img.decode()` + `canvas.toBlob`), mint the upload URL, POST the bytes, read the storage id — so any one that never settled left a spinner with nothing behind it, and the `catch` never ran.
+
+**Why "no request in the Network tab" points at the mint:** the upload-URL mint is a Convex **mutation**, which rides the WebSocket and never shows as an HTTP request. The Convex client *queues* a mutation while its socket is reconnecting or its auth token is refreshing, so the promise simply waits — no error, no request. Only the POST of the bytes is a visible request, and it never fired.
+
+**The rule:** every image upload goes through `uploadImage(file, mintUrl)` (or `prepareImage` + `uploadPrepared` where a site must prepare a whole set first, or check the prepared size). Each step races a deadline — prepare 30s, mint 20s, POST 90s (the POST is also **aborted**, so the bytes stop going up once we've given up) — and the result is always `{ ok: true, storageId, blob }` or `{ ok: false, reason, retryable, message }`. It never throws and never hangs. Offline fails fast, before the mint.
+
+**`retryable` is honest.** A file we refuse (HEIC, too large) and a server refusal that names its own fix (a view-only store) are *not* retryable — a Retry there is a wrong-but-enabled button. The rate limiter's refusal *is* ("try again in 30s"), and so are timeouts and transport failures. `reason` is machine-readable so a localized surface (the buyer's payment-proof dialog, BM/EN) can speak its own words instead of the English `message`.
+
+**The product photo grid** gives every picked photo its own tile: "Uploading…" over the preview, then it joins the grid or becomes **"Didn't upload"** with a 44px **Retry** strip and a remove ×, plus one line under the grid per distinct reason. A non-retryable failure skips the tile and toasts the reason. Uploads run one at a time (keeps a five-photo pick inside the per-minute write limit; appends land in pick order), and photos still in flight count toward the 5-photo cap. The grid reports `{kind: "uploading"}` / `{kind: "failed", count}` / `{kind: "idle"}` to its parent: `uploading` holds Save, and `failed` counts as unsaved work so the leave guard asks before the photo is lost — and the parent's primary button says so. The edit form's Save bar and the wizard's Continue both read **"1 photo didn't upload"** (`failedPhotosLabel`, one author) and are disabled while a tile sits failed: a bar reading "All changes saved" beside a "Didn't upload" tile was lying, and an enabled Continue let the wizard create the product without the photo (both found in the /test-code pass). The grid reports `{kind: "idle"}` from its effect **cleanup** too, so a parent never keeps hearing "uploading"/"failed" from a grid that has unmounted (the wizard's Continue was left disabled on every later step otherwise), and the wizard's **Back is held with the same reason** while photos are uploading or failed — Back unmounts the grid, which would land an in-flight photo with no tile and drop a failed one without a word. The "(n/5)" count includes tiles on their way up, because the cap and the Add tile count them. Refusals the grid makes itself (a HEIC, one over the 5-photo cap) are said **under the grid**, cleared by the next pick — routed to the form's error slot they landed two screens down beside Save, where nothing seemed to happen.
+
+Before this, the same four awaits were copy-pasted at eleven sites — which is how none of them got a deadline. Add an image upload by calling the helper, never by writing the awaits again.
+
+## Where it runs — 13 inputs
 
 | Surface | Uploader |
 |---|---|
@@ -55,6 +69,7 @@ Where the fallback lands on PNG and the source has **no alpha to lose** (`ALPHA_
 | `routes/app.settings.tsx` (logo, cover, payment QR) | seller |
 | `routes/app.orders.$shortId.tsx` | seller → **buyer approves it** |
 | `routes/app.admin.billing.tsx` | admin |
+| `admin/showcase-editor.tsx` (event cover) | admin |
 | `storefront/product-purchase.tsx` | buyer |
 | `storefront/manual-payment-dialog.tsx` | buyer → **seller must read it** |
 

@@ -83,7 +83,12 @@ export const VERIFIABLE: Record<CountrySetupItemKey, boolean> = {
 	pickup_addresses: true,
 	delivery_mode: true,
 	pickup_contacts: true,
-	delivery_booking: true,
+	// Was verifiable when it meant "booking on in a country with no booking" —
+	// a fact we held. Since z8r3fdch3r it means "your keys may belong to the
+	// old market", and nothing in a stored key says which market it was created
+	// for, so only the seller can confirm. Un-dismissable here would be a
+	// permanent nag on stores whose keys are fine.
+	delivery_booking: false,
 	wa_phone: true,
 	notify_wa_phone: true,
 };
@@ -185,8 +190,13 @@ export function resolveCountrySetup(
 	if (stalePickupContacts > 0) {
 		add("pickup_contacts", "cosmetic", stalePickupContacts);
 	}
-	if (input.deliveryBookingEnabled && !riderBookingAllowed(country)) {
-		add("delivery_booking", "cosmetic");
+	// Rider booking exists in both our markets now (z8r3fdch3r), but Lalamove
+	// issues API keys per market app — a key created for Malaysia quotes
+	// nothing in Singapore. Booking stays armed across the switch (nothing is
+	// silently disabled), so the checklist has to say why the next quote will
+	// fail and where the fix is.
+	if (input.deliveryBookingEnabled) {
+		add("delivery_booking", riderBookingAllowed(country) ? "money" : "cosmetic");
 	}
 	if (input.waPhone && !STORED_MOBILE_PATTERN[country].test(input.waPhone)) {
 		add("wa_phone", "cosmetic");

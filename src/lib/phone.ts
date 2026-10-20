@@ -23,7 +23,13 @@ export { normalizeMobileDigits };
 /**
  * Bridge between the app's stored phone format (digits-only with the country
  * code, e.g. `601159399791` / `6591234567`) and what belongs to the RIGHT of
- * the field's fixed `+60`/`+65` plate (`11-5939 9791` / `9123 4567`).
+ * a SELLER field's fixed `+60`/`+65` plate (`11-5939 9791` / `9123 4567`).
+ *
+ * Seller fields only — the store's contact, alert and pickup-manager numbers,
+ * whose plate is locked to the store's country (`MyPhoneInput`). A buyer field
+ * has a country picker instead (`BuyerPhoneInput`, z8r3fdh274): its number can
+ * be from anywhere, so there is no single plate to peel and this must not seed
+ * one.
  *
  * Seeding a plated field with the stored value verbatim would read `+60 |
  * 601159399791` — the country code twice — and a seller who "fixed" it by
@@ -49,9 +55,10 @@ export function toNationalPhoneInput(
 	const digits = value.replace(/\D/g, "");
 	if (digits.length === 0) return "";
 	const grouped = formatMobile(digits);
-	// `formatMobile` returns `+60 …`/`+65 …` for a recognised mobile and
-	// `+<digits>` for anything else; only a number in the plate's own country
-	// has a national part to peel off.
+	// `formatMobile` returns `+60 …`/`+65 …` for a recognised mobile, an
+	// unbroken `+<digits>` for any other MY/SG number, and `+CC …` for other
+	// countries; only a mobile in the plate's own country has a national part
+	// to peel off.
 	const plate = `+${COUNTRY_DIAL_CODE[country]} `;
 	return grouped.startsWith(plate) ? grouped.slice(plate.length) : digits;
 }

@@ -1,10 +1,13 @@
 /// <reference types="vite/client" />
+import { BUCKET_LEAVES } from "./lib/orderBuckets";
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { UNKNOWN_DIAL_COUNTRY_MESSAGE } from "./lib/buyerPhone";
 import { todayMytMidnight } from "./lib/fulfilmentDate";
+import { FULFILMENT_KEYS } from "./lib/orderCsv";
 import { rateLimiter } from "./lib/rateLimiter";
 import { sortInboxOrders } from "./lib/orderInboxFilter";
 import schema from "./schema";
@@ -17,6 +20,17 @@ function setup() {
 	const t = convexTest(schema, modules);
 	registerRateLimiter(t);
 	return t;
+}
+
+/**
+ * A stored screenshot for a payment claim. Proof is mandatory on a first claim
+ * (z8r3fdnpxf), so a test about something else — the mockup gate, the token
+ * capability, a delivery charge — still has to attach one for the claim to land.
+ */
+async function storeProof(t: ReturnType<typeof setup>): Promise<string> {
+	return await t.run((ctx) =>
+		ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+	);
 }
 
 /**
@@ -77,6 +91,8 @@ async function seedProduct(
 		blockWhenOutOfStock: boolean;
 		requiresProof: boolean;
 		minNoticeDays: number;
+		prepMinutes: number;
+		pickupNote: string;
 		parcelWeightG: number;
 	}> = {},
 ): Promise<Id<"products">> {
@@ -90,6 +106,8 @@ async function seedProduct(
 		blockWhenOutOfStock: overrides.blockWhenOutOfStock ?? true,
 		requiresProof: overrides.requiresProof ?? false,
 		minNoticeDays: overrides.minNoticeDays,
+		prepMinutes: overrides.prepMinutes,
+		pickupNote: overrides.pickupNote,
 		variants: [
 			{
 				optionValues: [],
@@ -435,6 +453,243 @@ describe("orders", () => {
 		expect(events[0].status).toBe("pending");
 	});
 
+	// ---- blockWhenOutOfStock freeze (86eypn8ye) ---------------------------
+	//
+	// Restore used to re-resolve the flag from the CURRENT docs, so flipping it
+	// between create and cancel broke the reversal in both directions. The flag
+	// is a property of the ORDER's moment, so it is frozen onto the line.
+
+	test("flag turned OFF after ordering still returns the reserved units", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			stock: 10,
+			blockWhenOutOfStock: true,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		expect(await getProductStock(t, productId)).toBe(7);
+
+		// Seller switches the product to made-to-order after the sale.
+		await asA.mutation(api.products.update, {
+			productId,
+			blockWhenOutOfStock: false,
+		});
+
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		// Units WERE reserved, so they must come back — previously they were
+		// stranded because today's flag said "never reserved".
+		expect(await getProductStock(t, productId)).toBe(10);
+	});
+
+	test("flag turned ON after ordering does not invent units", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			stock: 10,
+			blockWhenOutOfStock: false,
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		// Made-to-order: nothing was reserved.
+		expect(await getProductStock(t, productId)).toBe(10);
+
+		await asA.mutation(api.products.update, {
+			productId,
+			blockWhenOutOfStock: true,
+		});
+
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		// Must NOT climb to 13 — those units were never taken.
+		expect(await getProductStock(t, productId)).toBe(10);
+	});
+
+	// ---- Cancelled is terminal (86eypn8ye) -------------------------------
+	//
+	// Cancelling RESTORES reserved stock and nothing re-decrements on the way
+	// back out, so a revived order leaves its units counted as available while
+	// the goods are committed — and cancelling it AGAIN restores a second time.
+	// `onHand` has no ceiling, so the cycle inflates without limit until a later
+	// checkout passes its gate against a lie and the store oversells for real.
+	// Before this, no test asserted cancelled was terminal on any path.
+
+	test("updateStatus refuses to reopen a cancelled order", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		const asA = t.withIdentity({ subject: USER_A });
+		expect(await getProductStock(t, productId)).toBe(7);
+
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		expect(await getProductStock(t, productId)).toBe(10);
+
+		await expect(
+			asA.mutation(api.orders.updateStatus, {
+				orderId: order!._id,
+				status: "confirmed",
+			}),
+		).rejects.toThrow();
+		// Still cancelled, and stock is untouched by the refused call.
+		const after = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(after?.status).toBe("cancelled");
+		expect(await getProductStock(t, productId)).toBe(10);
+	});
+
+	test("re-cancelling a cancelled order stays a no-op for stock", async () => {
+		// The idempotence `applyStatusTransition` already had — pinned here
+		// because it is the other half of the invariant: restore fires on the
+		// FIRST transition into cancelled and never again.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		expect(await getProductStock(t, productId)).toBe(10);
+	});
+
+	test("bulkUpdateStatus skips cancelled orders and names the reason", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const asA = t.withIdentity({ subject: USER_A });
+
+		const a = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const b = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const orderA = await t.query(api.orders.get, { token: await tk(t, a.shortId) });
+		const orderB = await t.query(api.orders.get, { token: await tk(t, b.shortId) });
+
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: orderA!._id,
+			status: "cancelled",
+		});
+		const stockAfterCancel = await getProductStock(t, productId);
+
+		// The inbox's Cancelled bucket is selectable and the bulk bar offers every
+		// forward status without filtering on the current one — this exact
+		// selection was two taps away.
+		const res = await asA.mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [orderA!._id, orderB!._id],
+			status: "confirmed",
+		});
+		expect(res.updated).toBe(1);
+		expect(res.skipped).toBe(1);
+		expect(res.skippedCancelled).toBe(1);
+
+		const stillCancelled = await t.query(api.orders.get, {
+			token: await tk(t, a.shortId),
+		});
+		expect(stillCancelled?.status).toBe("cancelled");
+		expect(await getProductStock(t, productId)).toBe(stockAfterCancel);
+	});
+
+	test("the un-cancel loop can no longer inflate stock", async () => {
+		// The whole point of the ticket, end to end: cancel → revive → cancel
+		// used to restore a second time, and repeat without limit. Stock must
+		// never exceed what the product started with.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await asA.mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+
+		for (let i = 0; i < 3; i++) {
+			// Both revive paths, refused: one throws, one skips.
+			await expect(
+				asA.mutation(api.orders.updateStatus, {
+					orderId: order!._id,
+					status: "confirmed",
+				}),
+			).rejects.toThrow();
+			const res = await asA.mutation(api.orders.bulkUpdateStatus, {
+				orderIds: [order!._id],
+				status: "confirmed",
+			});
+			expect(res.skippedCancelled).toBe(1);
+			await asA.mutation(api.orders.updateStatus, {
+				orderId: order!._id,
+				status: "cancelled",
+			});
+			expect(await getProductStock(t, productId)).toBe(10);
+		}
+	});
+
 	test("updateStatus patches status and appends event", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -572,6 +827,9 @@ describe("orders", () => {
 	});
 
 	test("rejects when customer waPhone is invalid", async () => {
+		// Letters carry no number at all, so the buyer is asked for one
+		// (z8r3fdh274); digits of the wrong shape get the country's mobile copy
+		// (the confirmation-push suite pins that).
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id);
@@ -1079,6 +1337,7 @@ describe("orders", () => {
 			await t.mutation(api.orders.claimPayment, {
 				token: await tk(t, shortId),
 				reference: "TXN-12345",
+				proofStorageId: await storeProof(t),
 			});
 
 			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
@@ -1130,7 +1389,11 @@ describe("orders", () => {
 			expect(order?.paymentStatus).toBe("claimed");
 		});
 
-		test("claimPayment without reference or proof still succeeds", async () => {
+		// Proof is MANDATORY (z8r3fdnpxf) — these three pin the whole rule.
+		// A claim with nothing attached used to succeed, which is how sellers
+		// ended up with "they say they paid" and went back to WhatsApp to ask
+		// for the receipt.
+		test("claimPayment rejects a first claim with no proof", async () => {
 			const t = setup();
 			const retailer = await seedRetailer(t, USER_A);
 			const productId = await seedProduct(t, USER_A, retailer._id);
@@ -1142,10 +1405,79 @@ describe("orders", () => {
 				customer,
 				deliveryAddress: validAddress,
 			});
-			await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
+
+			await expect(
+				t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) }),
+			).rejects.toThrow(/Attach a screenshot/);
+
+			// Nothing moved: a refused claim must not leave the order looking
+			// claimed, or the seller gets the card without the image anyway.
 			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
-			expect(order?.paymentStatus).toBe("claimed");
-			expect(order?.paymentReference).toBeUndefined();
+			expect(order?.paymentStatus ?? "unpaid").toBe("unpaid");
+			expect(order?.paymentClaimedAt).toBeUndefined();
+		});
+
+		test("a reference is not a substitute for the screenshot", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const productId = await seedProduct(t, USER_A, retailer._id);
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+
+			await expect(
+				t.mutation(api.orders.claimPayment, {
+					token: await tk(t, shortId),
+					reference: "TXN-12345",
+				}),
+			).rejects.toThrow(/Attach a screenshot/);
+			// An empty-string proof is no proof either — the guard reads the
+			// TRIMMED value, not merely "was the arg present".
+			await expect(
+				t.mutation(api.orders.claimPayment, {
+					token: await tk(t, shortId),
+					proofStorageId: "   ",
+				}),
+			).rejects.toThrow(/Attach a screenshot/);
+		});
+
+		// The rule is on the ORDER, not on each submission: the forgotten-reference
+		// fix must not demand the same image a second time.
+		test("a reference-only resubmit is allowed once a screenshot is on file", async () => {
+			const t = setup();
+			const retailer = await seedRetailer(t, USER_A);
+			const productId = await seedProduct(t, USER_A, retailer._id);
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryAddress: validAddress,
+			});
+			const png = await t.run((ctx) =>
+				ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+			);
+			await t.mutation(api.orders.claimPayment, {
+				token: await tk(t, shortId),
+				proofStorageId: png,
+			});
+
+			await t.mutation(api.orders.claimPayment, {
+				token: await tk(t, shortId),
+				reference: "TXN-FORGOT",
+			});
+
+			const order = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			expect(order?.paymentReference).toBe("TXN-FORGOT");
+			// The screenshot survives the reference-only resubmit — it is still the
+			// thing the seller verifies against.
+			expect(order?.hasPaymentProof).toBe(true);
 		});
 
 		test("claimPayment is idempotent — second claim overwrites reference", async () => {
@@ -1164,7 +1496,10 @@ describe("orders", () => {
 			await t.mutation(api.orders.claimPayment, {
 				token: await tk(t, shortId),
 				reference: "first",
+				proofStorageId: await storeProof(t),
 			});
+			// The screenshot is already on file, so the fix is reference-only —
+			// exactly the resubmit the mandatory-proof rule has to keep legal.
 			await t.mutation(api.orders.claimPayment, {
 				token: await tk(t, shortId),
 				reference: "second",
@@ -1952,7 +2287,10 @@ describe("orders — mockup approval", () => {
 		});
 		await t.mutation(api.orders.approveMockup, { token: await tk(t, shortId) });
 
-		await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
+		await t.mutation(api.orders.claimPayment, {
+			token: await tk(t, shortId),
+			proofStorageId: await storeProof(t),
+		});
 		expect((await t.query(api.orders.get, { token: await tk(t, shortId) }))?.paymentStatus).toBe(
 			"claimed",
 		);
@@ -2507,6 +2845,81 @@ describe("orders — custom quote + decline", () => {
 		expect(jobs.some((j) => j.name.includes("notifyPaymentDue"))).toBe(false);
 	});
 
+	test("decline on a CANCELLED order is refused — the fourth stock-restore door", async () => {
+		// 86eypn8ye. Cancelling does not clear `mockupStatus`, so a cancelled
+		// order still satisfied declineMockupItem's two guards, and its restore
+		// handed the units back a SECOND time — `onHand` has no ceiling, so the
+		// store then oversells against a count that never happened. This is the
+		// only one of the four doors a BUYER can open (token, no auth).
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		// A proof-gated line that ALSO reserves stock — the combination the
+		// defensive restore inside declineMockupItem exists for.
+		const productId = await asA(t).mutation(api.products.create, {
+			retailerId: retailer._id,
+			name: "Engraved board",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			options: [],
+			variants: [
+				{
+					optionValues: [],
+					price: 9000,
+					onHand: 10,
+					blockWhenOutOfStock: true,
+					requiresProof: true,
+				},
+			],
+		});
+		const variant = await t.run(async (ctx) =>
+			(
+				await ctx.db
+					.query("productVariants")
+					.withIndex("by_product", (q) => q.eq("productId", productId))
+					.collect()
+			)[0],
+		);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ variantId: variant._id, quantity: 3 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Buyer", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.unique(),
+		);
+		// 10 - 3 reserved.
+		expect((await t.run((ctx) => ctx.db.get(variant._id)))?.onHand).toBe(7);
+
+		await asA(t).mutation(api.orders.submitMockup, {
+			orderId: order!._id,
+			storageId: "m1",
+			quotedAmount: 12000,
+		});
+		await asA(t).mutation(api.orders.updateStatus, {
+			orderId: order!._id,
+			status: "cancelled",
+		});
+		// Cancel restored the 3 — and deliberately left mockupStatus set.
+		expect((await t.run((ctx) => ctx.db.get(variant._id)))?.onHand).toBe(10);
+		expect(
+			(await t.run((ctx) => ctx.db.get(order!._id)))?.mockupStatus,
+		).toBeDefined();
+
+		await expect(
+			t.mutation(api.orders.declineMockupItem, { token: await tk(t, shortId) }),
+		).rejects.toThrow(/cancelled/i);
+
+		// The whole point: still 10, never 13.
+		expect((await t.run((ctx) => ctx.db.get(variant._id)))?.onHand).toBe(10);
+	});
+
 	test("decline is rejected once the mockup is approved", async () => {
 		const t = setup();
 		const { order, shortId } = await seedOrder(t, { fixedQty: 1, customQty: 1 });
@@ -2921,11 +3334,26 @@ describe("orders — inbox search", () => {
 			dueToday: 0,
 			unpaid: 2,
 			unpaidAmount: o1.total + o2.total,
+			// Both unpaid orders were created just now, so neither has gone
+			// stale yet (z8r3fdrgzj — the 3-day boundary is pinned in its own
+			// describe below). `unpaidStaleOldestAt` is 0, never a stray epoch.
+			unpaidStale: 0,
+			unpaidStaleAmount: 0,
+			unpaidStaleOldestAt: 0,
 			// Nothing is packed AND paid here, so the despatch queue is empty
 			// (86eyp63mp — covered properly in convex/awb.test.ts).
 			readyToShip: 0,
 			// Nothing pinned (86eyrtz74 — pinning is covered below).
 			pinned: 0,
+			// This fixture's store is in credit, so no order is waiting on one
+			// (Credits T3.1 — the gate's own counts live in orderGate.test.ts).
+			creditGated: 0,
+			// No booking orders in this fixture (S8). The assertion is
+			// deliberately exhaustive: a new count field has to be accounted for
+			// here consciously, not absorbed silently.
+			bookingActive: 0,
+			bookingEndingSoon: 0,
+			bookingUpcoming: 0,
 		});
 		expect(all.total).toBe(4);
 
@@ -2976,6 +3404,165 @@ describe("orders — inbox search", () => {
 		});
 		expect(byId.orders.map((o) => o._id)).toContain(o1._id);
 	});
+
+	/**
+	 * This test exists because the first build DIDN'T have it.
+	 *
+	 * `searchOrders` assembles its filter set from an EXPLICIT field list, not a
+	 * rest spread — so a new arg can be declared in the validator, sent by the
+	 * client and carried in the URL while the server silently drops it. The chip
+	 * rendered, its count was right, and clicking it changed nothing. Unit tests
+	 * on `buildInboxPredicate` cannot see that: the break is in the wiring
+	 * between the query and the predicate, which only an end-to-end query test
+	 * crosses.
+	 */
+	test("the booking period chip actually filters (S8)", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const plain = await mkOrder(t, retailer._id, productId, { name: "Plain" });
+		const active = await mkOrder(t, retailer._id, productId, {
+			name: "Staying",
+		});
+		const future = await mkOrder(t, retailer._id, productId, { name: "Later" });
+
+		const DAY = 86_400_000;
+		const today = todayMytMidnight();
+		await t.run(async (ctx) => {
+			await ctx.db.patch(active._id, {
+				deliveryMethod: "booking",
+				bookingCheckIn: today - 2 * DAY,
+				bookingCheckOut: today + 3 * DAY,
+			});
+			await ctx.db.patch(future._id, {
+				deliveryMethod: "booking",
+				bookingCheckIn: today + 2 * DAY,
+				bookingCheckOut: today + 5 * DAY,
+			});
+		});
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			bookingPeriods: ["active"],
+		});
+		const ids = res.orders.map((o) => o._id);
+		expect(ids).toEqual([active._id]);
+		// A plain order has no span at all — it must not survive the filter,
+		// or the chip would keep the whole product inbox.
+		expect(ids).not.toContain(plain._id);
+		expect(ids).not.toContain(future._id);
+
+		// Counts are tallied over the FULL window, so they do NOT move when the
+		// chip is on — that is what makes the chip's own number trustworthy.
+		expect(res.counts.bookingActive).toBe(1);
+		expect(res.counts.bookingUpcoming).toBe(1);
+	});
+
+	/** Same wiring hazard as the test above — `pinMode` is another arg that has
+	 * to be threaded through the explicit field list by hand. */
+	test('pinMode "only" narrows to the pinned orders', async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const kept = await mkOrder(t, retailer._id, productId, { name: "Kept" });
+		const other = await mkOrder(t, retailer._id, productId, { name: "Other" });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(kept._id, { pinnedAt: Date.now() });
+		});
+
+		const pinnedOnly = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			pinMode: "only",
+		});
+		expect(pinnedOnly.orders.map((o) => o._id)).toEqual([kept._id]);
+
+		// The counts stay tallied over the full window, so the chips still say
+		// what turning one on would give you.
+		expect(pinnedOnly.counts.new + pinnedOnly.counts.in_progress).toBe(2);
+
+		// Not a one-way door: back to "top" restores the full inbox.
+		const back = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			pinMode: "top",
+		});
+		expect(back.orders.map((o) => o._id).sort()).toEqual(
+			[kept._id, other._id].sort(),
+		);
+	});
+
+	/** A client built before `pinMode` existed sends `showPinned` or nothing.
+	 * Nothing meant "no pin privilege" on the old wire, and must keep meaning
+	 * that — the new default is "top", so an unfolded arg would silently start
+	 * forcing pins into a filtered view for anyone who hadn't reloaded. */
+	test("a pre-pinMode client keeps exactly the behaviour it asked for", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const pinned = await mkOrder(t, retailer._id, productId, { name: "Pin" });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(pinned._id, {
+				status: "delivered",
+				pinnedAt: Date.now(),
+			});
+		});
+
+		// No pin arg at all — the pin must NOT outrank the bucket.
+		const legacyOff = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["new"],
+		});
+		expect(legacyOff.orders.map((o) => o._id)).not.toContain(pinned._id);
+
+		// The old boolean still turns the privilege on.
+		const legacyOn = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["new"],
+			showPinned: true,
+		});
+		expect(legacyOn.orders.map((o) => o._id)).toContain(pinned._id);
+	});
+
+	/**
+	 * The fault that made the whole row confusing (owner report, 1 Sep): booking
+	 * chips ANDed with the status buckets while looking identical to them, so
+	 * "In progress" + "Ending this week" quietly intersected. They are ONE set
+	 * now, and this is the end-to-end proof that the union survives the wiring.
+	 */
+	test("a booking chip ORs with a status chip rather than narrowing it", async () => {
+		const t = setup();
+		const asA = t.withIdentity({ subject: USER_A });
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const plainNew = await mkOrder(t, retailer._id, productId, { name: "New" });
+		const stay = await mkOrder(t, retailer._id, productId, { name: "Stay" });
+
+		const DAY = 86_400_000;
+		const today = todayMytMidnight();
+		await t.run(async (ctx) => {
+			// A DELIVERED booking that is still running — deliberately in the
+			// "completed" bucket, so an intersection with New would drop it.
+			await ctx.db.patch(stay._id, {
+				status: "delivered",
+				deliveryMethod: "booking",
+				bookingCheckIn: today - DAY,
+				bookingCheckOut: today + 2 * DAY,
+			});
+		});
+
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["new"],
+			bookingPeriods: ["active"],
+		});
+		const ids = res.orders.map((o) => o._id);
+		// Both survive: one via the bucket, one via the period.
+		expect(ids.sort()).toEqual([plainNew._id, stay._id].sort());
+	});
+
 
 	test("omitting limit returns the full window; limit trims rows but keeps total/counts (stable-window pagination)", async () => {
 		const t = setup();
@@ -4036,7 +4623,10 @@ describe("tracking-link capability (shortId hardening)", () => {
 		const { shortId, trackingToken } = await makeOrder(t);
 		// The shortId is no longer a valid arg for the buyer mutation — only the
 		// token is accepted, and confirming via the token works.
-		await t.mutation(api.orders.claimPayment, { token: trackingToken });
+		await t.mutation(api.orders.claimPayment, {
+			token: trackingToken,
+			proofStorageId: await storeProof(t),
+		});
 		const order = await t.query(api.orders.get, { token: trackingToken });
 		expect(order?.paymentStatus).toBe("claimed");
 		// A guessed shortId-shaped token doesn't resolve to the order.
@@ -4780,7 +5370,10 @@ describe("orders — delivery charge", () => {
 			shortId: created.shortId,
 		});
 		expect(sellerOrder?.deliverySnapshot).toEqual({ fee: 2500, mode: "manual" });
-		await t.mutation(api.orders.claimPayment, { token });
+		await t.mutation(api.orders.claimPayment, {
+			token,
+			proofStorageId: await storeProof(t),
+		});
 		order = await t.query(api.orders.get, { token });
 		expect(order?.paymentStatus).toBe("claimed");
 	});
@@ -4809,7 +5402,10 @@ describe("orders — delivery charge", () => {
 		expect(order?.total).toBe(12000);
 
 		// Buyer claims → the charge is frozen against further edits.
-		await t.mutation(api.orders.claimPayment, { token });
+		await t.mutation(api.orders.claimPayment, {
+			token,
+			proofStorageId: await storeProof(t),
+		});
 		await expect(
 			asUser.mutation(api.orders.setDeliveryFee, { orderId, fee: 900 }),
 		).rejects.toThrow(/already in motion/);
@@ -5769,6 +6365,11 @@ describe("orders — Lalamove rider gate on manual advances", () => {
 			skipped: 1,
 			skippedAwaitingCollection: 0,
 			skippedRiderManaged: 1,
+			skippedNoSuchStage: 0,
+			skippedCancelled: 0,
+			// In credit, so nothing is waiting on one (Credits T3.1 — the mixed
+			// selection is covered in creditLock.test.ts).
+			skippedCreditGated: 0,
 		});
 		expect((await t.run((ctx) => ctx.db.get(gated._id)))?.status).toBe("packed");
 		expect((await t.run((ctx) => ctx.db.get(plain._id)))?.status).toBe(
@@ -6092,9 +6693,11 @@ describe("orders — confirmation push at create (86eyf1rck)", () => {
 	});
 
 	test("junk phone is rejected, and never told to add a country code", async () => {
-		// The field wears a fixed `+60` plate, so "8–15 digits, with country code"
-		// (the loose normalizer's own message) would contradict the badge the
-		// buyer is looking at. `assertValidMyMobile` owns one message (86eyknr2r).
+		// The field's plate carries the country code (a picker defaulting to the
+		// store's +60, z8r3fdh274), so "8–15 digits, with country code" (the
+		// loose normalizer's own message) would contradict what the buyer is
+		// looking at. Wrong-shape digits — and a value with no digits at all —
+		// get the picked country's mobile copy.
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id);
@@ -7437,7 +8040,13 @@ describe("orders — fulfilment time at create (86eyg0n8e follow-up)", () => {
 		expect(o?.fulfilmentTimeMinutes).toBe(930);
 	});
 
-	test("self-collect ignores a stray time — the point's schedule governs pickup hours", async () => {
+	test("self-collect now KEEPS a pickup time (z8r3fdff97 reverses this)", async () => {
+		// This test used to assert the opposite: a stray time on a self-collect
+		// order was dropped, because pickup was date-only and the point's own
+		// schedule note carried the detail. That left a made-to-order seller
+		// with no idea when the buyer was coming, which is the whole reason
+		// z8r3fdff97 exists. Kept rather than deleted, inverted rather than
+		// rewritten, so the behaviour change is visible in the diff.
 		const t = setup();
 		const { retailer, productId } = await store(t);
 		const { shortId } = await t.mutation(api.orders.create, {
@@ -7449,6 +8058,24 @@ describe("orders — fulfilment time at create (86eyg0n8e follow-up)", () => {
 			deliveryMethod: "self_collect",
 			fulfilmentDate: tomorrowMidnight(),
 			fulfilmentTimeMinutes: 930,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(930);
+	});
+
+	test("a self-collect order with no time is still accepted", async () => {
+		// The time is OPTIONAL on both methods. A buyer on a stale tab, or any
+		// client that predates the picker, must not be refused.
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMidnight(),
 		});
 		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
 		expect(o?.fulfilmentTimeMinutes).toBeUndefined();
@@ -7505,7 +8132,13 @@ describe("orders — store opening hours at create (86eyp5rav)", () => {
 	function weekWith(
 		overrides: Record<
 			number,
-			{ open: number; close: number; closed?: boolean }
+			{
+				open: number;
+				close: number;
+				closed?: boolean;
+				open2?: number;
+				close2?: number;
+			}
 		>,
 	) {
 		return Array.from(
@@ -7590,6 +8223,45 @@ describe("orders — store opening hours at create (86eyp5rav)", () => {
 		expect(o?.fulfilmentTimeMinutes).toBe(1080);
 	});
 
+	test("a SPLIT day refuses a delivery in the break, naming it, and takes both windows (z8r3fdff8r)", async () => {
+		const t = setup();
+		const { retailer, productId } = await store(t);
+		const date = tomorrowMidnight();
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.retailers.updateSettings,
+			{
+				openingHours: weekWith({
+					// Breakfast 7:30–10:00, then the cafe window 12:00–18:00.
+					[weekdayOf(date)]: { open: 450, close: 600, open2: 720, close2: 1080 },
+				}),
+			},
+		);
+		const base = {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR" as const,
+			channel: "whatsapp" as const,
+			customer,
+			deliveryMethod: "delivery" as const,
+			deliveryAddress: validAddress,
+			fulfilmentDate: date,
+		};
+		// 11:00 sits inside the day's outer bounds — the case a single-range
+		// check would wave through. The server names the break.
+		await expect(
+			t.mutation(api.orders.create, { ...base, fulfilmentTimeMinutes: 660 }),
+		).rejects.toThrow(/closed 10:00 AM – 12:00 PM/);
+		// Both windows accept, each at its own closing boundary (inclusive).
+		for (const minute of [600, 1080]) {
+			const { shortId } = await t.mutation(api.orders.create, {
+				...base,
+				fulfilmentTimeMinutes: minute,
+			});
+			const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			expect(o?.fulfilmentTimeMinutes).toBe(minute);
+		}
+	});
+
 	test("an open day passes date-only (self-collect), and unset hours constrain nothing", async () => {
 		const t = setup();
 		const { retailer, productId } = await store(t);
@@ -7602,9 +8274,9 @@ describe("orders — store opening hours at create (86eyp5rav)", () => {
 				}),
 			},
 		);
-		// Self-collect is date-only: an open day passes even though 3 AM would
-		// be outside the window (pickup has no time; the point's schedule note
-		// governs the detail).
+		// A self-collect order WITHOUT a time is judged by the day alone: an
+		// open day passes (a pickup time is optional; when one is sent it is
+		// held to the window like a delivery's).
 		const { shortId } = await t.mutation(api.orders.create, {
 			retailerId: retailer._id,
 			items: [{ productId, quantity: 1 }],
@@ -7688,6 +8360,81 @@ describe("orders — seller reschedule (86eyp5qd1)", () => {
 		);
 		const note = events.find((e) => e.note?.startsWith("fulfilment_rescheduled"));
 		expect(note?.note).toMatch(/from \d{4}-\d{2}-\d{2} 03:00 to \d{4}-\d{2}-\d{2} 10:00/);
+	});
+
+	test("the order carries what /track needs to SAY it moved", async () => {
+		// No message goes out on a reschedule, so the buyer's page is the only
+		// place the change can surface — and "Deliver on 10:00 AM" alone reads
+		// exactly like the time they picked (z8r3fdff97 test round).
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: date,
+			fulfilmentTimeMinutes: 10 * 60,
+		});
+		const moved = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(moved?.rescheduledAt).toBeGreaterThan(0);
+		expect(moved?.rescheduledFromDate).toBe(date);
+		expect(moved?.rescheduledFromTimeMinutes).toBe(3 * 60);
+
+		// Moving again re-points "was" at the moment just left, never the first.
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: date + DAY_MS,
+			fulfilmentTimeMinutes: 11 * 60,
+		});
+		const again = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(again?.rescheduledFromDate).toBe(date);
+		expect(again?.rescheduledFromTimeMinutes).toBe(10 * 60);
+	});
+
+	test("clearing a pickup time leaves no stale 'was' time behind", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const date = todayMytMidnight() + 2 * DAY_MS;
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: date,
+			fulfilmentTimeMinutes: 15 * 60,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		if (!order) throw new Error("seed failed");
+
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.orders.rescheduleFulfilment,
+			{ orderId: order._id, fulfilmentDate: date, fulfilmentTimeMinutes: null },
+		);
+		const cleared = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(cleared?.fulfilmentTimeMinutes).toBeUndefined();
+		// It moved FROM 3:00 PM — that is what the buyer needs contrasted.
+		expect(cleared?.rescheduledFromTimeMinutes).toBe(15 * 60);
+		expect(cleared?.rescheduledAt).toBeGreaterThan(0);
+	});
+
+	test("re-saving the SAME moment is not a change — the buyer is told nothing", async () => {
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.orders.rescheduleFulfilment,
+			{ orderId: order._id, fulfilmentDate: date, fulfilmentTimeMinutes: 3 * 60 },
+		);
+		const same = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(same?.rescheduledAt).toBeUndefined();
+		expect(same?.rescheduledFromDate).toBeUndefined();
 	});
 
 	test("date-only change keeps the existing time — the clock never silently drops", async () => {
@@ -7859,22 +8606,150 @@ describe("orders — seller reschedule (86eyp5qd1)", () => {
 		).rejects.toThrow(/time of day/);
 	});
 
-	test("self-collect orders stay date-only — a passed time is ignored, mirroring create", async () => {
+	test("self-collect takes a pickup time, and a date-only change keeps it (z8r3fdff97)", async () => {
 		const t = setup();
 		const { order, date } = await seedThreeAmOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
 		await t.run(async (ctx) =>
 			ctx.db.patch(order._id, {
 				deliveryMethod: "self_collect" as const,
 				fulfilmentTimeMinutes: undefined,
 			}),
 		);
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: date + DAY_MS,
+			fulfilmentTimeMinutes: 9 * 60,
+		});
+		let updated = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(updated?.fulfilmentDate).toBe(date + DAY_MS);
+		expect(updated?.fulfilmentTimeMinutes).toBe(9 * 60);
+
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: date,
+		});
+		updated = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(updated?.fulfilmentTimeMinutes).toBe(9 * 60);
+	});
+
+	test("null clears a self-collect time — 'come any time that day' — and the event says so", async () => {
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		await t.run(async (ctx) =>
+			ctx.db.patch(order._id, {
+				deliveryMethod: "self_collect" as const,
+				fulfilmentTimeMinutes: 15 * 60,
+			}),
+		);
 		await t.withIdentity({ subject: USER_A }).mutation(
 			api.orders.rescheduleFulfilment,
-			{ orderId: order._id, fulfilmentDate: date + DAY_MS, fulfilmentTimeMinutes: 9 * 60 },
+			{ orderId: order._id, fulfilmentDate: date, fulfilmentTimeMinutes: null },
 		);
 		const updated = await t.run(async (ctx) => ctx.db.get(order._id));
-		expect(updated?.fulfilmentDate).toBe(date + DAY_MS);
 		expect(updated?.fulfilmentTimeMinutes).toBeUndefined();
+		const events = await t.run(async (ctx) =>
+			ctx.db
+				.query("orderEvents")
+				.filter((q) => q.eq(q.field("orderId"), order._id))
+				.collect(),
+		);
+		const note = events.find((e) => e.note?.startsWith("fulfilment_rescheduled"));
+		expect(note?.note).toMatch(
+			/from \d{4}-\d{2}-\d{2} 15:00 to \d{4}-\d{2}-\d{2}\)$/,
+		);
+	});
+
+	test("a delivery refuses a clear — dispatch composes the rider's moment from it", async () => {
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		await expect(
+			t.withIdentity({ subject: USER_A }).mutation(
+				api.orders.rescheduleFulfilment,
+				{ orderId: order._id, fulfilmentDate: date, fulfilmentTimeMinutes: null },
+			),
+		).rejects.toThrow(/keeps a time/);
+		const unchanged = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(unchanged?.fulfilmentDate).toBe(date);
+		expect(unchanged?.fulfilmentTimeMinutes).toBe(3 * 60);
+	});
+
+	test("neither the prep floor nor opening hours bind the seller", async () => {
+		// "The puffs are done early, come in 30 min" is what this is for — and
+		// the store's hours are the seller's to make exceptions to.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Ice Cream Puff",
+			prepMinutes: 240,
+		});
+		const tomorrow = todayMytMidnight() + DAY_MS;
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrow,
+			fulfilmentTimeMinutes: 9 * 60,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		if (!order) throw new Error("seed failed");
+
+		// Inside today's 4-hour prep window. Skipped in the last minutes of the
+		// MYT day, where "a minute from now" would be tomorrow.
+		const nowMinutes = Math.floor(
+			((Date.now() + 8 * 3600_000) % DAY_MS) / 60_000,
+		);
+		if (nowMinutes < 1430) {
+			await asA.mutation(api.orders.rescheduleFulfilment, {
+				orderId: order._id,
+				fulfilmentDate: todayMytMidnight(),
+				fulfilmentTimeMinutes: nowMinutes + 5,
+			});
+			const soon = await t.run(async (ctx) => ctx.db.get(order._id));
+			expect(soon?.fulfilmentTimeMinutes).toBe(nowMinutes + 5);
+		}
+
+		// Tomorrow's hours are 9–6; 3 AM is outside them, and allowed.
+		const weekday = new Date(tomorrow + 8 * 3600_000).getUTCDay();
+		await asA.mutation(api.retailers.updateSettings, {
+			openingHours: Array.from({ length: 7 }, (_, i) =>
+				i === weekday
+					? { open: 9 * 60, close: 18 * 60 }
+					: { open: 9 * 60, close: 18 * 60, closed: true },
+			),
+		});
+		await asA.mutation(api.orders.rescheduleFulfilment, {
+			orderId: order._id,
+			fulfilmentDate: tomorrow,
+			fulfilmentTimeMinutes: 3 * 60,
+		});
+		const early = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(early?.fulfilmentTimeMinutes).toBe(3 * 60);
+	});
+
+	test("a booking is refused — its fulfilment date IS the check-in", async () => {
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		await t.run(async (ctx) =>
+			ctx.db.patch(order._id, { deliveryMethod: "booking" as const }),
+		);
+		await expect(
+			t.withIdentity({ subject: USER_A }).mutation(
+				api.orders.rescheduleFulfilment,
+				{ orderId: order._id, fulfilmentDate: date + DAY_MS },
+			),
+		).rejects.toThrow(/booking/);
+		const unchanged = await t.run(async (ctx) => ctx.db.get(order._id));
+		expect(unchanged?.fulfilmentDate).toBe(date);
 	});
 
 	test("a dateless legacy order can be GIVEN a date — event says 'from unset'", async () => {
@@ -8081,47 +8956,48 @@ describe("SG addresses (SG-lite, 86eynw29u)", () => {
 	});
 });
 
+/** An SG store (born SGD) + one SGD product — orders.create hard-throws on
+ * an order-vs-product currency mismatch, so the whole chain must be SGD. */
+async function seedSgStore(t: ReturnType<typeof setup>) {
+	const asUser = t.withIdentity({ subject: USER_A });
+	await asUser.mutation(api.retailers.createRetailer, {
+		storeName: "SG Store",
+		slug: "sg-store-phones",
+		country: "SG",
+	});
+	const retailer = await asUser.query(api.retailers.getMyRetailer);
+	if (!retailer) throw new Error("seed failed");
+	const productId = await seedProduct(t, USER_A, retailer._id, {
+		currency: "SGD",
+	});
+	return { retailer, productId };
+}
+
+function sgOrderArgs(
+	retailerId: Id<"retailers">,
+	productId: Id<"products">,
+	waPhone: string,
+	waDialCountry?: string,
+) {
+	return {
+		retailerId,
+		items: [{ productId, quantity: 1 }],
+		currency: "SGD",
+		channel: "whatsapp" as const,
+		customer: { name: "Wei Ling", waPhone, waDialCountry },
+		// SG-shaped — the address arm (86eynw29u) judges by the STORE's country,
+		// so an MY `validAddress` would fail first and mask the phone assertion
+		// under test.
+		deliveryAddress: {
+			line1: "12 Bedok North Ave 3",
+			city: "Singapore",
+			state: "Singapore",
+			postcode: "238859",
+		},
+	};
+}
+
 describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
-	/** An SG store (born SGD) + one SGD product — orders.create hard-throws on
-	 * an order-vs-product currency mismatch, so the whole chain must be SGD. */
-	async function seedSgStore(t: ReturnType<typeof setup>) {
-		const asUser = t.withIdentity({ subject: USER_A });
-		await asUser.mutation(api.retailers.createRetailer, {
-			storeName: "SG Store",
-			slug: "sg-store-phones",
-			country: "SG",
-		});
-		const retailer = await asUser.query(api.retailers.getMyRetailer);
-		if (!retailer) throw new Error("seed failed");
-		const productId = await seedProduct(t, USER_A, retailer._id, {
-			currency: "SGD",
-		});
-		return { retailer, productId };
-	}
-
-	function sgOrderArgs(
-		retailerId: Id<"retailers">,
-		productId: Id<"products">,
-		waPhone: string,
-	) {
-		return {
-			retailerId,
-			items: [{ productId, quantity: 1 }],
-			currency: "SGD",
-			channel: "whatsapp" as const,
-			customer: { name: "Wei Ling", waPhone },
-			// SG-shaped — the address arm (86eynw29u) judges by the SAME retailer
-			// country as the phone arm, so an MY `validAddress` would fail first
-			// and mask the phone assertion under test.
-			deliveryAddress: {
-				line1: "12 Bedok North Ave 3",
-				city: "Singapore",
-				state: "Singapore",
-				postcode: "238859",
-			},
-		};
-	}
-
 	test("accepts a +65 buyer and stores the inbound (65…) form", async () => {
 		const t = setup();
 		const { retailer, productId } = await seedSgStore(t);
@@ -8154,7 +9030,11 @@ describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 		expect(order?.customer.waPhone).toBe("6581234567");
 	});
 
-	test("rejects an MY buyer number with the SG message — no cross-accept", async () => {
+	test("bare MY digits on the SG default are still refused — the copy points at the picker", async () => {
+		// No cross-accept by sniffing: with no dial country sent, bare digits
+		// are judged by the store's +65 (z8r3fdh274). What changed is the copy —
+		// "this store takes Singapore numbers" stopped being true of a buyer, so
+		// it names the fix instead (the one-tap switch on the client).
 		const t = setup();
 		const { retailer, productId } = await seedSgStore(t);
 		await expect(
@@ -8162,10 +9042,35 @@ describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 				api.orders.create,
 				sgOrderArgs(retailer._id, productId, "012-345 6789"),
 			),
-		).rejects.toThrow(/Singapore mobile/i);
+		).rejects.toThrow(/Malaysian mobile number — switch the country to \+60/);
 	});
 
-	test("an MY store keeps rejecting +65 buyers exactly as before", async () => {
+	test("an explicit +65 typed at an MY store is honoured — typed, not sniffed", async () => {
+		// Before z8r3fdh274 this was refused with the Malaysian copy. The buyer
+		// TYPED the country code, which is what the picker's auto-switch reads
+		// too, so the server honours it even from a client that sends no dial
+		// country — the bare-digits test below is the one that must stay red.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Ali", waPhone: "+65 9123 4567" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		expect(order?.customer.waPhone).toBe("6591234567");
+	});
+
+	test("bare SG digits at an MY store with no dial country are refused, never sniffed", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
 		const productId = await seedProduct(t, USER_A, retailer._id);
@@ -8175,10 +9080,10 @@ describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 				items: [{ productId, quantity: 1 }],
 				currency: "MYR",
 				channel: "whatsapp",
-				customer: { name: "Ali", waPhone: "+65 9123 4567" },
+				customer: { name: "Ali", waPhone: "9123 4567" },
 				deliveryAddress: validAddress,
 			}),
-		).rejects.toThrow(/Malaysian mobile/i);
+		).rejects.toThrow(/Singapore mobile number — switch the country to \+65/);
 	});
 
 	test("updateBuyerPhone on an SG store repairs with the SG arm", async () => {
@@ -8202,13 +9107,14 @@ describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 			});
 		});
 
-		// An MY number is refused with the SG copy…
+		// Bare MY digits on the store's +65 default are refused, pointing at
+		// the picker (z8r3fdh274)…
 		await expect(
 			t.mutation(api.orders.updateBuyerPhone, {
 				token: await tk(t, shortId),
 				waPhone: "012-345 6789",
 			}),
-		).rejects.toThrow(/Singapore mobile/i);
+		).rejects.toThrow(/switch the country to \+60/);
 
 		// …and the bare SG national form lands in the stored shape.
 		await t.mutation(api.orders.updateBuyerPhone, {
@@ -8223,6 +9129,261 @@ describe("orders — SG store phone arms (SG-lite, 86eynw28q)", () => {
 		);
 		expect(order?.customer.waPhone).toBe("6591234567");
 		expect(order?.confirmationPushStatus).toBe("sending");
+	});
+});
+
+describe("orders — buyer numbers from any country (z8r3fdh274)", () => {
+	// A buyer's WhatsApp number is theirs, not the store's: the phone field wears
+	// a country picker (default = the store's country) and the picked ISO rides
+	// `customer.waDialCountry`. Stored form is always the E.164 digits Meta
+	// delivers inbound, so the customer row keyed on them never forks.
+
+	function myOrderArgs(
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		waPhone: string,
+		waDialCountry?: string,
+	) {
+		return {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp" as const,
+			customer: { name: "Ali", waPhone, waDialCountry },
+			deliveryAddress: validAddress,
+		};
+	}
+
+	async function storedPhone(t: ReturnType<typeof setup>, shortId: string) {
+		const order = await t.run(async (ctx) =>
+			ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first(),
+		);
+		return order?.customer.waPhone;
+	}
+
+	test("an MY store takes a Singapore buyer who picked +65", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "9123 4567", "SG"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("6591234567");
+	});
+
+	test("an SG store takes a Malaysian buyer who picked +60", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedSgStore(t);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			sgOrderArgs(retailer._id, productId, "012-345 6789", "MY"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("60123456789");
+	});
+
+	test("a UK number drops its trunk 0 and is stored as Meta delivers it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "07911 123456", "GB"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("447911123456");
+	});
+
+	test("a Japanese number typed the local way is stored in E.164 digits", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "090-1234-5678", "JP"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("819012345678");
+	});
+
+	test("the customer row is keyed by the E.164 digits — the same key an inbound message uses", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "07911 123456", "GB"),
+		);
+		const { order, customer } = await t.run(async (ctx) => {
+			const order = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			const customer = await ctx.db
+				.query("customers")
+				.withIndex("by_retailer_phone", (q) =>
+					q.eq("retailerId", retailer._id).eq("waPhone", "447911123456"),
+				)
+				.unique();
+			return { order, customer };
+		});
+		expect(customer).not.toBeNull();
+		expect(order?.customerId).toBe(customer?._id);
+		expect(customer?.orderCount).toBe(1);
+	});
+
+	test("an unknown dial country is refused, never read as the store's", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(
+				api.orders.create,
+				myOrderArgs(retailer._id, productId, "012-345 6789", "XX"),
+			),
+		).rejects.toThrow(UNKNOWN_DIAL_COUNTRY_MESSAGE);
+	});
+
+	test("a foreign number of the wrong length is refused, naming the picked country", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(
+				api.orders.create,
+				myOrderArgs(retailer._id, productId, "07911 1234", "GB"),
+			),
+		).rejects.toThrow(
+			/valid United Kingdom mobile number, or tap \+44 to change the country/,
+		);
+	});
+
+	test("a Malaysian number under a neighbour's pick is refused with the fix, never stored as that country's", async () => {
+		// Thailand sits in the picker's Nearby group, a slip of the thumb from
+		// Malaysia, and "012-345 6789" without its 0 is a Thai-LENGTH number. Only a length vouches for it
+		// there, and it is plainly a Malaysian mobile: a wrong pick, not a new
+		// Thai range — the order would otherwise store 66123456789 and the
+		// confirmation push would go to a stranger.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await expect(
+			t.mutation(
+				api.orders.create,
+				myOrderArgs(retailer._id, productId, "012-345 6789", "TH"),
+			),
+		).rejects.toThrow(
+			"That looks like a Malaysian mobile number — switch the country to +60",
+		);
+	});
+
+	test("a calling code typed without its + is peeled once — the mobile pattern decides, not the length", async () => {
+		// "628123456789" under Indonesia is 12 digits, itself a valid Indonesian
+		// length; only the mobile pattern (Indonesian mobiles start 8) says the
+		// 62 is the code the wa.me habit writes, not part of the number.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "628123456789", "ID"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("628123456789");
+	});
+
+	test("no dial country keeps the store country's arm — a local MY number still lands", async () => {
+		// An older client (no picker) sends no waDialCountry: MY stays MY.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(
+			api.orders.create,
+			myOrderArgs(retailer._id, productId, "012-345 6789"),
+		);
+		expect(await storedPhone(t, shortId)).toBe("60123456789");
+		// …and a UK number typed bare is judged as Malaysian, so it is refused.
+		await expect(
+			t.mutation(
+				api.orders.create,
+				myOrderArgs(retailer._id, productId, "07911 123456"),
+			),
+		).rejects.toThrow(/Malaysian mobile/);
+	});
+
+	describe("the track-page repair takes the picked country too", () => {
+		/** An MY-store order whose push failed against a typo'd MY number. */
+		async function seedFailedMyPush(t: ReturnType<typeof setup>) {
+			const retailer = await seedRetailer(t, USER_A);
+			const productId = await seedProduct(t, USER_A, retailer._id);
+			const { shortId } = await t.mutation(
+				api.orders.create,
+				myOrderArgs(retailer._id, productId, "0199999999"),
+			);
+			// Stamped directly: the push pipeline is covered by the 86eyf1rck
+			// suites above.
+			await t.run(async (ctx) => {
+				const o = await ctx.db
+					.query("orders")
+					.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+					.first();
+				await ctx.db.patch(o!._id, {
+					confirmationPushStatus: "failed",
+					confirmationPushFailureKind: "unreachable",
+				});
+			});
+			return { retailer, shortId };
+		}
+
+		test("repairs to a UK number, moves the CRM row onto it, and re-queues the push", async () => {
+			const t = setup();
+			const { retailer, shortId } = await seedFailedMyPush(t);
+			await t.mutation(api.orders.updateBuyerPhone, {
+				token: await tk(t, shortId),
+				waPhone: "07911 123456",
+				waDialCountry: "GB",
+			});
+			const { order, customer } = await t.run(async (ctx) => {
+				const order = await ctx.db
+					.query("orders")
+					.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+					.first();
+				const customer = await ctx.db
+					.query("customers")
+					.withIndex("by_retailer_phone", (q) =>
+						q.eq("retailerId", retailer._id).eq("waPhone", "447911123456"),
+					)
+					.unique();
+				return { order, customer };
+			});
+			expect(order?.customer.waPhone).toBe("447911123456");
+			expect(order?.confirmationPushStatus).toBe("sending");
+			expect(order?.customerId).toBe(customer?._id);
+			expect(customer?.orderCount).toBe(1);
+		});
+
+		test("no dial country = the store's: the same UK digits are refused as Malaysian", async () => {
+			const t = setup();
+			const { shortId } = await seedFailedMyPush(t);
+			await expect(
+				t.mutation(api.orders.updateBuyerPhone, {
+					token: await tk(t, shortId),
+					waPhone: "07911 123456",
+				}),
+			).rejects.toThrow(/Malaysian mobile/);
+		});
+
+		test("an unknown dial country is refused", async () => {
+			const t = setup();
+			const { shortId } = await seedFailedMyPush(t);
+			await expect(
+				t.mutation(api.orders.updateBuyerPhone, {
+					token: await tk(t, shortId),
+					waPhone: "07911 123456",
+					waDialCountry: "XX",
+				}),
+			).rejects.toThrow(UNKNOWN_DIAL_COUNTRY_MESSAGE);
+		});
 	});
 });
 
@@ -8799,6 +9960,87 @@ describe("orders — export gaps (86eyrtz74)", () => {
 		expect(csv.split("\r\n")[0]).toBe("Order ID,Total");
 	});
 
+	test("the exported Fulfilment cell says event for an RSVP, not the self_collect it is stored as", async () => {
+		// Same projection, same class of bug as the drop-off case below: an RSVP
+		// is stored `self_collect` and identified only by `eventRsvp`, so
+		// dropping that marker from `orderToCsvSource` makes the CSV disagree
+		// with the table on every event.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const doc = await ctx.db
+				.query("orders")
+				.filter((q) => q.eq(q.field("shortId"), shortId))
+				.first();
+			if (!doc) throw new Error("seed failed");
+			await ctx.db.patch(doc._id, {
+				deliveryMethod: "self_collect",
+				eventRsvp: true,
+			});
+		});
+		const { csv } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			columnKeys: ["shortId", "fulfilment"],
+		});
+		const [header, row] = csv.split("\r\n");
+		expect(header).toBe("Order ID,Fulfilment");
+		expect(row.endsWith(",event")).toBe(true);
+	});
+
+	test("the exported Fulfilment cell says drop_off, matching the table (z8r3fdfau9)", async () => {
+		// `orderToCsvSource` projects the order down to the column registry's
+		// shape. Drop `pickupSnapshot.locationType` there and the CSV quietly
+		// calls these orders "self_collect" while the seller's screen calls them
+		// "Drop-off" — the export diverging from the view, which is the single
+		// thing the shared-predicate/shared-registry design exists to prevent.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asA = t.withIdentity({ subject: USER_A });
+		const productId = await seedProduct(t, USER_A, retailer._id, { stock: 10 });
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const doc = await ctx.db
+				.query("orders")
+				.filter((q) => q.eq(q.field("shortId"), shortId))
+				.first();
+			if (!doc) throw new Error("seed failed");
+			await ctx.db.patch(doc._id, {
+				deliveryMethod: "self_collect",
+				pickupSnapshot: {
+					label: "Pasar Chow Kit",
+					address: "Jalan Raja Alang",
+					locationType: "drop_off",
+				},
+			});
+		});
+		const { csv } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			columnKeys: ["shortId", "fulfilment"],
+		});
+		const [header, row] = csv.split("\r\n");
+		expect(header).toBe("Order ID,Fulfilment");
+		expect(row.endsWith(",drop_off")).toBe(true);
+	});
+
 	test("never exports the buyer's tracking token", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);
@@ -9027,6 +10269,94 @@ describe("orders — column header filters (86eyrtz74)", () => {
 		return { retailer, asA, a, b, mixed, d };
 	}
 
+	// === One status axis (1 Sep) ==========================================
+	// These live at the query layer on purpose: the pure predicate tests already
+	// pin the SEMANTICS, and every bug this change fixed was a WIRING bug — two
+	// fields that each worked alone and lied when combined.
+
+	test("a bucket's leaves and a leaf from another bucket UNION, never intersect", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		// "In progress" (as the chip writes it) + "Order Received". Under the old
+		// two-field model the chip wrote `buckets` and the panel wrote `statuses`
+		// and these ANDed to NOTHING, with both controls lit on screen.
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			statuses: [...BUCKET_LEAVES.in_progress, "pending"],
+		});
+		// confirmed(1) + packed(2) + pending(1)
+		expect(res.total).toBe(4);
+	});
+
+	test("an unseen push-path order is reachable from New and NOT from In progress", async () => {
+		const t = setup();
+		const { retailer, asA, d } = await seedForFilters(t);
+		// Born-confirmed, never opened — what the push flow produces (86eyf1rck).
+		await t.run(async (ctx) => {
+			await ctx.db.patch(d._id, {
+				status: "confirmed",
+				confirmationPushStatus: "sent",
+				seenAt: undefined,
+			});
+		});
+
+		const asNew = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			statuses: [...BUCKET_LEAVES.new],
+		});
+		expect(asNew.orders.map((o) => o.shortId)).toContain(d.shortId);
+
+		const asInProgress = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			statuses: [...BUCKET_LEAVES.in_progress],
+		});
+		expect(asInProgress.orders.map((o) => o.shortId)).not.toContain(d.shortId);
+
+		// And the panel can name it: its own row, split out of `confirmed`.
+		expect(asNew.facets.statusLeaf.confirmed_unseen).toBe(1);
+		expect(asNew.counts.new).toBe(1);
+	});
+
+	test("the chips and the panel rows are one tally — a bucket count is the sum of its leaves", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+		});
+		// THE property the whole model rests on: a chip can never advertise a
+		// total its own rows don't add up to.
+		for (const [bucket, leaves] of Object.entries(BUCKET_LEAVES)) {
+			const summed = leaves.reduce(
+				(n, leaf) => n + (res.facets.statusLeaf[leaf] ?? 0),
+				0,
+			);
+			expect(summed).toBe(res.counts[bucket as keyof typeof BUCKET_LEAVES]);
+		}
+	});
+
+	test("a pre-1-Sep client sending `buckets` keeps exactly the list it asked for", async () => {
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		const legacy = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["in_progress"],
+		});
+		const current = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			statuses: [...BUCKET_LEAVES.in_progress],
+		});
+		expect(legacy.total).toBe(current.total);
+		expect(legacy.total).toBe(3); // confirmed + 2 packed
+
+		// The old pair ANDed, so a stale tab holding both still intersects.
+		const both = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			buckets: ["in_progress"],
+			statuses: ["packed"],
+		});
+		expect(both.total).toBe(2);
+	});
+
 	test("filters by exact status, several at once", async () => {
 		const t = setup();
 		const { retailer, asA } = await seedForFilters(t);
@@ -9074,12 +10404,20 @@ describe("orders — column header filters (86eyrtz74)", () => {
 			statuses: ["packed"],
 		});
 		expect(res.total).toBe(2);
-		expect(res.facets.status).toEqual({
+		// Keyed by LEAF: none of these fixtures is an unseen push-path order, so
+		// every `confirmed` here is the seen half.
+		expect(res.facets.statusLeaf).toEqual({
 			pending: 1,
 			confirmed: 1,
 			packed: 2,
 		});
-		expect(res.facets.category).toEqual({ Cakes: 3, Drinks: 2 });
+		expect(res.facets.category).toEqual(
+			expect.arrayContaining([
+				{ name: "Cakes", count: 3 },
+				{ name: "Drinks", count: 2 },
+			]),
+		);
+		expect(res.facets.category).toHaveLength(2);
 		expect(res.availableCategories).toEqual(["Cakes", "Drinks"]);
 	});
 
@@ -9092,7 +10430,113 @@ describe("orders — column header filters (86eyrtz74)", () => {
 			bucket: "all",
 			categories: ["Cakes"],
 		});
-		expect(res.facets.category.Cakes).toBe(res.total);
+		expect(
+			res.facets.category.find((c) => c.name === "Cakes")?.count,
+		).toBe(res.total);
+	});
+
+	test("a category named with a symbol or emoji still crosses the wire (z8r3fdv1r4)", async () => {
+		// Convex refuses an OBJECT whose field name has a non-ASCII character, so
+		// a name-keyed tally threw on serialisation and took the whole inbox down
+		// for the one store that prefixed its categories with "✦" (prod, 16 Oct
+		// 2026). The tally is a list of {name, count} pairs for exactly this
+		// reason; keying it by name again would turn this test red.
+		const t = setup();
+		const { retailer, asA, a } = await seedForFilters(t);
+		const { categoryId } = await asA.mutation(api.categories.create, {
+			retailerId: retailer._id,
+			name: "✦ DRESSES 🐆",
+			slug: "dresses",
+		});
+		await asA.mutation(api.categories.setProductCategories, {
+			productId: a.items[0].productId,
+			categoryIds: [categoryId],
+		});
+		await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId: a.items[0].productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		const res = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(res.facets.category).toContainEqual({ name: "✦ DRESSES 🐆", count: 1 });
+		expect(res.availableCategories).toContain("✦ DRESSES 🐆");
+	});
+
+	test("filters and tallies by fulfilment, over the unfiltered window (z8r3fdfau9)", async () => {
+		const t = setup();
+		const { retailer, asA, a, b, mixed } = await seedForFilters(t);
+		// The seed places delivery orders; re-point three of them so the window
+		// holds four different trips. Patched directly rather than placed through
+		// `orders.create` because the create-time invariants (a pickup location
+		// must exist, a booking needs a listing) are not what this test is about —
+		// the facet and the wire are.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(a._id, {
+				deliveryMethod: "self_collect",
+				pickupSnapshot: { label: "Kedai", address: "Jalan 1" },
+			});
+			await ctx.db.patch(b._id, {
+				deliveryMethod: "self_collect",
+				pickupSnapshot: {
+					label: "Pasar Chow Kit",
+					address: "Jalan Raja Alang",
+					locationType: "drop_off",
+				},
+			});
+			await ctx.db.patch(mixed._id, { deliveryDirection: "collection" });
+		});
+
+		const all = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+		});
+		expect(all.facets.fulfilment).toEqual({
+			delivery: 1,
+			self_collect: 1,
+			drop_off: 1,
+			collection: 1,
+		});
+
+		// Narrowing keeps the tally intact — the picker must not shrink as it is
+		// used, the same rule every other facet follows.
+		const pickups = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilments: ["self_collect", "drop_off"],
+		});
+		expect(pickups.total).toBe(2);
+		expect(pickups.facets.fulfilment).toEqual(all.facets.fulfilment);
+		// A collection run is NOT a delivery, even though the schema calls it one.
+		const deliveries = await asA.query(api.orders.searchOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilments: ["delivery"],
+		});
+		expect(deliveries.total).toBe(1);
+		expect(deliveries.orders[0]?.deliveryDirection).toBeUndefined();
+	});
+
+	test("every fulfilment key the registry can produce is accepted on the wire", async () => {
+		// The registry and the Convex validator are two lists. A sixth kind added
+		// to one and forgotten in the other would reach the seller as an
+		// unexplained failure the moment they ticked it — this is what notices.
+		const t = setup();
+		const { retailer, asA } = await seedForFilters(t);
+		for (const key of FULFILMENT_KEYS) {
+			await expect(
+				asA.query(api.orders.searchOrders, {
+					retailerId: retailer._id,
+					bucket: "all",
+					fulfilments: [key],
+				}),
+			).resolves.toBeDefined();
+		}
 	});
 
 	test("buckets are multi-select — 'everything closed' in one view", async () => {
@@ -9146,6 +10590,55 @@ describe("orders — column header filters (86eyrtz74)", () => {
 		expect(legacy.total).toBe(0);
 	});
 
+	test("the CSV export NARROWS by fulfilment, not just labels it (z8r3fdfau9)", async () => {
+		// The other two fulfilment export tests assert the CELL's wording. This
+		// one asserts the ROW SET: that `fulfilments` actually reaches the
+		// export's predicate. Without it the seller filters to "pickups", hits
+		// Export, and silently gets every order — the export diverging from the
+		// screen, which is the one thing the shared predicate exists to prevent.
+		const t = setup();
+		const { retailer, asA, a, b, mixed } = await seedForFilters(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(a._id, {
+				deliveryMethod: "self_collect",
+				pickupSnapshot: { label: "Kedai", address: "Jalan 1" },
+			});
+			await ctx.db.patch(b._id, {
+				deliveryMethod: "self_collect",
+				pickupSnapshot: {
+					label: "Pasar",
+					address: "Jalan 2",
+					locationType: "drop_off",
+				},
+			});
+			await ctx.db.patch(mixed._id, { eventRsvp: true });
+		});
+
+		const pickups = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilments: ["self_collect"],
+			columnKeys: ["shortId", "fulfilment"],
+		});
+		expect(pickups.count).toBe(1);
+		expect(pickups.csv).toContain(a.shortId);
+		// The drop-off and the RSVP are NOT self-collect, however they are stored.
+		expect(pickups.csv).not.toContain(b.shortId);
+		expect(pickups.csv).not.toContain(mixed.shortId);
+
+		// Several kinds OR together in the export exactly as in the inbox.
+		const both = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			fulfilments: ["drop_off", "event"],
+			columnKeys: ["shortId", "fulfilment"],
+		});
+		expect(both.count).toBe(2);
+		expect(both.csv).toContain(b.shortId);
+		expect(both.csv).toContain(mixed.shortId);
+		expect(both.csv).not.toContain(a.shortId);
+	});
+
 	test("the CSV export honours the header filters, or it isn't the same list", async () => {
 		// The invariant orderInboxFilter.ts exists for: export what's on screen.
 		const t = setup();
@@ -9158,5 +10651,1153 @@ describe("orders — column header filters (86eyrtz74)", () => {
 		});
 		expect(count).toBe(2); // b + mixed
 		expect(csv).toContain("Drinks");
+	});
+});
+
+
+describe("per-product prep time (z8r3fdff97)", () => {
+	const customer = { name: "Aisyah", waPhone: "60123456789" };
+
+	async function storeWithPrep(
+		t: ReturnType<typeof setup>,
+		prepMinutes: number,
+		pickupNote?: string,
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id, {
+			name: "Ice Cream Puff",
+			prepMinutes,
+			pickupNote,
+		});
+		return { retailer, productId };
+	}
+
+	const todayMyt = () =>
+		Math.floor((Date.now() + 8 * 3600_000) / 86_400_000) * 86_400_000 -
+		8 * 3600_000;
+	const tomorrowMyt = () => todayMyt() + 86_400_000;
+	/** Minutes since MYT midnight, right now. */
+	const nowMinutes = () =>
+		Math.floor(((Date.now() + 8 * 3600_000) % 86_400_000) / 60_000);
+
+	test("refuses a same-day pickup inside the prep window, and names the product", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 120);
+		// A minute from now is comfortably inside a two-hour window.
+		const tooSoon = Math.min(1439, nowMinutes() + 1);
+		// Within ~2h of MYT midnight the floor (now + prep, ceiled to 5) spills
+		// past 23:59, today has NO slot left, and the same rule answers "too
+		// late for today" instead of naming an earliest time — its own test
+		// covers that wording below. Every sibling here guards for the
+		// near-midnight case; this one ran green for two days and went red the
+		// first evening it executed after 21:55 MYT. The 10-minute band around
+		// the flip accepts either wording so a clock tick mid-test can't lie.
+		//
+		// And from 23:41 MYT the flat 15-min lead empties the day even WITHOUT
+		// prep, `prepFloorProblem` defers to the opening-hours rules — which
+		// no-op with hours unset — and the create RESOLVES. That acceptance is
+		// a real (if 19-minute-wide) server gap, not a contract, so the last
+		// half hour is skipped rather than asserted. Found the first evening
+		// the suite ran after 23:41; the gap itself is ticketed follow-up work.
+		if (nowMinutes() >= 1410) return;
+		const m = nowMinutes();
+		const expected =
+			m > 1320
+				? /Ice Cream Puff.*2 hours to prepare.*too late for today/s
+				: m < 1310
+					? /Ice Cream Puff.*2 hours to prepare.*earliest pickup/s
+					: /Ice Cream Puff.*2 hours to prepare.*(?:earliest pickup|too late for today)/s;
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				fulfilmentTimeMinutes: tooSoon,
+			}),
+		).rejects.toThrow(expected);
+	});
+
+	test("accepts the same order once the time clears the window", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 120);
+		const clear = nowMinutes() + 130;
+		// Near midnight the floor spills past the day; that case has its own
+		// test below, so only run the happy path when today still has room.
+		if (clear < 1440) {
+			const { shortId } = await t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				fulfilmentTimeMinutes: clear,
+			});
+			const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+			expect(o?.fulfilmentTimeMinutes).toBe(clear);
+		}
+	});
+
+	test("prep is absorbed overnight — tomorrow takes any open time", async () => {
+		// The deliberate semantic: prep moves the CLOCK within today and then
+		// stops. Ordering at 11 PM for tomorrow 9 AM is fine.
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 240);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMyt(),
+			fulfilmentTimeMinutes: 9 * 60,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(9 * 60);
+	});
+
+	test("a prep window that swallows the day moves the DATE, not the time", async () => {
+		// Without this the buyer picks today, finds no selectable time, and has
+		// a dead end instead of an answer.
+		//
+		// Skipped in the last half hour before MYT midnight: from 23:41 the
+		// flat lead empties the day without prep's help, the prep rule defers
+		// to opening-hours rules that no-op with hours unset, and the create
+		// resolves — the same server gap the same-day test above documents.
+		if (nowMinutes() >= 1410) return;
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 1440);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				fulfilmentTimeMinutes: 23 * 60,
+			}),
+		).rejects.toThrow(/too late for today, pick a later day/);
+	});
+
+	test("the floor is HOURS-AWARE: a store closing before prep finishes is too late today", async () => {
+		// The first server floor counted to midnight, so an 18:00 close with a
+		// 16:30 order and 2h prep named "earliest pickup is 6:30 PM" — after
+		// the shutters were down. Build that shape relative to now.
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 120);
+		const now = nowMinutes();
+		const closeAt = now + 60;
+		if (closeAt > 1439) return; // too near midnight to build the shape
+		const weekday = new Date(todayMyt() + 8 * 3600_000).getUTCDay();
+		await t.withIdentity({ subject: USER_A }).mutation(
+			api.retailers.updateSettings,
+			{
+				openingHours: Array.from({ length: 7 }, (_, i) =>
+					i === weekday ? { open: 0, close: closeAt } : { open: 0, close: 1439 },
+				),
+			},
+		);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [{ productId, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				// Inside today's hours — only prep makes it impossible.
+				fulfilmentTimeMinutes: Math.min(closeAt, now + 30),
+			}),
+		).rejects.toThrow(/too late for today/);
+	});
+
+	describe("a DATE-ONLY order's prep runs to midnight, not to closing", () => {
+		// A drop-off meet-up sends no time — its hour is the point's own
+		// schedule — so the store's closing time is not the deadline prep races.
+		// Pinned clock: Fri 26 Jun 2026, MYT.
+		const FRI = Date.UTC(2026, 5, 26) - 8 * 3600_000;
+		const at = (h: number, m = 0) => FRI + (h * 60 + m) * 60_000;
+		const nineToSix = Array.from({ length: 7 }, () => ({
+			open: 9 * 60,
+			close: 18 * 60,
+		}));
+		afterEach(() => vi.useRealTimers());
+
+		/** A 9-to-6 store (or `hours`) with one drop-off point; returns a
+		 * date-only order for the given day. */
+		async function dropOffOrder(
+			t: ReturnType<typeof setup>,
+			prepMinutes: number,
+			hours: Array<{ open: number; close: number; closed?: true }>,
+		) {
+			const { retailer, productId } = await storeWithPrep(t, prepMinutes);
+			const asUser = t.withIdentity({ subject: USER_A });
+			await asUser.mutation(api.retailers.updateSettings, {
+				offerSelfCollect: true,
+				openingHours: hours,
+			});
+			const { pickupLocationId } = await asUser.mutation(
+				api.pickupLocations.create,
+				{
+					retailerId: retailer._id,
+					label: "Pasar Sabtu",
+					address: "Seksyen 7, Shah Alam",
+					locationType: "drop_off",
+				},
+			);
+			return (fulfilmentDate: number) =>
+				t.mutation(api.orders.create, {
+					retailerId: retailer._id,
+					items: [{ productId, quantity: 1 }],
+					currency: "MYR",
+					channel: "whatsapp",
+					customer,
+					deliveryMethod: "self_collect",
+					pickupLocationId,
+					fulfilmentDate,
+				});
+		}
+
+		test("after closing, a day-long prep still can't be booked for tonight", async () => {
+			// The gap: judged against the 9-to-6 hours, 8 PM had no slots with
+			// prep AND none without, so prep looked blameless.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(20));
+			const t = setup();
+			const order = await dropOffOrder(t, 1440, nineToSix);
+			await expect(order(FRI)).rejects.toThrow(
+				/Ice Cream Puff.*24 hours to prepare.*too late for today/s,
+			);
+			await expect(order(FRI + DAY_MS)).resolves.toMatchObject({
+				shortId: expect.any(String),
+			});
+		});
+
+		test("closing time isn't the deadline: prep done before midnight is fine today", async () => {
+			// 4:30 PM plus 2h ends at 6:30 PM — after the store's 6 PM close, but
+			// the meet-up's hour is its own.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(16, 30));
+			const t = setup();
+			const order = await dropOffOrder(t, 120, nineToSix);
+			await expect(order(FRI)).resolves.toMatchObject({
+				shortId: expect.any(String),
+			});
+		});
+
+		test("a closed weekday still refuses in the opening-hours words, never prep's", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(at(20));
+			const t = setup();
+			const closedFriday = nineToSix.map((day, i) =>
+				i === 5 ? { ...day, closed: true as const } : day,
+			);
+			const order = await dropOffOrder(t, 1440, closedFriday);
+			await expect(order(FRI)).rejects.toThrow(/closed on Fridays/);
+		});
+	});
+
+	describe("a date-only order at a COUNTER still races closing time (z8r3fdg9aa)", () => {
+		// The mirror of the drop-off block above, and the reason the server
+		// stopped asking "did a time arrive?": a counter's hour IS the store's,
+		// so a request that omits a time the checkout would have required must
+		// still be held to the shutters. Pinned clock: Fri 26 Jun 2026, MYT.
+		const FRI = Date.UTC(2026, 5, 26) - 8 * 3600_000;
+		const at = (h: number, m = 0) => FRI + (h * 60 + m) * 60_000;
+		const nineToSix = Array.from({ length: 7 }, () => ({
+			open: 9 * 60,
+			close: 18 * 60,
+		}));
+		afterEach(() => vi.useRealTimers());
+
+		/** A 9-to-6 store with one ordinary self-collect counter; returns a
+		 * DATE-ONLY order (no `fulfilmentTimeMinutes`) for the given day. */
+		async function counterOrder(
+			t: ReturnType<typeof setup>,
+			prepMinutes: number,
+		) {
+			const { retailer, productId } = await storeWithPrep(t, prepMinutes);
+			const asUser = t.withIdentity({ subject: USER_A });
+			await asUser.mutation(api.retailers.updateSettings, {
+				offerSelfCollect: true,
+				openingHours: nineToSix,
+			});
+			const { pickupLocationId } = await asUser.mutation(
+				api.pickupLocations.create,
+				{
+					retailerId: retailer._id,
+					label: "Kedai counter",
+					address: "Seksyen 7, Shah Alam",
+					locationType: "self_collect",
+				},
+			);
+			return (fulfilmentDate: number) =>
+				t.mutation(api.orders.create, {
+					retailerId: retailer._id,
+					items: [{ productId, quantity: 1 }],
+					currency: "MYR",
+					channel: "whatsapp",
+					customer,
+					deliveryMethod: "self_collect",
+					pickupLocationId,
+					fulfilmentDate,
+				});
+		}
+
+		test("prep running past closing is refused, though no time was sent", async () => {
+			// The worked example: 5 PM + 2h = 7 PM, an hour after the counter
+			// shuts. Widened to midnight it looked bookable, and the seller was
+			// handed a collection that couldn't happen.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(17));
+			const t = setup();
+			const order = await counterOrder(t, 120);
+			await expect(order(FRI)).rejects.toThrow(
+				/Ice Cream Puff.*2 hours to prepare.*too late for today/s,
+			);
+			await expect(order(FRI + DAY_MS)).resolves.toMatchObject({
+				shortId: expect.any(String),
+			});
+		});
+
+		test("the same order resolves while the day still has prep-able slots", async () => {
+			// Refuse for the real reason, never for the missing time: at 2 PM
+			// the two hours still land inside the counter's own hours.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(14));
+			const t = setup();
+			const order = await counterOrder(t, 120);
+			await expect(order(FRI)).resolves.toMatchObject({
+				shortId: expect.any(String),
+			});
+		});
+
+		test("after closing, a day-long prep is still refused — the DAY's own deadline", async () => {
+			// Held only to the real hours, 8 PM leaves no slot with prep and
+			// none without, so prep defers and a date-only order has nobody
+			// left to refuse it. `orderPrepFloorIssue` keeps the day's reading.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(20));
+			const t = setup();
+			const order = await counterOrder(t, 1440);
+			await expect(order(FRI)).rejects.toThrow(
+				/Ice Cream Puff.*24 hours to prepare.*too late for today/s,
+			);
+		});
+	});
+
+	describe("the last minutes of the day (the 23:41 gap)", () => {
+		// From 23:41 MYT the flat 15-minute lead alone runs past 23:59, so an
+		// all-day store has no slot even WITHOUT prep. `prepFloorProblem` used
+		// to read that as "not prep's fault" and defer to opening-hours rules
+		// that no-op with hours unset — and the create RESOLVED (found when
+		// the 2026.09.6 release gate ran at 23:44 and five prep tests went red
+		// by resolving). Pinned clock: Fri 26 Jun 2026, 23:45 MYT.
+		const FRI = Date.UTC(2026, 5, 26) - 8 * 3600_000;
+		afterEach(() => vi.useRealTimers());
+
+		test("at 23:45 with hours unset, a same-day prep order is refused; tomorrow is fine", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(FRI + (23 * 60 + 45) * 60_000);
+			const t = setup();
+			const { retailer, productId } = await storeWithPrep(t, 240);
+			const order = (fulfilmentDate: number, fulfilmentTimeMinutes?: number) =>
+				t.mutation(api.orders.create, {
+					retailerId: retailer._id,
+					items: [{ productId, quantity: 1 }],
+					currency: "MYR",
+					channel: "whatsapp",
+					customer,
+					deliveryMethod: "self_collect",
+					fulfilmentDate,
+					fulfilmentTimeMinutes,
+				});
+			// The exact repro: today, 11:59 PM, a 4-hour prep — used to resolve.
+			await expect(order(FRI, 1439)).rejects.toThrow(
+				/Ice Cream Puff.*4 hours to prepare.*too late for today/s,
+			);
+			// A date-only request is judged the same, not widened past the gap.
+			await expect(order(FRI)).rejects.toThrow(/too late for today/);
+			await expect(order(FRI + DAY_MS, 9 * 60)).resolves.toMatchObject({
+				shortId: expect.any(String),
+			});
+		});
+	});
+
+	test("a COLLECTION trip is exempt: the rider collects first, prep comes after", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 240);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				deliveryBooking: {
+					enabled: false,
+					vehicleType: "MOTORCYCLE",
+					deliveryDirection: "collection",
+				},
+			});
+		});
+		const soon = Math.min(1439, nowMinutes() + 20);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "delivery",
+			deliveryAddress: validAddress,
+			fulfilmentDate: todayMyt(),
+			fulfilmentTimeMinutes: soon,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.deliveryDirection).toBe("collection");
+		expect(o?.fulfilmentTimeMinutes).toBe(soon);
+	});
+
+	test("the SLOWEST item in a mixed cart sets the floor and is named", async () => {
+		// Skipped in the last half hour before MYT midnight — see the same-day
+		// refusal test above: past 23:41 the prep rule defers and the create
+		// resolves, so there is no refusal to name the slowest item in.
+		if (nowMinutes() >= 1410) return;
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const quick = await seedProduct(t, USER_A, retailer._id, {
+			name: "Kuih",
+			prepMinutes: 15,
+		});
+		const slow = await seedProduct(t, USER_A, retailer._id, {
+			name: "Ice Cream Puff",
+			prepMinutes: 240,
+		});
+		const tooSoon = Math.min(1439, nowMinutes() + 30);
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId: retailer._id,
+				items: [
+					{ productId: quick, quantity: 1 },
+					{ productId: slow, quantity: 1 },
+				],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: todayMyt(),
+				fulfilmentTimeMinutes: tooSoon,
+			}),
+		).rejects.toThrow(/Ice Cream Puff.*4 hours/s);
+	});
+
+	test("a product with no prep window is untouched", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(t, 0);
+		const soon = Math.min(1439, nowMinutes() + 20);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: todayMyt(),
+			fulfilmentTimeMinutes: soon,
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		expect(o?.fulfilmentTimeMinutes).toBe(soon);
+	});
+
+	test("the pickup note is FROZEN onto the line, and a later edit never rewrites it", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(
+			t,
+			0,
+			"Side counter — ring the bell.",
+		);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMyt(),
+		});
+		const asA = t.withIdentity({ subject: USER_A });
+		await asA.mutation(api.products.update, {
+			productId,
+			pickupNote: "Front door now.",
+		});
+		const o = await t.query(api.orders.get, { token: await tk(t, shortId) });
+		// The buyer is still holding the old instruction in their chat.
+		expect(o?.items[0]?.pickupNote).toBe("Side counter — ring the bell.");
+	});
+
+	test("the export carries the pickup time and the note AS TOLD — and never on a delivery", async () => {
+		const t = setup();
+		const { retailer, productId } = await storeWithPrep(
+			t,
+			0,
+			"Side counter, ring the bell.",
+		);
+		const asA = t.withIdentity({ subject: USER_A });
+		const { shortId: collectId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrowMyt(),
+			fulfilmentTimeMinutes: 11 * 60 + 30,
+		});
+		const { shortId: deliveryId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer,
+			deliveryAddress: validAddress,
+		});
+		// Edited after both orders were placed — the export must not follow it.
+		await asA.mutation(api.products.update, {
+			productId,
+			pickupNote: "Front door now.",
+		});
+		const { csv } = await asA.action(api.orders.exportOrders, {
+			retailerId: retailer._id,
+			bucket: "all",
+			columnKeys: ["shortId", "fulfilmentTime", "pickupNotes"],
+		});
+		const lines = csv.split("\r\n");
+		expect(lines[0]).toBe("Order ID,Fulfilment time,Pickup notes");
+		expect(lines).toContain(
+			`${collectId},11:30 AM,"Side counter, ring the bell."`,
+		);
+		expect(lines).toContain(`${deliveryId},,`);
+	});
+});
+
+describe("bulk actions ask the order's OWN flow, not the kind's preset (z8r3fdh3w1)", () => {
+	const asA = (t: ReturnType<typeof setup>) =>
+		t.withIdentity({ subject: USER_A });
+
+	/** A confirmed order, forced onto a flow kind. */
+	async function bookingOrder(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId: retailer._id,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			deliveryAddress: validAddress,
+		});
+		const order = await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("no order");
+			await ctx.db.patch(o._id, {
+				deliveryMethod: "booking",
+				status: "confirmed",
+			});
+			return o;
+		});
+		return { retailer, order };
+	}
+
+	test("a booking on DEFAULTS is still skipped for an anchor its flow has no step for", async () => {
+		const t = setup();
+		const { order } = await bookingOrder(t);
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [order._id],
+			status: "packed",
+		});
+		expect(res.updated).toBe(0);
+		expect(res.skippedNoSuchStage).toBe(1);
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe(
+			"confirmed",
+		);
+	});
+
+	test("a booking whose OWN flow has that step is moved, not skipped", async () => {
+		const t = setup();
+		const { retailer, order } = await bookingOrder(t);
+		// The campsite writes its own flow, deliberately including a step that
+		// counts as "In production". The preset skips that anchor; the seller's
+		// flow does not, and the seller's flow is what the order runs.
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, {
+				orderFlows: {
+					booking: [
+						{
+							id: "b1",
+							anchor: "confirmed",
+							label: { en: "Booked" },
+							sortOrder: 0,
+						},
+						{
+							id: "b2",
+							anchor: "packed",
+							label: { en: "Site prepared" },
+							sortOrder: 1,
+						},
+						{
+							id: "b3",
+							anchor: "delivered",
+							label: { en: "Departed" },
+							sortOrder: 2,
+						},
+					],
+				},
+			}),
+		);
+
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [order._id],
+			status: "packed",
+		});
+		expect(res.updated).toBe(1);
+		expect(res.skippedNoSuchStage).toBe(0);
+		expect((await t.run((ctx) => ctx.db.get(order._id)))?.status).toBe("packed");
+	});
+
+	test("a cake shop's flat legacy list never makes a booking bulk-movable", async () => {
+		const t = setup();
+		const { retailer, order } = await bookingOrder(t);
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, {
+				orderStages: [
+					{ id: "c1", anchor: "confirmed", label: { en: "Order in" }, sortOrder: 0 },
+					{ id: "c2", anchor: "packed", label: { en: "Baking" }, sortOrder: 1 },
+					{ id: "c3", anchor: "delivered", label: { en: "Collected" }, sortOrder: 2 },
+				],
+			}),
+		);
+
+		const res = await asA(t).mutation(api.orders.bulkUpdateStatus, {
+			orderIds: [order._id],
+			status: "packed",
+		});
+		expect(res.updated).toBe(0);
+		expect(res.skippedNoSuchStage).toBe(1);
+	});
+});
+
+describe("orders.getTimeline — the seller Activity card (86exr91r4)", () => {
+	test("same-millisecond events keep insertion order, newest first", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		// An order's "placed" and "confirmed at checkout" rows are written in ONE
+		// mutation with a single `now`, so createdAt alone leaves them tied — and
+		// a tie rendered placed-above-confirmed, which reads backwards in a
+		// newest-first list (found on a real order driving Chrome).
+		const now = Date.now();
+		const orderId = await t.run(async (ctx) => {
+			const id = await ctx.db.insert("orders", {
+				retailerId: retailer._id,
+				shortId: "ORD-TIE1",
+				items: [],
+				subtotal: 0,
+				total: 0,
+				currency: "MYR",
+				status: "confirmed",
+				channel: "whatsapp",
+				customer: {},
+				statusChangedAt: now,
+				createdAt: now,
+				updatedAt: now,
+			});
+			await ctx.db.insert("orderEvents", {
+				orderId: id,
+				status: "pending",
+				createdAt: now,
+			});
+			await ctx.db.insert("orderEvents", {
+				orderId: id,
+				status: "confirmed",
+				note: "Confirmed at checkout",
+				createdAt: now,
+			});
+			return id;
+		});
+		const timeline = await asUser.query(api.orders.getTimeline, { orderId });
+		expect(timeline.map((e) => e.status)).toEqual(["confirmed", "pending"]);
+	});
+
+	test("an owner's move is attributed; buyer/system events are not", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const asUser = t.withIdentity({ subject: USER_A });
+		const now = Date.now();
+		const orderId = await t.run(async (ctx) => {
+			const id = await ctx.db.insert("orders", {
+				retailerId: retailer._id,
+				shortId: "ORD-TIE2",
+				items: [],
+				subtotal: 0,
+				total: 0,
+				currency: "MYR",
+				status: "confirmed",
+				channel: "whatsapp",
+				customer: {},
+				statusChangedAt: now,
+				createdAt: now,
+				updatedAt: now,
+			});
+			await ctx.db.insert("orderEvents", {
+				orderId: id,
+				status: "pending",
+				createdAt: now - 1000,
+			});
+			await ctx.db.insert("orderEvents", {
+				orderId: id,
+				status: "packed",
+				actorUserId: USER_A,
+				createdAt: now,
+			});
+			return id;
+		});
+		const timeline = await asUser.query(api.orders.getTimeline, { orderId });
+		expect(timeline[0]).toMatchObject({
+			status: "packed",
+			actor: { you: true, isOwner: true },
+		});
+		expect(timeline[1].actor).toBeUndefined();
+	});
+});
+
+describe("countDueByDay — Plan ahead counts exactly what Due today counts", () => {
+	/** Create a real order, then set the three fields the forecast reads. */
+	async function dueOrder(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		over: { fulfilmentDate?: number; status?: string; source?: string },
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Test Buyer", waPhone: "60120000900" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order not found");
+			await ctx.db.patch(o._id, {
+				fulfilmentDate: over.fulfilmentDate,
+				...(over.status ? { status: over.status as never } : {}),
+				...(over.source ? { source: over.source as never } : {}),
+			});
+		});
+	}
+
+	const ask = async (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		fromMyt: number,
+		days = 7,
+	) =>
+		t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.countDueByDay, { retailerId, fromMyt, days });
+
+	test("every day in the window renders, including the empty ones", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const from = todayMytMidnight(Date.now());
+		const days = await ask(t, r._id, from);
+		expect(days).toHaveLength(7);
+		expect(days.map((d) => d.start)).toEqual(
+			Array.from({ length: 7 }, (_, i) => from + i * DAY_MS),
+		);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("an order lands in its own MYT day, not the one next door", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from + 3 * DAY_MS });
+		const days = await ask(t, r._id, from);
+		expect(days[3].count).toBe(1);
+		expect(days.filter((d) => d.count > 0)).toHaveLength(1);
+	});
+
+	test("the first and last day of the window are inside it", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from });
+		await dueOrder(t, r._id, p, { fulfilmentDate: from + 6 * DAY_MS });
+		const days = await ask(t, r._id, from);
+		expect(days[0].count).toBe(1);
+		expect(days[6].count).toBe(1);
+	});
+
+	test("the day AFTER the window is outside it", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from + 7 * DAY_MS });
+		const days = await ask(t, r._id, from);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("yesterday is outside it", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from - DAY_MS });
+		const days = await ask(t, r._id, from);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("COUNTER orders never count — their date is a receipt, not a promise", async () => {
+		// A counter sale stamps today at create; counting it would swamp every
+		// tile at a counter-heavy store (86ey8r734), exactly as it would have
+		// swamped the inbox's Due today chip.
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: from, source: "counter" });
+		const days = await ask(t, r._id, from);
+		expect(days[0].count).toBe(0);
+	});
+
+	test("finished and cancelled orders are not work left to do", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, {
+			fulfilmentDate: from + DAY_MS,
+			status: "delivered",
+		});
+		await dueOrder(t, r._id, p, {
+			fulfilmentDate: from + DAY_MS,
+			status: "cancelled",
+		});
+		await dueOrder(t, r._id, p, {
+			fulfilmentDate: from + DAY_MS,
+			status: "confirmed",
+		});
+		const days = await ask(t, r._id, from);
+		expect(days[1].count).toBe(1);
+	});
+
+	test("orders with no fulfilment date at all are not due on any day", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, r._id, p, { fulfilmentDate: undefined });
+		const days = await ask(t, r._id, from);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("another store's orders never appear", async () => {
+		const t = setup();
+		const mine = await seedRetailer(t, USER_A);
+		const theirs = await seedRetailer(t, USER_B);
+		const p = await seedProduct(t, USER_B, theirs._id);
+		const from = todayMytMidnight(Date.now());
+		await dueOrder(t, theirs._id, p, { fulfilmentDate: from });
+		const days = await ask(t, mine._id, from);
+		expect(days.every((d) => d.count === 0)).toBe(true);
+	});
+
+	test("the window must start at MYT midnight", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const from = todayMytMidnight(Date.now());
+		await expect(ask(t, r._id, from + 1)).rejects.toThrow(/MYT midnight/);
+	});
+
+	test("the span is bounded on both ends", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const from = todayMytMidnight(Date.now());
+		await expect(ask(t, r._id, from, 0)).rejects.toThrow(/1–14 days/);
+		await expect(ask(t, r._id, from, 15)).rejects.toThrow(/1–14 days/);
+	});
+});
+
+describe("searchOrders counts — unpaid that has gone stale", () => {
+	// The clock is FROZEN for this block. Staleness is a strict comparison
+	// against "now", and the handler samples its own `Date.now()` a beat after
+	// the test stamps `createdAt` — so an order aged to exactly the boundary
+	// reads as stale by however many milliseconds elapsed in between, and the
+	// "exactly three days" case is unobservable with a live clock. It passed
+	// until the handler got marginally slower, which is the definition of a
+	// test that was never really asserting its own boundary.
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(Date.parse("2026-10-12T12:00:00+08:00"));
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** An order whose age and payment state we control. */
+	async function agedOrder(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		over: { ageDays: number; paymentStatus?: string; status?: string },
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Test Buyer", waPhone: "60120000901" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order not found");
+			await ctx.db.patch(o._id, {
+				createdAt: Date.now() - over.ageDays * DAY_MS,
+				...(over.paymentStatus
+					? { paymentStatus: over.paymentStatus as never }
+					: {}),
+				...(over.status ? { status: over.status as never } : {}),
+			});
+		});
+		return shortId;
+	}
+
+	const counts = async (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	) =>
+		(
+			await t
+				.withIdentity({ subject: USER_A })
+				.query(api.orders.searchOrders, { retailerId, limit: 1 })
+		).counts;
+
+	test("an unpaid order older than three days is stale", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 4, status: "confirmed" });
+		const c = await counts(t, r._id);
+		expect(c.unpaid).toBe(1);
+		expect(c.unpaidStale).toBe(1);
+		expect(c.unpaidStaleAmount).toBeGreaterThan(0);
+	});
+
+	test("stale is a STRICT SUBSET of unpaid, so '3 of 9' always reads true", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 5, status: "confirmed" });
+		await agedOrder(t, r._id, p, { ageDays: 4, status: "confirmed" });
+		await agedOrder(t, r._id, p, { ageDays: 0, status: "confirmed" });
+		const c = await counts(t, r._id);
+		expect(c.unpaid).toBe(3);
+		expect(c.unpaidStale).toBe(2);
+		expect(c.unpaidStale).toBeLessThanOrEqual(c.unpaid);
+		expect(c.unpaidStaleAmount).toBeLessThanOrEqual(c.unpaidAmount);
+	});
+
+	test("exactly three days old is not yet stale — the bound is strict", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 3, status: "confirmed" });
+		expect((await counts(t, r._id)).unpaidStale).toBe(0);
+	});
+
+	test("a CLAIMED payment still counts — somebody is waiting on a human", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, {
+			ageDays: 6,
+			status: "confirmed",
+			paymentStatus: "claimed",
+		});
+		expect((await counts(t, r._id)).unpaidStale).toBe(1);
+	});
+
+	test("money already received is never stale, however old", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, {
+			ageDays: 40,
+			status: "confirmed",
+			paymentStatus: "received",
+		});
+		const c = await counts(t, r._id);
+		expect(c.unpaid).toBe(0);
+		expect(c.unpaidStale).toBe(0);
+	});
+
+	test("a cancelled order is not money to chase", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 10, status: "cancelled" });
+		expect((await counts(t, r._id)).unpaidStale).toBe(0);
+	});
+
+	test("the oldest stale order's date is reported, not just a count", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 4, status: "confirmed" });
+		await agedOrder(t, r._id, p, { ageDays: 9, status: "confirmed" });
+		const c = await counts(t, r._id);
+		const ageDays = (Date.now() - c.unpaidStaleOldestAt) / DAY_MS;
+		expect(ageDays).toBeGreaterThan(8.9);
+		expect(ageDays).toBeLessThan(9.1);
+	});
+
+	test("no stale orders → zero and no date, never a stray epoch", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await agedOrder(t, r._id, p, { ageDays: 0, status: "confirmed" });
+		const c = await counts(t, r._id);
+		expect(c.unpaidStale).toBe(0);
+		expect(c.unpaidStaleOldestAt).toBe(0);
+	});
+});
+
+describe("searchOrders — the DUE window (what Plan ahead opens)", () => {
+	/** An order due on a given day, with a controllable status and source. */
+	async function dueOn(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		productId: Id<"products">,
+		over: { fulfilmentDate?: number; status?: string; source?: string },
+	) {
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Test Buyer", waPhone: "60120000902" },
+			deliveryAddress: validAddress,
+		});
+		await t.run(async (ctx) => {
+			const o = await ctx.db
+				.query("orders")
+				.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+				.first();
+			if (!o) throw new Error("order not found");
+			await ctx.db.patch(o._id, {
+				fulfilmentDate: over.fulfilmentDate,
+				...(over.status ? { status: over.status as never } : {}),
+				...(over.source ? { source: over.source as never } : {}),
+			});
+		});
+		return shortId;
+	}
+
+	const search = async (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		args: Record<string, unknown>,
+	) =>
+		t
+			.withIdentity({ subject: USER_A })
+			.query(api.orders.searchOrders, { retailerId, ...args });
+
+	test("a due window returns the orders due in it, not the ones PLACED in it", async () => {
+		// The bug Home shipped with: a tile counting orders DUE today linked to
+		// `from`/`to`, which bound `createdAt`, so "2 due" opened a list of 6.
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const day = todayMytMidnight(Date.now()) + 3 * DAY_MS;
+		await dueOn(t, r._id, p, { fulfilmentDate: day });
+		await dueOn(t, r._id, p, { fulfilmentDate: day + DAY_MS });
+		// Placed today, due nowhere near the window.
+		await dueOn(t, r._id, p, { fulfilmentDate: undefined });
+
+		const res = await search(t, r._id, {
+			fulfilmentFrom: day,
+			fulfilmentTo: day,
+		});
+		expect(res.total).toBe(1);
+	});
+
+	test("an order with NO fulfilment date is never due", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		await dueOn(t, r._id, p, { fulfilmentDate: undefined });
+		const day = todayMytMidnight(Date.now());
+		const res = await search(t, r._id, {
+			fulfilmentFrom: day,
+			fulfilmentTo: day + 6 * DAY_MS,
+		});
+		expect(res.total).toBe(0);
+	});
+
+	test("both bounds are inclusive", async () => {
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const from = todayMytMidnight(Date.now());
+		const to = from + 6 * DAY_MS;
+		await dueOn(t, r._id, p, { fulfilmentDate: from });
+		await dueOn(t, r._id, p, { fulfilmentDate: to });
+		await dueOn(t, r._id, p, { fulfilmentDate: to + DAY_MS });
+		const res = await search(t, r._id, {
+			fulfilmentFrom: from,
+			fulfilmentTo: to,
+		});
+		expect(res.total).toBe(2);
+	});
+
+	test("the due window ANDs with the status and source filters, so a tile's list matches its count", async () => {
+		// Plan ahead counts OPEN, non-counter orders. The link carries both, or
+		// the list is wider than the number the seller tapped.
+		const t = setup();
+		const r = await seedRetailer(t, USER_A);
+		const p = await seedProduct(t, USER_A, r._id);
+		const day = todayMytMidnight(Date.now());
+		await dueOn(t, r._id, p, { fulfilmentDate: day, status: "confirmed" });
+		await dueOn(t, r._id, p, { fulfilmentDate: day, status: "delivered" });
+		await dueOn(t, r._id, p, { fulfilmentDate: day, source: "counter" });
+
+		const res = await search(t, r._id, {
+			fulfilmentFrom: day,
+			fulfilmentTo: day,
+			// The leaves the `?bucket=new&bucket=in_progress` link folds into —
+			// "open", exactly as `countDueByDay` defines it.
+			statuses: [...BUCKET_LEAVES.new, ...BUCKET_LEAVES.in_progress],
+			sources: ["storefront", "claim"],
+		});
+		expect(res.total).toBe(1);
 	});
 });

@@ -1,12 +1,18 @@
 import { ConvexError } from "convex/values";
 import { describe, expect, it, test } from "vitest";
+import { creditLockErrorData } from "../../convex/lib/credits";
 import {
 	convexErrorMessage,
+	creditLockErrorOf,
 	currencySymbol,
+	formatDraftAmount,
+	formatDraftPrice,
+	formatDraftPriceRange,
 	formatMobile,
 	formatOrderTimestamp,
 	formatPrice,
 	formatPriceCompact,
+	GENERIC_SERVER_FAILURE,
 	normalizePriceInput,
 	parsePriceInput,
 	sanitizeIntInput,
@@ -176,9 +182,37 @@ describe("formatMobile", () => {
 	});
 
 	it("falls back to a plain +digits for unexpected shapes", () => {
+		// Unbroken on purpose, even though the code is known: `toNationalPhoneInput`
+		// peels a seller field's plate by string prefix, and "+60 312345678"
+		// would seed the field with the country code dropped.
 		expect(formatMobile("60312345678")).toBe("+60312345678"); // MY landline
 		expect(formatMobile("6512345678")).toBe("+6512345678"); // not an 8/9 SG mobile
 		expect(formatMobile("")).toBe("");
+	});
+
+	it("splits any other country's number as +CC then 3s and 4s (z8r3fdh274)", () => {
+		// Buyers can pick any country — the code they picked reads apart from
+		// the number they typed, so a wrong code is visible at a glance, and the
+		// national run is grouped short enough to check a digit at a time. The
+		// grouping is `groupNational`'s generic reading aid, deliberately NOT
+		// each country's own convention (a UK mobile conventionally reads
+		// "7911 123456"), which would mean shipping every numbering plan.
+		expect(formatMobile("447911123456")).toBe("+44 791 112 3456");
+		expect(formatMobile("14155550123")).toBe("+1 415 555 0123");
+		expect(formatMobile("+81 90-1234-5678")).toBe("+81 901 234 5678");
+	});
+
+	it("an unknown calling code still falls back to +digits", () => {
+		expect(formatMobile("99912345678")).toBe("+99912345678");
+	});
+
+	it("a KNOWN code with a national part of the wrong length also falls back", () => {
+		// The grouping is only reached when the national part is a length that
+		// code actually uses. Otherwise a malformed row would be dressed up as a
+		// well-formed number — `+44 791 1123 4` reads like a real GB mobile with
+		// a typo, when what we really have is digits we cannot vouch for.
+		expect(formatMobile("4479111234")).toBe("+4479111234"); // GB national 8, not 10
+		expect(formatMobile("44791112345678")).toBe("+44791112345678"); // 12, not 10
 	});
 });
 
@@ -247,6 +281,118 @@ describe("convexErrorMessage — rate-limit payload", () => {
 	});
 });
 
+describe("convexErrorMessage — the credit gate's typed refusal (Credits T3.1)", () => {
+	it("reads as its sentence, never [object Object]", () => {
+		const data = creditLockErrorData({
+			route: "topup",
+			audience: "owner",
+			creditsToUnlock: 1,
+			ordersWaiting: 3,
+		});
+		const err = new ConvexError(data);
+		expect(convexErrorMessage(err)).toBe(data.message);
+		expect(convexErrorMessage(err)).toMatch(/^3 orders are waiting on credits/);
+	});
+
+	it("hands a surface the way back AND the order's position", () => {
+		const err = new ConvexError(
+			creditLockErrorData({
+				route: "pick_plan",
+				audience: "member",
+				creditsToUnlock: 2,
+				ordersWaiting: 5,
+			}),
+		);
+		expect(creditLockErrorOf(err)).toMatchObject({
+			kind: "credits_locked",
+			unlockRoute: "pick_plan",
+			audience: "member",
+			// The ORDER's own place in the queue, so a refused control can say
+			// "waiting on 2 credits" rather than quoting the store's total.
+			creditsToUnlock: 2,
+			ordersWaiting: 5,
+		});
+		expect(creditLockErrorOf(new ConvexError("Only 2 in stock"))).toBeNull();
+		expect(creditLockErrorOf(new Error("boom"))).toBeNull();
+	});
+});
+
+describe("convexErrorMessage — the Convex server wrapper never reaches a person", () => {
+	// Exactly the shape the Convex client puts on `err.message` when a function
+	// throws. A teammate refused by a permission check read this, stack frames
+	// and all, in the 25 Sep Chrome round.
+	function wrapped(thrown: string, fn = "products:save") {
+		return new Error(
+			`[CONVEX M(${fn})] [Request ID: 9c2f8b1a] Server Error\n` +
+				`${thrown}\n` +
+				`    at requireRetailerAccess (../convex/lib/auth.ts:156:9)\n` +
+				`    at async handler (../convex/products.ts:220:3)\n\n` +
+				`  Called by client`,
+		);
+	}
+
+	it("keeps the sentence a deliberate throw carries, and nothing else", () => {
+		expect(
+			convexErrorMessage(wrapped("Uncaught Error: Maps URL must use https")),
+		).toBe("Maps URL must use https");
+	});
+
+	it("never leaks the request id, the frames or the word Uncaught", () => {
+		const msg = convexErrorMessage(
+			wrapped("Uncaught Error: Slug must be at most 32 characters"),
+		);
+		expect(msg).not.toContain("[CONVEX");
+		expect(msg).not.toContain("Request ID");
+		expect(msg).not.toContain("Uncaught");
+		expect(msg).not.toContain("    at ");
+		expect(msg).not.toContain("Called by client");
+	});
+
+	// A ConvexError thrown server-side normally arrives as a real ConvexError
+	// instance; if the class identity is ever lost crossing a bundle boundary,
+	// the copy still has to survive — that is the whole point of throwing it.
+	it("recovers a ConvexError's copy even without the class", () => {
+		expect(
+			convexErrorMessage(
+				wrapped(
+					"Uncaught ConvexError: You don't have permission to change products — ask the store owner for edit access from Settings → Team.",
+					"team:updatePermissions",
+				),
+			),
+		).toBe(
+			"You don't have permission to change products — ask the store owner for edit access from Settings → Team.",
+		);
+	});
+
+	// The CLASS decides, never the wording: a TypeError is the runtime telling
+	// us we have a bug, and "Cannot read properties of undefined" is not
+	// something a seller can act on.
+	it("turns a runtime crash into a sentence instead of repeating it", () => {
+		const msg = convexErrorMessage(
+			wrapped("Uncaught TypeError: Cannot read properties of undefined"),
+		);
+		expect(msg).toBe(GENERIC_SERVER_FAILURE);
+		expect(msg).not.toContain("undefined");
+	});
+
+	it("falls back when the wrapper carries no thrown line at all", () => {
+		expect(
+			convexErrorMessage(
+				new Error("[CONVEX M(products:save)] [Request ID: 9c2f] Server Error"),
+			),
+		).toBe(GENERIC_SERVER_FAILURE);
+	});
+
+	// Half the validators in convex/lib also run in the browser, where the throw
+	// never crosses the wire and the message is already clean. Unwrapping must
+	// not touch those.
+	it("leaves a client-side throw exactly as it is", () => {
+		expect(convexErrorMessage(new Error("Pick your check-out date"))).toBe(
+			"Pick your check-out date",
+		);
+	});
+});
+
 describe("currencySymbol", () => {
 	test("returns the same symbol formatPrice puts in front of an amount", () => {
 		// The pairing is the whole point: a field's prefix and the total it
@@ -267,5 +413,63 @@ describe("currencySymbol", () => {
 		// Mirrors formatPrice's fallback — an input prefixed with a made-up
 		// symbol would be worse than one prefixed with the code.
 		expect(currencySymbol("ZZZ")).toBe("ZZZ");
+	});
+});
+
+describe("formatDraftPrice — seller-typed amounts in summaries", () => {
+	const NB = "\u00a0";
+
+	test("the store's SYMBOL from its ISO code, never the code itself", () => {
+		// The bug this exists for: both product forms printed "MYR 12".
+		expect(formatDraftPrice(12, "MYR")).toBe(`RM${NB}12`);
+		expect(formatDraftPrice(12, "SGD")).toBe(`S$${NB}12`);
+	});
+
+	test("spelled like formatPrice — same prefix, same grouping — minus a trailing .00", () => {
+		for (const currency of ["MYR", "SGD"]) {
+			const draft = formatDraftPrice(1250, currency);
+			const stored = formatPrice(125_000, currency);
+			expect(stored.startsWith(draft)).toBe(true); // "RM 1,250" ⊂ "RM 1,250.00"
+		}
+		expect(formatDraftPrice(12.5, "MYR")).toBe(`RM${NB}12.50`);
+		expect(formatDraftPrice(0, "SGD")).toBe(`S$${NB}0`);
+	});
+
+	test("the number half groups, and keeps sen only when there are some", () => {
+		expect(formatDraftAmount(10_000)).toBe("10,000");
+		expect(formatDraftAmount(28.5)).toBe("28.50");
+		expect(formatDraftAmount(28)).toBe("28");
+	});
+
+	test("a range says the symbol once; meeting ends collapse to one price", () => {
+		expect(formatDraftPriceRange(12, 28.5, "MYR")).toBe(`RM${NB}12–28.50`);
+		expect(formatDraftPriceRange(12, 12, "SGD")).toBe(`S$${NB}12`);
+	});
+});
+
+describe("convexErrorMessage — a typed payload never reaches the buyer raw", () => {
+	test("an unclaimed typed payload becomes the generic line, never [object Object]", () => {
+		// The landmine this guards: `String({...})` is "[object Object]", which
+		// a buyer read once from the rate limiter's payload and again from the
+		// price-changed guard's. A new typed error must fail SAFE.
+		const message = convexErrorMessage(
+			new ConvexError({ kind: "something_new", lines: [1, 2] }),
+		);
+		expect(message).toBe(GENERIC_SERVER_FAILURE);
+		expect(message).not.toContain("object Object");
+	});
+
+	test("a typed payload carrying its own sentence still speaks", () => {
+		expect(
+			convexErrorMessage(
+				new ConvexError({ kind: "whatever", message: "Pick a pickup point." }),
+			),
+		).toBe("Pick a pickup point.");
+	});
+
+	test("a plain string payload is unchanged", () => {
+		expect(convexErrorMessage(new ConvexError("Out of stock"))).toBe(
+			"Out of stock",
+		);
 	});
 });

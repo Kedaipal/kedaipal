@@ -14,6 +14,17 @@ function setup() {
 	return t;
 }
 
+/**
+ * A stored screenshot for a payment claim. Proof is mandatory on a first claim
+ * (z8r3fdnpxf), so a test about something else — an email, a WhatsApp alert, a
+ * lock — still has to attach one for the claim to land at all.
+ */
+async function storeProof(t: ReturnType<typeof setup>): Promise<string> {
+	return await t.run((ctx) =>
+		ctx.storage.store(new Blob(["png"], { type: "image/png" })),
+	);
+}
+
 /** Resolve an order's buyer tracking token from its shortId (see orders.test.ts). */
 async function tk(
 	t: ReturnType<typeof setup>,
@@ -288,6 +299,7 @@ describe("email payment claimed alert", () => {
 		await t.mutation(api.orders.claimPayment, {
 			token: await tk(t, shortId),
 			reference: "TXN-9988",
+			proofStorageId: await storeProof(t),
 		});
 
 		await t.action(internal.email.notifyPaymentClaimed, { orderId });
@@ -320,7 +332,10 @@ describe("email payment claimed alert", () => {
 			retailerId,
 			productId,
 		);
-		await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
+		await t.mutation(api.orders.claimPayment, {
+			token: await tk(t, shortId),
+			proofStorageId: await storeProof(t),
+		});
 
 		await t.action(internal.email.notifyPaymentClaimed, { orderId });
 
@@ -345,7 +360,10 @@ describe("email payment claimed alert", () => {
 			retailerId,
 			productId,
 		);
-		await t.mutation(api.orders.claimPayment, { token: await tk(t, shortId) });
+		await t.mutation(api.orders.claimPayment, {
+			token: await tk(t, shortId),
+			proofStorageId: await storeProof(t),
+		});
 
 		await t.action(internal.email.notifyPaymentClaimed, { orderId });
 
@@ -368,6 +386,7 @@ describe("email payment claimed alert", () => {
 		await t.mutation(api.orders.claimPayment, {
 			token: await tk(t, shortId),
 			reference: "TXN-9988",
+			proofStorageId: await storeProof(t),
 		});
 
 		await t.action(internal.email.notifyPaymentClaimed, { orderId });
@@ -509,7 +528,47 @@ describe("email payment received alert (86eyd63r8)", () => {
 			notifyEmail: "ops@store.test",
 		});
 		const { orderId } = await createPendingOrder(t, retailerId, productId);
-		// Toggle never turned on → email is the only channel they have.
+		// The switch is on by default (z8r3fdv55f), but no number is saved →
+		// email is the only channel that can reach them.
+		await t.action(internal.email.notifyPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
+		expect(fetchMock.resendCalls()).toHaveLength(1);
+		fetchMock.restore();
+	});
+
+	test("a never-touched switch + a number = WhatsApp's job; a locked subscription hands it back to email (z8r3fdv55f)", async () => {
+		process.env.WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE =
+			"seller_payment_received_utility";
+		const t = setup();
+		const fetchMock = installFetchMock();
+		const { retailerId, productId } = await seedRetailerWithEmail(t, {
+			locale: "en",
+			notifyEmail: "ops@store.test",
+		});
+		const { orderId } = await createPendingOrder(t, retailerId, productId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { notifyWaPhone: "60198765432" });
+		});
+
+		// Default-on: WhatsApp covers it, so the email stays quiet.
+		await t.action(internal.email.notifyPaymentReceived, {
+			orderId,
+			provider: "HitPay",
+		});
+		expect(fetchMock.resendCalls()).toHaveLength(0);
+
+		// The store locks: the WhatsApp alert won't be attempted, and the email
+		// must read the SAME rule — or the seller hears nothing at all.
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			if (!sub) throw new Error("no subscription row");
+			await ctx.db.patch(sub._id, { status: "past_due" });
+		});
 		await t.action(internal.email.notifyPaymentReceived, {
 			orderId,
 			provider: "HitPay",

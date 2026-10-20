@@ -53,6 +53,10 @@ export function KpiRow({
 	currency: string;
 }) {
 	const outstanding = Math.max(0, earned - collected);
+	// NOTE: every figure here is already net of any refundable booking security
+	// deposit. That exclusion is stated once, for the whole page, by
+	// <DepositNote> under this row — deliberately NOT per-tile, which would
+	// imply the other tiles are gross. See deposit-note.tsx.
 	return (
 		<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
 			<KpiTile

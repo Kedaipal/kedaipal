@@ -292,7 +292,7 @@ describe("retailers.updateSettings — hitpay connection", () => {
 	test("plan catalog: onlinePayments is Pro+", () => {
 		expect(featuresForPlan("starter").onlinePayments).toBe(false);
 		expect(featuresForPlan("pro").onlinePayments).toBe(true);
-		expect(featuresForPlan("scale").onlinePayments).toBe(true);
+		expect(featuresForPlan("enterprise").onlinePayments).toBe(true);
 	});
 });
 
@@ -342,6 +342,90 @@ describe("orders.getPaymentMethods — gatewayAvailable", () => {
 		const { token } = await seedOrder(t, retailer._id, productId);
 		const info = await t.query(api.orders.getPaymentMethods, { token });
 		expect(info?.gatewayAvailable ?? false).toBe(false);
+	});
+});
+
+describe("HitPay on is THE way buyers pay (86eye9xd4, 8A)", () => {
+	const MAYBANK = {
+		type: "bank" as const,
+		label: "Maybank",
+		bankName: "Maybank",
+		bankAccountName: "Test Store",
+		bankAccountNumber: "5123 4567 8901",
+		sortOrder: 0,
+	};
+
+	async function seedManualAndHitpay(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.retailers.updateSettings, { paymentMethods: [MAYBANK] });
+		await connectHitpay(t, USER_A);
+		return { retailer, productId };
+	}
+
+	test("an order HitPay can take never sees the manual details", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedManualAndHitpay(t);
+		const { token } = await seedOrder(t, retailer._id, productId);
+		const info = await t.query(api.orders.getPaymentMethods, { token });
+		expect(info?.gatewayAvailable).toBe(true);
+		expect(info?.methods).toEqual([]);
+		expect(JSON.stringify(info)).not.toContain("5123 4567 8901");
+	});
+
+	test("switching back to manual brings them straight back — nothing was deleted", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedManualAndHitpay(t);
+		const { token } = await seedOrder(t, retailer._id, productId);
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.retailers.updateSettings, { hitpay: { enabled: false } });
+		const info = await t.query(api.orders.getPaymentMethods, { token });
+		expect(info?.gatewayAvailable).toBe(false);
+		expect(info?.methods.map((m) => m.label)).toEqual(["Maybank"]);
+	});
+
+	test("an order HitPay can't take keeps the manual details as its fallback", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedManualAndHitpay(t);
+		const { orderId, token } = await seedOrder(t, retailer._id, productId);
+		// Under HitPay's floor — the gateway refuses it, so manual is the door.
+		await t.run((ctx) => ctx.db.patch(orderId, { total: 20 }));
+		const info = await t.query(api.orders.getPaymentMethods, { token });
+		expect(info?.gatewayAvailable).toBe(false);
+		expect(info?.methods.map((m) => m.label)).toEqual(["Maybank"]);
+	});
+
+	test("the unpaid document points at Pay now instead of printing the account", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedManualAndHitpay(t);
+		const { token } = await seedOrder(t, retailer._id, productId);
+		const inputs = await t.query(internal.orders.receiptPdfInputs, { token });
+		expect(inputs?.data.paymentBlocks).toEqual([
+			{ label: "Pay online", lines: [expect.stringMatching(/Pay now/)] },
+		]);
+		expect(inputs?.data.payOnline).toBe(true);
+		expect(JSON.stringify(inputs?.data)).not.toContain("5123 4567 8901");
+	});
+
+	test("a receipt paid through HitPay names it, not the bank it didn't use", async () => {
+		const t = setup();
+		const { retailer, productId } = await seedManualAndHitpay(t);
+		const { orderId, token } = await seedOrder(t, retailer._id, productId);
+		await t.run((ctx) =>
+			ctx.db.patch(orderId, {
+				paymentStatus: "received",
+				paymentReceivedAt: Date.now(),
+				gatewayPaymentId: "pay_abc123",
+			}),
+		);
+		const inputs = await t.query(internal.orders.receiptPdfInputs, { token });
+		expect(inputs?.data.paymentBlocks).toEqual([
+			{ label: "Paid online", lines: ["HitPay payment pay_abc123"] },
+		]);
+		expect(inputs?.data.payOnline).toBeUndefined();
 	});
 });
 
@@ -465,6 +549,56 @@ describe("hitpay.createCheckout", () => {
 		).rejects.toThrow(/Couldn't reach the payment service/);
 		const row = await t.run(async (ctx) => ctx.db.get(orderId));
 		expect(row?.gatewayRequestId).toBeUndefined();
+	});
+
+	// z8r3fdh274: buyers can hold any country's number. HitPay's validation of
+	// a number outside the account's market is unverified and a 422 would kill
+	// Pay-now, so only a mobile of the STORE's country rides the request.
+	test("sends the buyer's phone only when it is a mobile of the store's country", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const productId = await seedProduct(t, USER_A, retailer._id);
+		await connectHitpay(t, USER_A);
+		const local = await seedOrder(t, retailer._id, productId);
+		const foreign = await seedOrder(t, retailer._id, productId);
+		const crossBorder = await seedOrder(t, retailer._id, productId);
+		await t.run(async (ctx) => {
+			const row = await ctx.db.get(foreign.orderId);
+			if (!row) throw new Error("order missing");
+			await ctx.db.patch(foreign.orderId, {
+				customer: { ...row.customer, waPhone: "447911123456" },
+			});
+		});
+
+		const phones: Array<string | null> = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: unknown, init?: RequestInit) => {
+				const body = new URLSearchParams(String(init?.body));
+				phones.push(body.get("phone"));
+				const id = `req_phone_${phones.length}`;
+				return new Response(
+					JSON.stringify({
+						id,
+						url: `https://checkout.sandbox.hit-pay.com/${id}`,
+						status: "pending",
+						amount: body.get("amount"),
+						currency: "myr",
+					}),
+					{ status: 201 },
+				);
+			}),
+		);
+
+		await t.action(api.hitpay.createCheckout, { token: local.token });
+		await t.action(api.hitpay.createCheckout, { token: foreign.token });
+		// The same MY buyer, once the store is Singaporean.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { country: "SG" });
+		});
+		await t.action(api.hitpay.createCheckout, { token: crossBorder.token });
+
+		expect(phones).toEqual(["60123456789", null, null]);
 	});
 });
 

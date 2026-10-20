@@ -11,8 +11,10 @@
  *   - A **revenue order** is one whose status is confirmed → delivered. `pending`
  *     and `cancelled` are excluded from EVERY figure (an order cancelled after
  *     payment therefore drops out of both earned and collected).
- *   - **Earned** = Σ total over revenue orders (order placed = revenue recognised).
- *   - **Collected** = Σ total over revenue orders whose paymentStatus is
+ *   - **Earned** = Σ total over revenue orders, NET of any refundable security
+ *     deposit (order placed = revenue recognised; held money is never revenue
+ *     — the amount netted out is reported back as `depositsExcluded`).
+ *   - **Collected** = Σ deposit-net total over revenue orders whose paymentStatus is
  *     "received" (money actually in hand). The payment-method donut slices this
  *     same figure, so Σ slices === collected.
  *   - Revenue anchors on `createdAt` (when the order was placed); `fulfilmentDate`
@@ -52,12 +54,20 @@ export type InsightsOrderInput = {
 	createdAt: number;
 	status: string;
 	total: number;
+	/** Refundable security deposit (sen) inside `total` on a booking order —
+	 * held money, excluded from every revenue figure here. */
+	securityDeposit?: number;
 	paymentStatus?: string;
 	paymentMethod?: string;
 	/** Checkout surface ("storefront" | "counter") — feeds the source bucket. */
 	source?: string;
 	/** Stamped `?src=` tag, when the buyer arrived with one (86eyq0eq9). */
 	attributionSource?: string;
+	/** Aggregated customer this order was linked to at create. Unset on orders
+	 * that arrived without a phone (link-in-bio checkout) and on anything from
+	 * before the backfill — those orders count toward revenue but have no
+	 * identity to count, so they never reach `customerIds`. */
+	customerId?: string;
 	items: ReadonlyArray<{
 		productId: string;
 		variantId?: string;
@@ -95,15 +105,25 @@ export type TrendBucket = { start: number; earned: number; orderCount: number };
 export type PaymentStat = { method: string; revenue: number; orderCount: number };
 
 /** One by-source row (86eyq0eq9). `source` is an `attributionBucket` key —
- * a stamped `?src=` tag, "counter", or "direct". Revenue is EARNED (Σ total
- * over revenue orders), so Σ rows === the earned KPI — this is "which funnel
- * produced the order", not "which funnel got paid". */
+ * a stamped `?src=` tag, "counter", or "direct". Revenue is EARNED — the same
+ * deposit-net figure as the KPI, never `total` (z8r3fdcw70) — so Σ rows === the
+ * earned KPI; this is "which funnel produced the order", not "which funnel got
+ * paid". */
 export type SourceStat = { source: string; revenue: number; orderCount: number };
 
 export type InsightsAggregate = {
-	/** Σ total over revenue orders. */
+	/** Σ deposit-net total over revenue orders. */
 	earned: number;
-	/** Σ total over revenue orders with paymentStatus "received". */
+	/** Σ security deposit netted out of `earned` over the same revenue orders —
+	 * the amount the "Revenue earned" tile says it excludes. The name is
+	 * literal and deliberately NOT `depositsHeld`: a deposit already returned
+	 * still counts here, because this answers "what did this window leave
+	 * out?", never "what is still outstanding?". The held/returned/kept
+	 * liability figure is a different number under a name this must not
+	 * squat on (z8r3fdd07u). 0 on a store without deposits, so the tile stays
+	 * silent. */
+	depositsExcluded: number;
+	/** Σ deposit-net total over revenue orders with paymentStatus "received". */
 	collected: number;
 	/** Count of revenue orders (denominator for AOV). */
 	orderCount: number;
@@ -116,6 +136,12 @@ export type InsightsAggregate = {
 	payments: PaymentStat[];
 	/** By-source rows over earned revenue, sorted by revenue desc. */
 	sources: SourceStat[];
+	/** Distinct `customerId`s seen on revenue orders in this window, insertion
+	 * ordered. IDS, not counts, because the Home Customers card merges a closed
+	 * range with today and the same customer can appear in both — counts cannot
+	 * be summed without double-counting them (z8r3fdrgzq). Orders with no
+	 * `customerId` contribute nothing. */
+	customerIds: string[];
 };
 
 /** Average order value (minor units) — earned ÷ revenue-order count, 0 when none. */
@@ -174,29 +200,41 @@ export function reduceInsights(
 	{ from, bucketing }: { from: number; bucketing: Bucketing },
 ): InsightsAggregate {
 	let earned = 0;
+	let depositsExcluded = 0;
 	let collected = 0;
 	let orderCount = 0;
 	const productMap = new Map<string, ProductStat>();
 	const trendMap = new Map<number, TrendBucket>();
 	const paymentMap = new Map<string, PaymentStat>();
 	const sourceMap = new Map<string, SourceStat>();
+	// A Set, so a customer with six orders in the window counts once.
+	const customerIds = new Set<string>();
 
 	for (const o of orders) {
 		if (!isRevenueOrder(o.status)) continue;
 		orderCount += 1;
-		earned += o.total;
+		if (o.customerId) customerIds.add(o.customerId);
+		// Revenue excludes the refundable security deposit (held money the
+		// seller gives back after check-out — the revenueExcludingDeposit rule,
+		// inlined since this module stays dependency-light).
+		const revenue = Math.max(0, o.total - (o.securityDeposit ?? 0));
+		earned += revenue;
+		// What the clamp above actually removed — Σ securityDeposit on every real
+		// order (total = stay + deposit), and never more than total on a bad one.
+		depositsExcluded += o.total - revenue;
 
 		// By-source rows — every revenue order lands in exactly one bucket
-		// (stamped tag → counter → direct), so Σ rows === earned/orderCount.
+		// (stamped tag → counter → direct) and adds the SAME deposit-net revenue
+		// as earned, so Σ rows === earned/orderCount holds on a booking store too.
 		const sourceKey = attributionBucket(o);
 		const sourceRow = sourceMap.get(sourceKey);
 		if (sourceRow) {
-			sourceRow.revenue += o.total;
+			sourceRow.revenue += revenue;
 			sourceRow.orderCount += 1;
 		} else {
 			sourceMap.set(sourceKey, {
 				source: sourceKey,
-				revenue: o.total,
+				revenue,
 				orderCount: 1,
 			});
 		}
@@ -206,10 +244,10 @@ export function reduceInsights(
 		const start = bucketStartFor(dayMidnight, from, bucketing);
 		const bucket = trendMap.get(start);
 		if (bucket) {
-			bucket.earned += o.total;
+			bucket.earned += revenue;
 			bucket.orderCount += 1;
 		} else {
-			trendMap.set(start, { start, earned: o.total, orderCount: 1 });
+			trendMap.set(start, { start, earned: revenue, orderCount: 1 });
 		}
 
 		// Top products — group order-item lines by product+variant (snapshot name).
@@ -235,26 +273,28 @@ export function reduceInsights(
 
 		// Collected + payment-method donut — only orders whose money is in hand.
 		if (o.paymentStatus === "received") {
-			collected += o.total;
+			collected += revenue;
 			const method = o.paymentMethod ?? "unspecified";
 			const slice = paymentMap.get(method);
 			if (slice) {
-				slice.revenue += o.total;
+				slice.revenue += revenue;
 				slice.orderCount += 1;
 			} else {
-				paymentMap.set(method, { method, revenue: o.total, orderCount: 1 });
+				paymentMap.set(method, { method, revenue, orderCount: 1 });
 			}
 		}
 	}
 
 	return {
 		earned,
+		depositsExcluded,
 		collected,
 		orderCount,
 		products: [...productMap.values()].sort((a, b) => b.revenue - a.revenue),
 		trend: [...trendMap.values()].sort((a, b) => a.start - b.start),
 		payments: [...paymentMap.values()].sort((a, b) => b.revenue - a.revenue),
 		sources: [...sourceMap.values()].sort((a, b) => b.revenue - a.revenue),
+		customerIds: [...customerIds],
 	};
 }
 

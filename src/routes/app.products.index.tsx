@@ -1,17 +1,20 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useConvex, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
+	CalendarClock,
 	ChevronRight,
 	Download,
 	EyeOff,
 	FileSpreadsheet,
 	FolderOpen,
 	Search,
+	Tag,
 	Upload,
 	X,
+	Zap,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -19,10 +22,20 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
 	productCapBlockReason,
+	productCapExemption,
 	productCapState,
 } from "../../convex/lib/productCap";
+import { formatEventBadge, isEventPassed } from "../../convex/lib/productEvent";
+import { NeedsAccessNote } from "../components/app/owner-only-note";
 import { ProBadge } from "../components/app/pro-gate";
+import { ViewOnlyNote } from "../components/app/view-only-note";
 import { PageHeader } from "../components/dashboard/page-header";
+import {
+	StockAdjustDialog,
+	type StockLine,
+	StockSheet,
+} from "../components/product/stock-adjust";
+import { ProductSpotlightBanner } from "../components/products/product-spotlight-banner";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
@@ -35,6 +48,8 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { usePermission } from "../hooks/usePermission";
+import { useAreaLock } from "../hooks/useStoreLock";
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage, formatPrice } from "../lib/format";
 import {
@@ -42,16 +57,41 @@ import {
 	downloadProductsXlsx,
 	type ExportableProduct,
 } from "../lib/product-export";
+import { PRODUCT_SPOTLIGHT } from "../lib/product-spotlight";
 import { reorderByIds } from "../lib/reorder";
+import {
+	isProductSpotlightKey,
+	type ProductSpotlightKey,
+} from "../lib/spotlight";
 import { storefrontUrl } from "../lib/storefront-url";
 import { hasFeature } from "../lib/subscription";
-import { hasStartingPrice } from "../lib/variant";
+import { cn } from "../lib/utils";
+import { hasStartingPrice, variantLabel } from "../lib/variant";
 
-type StatusFilter = "all" | "active" | "archived";
+/**
+ * The list's one narrowing control. "Out of stock" joined it rather than
+ * arriving as a separate filter (z8r3fdrgzj): a seller narrowing the list is
+ * doing ONE thing, and a second control beside this one would be two ways to
+ * ask the same kind of question. It is also what Home's "N products are out of
+ * stock" row opens, so the row's count and this list are the same set.
+ */
+type StatusFilter = "all" | "active" | "archived" | "out_of_stock";
 
 type ProductListItem = FunctionReturnType<typeof api.products.listAll>[number];
 
 export const Route = createFileRoute("/app/products/")({
+	// `spot` is a What's-new note's deep link (src/lib/spotlight.ts) for a card
+	// that lives on ONE product's edit form. A note can't know which product,
+	// so it lands here: the list says what to open, and every eligible row
+	// carries the key on to the edit page, which scrolls to the card and rings
+	// it. Validated against the product-page keys, so a hand-typed value (or a
+	// settings key pasted here) is dropped rather than forwarded.
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { spot?: ProductSpotlightKey; stock?: "out" } => ({
+		...(isProductSpotlightKey(search.spot) ? { spot: search.spot } : {}),
+		...(search.stock === "out" ? { stock: "out" as const } : {}),
+	}),
 	component: ProductsRoute,
 });
 
@@ -187,6 +227,8 @@ function CategoriesLink({
 
 function ProductsRoute() {
 	const retailer = useDashboardRetailer();
+	const { spot, stock: stockParam } = Route.useSearch();
+	const navigate = useNavigate();
 	// Client mirror of the `categories` plan gate (server is the lock) — only
 	// used to badge the Categories link; admin act-as sees through it.
 	const categoriesLocked =
@@ -202,7 +244,12 @@ function ProductsRoute() {
 	).data;
 	const [rawQuery, setRawQuery] = useState("");
 	const [query, setQuery] = useState("");
-	const [status, setStatus] = useState<StatusFilter>("all");
+	// A link can open the list already narrowed; the chip row then SHOWS which
+	// position is on, so the seller can see why the list is short and clear it
+	// in one tap rather than wondering where their products went.
+	const [status, setStatus] = useState<StatusFilter>(
+		stockParam === "out" ? "out_of_stock" : "all",
+	);
 	const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
 
 	useEffect(() => {
@@ -210,27 +257,53 @@ function ProductsRoute() {
 		return () => clearTimeout(t);
 	}, [rawQuery]);
 
-	const counts = useMemo(() => {
-		if (!products) return { all: 0, active: 0, archived: 0 };
+	const counts = useMemo((): Record<StatusFilter, number> => {
+		if (!products) return { all: 0, active: 0, archived: 0, out_of_stock: 0 };
 		let active = 0;
-		for (const p of products) if (p.active) active++;
+		let outOfStock = 0;
+		for (const p of products) {
+			if (p.active) active++;
+			if (p.active && !p.inStock) outOfStock++;
+		}
 		return {
 			all: products.length,
 			active,
 			archived: products.length - active,
+			out_of_stock: outOfStock,
 		};
 	}, [products]);
 
 	// Product cap. `counts.all` is the right input by construction: `listAll`
 	// returns every row, active AND archived, which is exactly what the cap
-	// counts. Client mirror of the server gate (server is the lock) — admin
-	// act-as is exempt so a white-glove catalog can be stocked past the ceiling.
-	const cap = productCapState(counts.all, retailer?.actingAsAdmin === true);
+	// counts. Client mirror of the server gate (server is the lock) — exempt for
+	// admin act-as, so a white-glove catalog can be stocked past the ceiling,
+	// and for a FULL-ACCESS store (admin-owned or sponsored), which has no plan
+	// to cap. Both inputs ride on the retailer payload and the OR lives in
+	// `productCapExemption`, so this cannot disagree with what the save does.
+	const capExempt = productCapExemption({
+		actingAsAdmin: retailer?.actingAsAdmin === true,
+		fullAccess: retailer?.fullAccess === true,
+	});
+	const cap = productCapState(counts.all, capExempt);
 	// null while there's room — one source for the disabled button and its reason.
-	const capBlockReason = productCapBlockReason(
-		counts.all,
-		retailer?.actingAsAdmin === true,
-	);
+	const capBlockReason = productCapBlockReason(counts.all, capExempt);
+	// Team members (86exr91r4): a read-only grant must not be handed
+	// create/reorder/export affordances that the server will refuse.
+	const productsPerm = usePermission("products");
+	const canExportProducts = usePermission("exports").canRead;
+	// Every reason the catalogue can't change right now, in one shape: the
+	// store lapsed (view-only), it ran out of credits (Credits T3), or this
+	// teammate holds view on products. One author for each sentence, shared
+	// with every other gated surface, so the words can't drift.
+	const productsLock = useAreaLock("products");
+	const writeBlockReason = productsLock.readOnly ? productsLock.reason : null;
+	// How many rows the spotlight key applies to — decides whether the banner
+	// says "open one below" or "you don't have one yet". Counted over every
+	// row, not the filtered view, so a status filter can't make it lie.
+	const spotEligible =
+		spot && products
+			? products.filter((p) => PRODUCT_SPOTLIGHT[spot].applies(p)).length
+			: 0;
 	const countsLine =
 		products === undefined
 			? "Loading…"
@@ -250,6 +323,9 @@ function ProductsRoute() {
 		return products.filter((p) => {
 			if (status === "active" && !p.active) return false;
 			if (status === "archived" && p.active) return false;
+			// Identical to the card's own `outOfStock`, so the chip and the word on
+			// the card can never disagree about what sold out means.
+			if (status === "out_of_stock" && !(p.active && !p.inStock)) return false;
 			if (q && !p.name.toLowerCase().includes(q)) return false;
 			return true;
 		});
@@ -258,8 +334,14 @@ function ProductsRoute() {
 	// Drag-to-reorder is enabled only in the unfiltered "All" view (the list is
 	// then the retailer's complete set). Needs 2+ active products — only active
 	// ones are draggable; archived sit in a fixed tail.
+	// …and only for someone allowed to change products: a read-only teammate
+	// dragging a card would snap back on the server's refusal (86exr91r4). The
+	// non-sortable branch below is the same grid without handles.
 	const canReorder =
-		status === "all" && query.trim() === "" && counts.active >= 2;
+		status === "all" &&
+		query.trim() === "" &&
+		counts.active >= 2 &&
+		!productsLock.readOnly;
 
 	if (!retailer) return null;
 
@@ -267,6 +349,7 @@ function ProductsRoute() {
 		{ key: "all", label: "All" },
 		{ key: "active", label: "Active" },
 		{ key: "archived", label: "Archived" },
+		{ key: "out_of_stock", label: "Out of stock" },
 	];
 
 	const clearFilters = () => {
@@ -294,7 +377,7 @@ function ProductsRoute() {
 				api.categories.namesByProduct,
 				{ retailerId: retailer._id },
 			);
-			// One row per exportable variant. The first eleven columns stay
+			// One row per exportable variant. The leading template columns stay
 			// round-trippable with the import parser; the rest are the catalogue
 			// report (86eyrtz74) — see src/lib/product-export.ts.
 			const rows: ExportableProduct[] = filtered.map((p) => ({
@@ -310,6 +393,10 @@ function ProductsRoute() {
 				url: `${storefrontUrl(retailer.slug)}/p/${p.slug}`,
 				minQuantity: p.minQuantity,
 				minNoticeDays: p.minNoticeDays,
+				prepMinutes: p.prepMinutes,
+				pickupNote: p.pickupNote,
+				kind: p.kind,
+				event: p.event,
 				imageCount: p.imageUrls?.length ?? 0,
 				variants: p.variants.map((vr) => ({
 					optionValues: vr.optionValues,
@@ -345,14 +432,16 @@ function ProductsRoute() {
 					<>
 						{BULK_IO_ENABLED ? (
 							<BulkIoMenu
-								canExport={counts.all > 0}
+								canExport={counts.all > 0 && canExportProducts}
 								exporting={exporting}
 								onExport={handleExport}
 							/>
 						) : null}
-						<CategoriesLink locked={categoriesLocked} />
+						<CategoriesLink
+							locked={categoriesLocked || !productsPerm.canWrite}
+						/>
 						<NewProductButton
-							blockedReason={capBlockReason}
+							blockedReason={writeBlockReason ?? capBlockReason}
 							label="+ New product"
 							className="h-10"
 						/>
@@ -375,19 +464,41 @@ function ProductsRoute() {
 				<div className="flex shrink-0 items-center gap-2">
 					{BULK_IO_ENABLED ? (
 						<BulkIoMenu
-							canExport={counts.all > 0}
+							canExport={counts.all > 0 && canExportProducts}
 							exporting={exporting}
 							onExport={handleExport}
 						/>
 					) : null}
-					<CategoriesLink locked={categoriesLocked} mobile />
+					<CategoriesLink
+						locked={categoriesLocked || !productsPerm.canWrite}
+						mobile
+					/>
 					<NewProductButton
-						blockedReason={capBlockReason}
+						blockedReason={writeBlockReason ?? capBlockReason}
 						label="+ New"
 						className="h-11"
 					/>
 				</div>
 			</div>
+
+			{/* A What's-new deep link landed here (`?spot=`): say what the seller
+			    is looking for and where the next tap takes them. First among the
+			    sections because it is the reason they are on this page. "Got it"
+			    clears the key from the URL. */}
+			{/* Why the catalogue can't change right now, above the controls it
+			    greys out: a lapsed store, one out of credits (Credits T3), or a
+			    teammate with view on products. Each renders nothing otherwise. */}
+			<ViewOnlyNote />
+			<NeedsAccessNote area="products" />
+
+			{spot && products !== undefined ? (
+				<ProductSpotlightBanner
+					spot={spot}
+					eligibleCount={spotEligible}
+					canCreate={!capBlockReason && !writeBlockReason}
+					onDismiss={() => navigate({ to: "/app/products", search: {} })}
+				/>
+			) : null}
 
 			{/* At the ceiling the disabled New button needs to say WHY, and the
 			    reason isn't guessable: archiving looks like removal but keeps the
@@ -451,11 +562,23 @@ function ProductsRoute() {
 				<div className="rounded-2xl border border-dashed border-border p-8 text-center">
 					<p className="font-medium">No products yet</p>
 					<p className="mt-1 text-sm text-muted-foreground">
-						Add your first product to start selling.
+						Add your first product to start selling — or, if you have 20+ items,
+						import your whole catalogue from a spreadsheet in one go.
 					</p>
-					<Button asChild className="mt-4 h-11">
-						<Link to="/app/products/new">+ New product</Link>
-					</Button>
+					{/* Both doors with equal billing: the onboarding checklist sends
+					    new sellers HERE to choose, so import can't hide in the
+					    header's icon menu for the zero-product state. */}
+					<div className="mt-4 flex flex-col justify-center gap-2 sm:flex-row">
+						<Button asChild className="h-11">
+							<Link to="/app/products/new">+ New product</Link>
+						</Button>
+						<Button asChild variant="outline" className="h-11">
+							<Link to="/app/products/import">
+								<FileSpreadsheet className="size-4" aria-hidden />
+								Import from spreadsheet
+							</Link>
+						</Button>
+					</div>
 				</div>
 			) : filtered.length === 0 ? (
 				<div className="rounded-2xl border border-dashed border-border p-8 text-center">
@@ -470,12 +593,20 @@ function ProductsRoute() {
 					</Button>
 				</div>
 			) : canReorder ? (
-				<SortableProductGrid retailerId={retailer._id} products={filtered} />
+				<SortableProductGrid
+					retailerId={retailer._id}
+					products={filtered}
+					spot={spot}
+				/>
 			) : (
 				<ul className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:gap-3 xl:grid-cols-3">
 					{filtered.map((p) => (
 						<li key={p._id}>
-							<ProductCard product={p} />
+							<ProductCard
+								product={p}
+								spot={spot}
+								lockedReason={writeBlockReason ?? undefined}
+							/>
 						</li>
 					))}
 				</ul>
@@ -515,10 +646,20 @@ function NewProductButton({
 function ProductCard({
 	product: p,
 	dragHandle,
+	spot,
+	lockedReason,
 }: {
 	product: ProductListItem;
 	dragHandle?: ReactNode;
+	/** A What's-new deep link to forward — only rows the key applies to carry it. */
+	spot?: ProductSpotlightKey;
+	/** Why the catalogue can't change right now (view-only, out of credits, a
+	 * view-only teammate) — moving stock edits the product, so Stock greys out
+	 * with the rest. Resolved once by the page, not per row. */
+	lockedReason?: string;
 }) {
+	const forwardSpot =
+		spot && PRODUCT_SPOTLIGHT[spot].applies(p) ? spot : undefined;
 	const blockOOS = p.blockWhenOutOfStock === true;
 	const outOfStock = p.active && !p.inStock;
 	const lowStock =
@@ -536,13 +677,34 @@ function ProductCard({
 	// and the reorder tail).
 	const dim = p.active ? "" : " opacity-55";
 
+	// The second door onto stock (86eypn8ye). Taking stock out of the product
+	// save is only an improvement if changing it got EASIER — buried behind
+	// Products → open → scroll to Pricing & choices → Adjust, a correctness fix
+	// would read as a regression. This list is the one screen that already shows
+	// stock, so it is where the daily "sold three at the stall" belongs.
+	const [stockOpen, setStockOpen] = useState(false);
+	const stockLines: StockLine[] = p.active
+		? p.variants
+				// Made-to-order and bespoke lines have no count to move; offering one
+				// would invent a concept the seller deliberately turned off. Same rule
+				// the editor uses to decide whether a stock field renders at all.
+				.filter((vr) => vr.active && !vr.isCustom && vr.blockWhenOutOfStock)
+				.map((vr) => ({
+					variantId: vr._id,
+					label:
+						vr.optionValues.length > 0 ? variantLabel(vr.optionValues) : p.name,
+					onHand: vr.onHand,
+				}))
+		: [];
+
 	const link = (
 		<Link
 			to="/app/products/$productId"
 			params={{ productId: p._id }}
+			search={forwardSpot ? { spot: forwardSpot } : {}}
 			className={
-				(dragHandle
-					? "flex min-h-16 min-w-0 flex-1 items-center gap-3 py-3 pr-3"
+				(dragHandle || stockLines.length > 0
+					? "flex min-h-16 min-w-0 flex-1 items-center gap-3 py-3 pr-2"
 					: "flex min-h-16 items-center gap-3 rounded-2xl border border-border bg-card p-3 transition-colors hover:border-ring hover:bg-accent/5") +
 				dim
 			}
@@ -562,7 +724,22 @@ function ProductCard({
 						) : (
 							<>
 								{showFrom ? "From " : ""}
-								{formatPrice(p.priceFrom, p.currency)}
+								{/* The seller's own catalogue must show what buyers are
+								    actually being charged. It printed the LIST price with
+								    no hint a sale was running, so a seller scanning the
+								    list could not tell which products were discounted or
+								    at what — the one place they'd look to check
+								    (found by hand-testing). */}
+								{p.promoPriceFrom !== undefined ? (
+									<>
+										{formatPrice(p.promoPriceFrom, p.currency)}{" "}
+										<span className="font-normal text-muted-foreground line-through">
+											{formatPrice(p.priceFrom, p.currency)}
+										</span>
+									</>
+								) : (
+									formatPrice(p.priceFrom, p.currency)
+								)}
 							</>
 						)}
 					</span>
@@ -571,8 +748,28 @@ function ProductCard({
 				{/* Stock state as a colour word — the number a home seller actually
 				    protects. Archived rows use the slot for their status instead. */}
 				<span className="truncate text-[12.5px] font-semibold">
+					{/* An EVENT's third line is its date, not a stock word — the date
+					    is what the product IS, and it lives in the flexible left
+					    column so a long range truncates instead of crushing the
+					    name (the first cut put it in the shrink-0 chip column,
+					    which rendered the name at 0px). "Ended" keeps history
+					    legible; the storefront has already dropped the listing. */}
 					{!p.active ? (
 						<span className="font-normal text-muted-foreground">Archived</span>
+					) : p.event ? (
+						<span
+							className={`inline-flex max-w-full items-center gap-1 ${
+								isEventPassed(p.event)
+									? "font-normal text-muted-foreground"
+									: "text-accent-emphasis"
+							}`}
+						>
+							<CalendarClock className="size-3 shrink-0" aria-hidden />
+							<span className="truncate">
+								{isEventPassed(p.event) ? "Ended" : "Event"} ·{" "}
+								{formatEventBadge(p.event)}
+							</span>
+						</span>
 					) : outOfStock ? (
 						<span className="text-red-600 dark:text-red-400">Sold out</span>
 					) : lowStock ? (
@@ -585,6 +782,29 @@ function ProductCard({
 				</span>
 			</div>
 			<div className="flex shrink-0 flex-col items-end gap-1">
+				{/* FIRST in this column, above the standing rules below it: a sale
+				    is the only thing here with a clock on it. Same two treatments
+				    the buyer's card uses — dark + bolt for a timed flash, mint +
+				    tag for a plain discount — so the seller recognises what the
+				    shopper is seeing instead of learning a second vocabulary. */}
+				{p.active && p.promoState !== undefined ? (
+					<span
+						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+							p.promoState.endsAt !== undefined
+								? "bg-foreground text-background"
+								: "bg-accent/15 text-accent-emphasis"
+						}`}
+					>
+						{p.promoState.endsAt !== undefined ? (
+							<Zap className="size-3" aria-hidden />
+						) : (
+							<Tag className="size-3" aria-hidden />
+						)}
+						{p.promoState.phase === "scheduled"
+							? "Scheduled"
+							: p.promoState.label}
+					</span>
+				) : null}
 				{p.active && (p.minQuantity ?? 0) >= 2 ? (
 					// Minimum-order-quantity rule — flagged on the list so the seller
 					// can see at a glance which products carry it. See minOrderRules.
@@ -603,11 +823,18 @@ function ProductCard({
 						{p.hidden ? "Hidden" : "Hidden · category"}
 					</span>
 				) : null}
+				{/* The chevron stands down for the Stock button (86eypn8ye): two
+				    right-hand affordances read as noise, and on a 375px row the 24px
+				    it costs comes straight out of the product name. The row is still
+				    a link — the button beside it is the stronger signal that this row
+				    has more than one thing to do. */}
 				{p.active ? (
-					<ChevronRight
-						className="size-4 text-muted-foreground/60"
-						aria-hidden="true"
-					/>
+					stockLines.length > 0 ? null : (
+						<ChevronRight
+							className="size-4 text-muted-foreground/60"
+							aria-hidden="true"
+						/>
+					)
 				) : (
 					<EyeOff className="size-4 text-muted-foreground/60" aria-hidden />
 				)}
@@ -615,11 +842,53 @@ function ProductCard({
 		</Link>
 	);
 
-	if (!dragHandle) return link;
+	const stock =
+		stockLines.length > 0 ? (
+			<>
+				<Button
+					variant="outline"
+					// 44px on touch, per the mobile-first floor — this row is the
+					// primary stock surface on a phone. Released at `lg`, where the
+					// design system permits compact pointer-only controls and a
+					// 44px button would bloat every row in a 3-up grid.
+					className="mr-2 h-11 shrink-0 bg-background px-3 text-xs lg:h-9"
+					onClick={() => setStockOpen(true)}
+					disabled={lockedReason !== undefined}
+					title={lockedReason ?? `Adjust stock for ${p.name}`}
+				>
+					Stock
+				</Button>
+				{/* One tracked choice needs no list; several open the sheet that moves
+				    them in one batched, all-or-nothing pass. */}
+				{stockLines.length === 1 ? (
+					<StockAdjustDialog
+						open={stockOpen}
+						onOpenChange={setStockOpen}
+						productName={p.name}
+						line={stockLines[0]}
+					/>
+				) : (
+					<StockSheet
+						open={stockOpen}
+						onOpenChange={setStockOpen}
+						productName={p.name}
+						lines={stockLines}
+					/>
+				)}
+			</>
+		) : null;
+
+	if (!dragHandle && !stock) return link;
 	return (
-		<div className="flex items-center gap-1 rounded-2xl border border-border bg-card pl-1 transition-colors hover:border-ring hover:bg-accent/5">
+		<div
+			className={cn(
+				"flex items-center gap-1 rounded-2xl border border-border bg-card transition-colors hover:border-ring hover:bg-accent/5",
+				dragHandle ? "pl-1" : "pl-3",
+			)}
+		>
 			{dragHandle}
 			{link}
+			{stock}
 		</div>
 	);
 }
@@ -627,9 +896,11 @@ function ProductCard({
 function SortableProductGrid({
 	retailerId,
 	products,
+	spot,
 }: {
 	retailerId: Id<"retailers">;
 	products: ProductListItem[];
+	spot?: ProductSpotlightKey;
 }) {
 	const reorder = useMutation(api.products.reorder);
 	// `products` arrives active-first (server `byActiveThenSort`). Only the active
@@ -676,7 +947,7 @@ function SortableProductGrid({
 				strategy="grid"
 				className={gridClass}
 				renderItem={(prod, handle) => (
-					<ProductCard product={prod} dragHandle={handle} />
+					<ProductCard product={prod} dragHandle={handle} spot={spot} />
 				)}
 			/>
 			{inactiveProducts.length > 0 ? (
@@ -687,7 +958,7 @@ function SortableProductGrid({
 					<ul className={gridClass}>
 						{inactiveProducts.map((p) => (
 							<li key={p._id}>
-								<ProductCard product={p} />
+								<ProductCard product={p} spot={spot} />
 							</li>
 						))}
 					</ul>

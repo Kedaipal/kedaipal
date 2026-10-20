@@ -6,15 +6,32 @@ import {
 	notFound,
 	redirect,
 } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Zap } from "lucide-react";
+import { useMemo } from "react";
 import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
+import { BookingCheckoutForm } from "../components/storefront/booking-checkout-form";
 import { CheckoutPage } from "../components/storefront/checkout-form";
+import { EventRsvpCheckoutForm } from "../components/storefront/event-rsvp-checkout-form";
+import {
+	OrderingPausedProvider,
+	SeasonalBreakNotice,
+} from "../components/storefront/seasonal-break";
+import {
+	StoreUnavailable,
+	type StoreUnavailableLoaderData,
+	storeUnavailableHead,
+} from "../components/storefront/store-unavailable";
+import { StorefrontAppBar } from "../components/storefront/storefront-app-bar";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
-import { StorefrontHeader } from "../components/storefront/storefront-header";
+import { CountdownBand } from "../components/ui/countdown-strip";
 import { Skeleton } from "../components/ui/skeleton";
-import { useCart } from "../hooks/useCart";
+import { type UseCart, useCart } from "../hooks/useCart";
+import { usePromoClock } from "../hooks/usePromoClock";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
+import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient } from "../lib/convex-server";
+import type { PromoState } from "../lib/promo";
 import { ssrRead } from "../lib/ssr-read";
 
 interface CheckoutLoaderData {
@@ -32,7 +49,38 @@ interface CheckoutLoaderData {
  * page. Noindex: a checkout is transactional, not a landing surface.
  */
 export const Route = createFileRoute("/$slug_/checkout")({
-	loader: async ({ params }): Promise<CheckoutLoaderData | null> => {
+	// ?booking=<productSlug> switches this page into the booking-request flow
+	// (S2 `86eyn4kbw`): calendar + guest details instead of the cart form.
+	// ?rsvp=<productSlug> does the same for an event RSVP (`z8r3fdhh45`).
+	// Both are STANDALONE checkouts — their product carries its own fixed
+	// fulfilment moment, so it can never share an order with cart lines whose
+	// date the buyer picks. The cart is untouched either way: neither a stay
+	// nor an RSVP ever enters it.
+	//
+	// Mutually exclusive by construction — one page can only check one thing
+	// out — and `booking` wins a malformed URL carrying both, so the branch
+	// below and this validator can never disagree.
+	//
+	// ?voucher=<code> carries a seller-issued discount code (`z8r3fdr617`) — the
+	// "link" of the share sheet's code/QR/link trio, for a buyer who cannot scan
+	// their own screen. It rides the CART checkout only: a booking and an RSVP
+	// are standalone flows with their own totals, and vouchers are not offered
+	// on either in v1, so a code arriving on one of those URLs is dropped rather
+	// than silently ignored downstream.
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { booking?: string; rsvp?: string; voucher?: string } => {
+		if (typeof search.booking === "string" && search.booking.length > 0)
+			return { booking: search.booking };
+		if (typeof search.rsvp === "string" && search.rsvp.length > 0)
+			return { rsvp: search.rsvp };
+		return typeof search.voucher === "string" && search.voucher.length > 0
+			? { voucher: search.voucher }
+			: {};
+	},
+	loader: async ({
+		params,
+	}): Promise<CheckoutLoaderData | StoreUnavailableLoaderData | null> => {
 		const client = getConvexHttpClient();
 		const read = await ssrRead(() =>
 			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
@@ -54,6 +102,11 @@ export const Route = createFileRoute("/$slug_/checkout")({
 		if (result.status === "notFound") {
 			throw notFound();
 		}
+		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
+		// the component renders the neutral unavailable page, and head()
+		// takes it out of search in the SSR HTML.
+		if (result.status === "unavailable")
+			return { unavailable: true, storeName: result.storeName };
 
 		return {
 			storeName: result.retailer.storeName,
@@ -62,6 +115,8 @@ export const Route = createFileRoute("/$slug_/checkout")({
 	},
 	head: ({ loaderData }) => {
 		if (!loaderData) return {};
+		if ("unavailable" in loaderData)
+			return storeUnavailableHead(loaderData.storeName);
 		return {
 			meta: [
 				{ title: `Checkout — ${loaderData.storeName} | Kedaipal` },
@@ -76,11 +131,15 @@ export const Route = createFileRoute("/$slug_/checkout")({
 function CheckoutNotFound() {
 	const { slug } = Route.useParams();
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-3xl font-bold">Store not found</h1>
-			<p className="text-sm text-muted-foreground">
-				No retailer uses <span className="font-mono">/{slug}</span>.
-			</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="text-3xl font-bold">Store not found</h1>
+				<p className="text-sm text-muted-foreground">
+					No retailer uses <span className="font-mono">/{slug}</span>.
+				</p>
+			</div>
+			{/* No store to attribute to — the slug names nobody. */}
+			<StorefrontFooter />
 		</main>
 	);
 }
@@ -88,22 +147,16 @@ function CheckoutNotFound() {
 function CheckoutSkeleton() {
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col">
-			{/* Mirrors the shared StorefrontHeader shape so the swap-in is seamless. */}
-			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8 lg:pb-8">
-				<Skeleton className="h-5 w-24" />
-				<div className="flex items-center gap-4">
-					<Skeleton className="h-16 w-16 shrink-0 rounded-2xl" />
-					<div className="flex flex-col gap-2">
-						<Skeleton className="h-7 w-40" />
-						<Skeleton className="h-4 w-48" />
-					</div>
+			{/* Mirrors the compact StorefrontAppBar so the swap-in is seamless. */}
+			<header className="border-b border-border">
+				<div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 lg:h-16">
+					<Skeleton className="size-6 rounded-full" />
+					<Skeleton className="size-8 rounded-[10px]" />
+					<Skeleton className="h-4 w-32" />
 				</div>
 			</header>
 			<div className="flex flex-col gap-4 px-5 pt-4 lg:px-8 lg:pt-6">
-				<div className="flex items-center gap-3">
-					<Skeleton className="size-9 rounded-full" />
-					<Skeleton className="h-7 w-32" />
-				</div>
+				<Skeleton className="h-7 w-32" />
 				<div className="flex flex-col gap-4 lg:flex-row lg:gap-8">
 					<Skeleton className="h-64 w-full rounded-2xl lg:order-2 lg:w-96" />
 					<div className="flex flex-1 flex-col gap-4 lg:order-1">
@@ -118,8 +171,12 @@ function CheckoutSkeleton() {
 
 function CheckoutRoute() {
 	const { slug } = Route.useParams();
+	const { booking, rsvp, voucher } = Route.useSearch();
 	// A tagged link can land straight on checkout — capture here too.
 	useCaptureAttribution(slug);
+	// A `?voucher=` link lands on an EMPTY cart, so the code has to survive the
+	// browsing that follows (`z8r3fdr617`) — same reason as the line above.
+	useCaptureVoucherParam(slug);
 	// Live query keeps the page reactive after the SSR'd loader response —
 	// same pattern as the store home and category pages.
 	const result = useQuery(
@@ -136,49 +193,139 @@ function CheckoutRoute() {
 	// Without the cart gate the first committed render shows the empty-cart
 	// panel — with a "Browse {store}" button that navigates away from checkout
 	// — before the buyer's items hydrate from localStorage.
+	if (result?.status === "unavailable") {
+		return <StoreUnavailable storeName={result.storeName} />;
+	}
 	if (!retailer || !cart.hydrated) {
 		return <CheckoutSkeleton />;
 	}
 
+	// Off-Season Hold (z8r3fday24): no form at all — the server would refuse
+	// the order anyway, and a form that can't submit is a trap. The cart is
+	// kept (localStorage) for when the store reopens.
+	if (retailer.orderingPaused) {
+		return (
+			<OrderingPausedProvider paused pausedBy={retailer.orderingPausedBy}>
+				<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-10">
+					<StorefrontAppBar retailer={retailer} slug={retailer.slug} />
+					<SeasonalBreakNotice storeName={retailer.storeName} />
+					<div className="px-5 pt-4 lg:px-8 lg:pt-6">
+						<h1 className="font-heading text-xl font-extrabold tracking-tight">
+							Checkout
+						</h1>
+						<p className="mt-2 text-sm text-muted-foreground">
+							{retailer.orderingPausedBy?.by === "hold"
+								? `${retailer.storeName} isn't taking orders this season, so there's nothing to check out yet.`
+								: `${retailer.storeName} isn't taking orders right now, so there's nothing to check out yet.`}{" "}
+							Your basket is saved for when they're back.
+						</p>
+						<Link
+							to="/$slug"
+							params={{ slug: retailer.slug }}
+							activeOptions={{ exact: true }}
+							className="tap-target mt-4 inline-flex h-11 items-center gap-1.5 rounded-lg border border-border bg-card px-4 text-sm font-medium"
+						>
+							<ArrowLeft className="size-4" aria-hidden />
+							Back to {retailer.storeName}
+						</Link>
+					</div>
+					<StorefrontFooter />
+				</div>
+			</OrderingPausedProvider>
+		);
+	}
+
+	if (booking) {
+		return (
+			<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
+				{/* The app bar owns "back" — and here the page sits under a LISTING,
+				    so back leads to it rather than the store home (one back control
+				    per screen, pointing one level up). */}
+				<StorefrontAppBar
+					retailer={retailer}
+					slug={retailer.slug}
+					backToProductSlug={booking}
+				/>
+				<div className="px-5 pt-4 lg:px-8 lg:pt-6">
+					<h1 className="font-heading text-xl font-extrabold tracking-tight">
+						Request to book
+					</h1>
+					<div className="mt-4">
+						<BookingCheckoutForm
+							retailerId={retailer._id}
+							storeName={retailer.storeName}
+							storeSlug={retailer.slug}
+							productSlug={booking}
+							locale={retailer.locale}
+							country={retailer.country}
+							cartItemCount={cart.itemCount}
+							paymentsPaused={retailer.paymentsPaused}
+						/>
+					</div>
+				</div>
+				<StorefrontFooter slug={slug} />
+			</div>
+		);
+	}
+
+	if (rsvp) {
+		return (
+			<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
+				{/* Same bar, same rule as the booking branch above: back leads to
+				    the EVENT this page is checking out, one level up. */}
+				<StorefrontAppBar
+					retailer={retailer}
+					slug={retailer.slug}
+					backToProductSlug={rsvp}
+				/>
+				<div className="px-5 pt-4 lg:px-8 lg:pt-6">
+					<h1 className="font-heading text-xl font-extrabold tracking-tight">
+						RSVP
+					</h1>
+					<div className="mt-4">
+						<EventRsvpCheckoutForm
+							retailerId={retailer._id}
+							storeName={retailer.storeName}
+							storeSlug={retailer.slug}
+							productSlug={rsvp}
+							locale={retailer.locale}
+							country={retailer.country}
+							confirmPushEnabled={retailer.confirmPushEnabled ?? false}
+							cartItemCount={cart.itemCount}
+							paymentsPaused={retailer.paymentsPaused}
+						/>
+					</div>
+				</div>
+				<StorefrontFooter slug={slug} />
+			</div>
+		);
+	}
+
 	return (
-		// No horizontal padding on the container: the brand header is full-bleed
-		// (its cover image must reach the edges) and each section below owns its
-		// own px — same structure as the store home, category and product pages.
-		// Stays max-w-5xl (they use 6xl) so the header's logo and store name line
-		// up with the checkout content beneath: capping the content narrower than
-		// the header instead left the two centred on different axes, and a brand
-		// block indented 64px off the page it heads reads as a bug. A slightly
-		// narrower header is the cheaper inconsistency, and suits a task page.
-		//
 		// The bottom padding reserves room for the FIXED mobile CTA bar (out of
 		// flow, so it would otherwise cover the footer) — the bar measures itself
 		// and publishes --storefront-bar-h, so this is exactly the bar and no
 		// dead space under the footer badge. The fallback only applies for the
 		// frame before the first measurement. Desktop has no fixed bar.
 		<div className="mx-auto flex min-h-dvh w-full max-w-5xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
-			{/* The same brand header every other storefront page renders. Checkout
-			    is not a payment funnel — nothing is charged here and the only way
-			    out is back to the store (which keeps the cart) — so the usual
-			    "strip the chrome so buyers can't escape" rule doesn't apply, and
-			    the seller's brand belongs at the moment of ordering. */}
-			<StorefrontHeader retailer={retailer} asPageHeading={false} />
+			{/* The compact app bar every subpage renders (z8r3fdegb5). Checkout is
+			    not a payment funnel — nothing is charged here and the way out is
+			    back to the store (which keeps the cart) — so the seller's identity
+			    belongs at the moment of ordering; the bar carries it AND owns
+			    "back", replacing the old round back button beside the heading. */}
+			<StorefrontAppBar retailer={retailer} slug={retailer.slug} />
+			{/* The countdown is ALWAYS the page's top band (z8r3fdr60v), under
+			    the store header — same component and same place as the product
+			    page and the claim checkout. Driven by the flash in this basket
+			    that ends SOONEST, since that is the one about to change what
+			    the buyer pays. */}
+			<CheckoutPromoBand retailerId={retailer._id} cart={cart} />
 
 			<div className="px-5 pt-4 lg:px-8 lg:pt-6">
-				<div className="flex items-center gap-3">
-					<Link
-						to="/$slug"
-						params={{ slug: retailer.slug }}
-						activeOptions={{ exact: true }}
-						aria-label={`Back to ${retailer.storeName}`}
-						className="tap-target flex size-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
-					>
-						<ArrowLeft className="size-4" aria-hidden />
-					</Link>
-					{/* This page's own subject, so it owns the <h1>. */}
-					<h1 className="font-heading text-xl font-extrabold tracking-tight">
-						Checkout
-					</h1>
-				</div>
+				{/* This page's own subject, so it owns the <h1>. */}
+				<h1 className="font-heading text-xl font-extrabold tracking-tight">
+					Checkout
+				</h1>
 
 				<div className="mt-4">
 					<CheckoutPage
@@ -195,17 +342,68 @@ function CheckoutRoute() {
 						collectsFromCustomer={
 							retailer.deliveryCollectsFromCustomer ?? false
 						}
+						booksCouriers={retailer.booksCouriers ?? false}
 						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
 						openingHours={retailer.openingHours}
+						closedDates={retailer.closedDates}
 						minOrderValue={retailer.minOrderValue}
 						pickupLocations={pickupLocations ?? []}
+						voucherCode={voucher}
+						acceptsVouchers={retailer.acceptsVouchers ?? false}
+						paymentsPaused={retailer.paymentsPaused}
 					/>
 				</div>
 			</div>
 
 			{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
 			    page — same placement as the store home and category pages. */}
-			<StorefrontFooter />
+			<StorefrontFooter slug={slug} />
 		</div>
+	);
+}
+
+/**
+ * The scissors countdown over checkout, for the flash in the basket that ends
+ * first (z8r3fdcw72). Renders nothing when the basket holds no timed sale.
+ *
+ * Reads the catalogue the checkout form already reads, so the two can't
+ * disagree about which sale is running; the price the buyer PAYS is settled
+ * by the server's `expectedSubtotal` guard either way.
+ */
+function CheckoutPromoBand({
+	retailerId,
+	cart,
+}: {
+	retailerId: Id<"retailers">;
+	cart: UseCart;
+}) {
+	const listed = useQuery(convexQuery(api.products.list, { retailerId })).data;
+	const soonest = useMemo(() => {
+		const inCart = new Set(
+			cart.items.map((i: { productId: string }) => i.productId as string),
+		);
+		return (listed ?? [])
+			.filter(
+				(p) =>
+					inCart.has(p._id as string) &&
+					p.promoState?.phase === "live" &&
+					p.promoState.endsAt !== undefined,
+			)
+			.map((p) => p.promoState as PromoState)
+			.sort((a, b) => (a.endsAt ?? 0) - (b.endsAt ?? 0))[0];
+	}, [cart.items, listed]);
+	const clock = usePromoClock(soonest);
+	if (!soonest?.endsAt || soonest.endsAt <= clock) return null;
+	return (
+		<CountdownBand
+			expiresAt={soonest.endsAt}
+			totalMs={
+				soonest.startsAt !== undefined
+					? soonest.endsAt - soonest.startsAt
+					: Math.max(soonest.endsAt - clock, 60 * 60_000)
+			}
+			label={`${soonest.label} ends in`}
+			icon={Zap}
+		/>
 	);
 }

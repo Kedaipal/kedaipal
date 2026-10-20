@@ -1,5 +1,6 @@
 import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
 import { deriveMapsUrl } from "../../convex/lib/mapsUrl";
+import { noteToPlainText } from "../../convex/lib/noteLinks";
 import { displayAddressState } from "./address-display";
 import { formatPrice } from "./format";
 
@@ -35,7 +36,11 @@ export interface WaOrderMessageInput {
 	 * ("+ delivery") and adds a "confirmed by seller" caveat. Mirrors the
 	 * checkout-time behaviour the delivery-charge feature shipped. */
 	deliveryFeePending?: boolean;
-	deliveryMethod?: "delivery" | "self_collect";
+	// "booking" is accepted for type-compatibility with the widened order doc
+	// but never composed in practice: a booking request skips the wa.me handoff
+	// entirely (nothing to send — the seller's approve drives the chat, S3),
+	// and its branch below prints no address/pickup block.
+	deliveryMethod?: "delivery" | "self_collect" | "booking";
 	/** Frozen trip direction (86eyg0n8e): "collection" = the rider collects
 	 * FROM this address, so the message reads "Collect from", never
 	 * "Deliver to". */
@@ -124,7 +129,10 @@ export function buildOrderWaMessage(order: WaOrderMessageInput): string {
 		lines.push("(Delivery charge to be confirmed by seller)");
 	if (hasQuoteItem) lines.push("(Custom item price to be confirmed by seller)");
 	const method = order.deliveryMethod ?? "delivery";
-	if (method === "self_collect") {
+	if (method === "booking") {
+		// No fulfilment block — the stay itself is the order (dead path today,
+		// see the type comment; kept truthful in case a caller ever composes it).
+	} else if (method === "self_collect") {
 		const snap = order.pickupSnapshot;
 		if (snap) {
 			const verb =
@@ -134,7 +142,7 @@ export function buildOrderWaMessage(order: WaOrderMessageInput): string {
 			if (snap.scheduleNote) lines.push(`🗓️ ${snap.scheduleNote}`);
 			const mapsUrl = deriveMapsUrl(snap);
 			if (mapsUrl) lines.push(mapsUrl);
-			if (snap.notes) lines.push(snap.notes);
+			if (snap.notes) lines.push(noteToPlainText(snap.notes));
 		} else {
 			lines.push("📍 Pickup");
 		}

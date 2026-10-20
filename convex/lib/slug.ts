@@ -5,45 +5,27 @@
  *
  * IMPORTANT: Keep in sync with `src/lib/slug.ts`. Both files must stay
  * byte-identical in logic — they exist separately because Convex functions
- * bundle from the `convex/` directory.
+ * bundle from the `convex/` directory. The reserved-word list is the one part
+ * that is NOT mirrored: both sides import it from `./reservedSlugs.ts`, which
+ * is machine-checked against the route tree (z8r3fddrd3).
  *
- * This module is also the ONE author of phone normalization (SG-lite,
+ * This module is also the ONE author of MY/SG mobile normalization (SG-lite,
  * 86eynw28q): the client (`src/lib/phone.ts`, `src/lib/schemas.ts`) imports
  * the per-country patterns, messages, and `normalizeMobileDigits` from here
- * rather than mirroring them, so checkout's client gate and the server
- * validator can never disagree about what a store accepts.
+ * rather than mirroring them, so a field's client gate and the server
+ * validator can never disagree about what it accepts. Those arms judge
+ * SELLER-side numbers directly; a BUYER's number, which may come from any
+ * country, is judged by `./buyerPhone` (z8r3fdh274), which delegates an MY/SG
+ * pick back to the strict arm here byte for byte.
  */
 
-import { type Country, COUNTRY_DIAL_CODE } from "./country";
-
-export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
-	"_",
-	"about",
-	"admin",
-	"api",
-	"app",
-	"assets",
-	"blog",
-	"docs",
-	"favicon.ico",
-	"help",
-	"kedaipal",
-	"login",
-	"logout",
-	"onboarding",
-	"pricing",
-	"public",
-	"robots.txt",
-	"settings",
-	"sign-in",
-	"sign-up",
-	"signin",
-	"signup",
-	"sitemap.xml",
-	"static",
-	"support",
-	"www",
-]);
+import { COUNTRIES, type Country, COUNTRY_DIAL_CODE } from "./country";
+import {
+	BRAND_NAME_MESSAGE,
+	containsBrand,
+	isReservedSlug,
+	RESERVED_SLUG_MESSAGE,
+} from "./reservedSlugs";
 
 /**
  * Best-effort slugification of free text (store names, product names):
@@ -83,8 +65,8 @@ export function assertValidSlug(raw: string): string {
 	if (!SLUG_PATTERN.test(s)) {
 		throw new Error("Slug must use lowercase letters, numbers and single dashes");
 	}
-	if (RESERVED_SLUGS.has(s)) {
-		throw new Error("This slug is reserved");
+	if (isReservedSlug(s)) {
+		throw new Error(RESERVED_SLUG_MESSAGE);
 	}
 	return s;
 }
@@ -109,10 +91,24 @@ export function assertValidCategorySlug(raw: string): string {
 	return s;
 }
 
+export const STORE_NAME_MIN = 2;
+export const STORE_NAME_MAX = 60;
+
+/**
+ * The store name is what every buyer reads — WhatsApp message body, storefront
+ * header, tracking page — so it carries the same brand rule as the slug
+ * (`containsBrand`): a store called "Kedaipal Support" on the slug
+ * `abc-trading` is a stronger impersonation than any URL. Mirrors
+ * `validateStoreName` in `src/lib/slug.ts`, which gives the seller the same
+ * sentence inline before they ever submit.
+ */
 export function assertValidStoreName(raw: string): string {
 	const s = raw.trim();
-	if (s.length < 2) throw new Error("Store name must be at least 2 characters");
-	if (s.length > 60) throw new Error("Store name must be at most 60 characters");
+	if (s.length < STORE_NAME_MIN)
+		throw new Error(`Store name must be at least ${STORE_NAME_MIN} characters`);
+	if (s.length > STORE_NAME_MAX)
+		throw new Error(`Store name must be at most ${STORE_NAME_MAX} characters`);
+	if (containsBrand(s)) throw new Error(BRAND_NAME_MESSAGE);
 	return s;
 }
 
@@ -120,12 +116,12 @@ export function assertValidStoreName(raw: string): string {
  * Normalize and validate a WhatsApp phone number to E.164-ish digits.
  * Strips '+', spaces, dashes, parentheses. Requires 8–15 digits.
  *
- * The loose, country-agnostic shape. Since 86eyknr2r **no UI field uses it** —
- * every phone a human types into Kedaipal is Malaysian and goes through
- * `assertValidMyMobile`. What's left are the paths where the number arrives
- * from somewhere else and rejecting it would lose data: numbers Meta hands us
- * on an inbound message, the counter's store-QR scan, and the CRM row keyed off
- * them. Keep it permissive there.
+ * The loose, country-agnostic shape. **No field a human types into uses
+ * it** — seller-side numbers go through `assertValidMobileForCountry` and
+ * buyer numbers through `./buyerPhone` (z8r3fdh274). What's left are the paths
+ * where the number arrives from somewhere else and rejecting it would lose
+ * data: numbers Meta hands us on an inbound message, the counter's store-QR
+ * scan, and the CRM row keyed off them. Keep it permissive there.
  */
 export function assertValidWaPhone(raw: string): string {
 	const s = raw.replace(/[\s\-()+]/g, "");
@@ -153,8 +149,9 @@ const MOBILE_NSN: Record<Country, RegExp> = {
 
 /**
  * The stored (inbound-Meta) mobile shape per country: dial code + mobile NSN.
- * The single accept pattern behind every plated phone field — imported by the
- * client schemas so the two sides can't drift.
+ * The single accept pattern behind every MY/SG phone field — seller plates
+ * and a buyer's MY/SG pick alike — imported by the client schemas so the two
+ * sides can't drift.
  */
 export const STORED_MOBILE_PATTERN: Record<Country, RegExp> = {
 	MY: /^601\d{8,9}$/,
@@ -162,31 +159,55 @@ export const STORED_MOBILE_PATTERN: Record<Country, RegExp> = {
 };
 
 /**
+ * The noun the phone copy leads with — "Malaysian mobile", not "Malaysia
+ * mobile", so it can't be derived from COUNTRY_LABELS. One author for every
+ * surface that names the kind: the messages below, the settings cards' helper
+ * lines, and the cross-country rejection copy.
+ */
+export const MOBILE_KIND: Record<Country, string> = {
+	MY: "Malaysian mobile",
+	SG: "Singapore mobile",
+};
+
+/**
+ * The example each rejection shows — shaped the way a local writes one, and
+ * (pinned by test) a value that country's own validator accepts, so the copy
+ * can never demonstrate a format the save then refuses.
+ */
+export const MOBILE_EXAMPLE: Record<Country, string> = {
+	MY: "012-345 6789",
+	SG: "9123 4567",
+};
+
+/**
  * One rejection message per country — referenced by the server validators AND
  * the client schemas/fallback copy, so the wording exists in exactly one place.
  */
 export const MOBILE_MESSAGE: Record<Country, string> = {
-	MY: "Enter a Malaysian mobile number (e.g. 012-345 6789)",
-	SG: "Enter a Singapore mobile number (e.g. 9123 4567)",
+	MY: `Enter a ${MOBILE_KIND.MY} number (e.g. ${MOBILE_EXAMPLE.MY})`,
+	SG: `Enter a ${MOBILE_KIND.SG} number (e.g. ${MOBILE_EXAMPLE.SG})`,
 };
 
 /**
- * Loose per-country bridging of a locally-typed number to international digits.
+ * Loose per-country bridging of a locally-typed number to international
+ * digits — the first step of `assertValidMobileForCountry` and
+ * `normalizeMobileDigits`, which then fold the bare NSN and judge the result
+ * against `STORED_MOBILE_PATTERN`. No field is judged by this bridge alone
+ * any more (the counter's manual bind was the last, until z8r3fdh274 moved it
+ * to the buyer validator), so its pass-through only ever feeds a strict
+ * check.
  *
  * MY keeps the historical arm byte-identical: drop the trunk 0, keep `60…`,
- * pass everything else through (a cashier may key a foreign number that
- * already carries its country code — see `assertValidWaPhoneForCountry`).
- * Deliberately NO bare-NSN fold here: a 9–10-digit number starting with 1
- * could plausibly be a mis-keyed foreign number, so only the strict validator
- * (whose field wears the `+60` plate) folds it.
+ * pass everything else through. Deliberately NO bare-NSN fold here: a
+ * 9–10-digit number starting with 1 could plausibly be a mis-keyed foreign
+ * number, so only the strict validator (whose field wears the `+60` plate)
+ * folds it.
  *
  * SG folds its bare NSN (`[89]` + 7 digits) even in the loose arm — the M3
- * CRM-fork fix: SG has no trunk 0, so `81234567` is the natural way an SG
- * cashier keys a local buyer, and an 8-digit string carries no country code
- * for the pass-through posture to preserve. Unprefixed it would be stored as
- * `81234567` while Meta delivers the same buyer inbound as `6581234567`,
- * forking the `(retailerId, waPhone)` customer row and sending to a dead
- * number.
+ * CRM-fork fix: SG has no trunk 0, so `81234567` is the natural way to key a
+ * local number, and unprefixed it would be stored as `81234567` while Meta
+ * delivers the same buyer inbound as `6581234567`, forking the
+ * `(retailerId, waPhone)` customer row and sending to a dead number.
  */
 const LOOSE_NORMALIZE: Record<Country, (digits: string) => string> = {
 	MY: (digits) => {
@@ -203,17 +224,21 @@ const LOOSE_NORMALIZE: Record<Country, (digits: string) => string> = {
 
 /**
  * Normalize a locally-typed phone number to the SAME E.164-ish digits an
- * inbound WhatsApp message produces, so a cashier-keyed number keys identically
- * to a scan bind (customers are keyed by `(retailerId, waPhone)`; a mismatch
- * would fork a returning buyer into a duplicate CRM row and send to a bad
- * number). A cashier types a LOCAL number (`012-345 6789` / `9123 4567`), but
- * Meta delivers `60123456789` / `6591234567` — so a bare `assertValidWaPhone`
- * (which only strips separators) is not enough for manual entry. The
- * per-country bridging lives in `LOOSE_NORMALIZE`; anything unbridged is
- * passed through and validated (assume it already carries a country code —
- * the 8–15-digit rule still rejects junk). Which arm applies is driven by the
- * RETAILER's country, never by sniffing the number — sniffing is how a typo in
- * one country's shape gets silently accepted as the other's.
+ * inbound WhatsApp message produces (customers are keyed by
+ * `(retailerId, waPhone)`; a mismatch would fork a returning buyer into a
+ * duplicate CRM row and send to a bad number). People type a LOCAL number
+ * (`012-345 6789` / `9123 4567`), but Meta delivers `60123456789` /
+ * `6591234567` — so a bare `assertValidWaPhone` (which only strips
+ * separators) is not enough. The per-country bridging lives in
+ * `LOOSE_NORMALIZE`; anything unbridged is passed through and validated by
+ * the 8–15-digit rule alone. Which arm applies is driven by the caller's
+ * country, never by sniffing the number — sniffing is how a typo in one
+ * country's shape gets silently accepted as the other's.
+ *
+ * The loose half of `assertValidMobileForCountry`: since z8r3fdh274 no
+ * mutation calls it directly (a landline or junk that passes here is refused
+ * by the strict arm's mobile shape). Exported for the unit tests that pin the
+ * bridge on its own.
  */
 export function assertValidWaPhoneForCountry(
 	raw: string,
@@ -221,13 +246,6 @@ export function assertValidWaPhoneForCountry(
 ): string {
 	const digits = raw.replace(/\D/g, "");
 	return assertValidWaPhone(LOOSE_NORMALIZE[country](digits));
-}
-
-/** MY-fixed alias kept for the callers that predate SG-lite (86eynw28q) and
- * genuinely mean Malaysia. New country-aware paths take the retailer's country
- * and call `assertValidWaPhoneForCountry` instead. */
-export function assertValidMyWaPhone(raw: string): string {
-	return assertValidWaPhoneForCountry(raw, "MY");
 }
 
 /**
@@ -249,6 +267,67 @@ export function normalizeMobileDigits(
 }
 
 /**
+ * Which OTHER supported country would accept this value as a mobile, if any —
+ * input to better rejection copy, never to acceptance (z8r3fdbmc9).
+ *
+ * Sniffing a country from digits is deliberately banned for VALIDATION (see
+ * `assertValidWaPhoneForCountry` — sniffing is how a typo in one country's
+ * shape gets silently accepted as the other's). Error copy is the one place
+ * it's safe: the value is rejected either way, and naming what it looks like
+ * turns a dead end into a fix. The case that matters is a store sitting on the
+ * wrong country (a missed onboarding default): the seller types their own
+ * number, and "enter a Singapore mobile" describes the symptom while "that
+ * looks like a Malaysian mobile" names the cause.
+ */
+export function otherCountryMobile(
+	raw: string,
+	country: Country,
+): Country | null {
+	for (const candidate of COUNTRIES) {
+		if (candidate === country) continue;
+		if (
+			STORED_MOBILE_PATTERN[candidate].test(
+				normalizeMobileDigits(raw, candidate),
+			)
+		) {
+			return candidate;
+		}
+	}
+	return null;
+}
+
+/**
+ * The neutral cross-country rejection line for SELLER-side fields — the
+ * store's own contact, alert and pickup-contact numbers, which stay locked to
+ * the store's country: it names what the number looks like and what this
+ * store takes. Surfaces with a country control in reach (onboarding, the
+ * settings contact card) layer their own pointed copy on top. Buyer fields
+ * never show it — "this store takes Malaysian numbers" stopped being true of
+ * a buyer's number in z8r3fdh274, so `./buyerPhone` replaces it with copy that
+ * points at the field's own country picker.
+ */
+export function crossCountryMobileMessage(
+	store: Country,
+	typed: Country,
+): string {
+	return `That looks like a ${MOBILE_KIND[typed]} number (+${COUNTRY_DIAL_CODE[typed]}) — this store takes ${MOBILE_KIND[store]} numbers (e.g. ${MOBILE_EXAMPLE[store]})`;
+}
+
+/**
+ * What a refused value's rejection SAYS — the cross-country line when the
+ * digits cleanly match the other supported country, the store's own
+ * `MOBILE_MESSAGE` otherwise. Acceptance is untouched; both the server
+ * authority below and the client schemas built from these pieces route their
+ * message through here so the copy can't drift between the two sides.
+ */
+export function mobileRejectionMessage(raw: string, country: Country): string {
+	const other = otherCountryMobile(raw, country);
+	return other
+		? crossCountryMobileMessage(country, other)
+		: MOBILE_MESSAGE[country];
+}
+
+/**
  * Stricter sibling of `assertValidWaPhoneForCountry` for numbers we intend to
  * MESSAGE: normalizes the same way, then requires the country's **mobile**
  * shape (`STORED_MOBILE_PATTERN`). An MY landline (`03-…` → `60312345678`)
@@ -266,24 +345,28 @@ export function normalizeMobileDigits(
  * The client fails fast via `src/lib/schemas.ts` (which imports this module's
  * patterns + messages, so the two can't drift); this is the authority.
  *
- * **The validator behind the plate.** Every field in the app that renders
- * `MyPhoneInput` / `TextField prefix={<MyPhonePrefix />}` lands here — buyer
- * checkout and the buyer's number repair (86eyf1rck), the seller's alert number
- * (86eyhw9zy), and since 86eyknr2r the store's own contact `waPhone` (settings,
- * onboarding, admin create) plus a pickup point's manager contact. The plate is
- * a promise about what the field accepts, so the two move together: the plate's
- * country and this validator's country both come from the retailer row, and a
- * field must never wear a plate this doesn't guard.
+ * **The validator behind the seller's plate.** Every SELLER-side field that
+ * renders `MyPhoneInput` / `TextField prefix={<MyPhonePrefix />}` lands
+ * here — the seller's alert number (86eyhw9zy) and, since 86eyknr2r, the
+ * store's own contact `waPhone` (settings, onboarding, admin create) plus a
+ * pickup point's manager contact — as does the platform's own opt-out panel.
+ * The plate is a promise about what the field accepts, so the two move
+ * together: the plate's country and this validator's country both come from
+ * the retailer row, and a field must never wear a plate this doesn't guard.
  *
  * Which arm applies is the RETAILER's country (SG-lite, 86eynw28q/86eynw2dy) —
  * never a permissive both-countries regex. Cross-country numbers are rejected
- * on purpose: an SG store's checkout refuses a `+60` buyer with the SG
- * message, an MY store's refuses `+65`, keeping each side's typo protection
- * exactly as strict as it was when the app was MY-only.
+ * on purpose — a seller's numbers are the store's identity and the couriers'
+ * sender contact — but the rejection copy names the mismatch when the digits
+ * cleanly match the other country (`mobileRejectionMessage`, z8r3fdbmc9),
+ * because "enter a Singapore mobile" is a dead end when the real problem is a
+ * store on the wrong country.
  *
- * Deliberately NOT applied to the counter's manual bind, where a cashier may
- * legitimately key an unusual number for a buyer standing in front of them
- * (that path uses `assertValidWaPhoneForCountry`).
+ * BUYER fields (checkout, booking, the track-page repair, the counter's manual
+ * bind) are not judged here directly: their number may come from any country,
+ * so they go through `assertValidBuyerWaPhone` in `./buyerPhone` (z8r3fdh274),
+ * which hands an MY/SG pick back to this function unchanged and swaps in
+ * picker-pointing rejection copy.
  */
 export function assertValidMobileForCountry(
 	raw: string,
@@ -303,18 +386,18 @@ export function assertValidMobileForCountry(
 				)
 			: assertValidWaPhoneForCountry(raw, country);
 	} catch {
-		throw new Error(MOBILE_MESSAGE[country]);
+		throw new Error(mobileRejectionMessage(raw, country));
 	}
 	if (!STORED_MOBILE_PATTERN[country].test(normalized)) {
-		throw new Error(MOBILE_MESSAGE[country]);
+		throw new Error(mobileRejectionMessage(raw, country));
 	}
 	return normalized;
 }
 
 /** MY-fixed alias, kept so Kedaipal's own always-Malaysian numbers (the
  * platform support line in `./contact.ts`) don't have to spell out a country
- * that is not data-driven. Seller/buyer paths resolve the retailer's country
- * and call `assertValidMobileForCountry`. */
+ * that is not data-driven. Seller paths resolve the retailer's country and
+ * call `assertValidMobileForCountry`; buyer paths go through `./buyerPhone`. */
 export function assertValidMyMobile(raw: string): string {
 	return assertValidMobileForCountry(raw, "MY");
 }

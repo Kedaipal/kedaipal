@@ -115,9 +115,21 @@ chains to `buyer_identified`).
 **Fulfilment date:** counter orders capture an optional collection date
 (defaults to **today**, the walk-in case) validated against a 0-day notice — the
 seller is keying it in person, so today is always valid regardless of the
-storefront `minFulfilmentNoticeDays`. See [`fulfilment-date.md`](./fulfilment-date.md).
-After a **paid-in-person** order is created, the success screen offers an
-optional **"Mark as completed"** button (one tap → `delivered`).
+storefront `minFulfilmentNoticeDays` — and the per-product **prep time**
+(`z8r3fdff97`) doesn't apply either. Counter orders freeze no pickup note: the
+buyer is at the counter. See [`fulfilment-date.md`](./fulfilment-date.md).
+**Born completed (Oct 2026).** A counter sale is handed over at the counter, so
+`createOrderFromSession` writes it as **`delivered`** (reads "Completed") the
+moment the cashier taps Create — there is no "Mark as completed" tap for the
+common case. The rule is `handedOverNow`: not an RSVP, and the collection date
+is absent or today. The two exceptions stay `confirmed` because nothing changed
+hands yet — a **collection dated for later** (the Done screen says
+"collecting Fri 17 Oct · stays open until it's handed over" and keeps the
+one-tap close with that reason) and an **RSVP** (completes at the event). Payment
+is its own axis: a **pay-later** walk-in still left with the goods, so it is
+`delivered` + `unpaid` and settles from the link in their confirmation. The
+timeline reads `confirmed` (counter_checkout) → `delivered` (counter_handover),
+as a seller tapping through would have left it.
 
 **`orders.source` — the checkout surface** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734)):
 a first-class field on `orders`, `v.union("storefront","counter","claim")`,
@@ -184,9 +196,9 @@ price are agreed face-to-face — so the block is lifted:
   `mockupStatus` — there's nothing to approve, the buyer has it (or will collect).
   No image is required either.
 - **Price trust boundary.** `createOrderFromSession` takes a per-item
-  `unitPrice` (validated as a positive integer in sen — the **same rule as any
-  product price**, no upper cap, since the vendor's business could be high-value:
-  watches, renovations, B2B services). It is **required** on an `isCustom` line
+  `unitPrice` (validated as a **non-negative** integer in sen — RM0 is a free
+  line, see "Free lines" below — with no upper cap, since the vendor's business
+  could be high-value: watches, renovations, B2B services). It is **required** on an `isCustom` line
   (no catalog price exists) and **optional** on a standard line — see "Seller
   price adjustment" below. Trusting it is safe because this mutation is
   **owner-or-admin only** (`requireSessionAccess`): the caller is the
@@ -223,17 +235,58 @@ product.
 - **Wire format:** the client sends `unitPrice` only when the line is custom or
   adjusted; an absent `unitPrice` means "charge the catalog price". Adjustments
   autosave on the draft like custom prices, so a resume restores them.
-- **Server:** same validation as a custom price (positive integer sen, no cap).
-  The order item snapshot stores the charged price — same as custom lines, no
-  extra column.
+- **Server:** same validation as a custom price (non-negative integer sen, no
+  cap). The order item snapshot stores the charged price — same as custom lines,
+  no extra column.
+
+## Free lines — RM0 at the counter (2026-10-15)
+
+A seller comps things in person all the time — a freebie with a purchase, a
+goodwill replacement, a warranty redo — and the counter refused to record it:
+both price inputs and `createOrderFromSession` rejected anything at or below
+zero, so the only way to hand over a free item was to leave it off the order.
+**RM0 is now a real price at the counter**, on a custom line and as an
+adjustment on a standard one.
+
+- **Where the seller is told:** the line-edit sheet's hint reads
+  "Enter a price to save — RM 0.00 makes the line free" while the field is
+  blank, and "Free line — nothing to collect for it. An order of only free
+  lines is a free order." once it reads zero; the catalog's custom row says
+  "set the agreed price (RM 0.00 for a free line)". `rmToCents`
+  (`src/lib/counter-price.ts`, the one parser for both inputs) reads a blank
+  field as NaN, not RM0 — `Number("")` is 0, so without that guard the custom
+  row's **Add** would add a free line the seller never priced.
+- **What the order becomes:** `createOrderFromSession` already turned a zero
+  total into a free order (`paidInPerson = args.paidInPerson && total > 0`, for
+  free RSVPs): no payment is recorded whatever method the seller tapped, so the
+  order page shows "Free order — nothing to collect", not "Paid now · Cash".
+  A RM0 line beside a paid one is an ordinary paid order. The review modal
+  prints the RM0 line like any other, with the catalog price struck through
+  when it is an adjustment.
+- **The claim-link door still refuses zero** (`orderClaims.sendClaim`): a link
+  exists to take a payment within a runway, and a free claim has nothing to
+  take. The build screen's primary mirrors that in SEND mode — `freeLine`
+  (formerly `unpriced`, which could no longer occur: a line only enters the
+  cart with a parsed price) greys **Send link** with
+  `"<line>" is free — a link takes a payment, so ring it up at the counter`.
+  A free RSVP line is still named as an event first.
+- **The anonymous-sale rule now waits for the total.** `createOrderFromSession`
+  refused an anonymous (no-phone) sale sent without `paidInPerson`, and the
+  client sends `false` for a free total on purpose (no payment is recorded) —
+  so every free cash sale was a dead end with a toast about payment links.
+  Found by the hands-on pass. The rule is unchanged for a paid total and now
+  runs after `computeOrderTotals`, before any write, keyed on `total > 0`.
+- **The SEND reason names the LINE** (`Cempedak · Custom`), not the product:
+  with three Cempedak lines in the cart, "Cempedak is free" names nothing.
+- **Negative** and non-integer amounts are rejected as before.
 
 See [`custom-option.md`](./custom-option.md) and
 [`proof-approval.md`](./proof-approval.md).
 
 ## Review-before-create (no price ceiling)
 
-Counter prices have **no upper cap** — same rule as any product price (positive
-integer in sen); the vendor's business could legitimately be high-value (watches,
+Counter prices have **no upper cap** — same rule as any product price
+(non-negative integer in sen); the vendor's business could legitimately be high-value (watches,
 renovations, B2B services). The guard against a fat-fingered amount (an extra
 zero: RM 5M instead of RM 500k) is **not** an arbitrary limit but a **mandatory
 review step**: tapping **"Review order"** opens a confirm modal
@@ -291,7 +344,8 @@ yet; revisit (trim or gate it) alongside the WABA-protection / compliance work
 | `bindCheckoutSession` (internal, called by webhook) | `convex/counterCheckout.ts` |
 | `createOrderFromSession` (catalog-priced with optional seller adjustment, pay-in-person, completes session) | `convex/counterCheckout.ts` |
 | Inbound routing → bind + buyer reply | `convex/whatsapp.ts` (`handleInbound`) |
-| Buyer order confirmation + tracking link | `convex/whatsapp.ts` (`notifyCounterOrderCreated`) |
+| Buyer order confirmation + tracking link — the storefront's template, outcome stamped on the order | `convex/whatsapp.ts` (`notifyCounterOrderCreated`) |
+| Done screen — born-completed heading, LIVE WhatsApp outcome, Share/Copy link on failure | `src/components/counter/done-screen.tsx` (+ test) |
 | Expiry cron (every 5 min) | `convex/crons.ts` → `expireStaleSessions` |
 | Webhook observability (phone + pushname + text) | `convex/http.ts` |
 | **iPad-first seller UI** (start → QR → live bind → catalog/cart → pay → done) | `src/routes/app.checkout.tsx` |
@@ -299,8 +353,12 @@ yet; revisit (trim or gate it) alongside the WABA-protection / compliance work
 | Nav entry ("Counter") | `sidebar.tsx`, `bottom-nav.tsx` |
 | Tests | `counterCheckout.test.ts`, `inboundIntent.test.ts`, `whatsapp.test.ts` |
 
-**Order shape:** a counter order is created `confirmed`, `deliveryMethod:
-self_collect` (collected at the counter), customer linked from the bound session.
+**Order shape:** a counter order is created `delivered` when handed over now
+(else `confirmed` — see "Born completed" above), `deliveryMethod:
+self_collect` (collected at the counter), customer linked from the bound session,
+and — when there is a buyer to message — `confirmationPushStatus: "sending"` +
+`seenAt: now` (the seller rang it up, so it never lands in the inbox's New
+bucket; `isUnseenOrder` keys on the push stamp).
 **Pay-in-person** → `paymentStatus: received` immediately + a structured
 `order.paymentMethod` (see below); **pay-later** → left `unpaid` and the buyer's
 WhatsApp confirmation carries a pay-&-track link (the normal handshake). Either
@@ -630,8 +688,10 @@ items, each with a one-line "what happens next":
    the moment the buyer scans). Hidden — just this item — while the store's `wa.me`
    deep link hasn't resolved (no `WHATSAPP_CHECKOUT_PHONE`), so the phone + cash
    paths stay usable.
-2. **Enter phone number** — opens the manual-phone bind form directly (the old
-   two-step "choose → phone" chooser is gone; the menu *is* the chooser).
+2. **Enter phone number** — opens the manual-phone bind dialog ("Enter buyer's
+   number") directly (the old two-step "choose → phone" chooser is gone; the
+   menu *is* the chooser). The number can be from any country — the field's
+   plate carries a country picker (see §Manual entry below).
 3. **Cash sale — no contact** — fires `startAnonymousSession` straight from the item.
 
 Behaviour is unchanged from the two-button version — pure IA/UX consolidation. The
@@ -671,22 +731,69 @@ required-in-UI pattern — `orders.create` keeps `customer.name` optional for
 legacy/other callers).
 
 **Manual phone** — `counterCheckout.bindSessionManualPhone` (owner-or-admin,
-admin-audited). The cashier types the buyer's number + name; the number is
-normalized by
-`assertValidMyWaPhone` (`convex/lib/slug.ts`) to the **same E.164 digits an inbound
-scan produces** (`0xx…` → `60xx…`; `60…`/`+60…` kept) so it resolves-or-creates the
-exact same `(retailerId, waPhone)` customer — a returning buyer is recognised, never
-forked. The bind is direct (no webhook, no rate-limit/cap — those guard the public
-poster token, not a logged-in seller). The buyer still gets the one WhatsApp
+admin-audited), from the `ManualBindDialog`
+(`src/components/counter/manual-bind-dialog.tsx`). The cashier types the buyer's
+number + name. The number is a **buyer's**, so since
+[`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274) it wears the buyer plate: a
+country picker defaulting to the store's country (a Bruneian tourist or a UK
+visitor is one tap on the plate, or one typed `+CC`, away), judged by the same
+`assertValidBuyerWaPhone` as every buyer field against the country picked
+(`waDialCountry`; absent = the store's, so a counter tab loaded before the
+picker binds exactly as it did). An MY/SG pick takes the strict mobile arm —
+`012-345 6789`, the bare `12-345 6789` (folded to `60…`) or `+60…`; landlines
+and junk refused — and any other country goes through the generated dial
+table. Either way it normalizes to the **same E.164 digits an inbound scan
+produces** (`012…` → `6012…`, a UK `07911 123456` → `447911123456`), so it
+resolves-or-creates the exact same `(retailerId, waPhone)` customer — a
+returning buyer is recognised, never forked. The rules:
+[`phone-numbers.md`](./phone-numbers.md).
+
+Until z8r3fdh274 this path was the loose, plate-less exception: a bare input
+through `assertValidWaPhoneForCountry` that passed any 8–15 digits — MY
+landlines and junk included — stored a bare MY national number unprefixed, and
+never told the cashier a foreign number was welcome at all
+([`86eyqug8w`](https://app.clickup.com/t/86eyqug8w), folded in). The dialog now
+says so where the cashier is looking — "Serving a visitor? Tap +60 to pick
+their country.", then "Number from Japan — tap +81 to change it." after a pick
+— replaces that hint with the rejection when a number is refused (the buyer
+copy itself names the way out, "…or tap +60 to change the country", plus a
+one-tap **Switch to Singapore (+65)** when the digits fit the other supported
+country), states why **Start
+checkout** is disabled, submits on Enter, turns browser autofill off (it would
+offer the cashier's own number), and starts clean on every open (the form
+unmounts with the dialog, so the last buyer's country never leaks into the
+next bind). The bind is direct (no webhook, no rate-limit/cap — those guard the
+public poster token, not a logged-in seller); a paused or lapsed store says so
+before any complaint about the number. The buyer still gets the one WhatsApp
 confirmation (and a CRM row); the receipt/invoice is on the order page it links
 to, not in the chat (`86eyd63r8`). **PDPA:** the buyer never scanned, so the confirmation
 is our first message to them — it carries the same notice-at-collection line as the
 poster ack (`whatsappCopy.privacyNoticeLine`, threaded via `notifyCounterOrderCreated`'s
 `includePrivacyNotice`; scan buyers already got it at connect, so it's not repeated).
-**Caveat (graceful degradation):** a manual-phone buyer never opened a 24h WhatsApp
-session window, so a free-form send may be rejected by Meta. Sends are best-effort
-(errors logged) so the order/CRM are always intact; full out-of-window Utility-template
-fallback is [`86ey1fgjw`](https://app.clickup.com/t/86ey1fgjw), a follow-up.
+**The counter buyer gets the storefront buyer's notification (fixed Oct 2026).**
+`notifyCounterOrderCreated` sends the approved **`order_confirmation_utility`**
+template — the same name, body params (order / store / total) and tracking-token
+button as the storefront push, byte for byte — whenever
+`WHATSAPP_ORDER_CONFIRM_TEMPLATE` is set. One message shape for every checkout
+door, one Meta approval. Why not the old free-form text: Meta delivers
+free-form ONLY inside a 24h service window the BUYER opened by messaging us; a
+manual-phone buyer never did, and a scan buyer's window closes a day after the
+scan (a resumed session can be 3 days old). Both were rejected with **131047**,
+the action swallowed it as "best-effort", and the Done screen told the cashier
+the message had gone out: the buyer never got their order link. A template is
+delivered with no window at all. The outcome is stamped on the order through the
+same `recordConfirmationPush` the storefront uses (`sending` → `sent` + wamid /
+`failed` + kind; transient failures retry on the push schedule; every send kind
+now returns Meta's wamid, so the `statuses` webhook can flip a
+delivered-then-failed message too), and the **Done screen reads it live**:
+*Sending…* → *Aiman has their order link on WhatsApp* → an amber *WhatsApp
+couldn't reach Aiman* card with **Share link / Copy link** for the buyer's order
+page, while they are still at the counter. With the template env unset (dev,
+legacy) the free-form confirmation is sent instead, and a 131047 there is
+recorded as ours, never as the buyer's number; its pay-later CTA skips the
+plain-text retry on an unreachable code. The template cannot carry the PDPA
+line (its body is fixed at approval); the order page it opens links the
+privacy notice.
 **Payment details:** a manual-phone **pay-later** buyer (like every buyer now,
 post-86ey98ju1) gets the order-page link + **"Make payment"** button on the
 order-create message; the bank/QR details live on the order page's `How to pay`
@@ -702,8 +809,8 @@ optional), **no customer aggregate is touched**, and **no WhatsApp is scheduled*
 phone). Anonymous **forces paid-in-person** — there's nobody to send a pay-later link
 to — enforced server-side and surfaced as a disabled-with-reason "Pay later" toggle.
 Anonymous orders render **"Walk-in customer"** everywhere a name shows (inbox card,
-order detail, CSV export) via the shared `orderCustomerLabel` (`convex/lib/customer.ts`
-↔ `src/lib/customer.ts`) — never blank/crash. The Done screen hides the "sent to buyer"
+order detail, CSV export) via the shared `orderCustomerLabel` (one implementation in
+`convex/lib/customer.ts`, re-exported by `src/lib/customer.ts`) — never blank/crash. The Done screen hides the "sent to buyer"
 framing and offers **Download / Share only**.
 
 **Re-claim safety** — if a manually-bound buyer later scans the store QR with the same

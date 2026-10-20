@@ -4,8 +4,14 @@
 // status is deliberately NOT a bucket (it's an orthogonal filter + badge). See
 // docs/order-inbox.md.
 
+import { isRevenueOrder } from "./insights";
+
 export type OrderStatus =
 	| "pending"
+	// Booking kind only (86eyj70z1): a date-range request awaiting the
+	// seller's approve/decline. Terminal exits are confirmed (approve) or
+	// cancelled (decline / 24 h expiry / buyer cancel).
+	| "booking_requested"
 	| "confirmed"
 	| "packed"
 	| "shipped"
@@ -15,12 +21,113 @@ export type OrderStatus =
 /** Fulfilment buckets — the inbox's primary segmentation (excludes "all"). */
 export type OrderBucket = "new" | "in_progress" | "completed" | "cancelled";
 
-export const BUCKET_STATUSES: Record<OrderBucket, OrderStatus[]> = {
-	new: ["pending"],
+/**
+ * The filterable ATOM of the inbox's status axis (1 Sep) — every order resolves
+ * to exactly one, and a bucket is defined as the union of its leaves.
+ *
+ * This exists because a bucket was never a set of statuses. `orderBucket` routes
+ * an unseen push-path order (born `confirmed`, never opened — 86eyf1rck) to
+ * **new**, so "New" ⊅ {pending, booking_requested} and no amount of syncing could
+ * make the chip row and the filter panel agree while one filtered on buckets and
+ * the other on raw `status`. They were two filter states wearing the same word,
+ * ANDed together: ticking every row under the panel's NEW heading could not light
+ * the New chip, and on a store with unseen orders the two disagreed outright.
+ *
+ * Splitting `confirmed` into seen/unseen makes the leaf set a true partition, so
+ * bucket = Σ leaves both in membership AND in the counts. The seller sees the
+ * split as a real row — "Not yet opened" under New — which is also the first time
+ * that rule has been visible anywhere in the product rather than inferred from an
+ * order mysteriously sitting in New.
+ *
+ * NOT an `OrderStatus`, and deliberately absent from `ORDER_STATUS_KEYS`: that
+ * list is the seller's RENAME list, and "not yet opened" is a fact about the
+ * seller's attention, not a pipeline stage they name.
+ */
+export const INBOX_LEAF_KEYS = [
+	"pending",
+	"booking_requested",
+	"confirmed_unseen",
+	"confirmed",
+	"packed",
+	"shipped",
+	"delivered",
+	"cancelled",
+] as const;
+
+export type InboxStatusLeaf = (typeof INBOX_LEAF_KEYS)[number];
+
+/**
+ * Which leaves make up each bucket. Flattened this is exactly `INBOX_LEAF_KEYS`
+ * (pinned by a test) — the partition property the counts rely on.
+ *
+ * Note `confirmed` here means confirmed AND SEEN: the unseen half is its own
+ * leaf, one group up. That is the single place the leaf vocabulary diverges from
+ * `orders.status`, and the reason `orderLeaf` is the only way to derive one.
+ */
+export const BUCKET_LEAVES: Record<OrderBucket, InboxStatusLeaf[]> = {
+	// A booking request IS the needs-action new order — it has a 24 h clock on
+	// it, which is exactly what the New bucket's age escalation was built for.
+	// An unseen push-path order joins them for the same reason: nobody has
+	// looked at it yet.
+	new: ["pending", "booking_requested", "confirmed_unseen"],
 	in_progress: ["confirmed", "packed", "shipped"],
 	completed: ["delivered"],
 	cancelled: ["cancelled"],
 };
+
+/** Seller-facing name for a leaf that has no `OrderStatus` behind it. Not
+ * renameable (see `INBOX_LEAF_KEYS`), so it needs no label resolver. */
+export const UNSEEN_LEAF_LABEL = "Not yet opened";
+
+/** Bucket a leaf belongs to. Total by construction over `INBOX_LEAF_KEYS`. */
+export function leafBucket(leaf: InboxStatusLeaf): OrderBucket {
+	if (leaf === "pending" || leaf === "booking_requested") return "new";
+	if (leaf === "confirmed_unseen") return "new";
+	if (leaf === "delivered") return "completed";
+	if (leaf === "cancelled") return "cancelled";
+	return "in_progress"; // confirmed (seen) / packed / shipped
+}
+
+/** The `OrderStatus` behind a leaf — identity except for the unseen split,
+ * which is a `confirmed` order the seller has not opened yet. */
+export function leafStatus(leaf: InboxStatusLeaf): OrderStatus {
+	return leaf === "confirmed_unseen" ? "confirmed" : leaf;
+}
+
+/**
+ * The leaves whose orders Insights counts as revenue — the status scope every
+ * drill-in from `/app/insights` carries, so the inbox it opens holds exactly
+ * the orders the figure was computed from.
+ *
+ * Without it a drill-in passed only a date range, so the inbox answered a
+ * different question than the chart asked: "2 orders" on a trend bar opened a
+ * list of 3, the extra one CANCELLED. Insights excludes `pending`,
+ * `booking_requested` and `cancelled` from every figure; the inbox, told only
+ * "8 Sep", showed them.
+ *
+ * DERIVED from `isRevenueOrder`, never typed out, because the two lists
+ * drifting is the whole failure. Note `confirmed_unseen` is in here: it is a
+ * `confirmed` order nobody has opened, which Insights counts while the inbox
+ * files it under New. A hand-written list would have missed it and the
+ * drill-in would have been short by every unopened order.
+ */
+export const REVENUE_LEAVES: InboxStatusLeaf[] = INBOX_LEAF_KEYS.filter(
+	(leaf) => isRevenueOrder(leafStatus(leaf)),
+);
+
+/**
+ * Seller-facing label for a leaf. Takes the caller's status resolver rather than
+ * importing one, so the same helper serves the dashboard (which speaks the
+ * seller's renamed labels) without this module depending on the label layer.
+ */
+export function leafLabel(
+	leaf: InboxStatusLeaf,
+	resolveStatus: (status: OrderStatus) => string,
+): string {
+	return leaf === "confirmed_unseen"
+		? UNSEEN_LEAF_LABEL
+		: resolveStatus(leaf);
+}
 
 /** The subset of an order the bucket rules read. */
 export type BucketableOrder = {
@@ -65,18 +172,63 @@ export const INBOX_BUCKETS: { key: OrderBucket; label: string }[] = [
  * `orderBucket` for anything the seller sees — it also routes an unseen
  * push-path order to "new". */
 export function statusToBucket(status: OrderStatus): OrderBucket {
-	if (status === "pending") return "new";
+	if (status === "pending" || status === "booking_requested") return "new";
 	if (status === "delivered") return "completed";
 	if (status === "cancelled") return "cancelled";
 	return "in_progress"; // confirmed / packed / shipped
 }
 
+/**
+ * The leaf an order occupies — exactly one, so leaf counts partition the inbox.
+ *
+ * THE only way to derive a leaf. `o.status` is not a leaf: a `confirmed` order
+ * is `confirmed_unseen` until the seller opens it, and reading the raw status
+ * instead is precisely how the panel and the chip row came to disagree.
+ */
+export function orderLeaf(order: BucketableOrder): InboxStatusLeaf {
+	if (isUnseenOrder(order)) return "confirmed_unseen";
+	return order.status;
+}
+
 /** Bucket for a whole order: `statusToBucket`, except an unseen push-path
  * order counts as "new" until the seller opens it. Exactly one bucket per
- * order, so counts never double. */
+ * order, so counts never double. Derived from the leaf since 1 Sep, so a
+ * bucket is definitionally the union of its leaves and the two can't drift. */
 export function orderBucket(order: BucketableOrder): OrderBucket {
-	if (isUnseenOrder(order)) return "new";
-	return statusToBucket(order.status);
+	return leafBucket(orderLeaf(order));
+}
+
+/**
+ * Collapse the pre-1-Sep `buckets` + `statuses` PAIR onto the single leaf set.
+ *
+ * The two used to AND (a bucket narrowed, statuses narrowed further), so a
+ * client still holding that shape gets the intersection — anything else would
+ * silently widen a stale tab's list. New clients send only `statuses` and take
+ * the first branch.
+ *
+ * Two things it cannot recover exactly, both self-healing on refresh:
+ *
+ * - A legacy `statuses: ["confirmed"]` used to include unseen push-path orders
+ *   and now means confirmed-AND-SEEN, because `confirmed` is a valid leaf and
+ *   nothing distinguishes an old client sending it from a new one deliberately
+ *   picking "Ok go" alone. The orders never went anywhere — they are in New,
+ *   under "Not yet opened".
+ * - A CONTRADICTORY pair ("New" chip + "Packed" ticked) intersected to nothing
+ *   and showed an empty list. An empty array here would read as "no status
+ *   filter" and widen that to the whole inbox — the one outcome worse than
+ *   either — so the panel's own selection wins instead. Narrower than the
+ *   bucket, never everything, and it is what the seller last ticked.
+ */
+export function foldLegacyBuckets(
+	buckets: OrderBucket[] | undefined,
+	statuses: InboxStatusLeaf[] | undefined,
+): InboxStatusLeaf[] | undefined {
+	if (!buckets || buckets.length === 0) return statuses;
+	const fromBuckets = buckets.flatMap((b) => BUCKET_LEAVES[b]);
+	if (!statuses || statuses.length === 0) return fromBuckets;
+	const wanted = new Set(statuses);
+	const both = fromBuckets.filter((leaf) => wanted.has(leaf));
+	return both.length > 0 ? both : statuses;
 }
 
 // --- Time in status -------------------------------------------------------
@@ -118,13 +270,59 @@ export function statusAgeSeverity(
 	order: OrderStatus | BucketableOrder,
 	ms: number,
 ): StatusAgeSeverity {
+	// Booking requests share the window: amber at 4 h, red at 24 h — which is
+	// the moment the expiry cron kills the hold, so red means "about to lapse".
 	const risky =
 		typeof order === "string"
-			? order === "pending"
-			: order.status === "pending" || isUnseenOrder(order);
+			? order === "pending" || order === "booking_requested"
+			: order.status === "pending" ||
+				order.status === "booking_requested" ||
+				isUnseenOrder(order);
 	if (!risky) return "normal";
 	const hrs = ms / 3_600_000;
 	if (hrs >= 24) return "urgent";
 	if (hrs >= 4) return "warn";
 	return "normal";
+}
+
+/**
+ * How old an unpaid order has to be before Home calls it out as chasing work
+ * (z8r3fdrgzj). Three days is the point a seller stops remembering the order
+ * without being reminded — short enough to still be collectable, long enough
+ * that an order placed on a Friday evening is not nagged about on Saturday.
+ */
+export const STALE_UNPAID_DAYS = 3;
+
+/** What the collection predicates need on top of bucketing: whether the money
+ * arrived, and when the order was placed. `BucketableOrder` stays the minimal
+ * status shape it has always been. */
+export type CollectableOrder = BucketableOrder & {
+	paymentStatus?: string;
+	createdAt: number;
+};
+
+/**
+ * Is this an OPEN order whose money has not arrived? The definition behind both
+ * the inbox's "To collect" figure and Home's strip — one author, so the two can
+ * never disagree about what "unpaid" means.
+ *
+ * "Not received" rather than "unpaid", deliberately: an order the buyer has
+ * CLAIMED to have paid is still money the seller does not have, and it is the
+ * one most worth chasing, because somebody is waiting on a human to look.
+ */
+export function isOpenUnpaid(order: CollectableOrder): boolean {
+	const b = orderBucket(order);
+	if (b !== "new" && b !== "in_progress") return false;
+	return (order.paymentStatus ?? "unpaid") !== "received";
+}
+
+/**
+ * Open, unpaid, and older than `STALE_UNPAID_DAYS` — a STRICT SUBSET of
+ * `isOpenUnpaid`, which is what lets Home say "3 of your 9 unpaid orders are
+ * over 3 days old" without the two numbers being computed from different ideas.
+ * Age is measured from `createdAt`, the same anchor revenue uses.
+ */
+export function isStaleUnpaid(order: CollectableOrder, now: number): boolean {
+	if (!isOpenUnpaid(order)) return false;
+	return order.createdAt < now - STALE_UNPAID_DAYS * 24 * 60 * 60 * 1000;
 }

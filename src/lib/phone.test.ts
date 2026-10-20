@@ -80,6 +80,17 @@ describe("toNationalPhoneInput — MY plate", () => {
 		expect(toNationalPhoneInput("6581234567", "MY")).toBe("6581234567");
 	});
 
+	test("keeps a stored MY landline's country code (z8r3fdh274)", () => {
+		// A legacy row from before seller fields were mobile-only. Its display
+		// form must not look plated: were it split as "+60 312345678", the
+		// prefix peel would seed "312345678" and the save would drop the 60.
+		expect(toNationalPhoneInput("60312345678", "MY")).toBe("60312345678");
+	});
+
+	test("shows a foreign number as bare digits, never under the +60 plate", () => {
+		expect(toNationalPhoneInput("447911123456", "MY")).toBe("447911123456");
+	});
+
 	test("is empty-safe", () => {
 		expect(toNationalPhoneInput("", "MY")).toBe("");
 		expect(toNationalPhoneInput(undefined, "MY")).toBe("");
@@ -102,6 +113,10 @@ describe("toNationalPhoneInput — SG plate (86eynw2dy)", () => {
 
 	test("shows a stored MY number as bare digits instead of peeling the wrong plate", () => {
 		expect(toNationalPhoneInput("60123456789", "SG")).toBe("60123456789");
+	});
+
+	test("keeps a stored SG non-mobile's country code (z8r3fdh274)", () => {
+		expect(toNationalPhoneInput("6561234567", "SG")).toBe("6561234567");
 	});
 });
 
@@ -150,11 +165,17 @@ describe("waPhoneCheckoutSchema.SG — the validator behind the +65 plate", () =
 		expect(waPhoneCheckoutSchema.SG.safeParse(input).success).toBe(false);
 	});
 
-	test("rejects with the SG copy, not the Malaysian message", () => {
+	test("rejects an MY number with copy that names BOTH sides, never a bare MY prompt", () => {
+		// Pre-z8r3fdbmc9 this pinned the generic SG line; the cross-country copy
+		// now names the mismatch too. The invariant that matters is unchanged:
+		// the message must state what THIS store takes (with its example), and
+		// must never be the plain "Enter a Malaysian…" prompt — which would read
+		// as the field asking for the number it just refused.
 		const result = waPhoneCheckoutSchema.SG.safeParse("012-345 6789");
-		expect(!result.success && result.error.issues[0].message).toBe(
-			"Enter a Singapore mobile number (e.g. 9123 4567)",
-		);
+		const message = !result.success && result.error.issues[0].message;
+		expect(message).toMatch(/looks like a Malaysian mobile/i);
+		expect(message).toContain("Singapore mobile numbers (e.g. 9123 4567)");
+		expect(message).not.toContain("Enter a Malaysian");
 	});
 });
 

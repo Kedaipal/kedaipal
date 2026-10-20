@@ -1,0 +1,554 @@
+import { describe, expect, it } from "vitest";
+import { DAY_MS, MYT_OFFSET_MS } from "../../convex/lib/fulfilmentDate";
+import {
+	bookingDayPosition,
+	bookingFulfilmentLine,
+	bookingLengthLabel,
+	bookingPriceSuffix,
+	bookingSpanCounted,
+	bookingSpanNoun,
+	calendarDateFromMytEpoch,
+	canCheckIn,
+	conflictCeiling,
+	describeBookingSpan,
+	describeNights,
+	describeSkippedDays,
+	formatNight,
+	latestCheckOutFor,
+	mytEpochFromCalendarDate,
+	mytMonthStart,
+	nextBookingSelection,
+	packageCountLabel,
+	packageEnd,
+	packageStartsCoveringRange,
+	packageTerm,
+	type SelectionContext,
+	weekendRateSuffix,
+} from "./booking-dates";
+
+const D0 = Date.UTC(2026, 8, 1) - MYT_OFFSET_MS; // 1 Sep 2026, MYT midnight
+const day = (offset: number) => D0 + offset * DAY_MS;
+
+function ctx(partial: Partial<SelectionContext> = {}): SelectionContext {
+	return {
+		unavailable: new Set<number>(),
+		earliestCheckIn: day(0),
+		latestCheckIn: day(180),
+		maxNights: 30,
+		...partial,
+	};
+}
+
+describe("MYT ⟷ calendar date conversion", () => {
+	it("round-trips regardless of the runner's timezone", () => {
+		const date = calendarDateFromMytEpoch(day(24));
+		expect(date.getDate()).toBe(25); // 25 Sep 2026
+		expect(mytEpochFromCalendarDate(date)).toBe(day(24));
+	});
+
+	it("month starts align to MYT months", () => {
+		expect(mytMonthStart(day(24))).toBe(day(0));
+	});
+});
+
+describe("two-tap selection", () => {
+	it("first tap sets check-in, second later tap completes the range", () => {
+		const c = ctx();
+		let sel = nextBookingSelection({}, day(24), c);
+		expect(sel).toEqual({ checkIn: day(24) });
+		sel = nextBookingSelection(sel, day(26), c);
+		expect(sel).toEqual({ checkIn: day(24), checkOut: day(26) });
+		// A third tap starts a fresh stay.
+		sel = nextBookingSelection(sel, day(10), c);
+		expect(sel).toEqual({ checkIn: day(10) });
+	});
+
+	it("an earlier tap during check-out picking restarts from that day", () => {
+		const c = ctx();
+		const sel = nextBookingSelection({ checkIn: day(24) }, day(20), c);
+		expect(sel).toEqual({ checkIn: day(20) });
+	});
+
+	it("never starts a stay on an unavailable night", () => {
+		const c = ctx({ unavailable: new Set([day(24)]) });
+		expect(canCheckIn(day(24), c)).toBe(false);
+		expect(nextBookingSelection({}, day(24), c)).toEqual({});
+	});
+});
+
+describe("checkout-only handling (the design's partial-range state)", () => {
+	// Nights 11 + 12 (12/13 Sep) full; check-in Fri 11 Sep = day(10).
+	const c = ctx({ unavailable: new Set([day(11), day(12)]) });
+
+	it("the first full night is the LATEST check-out — leaving that morning is fine", () => {
+		expect(latestCheckOutFor(day(10), c)).toBe(day(11));
+	});
+
+	it("completing the range at the ceiling works; past it is refused", () => {
+		const sel = { checkIn: day(10) };
+		expect(nextBookingSelection(sel, day(11), c)).toEqual({
+			checkIn: day(10),
+			checkOut: day(11),
+		});
+		expect(nextBookingSelection(sel, day(13), c)).toEqual(sel);
+	});
+
+	it("explains the ceiling, and stays quiet when the window is open", () => {
+		expect(conflictCeiling(day(10), c)).toEqual({
+			latestCheckOut: day(11),
+			maxStayNights: 1,
+		});
+		expect(conflictCeiling(day(20), c)).toBeNull();
+	});
+
+	it("max-nights caps the run even with no full night in the way", () => {
+		const short = ctx({ maxNights: 3 });
+		expect(latestCheckOutFor(day(10), short)).toBe(day(13));
+		expect(conflictCeiling(day(10), short)).toBeNull();
+	});
+});
+
+describe("fixed-length packages (S7)", () => {
+	const pkg = (partial: Partial<SelectionContext> = {}) =>
+		ctx({ packageLength: 30, ...partial });
+
+	it("one tap picks the whole span — there is no check-out to choose", () => {
+		const sel = nextBookingSelection({}, day(3), pkg());
+		expect(sel.checkIn).toBe(day(3));
+		expect(sel.checkOut).toBe(day(33));
+	});
+
+	it("tapping again just moves the start", () => {
+		const first = nextBookingSelection({}, day(3), pkg());
+		const second = nextBookingSelection(first, day(10), pkg());
+		expect(second.checkIn).toBe(day(10));
+		expect(second.checkOut).toBe(day(40));
+	});
+
+	it("a start is offered only when EVERY night it would occupy is free", () => {
+		// One busy night 10 days out closes every start that would span it —
+		// a package can't be shortened around it.
+		const c = pkg({ unavailable: new Set([day(10)]) });
+		expect(canCheckIn(day(11), c)).toBe(true); // starts after the busy night
+		expect(canCheckIn(day(10), c)).toBe(false); // starts ON it
+		expect(canCheckIn(day(5), c)).toBe(false); // would span it
+		expect(nextBookingSelection({}, day(5), c)).toEqual({});
+	});
+
+	it("still respects the notice window and horizon", () => {
+		const c = pkg({ earliestCheckIn: day(2), latestCheckIn: day(20) });
+		expect(canCheckIn(day(1), c)).toBe(false);
+		expect(canCheckIn(day(21), c)).toBe(false);
+		expect(canCheckIn(day(2), c)).toBe(true);
+	});
+
+	it("packageTerm runs exactly the days occupied, skipping nothing on an every-day package", () => {
+		expect(packageTerm(day(0), { packageLength: 3 })).toEqual({
+			checkOut: day(3),
+			skipped: [],
+		});
+	});
+
+	it("an OPEN-DAYS package (z8r3fdhpm7) counts open days, can't start shut, and is judged on counted days", () => {
+		// Shut on day 2 and day 4.
+		const isClosed = (d: number) => d === day(2) || d === day(4);
+		const c = pkg({ packageLength: 3, isClosed });
+		expect(packageTerm(day(1), c)).toEqual({
+			checkOut: day(6),
+			skipped: [day(2), day(4)],
+		});
+		expect(canCheckIn(day(2), c)).toBe(false);
+		// A full/blocked night on a SKIPPED day never stops the start…
+		expect(canCheckIn(day(1), { ...c, unavailable: new Set([day(2)]) })).toBe(
+			true,
+		);
+		// …one on a COUNTED day does.
+		expect(canCheckIn(day(1), { ...c, unavailable: new Set([day(3)]) })).toBe(
+			false,
+		);
+		expect(nextBookingSelection({}, day(1), c)).toEqual({
+			checkIn: day(1),
+			checkOut: day(6),
+		});
+	});
+
+	it("crossing a month boundary lands on the right calendar day", () => {
+		// 1 Sep + 30 days = 1 Oct, so the last usable day is 30 Sep.
+		const sel = nextBookingSelection({}, day(0), pkg());
+		const last = calendarDateFromMytEpoch((sel.checkOut ?? 0) - DAY_MS);
+		expect(last.getMonth()).toBe(8); // September
+		expect(last.getDate()).toBe(30);
+	});
+});
+
+describe("booking copy helpers (S7)", () => {
+	it("names the span it prices, rather than saying 'per package'", () => {
+		// A gym's RM100 is "/month" — "per package" made the buyer open the
+		// listing to find out what span they were buying, and made the seller's
+		// own price field read "per night" while they typed a monthly fee.
+		expect(bookingPriceSuffix(1, "month")).toBe("/month");
+		expect(bookingPriceSuffix(3, "month")).toBe("/3 months");
+		expect(bookingPriceSuffix(30, "day")).toBe("/30 days");
+		expect(bookingPriceSuffix(1, "day")).toBe("/day");
+		// A free-range stay is still per-night, and stays the default when no
+		// unit is supplied.
+		expect(bookingPriceSuffix(undefined)).toBe("/night");
+		expect(bookingPriceSuffix(0)).toBe("/night");
+		expect(bookingPriceSuffix(0, "month")).toBe("/night");
+	});
+
+	it("offers the bare span noun for prose that brings its own preposition", () => {
+		expect(bookingSpanNoun(1, "month")).toBe("month");
+		expect(bookingSpanNoun(2, "month")).toBe("2 months");
+		expect(bookingSpanNoun(30, "day")).toBe("30 days");
+		expect(bookingSpanNoun(undefined)).toBe("night");
+	});
+
+	it("a package reads as a validity window ending on its LAST usable day", () => {
+		const fmt = (e: number) => String(calendarDateFromMytEpoch(e).getDate());
+		// 1 Sep + 30 days: valid through the 30th, never "– 1 Oct".
+		expect(
+			describeBookingSpan(day(0), day(30), { isPackage: true, format: fmt }),
+		).toBe("Valid 1 – 30");
+		// A stay's check-out morning IS the day they leave.
+		expect(
+			describeBookingSpan(day(0), day(2), { isPackage: false, format: fmt }),
+		).toBe("1 → 3");
+	});
+});
+
+describe("package count label (the 'How many 2 dayss?' bug)", () => {
+	it("never double-pluralises: the noun carries LENGTH, the caller carries COUNT", () => {
+		// The reported string came from "How many " + bookingSpanNoun() + "s":
+		// bookingSpanNoun already pluralises on the package's length, and the
+		// caller pluralised again on the buyer's count.
+		expect(packageCountLabel(2, "day")).toBe("2-day packages");
+		expect(packageCountLabel(2, "day")).not.toContain("dayss");
+		expect(packageCountLabel(2, "night")).toBe("2-night packages");
+		// A length of one is just its unit — "How many months?" beats "How many
+		// 1-month packages?".
+		expect(packageCountLabel(1, "month")).toBe("months");
+		expect(packageCountLabel(1, "night")).toBe("nights");
+		expect(packageCountLabel(3, "month")).toBe("3-month packages");
+	});
+
+	it("carries the seller's word through the price suffix and span noun", () => {
+		// "night" and "day" are the same arithmetic; only the word differs.
+		expect(bookingPriceSuffix(2, "night")).toBe("/2 nights");
+		expect(bookingPriceSuffix(1, "night")).toBe("/night");
+		expect(bookingSpanNoun(2, "night")).toBe("2 nights");
+		expect(packageEnd(0, 2, "night")).toBe(packageEnd(0, 2, "day"));
+		expect(packageEnd(0, 2, "night", 3)).toBe(packageEnd(0, 2, "day", 3));
+	});
+});
+
+describe("weekendRateSuffix (S13)", () => {
+	it("names the nights after the per-night unit", () => {
+		expect(
+			weekendRateSuffix({ weekendPrice: 12_000, weekendDays: [5, 6] }),
+		).toBe("/night Fri & Sat");
+		expect(
+			weekendRateSuffix({ weekendPrice: 12_000, weekendDays: [0, 5, 6] }),
+		).toBe("/night Fri, Sat & Sun");
+	});
+
+	it("is null with no rate, no nights, or on a package", () => {
+		expect(weekendRateSuffix(undefined)).toBeNull();
+		expect(weekendRateSuffix({})).toBeNull();
+		expect(weekendRateSuffix({ weekendPrice: 12_000 })).toBeNull();
+		expect(
+			weekendRateSuffix({ weekendPrice: 12_000, weekendDays: [] }),
+		).toBeNull();
+		expect(
+			weekendRateSuffix({
+				weekendPrice: 12_000,
+				weekendDays: [5, 6],
+				packageLength: 30,
+			}),
+		).toBeNull();
+	});
+});
+
+describe("naming a split line's nights (S13)", () => {
+	it("formats one night compactly — no year, no comma", () => {
+		// The year would be noise under a card that already states the stay,
+		// and a comma would collide with the separator between nights.
+		expect(formatNight(day(0))).toBe("Tue 1 Sep");
+		expect(formatNight(day(3))).toBe("Fri 4 Sep");
+	});
+
+	it("lists the nights a rate charged for", () => {
+		expect(describeNights([day(0)], formatNight)).toBe("Tue 1 Sep");
+		expect(describeNights([day(3), day(4)], formatNight)).toBe(
+			"Fri 4 Sep, Sat 5 Sep",
+		);
+	});
+
+	it("lists non-contiguous nights, which a range could never say", () => {
+		// A Thu→Mon stay's weekday nights are the Thursday AND the Sunday.
+		expect(describeNights([day(2), day(5)], formatNight)).toBe(
+			"Thu 3 Sep, Sun 6 Sep",
+		);
+	});
+
+	it("counts the rest once a long stay would run away with the line", () => {
+		const many = [day(0), day(1), day(2), day(3), day(4)];
+		expect(describeNights(many, formatNight)).toBe(
+			"Tue 1 Sep, Wed 2 Sep +3 more nights",
+		);
+		expect(describeNights(many.slice(0, 4), formatNight)).toBe(
+			"Tue 1 Sep, Wed 2 Sep +2 more nights",
+		);
+		// Exactly at the cap, everything is still named.
+		expect(describeNights(many.slice(0, 3), formatNight)).toBe(
+			"Tue 1 Sep, Wed 2 Sep, Thu 3 Sep",
+		);
+	});
+
+	it("says nothing for no nights", () => {
+		expect(describeNights([], formatNight)).toBe("");
+	});
+});
+
+describe("bookingSpanCounted — the span with its count, always", () => {
+	it("singular at one, plural above, in the listing's own unit", () => {
+		expect(bookingSpanCounted(1, "month")).toBe("1 month");
+		expect(bookingSpanCounted(3, "month")).toBe("3 months");
+		expect(bookingSpanCounted(1, "day")).toBe("1 day");
+		expect(bookingSpanCounted(30, "day")).toBe("30 days");
+		expect(bookingSpanCounted(1, "night")).toBe("1 night");
+		expect(bookingSpanCounted(2, "night")).toBe("2 nights");
+	});
+
+	it("defaults to days — a pre-units listing reads as days everywhere", () => {
+		expect(bookingSpanCounted(7)).toBe("7 days");
+	});
+
+	it("never produces the strings the forms used to hand-roll", () => {
+		for (const unit of ["day", "night", "month"] as const) {
+			for (const n of [1, 2, 12]) {
+				const out = bookingSpanCounted(n, unit);
+				expect(out).not.toMatch(/\(s\)|1 [a-z]+s$|ss$/);
+			}
+		}
+	});
+});
+
+describe("packageStartsCoveringRange (z8r3fdhpm7)", () => {
+	const TODAY = Date.UTC(2026, 8, 1) - 8 * 3_600_000; // Tue 1 Sep 2026 MYT
+	const D = (n: number) => TODAY + n * 86_400_000;
+
+	it("a 5-day package: the four starts before the blocked day, and the day itself", () => {
+		expect(
+			packageStartsCoveringRange(
+				{ packageLength: 5, packageUnit: "day" },
+				D(20),
+				D(20),
+				TODAY,
+			),
+		).toEqual({ first: D(16), last: D(20) });
+	});
+
+	it("a 1-month package: blocking one day takes a month of starts off sale", () => {
+		const range = packageStartsCoveringRange(
+			{ packageLength: 1, packageUnit: "month" },
+			D(40),
+			D(40),
+			TODAY,
+		);
+		// Starts from ~a month before the blocked day up to the day itself.
+		expect(range?.last).toBe(D(40));
+		expect(
+			Math.round(((range?.last ?? 0) - (range?.first ?? 0)) / 86_400_000),
+		).toBeGreaterThanOrEqual(27);
+	});
+
+	it("clipped to today, and null for free-range stays or nothing sellable", () => {
+		expect(
+			packageStartsCoveringRange(
+				{ packageLength: 30, packageUnit: "day" },
+				D(3),
+				D(3),
+				TODAY,
+			),
+		).toEqual({ first: TODAY, last: D(3) });
+		expect(packageStartsCoveringRange({}, D(3), D(3), TODAY)).toBeNull();
+		expect(
+			packageStartsCoveringRange(
+				{ packageLength: 2, packageUnit: "day" },
+				D(-5),
+				D(-3),
+				TODAY,
+			),
+		).toBeNull();
+	});
+
+	// Tue 1 Sep is TODAY; the store is shut Sun, Tue and Wed (herb's week).
+	const shut = (day: number) =>
+		[0, 2, 3].includes(new Date(day + 8 * 3_600_000).getUTCDay());
+
+	it("an OPEN-DAYS package is judged on the days it counts — a block on Mon 7 stops Sat 5 (Sat + Mon) and Mon 7, never Sun 6", () => {
+		// Counted every day in a row this would have said "from Sun 6" — a day
+		// that can't even be a start.
+		expect(
+			packageStartsCoveringRange(
+				{ packageLength: 2, packageUnit: "day" },
+				D(6),
+				D(6),
+				TODAY,
+				{ isClosed: shut, startClosed: shut },
+			),
+		).toEqual({ first: D(4), last: D(6) });
+	});
+
+	it("an open-days package stops nothing when the block sits on a day it skips", () => {
+		expect(
+			packageStartsCoveringRange(
+				{ packageLength: 2, packageUnit: "day" },
+				D(5),
+				D(5), // Sun 6 Sep
+				TODAY,
+				{ isClosed: shut, startClosed: shut },
+			),
+		).toBeNull();
+	});
+
+	it("an every-day package never counts a shut day as a start it loses", () => {
+		// Blocking Thu 3: starts Thu 3 and the day before — but Wed 2 is shut,
+		// so the only start the block takes is Thu 3 itself.
+		expect(
+			packageStartsCoveringRange(
+				{ packageLength: 2, packageUnit: "day" },
+				D(2),
+				D(2),
+				TODAY,
+				{ startClosed: shut },
+			),
+		).toEqual({ first: D(2), last: D(2) });
+	});
+});
+
+describe("no package starts on a shut day (owner call, 24 Sep)", () => {
+	const shutOnDay3 = (d: number) => d === day(3);
+
+	it("an every-day package can't start on it, but can run through it", () => {
+		const c = ctx({
+			packageLength: 2,
+			packageUnit: "day",
+			startClosed: shutOnDay3,
+		});
+		expect(canCheckIn(day(3), c)).toBe(false);
+		// Day 2 + day 3: runs THROUGH the shut day — fine.
+		expect(canCheckIn(day(2), c)).toBe(true);
+		expect(nextBookingSelection({}, day(3), c)).toEqual({});
+	});
+
+	it("a stay never reads it", () => {
+		expect(canCheckIn(day(3), ctx({ startClosed: undefined }))).toBe(true);
+	});
+});
+
+describe("bookingLengthLabel — one count for every order surface (z8r3fdhpm7)", () => {
+	const D = (n: number) => day(n);
+	it("an open-days package counts the days it uses, not its span", () => {
+		const order = {
+			bookingCheckIn: D(2),
+			bookingCheckOut: D(9),
+			bookingPackaged: true,
+			bookingSkippedDays: [D(3), D(5), D(6)],
+		};
+		expect(bookingLengthLabel(order)).toBe("4 open days");
+		expect(bookingLengthLabel(order, "ms")).toBe("4 hari buka");
+	});
+
+	it("a package is days, a stay is nights, and nothing without dates", () => {
+		expect(
+			bookingLengthLabel({
+				bookingCheckIn: D(0),
+				bookingCheckOut: D(1),
+				bookingPackaged: true,
+			}),
+		).toBe("1 day");
+		expect(
+			bookingLengthLabel({ bookingCheckIn: D(0), bookingCheckOut: D(2) }),
+		).toBe("2 nights");
+		expect(
+			bookingLengthLabel({ bookingCheckIn: D(0), bookingCheckOut: D(2) }, "ms"),
+		).toBe("2 malam");
+		expect(bookingLengthLabel({})).toBeNull();
+	});
+});
+
+describe("bookingDayPosition — where one day sits in a booking", () => {
+	const row = (partial: Partial<Parameters<typeof bookingDayPosition>[0]>) => ({
+		checkIn: day(2),
+		checkOut: day(9),
+		packaged: true,
+		...partial,
+	});
+
+	it("an open-days package counts only the days the member comes", () => {
+		const r = row({ skippedDays: [day(3), day(5), day(6)] });
+		expect(bookingDayPosition(r, day(2))).toBe("starts today");
+		expect(bookingDayPosition(r, day(4))).toBe("day 2 of 4");
+		expect(bookingDayPosition(r, day(8))).toBe("last day");
+		expect(bookingDayPosition(r, day(3))).toBe("a day it skips");
+	});
+
+	it("a one-day package, and a stay's nights", () => {
+		expect(bookingDayPosition(row({ checkOut: day(3) }), day(2))).toBe(
+			"its only day",
+		);
+		const stay = row({ packaged: false, checkOut: day(6) });
+		expect(bookingDayPosition(stay, day(2))).toBe("arrives today");
+		expect(bookingDayPosition(stay, day(3))).toBe("night 2 of 4");
+		expect(bookingDayPosition(stay, day(5))).toBe("leaves tomorrow");
+	});
+});
+
+describe("order-page booking lines (z8r3fdhpm7)", () => {
+	const D = (n: number) => Date.UTC(2026, 8, 30) - MYT_OFFSET_MS + n * DAY_MS; // Wed 30 Sep
+	const fmt = (e: number) => formatNight(e);
+
+	it("a PACKAGE reads as a validity window in days — the field S7 renamed, read right at last", () => {
+		expect(
+			bookingFulfilmentLine(
+				{ bookingCheckIn: D(0), bookingCheckOut: D(5), bookingPackaged: true },
+				fmt,
+			),
+		).toBe("Booking · 5 days · Valid Wed 30 Sep – Sun 4 Oct");
+	});
+
+	it("an OPEN-DAYS package counts its open days and names what it skipped", () => {
+		expect(
+			bookingFulfilmentLine(
+				{
+					bookingCheckIn: D(0),
+					bookingCheckOut: D(7),
+					bookingPackaged: true,
+					bookingSkippedDays: [D(1), D(4)],
+				},
+				fmt,
+			),
+		).toBe(
+			"Booking · 5 open days · Valid Wed 30 Sep – Tue 6 Oct · skips Thu 1 Oct, Sun 4 Oct",
+		);
+	});
+
+	it("a stay stays in nights, check-in → check-out", () => {
+		expect(
+			bookingFulfilmentLine(
+				{ bookingCheckIn: D(0), bookingCheckOut: D(2) },
+				fmt,
+			),
+		).toBe("Booking · 2 nights · Wed 30 Sep → Fri 2 Oct");
+		expect(bookingFulfilmentLine({}, fmt)).toBe("Booking");
+	});
+
+	it("skipped days: three named, then counted in days", () => {
+		expect(describeSkippedDays(undefined)).toBe("");
+		expect(describeSkippedDays([D(1), D(4), D(11), D(18)])).toBe(
+			"skips Thu 1 Oct, Sun 4 Oct +2 more days",
+		);
+	});
+});

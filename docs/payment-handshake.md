@@ -4,7 +4,7 @@ The manual, two-button payment confirmation flow. **Shipped and in production** 
 
 No payment gateway is involved: this solves the "did the money land?" handshake on top of the bank-transfer / DuitNow QR flow retailers already use. Customer payment money never touches Kedaipal — the retailer owns the gateway/bank account.
 
-**Source files:** [`convex/orders.ts`](../convex/orders.ts) (`claimPayment`, `markPaymentReceived`, `generateOrderProofUploadUrl`, `getPaymentProofUrl`), [`convex/schema.ts`](../convex/schema.ts) (payment fields), [`src/routes/track.$token.tsx`](../src/routes/track.$token.tsx) (both buyer-facing halves of the handshake).
+**Source files:** [`convex/orders.ts`](../convex/orders.ts) (`claimPayment`, `markPaymentReceived`, `generateOrderProofUploadUrl`, `listPaymentProofs`), [`convex/lib/paymentClaims.ts`](../convex/lib/paymentClaims.ts) (submission history), [`convex/schema.ts`](../convex/schema.ts) (payment fields + `paymentClaims`), [`src/components/order/payment-proof-list.tsx`](../src/components/order/payment-proof-list.tsx) (the seller's proof card), [`src/routes/track.$token.tsx`](../src/routes/track.$token.tsx) (both buyer-facing halves of the handshake).
 
 > **The handshake no longer sends anything (2026-08-04, [`86eyd63r8`](https://app.clickup.com/t/86eyd63r8)).**
 > `whatsapp.notifyPaymentReceived` — the "✅ Payment received" WhatsApp — is
@@ -37,19 +37,60 @@ stateDiagram-v2
 
 ## Shopper flow — claim payment
 
+> **A lapsed store takes no payment** (`z8r3fdr6gg`): while the store is past due, `getPaymentMethods` returns no methods and `paymentsPaused: true`, the payment card shows a disabled "Payments paused" state, and `claimPayment` refuses a NEW claim (an order claimed before the pause can still update its proof). See [`manual-subscription.md`](./manual-subscription.md#buyer-payments-pause-while-a-store-is-lapsed-z8r3fdr6gg).
+
 On the tracking page (`/track/<token>`), the shopper taps **"I've paid"**. Trust model: knowing the high-entropy `orders.trackingToken` is the capability (the human `shortId` is NOT a secret — see [`infra-cost-scaling.md` §6](./infra-cost-scaling.md)).
 
-1. **(Optional) attach a screenshot** — `generateOrderProofUploadUrl(token)` mints a one-shot Convex storage upload URL. Rate-limited `proofUpload` (3/min per token). Refused once `received`.
+1. **Attach a screenshot — MANDATORY, and the first field** ([`z8r3fdnpxf`](https://app.clickup.com/t/z8r3fdnpxf)). `generateOrderProofUploadUrl(token)` mints a one-shot Convex storage upload URL. Rate-limited `proofUpload` (**10/min per token, burst 5**) — sized for one URL per file the buyer PICKS, because the sheet uploads on selection rather than on submit. Refused once `received`. See **Proof is mandatory** below.
 2. **`claimPayment(shortId, reference?, proofStorageId?)`** — rate-limited `paymentClaim` (5/min per shortId):
-   - Rejected only if already `received` ("Payment already confirmed") — a retailer-confirmed payment can't be re-claimed.
-   - **Idempotent otherwise**: re-submitting overwrites `paymentReference` / `paymentProofStorageId` and refreshes `paymentClaimedAt`. This lets a shopper fix a typo'd reference or add a screenshot they forgot.
+   - Rejected if already `received` ("Payment already confirmed") — a retailer-confirmed payment can't be re-claimed.
+   - Rejected if the claim would leave the order with **no proof** (`PAYMENT_PROOF_REQUIRED_MESSAGE`).
+   - **Resubmitting is allowed and kept as history** ([`z8r3fdn2uj`](https://app.clickup.com/t/z8r3fdn2uj)): each submission is a `paymentClaims` row (what THAT submission carried — a reference-only resubmit has no screenshot), and the order's `paymentReference` / `paymentProofStorageId` are updated to the latest values (email + WhatsApp read those). `paymentClaimedAt` is refreshed. This lets a shopper fix a typo'd reference or add a screenshot they forgot without the seller losing the first one. Capped at **20 submissions per order** (`MAX_PAYMENT_CLAIMS_PER_ORDER`) — the 21st is refused with a "message the seller on WhatsApp" error; the per-minute rate limit alone doesn't bound a day.
    - `reference` is trimmed and capped at **80 characters** (`PAYMENT_REFERENCE_MAX`).
    - Sets `paymentStatus: "claimed"`, writes a `"payment_claimed"` `orderEvents` row.
    - Schedules `notifyPaymentClaimed` email to the retailer (fire-and-forget).
 
+### Proof is mandatory (z8r3fdnpxf)
+
+The screenshot used to be optional and sat **below** the reference number, so buyers skipped it. The seller then got a claimed payment with nothing to check a bank statement against and went back to WhatsApp to ask for the receipt — the exact chase this whole feature exists to end.
+
+**The rule is on the ORDER, not on each submission.** `claimPayment` refuses a claim only when it would leave the order with nothing: no new `proofStorageId` **and** no `orders.paymentProofStorageId` already. So the first claim must carry a screenshot, while the common resubmit — "I forgot the reference number" — stays legal, because the seller can already verify that order and `currentClaimIndex` keeps the earlier screenshot in the lead. A reference is never a substitute, and an all-whitespace `proofStorageId` is no proof (the guard reads the trimmed value).
+
+The server guard is the backstop, not the buyer's experience. `ManualPaymentDialog` ([`src/components/storefront/manual-payment-dialog.tsx`](../src/components/storefront/manual-payment-dialog.tsx)) makes it real on the way in:
+
+- **The attachment leads the form**, above the reference number.
+- **It uploads the moment it is picked**, not on submit — which is what lets the submit be held until the image is genuinely stored, gives the buyer a thumbnail to check they attached the right screenshot, and overlaps the slow part of a mobile-data claim with typing the reference. States: uploading (spinner, submit held), failed (the reason + **Retry** / **Remove**, the file kept so a retry is one tap), done (thumbnail + **Replace**).
+- **A screenshot that FAILED to upload holds the submit on every path**, not just on a first claim (PR #342 review). The resubmit path used to let a buyer who picked a replacement, watched it fail, and tapped Update believe the new screenshot had gone through while the seller kept the old one — the same "they don't have what I sent" failure the mandatory rule exists to end, and an asymmetry besides, since the identical failure already blocked a first claim via the missing-proof rule. **Remove** is what keeps that block from stranding anyone: it discards the failed attachment, returning a first claim to "attach one to continue" (with the message-the-store way out) and freeing a resubmit to send its reference alone.
+- **The submit says why it is disabled, beside it, before the tap** — `Attach your payment screenshot to continue.` on a first claim, `Attach a new screenshot or add a reference number to update.` on an empty resubmit. A form can still submit implicitly from a text field, so `handleSubmit` re-checks and surfaces the same sentence rather than swallowing the gesture.
+- **There is always a way out.** A mandatory field with no alternative is a dead end, so a buyer who genuinely cannot produce an image gets `Can't attach one? Message <store> on WhatsApp.` — deep-linked to the vendor's own number with the order ref prefilled, where the seller can `markPaymentReceived` by hand. The track page's pay-now helper also says the screenshot is needed *before* the sheet opens, so nobody meets the requirement only once they are inside the form.
+- **HEIC is not a dead end either.** `IMAGE_ACCEPT` greys `.HEIC` out in the picker (iOS then hands over a JPEG), and `prepareImageUpload`'s decode test still refuses anything this browser can't render. What changed is the copy: the shared `imageRejectMessage` names a macOS fix ("open it in Preview, File → Export as JPEG") because its other caller is a seller on a laptop, so the sheet maps the reject *reason* to buyer-facing wording instead — always "take a screenshot of the receipt in your banking app". See [`manual-payment-copy.ts`](../src/components/storefront/manual-payment-copy.ts).
+
+**The sheet is fully bilingual.** Every string lives in `manual-payment-copy.ts`, keyed off the order payload's `retailerLocale` (the STORE's language; the buyer never picks one, and `zh` reads the English column). `manual-payment-copy.test.ts` fails when any string answers the same in both languages unless it is declared in `SAME_IN_BOTH` — so a string added in English only is a red gate, not something to spot by eye. This was the one surface where a half-translated sheet would land on the sentence explaining why a payment can't go through.
+
+A legacy bare claim — `paymentClaimedAt` set with nothing attached — has no submission to speak for it, so `PaymentProofList` takes `claimedAt` and still states **when** it was made. That is decision-relevant on its own: a transfer claimed five minutes ago may simply not have landed, one claimed three days ago wants chasing. It cannot reintroduce the two-sources-disagree bug, because that branch runs only when there is no submission to disagree with.
+
+`orders.get` carries **`hasPaymentProof`** (a boolean, never the storage id — resolving a proof to a URL is the seller's auth-gated `listPaymentProofs`, and this payload crosses an unauthenticated wire) so the sheet knows which of the two rules it is under.
+
+**Only one surface runs this handshake.** `ManualPaymentDialog` is rendered by `src/routes/track.$token.tsx` and nothing else: storefront checkout never claims payment (it hands off to WhatsApp and the buyer lands on `/track`), and a counter pay-later sale is created `paymentStatus: "unpaid"`, so its buyer pays through that same sheet. Gateway (HitPay) payments are unaffected — they settle by webhook and never call `claimPayment`.
+
 ## Retailer flow — mark received
 
-In the dashboard, the retailer reviews the claimed reference + proof screenshot (`getPaymentProofUrl` — **auth-gated**, ownership-checked, so shoppers can't fish proof images for arbitrary shortIds) and clicks **"Mark payment received"**.
+In the dashboard, the retailer reviews the claimed reference + proof screenshot (`listPaymentProofs` — **auth-gated**, orders-read, so shoppers can't fish proof images) and clicks **"Mark payment received"**.
+
+### Payment proof history (z8r3fdn2uj)
+
+The proof stays reachable after the payment is in — a dispute, a refund or matching the bank statement needs it long after the claim card is gone. `PaymentProofList` renders in both cards:
+
+- **Payment claimed** (amber): the lead screenshot full-width, as before — reading the amount off it is the job.
+- **Payment received** (green): a **Customer's proof** row — portrait thumbnail (tap → full size), the buyer's reference with a copy button, and when it was sent. Not rendered for a payment the seller marked by hand with no buyer claim (`paymentClaimedAt` unset).
+- **The lead** is the newest submission carrying a screenshot (`currentClaimIndex`) — a later reference-only resubmit doesn't push the screenshot out. Every other submission is under one collapsed **Other submissions (n)** row, newest first.
+- **The reference beside the lead is the NEWEST one the buyer sent, not the lead's own** (`borrowedLeadReference`, corrected in [`z8r3fdnpxf`](https://app.clickup.com/t/z8r3fdnpxf)). A resubmit is a correction or an addition, never a regression: a buyer who attaches a screenshot with a typo'd reference and then sends the corrected one must not leave the seller reconciling by the typo. When that reference came from a different submission it is labelled **"From their submission on …"**, so it is never presented as the lead's own. The lead is still chosen by the SCREENSHOT — the image is the evidence, the reference is the string beside it.
+- **Both cards state it identically**, because both call `leadReference` in [`payment-proof-list.tsx`](../src/components/order/payment-proof-list.tsx). The amber card used to render its own Reference/Submitted rows read off `orders.paymentReference` (always the latest) while the list underneath and the green card spoke for the submission — so a corrected reference made the same order read one way while the seller was deciding and another after the payment was in. Those rows now live inside `PaymentProofList`, which is the single author of "what the buyer sent". Whatever it resolves to equals `orders.paymentReference`, which is what the claim email and the seller's WhatsApp alert quote — pinned by a test, so the dashboard can't contradict the record.
+- **A lead without a reference borrows one.** The commonest resubmit is "I forgot the screenshot" — the buyer's dialog starts empty, so that row is screenshot-only and becomes the lead. `borrowedLeadReference` hands the card the newest reference any other submission carried, shown with "From their submission on …", so the seller's reconciliation row never reads "Not provided" while a reference exists.
+- **A bare claim records no row.** `claimPayment` accepts neither field (the order still flips to claimed), but there's nothing to show, so no history row — otherwise twenty empty taps would hit the cap and lock the buyer out of ever attaching a screenshot. `legacyClaimFromOrder` likewise rebuilds nothing for an empty pre-table claim.
+- States: loading skeleton, no screenshot, screenshot no longer available (blob gone → `url: null`, never a broken image), one, many.
+- **Orders claimed before the table existed** have no rows: `legacyClaimFromOrder` rebuilds their one submission from the order (skipping a HitPay payment id that settlement wrote into `paymentReference`), so the proof shows immediately. One limit of the old data model: an order whose buyer sent a screenshot and THEN a reference-only resubmit before this shipped kept only the latest values, so its one rebuilt entry pairs the old screenshot with the newer reference and time — the earlier submission's own reference was already overwritten and can't be recovered. `claimPayment` writes that legacy row first on the next resubmit, and `migrations:backfillPaymentClaims` makes it a real row for everyone (idempotent, release step after deploy).
+- **Deletion:** `deleteOrderOwnedBlobs` (both the admin hard delete and the account cascade) frees every screenshot in the history and deletes the rows — overwritten screenshots used to leak.
 
 **`markPaymentReceived(orderId, note?)`** — auth-gated, ownership-checked:
 - **Idempotent** — if already `received`, returns immediately (no-op second click).
@@ -133,7 +174,9 @@ The slot this section predicted is live: a HitPay webhook (or the
 redirect-return reconcile) flips `paymentStatus` to `received` through the
 same `applyPaymentReceived` core as the manual button — auto-confirm,
 activation stamp, and `notifyPaymentReceived` are byte-identical, and the
-manual claim/mark-received handshake keeps working beside it (buyers can
-still transfer; sellers without HitPay see zero change). Gateway orders also
+manual claim/mark-received handshake keeps working for every store on manual
+transfer. Since 86eye9xd4 a store that turns HitPay on makes it the **only**
+door for any order HitPay can take — the manual details are withheld, so this
+handshake only runs on the orders it can't (see [`hitpay-gateway.md`](./hitpay-gateway.md#hitpay-on-is-the-way-buyers-pay-86eye9xd4-8a)). Gateway orders also
 stamp a reliable `paymentMethod` (incl. the new `fpx`). Full design:
 [`hitpay-gateway.md`](./hitpay-gateway.md).

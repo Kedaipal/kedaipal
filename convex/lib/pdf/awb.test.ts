@@ -528,6 +528,45 @@ describe("a country switch never leaves a foreign return address (86eyqgujv)", (
 		expect(l.sender.name).toBe("Wagyu Walid");
 	});
 
+	test("the unit / floor line prints on the return address too (z8r3fdff8r)", () => {
+		const l = orderToAwbLabelData({
+			order: order(),
+			retailer: {
+				storeName: "Wagyu Walid",
+				waPhone: "60123456789",
+				country: "MY",
+				businessAddress: {
+					label: MY_LABEL,
+					unit: "Unit 3-1, Block B",
+					country: "MY",
+				},
+			},
+			config: AWB_DEFAULTS,
+		});
+		// A returned parcel has the same find-the-door problem as an arriving
+		// rider, and this block IS the return address.
+		expect(l.sender.lines.join(" ")).toContain("Unit 3-1, Block B");
+		expect(l.sender.warning).toBeUndefined();
+	});
+
+	test("a foreign-stamped address drops the unit with the rest of it", () => {
+		const l = orderToAwbLabelData({
+			order: order({ deliveryAddress: sgAddress }),
+			retailer: {
+				storeName: "Wagyu Walid",
+				waPhone: "6512345678",
+				country: "SG",
+				businessAddress: {
+					label: MY_LABEL,
+					unit: "Unit 3-1, Block B",
+					country: "MY",
+				},
+			},
+			config: AWB_DEFAULTS,
+		});
+		expect(l.sender.lines).toEqual([]);
+	});
+
 	test("a matching stamp prints exactly as before", () => {
 		const l = orderToAwbLabelData({
 			order: order(),

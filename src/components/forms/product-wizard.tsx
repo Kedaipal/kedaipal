@@ -1,39 +1,122 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import {
+	CalendarClock,
+	CalendarRange,
 	ChefHat,
 	ChevronLeft,
 	EyeOff,
+	ImagePlus,
+	Package,
 	PackageCheck,
 	Plus,
 	Sparkles,
 	Store,
+	UtensilsCrossed,
+	Wrench,
 	X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { MAX_NOTICE_DAYS } from "../../../convex/lib/fulfilmentDate";
+import type { CreditLockErrorData } from "../../../convex/lib/credits";
+import {
+	MAX_NOTICE_DAYS,
+	MAX_PREP_MINUTES,
+	parsePrepMinutesText,
+} from "../../../convex/lib/fulfilmentDate";
 import { MIN_QUANTITY_MAX } from "../../../convex/lib/minOrderRules";
 import {
+	MAX_PICKUP_NOTE_LENGTH,
+	pickupNoteFits,
+} from "../../../convex/lib/pickupNote";
+import { formatEventBadge } from "../../../convex/lib/productEvent";
+import {
+	DEFAULT_WEEKEND_DAYS,
+	MAX_CAPACITY_PER_NIGHT,
+	type PackageUnit,
+	type ProductKind,
+	packageUnitMax,
+	weekendDaysLabel,
+} from "../../../convex/lib/productKind";
+import {
+	MAX_OPTION_AXES,
+	MAX_VARIANTS_PER_PRODUCT,
+	overCapMessage,
+} from "../../../convex/lib/variant";
+import {
+	bookingPriceSuffix,
+	bookingSpanCounted,
+	bookingSpanNoun,
+} from "../../lib/booking-dates";
+import {
 	convexErrorMessage,
+	creditLockErrorOf,
+	currencySymbol,
+	formatDraftPrice,
+	formatDraftPriceRange,
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
+import type { KindCard } from "../../lib/kind-card";
+import { NOTE_LINK_HINT } from "../../lib/linkify";
+import { asPackageUnit } from "../../lib/package-unit";
+import type { UnsavedState } from "../../lib/product-form-dirty";
+import {
+	isSecurityDepositInRange,
+	securityDepositRangeMessage,
+	weekendRateConsequence,
+} from "../../lib/product-summary";
 import { cn } from "../../lib/utils";
 import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
+import { ProFeatureTease } from "../app/pro-gate";
+import { CreditLockCta, SaveLockNote } from "../credits/credit-lock-cta";
 import { Button } from "../ui/button";
+import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
+import { Textarea } from "../ui/textarea";
+import { ToggleSwitch } from "../ui/toggle-switch";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
+import {
+	type BuyerQuestionsDraft,
+	BuyerQuestionsEditor,
+	questionsDraftIssue,
+	questionsSubmitValue,
+} from "./buyer-questions-card";
 import { CategoryPicker } from "./category-picker";
+import {
+	EMPTY_EVENT_DRAFT,
+	EVENT_NO_VENUE_COPY,
+	type EventDraft,
+	EventFields,
+	eventDraftValid,
+	eventEndDateIssue,
+	eventSubmitValue,
+} from "./event-fields";
+import { focusAfterRender } from "./focus-error";
+import { PackageDayCounting, type StoreSchedule } from "./package-day-counting";
 import {
 	buildSubmitVariants,
 	collectOptionIssues,
+	PREP_PRESETS,
 	type ProductFormDraft,
 	type ProductFormInitialValues,
 	type ProductFormSubmitValues,
 } from "./product-form";
-import { type ProductImage, ProductImagesField } from "./product-images-field";
+import {
+	failedPhotosLabel,
+	type PhotoUploadState,
+	type ProductImage,
+	ProductImagesField,
+} from "./product-images-field";
+import {
+	EMPTY_PROMO_DRAFT,
+	type PromoDraft,
+	PromoFields,
+	type PromoRow,
+	promoDraftIssue,
+	promoSubmitValue,
+} from "./promo-fields";
 import {
 	AXIS_PRESETS,
 	type CustomLineDraft,
@@ -49,10 +132,7 @@ import {
 	type VariantRow,
 } from "./variant-editor";
 import { VariantImageCell } from "./variant-image-cell";
-
-// Mirrors the server caps in convex/lib/variant.ts.
-const MAX_AXES = 2;
-const MAX_VARIANTS = 50;
+import { WeekdayPicker } from "./weekday-picker";
 
 /**
  * Draft state for the 5-step create wizard. The selling configuration lives
@@ -83,11 +163,48 @@ const MAX_VARIANTS = 50;
  */
 export type ProductShape = "single" | "choices" | "made_to_order";
 
+/** Card → stored kind. Food and Event are routers: they store as physical. */
+export function kindFromCard(card: KindCard): ProductKind {
+	return card === "food" || card === "event" ? "physical" : card;
+}
+
+/** Stored kind → the card to light. `physical` lights "Physical goods" —
+ * the food and event identities are wizard-session affordances, not stored
+ * (a form draft coming back with `event.on` keeps the DRAWER flow, which
+ * edits the same state — no dead end, just a different door). */
+export function cardFromKind(kind: ProductKind): KindCard {
+	return kind;
+}
+
 export type WizardState = {
 	name: string;
 	description: string;
 	images: ProductImage[];
-	/** Step 2 — "What are you selling?" null until answered. */
+	/** Step 0 — "What are you selling?" null until answered (pre-answered when
+	 * the store's `storeType` is set — see `emptyWizardState`). */
+	kindCard: KindCard | null;
+	/** Booking kind only — per-night capacity, as typed. Prefilled "1";
+	 * blank = unlimited (S7). */
+	capacityPerNight: string;
+	/** Booking kind only — fixed-length package, as typed. Blank = the free
+	 * check-in/check-out range (S7). */
+	packageLength: string;
+	/** How that length counts. Months is the default because it's what a
+	 * membership means; days suits a 3D2N stay. */
+	packageUnit: PackageUnit;
+	/** Booking kind only — skip the approval step (S7). */
+	autoAccept: boolean;
+	/** Booking kind, DAY package only — "Only days you're open" (z8r3fdhpm7):
+	 * the term skips the store's closed days. Sent only for a day package. */
+	skipsClosedDays: boolean;
+	/** Booking kind only — refundable security deposit (RM, as typed; blank =
+	 * none). Collected with the payment, returned after check-out (S5). */
+	securityDeposit: string;
+	/** Booking kind only — weekend per-night rate (RM, as typed; blank = one
+	 * rate) and the nights it covers, 0 = Sunday (S13). Free range only. */
+	weekendPrice: string;
+	weekendDays: number[];
+	/** Step 2 — "What kind of product is it?" null until answered. */
 	shape: ProductShape | null;
 	/** The shared draft substrate (options + rows + custom line). */
 	editor: VariantEditorState;
@@ -103,24 +220,189 @@ export type WizardState = {
 	/** Review "More options" — order rules, as typed (blank = no rule). */
 	minQuantity: string;
 	minNoticeDays: string;
+	/** Prep window in minutes, as typed; blank = none (z8r3fdff97). */
+	prepMinutes: string;
+	/** One line a collecting buyer reads; blank = none. */
+	pickupNote: string;
+	/** Review "More options" — fixed-date event (`z8r3fdff9u`). Lives in the
+	 * optional drawer, not as a step: the wizard's steps are the questions
+	 * every product must answer, and "is this an event?" is a no for almost
+	 * every one of them. Never offered on a booking listing. */
+	event: EventDraft;
+	/** Promotion (z8r3fdcw72) — an OPTIONAL block at the foot of the Price
+	 * step, not a step of its own: a sale price is a price decision, and a
+	 * wizard step everyone taps past for a feature most products never use is
+	 * friction on every single create. Collapsed until the seller asks. */
+	promo: PromoDraft;
+	/** Review "More options" — buyer questions (`z8r3fdkjek`), as typed. In the
+	 * drawer for the event's reason: most products ask nothing. Never on a
+	 * booking listing. */
+	buyerQuestions: BuyerQuestionsDraft;
 };
 
-export function emptyWizardState(): WizardState {
+export function emptyWizardState(defaultKind?: ProductKind): WizardState {
+	// A set storeType pre-answers the kind card — the step still SHOWS (never a
+	// silently skipped question), ringed with a "Your store type" badge, and one
+	// tap picks something else. A booking default also seeds the booking row
+	// shape (capacity governs availability, stock never blocks).
+	const kindCard = defaultKind ? cardFromKind(defaultKind) : null;
 	return {
 		name: "",
 		description: "",
 		images: [],
+		kindCard,
+		capacityPerNight: "1",
+		packageLength: "",
+		packageUnit: "month",
+		autoAccept: false,
+		skipsClosedDays: false,
+		securityDeposit: "",
+		weekendPrice: "",
+		weekendDays: [...DEFAULT_WEEKEND_DAYS],
 		shape: null,
-		editor: { options: [], rows: [emptyRow([])], customLine: null },
-		fulfilmentAnswered: false,
+		editor: {
+			options: [],
+			rows: [
+				defaultKind === "booking"
+					? { ...emptyRow([]), blockWhenOutOfStock: false }
+					: emptyRow([]),
+			],
+			customLine: null,
+		},
+		fulfilmentAnswered: defaultKind === "booking",
 		hidden: false,
 		categoryIds: [],
 		minQuantity: "",
 		minNoticeDays: "",
+		prepMinutes: "",
+		pickupNote: "",
+		event: { ...EMPTY_EVENT_DRAFT },
+		promo: { ...EMPTY_PROMO_DRAFT },
+		buyerQuestions: [],
 	};
 }
 
+/** The stored kind this draft will submit — physical until step 0 says
+ * otherwise. Booking is the one kind that changes the walked route. */
+export function wizardKind(state: WizardState): ProductKind {
+	return state.kindCard ? kindFromCard(state.kindCard) : "physical";
+}
+
 export type WizardIssue = { field: string; message: string };
+
+/** Step 0's refusal for a seller whose plan can't publish an event — said
+ * at the card (never a flow that dead-ends at Publish), and on arrival when a
+ * `?card=event` link brought them there. One message, both doors.
+ *
+ * Its own field, not step 0's generic "kind": it renders directly UNDER the
+ * Event card as the house upsell strip (`ProFeatureTease`, with its Upgrade
+ * button), while "Pick one to continue." keeps the slot below the list. Below
+ * the list it sat under a phone's sticky Continue and read as nothing
+ * happening (#297 review, measured at 375×812). */
+export const EVENTS_LOCKED_ISSUE: WizardIssue = {
+	field: "kind:events-locked",
+	// Short on purpose: it sits beside the strip's own Upgrade button in a
+	// ~150px column on a phone — a longer sentence wrapped to four lines.
+	message: "Events are part of the Pro plan.",
+};
+
+/**
+ * Step 0's card, applied to a draft — the ONE transition behind both a card
+ * tap and a `?card=` deep link (`z8r3fdhkr7`), so a linked card can never
+ * open a state the tap wouldn't have produced.
+ *
+ * Food ⟷ Physical is a pure relabel (same stored kind, same route). The Event
+ * card IS the event toggle: selecting it arms the flag the submit values
+ * read, leaving it disarms — typed values are kept (the EventDraft posture:
+ * toggling off doesn't erase a typed date). Crossing the booking boundary
+ * rebuilds the selling substrate: INTO booking, one implicit
+ * never-stock-blocked row (capacity governs availability — S2's module, not
+ * the stock counter) with no axes and no bespoke line; OUT of booking, both
+ * questions return unanswered and the per-night price carries onto the fresh
+ * row so the seller doesn't retype.
+ *
+ * Pure — whether that rebuild needs the seller's say-so first is the caller's
+ * question (`switchKind` asks; an untouched opening draft has nothing to lose).
+ */
+export function withKindCard(state: WizardState, card: KindCard): WizardState {
+	if (state.kindCard === card) return state;
+	const event =
+		card === "event"
+			? { ...state.event, on: true }
+			: state.kindCard === "event"
+				? { ...state.event, on: false }
+				: state.event;
+	const nextBooking = kindFromCard(card) === "booking";
+	if (nextBooking === (wizardKind(state) === "booking")) {
+		return { ...state, kindCard: card, event };
+	}
+	const rows = state.editor.rows;
+	if (nextBooking) {
+		return {
+			...state,
+			kindCard: card,
+			event,
+			shape: null,
+			fulfilmentAnswered: true,
+			editor: {
+				options: [],
+				customLine: null,
+				rows: [
+					{
+						...(rows[0] ?? emptyRow([])),
+						optionValues: [],
+						sku: "",
+						imageStorageIds: [],
+						imageUrl: undefined,
+						active: true,
+						blockWhenOutOfStock: false,
+						requiresProof: false,
+					},
+				],
+			},
+		};
+	}
+	return {
+		...state,
+		kindCard: card,
+		event,
+		shape: null,
+		fulfilmentAnswered: false,
+		editor: {
+			options: [],
+			customLine: null,
+			rows: [{ ...emptyRow([]), price: rows[0]?.price ?? "" }],
+		},
+	};
+}
+
+/**
+ * How a fresh wizard opens: blank, pre-answered by the store type, then — for
+ * a `?card=` deep link (`z8r3fdhkr7`) — that card applied through the same
+ * `withKindCard` a tap runs. A What's-new note that says "Create an event"
+ * lands with Event already selected instead of on a page ringing the store's
+ * Food or Booking card.
+ *
+ * A link to a card the plan can't publish is refused exactly like the tap:
+ * the store-type default stays, and the reason is on screen from the first
+ * paint — never a silently ignored link, never a flow that can't publish.
+ */
+export function openingWizard({
+	defaultKind,
+	card,
+	eventsLocked,
+}: {
+	defaultKind?: ProductKind;
+	card?: KindCard;
+	eventsLocked: boolean;
+}): { state: WizardState; issues: WizardIssue[] } {
+	const blank = emptyWizardState(defaultKind);
+	if (card === undefined) return { state: blank, issues: [] };
+	if (card === "event" && eventsLocked) {
+		return { state: blank, issues: [EVENTS_LOCKED_ISSUE] };
+	}
+	return { state: withKindCard(blank, card), issues: [] };
+}
 
 /**
  * **The one shape derivation.** `state.shape` is the step-2 affordance; the
@@ -147,16 +429,29 @@ export function effectiveShape(state: WizardState): ProductShape | null {
 }
 
 /**
- * The steps this product actually has to answer. A made-to-order product skips
- * **Preparation** — "how do you prepare orders?" has exactly one answer for a
- * thing that is, by definition, made to order — and keeps Price, where the
- * amount becomes optional. Step IDs stay stable (1,2,3,4,5) so every
+ * The steps this product actually has to answer. Step 0 (kind) leads every
+ * route (86eyj70z1: kind-first). A BOOKING listing skips **Choices** (one
+ * implicit variant — a plot has no size matrix) and **Preparation**
+ * (request-to-book IS the preparation; capacity, not stock, governs
+ * availability) — its step 3 renders as price-per-night + capacity. A
+ * made-to-order product skips **Preparation** and keeps Price, where the
+ * amount becomes optional. Step IDs stay stable (0,1,2,3,4,5) so every
  * `step === n` render branch is untouched; only the ORDER walked through them
  * changes. Takes the EFFECTIVE shape, never `state.shape` — otherwise the
  * walked route can disagree with the screen. Pure + exported for tests.
  */
-export function wizardSteps(shape: ProductShape | null): number[] {
-	return shape === "made_to_order" ? [1, 2, 3, 5] : [1, 2, 3, 4, 5];
+export function wizardSteps(
+	shape: ProductShape | null,
+	kind: ProductKind = "physical",
+	/** The step-0 Event card is selected — the flow gains "When is it?" (6)
+	 * right after the name (the date IS the product's identity), keeps the
+	 * choices and price steps (food sets / packages), and keeps the caps step
+	 * reworded (per-choice caps are how Helinox limits tent slots per type). */
+	eventFlow = false,
+): number[] {
+	if (kind === "booking") return [0, 1, 3, 5];
+	if (eventFlow) return [0, 1, 6, 2, 3, 4, 5];
+	return shape === "made_to_order" ? [0, 1, 2, 3, 5] : [0, 1, 2, 3, 4, 5];
 }
 
 /** Stable key for a row's price/stock/sku inputs: its variant label ("" for
@@ -193,6 +488,17 @@ export function skuConflictTarget(
 export function wizardStepIssues(
 	state: WizardState,
 	step: number,
+	opts: {
+		/** The store has several pickup points (hidden ones count), so an armed
+		 * event must name its venue (the server refuses the save otherwise). */
+		requireEventVenue?: boolean;
+		/** No pickup point exists — an event can't be saved yet. */
+		noEventVenue?: boolean;
+		/** The retailer's ISO code, so a money message names the store's own
+		 * symbol ("S$ 10,000"). Only the on-screen callers need it — a caller
+		 * that just counts issues can leave it off. */
+		currency?: string;
+	} = {},
 ): WizardIssue[] {
 	const issues: WizardIssue[] = [];
 	const { customLine } = state.editor;
@@ -218,9 +524,119 @@ export function wizardStepIssues(
 		state.editor.options,
 		state.editor.rows,
 	);
+	const booking = wizardKind(state) === "booking";
+	if (step === 0) {
+		if (state.kindCard === null) {
+			issues.push({ field: "kind", message: "Pick one to continue." });
+		}
+	}
+	// The event flow's "When is it?" step — same rules the review-step check
+	// below enforces (and the server re-enforces), addressed here so the
+	// seller is stopped ON the step that owns the fields.
+	if (step === 6) {
+		const endIssue = eventEndDateIssue(state.event);
+		if (opts.noEventVenue) {
+			issues.push({ field: "event", message: EVENT_NO_VENUE_COPY });
+		} else if (state.event.date.trim().length === 0) {
+			issues.push({ field: "event", message: "Pick the event date." });
+		} else if (
+			opts.requireEventVenue &&
+			state.event.venueId.trim().length === 0
+		) {
+			issues.push({
+				field: "event",
+				message: "Pick which venue hosts the event.",
+			});
+		} else if (endIssue !== null) {
+			// The specific problem beats the generic sentence — "the last day
+			// can't be before the event date" tells the seller which field.
+			issues.push({ field: "event", message: endIssue });
+		} else if (!eventDraftValid(state.event)) {
+			issues.push({
+				field: "event",
+				message:
+					"Set an event date of today or later, and a seat limit between 1 and 500 (or leave it blank).",
+			});
+		}
+	}
 	if (step === 1) {
 		if (state.name.trim().length === 0) {
-			issues.push({ field: "name", message: "Give your product a name." });
+			issues.push({
+				field: "name",
+				message: booking
+					? "Give your listing a name."
+					: "Give your product a name.",
+			});
+		}
+	}
+	// Booking's step 3 owns capacity + notice (its whole pricing card); the
+	// per-night price itself rides the shared row validation below.
+	if (step === 3 && booking) {
+		// Blank capacity = UNLIMITED (S7), a real choice a gym makes.
+		const capRaw = state.capacityPerNight.trim();
+		const cap = Number(capRaw);
+		if (
+			capRaw.length > 0 &&
+			(!Number.isInteger(cap) || cap < 1 || cap > MAX_CAPACITY_PER_NIGHT)
+		) {
+			issues.push({
+				field: "capacityPerNight",
+				message: `Enter a whole number between 1 and ${MAX_CAPACITY_PER_NIGHT}, or leave blank for unlimited.`,
+			});
+		}
+		const pkgRaw = state.packageLength.trim();
+		if (pkgRaw.length > 0) {
+			const pkg = Number(pkgRaw);
+			const pkgMax = packageUnitMax(state.packageUnit);
+			if (!Number.isInteger(pkg) || pkg < 1 || pkg > pkgMax) {
+				issues.push({
+					field: "packageLength",
+					message: `Enter a whole number of ${state.packageUnit}s between 1 and ${pkgMax}, or leave blank.`,
+				});
+			}
+		}
+		const depositRaw = state.securityDeposit.trim();
+		if (depositRaw.length > 0) {
+			if (!isSecurityDepositInRange(parsePriceInput(depositRaw))) {
+				issues.push({
+					field: "securityDeposit",
+					message: securityDepositRangeMessage(opts.currency),
+				});
+			}
+		}
+		// Weekend rate (S13) — only judged on a free-range listing; a package
+		// hides the fields and never sends the pair.
+		const weekendRaw = state.weekendPrice.trim();
+		if (pkgRaw.length === 0 && weekendRaw.length > 0) {
+			const rate = parsePriceInput(weekendRaw);
+			if (rate === null || rate <= 0 || rate > 100_000) {
+				issues.push({
+					field: "weekendPrice",
+					message: "Enter an amount above 0 and up to 100,000, or leave blank.",
+				});
+			}
+			if (state.weekendDays.length === 0) {
+				issues.push({
+					field: "weekendDays",
+					message: "Pick at least one night for the weekend rate.",
+				});
+			} else if (state.weekendDays.length === 7) {
+				issues.push({
+					field: "weekendDays",
+					message:
+						"That's every night — set it as the price per night instead.",
+				});
+			}
+		}
+		const notice = state.minNoticeDays.trim();
+		if (notice.length > 0) {
+			const n = Number(notice);
+			if (!Number.isInteger(n) || n < 0 || n > MAX_NOTICE_DAYS) {
+				issues.push({
+					field: "minNoticeDays",
+					message: `Enter a whole number of days between 0 and ${MAX_NOTICE_DAYS}, or leave blank.`,
+				});
+			}
 		}
 	}
 	if (step === 2) {
@@ -248,10 +664,13 @@ export function wizardStepIssues(
 					message: issue.message,
 				});
 			}
-			if (cartesian(options).length > MAX_VARIANTS) {
+			const comboCount = cartesian(options).length;
+			if (comboCount > MAX_VARIANTS_PER_PRODUCT) {
+				// Same sentence the editor and the server use — the wizard is just
+				// another door onto one rule (z8r3fdjgvd review).
 				issues.push({
 					field: "axisValues",
-					message: `That's ${cartesian(options).length} combinations — keep it to ${MAX_VARIANTS} or fewer.`,
+					message: overCapMessage(comboCount),
 				});
 			}
 		}
@@ -283,8 +702,22 @@ export function wizardStepIssues(
 						message: issue.message,
 					});
 				}
+				// A sale price that doesn't undercut its own line stops the step
+				// too — the Promotion block lives here, so its refusals belong
+				// here (z8r3fdcw72).
+				if (issue.where === "row" && issue.field === "promoPrice") {
+					issues.push({
+						field: `promoPrice:${rowKey(rows[issue.index])}`,
+						message: issue.message,
+					});
+				}
 			}
 		}
+	}
+	// A half-filled promotion can't pass the step that sets it either.
+	if (step === 3) {
+		const promoIssue = promoDraftIssue(state.promo, Date.now(), rows);
+		if (promoIssue) issues.push({ field: "promo", message: promoIssue });
 	}
 	if (step === 4) {
 		if (!state.fulfilmentAnswered) {
@@ -323,8 +756,11 @@ export function wizardStepIssues(
 				});
 			}
 		}
+		// An event hides min notice + prep (and drops their values at submit),
+		// so a stale invalid value must not block review with an error the
+		// seller can no longer see.
 		const notice = state.minNoticeDays.trim();
-		if (notice.length > 0) {
+		if (!state.event.on && notice.length > 0) {
 			const n = Number(notice);
 			if (!Number.isInteger(n) || n < 0 || n > MAX_NOTICE_DAYS) {
 				issues.push({
@@ -333,6 +769,42 @@ export function wizardStepIssues(
 				});
 			}
 		}
+		// Prep time + pickup note ride the same step, and only on the
+		// non-booking route — a booking's preparation IS the acceptance, and
+		// its orders can never carry a pickup note.
+		if (!state.event.on && !parsePrepMinutesText(state.prepMinutes).ok) {
+			issues.push({
+				field: "prepMinutes",
+				message: `Enter a whole number of minutes between 0 and ${MAX_PREP_MINUTES}, or leave blank.`,
+			});
+		}
+		if (!pickupNoteFits(state.pickupNote)) {
+			issues.push({
+				field: "pickupNote",
+				message: `Keep it to ${MAX_PICKUP_NOTE_LENGTH} characters or fewer.`,
+			});
+		}
+		// Nothing can have RSVP'd to a product that doesn't exist yet, so the
+		// wizard never allows a past date.
+		if (
+			!eventDraftValid(state.event, {
+				requireVenue: opts.requireEventVenue,
+				noVenue: opts.noEventVenue,
+			})
+		) {
+			issues.push({
+				field: "event",
+				message:
+					"Set an event date of today or later, and a seat limit between 1 and 500 (or leave it blank).",
+			});
+		}
+		// Buyer questions — the server's own sanitizer is the judge.
+		const questionsIssue =
+			wizardKind(state) === "booking"
+				? null
+				: questionsDraftIssue(state.buyerQuestions);
+		if (questionsIssue)
+			issues.push({ field: "buyerQuestions", message: questionsIssue });
 	}
 	return issues;
 }
@@ -359,6 +831,14 @@ export function buildWizardSubmitValues(
 	const built = buildSubmitVariants(reconciled.rows, state.editor.customLine);
 	const minQty = Number(state.minQuantity.trim());
 	const notice = Number(state.minNoticeDays.trim());
+	const prep = parsePrepMinutesText(state.prepMinutes);
+	const kind = wizardKind(state);
+	const capacity = Number(state.capacityPerNight.trim());
+	const packageLengthValue = (() => {
+		if (kind !== "booking") return undefined;
+		const n = Number(state.packageLength?.trim() ?? "");
+		return Number.isInteger(n) && n > 0 ? n : undefined;
+	})();
 	return {
 		name: state.name.trim(),
 		description:
@@ -366,15 +846,90 @@ export function buildWizardSubmitValues(
 				? state.description.trim()
 				: undefined,
 		hidden: state.hidden,
+		kind,
+		// `null` when the block is switched off — the spelling that CLEARS a
+		// promotion, never `undefined` ("no change"). Flash extras are refused
+		// on booking and event listings server-side, so the draft never sends
+		// them there (`assertFlashFieldsAllowed`).
+		promo: promoSubmitValue(state.promo, Date.now(), {
+			flashAllowed: kind !== "booking" && !state.event.on,
+		}),
+		// Kind + booking config travel together (the server enforces the pairing).
+		booking:
+			kind === "booking"
+				? {
+						// Blank = UNLIMITED (S7). `capacity` is Number("") === 0 for a
+						// blank field, which is an integer — so test the raw string,
+						// not the parsed number, or unlimited would submit as 0 and be
+						// refused by the 1..100 validator.
+						capacityPerNight:
+							state.capacityPerNight.trim().length > 0 ? capacity : undefined,
+						packageLength: packageLengthValue,
+						// No unit without a length — a bare unit on a free-range
+						// listing is config that describes nothing.
+						packageUnit:
+							packageLengthValue !== undefined ? state.packageUnit : undefined,
+						autoAccept: state.autoAccept || undefined,
+						// Only a DAY package can skip closed days (z8r3fdhpm7) — a
+						// value kept while the unit said "month" never rides along.
+						skipsClosedDays:
+							packageLengthValue !== undefined &&
+							state.packageUnit === "day" &&
+							state.skipsClosedDays
+								? true
+								: undefined,
+						securityDeposit: (() => {
+							const dep = parsePriceInput(state.securityDeposit.trim());
+							return dep !== null && dep > 0
+								? Math.round(dep * 100)
+								: undefined;
+						})(),
+						// Free-range only — a package has one flat price, so the pair
+						// is dropped rather than sent for the server to refuse.
+						...(() => {
+							if (packageLengthValue !== undefined) return {};
+							const rate = parsePriceInput(state.weekendPrice.trim());
+							return rate !== null && rate > 0
+								? {
+										weekendPrice: Math.round(rate * 100),
+										weekendDays: state.weekendDays,
+									}
+								: {};
+						})(),
+					}
+				: undefined,
 		// Blank → undefined (no rule); the server normalizes 0/1 to unset.
+		// A booking listing never carries a min quantity — one request = one
+		// booking; the input isn't offered on that route.
 		minQuantity:
-			state.minQuantity.trim().length > 0 && Number.isInteger(minQty)
+			kind !== "booking" &&
+			state.minQuantity.trim().length > 0 &&
+			Number.isInteger(minQty)
 				? minQty
 				: undefined,
+		// An EVENT drops both timing rules (their inputs are hidden while the
+		// toggle is on — see the drawer): guests RSVP to the fixed date, so a
+		// stale typed value must not ride along into the row.
 		minNoticeDays:
-			state.minNoticeDays.trim().length > 0 && Number.isInteger(notice)
+			!state.event.on &&
+			state.minNoticeDays.trim().length > 0 &&
+			Number.isInteger(notice)
 				? notice
 				: undefined,
+		// Both are non-booking-only, like minQuantity: a booking's preparation
+		// IS the acceptance, and its orders can never carry a pickup note.
+		prepMinutes:
+			kind !== "booking" && !state.event.on && prep.ok
+				? prep.minutes
+				: undefined,
+		pickupNote:
+			kind !== "booking" && state.pickupNote.trim().length > 0
+				? state.pickupNote
+				: undefined,
+		// A booking listing already takes its own dates — never an event.
+		event: kind === "booking" ? null : eventSubmitValue(state.event),
+		buyerQuestions:
+			kind === "booking" ? [] : questionsSubmitValue(state.buyerQuestions),
 		categoryIds: state.categoryIds,
 		imageStorageIds: state.images.map((i) => i.id),
 		options: reconciled.options,
@@ -390,24 +945,45 @@ export function wizardHandoff(state: WizardState): {
 	initialValues: ProductFormInitialValues;
 	initialEditor: VariantEditorState;
 } {
-	// Parse EXACTLY as wizardStepIssues validates (Number + isInteger), so a
-	// value the wizard rejects can never arrive silently truncated in the form.
+	// Parse EXACTLY as wizardStepIssues validates (Number + isInteger; prep
+	// through parsePrepMinutesText), so a value the wizard rejects can never
+	// arrive silently truncated in the form.
 	const minQtyRaw = state.minQuantity.trim();
 	const noticeRaw = state.minNoticeDays.trim();
 	const minQty = minQtyRaw.length > 0 ? Number(minQtyRaw) : Number.NaN;
 	const notice = noticeRaw.length > 0 ? Number(noticeRaw) : Number.NaN;
+	const prep = parsePrepMinutesText(state.prepMinutes);
 	return {
 		initialValues: {
 			name: state.name,
 			description:
 				state.description.trim().length > 0 ? state.description : undefined,
 			hidden: state.hidden,
+			kind: wizardKind(state),
+			capacityPerNight: state.capacityPerNight,
+			packageLength: state.packageLength,
+			packageUnit: state.packageUnit,
+			autoAccept: state.autoAccept,
+			skipsClosedDays: state.skipsClosedDays,
+			securityDeposit: state.securityDeposit,
+			weekendPrice: state.weekendPrice,
+			weekendDays: state.weekendDays,
 			categoryIds: state.categoryIds,
 			imageStorageIds: state.images.map((i) => i.id),
 			imageUrls: state.images.map((i) => i.url),
 			minQuantity: Number.isInteger(minQty) && minQty > 0 ? minQty : undefined,
 			minNoticeDays:
 				Number.isInteger(notice) && notice > 0 ? notice : undefined,
+			prepMinutes:
+				prep.ok && prep.minutes !== undefined && prep.minutes > 0
+					? prep.minutes
+					: undefined,
+			pickupNote:
+				state.pickupNote.trim().length > 0 ? state.pickupNote : undefined,
+			// Handed over as the DRAFT, not the parsed value: a half-typed seat
+			// cap must survive the jump to the full editor intact.
+			eventDraft: state.event,
+			buyerQuestionsDraft: state.buyerQuestions,
 		},
 		initialEditor: state.editor,
 	};
@@ -423,6 +999,21 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		name: draft.name,
 		description: draft.description,
 		images: draft.images,
+		// The card re-lights from the STORED kind — a food seller's Food tap
+		// round-trips as "Physical goods" (same stored kind, wizard-session
+		// affordance only; locked in 86eyj70z1).
+		kindCard: cardFromKind(draft.kind),
+		promo: draft.promoDraft ?? { ...EMPTY_PROMO_DRAFT },
+		capacityPerNight: draft.capacityPerNight,
+		packageLength: draft.packageLength ?? "",
+		packageUnit: draft.packageUnit ?? "month",
+		autoAccept: draft.autoAccept === true,
+		skipsClosedDays: draft.skipsClosedDays === true,
+		securityDeposit: draft.securityDeposit ?? "",
+		weekendPrice: draft.weekendPrice ?? "",
+		weekendDays: draft.weekendDays ?? [...DEFAULT_WEEKEND_DAYS],
+		event: draft.event ?? { ...EMPTY_EVENT_DRAFT },
+		buyerQuestions: draft.buyerQuestions ?? [],
 		// The form's substrate IS the answer — nothing to re-ask. Axes present =
 		// the buyer picks; one never-out-of-stock, mockup-gated row = made to
 		// order; anything else = a single item.
@@ -440,6 +1031,8 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		categoryIds: draft.categoryIds,
 		minQuantity: draft.minQuantity,
 		minNoticeDays: draft.minNoticeDays,
+		prepMinutes: draft.prepMinutes,
+		pickupNote: draft.pickupNote,
 	};
 }
 
@@ -447,24 +1040,47 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
  * Where a restored wizard should open: the first step that still needs an
  * answer (structural nulls included), else the review step.
  */
-export function wizardInitialStep(state: WizardState): number {
-	const steps = wizardSteps(effectiveShape(state));
+export function wizardInitialStep(
+	state: WizardState,
+	opts: { requireEventVenue?: boolean; noEventVenue?: boolean } = {},
+): number {
+	const steps = wizardSteps(
+		effectiveShape(state),
+		wizardKind(state),
+		state.kindCard === "event",
+	);
 	// Every step but the last (Review) — Review is where an answered draft lands.
 	for (const s of steps.slice(0, -1)) {
-		if (wizardStepIssues(state, s).length > 0) return s;
+		if (wizardStepIssues(state, s, opts).length > 0) return s;
 	}
 	return REVIEW_STEP;
 }
 
-/** Compact "RM 12" / "RM 12–28" label for the review preview. */
+/** Compact "RM 12" / "RM 12–28" label for the review preview. `currency` is
+ * the retailer's ISO code — spelled by `formatDraftPrice`, the same helper as
+ * the edit form's summary strip, so the two can't disagree. */
 export function wizardPriceLabel(state: WizardState, currency: string): string {
+	// A booking listing has one implicit row; the suffix names its span through
+	// the SAME author the storefront card and product page use, so the preview
+	// says exactly what the buyer will see — "/night" for a free range, "/month"
+	// for a package (S2, S7).
+	if (wizardKind(state) === "booking") {
+		const p = parsePriceInput(state.editor.rows[0]?.price.trim() ?? "");
+		if (p === null) return "";
+		const length = /^\d+$/.test(state.packageLength.trim())
+			? Number.parseInt(state.packageLength.trim(), 10)
+			: undefined;
+		const suffix = bookingPriceSuffix(length, state.packageUnit);
+		return `${formatDraftPrice(p, currency)}${suffix}`;
+	}
 	// Made to order has no matrix — its price lives on the bespoke line, and is
 	// a STARTING price the mockup quote lands on top of, so the preview says
-	// exactly what the storefront prints: "From RM 40" (86eyhn4mr).
+	// "From" like the storefront does (86eyhn4mr) — "From RM 40" in the
+	// summary spelling, where the storefront card prints "From RM 40.00".
 	if (effectiveShape(state) === "made_to_order") {
 		const base = parsePriceInput(state.editor.customLine?.price.trim() ?? "");
 		return base && base > 0
-			? `From ${currency} ${base % 1 === 0 ? String(base) : base.toFixed(2)}`
+			? `From ${formatDraftPrice(base, currency)}`
 			: "Price on quote";
 	}
 	const parsed = state.editor.rows
@@ -472,12 +1088,11 @@ export function wizardPriceLabel(state: WizardState, currency: string): string {
 		.map((r) => parsePriceInput(r.price.trim()))
 		.filter((p): p is number => p !== null);
 	if (parsed.length === 0) return "";
-	const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
-	const min = Math.min(...parsed);
-	const max = Math.max(...parsed);
-	return min === max
-		? `${currency} ${fmt(min)}`
-		: `${currency} ${fmt(min)}–${fmt(max)}`;
+	return formatDraftPriceRange(
+		Math.min(...parsed),
+		Math.max(...parsed),
+		currency,
+	);
 }
 
 // Titles are deliberately short — the header also carries a back button,
@@ -486,7 +1101,9 @@ export function wizardPriceLabel(state: WizardState, currency: string): string {
 // of M" line is computed from the walked sequence, not hard-coded, so a
 // made-to-order product doesn't claim five steps and then show four.
 const STEP_TITLES: Record<number, string> = {
+	0: "Selling",
 	1: "Name it",
+	6: "The date",
 	2: "Type",
 	3: "Price",
 	4: "Preparation",
@@ -544,39 +1161,126 @@ function AnswerCard({
 export function ProductWizard({
 	retailerId,
 	categoriesLocked,
+	eventsLocked,
+	promoLocked,
 	currency,
+	defaultKind,
 	onSubmit,
 	onSkipToFullForm,
 	onOpenFullForm,
 	onExit,
 	initialState,
+	linkedCard,
+	storeSchedule,
+	saveLock,
+	onUnsavedChange,
 }: {
 	/** Owning retailer — feeds the review step's category picker. */
 	retailerId: Id<"retailers">;
+	/** Set while this seller can't create products right now (view-only, out
+	 * of credits, or a teammate with view on products) — see ProductForm's
+	 * `saveLock`. Every step still works, so the draft is ready to publish the
+	 * moment saving is possible again; only Publish greys out. */
+	saveLock?: { reason: string; label: string };
 	/** Client mirror of the `categories` plan gate (same as the full form). */
 	categoriesLocked: boolean;
+	/** Client mirror of the `events` plan gate — the toggle disables with the
+	 * Pro hint. Server enforces it too. */
+	eventsLocked: boolean;
+	/** Client mirror of the `promo` plan gate (z8r3fdcw72) — the toggle in
+	 * the Price step disables with the Pro hint. Server enforces it. */
+	promoLocked: boolean;
 	currency: string;
+	/** The store's `storeType`, when set — pre-answers step 0's kind card
+	 * ("Your store type" badge); the seller can still tap another. */
+	defaultKind?: ProductKind;
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
 	/** "Skip — use the full form" on step 1: hands off the whole draft. */
 	onSkipToFullForm: (handoff: ReturnType<typeof wizardHandoff>) => void;
 	/** Review-step handoff: open the full form on the same draft. */
 	onOpenFullForm: (handoff: ReturnType<typeof wizardHandoff>) => void;
-	/** Back from step 1 / Cancel — leave the wizard entirely. */
+	/** Back from step 0 / Cancel — leave the wizard entirely. Called only
+	 * after the wizard has confirmed any discard itself. */
 	onExit: () => void;
+	/** Reports what leaving right now would lose (z8r3fdtk82), so the route's
+	 * `UnsavedChangesGuard` can warn on a sidebar tap or a tab close. */
+	onUnsavedChange?: (state: UnsavedState) => void;
 	/** Restored draft from the full form's "switch back to guided setup" —
 	 * the wizard opens at the first unanswered step, every value in place. */
 	initialState?: WizardState;
+	/** The step-0 card a `?card=` link asks for (`z8r3fdhkr7`). At mount it's
+	 * pre-selected through the same transition a tap uses (`openingWizard`);
+	 * if it CHANGES while the wizard is open — What's new reopened mid-draft —
+	 * it's applied once more, as a tap (see `pickCard`). A restored
+	 * `initialState` outranks it at mount: that draft is the seller's own
+	 * answer. */
+	linkedCard?: KindCard;
+	/** The store's opening hours + closed dates (z8r3fdhpm7) — the day
+	 * package's "How are the days counted?" example is built from them. */
+	storeSchedule?: StoreSchedule;
 }) {
 	const [step, setStep] = useState(() =>
-		initialState ? wizardInitialStep(initialState) : 1,
+		initialState ? wizardInitialStep(initialState) : 0,
 	);
-	const [state, setStateRaw] = useState<WizardState>(
-		() => initialState ?? emptyWizardState(),
+	// Derived once, at mount — a lazy initialiser, not an effect, so the first
+	// paint already shows the linked card (or the refusal) with no flicker.
+	const [opening] = useState(() =>
+		initialState
+			? { state: initialState, issues: [] }
+			: openingWizard({ defaultKind, card: linkedCard, eventsLocked }),
 	);
-	const [issues, setIssues] = useState<WizardIssue[]>([]);
-	const [uploading, setUploading] = useState(false);
+	const [state, setStateRaw] = useState<WizardState>(opening.state);
+	const [issues, setIssues] = useState<WizardIssue[]>(opening.issues);
+	// The link value last applied — so a `?card=` that changes while the
+	// wizard is open is applied exactly once, and a re-render never re-applies
+	// it (see the adjustment just above the render).
+	const [appliedLink, setAppliedLink] = useState(linkedCard);
+	// A card a link just chose, waiting to be scrolled into view. On a phone
+	// step 0's fifth card sits under the sticky Continue (#297 review: 610–686
+	// under 628–700 at 360×780), so an arrival that only SETS the answer
+	// looks like nothing happened. The first paint is already the right state;
+	// this only moves the scroll position, once.
+	const [reveal, setReveal] = useState<KindCard | null>(() =>
+		initialState === undefined && linkedCard !== undefined ? linkedCard : null,
+	);
+	const revealRef = useRef<HTMLElement | null>(null);
+	const wizardRef = useRef<HTMLDivElement | null>(null);
+	// One callback ref for whichever element is the target (a card's wrapper
+	// or the event hint) — a RefObject would be typed to a single tag.
+	const setRevealTarget = (el: HTMLElement | null) => {
+		revealRef.current = el;
+	};
+	useEffect(() => {
+		if (reveal === null) return;
+		// `nearest` + the target's phone-only scroll margin (clears the sticky
+		// Continue and the bottom nav): scrolls only when the answer is covered,
+		// so a desktop page that already shows it never jumps.
+		revealRef.current?.scrollIntoView({ block: "nearest" });
+		setReveal(null);
+	}, [reveal]);
+	const [photoUploads, setPhotoUploads] = useState<PhotoUploadState>({
+		kind: "idle",
+	});
+	const uploading = photoUploads.kind === "uploading";
+	const photosFailed = photoUploads.kind === "failed" ? photoUploads.count : 0;
 	const [submitting, setSubmitting] = useState(false);
+	// The one destructive answer the wizard ever asks for — a type switch that
+	// drops typed prices, or leaving an unsaved draft. One piece of state, so
+	// there is one dialog rather than two that can both be open.
+	const [pendingConfirm, setPendingConfirm] = useState<{
+		title: string;
+		description: string;
+		confirmLabel: string;
+		/** Defaults to "Cancel". */
+		cancelLabel?: string;
+		apply: () => void;
+	} | null>(null);
 	const [serverError, setServerError] = useState<string | null>(null);
+	// The credit lock's typed refusal, when that's what Publish hit — its way
+	// back renders under the sentence (Credits T3).
+	const [serverLock, setServerLock] = useState<CreditLockErrorData | null>(
+		null,
+	);
 	// Restored drafts open their optional reveals when they hold content.
 	const [showDescription, setShowDescription] = useState(
 		() => (initialState?.description ?? "").trim().length > 0,
@@ -607,12 +1311,34 @@ export function ProductWizard({
 			(initialState.editor.customLine !== null ||
 				initialState.editor.rows.some((r) => r.requiresProof) ||
 				initialState.minQuantity.trim().length > 0 ||
-				initialState.minNoticeDays.trim().length > 0),
+				initialState.minNoticeDays.trim().length > 0 ||
+				// A handoff from the full form must not hide typed questions.
+				initialState.buyerQuestions.length > 0),
 	);
 	// One add-value draft per axis (max 2), mirroring the full editor.
 	const [valueDrafts, setValueDrafts] = useState<string[]>(() =>
 		(initialState?.editor.options ?? []).map(() => ""),
 	);
+	// EVERY pickup point, hidden ones included — the event venue selector
+	// (round 4). A point hidden from standard orders can still host an event
+	// (an RSVP-only location IS a hidden point). Same adapter read the
+	// categories use; one query serves the When-is-it step, the drawer's
+	// EventFields and the venue-required validation.
+	const pickupRows = useQuery(
+		convexQuery(api.pickupLocations.listForRetailer, { retailerId }),
+	).data;
+	const eventVenues = pickupRows?.map((r) => ({
+		_id: r._id as string,
+		label: r.label,
+		isActive: r.isActive,
+		// Drives the picker's grouping (z8r3fdm32x).
+		eventsOnly: r.eventsOnly,
+		// Carried so the picker can say that an event never charges it — see
+		// buildEventVenueSnapshot (z8r3fdjgvd).
+		fee: r.fee,
+	}));
+	const requireEventVenue = (eventVenues?.length ?? 0) > 1;
+	const noEventVenue = eventVenues !== undefined && eventVenues.length === 0;
 	// Categories are only offered on review when the store actually has some —
 	// a brand-new seller shouldn't meet a whole new concept mid-wizard.
 	const categories = useQuery(
@@ -654,6 +1380,27 @@ export function ProductWizard({
 	// below (which card is lit, which steps are walked, which review rows show)
 	// reads these two, so the screen can never contradict the payload.
 	const shape = effectiveShape(state);
+	const kind = wizardKind(state);
+	const isBooking = kind === "booking";
+	// `currency` is the retailer's ISO code, which sellers never read — every
+	// money plate and label wears the store's own symbol ("RM", "S$").
+	const moneySymbol = currencySymbol(currency);
+	// A typed amount for a review row, spelled like the summary strip. A value
+	// that doesn't parse can't reach review (its step blocks), but if one did
+	// it's echoed as typed rather than dropped.
+	const draftMoney = (raw: string) => {
+		const n = parsePriceInput(raw.trim());
+		return n === null
+			? `${moneySymbol} ${raw.trim()}`
+			: formatDraftPrice(n, currency);
+	};
+	// A booking listing's package length, as a number — drives the price label
+	// and the capacity wording live, while the seller is still typing it.
+	const packageLengthNum = /^\d+$/.test(state.packageLength.trim())
+		? Number.parseInt(state.packageLength.trim(), 10)
+		: undefined;
+	const isPackageListing =
+		packageLengthNum !== undefined && packageLengthNum > 0;
 	const showAxes = shape === "choices";
 	const madeToOrder = shape === "made_to_order";
 	const variantCount = cartesian(options).length;
@@ -666,6 +1413,27 @@ export function ProductWizard({
 
 	const issueFor = (field: string): string | undefined =>
 		issues.find((i) => i.field === field)?.message;
+
+	// The Promotion block edits sale prices on the SAME rows the price grid
+	// above it owns — one substrate, two writers, exactly as in the full form.
+	const promoRows: PromoRow[] = rows.map((row, index) => ({
+		key: String(index),
+		label: rowKey(row) || state.name.trim() || "This item",
+		price: row.price,
+		promoPrice: row.promoPrice ?? "",
+	}));
+	/** ONE patch for however many rows changed — `setRow` in a loop reads
+	 * `rows` from this render's closure, so N calls collapse to the last one
+	 * ("30% off" discounted only the final choice). Mirrors `fillAllPrices`
+	 * just below, which has always written the whole grid in one go. */
+	function setPromoPrices(next: Record<string, string>) {
+		patchEditor({
+			rows: rows.map((row, i) => {
+				const value = next[String(i)];
+				return value === undefined ? row : { ...row, promoPrice: value };
+			}),
+		});
+	}
 
 	// --- Editor manipulation (same semantics as the full editor) -------------
 	function setOptions(nextOptions: OptionAxis[]) {
@@ -734,7 +1502,7 @@ export function ProductWizard({
 		);
 	}
 	function addSecondAxis(preset?: { name: string; values: string[] }) {
-		if (options.length >= MAX_AXES) return;
+		if (options.length >= MAX_OPTION_AXES) return;
 		setOptions([
 			...options,
 			preset
@@ -749,14 +1517,31 @@ export function ProductWizard({
 	}
 
 	/** True when switching away would throw typed pricing/stock away. */
-	function confirmLosingChoices(): boolean {
+	function switchingLosesChoices(): boolean {
 		const hasTypedData = rows.some(
 			(r) => r.price.trim().length > 0 || r.stock.trim().length > 0,
 		);
-		if (!options.some((a) => a.values.length > 0) || !hasTypedData) return true;
-		return window.confirm(
-			"Change the product type? Your choices and their prices will be removed.",
-		);
+		return options.some((a) => a.values.length > 0) && hasTypedData;
+	}
+
+	/**
+	 * Run `apply`, asking first when the switch would throw typed prices or
+	 * stock away. The question is the house `ConfirmDialog`, never
+	 * `window.confirm`: a native dialog is unstyled, ignores the theme, and
+	 * BLOCKS the page until it is dismissed (found while driving the wizard —
+	 * the renderer froze for as long as it stood).
+	 */
+	function askBeforeLosingChoices(apply: () => void) {
+		if (!switchingLosesChoices()) {
+			apply();
+			return;
+		}
+		setPendingConfirm({
+			title: "Change the product type?",
+			description: "Your choices and their prices will be removed.",
+			confirmLabel: "Change type",
+			apply,
+		});
 	}
 
 	/**
@@ -798,63 +1583,96 @@ export function ProductWizard({
 	}
 	function switchToSingle() {
 		if (shape === "single") return;
-		if (!confirmLosingChoices()) return;
-		// Collapse to one row, carrying the first row's price/stock/flags.
-		const donor = madeToOrder
-			? rowsLeavingMadeToOrder()[0]
-			: (rows[0] ?? emptyRow([]));
-		patch({
-			shape: "single",
-			// Same reason as switchToChoices: "how do you prepare orders?" was
-			// never asked, so step 4 must ask it rather than inherit an answer.
-			fulfilmentAnswered: madeToOrder ? false : state.fulfilmentAnswered,
-			editor: {
-				...state.editor,
-				options: [],
-				customLine: madeToOrder ? null : state.editor.customLine,
-				rows: [
-					{
-						...donor,
-						optionValues: [],
-						sku: "",
-						imageStorageIds: [],
-						imageUrl: undefined,
-						active: true,
-					},
-				],
-			},
+		askBeforeLosingChoices(() => {
+			// Collapse to one row, carrying the first row's price/stock/flags.
+			const donor = madeToOrder
+				? rowsLeavingMadeToOrder()[0]
+				: (rows[0] ?? emptyRow([]));
+			patch({
+				shape: "single",
+				// Same reason as switchToChoices: "how do you prepare orders?" was
+				// never asked, so step 4 must ask it rather than inherit an answer.
+				fulfilmentAnswered: madeToOrder ? false : state.fulfilmentAnswered,
+				editor: {
+					...state.editor,
+					options: [],
+					customLine: madeToOrder ? null : state.editor.customLine,
+					rows: [
+						{
+							...donor,
+							optionValues: [],
+							sku: "",
+							imageStorageIds: [],
+							imageUrl: undefined,
+							active: true,
+						},
+					],
+				},
+			});
+			setValueDrafts([]);
 		});
-		setValueDrafts([]);
 	}
 	function switchToMadeToOrder() {
 		if (madeToOrder) return;
-		if (!confirmLosingChoices()) return;
-		const donor = rows[0] ?? emptyRow([]);
-		// The type IS the fulfilment answer (made to order, never out of stock,
-		// mockup-approved), so step 4 has nothing left to ask — mark it answered
-		// and drop it from the sequence.
-		//
-		// The product becomes ONE bespoke line and no matrix at all: modelling the
-		// type as `isCustom` is what gives it the storefront's existing bespoke
-		// flow (request box, "Choose" routing, qty-1 cart line) instead of a
-		// parallel path. An existing custom line is kept — same offer, and the
-		// seller already wrote its prompt.
-		patch({
-			shape: "made_to_order",
-			fulfilmentAnswered: true,
-			editor: {
-				options: [],
-				rows: [],
-				customLine: customLine ?? {
-					...emptyCustomLine(),
-					// Carry what still means something from the row being retired.
-					price: donor?.price ?? "",
-					imageStorageIds: donor?.imageStorageIds ?? [],
-					imageUrl: donor?.imageUrl,
+		askBeforeLosingChoices(() => {
+			const donor = rows[0] ?? emptyRow([]);
+			// The type IS the fulfilment answer (made to order, never out of stock,
+			// mockup-approved), so step 4 has nothing left to ask — mark it answered
+			// and drop it from the sequence.
+			//
+			// The product becomes ONE bespoke line and no matrix at all: modelling the
+			// type as `isCustom` is what gives it the storefront's existing bespoke
+			// flow (request box, "Choose" routing, qty-1 cart line) instead of a
+			// parallel path. An existing custom line is kept — same offer, and the
+			// seller already wrote its prompt.
+			patch({
+				shape: "made_to_order",
+				fulfilmentAnswered: true,
+				editor: {
+					options: [],
+					rows: [],
+					customLine: customLine ?? {
+						...emptyCustomLine(),
+						// Carry what still means something from the row being retired.
+						price: donor?.price ?? "",
+						imageStorageIds: donor?.imageStorageIds ?? [],
+						imageUrl: donor?.imageUrl,
+					},
 				},
-			},
+			});
+			setValueDrafts([]);
 		});
-		setValueDrafts([]);
+	}
+
+	/**
+	 * Step 0's card tap — `withKindCard` does the switching (shared with the
+	 * `?card=` deep link, so the two can't drift). What only a TAP has is the
+	 * question: crossing the booking boundary rebuilds the selling substrate,
+	 * so typed prices/stock are guarded by the same confirm the shape
+	 * switchers use.
+	 */
+	function switchKind(card: KindCard) {
+		if (state.kindCard === card) return;
+		const crossesBooking = (kindFromCard(card) === "booking") !== isBooking;
+		const apply = () => {
+			setStateRaw((prev) => withKindCard(prev, card));
+			setIssues([]);
+			setServerError(null);
+			if (crossesBooking) setValueDrafts([]);
+		};
+		if (crossesBooking) askBeforeLosingChoices(apply);
+		else apply();
+	}
+
+	/** Step 0's card, chosen — by a tap, or by a `?card=` link that changed
+	 * while the wizard was open. Events are Pro: the card refuses WITH the
+	 * reason instead of opening a flow that can't publish. */
+	function pickCard(card: KindCard) {
+		if (card === "event" && eventsLocked) {
+			setIssues([EVENTS_LOCKED_ISSUE]);
+			return;
+		}
+		switchKind(card);
 	}
 
 	// --- Custom line ---------------------------------------------------------
@@ -899,32 +1717,67 @@ export function ProductWizard({
 		state.minQuantity.trim().length > 0 ||
 		state.minNoticeDays.trim().length > 0;
 
+	// A photo that didn't upload is still on screen waiting for Retry — leaving
+	// would lose it, so it counts as unsaved work (z8r3fdtk85).
+	const unsaved: UnsavedState = uploading
+		? "uploading"
+		: isDirty || photosFailed > 0
+			? "changes"
+			: "none";
+	useEffect(() => {
+		onUnsavedChange?.(unsaved);
+	}, [unsaved, onUnsavedChange]);
+
 	function cancelWizard() {
-		if (
-			isDirty &&
-			!window.confirm("Discard this product? Nothing has been saved.")
-		) {
+		if (!isDirty) {
+			onExit();
 			return;
 		}
-		onExit();
+		setPendingConfirm({
+			title: "Discard this product?",
+			description: "Nothing has been saved — leaving loses the draft.",
+			// The same two answers as the route's leave guard
+			// (UnsavedChangesGuard), so leaving reads the same whichever way
+			// the seller leaves: Cancel here, or the sidebar.
+			cancelLabel: "Keep editing",
+			confirmLabel: "Discard changes",
+			apply: onExit,
+		});
 	}
 
 	// Structural gate: the branching questions must be answered before Continue
 	// makes sense; text-input problems surface on Continue instead (a disabled
 	// button with no visible reason would read as broken).
 	const structurallyAnswered =
-		step === 2 ? shape !== null : step === 4 ? state.fulfilmentAnswered : true;
+		step === 0
+			? state.kindCard !== null
+			: step === 2
+				? shape !== null
+				: step === 4
+					? state.fulfilmentAnswered
+					: true;
 
-	// The steps THIS product walks — made-to-order skips Preparation. Recomputed
-	// per render off the live answer, so changing the type mid-wizard re-plans
-	// the remaining route instead of stranding the seller on a dropped step.
-	const steps = wizardSteps(shape);
+	// The steps THIS product walks — booking skips Choices + Preparation,
+	// made-to-order skips Preparation. Recomputed per render off the live
+	// answer, so changing the kind/type mid-wizard re-plans the remaining route
+	// instead of stranding the seller on a dropped step.
+	const steps = wizardSteps(shape, kind, state.kindCard === "event");
 	const stepPos = Math.max(steps.indexOf(step), 0);
 
 	function goNext() {
-		const found = wizardStepIssues(state, step);
+		const found = wizardStepIssues(state, step, {
+			requireEventVenue,
+			noEventVenue,
+			currency,
+		});
 		if (found.length > 0) {
 			setIssues(found);
+			// Otherwise Continue is a button that does nothing, with the reason
+			// off-screen above — the stepper's own rule is that text problems
+			// surface ON Continue, which only works if the seller is taken to
+			// them (found by hand-testing: a sale price over list silently
+			// blocked the step).
+			focusAfterRender(wizardRef.current);
 			return;
 		}
 		setIssues([]);
@@ -932,8 +1785,10 @@ export function ProductWizard({
 	}
 
 	function goBack() {
+		// Back off the first step leaves the wizard, so it asks first exactly
+		// like Cancel does.
 		if (stepPos === 0) {
-			onExit();
+			cancelWizard();
 			return;
 		}
 		setIssues([]);
@@ -949,21 +1804,28 @@ export function ProductWizard({
 		// edits jump around, so a hole could otherwise slip through). Walks the
 		// product's OWN sequence — a skipped step has no answer to check.
 		for (const s of steps) {
-			const found = wizardStepIssues(state, s);
+			const found = wizardStepIssues(state, s, {
+				requireEventVenue,
+				noEventVenue,
+				currency,
+			});
 			if (found.length > 0) {
 				setIssues(found);
 				setStep(s);
 				// A review-step issue lives inside the More-options disclosure.
 				if (s === REVIEW_STEP) setMoreOpen(true);
+				focusAfterRender(wizardRef.current);
 				return;
 			}
 		}
 		setSubmitting(true);
 		setServerError(null);
+		setServerLock(null);
 		try {
 			await onSubmit(buildWizardSubmitValues(state));
 		} catch (err) {
 			const message = convexErrorMessage(err);
+			setServerLock(creditLockErrorOf(err));
 			// A rejected SKU names itself in the message — take the seller to the
 			// row that owns it with the details open, instead of a generic banner
 			// on the review step with no pointer to the offending choice.
@@ -1075,8 +1937,38 @@ export function ProductWizard({
 		);
 	}
 
+	// A `?card=` that changed while the wizard is open (What's new reopened
+	// mid-draft, "Create an event" tapped): apply it once, exactly as a tap on
+	// step 0 would — the lock refuses with its reason, a booking switch asks
+	// before dropping typed prices — and show step 0 so the seller sees what
+	// changed. Adjusted during render (React's "store the previous prop"
+	// pattern), never by remounting: a remount would silently throw the draft
+	// away. Before this the URL changed and nothing on screen did.
+	if (linkedCard !== appliedLink) {
+		setAppliedLink(linkedCard);
+		if (linkedCard !== undefined) {
+			setStep(0);
+			pickCard(linkedCard);
+			setReveal(linkedCard);
+		}
+	}
+
+	// What a link's reveal scrolls to: the refusal under the Event card when
+	// the plan is locked, the event hint (just under the Event card) on the
+	// event route, else the chosen card itself.
+	const revealKey: KindCard | "event-hint" | null = issueFor(
+		EVENTS_LOCKED_ISSUE.field,
+	)
+		? "event"
+		: state.kindCard === "event"
+			? "event-hint"
+			: state.kindCard;
+	// Phone-only: the sticky Continue and the bottom nav cover the bottom of
+	// the screen there; from `lg` the CTA is static and nothing is covered.
+	const revealMargin = "scroll-mb-56 lg:scroll-mb-0";
+
 	return (
-		<div className="flex flex-col gap-4">
+		<div ref={wizardRef} className="flex flex-col gap-4">
 			{/* Header: back + step title + progress dots + cancel. Four items on one
 			    narrow row, so the gap tightens on mobile and only the CURRENT dot
 			    widens — completed steps stay small (still accent-coloured, so
@@ -1085,8 +1977,28 @@ export function ProductWizard({
 				<button
 					type="button"
 					onClick={goBack}
-					aria-label={step === 1 ? "Back to products" : "Previous step"}
-					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+					// Back unmounts the photo grid: an upload in flight would land
+					// with no tile to show it, a failed one would be dropped without
+					// a word. Held with the reason until the photos settle — the
+					// same reason Continue carries (PR #392 review).
+					disabled={uploading || photosFailed > 0}
+					aria-label={
+						uploading
+							? "Back — wait for the photo to finish uploading"
+							: photosFailed > 0
+								? `Back — ${failedPhotosLabel(photosFailed)}, retry or remove it first`
+								: stepPos === 0
+									? "Back to products"
+									: "Previous step"
+					}
+					title={
+						uploading
+							? "Wait for the photo to finish uploading"
+							: photosFailed > 0
+								? `${failedPhotosLabel(photosFailed)} — retry or remove it first`
+								: undefined
+					}
+					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
 				>
 					<ChevronLeft className="size-5" />
 				</button>
@@ -1123,16 +2035,157 @@ export function ProductWizard({
 			</div>
 
 			<section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4 shadow-sm lg:p-5">
-				{step === 1 ? (
+				{step === 0 ? (
 					<>
 						<h3 className="text-xl font-bold leading-tight">
 							What are you selling?
+						</h3>
+						<p className="-mt-2 text-sm text-muted-foreground">
+							Picks the words and questions you&apos;ll see — buyers never see
+							this.
+						</p>
+						<div className="flex flex-col gap-2.5">
+							{(
+								[
+									{
+										card: "food" as const,
+										icon: <UtensilsCrossed className="size-5" aria-hidden />,
+										title: "Food",
+										description: "Cakes, kuih, frozen, catering",
+									},
+									{
+										card: "physical" as const,
+										icon: <Package className="size-5" aria-hidden />,
+										title: "Physical goods",
+										description: "Gear, packaged items, merchandise",
+									},
+									{
+										card: "service" as const,
+										icon: <Wrench className="size-5" aria-hidden />,
+										title: "Service",
+										description: "Cleaning, wash, repair",
+									},
+									{
+										card: "booking" as const,
+										icon: <CalendarRange className="size-5" aria-hidden />,
+										title: "Booking",
+										description: "Campsite, venue, homestay, rental",
+									},
+									{
+										card: "event" as const,
+										icon: <CalendarClock className="size-5" aria-hidden />,
+										title: "Event",
+										description: "Class, workshop, camp — guests RSVP",
+									},
+								] satisfies {
+									card: KindCard;
+									icon: ReactNode;
+									title: string;
+									description: string;
+								}[]
+							).map(({ card, icon, title, description }) => (
+								<div
+									key={card}
+									ref={revealKey === card ? setRevealTarget : undefined}
+									className={cn("relative", revealMargin)}
+								>
+									<AnswerCard
+										selected={state.kindCard === card}
+										icon={icon}
+										title={title}
+										description={description}
+										onClick={() => pickCard(card)}
+									/>
+									{card === "event" && eventsLocked ? (
+										<span className="pointer-events-none absolute right-3 top-3 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-bold text-accent-emphasis">
+											Pro
+										</span>
+									) : null}
+									{/* Why this card is pre-ringed — the storeType default. */}
+									{defaultKind !== undefined &&
+									cardFromKind(defaultKind) === card &&
+									state.kindCard === card ? (
+										<span className="pointer-events-none absolute right-3 top-3 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-bold text-accent-emphasis">
+											Your store type
+										</span>
+									) : null}
+									{/* The refusal sits UNDER the card it refuses, with the
+									    way forward — not below the list, where a phone's
+									    sticky Continue hid it. */}
+									{card === "event" && issueFor(EVENTS_LOCKED_ISSUE.field) ? (
+										<div role="alert" className="mt-2">
+											<ProFeatureTease message={EVENTS_LOCKED_ISSUE.message} />
+										</div>
+									) : null}
+								</div>
+							))}
+						</div>
+						{state.kindCard === "food" ? (
+							<p className="rounded-xl bg-accent/5 px-3 py-2 text-xs text-muted-foreground">
+								Next you&apos;ll tell us whether it&apos;s{" "}
+								<span className="font-medium text-foreground">made fresh</span>{" "}
+								when ordered or{" "}
+								<span className="font-medium text-foreground">ready stock</span>{" "}
+								(frozen or packaged).
+							</p>
+						) : null}
+						{isBooking ? (
+							<p className="rounded-xl bg-accent/5 px-3 py-2 text-xs text-muted-foreground">
+								Guests pick dates on a calendar and{" "}
+								<span className="font-medium text-foreground">
+									request to book
+								</span>{" "}
+								— you approve each booking before anything is paid. No stock to
+								set up; you&apos;ll set a price per night and how many spots
+								each night holds.
+							</p>
+						) : null}
+						{state.kindCard === "event" ? (
+							<p
+								ref={revealKey === "event-hint" ? setRevealTarget : undefined}
+								className={cn(
+									"rounded-xl bg-accent/5 px-3 py-2 text-xs text-muted-foreground",
+									revealMargin,
+								)}
+							>
+								Guests{" "}
+								<span className="font-medium text-foreground">
+									RSVP to one date you fix
+								</span>{" "}
+								— no calendar, no approval. They pick a food set or package if
+								you offer choices, seats cap the room, and the listing takes
+								itself off your storefront after the event.{" "}
+								{currencySymbol(currency)} 0 makes it a free RSVP.
+							</p>
+						) : null}
+						<IssueText message={issueFor("kind")} />
+					</>
+				) : null}
+
+				{step === 1 ? (
+					<>
+						<h3 className="text-xl font-bold leading-tight">
+							{isBooking
+								? "Name this listing"
+								: state.kindCard === "event"
+									? "Name your event"
+									: kind === "service"
+										? "Name your service"
+										: "Name your product"}
 						</h3>
 						<label className="flex flex-col gap-1.5 text-sm font-medium">
 							Name
 							<Input
 								variant="field"
-								placeholder="e.g. Chocolate fudge brownies"
+								placeholder={
+									isBooking
+										? "e.g. Riverside Standard Plot"
+										: state.kindCard === "event"
+											? "e.g. BNI Breakfast · October"
+											: kind === "service"
+												? "e.g. Tent deep-clean (2-man)"
+												: "e.g. Chocolate fudge brownies"
+								}
 								value={state.name}
 								maxLength={120}
 								onChange={(e) => patch({ name: e.target.value })}
@@ -1143,8 +2196,7 @@ export function ProductWizard({
 						<ProductImagesField
 							images={state.images}
 							onChange={(images) => patch({ images })}
-							onUploadingChange={setUploading}
-							onError={setServerError}
+							onUploadStateChange={setPhotoUploads}
 						/>
 						{showDescription ? (
 							<label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -1173,10 +2225,33 @@ export function ProductWizard({
 					</>
 				) : null}
 
+				{step === 6 ? (
+					<>
+						<h3 className="text-xl font-bold leading-tight">When is it?</h3>
+						<p className="-mt-2 text-sm text-muted-foreground">
+							Guests RSVP to this exact moment — they never pick a date, and
+							delivery is off for the whole order.
+						</p>
+						{/* The step IS the toggle (the Event card armed it), so the
+						    fields render headerless. Same component, same state as the
+						    drawer and the full form — three doors, one editor. */}
+						<EventFields
+							draft={state.event}
+							onChange={(event) => patch({ event })}
+							locked={eventsLocked}
+							noToggle
+							venues={eventVenues}
+						/>
+						<IssueText message={issueFor("event")} />
+					</>
+				) : null}
+
 				{step === 2 ? (
 					<>
 						<h3 className="text-xl font-bold leading-tight">
-							What kind of product is it?
+							{state.kindCard === "event"
+								? "Do guests pick an option?"
+								: "What kind of product is it?"}
 						</h3>
 						<p className="-mt-2 text-sm text-muted-foreground">
 							This decides what we ask you for next.
@@ -1185,27 +2260,47 @@ export function ProductWizard({
 							<AnswerCard
 								selected={shape === "single"}
 								icon={<PackageCheck className="size-5" aria-hidden />}
-								title="Just one item"
-								description="One name, one price. e.g. Nasi lemak bungkus"
+								title={
+									state.kindCard === "event"
+										? "One ticket for everyone"
+										: "Just one item"
+								}
+								description={
+									state.kindCard === "event"
+										? "Every guest gets the same thing at one price."
+										: "One name, one price. e.g. Nasi lemak bungkus"
+								}
 								onClick={switchToSingle}
 							/>
 							<AnswerCard
 								selected={showAxes}
 								icon={<ChefHat className="size-5" aria-hidden />}
-								title="Buyer picks a choice"
-								description="A size, flavour or weight — each with its own price. e.g. Small / Medium / Large"
+								title={
+									state.kindCard === "event"
+										? "Guests pick a choice"
+										: "Buyer picks a choice"
+								}
+								description={
+									state.kindCard === "event"
+										? "A food set, package or tent type — each with its own price. e.g. Set A / Set B"
+										: "A size, flavour or weight — each with its own price. e.g. Small / Medium / Large"
+								}
 								onClick={switchToChoices}
 							/>
 							{/* Third type (86eyfq04j) — the bespoke seller's product. No
 							    choices to set up and no price to commit to; the price step
-							    that follows is optional. */}
-							<AnswerCard
-								selected={madeToOrder}
-								icon={<Sparkles className="size-5" aria-hidden />}
-								title="Made to order"
-								description="Buyer tells you what they want; you quote a price and get a mockup approved. e.g. a custom cake"
-								onClick={switchToMadeToOrder}
-							/>
+							    that follows is optional. Not offered on the EVENT route: a
+							    quote-and-mockup round-trip has no place in an RSVP (the
+							    full form can still compose the two). */}
+							{state.kindCard === "event" ? null : (
+								<AnswerCard
+									selected={madeToOrder}
+									icon={<Sparkles className="size-5" aria-hidden />}
+									title="Made to order"
+									description="Buyer tells you what they want; you quote a price and get a mockup approved. e.g. a custom cake"
+									onClick={switchToMadeToOrder}
+								/>
+							)}
 						</div>
 						{madeToOrder ? (
 							<p className="rounded-xl bg-accent/5 px-3 py-2 text-xs text-muted-foreground">
@@ -1263,7 +2358,262 @@ export function ProductWizard({
 					</>
 				) : null}
 
-				{step === 3 ? (
+				{step === 3 && isBooking ? (
+					<>
+						<h3 className="text-xl font-bold leading-tight">
+							Price and capacity
+						</h3>
+						{/* Fixed-length package (S7) — the membership/package shape.
+						    FIRST on the step, ahead of the price, because it decides what
+						    the price MEANS. It used to sit below, so a gym owner read
+						    "Price per night", typed their monthly fee into it, and only
+						    then scrolled down to say "1 month" — the field above still
+						    claiming per-night while holding a monthly number. */}
+						<label className="flex flex-col gap-1.5 text-sm font-medium">
+							<span>
+								Package length{" "}
+								<span className="font-normal text-muted-foreground">
+									(optional)
+								</span>
+							</span>
+							<span className="flex items-center gap-2">
+								<Input
+									type="number"
+									inputMode="numeric"
+									min={1}
+									max={packageUnitMax(state.packageUnit)}
+									placeholder="e.g. 30"
+									value={state.packageLength}
+									onChange={(e) => patch({ packageLength: e.target.value })}
+									variant="field"
+									isError={!!issueFor("packageLength")}
+									className="w-32"
+								/>
+								<select
+									aria-label="Package length unit"
+									value={state.packageUnit}
+									onChange={(e) =>
+										patch({ packageUnit: asPackageUnit(e.target.value) })
+									}
+									className="h-11 rounded-xl border border-input bg-background px-2 text-sm font-normal"
+								>
+									<option value="month">months</option>
+									{/* "nights" and "days" are the SAME span — a 2-night stay and
+									    a 2-day pass both run two days. The seller picks the word
+									    their buyers use: accommodation sells by the night (a
+									    3D2N deal is two nights), a gym or class by the day. */}
+									<option value="night">nights</option>
+									<option value="day">days</option>
+								</select>
+							</span>
+							<IssueText message={issueFor("packageLength")} />
+							<span className="text-xs font-normal text-muted-foreground">
+								{state.packageLength.trim().length > 0
+									? state.packageUnit === "month"
+										? `Buyers pick a start date only — starting the 12th runs to the 11th, ${bookingSpanCounted(Number(state.packageLength.trim()), "month")} later, at one flat price.`
+										: `Buyers pick a start date only — the booking runs ${bookingSpanCounted(Number(state.packageLength.trim()), state.packageUnit)} from there, at one flat price.`
+									: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month, or 2 nights) to sell a fixed-length package at one flat price."}
+							</span>
+						</label>
+						{/* A DAY package decides what a store closure does to it
+						    (z8r3fdhpm7) — the product form's own field, so both doors
+						    ask the same question in the same words. */}
+						{state.packageUnit === "day" &&
+						packageLengthNum !== undefined &&
+						packageLengthNum > 0 ? (
+							<PackageDayCounting
+								packageLength={packageLengthNum}
+								skipsClosedDays={state.skipsClosedDays}
+								onChange={(next) => patch({ skipsClosedDays: next })}
+								schedule={storeSchedule}
+							/>
+						) : null}
+						<label className="flex items-center gap-3 text-sm font-medium">
+							{/* The label names the SPAN the seller just chose, so the number
+							    they type is unambiguous: "Price per month", not "per night"
+							    on a monthly membership. */}
+							<span className="min-w-0 flex-1">
+								Price per {bookingSpanNoun(packageLengthNum, state.packageUnit)}
+							</span>
+							<span className="text-sm text-muted-foreground">
+								{moneySymbol}
+							</span>
+							<PriceInput
+								value={rows[0]?.price ?? ""}
+								onChange={(v) => setRow(0, { price: v })}
+								className="h-11 w-28 text-right"
+								invalid={!!issueFor("price:")}
+							/>
+						</label>
+						<IssueText message={issueFor("price:")} />
+						{/* Weekend rate (S13) — a second per-night price on the nights
+						    the seller picks. Directly under the base price because it IS
+						    a price; hidden on a package (one flat price) with the reason
+						    in its place, so the seller never wonders where it went. */}
+						{isPackageListing ? (
+							<p className="text-xs text-muted-foreground">
+								<span className="font-medium text-foreground">
+									Weekend rate
+								</span>{" "}
+								— a package has one flat price. Clear the package length to
+								charge weekend nights differently.
+							</p>
+						) : (
+							<div className="flex flex-col gap-1.5">
+								<label className="flex items-center gap-3 text-sm font-medium">
+									<span className="min-w-0 flex-1">
+										Weekend rate{" "}
+										<span className="font-normal text-muted-foreground">
+											(optional)
+										</span>
+									</span>
+									<span className="text-sm text-muted-foreground">
+										{moneySymbol}
+									</span>
+									<PriceInput
+										value={state.weekendPrice}
+										onChange={(v) => patch({ weekendPrice: v })}
+										className="h-11 w-28 text-right"
+										invalid={!!issueFor("weekendPrice")}
+									/>
+								</label>
+								<IssueText message={issueFor("weekendPrice")} />
+								{state.weekendPrice.trim().length > 0 ? (
+									<div className="flex flex-col gap-1.5 pt-1">
+										<span className="text-xs font-medium">
+											Which nights charge this rate?
+										</span>
+										<WeekdayPicker
+											label="Weekend nights"
+											value={state.weekendDays}
+											onChange={(days) => patch({ weekendDays: days })}
+										/>
+										<IssueText message={issueFor("weekendDays")} />
+									</div>
+								) : null}
+								{/* One voice: once Continue has flagged the night set, the
+								    issue text speaks and the consequence line steps aside. */}
+								{issueFor("weekendDays") ? null : (
+									<span className="text-xs font-normal text-muted-foreground">
+										{weekendRateConsequence(
+											{
+												basePrice: rows[0]?.price ?? "",
+												weekendPrice: state.weekendPrice,
+												weekendDays: state.weekendDays,
+											},
+											currency,
+										) ??
+											"Leave blank for one rate every night. Set it to charge more on the nights you pick — Fri and Sat by default. Guests see both rates before they pick dates."}
+									</span>
+								)}
+							</div>
+						)}
+						<label className="flex flex-col gap-1.5 text-sm font-medium">
+							<span>
+								{isPackageListing
+									? "Spots available at a time"
+									: "Spots available each night"}{" "}
+								<span className="font-normal text-muted-foreground">
+									(blank = unlimited)
+								</span>
+							</span>
+							<StockInput
+								value={state.capacityPerNight}
+								onChange={(v) => patch({ capacityPerNight: v })}
+								stepper
+								// "Unlimited", not "0" — the field's own placeholder used to
+								// read 0, contradicting the "blank = unlimited" label right
+								// above it and looking like a hard zero-spots setting.
+								placeholder="Unlimited"
+								ariaLabel="Spots available"
+								className="w-48"
+								invalid={!!issueFor("capacityPerNight")}
+							/>
+							<IssueText message={issueFor("capacityPerNight")} />
+							<span className="text-xs font-normal text-muted-foreground">
+								{state.capacityPerNight.trim().length === 0
+									? "Anyone can book any date — nothing sells out. Right for a gym or class with no daily limit."
+									: isPackageListing
+										? "How many bookings can run at the same time — e.g. 20 members on a package at once. We stop taking bookings once they're all taken."
+										: "How many bookings can share the same night — e.g. 5 identical plots = 5. We stop taking requests for a night once they're all booked."}
+							</span>
+						</label>
+						{/* Instant book (S7) — the spec's named follow-up. */}
+						<div className="flex flex-col gap-1.5">
+							<div className="flex items-center justify-between gap-3">
+								<span className="text-sm font-medium">Instant book</span>
+								<ToggleSwitch
+									on={state.autoAccept}
+									onChange={(v) => patch({ autoAccept: v })}
+									label="Confirm bookings instantly"
+								/>
+							</div>
+							<span className="text-xs text-muted-foreground">
+								{state.autoAccept
+									? "Bookings are confirmed instantly and the payment request goes out straight away. Turn off to approve each request first."
+									: "You approve each request before the buyer pays. Turn on to confirm bookings instantly."}
+							</span>
+						</div>
+						<label className="flex flex-col gap-1.5 text-sm font-medium">
+							<span>
+								Security deposit{" "}
+								<span className="font-normal text-muted-foreground">
+									(optional)
+								</span>
+							</span>
+							<span className="flex items-center gap-3">
+								<span className="text-sm text-muted-foreground">
+									{moneySymbol}
+								</span>
+								<PriceInput
+									value={state.securityDeposit}
+									onChange={(v) => patch({ securityDeposit: v })}
+									className="h-11 w-28 text-right"
+									invalid={!!issueFor("securityDeposit")}
+								/>
+							</span>
+							<IssueText message={issueFor("securityDeposit")} />
+							<span className="text-xs font-normal text-muted-foreground">
+								A refundable hold collected with the booking payment and
+								returned after check-out. Guests see it before they request.
+							</span>
+						</label>
+						<label className="flex flex-col gap-1 text-sm font-medium">
+							Minimum notice{" "}
+							<span className="font-normal text-muted-foreground">
+								(optional)
+							</span>
+							{/* Notice is measured in DAYS, full stop (`minNoticeDays`,
+							    `MAX_NOTICE_DAYS`). A copy-paste had left the PACKAGE LENGTH's
+							    unit dropdown sitting in this row — bound to `state.packageUnit`,
+							    so a seller adjusting their notice period silently flipped a
+							    1-month membership into a 1-day pass. */}
+							<span className="flex items-center gap-1.5">
+								<Input
+									type="number"
+									inputMode="numeric"
+									min={0}
+									max={MAX_NOTICE_DAYS}
+									placeholder="0"
+									value={state.minNoticeDays}
+									onChange={(e) => patch({ minNoticeDays: e.target.value })}
+									isError={!!issueFor("minNoticeDays")}
+									className="h-11 w-24 text-center"
+								/>
+								<span className="text-sm font-normal text-muted-foreground">
+									days
+								</span>
+							</span>
+							<IssueText message={issueFor("minNoticeDays")} />
+							<span className="text-xs font-normal text-muted-foreground">
+								Lead time you need — guests can&apos;t request a check-in sooner
+								than this.
+							</span>
+						</label>
+					</>
+				) : null}
+
+				{step === 3 && !isBooking ? (
 					<>
 						<h3 className="text-xl font-bold leading-tight">
 							{showAxes
@@ -1272,6 +2622,13 @@ export function ProductWizard({
 									? "Do you have a starting price?"
 									: "Set your price"}
 						</h3>
+						{state.kindCard === "event" ? (
+							<p className="-mt-2 text-sm text-muted-foreground">
+								Type 0 for a free RSVP — guests confirm without being asked to
+								pay. (A blank price means "not priced yet", so the 0 is
+								explicit.)
+							</p>
+						) : null}
 						{/* Made to order edits its OWN line — the product has no matrix to
 						    price. Both fields are optional: a blank price is the storefront's
 						    "Price on quote", and the prompt becomes the placeholder in the
@@ -1281,15 +2638,16 @@ export function ProductWizard({
 								<p className="-mt-2 text-sm text-muted-foreground">
 									Optional. Leave it blank and buyers see &ldquo;Price on
 									quote&rdquo; — you set the real price when you send them a
-									mockup. Enter an amount and buyers see &ldquo;From {currency}{" "}
-									…&rdquo;, so nobody mistakes it for the final price.
+									mockup. Enter an amount and buyers see &ldquo;From{" "}
+									{moneySymbol} …&rdquo;, so nobody mistakes it for the final
+									price.
 								</p>
 								<label className="flex items-center gap-3 text-sm font-medium">
 									<span className="min-w-0 flex-1 truncate">
 										{state.name.trim() || "This item"}
 									</span>
 									<span className="text-sm text-muted-foreground">
-										{currency}
+										{moneySymbol}
 									</span>
 									<PriceInput
 										value={customLine?.price ?? ""}
@@ -1354,7 +2712,7 @@ export function ProductWizard({
 												) : null}
 											</span>
 											<span className="text-sm text-muted-foreground">
-												{currency}
+												{moneySymbol}
 											</span>
 											<PriceInput
 												value={row.price}
@@ -1436,14 +2794,42 @@ export function ProductWizard({
 								{showAxes ? "choice" : "item"}
 							</button>
 						)}
+						{/* Promotion (z8r3fdcw72) — here, at the foot of the step that
+						    sets the price, rather than as a step of its own: a sale
+						    price IS a price, and a wizard step everyone taps past for
+						    something most products never use is friction on every
+						    create. Collapsed until the seller flips the toggle, so it
+						    costs a line of text until it is wanted. */}
+						<div className="mt-2 border-t border-border pt-4">
+							<PromoFields
+								draft={state.promo}
+								onChange={(promo) => patch({ promo })}
+								rows={promoRows}
+								onPromoPrices={setPromoPrices}
+								currency={currency}
+								locked={promoLocked}
+								flashAllowed={!state.event.on}
+								flashBlockedReason="Flash-sale extras don't apply to an event — seats already cap it. The sale price still does."
+								now={Date.now()}
+							/>
+						</div>
 					</>
 				) : null}
 
 				{step === 4 ? (
 					<>
 						<h3 className="text-xl font-bold leading-tight">
-							How do you prepare orders?
+							{state.kindCard === "event"
+								? "Cap each choice separately?"
+								: "How do you prepare orders?"}
 						</h3>
+						{state.kindCard === "event" ? (
+							<p className="-mt-2 text-sm text-muted-foreground">
+								{state.event.seats.trim()
+									? `Your ${state.event.seats.trim()}-seat limit caps the whole event either way — this is only about individual choices running out.`
+									: "The seat limit (from the date step) caps the whole event either way — this is only about individual choices running out."}
+							</p>
+						) : null}
 						<div className="flex flex-col gap-2.5">
 							{/* "Made fresh", not "Made to order" — that names a product TYPE
 							    in step 2 now, and two differently-meaning controls with one
@@ -1451,8 +2837,16 @@ export function ProductWizard({
 							<AnswerCard
 								selected={state.fulfilmentAnswered && allMto}
 								icon={<ChefHat className="size-5" aria-hidden />}
-								title="Made fresh"
-								description="You make each order fresh. Never marked sold out."
+								title={
+									state.kindCard === "event"
+										? "No per-choice cap"
+										: "Made fresh"
+								}
+								description={
+									state.kindCard === "event"
+										? "Any choice can go to any guest — only the seat limit caps RSVPs."
+										: "You make each order fresh. Never marked sold out."
+								}
 								onClick={() => {
 									bulkFlag("blockWhenOutOfStock", false);
 									patch({ fulfilmentAnswered: true });
@@ -1461,8 +2855,14 @@ export function ProductWizard({
 							<AnswerCard
 								selected={state.fulfilmentAnswered && allTrack}
 								icon={<PackageCheck className="size-5" aria-hidden />}
-								title="From stock"
-								description="You have ready items. Orders stop when you run out."
+								title={
+									state.kindCard === "event" ? "Cap each choice" : "From stock"
+								}
+								description={
+									state.kindCard === "event"
+										? "e.g. only 20 tent slots for Set A — that choice closes when they're gone."
+										: "You have ready items. Orders stop when you run out."
+								}
 								onClick={() => {
 									bulkFlag("blockWhenOutOfStock", true);
 									patch({ fulfilmentAnswered: true });
@@ -1524,14 +2924,17 @@ export function ProductWizard({
 						) : null}
 						{state.fulfilmentAnswered && allMto ? (
 							<p className="rounded-xl bg-accent/10 px-3 py-2.5 text-sm leading-relaxed text-accent-emphasis">
-								Nice — buyers can always order. No stock counting, nothing ever
-								shows "sold out". You'll see the day's orders in your inbox.
+								{state.kindCard === "event"
+									? "Nice — no counting per choice. The seat limit (if you set one) is the only ceiling, and you'll see every RSVP in your inbox."
+									: "Nice — buyers can always order. No stock counting, nothing ever shows \"sold out\". You'll see the day's orders in your inbox. If each one takes time to make, set a prep time under More options on the last step — buyers then can't pick a time sooner."}
 							</p>
 						) : null}
 						{state.fulfilmentAnswered && anyTrack ? (
 							<div className="flex flex-col gap-3 border-t border-border pt-3">
 								<span className="text-sm font-medium">
-									How many do you have right now?
+									{state.kindCard === "event"
+										? "How many of each choice?"
+										: "How many do you have right now?"}
 								</span>
 								{rows.map((row, i) => {
 									if (!row.blockWhenOutOfStock) return null;
@@ -1555,8 +2958,34 @@ export function ProductWizard({
 									);
 								})}
 								<p className="text-xs text-muted-foreground">
-									When a choice hits 0, buyers see "Sold out" until you restock.
+									{state.kindCard === "event"
+										? "When a choice hits 0, guests see it as fully taken. These are per-choice ceilings — your seat limit still caps the total across all choices."
+										: 'When a choice hits 0, buyers see "Sold out" until you restock.'}
 								</p>
+								{/* The one arithmetic trap: per-choice caps summing BELOW the
+								    seat limit make some seats unreachable — a seller reading
+								    "50 seats" would wait for guests who can never RSVP. Said
+								    here, where both numbers are on screen; never enforced
+								    (caps above the limit are normal — any mix up to the
+								    seats is the Helinox shape). */}
+								{(() => {
+									if (state.kindCard !== "event") return null;
+									const seats = Number.parseInt(state.event.seats.trim(), 10);
+									if (!Number.isInteger(seats) || seats < 1) return null;
+									if (!rows.every((r) => r.blockWhenOutOfStock)) return null;
+									const capSum = rows.reduce((sum, r) => {
+										const n = Number.parseInt(r.stock.trim(), 10);
+										return Number.isInteger(n) && n >= 0 ? sum + n : Number.NaN;
+									}, 0);
+									if (!Number.isInteger(capSum) || capSum >= seats) return null;
+									return (
+										<p className="text-xs text-amber-600 dark:text-amber-500">
+											These add up to {capSum} — below your {seats}-seat limit,
+											so at most {capSum} guest{capSum === 1 ? "" : "s"} can
+											RSVP.
+										</p>
+									);
+								})()}
 							</div>
 						) : null}
 					</>
@@ -1570,19 +2999,43 @@ export function ProductWizard({
 						<p className="-mt-2 text-sm text-muted-foreground">
 							This is what buyers will see on your store.
 						</p>
-						{/* Buyer-eye preview card. */}
+						{/* Buyer-eye preview card. The photo area is a BUTTON back to the
+						    details step (where the uploader lives) — every other line on
+						    this screen has an Edit affordance, and the one thing a seller
+						    most wants to fix from a preview is the picture. Reaching it
+						    used to mean tapping Back through the whole wizard. */}
 						<div className="overflow-hidden rounded-2xl border border-border">
-							{state.images[0]?.url ? (
-								<img
-									src={state.images[0].url}
-									alt=""
-									className="h-36 w-full object-cover"
-								/>
-							) : (
-								<div className="flex h-24 w-full items-center justify-center bg-muted text-xs text-muted-foreground">
-									No photo yet — you can add one later
-								</div>
-							)}
+							<button
+								type="button"
+								onClick={() => setStep(1)}
+								className="group relative block w-full text-left"
+								aria-label={
+									state.images[0]?.url
+										? "Change product photos"
+										: "Add a product photo"
+								}
+							>
+								{state.images[0]?.url ? (
+									<>
+										<img
+											src={state.images[0].url}
+											alt=""
+											className="h-36 w-full object-cover"
+										/>
+										<span className="absolute right-2 top-2 rounded-full bg-background/90 px-2.5 py-1 text-[11px] font-semibold shadow-sm backdrop-blur">
+											Change photo
+										</span>
+									</>
+								) : (
+									<span className="flex h-24 w-full flex-col items-center justify-center gap-1 bg-muted text-xs text-muted-foreground transition-colors group-hover:bg-muted/70">
+										<ImagePlus className="size-5" aria-hidden />
+										<span>
+											No photo yet —{" "}
+											<span className="font-semibold underline">add one</span>
+										</span>
+									</span>
+								)}
+							</button>
 							<div className="flex flex-col gap-1.5 p-3">
 								<span className="text-sm font-bold">
 									{state.name.trim() || "Your product"}
@@ -1606,7 +3059,11 @@ export function ProductWizard({
 								</span>
 								{allMto ? (
 									<span className="self-start rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-950/50 dark:text-amber-400">
-										{madeToOrder ? "Made to order" : "Made fresh"}
+										{isBooking
+											? "Booking — request to book"
+											: madeToOrder
+												? "Made to order"
+												: "Made fresh"}
 									</span>
 								) : null}
 							</div>
@@ -1616,25 +3073,88 @@ export function ProductWizard({
 							{[
 								{
 									label: "Type",
-									value: showAxes
-										? `${variantCount} by ${options
-												.map((a) => a.name.trim())
-												.filter(Boolean)
-												.join(" × ")}`
-										: madeToOrder
-											? "Made to order"
-											: "Just one item",
-									step: 2,
+									value: isBooking
+										? "Booking"
+										: showAxes
+											? `${variantCount} by ${options
+													.map((a) => a.name.trim())
+													.filter(Boolean)
+													.join(" × ")}`
+											: madeToOrder
+												? "Made to order"
+												: "Just one item",
+									step: isBooking ? 0 : 2,
 								},
 								{
 									label: "Price",
 									value: wizardPriceLabel(state, currency),
 									step: 3,
 								},
-								// Preparation is constitutive of a made-to-order product, so
-								// there's no step to edit and no row to show — it would only
-								// link to a step this type doesn't walk.
-								...(madeToOrder
+								// Booking reviews its capacity + notice where they were asked
+								// (step 3); Preparation is constitutive of made-to-order AND
+								// booking (request-to-book), so neither shows a row for a step
+								// it doesn't walk.
+								...(isBooking
+									? [
+											{
+												label: "Capacity",
+												value:
+													state.capacityPerNight.trim().length > 0
+														? `${state.capacityPerNight.trim()} ${isPackageListing ? "at a time" : "per night"}`
+														: "Unlimited",
+												step: 3,
+											},
+											...(state.packageLength.trim().length > 0
+												? [
+														{
+															label: "Package",
+															value: `${state.packageLength.trim()} ${state.packageUnit}${state.packageLength.trim() === "1" ? "" : "s"}${state.packageUnit === "day" && state.skipsClosedDays ? " (open days only)" : ""}, flat price`,
+															step: 3,
+														},
+													]
+												: []),
+											...(state.autoAccept
+												? [
+														{
+															label: "Booking",
+															value: "Confirmed instantly",
+															step: 3,
+														},
+													]
+												: []),
+											...(!isPackageListing &&
+											state.weekendPrice.trim().length > 0
+												? [
+														{
+															label: "Weekend rate",
+															value: `${draftMoney(state.weekendPrice)} on ${weekendDaysLabel(state.weekendDays)} nights`,
+															step: 3,
+														},
+													]
+												: []),
+											...(state.securityDeposit.trim().length > 0
+												? [
+														{
+															label: "Deposit",
+															// The store's symbol, never a hardcoded RM (S13)
+															// nor the raw ISO code ("SGD 50").
+															value: `${draftMoney(state.securityDeposit)} (refundable)`,
+															step: 3,
+														},
+													]
+												: []),
+											...(state.minNoticeDays.trim().length > 0
+												? [
+														{
+															label: "Notice",
+															value: `${state.minNoticeDays.trim()} day${state.minNoticeDays.trim() === "1" ? "" : "s"}`,
+															step: 3,
+														},
+													]
+												: []),
+										]
+									: []),
+								...(madeToOrder || isBooking
 									? []
 									: [
 											{
@@ -1732,10 +3252,30 @@ export function ProductWizard({
 								<span className="flex min-w-0 flex-col">
 									<span className="text-sm font-semibold">More options</span>
 									<span className="truncate text-xs text-muted-foreground">
+										{/* When the event is ON, the closed drawer leads with it —
+										    the one live setting in here the seller must be able to
+										    see without opening anything. Off, "events" still
+										    appears in the list so the capability is discoverable. */}
 										{[
-											anyMto ? MOCKUP_APPROVAL_COPY.teaser : null,
-											madeToOrder ? null : CUSTOM_LINE_COPY.teaser,
-											"order rules",
+											// A dateless draft can't render a badge — name the state
+											// instead of printing NaN.
+											state.event.on
+												? (() => {
+														const value = eventSubmitValue(state.event);
+														return value
+															? `Event · ${formatEventBadge(value)}`
+															: "Event (date not set)";
+													})()
+												: null,
+											anyMto && !isBooking ? MOCKUP_APPROVAL_COPY.teaser : null,
+											madeToOrder || isBooking ? null : CUSTOM_LINE_COPY.teaser,
+											state.event.on || isBooking ? null : "events",
+											isBooking
+												? null
+												: state.buyerQuestions.length > 0
+													? `${state.buyerQuestions.length} question${state.buyerQuestions.length === 1 ? "" : "s"} for the buyer`
+													: "questions for the buyer",
+											isBooking ? null : "order rules",
 											"full editor",
 										]
 											.filter(Boolean)
@@ -1765,7 +3305,7 @@ export function ProductWizard({
 									    checkbox unmount the moment it was used, with no way to
 									    untick it (PR #160 review). It stays, checked — and
 									    unticking releases the type, which is the way back out. */}
-									{anyMto ? (
+									{anyMto && !isBooking ? (
 										<label className="flex items-start gap-2.5 text-sm">
 											<input
 												type="checkbox"
@@ -1796,8 +3336,10 @@ export function ProductWizard({
 									    already IS this line, so adding one to itself is the same
 									    offer twice. Nothing is stranded behind the hidden control
 									    — `switchToMadeToOrder` moves the seller's line onto the
-									    product rather than leaving a second one in state. */}
-									{madeToOrder ? null : (
+									    product rather than leaving a second one in state. Nor on
+									    a booking listing — dates, not bespoke requests, are what
+									    it sells (switchKind cleared any line). */}
+									{madeToOrder || isBooking ? null : (
 										<div className="flex flex-col gap-3">
 											<label className="flex items-start gap-2.5 text-sm">
 												<input
@@ -1851,7 +3393,7 @@ export function ProductWizard({
 														</label>
 													</div>
 													<label className="flex flex-col gap-1 text-sm font-medium">
-														Starting price ({currency}){" "}
+														Starting price ({moneySymbol}){" "}
 														<span className="font-normal text-muted-foreground">
 															(optional — blank shows “Price on quote”)
 														</span>
@@ -1883,62 +3425,226 @@ export function ProductWizard({
 										</div>
 									)}
 
-									{/* Order rules — the same two constraints the full form
-									    groups in its "Order rules" card. Blank = no rule. */}
-									<div className="flex flex-col gap-3 border-t border-border pt-3">
-										<span className="text-sm font-semibold">Order rules</span>
-										<label className="flex flex-col gap-1 text-sm font-medium">
-											Minimum order quantity{" "}
-											<span className="font-normal text-muted-foreground">
-												(optional)
-											</span>
-											<Input
-												type="number"
-												inputMode="numeric"
-												min={0}
-												max={MIN_QUANTITY_MAX}
-												placeholder="e.g. 20"
-												value={state.minQuantity}
-												onChange={(e) => patch({ minQuantity: e.target.value })}
-												isError={!!issueFor("minQuantity")}
-												className="h-11 w-32"
+									{/* Event (`z8r3fdff9u`) — above Order rules for the same
+									    reason the full form puts it in its own card first: it
+									    overrides the minimum notice below it. On the EVENT
+									    route the "When is it?" step owns these fields (and the
+									    teaser above summarizes them), so the drawer copy would
+									    be a second editor for the same state — hidden there.
+									    Never on a booking listing. */}
+									{isBooking || state.kindCard === "event" ? null : (
+										<div className="flex flex-col gap-3 border-t border-border pt-3">
+											<EventFields
+												draft={state.event}
+												onChange={(event) => patch({ event })}
+												locked={eventsLocked}
+												venues={eventVenues}
 											/>
-											<IssueText message={issueFor("minQuantity")} />
-											<span className="text-xs font-normal text-muted-foreground">
-												Buyers must order at least this many — choices combined.
-												Counter checkout ignores it.
-											</span>
-										</label>
-										<label className="flex flex-col gap-1 text-sm font-medium">
-											Minimum notice{" "}
-											<span className="font-normal text-muted-foreground">
-												(optional)
-											</span>
-											<span className="flex items-center gap-1.5">
+											<IssueText message={issueFor("event")} />
+										</div>
+									)}
+
+									{/* Buyer questions (`z8r3fdkjek`) — shown on every route,
+									    the event one included (its "When is it?" step doesn't
+									    own them). Never on a booking listing. */}
+									{isBooking ? null : (
+										<div className="flex flex-col gap-3 border-t border-border pt-3">
+											<div>
+												<p className="text-sm font-semibold">Ask the buyer</p>
+												<p className="text-xs text-muted-foreground">
+													Up to 3 questions answered at checkout. Optional.
+												</p>
+											</div>
+											<BuyerQuestionsEditor
+												draft={state.buyerQuestions}
+												onChange={(buyerQuestions) => patch({ buyerQuestions })}
+												// The review check flagged this block on Publish —
+												// from then on every row names its own problem.
+												revealAll={issueFor("buyerQuestions") !== undefined}
+											/>
+										</div>
+									)}
+
+									{/* Order rules — the same two constraints the full form
+									    groups in its "Order rules" card. Blank = no rule. A
+									    booking listing shows neither: min quantity is meaningless
+									    (one request = one booking) and notice already lives in
+									    its Price & capacity step. */}
+									{isBooking ? null : (
+										<div className="flex flex-col gap-3 border-t border-border pt-3">
+											<span className="text-sm font-semibold">Order rules</span>
+											<label className="flex flex-col gap-1 text-sm font-medium">
+												Minimum order quantity{" "}
+												<span className="font-normal text-muted-foreground">
+													(optional)
+												</span>
 												<Input
 													type="number"
 													inputMode="numeric"
 													min={0}
-													max={MAX_NOTICE_DAYS}
-													placeholder="0"
-													value={state.minNoticeDays}
+													max={MIN_QUANTITY_MAX}
+													placeholder="e.g. 20"
+													value={state.minQuantity}
 													onChange={(e) =>
-														patch({ minNoticeDays: e.target.value })
+														patch({ minQuantity: e.target.value })
 													}
-													isError={!!issueFor("minNoticeDays")}
-													className="h-11 w-24 text-center"
+													isError={!!issueFor("minQuantity")}
+													className="h-11 w-32"
 												/>
-												<span className="text-sm font-normal text-muted-foreground">
-													days
+												<IssueText message={issueFor("minQuantity")} />
+												<span className="text-xs font-normal text-muted-foreground">
+													Buyers must order at least this many — choices
+													combined. Counter checkout ignores it.
 												</span>
-											</span>
-											<IssueText message={issueFor("minNoticeDays")} />
-											<span className="text-xs font-normal text-muted-foreground">
-												Lead time you need — buyers can&apos;t pick a delivery
-												or pickup date sooner than this.
-											</span>
-										</label>
-									</div>
+											</label>
+											{/* An EVENT hides both timing rules instead of disabling them: a
+												    greyed-out input still reads as a rule the seller is failing to
+												    set. One line says why they're gone. Their submit values are
+												    dropped too, so a value typed before toggling never rides
+												    along. */}
+											{state.event.on ? (
+												<p className="text-xs leading-relaxed text-muted-foreground">
+													Minimum notice and prep time don&apos;t apply to an
+													event — guests RSVP to the fixed date and time you set
+													above.
+												</p>
+											) : (
+												<label className="flex flex-col gap-1 text-sm font-medium">
+													Minimum notice{" "}
+													<span className="font-normal text-muted-foreground">
+														(optional)
+													</span>
+													<span className="flex items-center gap-1.5">
+														<Input
+															type="number"
+															inputMode="numeric"
+															min={0}
+															max={MAX_NOTICE_DAYS}
+															placeholder="0"
+															value={state.minNoticeDays}
+															onChange={(e) =>
+																patch({ minNoticeDays: e.target.value })
+															}
+															isError={!!issueFor("minNoticeDays")}
+															className="h-11 w-24 text-center"
+														/>
+														<span className="text-sm font-normal text-muted-foreground">
+															days
+														</span>
+													</span>
+													<IssueText message={issueFor("minNoticeDays")} />
+													<span className="text-xs font-normal text-muted-foreground">
+														Lead time you need — buyers can&apos;t pick a
+														delivery or pickup date sooner than this.
+													</span>
+												</label>
+											)}
+											{/* Prep time hides with min notice — same reason, said once above. */}
+											{state.event.on ? null : (
+												<>
+													{/* Prep time — the same question at a smaller scale, so
+													    it follows notice here exactly as it does in the full
+													    form. Same presets, same order, one control. */}
+													<label className="flex flex-col gap-1 text-sm font-medium">
+														Prep time{" "}
+														<span className="font-normal text-muted-foreground">
+															(optional)
+														</span>
+														<span className="flex items-center gap-1.5">
+															<Input
+																type="number"
+																inputMode="numeric"
+																min={0}
+																max={MAX_PREP_MINUTES}
+																placeholder="0"
+																value={state.prepMinutes}
+																onChange={(e) =>
+																	patch({ prepMinutes: e.target.value })
+																}
+																isError={!!issueFor("prepMinutes")}
+																className="h-11 w-24 text-center"
+															/>
+															<span className="text-sm font-normal text-muted-foreground">
+																minutes
+															</span>
+														</span>
+														<span className="flex flex-wrap gap-1.5 pt-0.5">
+															{PREP_PRESETS.map((preset) => {
+																const active =
+																	state.prepMinutes.trim() ===
+																	String(preset.minutes);
+																return (
+																	<button
+																		key={preset.minutes}
+																		type="button"
+																		aria-pressed={active}
+																		onClick={() =>
+																			patch({
+																				prepMinutes: active
+																					? ""
+																					: String(preset.minutes),
+																			})
+																		}
+																		className={`h-11 rounded-xl border px-3 text-sm font-normal transition-colors ${
+																			active
+																				? "border-accent bg-accent/10 font-medium text-accent-emphasis"
+																				: "border-input text-muted-foreground hover:bg-muted"
+																		}`}
+																	>
+																		{preset.label}
+																	</button>
+																);
+															})}
+														</span>
+														<IssueText message={issueFor("prepMinutes")} />
+														<span className="text-xs font-normal text-muted-foreground">
+															How long you need to make it, up to 24 hours.
+															Buyers can&apos;t pick a pickup or delivery time
+															sooner than this.
+														</span>
+													</label>
+												</>
+											)}
+											{/* Pickup note — an instruction, not a limit, so it is
+											    last. Offered here regardless of the store's
+											    self-collect setting: the wizard is the CREATE flow,
+											    and a seller turning collection on next week should
+											    not have to come back for it. */}
+											{/* htmlFor rather than a wrapping label: the control is
+											    a component, and the a11y rule (rightly) can't see
+											    an <input> through it. */}
+											<label
+												htmlFor="wizard-pickup-note"
+												className="flex flex-col gap-1 text-sm font-medium"
+											>
+												Pickup note{" "}
+												<span className="font-normal text-muted-foreground">
+													(optional)
+												</span>
+												<Textarea
+													id="wizard-pickup-note"
+													value={state.pickupNote}
+													onChange={(e) =>
+														patch({ pickupNote: e.target.value })
+													}
+													placeholder="e.g. Collect from the side counter — bring an ice bag."
+													className="min-h-20 font-normal"
+													aria-invalid={!!issueFor("pickupNote")}
+												/>
+												<span className="self-end text-xs font-normal tabular-nums text-muted-foreground">
+													{state.pickupNote.replace(/\s+/g, " ").trim().length}/
+													{MAX_PICKUP_NOTE_LENGTH}
+												</span>
+												<IssueText message={issueFor("pickupNote")} />
+												<span className="text-xs font-normal text-muted-foreground">
+													Collecting buyers see this at checkout and on their
+													order page. {NOTE_LINK_HINT} It&apos;s copied onto
+													each order, so editing it later never changes past
+													orders.
+												</span>
+											</label>
+										</div>
+									)}
 
 									{/* Prefer the big-screen layout? Same draft, other skin. */}
 									<div className="flex flex-col gap-1.5 border-t border-border pt-3">
@@ -1961,12 +3667,15 @@ export function ProductWizard({
 				) : null}
 
 				{serverError ? (
-					<p
+					<div
 						role="alert"
 						className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
 					>
-						{serverError}
-					</p>
+						<p>{serverError}</p>
+						<CreditLockCta lock={serverLock} />
+					</div>
+				) : saveLock && step === REVIEW_STEP ? (
+					<SaveLockNote reason={saveLock.reason} />
 				) : null}
 			</section>
 
@@ -1976,22 +3685,33 @@ export function ProductWizard({
 					<Button
 						type="button"
 						onClick={goNext}
-						disabled={!structurallyAnswered || uploading}
+						// A photo in "Didn't upload" would be left behind on this step
+						// and the product created without it — held, with the reason,
+						// until the seller retries or removes it (z8r3fdtk85).
+						disabled={!structurallyAnswered || uploading || photosFailed > 0}
 						className="h-12 w-full shadow-lg shadow-accent/20 lg:shadow-none"
 					>
-						{uploading ? "Uploading…" : "Continue"}
+						{uploading
+							? "Uploading…"
+							: photosFailed > 0
+								? failedPhotosLabel(photosFailed)
+								: "Continue"}
 					</Button>
 				) : (
 					<Button
 						type="button"
 						onClick={publish}
-						disabled={submitting}
+						disabled={submitting || saveLock !== undefined}
 						className="h-12 w-full shadow-lg shadow-accent/20 lg:shadow-none"
 					>
-						{submitting ? "Publishing…" : "Publish product"}
+						{submitting
+							? "Publishing…"
+							: saveLock
+								? `Publish product — ${saveLock.label}`
+								: "Publish product"}
 					</Button>
 				)}
-				{step === 1 ? (
+				{step === 0 ? (
 					<button
 						type="button"
 						onClick={() => onSkipToFullForm(wizardHandoff(state))}
@@ -2000,12 +3720,28 @@ export function ProductWizard({
 						Know the full editor? Skip — use the full form
 					</button>
 				) : null}
-				{(step === 2 || step === 4) && !structurallyAnswered ? (
+				{(step === 0 || step === 2 || step === 4) && !structurallyAnswered ? (
 					<p className="text-center text-xs text-muted-foreground">
 						Pick one to continue — you can change it any time.
 					</p>
 				) : null}
 			</div>
+			<ConfirmDialog
+				open={pendingConfirm !== null}
+				onOpenChange={(open) => {
+					if (!open) setPendingConfirm(null);
+				}}
+				title={pendingConfirm?.title ?? ""}
+				description={pendingConfirm?.description}
+				confirmLabel={pendingConfirm?.confirmLabel ?? "Confirm"}
+				cancelLabel={pendingConfirm?.cancelLabel}
+				destructive
+				onConfirm={() => {
+					const apply = pendingConfirm?.apply;
+					setPendingConfirm(null);
+					apply?.();
+				}}
+			/>
 		</div>
 	);
 }

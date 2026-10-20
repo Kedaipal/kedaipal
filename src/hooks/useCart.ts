@@ -8,6 +8,21 @@ import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
  * doesn't see items bleed across them.
  *
  * Prices are stored in minor units (see `src/lib/format.ts`).
+ *
+ * **INVARIANT — the cart holds only buyer-scheduled lines** (`z8r3fdhh45`).
+ * An order carries exactly ONE fulfilment contract: one method, one date, one
+ * place. So a product that carries its own FIXED fulfilment moment can never
+ * be a cart line — it is checked out standalone, on its own route:
+ *
+ * - a **booking** (`?booking=`) — its own date range, capacity and approval;
+ * - an **event RSVP** (`?rsvp=`) — the seller's date, the seller's venue.
+ *
+ * Everything else (physical goods, food, services, made-to-order) has a date
+ * the BUYER picks, so those lines share a cart freely. This is enforced
+ * structurally — neither flow has an add-to-cart to reach — and backstopped in
+ * `orders.create` for stale tabs. It is deliberately NOT a rule about product
+ * KIND: a service's fulfilment is identical to a physical good's, so services
+ * belong in the cart.
  */
 
 export type CartItem = {
@@ -43,10 +58,28 @@ export type CartItem = {
 	// raises the earliest pickable date to the strictest item in the cart.
 	// Absent on legacy persisted carts → treated as 0 (no override).
 	minNoticeDays?: number;
+	// Per-product prep window in MINUTES, frozen at add time — checkout raises
+	// the earliest pickable TIME to the slowest item in the cart, the way
+	// minNoticeDays raises the earliest DATE. Absent on legacy persisted carts
+	// → treated as 0 (no window). The server re-derives both from the live
+	// products at create and is the judge; these exist so the buyer is stopped
+	// at the picker rather than at the error.
+	prepMinutes?: number;
+	// The product's pickup note as it read when added — lets checkout show the
+	// "Before you collect" block without a product join. NOT the copy that
+	// reaches the order: orders.create freezes the LIVE product's note, so a
+	// seller's edit between add and checkout still lands.
+	pickupNote?: string;
 	// Optional buyer reference image for a custom line. Uploaded on attach (Convex
 	// storage id; serializable so it survives cart persistence) and passed to
 	// orders.create at checkout. See docs/custom-option.md.
 	customImageStorageId?: string;
+	// Answers to the product's buyer questions (z8r3fdkjek), keyed by question
+	// id — entered at CHECKOUT (one set per line), persisted so a refresh on
+	// the checkout page doesn't wipe them. Not validated against the product
+	// here (hydrate has no catalogue): checkout sends only ids the LIVE
+	// product still asks, and the server drops anything else.
+	answers?: Record<string, string>;
 };
 
 type CartState = {
@@ -63,6 +96,18 @@ type CartAction =
 	| { type: "ADD"; item: Omit<CartItem, "quantity">; quantity: number }
 	| { type: "SET_QTY"; variantId: Id<"productVariants">; quantity: number }
 	| { type: "REMOVE"; variantId: Id<"productVariants"> }
+	| {
+			type: "SET_ANSWER";
+			variantId: Id<"productVariants">;
+			questionId: string;
+			/** undefined clears the answer. */
+			answer: string | undefined;
+	  }
+	| {
+			type: "REPRICE";
+			/** variantId → the line's price NOW, in minor units. */
+			prices: Record<string, number>;
+	  }
 	| { type: "CLEAR" }
 	| { type: "HYDRATE"; items: CartItem[]; retailerId: string };
 
@@ -119,6 +164,37 @@ function reducer(state: CartState, action: CartAction): CartState {
 				),
 			};
 		}
+		case "SET_ANSWER":
+			return {
+				...state,
+				items: state.items.map((i) => {
+					if (i.variantId !== action.variantId) return i;
+					const { [action.questionId]: _cleared, ...rest } = i.answers ?? {};
+					const answers =
+						action.answer === undefined
+							? rest
+							: { ...rest, [action.questionId]: action.answer };
+					return {
+						...i,
+						answers: Object.keys(answers).length > 0 ? answers : undefined,
+					};
+				}),
+			};
+		case "REPRICE": {
+			// A promotion that started or ended while items sat in the cart
+			// (z8r3fdcw72). The buyer is SHOWN the change and taps to accept it
+			// — this never fires on its own, because a price moving under
+			// someone mid-checkout is exactly what the price-changed guard at
+			// `orders.create` exists to refuse.
+			let touched = false;
+			const items = state.items.map((item) => {
+				const next = action.prices[item.variantId];
+				if (next === undefined || next === item.price) return item;
+				touched = true;
+				return { ...item, price: next };
+			});
+			return touched ? { ...state, items } : state;
+		}
 		case "REMOVE":
 			return {
 				...state,
@@ -135,6 +211,15 @@ function storageKey(retailerId: string): string {
 	return `kedaipal:cart:${retailerId}`;
 }
 
+function isStringRecord(value: unknown): value is Record<string, string> {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		Object.values(value).every((v) => typeof v === "string")
+	);
+}
+
 function readPersisted(retailerId: string): CartItem[] {
 	if (typeof window === "undefined") return [];
 	try {
@@ -142,18 +227,32 @@ function readPersisted(retailerId: string): CartItem[] {
 		if (!raw) return [];
 		const parsed = JSON.parse(raw);
 		if (!Array.isArray(parsed)) return [];
-		return parsed.filter(
-			(i): i is CartItem =>
-				typeof i === "object" &&
-				i !== null &&
-				typeof i.variantId === "string" &&
-				typeof i.productId === "string" &&
-				typeof i.name === "string" &&
-				typeof i.price === "number" &&
-				typeof i.currency === "string" &&
-				typeof i.quantity === "number" &&
-				i.quantity > 0,
-		);
+		return parsed
+			.filter(
+				(i): i is CartItem =>
+					typeof i === "object" &&
+					i !== null &&
+					// An RSVP is checked out standalone (`z8r3fdhh45`), so it can no
+					// longer be a cart line. A cart persisted before that change may
+					// still carry one — dropped on hydrate rather than left to be
+					// refused at `orders.create`, which would strand the buyer with a
+					// basket they can't check out and can't see the problem with.
+					(i as { event?: unknown }).event === undefined &&
+					typeof i.variantId === "string" &&
+					typeof i.productId === "string" &&
+					typeof i.name === "string" &&
+					typeof i.price === "number" &&
+					typeof i.currency === "string" &&
+					typeof i.quantity === "number" &&
+					i.quantity > 0,
+			)
+			.map((i) =>
+				// A malformed answers map is dropped, the LINE kept — losing typed
+				// answers is a nuisance, losing the basket is a dead end.
+				i.answers === undefined || isStringRecord(i.answers)
+					? i
+					: { ...i, answers: undefined },
+			);
 	} catch {
 		return [];
 	}
@@ -194,12 +293,47 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 			dispatch({ type: "SET_QTY", variantId, quantity }),
 		[],
 	);
+	// The product card's stepper "−" (z8r3fdegb5). Steppers only render for
+	// quick-addable products (single variant, never custom), so the product
+	// resolves to exactly one line. Dropping below the product's minimum
+	// removes the line outright — symmetric with quick-add, whose first tap
+	// adds the whole minimum, and it keeps the card from manufacturing a
+	// shortfall it has no room to explain (checkout can, the card can't).
+	const quickRemoveProduct = useCallback(
+		(productId: Id<"products">) => {
+			const line = state.items.find(
+				(i) => i.productId === productId && !i.isCustom,
+			);
+			if (!line) return;
+			const min = Math.max(1, line.minQuantity ?? 1);
+			const next = line.quantity - 1;
+			dispatch({
+				type: "SET_QTY",
+				variantId: line.variantId,
+				quantity: next < min ? 0 : next,
+			});
+		},
+		[state.items],
+	);
 	const removeItem = useCallback(
 		(variantId: Id<"productVariants">) =>
 			dispatch({ type: "REMOVE", variantId }),
 		[],
 	);
 	const clearCart = useCallback(() => dispatch({ type: "CLEAR" }), []);
+	/** Accept the live prices for the named lines (z8r3fdcw72). */
+	const repriceItems = useCallback(
+		(prices: Record<string, number>) => dispatch({ type: "REPRICE", prices }),
+		[],
+	);
+	const setAnswer = useCallback(
+		(
+			variantId: Id<"productVariants">,
+			questionId: string,
+			answer: string | undefined,
+		) => dispatch({ type: "SET_ANSWER", variantId, questionId, answer }),
+		[],
+	);
 
 	const { itemCount, total, currency } = useMemo(() => {
 		let count = 0;
@@ -215,31 +349,22 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		};
 	}, [state.items]);
 
-	// Per-product aggregates: the quantity drives the min-quantity-aware stepper
-	// default + quick-add top-up, and both quantity + subtotal drive the grid's
-	// "N in cart · RM total" affordance. Custom / made-to-order lines are excluded
-	// — they never count toward a minimum, and they're a separate quoted
-	// negotiation (price 0 in-cart until the seller quotes on the mockup), so
-	// folding them into a running money total would understate it. Built once per
-	// items change, then read per-card in O(1).
+	// Per-product quantity: drives the min-quantity-aware stepper default, the
+	// quick-add top-up, and the card's −/n/+ stepper (z8r3fdegb5). Custom /
+	// made-to-order lines are excluded — they never count toward a minimum, and
+	// they're a separate quoted negotiation. Built once per items change, then
+	// read per-card in O(1).
 	const byProduct = useMemo(() => {
-		const map = new Map<string, { quantity: number; subtotal: number }>();
+		const map = new Map<string, number>();
 		for (const i of state.items) {
 			if (i.isCustom) continue;
-			const agg = map.get(i.productId) ?? { quantity: 0, subtotal: 0 };
-			agg.quantity += i.quantity;
-			agg.subtotal += i.price * i.quantity;
-			map.set(i.productId, agg);
+			map.set(i.productId, (map.get(i.productId) ?? 0) + i.quantity);
 		}
 		return map;
 	}, [state.items]);
 
 	const quantityForProduct = useCallback(
-		(productId: Id<"products">) => byProduct.get(productId)?.quantity ?? 0,
-		[byProduct],
-	);
-	const subtotalForProduct = useCallback(
-		(productId: Id<"products">) => byProduct.get(productId)?.subtotal ?? 0,
+		(productId: Id<"products">) => byProduct.get(productId) ?? 0,
 		[byProduct],
 	);
 
@@ -260,10 +385,12 @@ export function useCart(retailerId: Id<"retailers"> | undefined) {
 		currency,
 		addItem,
 		updateQuantity,
+		quickRemoveProduct,
 		removeItem,
 		clearCart,
+		repriceItems,
+		setAnswer,
 		quantityForProduct,
-		subtotalForProduct,
 	};
 }
 

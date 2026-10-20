@@ -16,7 +16,7 @@
  * least as often as after.
  */
 
-import { displayAddressState } from "../address";
+import { displayAddressState, formatBusinessAddress } from "../address";
 import { type Country, DEFAULT_COUNTRY } from "../country";
 import { formatPhone } from "../customer";
 import { formatFulfilmentDateTime } from "../fulfilmentDate";
@@ -96,18 +96,27 @@ export type AwbLabelData = {
 // --- Eligibility -----------------------------------------------------------
 
 /** Why an order can't be given a despatch label. */
-export type AwbSkipReason = "cancelled" | "no_address" | "not_found";
+export type AwbSkipReason =
+	| "cancelled"
+	| "no_address"
+	| "not_found"
+	/** Waiting on credits (Credits T3.1) — the seller can't see this order, so
+	 * they certainly can't print its address on a parcel. Decided by the gate
+	 * at the call site, not by `labelSkipReason`, which is pure and knows
+	 * nothing about a store's balance. */
+	| "credit_gated";
 
 export const AWB_SKIP_REASONS: readonly AwbSkipReason[] = [
 	"cancelled",
 	"no_address",
 	"not_found",
+	"credit_gated",
 ];
 
 export type AwbSkipCounts = Record<AwbSkipReason, number>;
 
 export function emptySkipCounts(): AwbSkipCounts {
-	return { cancelled: 0, no_address: 0, not_found: 0 };
+	return { cancelled: 0, no_address: 0, not_found: 0, credit_gated: 0 };
 }
 
 type EligibilityOrder = {
@@ -317,7 +326,7 @@ export type RetailerForAwb = {
 	 * capture country to catch a return address left behind by a country
 	 * switch (86eyqgujv). */
 	country?: Country;
-	businessAddress?: { label: string; country?: Country };
+	businessAddress?: { label: string; unit?: string; country?: Country };
 };
 
 /**
@@ -414,7 +423,10 @@ export function orderToAwbLabelData(args: {
 		retailer.businessAddress.country !== (retailer.country ?? DEFAULT_COUNTRY);
 	const storeAddress = clampLines(
 		retailer.businessAddress && !foreignReturnAddress
-			? [retailer.businessAddress.label]
+			// Unit / floor / building included (z8r3fdff8r): a returned parcel
+			// has the same find-the-door problem as an arriving rider, and this
+			// block IS the return address.
+			? [formatBusinessAddress(retailer.businessAddress)]
 			: [],
 	);
 	const storeParty: Omit<AwbParty, "heading"> = {

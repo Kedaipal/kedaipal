@@ -3,8 +3,10 @@ import { ImagePlus, X } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import { takePickedFiles } from "../../lib/file-input";
 import { convexErrorMessage } from "../../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
+import { IMAGE_ACCEPT } from "../../lib/image-upload";
+import { uploadImage } from "../../lib/storage-upload";
 import { cn } from "../../lib/utils";
 import { AppImage } from "../ui/app-image";
 
@@ -33,29 +35,17 @@ export function VariantImageCell({
 	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
 	const [uploading, setUploading] = useState(false);
 
-	async function handleFile(files: FileList | null) {
-		const file = files?.[0];
+	async function handleFile(files: readonly File[]) {
+		const file = files[0];
 		if (!file) return;
 		setUploading(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const result = await uploadImage(file, () => generateUploadUrl());
+			if (!result.ok) {
+				toast.error(result.message);
 				return;
 			}
-			const url = await generateUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			// Validate the response shape before trusting it — an error body would
-			// otherwise store `undefined` as a storage id and surface server-side.
-			const body = (await res.json()) as { storageId?: unknown };
-			if (typeof body.storageId !== "string")
-				throw new Error("Upload failed: unexpected response");
-			onUploaded(body.storageId, URL.createObjectURL(prepared.blob));
+			onUploaded(result.storageId, URL.createObjectURL(result.blob));
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -91,7 +81,7 @@ export function VariantImageCell({
 				type="file"
 				accept={IMAGE_ACCEPT}
 				disabled={uploading}
-				onChange={(e) => void handleFile(e.target.files)}
+				onChange={(e) => void handleFile(takePickedFiles(e.target))}
 				className="hidden"
 				aria-label={`Add ${label}`}
 			/>

@@ -25,7 +25,14 @@ import type {
  */
 
 /** Which settings tab fixes this row. */
-export type CountrySetupTab = "store" | "whatsapp" | "payments" | "fulfilment";
+export type CountrySetupTab =
+	| "store"
+	| "whatsapp"
+	| "payments"
+	| "fulfilment"
+	// Third-party accounts (2 Sep IA rework) — HitPay's checklist row lands
+	// on the card's new home.
+	| "integrations";
 
 type CountrySetupCopy = {
 	title: string;
@@ -56,8 +63,9 @@ const COPY: Record<
 	hitpay: ({ to, from }) => ({
 		title: "Check your HitPay account",
 		body: `Your HitPay keys were connected while the store was in ${placeName(from)}. A HitPay account settles one country's currency, so ${COUNTRY_CURRENCY[to]} payments will be declined at checkout.`,
-		tab: "payments",
-		action: "Open Payments",
+		// HitPay's card moved to Integrations (2 Sep IA rework).
+		tab: "integrations",
+		action: "Open Integrations",
 	}),
 	business_address: ({ to, from }) => ({
 		title: "Set your business address",
@@ -89,11 +97,11 @@ const COPY: Record<
 		tab: "fulfilment",
 		action: "Open Fulfilment",
 	}),
-	delivery_booking: ({ to }) => ({
-		title: "Lalamove booking is still switched on",
-		body: `We can't book riders in ${COUNTRY_LABELS[to]} yet, so the dispatch card is hidden on your orders and nothing can be spent by accident. Your API keys are kept if you switch back.`,
-		tab: "fulfilment",
-		action: "Open Fulfilment",
+	delivery_booking: ({ to, from }) => ({
+		title: "Your Lalamove keys may belong to the wrong market",
+		body: `Lalamove issues API keys per market, so the keys you pasted${from ? ` for ${COUNTRY_LABELS[from]}` : " before the switch"} can't price or book riders in ${COUNTRY_LABELS[to]} — quotes will fail until you create ${COUNTRY_LABELS[to]} keys on developers.lalamove.com and paste them in Integrations. Booking stays switched on; nothing books until the keys work.`,
+		tab: "integrations",
+		action: "Open Integrations",
 	}),
 	wa_phone: ({ to, from }) => ({
 		title: "Your store's WhatsApp number is foreign",
@@ -157,9 +165,11 @@ export function countrySetupHeadline(
  * letting them hunt is the difference between a checklist they act on and one
  * they close.
  *
- * Two pairs share a card on purpose: a pickup point's address and its manager
- * number are edited in the same place, as are the delivery-charge mode and the
- * Lalamove booking that rides it.
+ * One pair shares a card on purpose: a pickup point's address and its manager
+ * number are edited in the same place. `delivery_booking` is about the
+ * Lalamove KEYS, so it rings the Lalamove card on Integrations — the tab its
+ * own copy sends the seller to. It used to point at the delivery-charge card on
+ * Fulfilment, so the link opened Integrations and rang nothing.
  */
 export const SETTINGS_ANCHOR: Record<CountrySetupItemKey, string> = {
 	payment_methods: "settings-payment-methods",
@@ -168,7 +178,7 @@ export const SETTINGS_ANCHOR: Record<CountrySetupItemKey, string> = {
 	pickup_addresses: "settings-pickup",
 	delivery_mode: "settings-delivery-charge",
 	pickup_contacts: "settings-pickup",
-	delivery_booking: "settings-delivery-charge",
+	delivery_booking: "settings-lalamove",
 	wa_phone: "settings-wa-phone",
 	notify_wa_phone: "settings-wa-alerts",
 	message_copy: "settings-message-templates",
@@ -184,7 +194,15 @@ export const SETTINGS_ANCHOR: Record<CountrySetupItemKey, string> = {
  * is Malaysian, so ringing it red would be asserting something we don't know.
  * Those get amber: "check this", not "this is broken".
  */
-export type FixHighlight = "error" | "check";
+export type FixHighlight = "error" | "check" | "spotlight";
+
+/**
+ * A card a deep link sent the seller to: which anchor, and how to ring it.
+ * The one shape every settings tab accepts, whoever the sender is — the
+ * post-switch checklist (`?fix=`, error/check) or a What's-new note
+ * (`?spot=`, spotlight). See `src/lib/spotlight.ts`.
+ */
+export type CardTarget = { anchor: string; highlight: FixHighlight };
 
 export function highlightFor(verifiable: boolean): FixHighlight {
 	return verifiable ? "error" : "check";
@@ -200,6 +218,15 @@ export function highlightRingClass(
 	}
 	if (highlight === "check") {
 		return "border-amber-400 ring-2 ring-amber-400/25 dark:border-amber-500";
+	}
+	if (highlight === "spotlight") {
+		// "Here's the thing we were talking about" — the brand mint, because a
+		// What's-new note is an invitation, not a complaint. Nothing is wrong
+		// with the card, so it must never borrow red or amber. The pulse
+		// (`animate-kp-spotlight`) draws the eye once and settles; it is
+		// switched off under prefers-reduced-motion in styles.css, leaving the
+		// static ring.
+		return "border-accent-emphasis ring-2 ring-accent/40 animate-kp-spotlight dark:border-accent";
 	}
 	return "border-input";
 }
@@ -219,9 +246,56 @@ export function scrollToAnchor(anchorId: string): boolean {
 	const reduced =
 		typeof window !== "undefined" &&
 		window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+	// A hidden tab (a cmd-clicked deep link) never runs a smooth scroll's
+	// animation — it would open at the top. Jump instead.
+	const hidden = document.visibilityState === "hidden";
 	el.scrollIntoView({
-		behavior: reduced ? "auto" : "smooth",
+		behavior: reduced || hidden ? "auto" : "smooth",
 		block: "start",
 	});
 	return true;
+}
+
+/**
+ * Scroll to a deep-linked card ONCE it is on the page — the one way a `?spot=`
+ * / `?fix=` link reveals its target.
+ *
+ * The old caller tried a single frame after mount and gave up. On Settings the
+ * tab body renders behind a skeleton until the store loads, so the card
+ * usually wasn't there yet: the ring pulsed below the fold and the seller
+ * landed on the top of the tab (z8r3fdhpm7 — the booking calendar's "Manage"
+ * link). This watches the DOM until the anchor appears, scrolls once, and
+ * gives up after `timeoutMs` so a card that never renders can't yank the page
+ * later. Returns the cleanup for an effect.
+ */
+export function revealAnchorWhenMounted(
+	anchorId: string,
+	timeoutMs = 5000,
+): () => void {
+	if (typeof document === "undefined") return () => {};
+	let done = false;
+	let observer: MutationObserver | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const stop = () => {
+		done = true;
+		observer?.disconnect();
+		if (timer !== undefined) clearTimeout(timer);
+	};
+	const attempt = () => {
+		if (!done && document.getElementById(anchorId)) {
+			stop();
+			scrollToAnchor(anchorId);
+		}
+	};
+	// A frame first: the target usually mounts in the same commit.
+	const frame = requestAnimationFrame(attempt);
+	if (typeof MutationObserver !== "undefined") {
+		observer = new MutationObserver(attempt);
+		observer.observe(document.body, { childList: true, subtree: true });
+	}
+	timer = setTimeout(stop, timeoutMs);
+	return () => {
+		cancelAnimationFrame(frame);
+		stop();
+	};
 }

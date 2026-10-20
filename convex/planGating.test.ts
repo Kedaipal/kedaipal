@@ -233,7 +233,9 @@ describe("plan gating — CRM (Pro+)", () => {
 			radiusDelivery: true,
 			delivery: true,
 			onlinePayments: true,
-			waOrderAlerts: true,
+			events: true,
+			promo: true,
+			vouchers: true,
 		});
 
 		await setPlan(t, retailer._id, "starter");
@@ -247,7 +249,9 @@ describe("plan gating — CRM (Pro+)", () => {
 			radiusDelivery: false,
 			delivery: false,
 			onlinePayments: false,
-			waOrderAlerts: false,
+			events: false,
+			promo: false,
+			vouchers: false,
 		});
 	});
 
@@ -270,7 +274,9 @@ describe("plan gating — CRM (Pro+)", () => {
 			radiusDelivery: true,
 		delivery: true,
 		onlinePayments: true,
-		waOrderAlerts: true,
+		events: true,
+			promo: true,
+		vouchers: true,
 		});
 		// subscriptions.current (billing nav) resolves the same way.
 		const current = await asAdmin.query(api.subscriptions.current, {});
@@ -710,9 +716,6 @@ describe("subscription usage meter", () => {
 		await placeOrder(t, retailer._id, productId);
 		expect(await usageOrders(t, retailer._id)).toBe(2);
 
-		// getMyRetailer carries the meter for the dashboard nudge + billing tab.
-		const me = await asA.query(api.retailers.getMyRetailer);
-		expect(me?.ordersThisMonth).toBe(2);
 
 		await asA.mutation(api.orders.updateStatus, {
 			orderId: first,

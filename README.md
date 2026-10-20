@@ -17,7 +17,7 @@
 | Order flow | WhatsApp CTA → storefront → cart → `wa.me` deep link with `ORD-XXXX` → Convex confirms |
 | Catalog | Hosted in Convex (not Meta Commerce Catalog) |
 | WhatsApp | Shared Kedaipal-owned WABA — no Meta verification required of retailers |
-| Pricing | 3 tiers: Starter RM79 / Pro RM149 / Scale RM299 + 14-day trial (no card) |
+| Pricing | 3 tiers: Starter RM79 / Pro RM149 / Scale RM399, free until your first order (no card) |
 | Customer payments | Retailer-owned gateway (HitPay Connect / Billplz / Stripe Connect) — Kedaipal never touches order money |
 | Subscription billing | Stripe Singapore + HitPay/Billplz |
 | Roadmap | Shopee, Lazada, TikTok Shop, StoreHub connectors — parked behind F&B core |
@@ -81,10 +81,13 @@ pnpm test
 
 ### Lint & format
 
+`pnpm check` is what CI gates — Biome lint **plus** formatting and import
+order. `pnpm lint` is the lint-only subset.
+
 ```bash
-pnpm lint
-pnpm format
-pnpm check
+pnpm check                          # the gate
+pnpm lint                           # lint rules only
+npx biome check --write <paths>     # fix drift (explicit paths, not a directory)
 ```
 
 ---

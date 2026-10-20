@@ -1,5 +1,19 @@
 import { ConvexError, v } from "convex/values";
-import { isMytMidnight, MAX_NOTICE_DAYS } from "./lib/fulfilmentDate";
+import { isStoreOffline, offlineStoreIds } from "./storeAvailability";
+import {
+	formatFulfilmentDate,
+	isMytMidnight,
+	isValidPrepMinutes,
+	MAX_NOTICE_DAYS,
+	MAX_PREP_MINUTES,
+} from "./lib/fulfilmentDate";
+import {
+	type BuyerQuestion,
+	buyerQuestionInputValidator,
+	type BuyerQuestionInput,
+	sanitizeBuyerQuestions,
+} from "./lib/buyerQuestions";
+import { collapseNote, MAX_PICKUP_NOTE_LENGTH } from "./lib/pickupNote";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import {
@@ -10,19 +24,57 @@ import {
 	type QueryCtx,
 } from "./_generated/server";
 import {
-	adminUserIds,
 	logAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
+	storeOwnerIsAdmin,
+	tryRetailerAccess,
 } from "./lib/auth";
+import type { PermissionLevel } from "./lib/permissions";
 import {
 	bumpCategoryCountsForProduct,
 	isProductVisible,
 } from "./lib/categoryCounts";
 import { sanitizeMinQuantity } from "./lib/minOrderRules";
 import {
+	type QuestionTally,
+	questionTallies,
+	tallyEventSeats,
+} from "./lib/eventSeats";
+import { resolveEventVenue } from "./orders";
+import {
+	type EventInput,
+	hiddenFromStorefront,
+	isEventPassed,
+	type ProductEvent,
+	sanitizeEvent,
+	seatsLeft,
+} from "./lib/productEvent";
+import {
+	effectiveKind,
+	sanitizeCapacityPerNight,
+	sanitizePackageLength,
+	sanitizeSecurityDeposit,
+	sanitizeSkipsClosedDays,
+	sanitizeWeekendRate,
+	type PackageUnit,
+} from "./lib/productKind";
+import {
+	assertValidPromoPrice,
+	effectivePrice,
+	isPromoActive,
+	promoPhase,
+	promoUnitsLeft,
+	sanitizePromo,
+	DEFAULT_PROMO_LABEL,
+} from "./lib/promo";
+import { tallyPromoUnits } from "./lib/promoTally";
+import { productPromotion } from "./promotions";
+import {
 	assertProductCap,
 	MAX_PRODUCTS_PER_RETAILER,
+	type ProductCapExemption,
+	productCapExemption,
 	productCapState,
 } from "./lib/productCap";
 import { deleteProductCascade } from "./lib/productDelete";
@@ -31,15 +83,24 @@ import {
 	POPULAR_TOP_CANDIDATES,
 	rankPopularProducts,
 } from "./lib/popularProducts";
+import { lacksParcelWeight } from "./lib/delivery";
 import { rateLimiter } from "./lib/rateLimiter";
 import { SLUG_MAX, SLUG_MIN, slugify } from "./lib/slug";
-import { assertSubscriptionActive } from "./subscriptions";
+import {
+	assertOwnStoreActive,
+	assertPlanFeature,
+	assertSubscriptionActive,
+	getAccess,
+	loadSubscription,
+} from "./subscriptions";
+import { type Plan, storeHasFullAccess } from "./lib/plans";
 import {
 	cartesian,
 	DEFAULT_CUSTOM_LABEL,
 	isValidCombination,
 	MAX_CUSTOM_LABEL_LENGTH,
 	MAX_CUSTOM_PROMPT_LENGTH,
+	MAX_VARIANTS_PER_PRODUCT,
 	type OptionAxis,
 	normalizeOptions,
 	sameOptionValues,
@@ -59,9 +120,47 @@ function sanitizeMinNoticeDays(raw: number | undefined): number | undefined {
 	return raw === 0 ? undefined : raw;
 }
 
+/** Per-product prep window in MINUTES (z8r3fdff97). Integer in
+ * [0, MAX_PREP_MINUTES]; 0 normalizes to unset so "no window" has one
+ * spelling, the sanitizeMinNoticeDays posture. Checkout/create take the MAX
+ * across cart items and floor the fulfilment TIME with it. */
+function sanitizePrepMinutes(raw: number | undefined): number | undefined {
+	if (raw === undefined) return undefined;
+	if (!isValidPrepMinutes(raw)) {
+		throw new ConvexError(
+			`Prep time must be a whole number of minutes between 0 and ${MAX_PREP_MINUTES}`,
+		);
+	}
+	return raw === 0 ? undefined : raw;
+}
+
+/** Per-product pickup note. Trimmed; inner newlines collapse to single
+ * spaces so one line stays one line wherever it lands (a cart row, a
+ * WhatsApp message, a PDF); empty → unset. Stored as plain text and rendered
+ * as escaped text everywhere — never markup. */
+function sanitizePickupNote(raw: string | undefined): string | undefined {
+	const collapsed = collapseNote(raw);
+	if (collapsed !== undefined && collapsed.length > MAX_PICKUP_NOTE_LENGTH) {
+		throw new ConvexError(
+			`Pickup note must be ${MAX_PICKUP_NOTE_LENGTH} characters or fewer`,
+		);
+	}
+	return collapsed;
+}
+
 const MAX_IMAGES_PER_PRODUCT = 5;
 const MAX_IMAGES_PER_VARIANT = 3;
-const MAX_BULK_IMPORT_BATCH = 50;
+/**
+ * Variant rows one `bulkUpsert` call may carry. Deliberately EQUAL to the
+ * per-product variant cap, not a number of its own: a single product's grid
+ * cannot be split across calls (the client chunker never splits one product),
+ * so a batch ceiling below `MAX_VARIANTS_PER_PRODUCT` would accept a grid in
+ * the editor and refuse the same grid on import — which is exactly what
+ * happened when the cap moved to 100 and this still read 50 (z8r3fdjgvd).
+ * The chunker packs several small products up to this number; 100 variant rows
+ * is still far inside a Convex transaction's document budget.
+ */
+const MAX_BULK_IMPORT_BATCH = MAX_VARIANTS_PER_PRODUCT;
 const MAX_SKU_LENGTH = 60;
 
 /**
@@ -126,30 +225,71 @@ async function requireUserId(ctx: QueryCtx | MutationCtx): Promise<string> {
 // Owner-OR-admin retailer access (see convex/lib/auth.ts). Kept as a thin local
 // alias so every call site in this file reads uniformly and returns the
 // `actingAsAdmin` flag the mutations use to skip the soft-lock + write audit rows.
+// "Ownership" = the ROW belongs to the store; WHO may act is the `level` on the
+// products grant (owner/admin always; members per convex/lib/permissions.ts).
 async function requireRetailerOwnership(
 	ctx: QueryCtx | MutationCtx,
 	retailerId: Id<"retailers">,
+	level: PermissionLevel,
 ): Promise<RetailerAccess> {
-	return requireRetailerAccess(ctx, retailerId);
+	return requireRetailerAccess(ctx, retailerId, { area: "products", level });
 }
 
+/**
+ * Does the 200-product cap apply to this call? ONE author, because four
+ * surfaces ask it — `create`, `bulkUpsert`, the `capState` counter and the
+ * import preview — and a disagreement between them is a seller told "12 of
+ * these 60 fit" by a preview and then refused by the save, or the reverse.
+ *
+ * Two independent reasons to be exempt, different in kind:
+ *  - the CALLER is a Kedaipal admin operating someone else's store (act-as);
+ *  - the STORE has full access (`storeHasFullAccess` — admin-owned or
+ *    SPONSORED, z8r3fdrph7), so there is no plan behind it to cap. Unlike
+ *    act-as this holds on the seller's OWN login, which is the point: a
+ *    sponsored vendor adds their 250th product themselves.
+ */
+async function productCapExempt(
+	ctx: QueryCtx | MutationCtx,
+	access: RetailerAccess,
+): Promise<ProductCapExemption | null> {
+	const sub = await loadSubscription(ctx, access.retailer._id);
+	return productCapExemption({
+		actingAsAdmin: access.actingAsAdmin,
+		fullAccess: storeHasFullAccess({
+			ownerIsAdmin: storeOwnerIsAdmin(access.retailer),
+			comped: sub?.comped === true,
+		}),
+	});
+}
+
+// Widened to accept a QueryCtx (the `requireRetailerOwnership` shape) so
+// owner-gated READS — `eventHeadcount` — share the same ownership check the
+// mutations use, rather than growing a second, drifting copy of it.
 async function requireProductOwnership(
-	ctx: MutationCtx,
+	ctx: QueryCtx | MutationCtx,
 	productId: Id<"products">,
+	level: PermissionLevel,
 ): Promise<{ product: Doc<"products">; access: RetailerAccess }> {
 	const product = await ctx.db.get(productId);
 	if (!product) throw new Error("Product not found");
-	const access = await requireRetailerAccess(ctx, product.retailerId);
+	const access = await requireRetailerAccess(ctx, product.retailerId, {
+		area: "products",
+		level,
+	});
 	return { product, access };
 }
 
 async function requireVariantOwnership(
 	ctx: MutationCtx,
 	variantId: Id<"productVariants">,
+	level: PermissionLevel,
 ): Promise<{ variant: Doc<"productVariants">; access: RetailerAccess }> {
 	const variant = await ctx.db.get(variantId);
 	if (!variant) throw new Error("Variant not found");
-	const access = await requireRetailerAccess(ctx, variant.retailerId);
+	const access = await requireRetailerAccess(ctx, variant.retailerId, {
+		area: "products",
+		level,
+	});
 	return { variant, access };
 }
 
@@ -186,7 +326,7 @@ async function loadVariants(ctx: QueryCtx, productId: Id<"products">) {
 export async function productWithVariants(
 	ctx: QueryCtx,
 	product: Doc<"products">,
-	opts: { activeOnly: boolean; forOwner?: boolean },
+	opts: { activeOnly: boolean; forOwner?: boolean; plan: Plan },
 ) {
 	const base = await withImageUrls(ctx, product);
 	// Seller-only fields are stripped unless the caller is an owner/admin surface.
@@ -206,7 +346,10 @@ export async function productWithVariants(
 	// letting TS infer a union: a Convex query has ONE return type regardless of
 	// the runtime auth branch, so the shape has to admit the field being absent.
 	// The stripped object is assignable precisely because the field is optional.
-	const { orderedAt: _orderedAt, ...publicBase } = base;
+	// `promo` (the raw config) is seller-only like `orderedAt`: the buyer-safe
+	// slice travels as `promoState` below, so cap sizes, pay windows and a
+	// paused config never cross the public wire raw.
+	const { orderedAt: _orderedAt, promo: _promoCfg, ...publicBase } = base;
 	const visibleBase: typeof base =
 		opts.forOwner === true ? base : publicBase;
 	const all = await loadVariants(ctx, product._id);
@@ -238,15 +381,143 @@ export async function productWithVariants(
 	const inStock = resolved
 		.filter((vr) => vr.active)
 		.some((vr) => (vr.blockWhenOutOfStock ? vr.onHand > 0 : true));
+	// Seat counts for an event product (`z8r3fdff9u`). Only ONE extra read, and
+	// only for the handful of products that are events — the tally scans a single
+	// day of this seller's orders on `by_retailer_fulfilment`, which is why this
+	// is affordable on the public storefront grid.
+	//
+	// `eventSeatsLeft` is public (a buyer must see "12 seats left" and the
+	// sold-out state before committing) and is `undefined` for an UNCAPPED
+	// event — nothing to show, nothing to leak. `eventSeatsTaken` is the raw
+	// headcount and stays owner-only, next to `orderedAt` in the seller-only
+	// bucket: it's sales volume, the line `popularProducts` already draws.
+	let eventSeatsLeft: number | undefined;
+	let eventSeatsTaken: number | undefined;
+	if (product.event !== undefined) {
+		const tally = await tallyEventSeats(ctx, {
+			retailerId: product.retailerId,
+			productId: product._id,
+			date: product.event.date,
+		});
+		eventSeatsLeft = seatsLeft(product.event, tally.taken);
+		if (opts.forOwner === true) eventSeatsTaken = tally.taken;
+	}
+	// Promo state (z8r3fdcw72), the event-seats posture: resolved ONCE here so
+	// the card, sheet, page, counter default and dashboard badge all read the
+	// same answer as the order doors. Read-time check against Date.now() (the
+	// isEventPassed precedent — no cron; the ticking countdown is the client's
+	// clock, the server stays the authority at create). Plan-gated: a paused
+	// promo (Starter) publishes NO state and the variants' sale prices are
+	// stripped, so a buyer never sees a sale the doors won't honour. The flash
+	// tally is one bounded read, only for a live capped sale.
+	const promoNow = Date.now();
+	let promoState:
+		| {
+				phase: "scheduled" | "live";
+				label: string;
+				startsAt?: number;
+				endsAt?: number;
+				unitCap?: number;
+				unitsLeft?: number;
+				maxPerOrder?: number;
+				payWithinMinutes?: number;
+		  }
+		| undefined;
+	if (
+		product.promo !== undefined &&
+		isPromoActive(
+			{ promo: { ...product.promo, startsAt: undefined } },
+			opts.plan,
+			promoNow,
+		)
+	) {
+		// The plan check above is phase-independent (start stripped); the real
+		// phase decides between the teaser and the live sale.
+		const phase = promoPhase(product.promo, promoNow);
+		if (phase === "scheduled" || phase === "live") {
+			const flashApplies = product.event === undefined;
+			const capped = flashApplies && product.promo.unitCap !== undefined;
+			const unitsLeft =
+				phase === "live" && capped
+					? promoUnitsLeft(
+							product.promo.unitCap,
+							await tallyPromoUnits(ctx, {
+								retailerId: product.retailerId,
+								productId: product._id,
+								runId: product.promo.runId,
+								startsAt: product.promo.startsAt ?? 0,
+								endsAt: product.promo.endsAt,
+							}),
+						)
+					: undefined;
+			promoState = {
+				phase,
+				label: product.promo.label ?? DEFAULT_PROMO_LABEL,
+				startsAt: product.promo.startsAt,
+				endsAt: product.promo.endsAt,
+				unitCap: capped ? product.promo.unitCap : undefined,
+				unitsLeft,
+				maxPerOrder: flashApplies ? product.promo.maxPerOrder : undefined,
+				// The buyer is the one who LOSES the order to this deadline, so
+				// they have to be told before they commit — the cron cancels an
+				// unpaid flash order and this buyer's habit is to place it and
+				// go straight to WhatsApp. Previously the first mention of a
+				// deadline was the track-page countdown, after the fact.
+				payWithinMinutes: flashApplies
+					? product.promo.payWithinMinutes
+					: undefined,
+			};
+		}
+	}
+	const promoLive = promoState?.phase === "live";
+	// Sale prices ride the variant payload only while they can actually apply;
+	// the teaser keeps them too (the card says "RM 31.50 at 8:00 PM").
+	const shownVariants =
+		promoState !== undefined || opts.forOwner === true
+			? variants
+			: variants.map((vr) =>
+					vr.promoPrice === undefined ? vr : { ...vr, promoPrice: undefined },
+				);
+	// Discounted "From" for the strike-through pair on cards: min effective
+	// price across priced variants, present only when it differs from the list.
+	//
+	// Published for a SCHEDULED teaser too, not just a live sale. Two things
+	// need it: the teaser names the price it drops TO ("RM 31.50 in 1h 11m" —
+	// "in 1h 11m" alone asks the buyer to come back for a number nobody told
+	// them), and the client flips to the sale price on its own clock at
+	// `startsAt` (see `promoLive`), which it can only do if the discounted
+	// figure is already in hand. Publishing it early is safe: every surface
+	// gates on `promoLive`, which stays false until the drop opens.
+	let promoPriceFrom: number | undefined;
+	if (promoState !== undefined) {
+		const priced = variants.filter((vr) => !isQuoteVariant(vr));
+		const effective = priced.map((vr) =>
+			promoLive
+				? effectivePrice(vr, product, opts.plan, promoNow, promoState.unitsLeft)
+				: // Teaser: what it WILL cost, by the same rule the live branch
+					// applies — a sale price only counts when it undercuts its own line.
+					vr.promoPrice !== undefined &&
+						vr.promoPrice > 0 &&
+						vr.promoPrice < vr.price
+					? vr.promoPrice
+					: vr.price,
+		);
+		const min = effective.length ? Math.min(...effective) : 0;
+		if (prices.length && min < Math.min(...prices)) promoPriceFrom = min;
+	}
 	return {
 		...visibleBase,
+		eventSeatsLeft,
+		eventSeatsTaken,
 		// Always usable by the storefront's product-page links, even before the
 		// slug backfill has stamped this row.
 		slug: effectiveSlug(product),
-		variants,
+		variants: shownVariants,
 		variantCount: variants.length,
 		priceFrom: prices.length ? Math.min(...prices) : 0,
 		priceTo: prices.length ? Math.max(...prices) : 0,
+		promoState,
+		promoPriceFrom,
 		hasQuotePricing,
 		totalOnHand,
 		inStock,
@@ -314,6 +585,38 @@ const optionAxisValidator = v.object({
 	values: v.array(v.string()),
 });
 
+/** Promo config input (z8r3fdcw72) — the server mints/keeps `runId`
+ * (`sanitizePromo`), never the client. */
+const promoInputValidator = v.object({
+	label: v.optional(v.string()),
+	startsAt: v.optional(v.number()),
+	endsAt: v.optional(v.number()),
+	unitCap: v.optional(v.number()),
+	maxPerOrder: v.optional(v.number()),
+	payWithinMinutes: v.optional(v.number()),
+});
+
+/** Flash extras are refused where capacity/seats already govern (v1) — the
+ * copy says so instead of hiding the fields silently (the step mirrors it). */
+function assertFlashFieldsAllowed(
+	input: { unitCap?: number; maxPerOrder?: number; payWithinMinutes?: number },
+	listing: { isBooking: boolean; isEvent: boolean },
+): void {
+	const hasFlash =
+		input.unitCap !== undefined ||
+		input.maxPerOrder !== undefined ||
+		input.payWithinMinutes !== undefined;
+	if (!hasFlash) return;
+	if (listing.isBooking)
+		throw new ConvexError(
+			"Flash-sale extras don't apply to a booking listing — capacity already caps it. The promo price still does.",
+		);
+	if (listing.isEvent)
+		throw new ConvexError(
+			"Flash-sale extras don't apply to an event — seats already cap it. The promo price still does.",
+		);
+}
+
 const variantInputValidator = v.object({
 	// Positionally aligned with the product's option axes; [] for the implicit
 	// default variant of a no-axes product AND for the custom line (the two are
@@ -321,6 +624,8 @@ const variantInputValidator = v.object({
 	optionValues: v.array(v.string()),
 	sku: v.optional(v.string()),
 	price: v.number(),
+	// Sale price (z8r3fdcw72): > 0 and < price, refused on custom/quote lines.
+	promoPrice: v.optional(v.number()),
 	onHand: v.number(),
 	parcelWeightG: v.optional(v.number()),
 	imageStorageIds: v.optional(v.array(v.string())),
@@ -338,6 +643,7 @@ type VariantInput = {
 	optionValues: string[];
 	sku?: string;
 	price: number;
+	promoPrice?: number;
 	onHand: number;
 	parcelWeightG?: number;
 	imageStorageIds?: string[];
@@ -441,6 +747,22 @@ function validateVariantSet(
 
 	if (customLines.length > 1)
 		throw new ConvexError("A product can have at most one custom option");
+
+	// Promo prices (z8r3fdcw72): one author for create AND update. A custom
+	// line's price is agreed per order, so a sale price on it is meaningless;
+	// a filled price must undercut its own variant's list price.
+	for (const vr of variants) {
+		if (vr.promoPrice === undefined) continue;
+		if (vr.isCustom === true)
+			throw new ConvexError(
+				"A custom line's price is agreed per order — it can't carry a promo price",
+			);
+		try {
+			assertValidPromoPrice(vr.promoPrice, vr.price);
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+	}
 
 	/**
 	 * A product's sellable lines are the cartesian **matrix ∪ the custom line**,
@@ -558,6 +880,8 @@ function byActiveThenSort(a: Doc<"products">, b: Doc<"products">): number {
 export const list = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return [];
 		const rows = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -577,8 +901,18 @@ export const list = query({
 			)
 			.collect();
 		rows.sort(bySortOrder);
+		// Resolved once per query, passed down: promo gating is per-STORE, and
+		// per-product resolution would re-read the subscription row N times.
+		const plan = (await getAccess(ctx, retailerId)).plan;
 		return Promise.all(
-			rows.map((row) => productWithVariants(ctx, row, { activeOnly: true })),
+			// A finished event takes itself off the storefront the morning after
+			// (`hiddenFromStorefront`) — no cron, no seller action. Filtered in
+			// memory beside the hidden flags for the same reason they are.
+			rows
+				.filter((row) => !hiddenFromStorefront(row))
+				.map((row) =>
+					productWithVariants(ctx, row, { activeOnly: true, plan }),
+				),
 		);
 	},
 });
@@ -590,7 +924,13 @@ export const list = query({
 export const listForCounter = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
-		await requireRetailerOwnership(ctx, retailerId);
+		// The counter's product picker rides the ORDERS grant: ringing up what's
+		// on the shelf is selling, not catalog management — a front-desk member
+		// without the products grant must still be able to run the counter.
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
 		const rows = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -598,11 +938,36 @@ export const listForCounter = query({
 			)
 			.collect();
 		rows.sort(bySortOrder);
+		const plan = (await getAccess(ctx, retailerId)).plan;
 		return Promise.all(
-			rows.map((row) =>
-				// Owner-gated read (counter checkout), so seller-only fields are safe.
-				productWithVariants(ctx, row, { activeOnly: true, forOwner: true }),
-			),
+			rows
+				// Booking listings never sell at the counter (86eyj70z1/S2): a stay
+				// needs the calendar + request-to-book flow, and the counter has no
+				// date-range UI. A walk-in guest books on the storefront instead —
+				// revisit only if a real seller asks for counter bookings.
+				.filter((row) => effectiveKind(row.kind) !== "booking")
+				.map(async (row) => {
+					// Owner-gated read (counter checkout), so seller-only fields are safe.
+					const product = await productWithVariants(ctx, row, {
+						activeOnly: true,
+						forOwner: true,
+						plan,
+					});
+					// An event product's binding number at the counter is SEATS, not
+					// stock — the rows show min(stock, seats) and the stepper stops
+					// there, so a walk-in cart never gets built past the cap only to
+					// be refused at create. Same tally the storefront reads.
+					if (row.event === undefined) return product;
+					const tally = await tallyEventSeats(ctx, {
+						retailerId,
+						productId: row._id,
+						date: row.event.date,
+					});
+					return {
+						...product,
+						eventSeatsLeft: seatsLeft(row.event, tally.taken),
+					};
+				}),
 		);
 	},
 });
@@ -615,13 +980,110 @@ export const listForCounter = query({
  * would be absurd. The products list keeps deriving it from the `listAll` it
  * already holds; both go through `productCapState`, so the flags can't drift.
  */
+/**
+ * Does this store have any live event listing? Drives the Order-status
+ * settings note that events keep their fixed Confirmed → Checked In pipeline
+ * (the booking-note pattern) — the exemption must be visible to exactly the
+ * sellers it applies to, and invisible noise to everyone else.
+ */
+export const hasEventListings = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<boolean> => {
+		await requireRetailerOwnership(ctx, retailerId, "read");
+		const rows = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailerId).eq("active", true),
+			)
+			.collect();
+		return rows.some((p) => p.event !== undefined);
+	},
+});
+
+/** How many products a weight-priced checkout can't price, named. */
+export const MISSING_WEIGHT_NAMED_MAX = 5;
+
+/**
+ * The weight & zone readiness check (86eye9xd4, 4A): live, active, physical
+ * products with at least one live non-custom choice that has no parcel
+ * weight. Checkout refuses (or holds for WhatsApp) any cart holding one, so
+ * the delivery-pricing page names them up front instead of leaving the seller
+ * to find out from a stranded order.
+ *
+ * Bounded by the product cap (z8r3fdjmf4q): one indexed variant read per
+ * active product. Custom choices never count — their weight is unknowable by
+ * design, and the "When the weight can't be calculated" rule covers them.
+ */
+export const missingParcelWeights = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		count: number;
+		named: Array<{ productId: Id<"products">; name: string }>;
+	}> => {
+		await requireRetailerOwnership(ctx, retailerId, "read");
+		const products = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailerId).eq("active", true),
+			)
+			.collect();
+		const missing: Array<{ productId: Id<"products">; name: string }> = [];
+		for (const product of products) {
+			if (effectiveKind(product.kind) !== "physical") continue;
+			const variants = await ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", product._id))
+				.collect();
+			if (variants.some((v) => v.active && lacksParcelWeight(v))) {
+				missing.push({ productId: product._id, name: product.name });
+			}
+		}
+		return {
+			count: missing.length,
+			named: missing.slice(0, MISSING_WEIGHT_NAMED_MAX),
+		};
+	},
+});
+
+/**
+ * Which pickup points host a live event, by name (`z8r3fdff9u`): the
+ * Settings → Fulfilment badge. A point can be hidden from standard orders
+ * yet still be an event's venue (an RSVP-only location), so the row that
+ * hides it must SAY it hosts events — otherwise "hide" looks like it made
+ * the point disappear everywhere, which is false. Explicitly named venues
+ * only: a legacy event with no venue isn't tied to any one point.
+ */
+export const eventVenueUsage = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<Array<{ venueId: Id<"pickupLocations">; name: string }>> => {
+		await requireRetailerOwnership(ctx, retailerId, "read");
+		const rows = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailerId).eq("active", true),
+			)
+			.collect();
+		return rows.flatMap((p) =>
+			p.event?.venueId !== undefined
+				? [{ venueId: p.event.venueId, name: p.name }]
+				: [],
+		);
+	},
+});
+
 export const capState = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
-		const access = await requireRetailerOwnership(ctx, retailerId);
+		const access = await requireRetailerOwnership(ctx, retailerId, "read");
 		return productCapState(
 			await countProductsForRetailer(ctx, retailerId),
-			access.actingAsAdmin,
+			await productCapExempt(ctx, access),
 		);
 	},
 });
@@ -629,16 +1091,21 @@ export const capState = query({
 export const listAll = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }) => {
-		await requireRetailerOwnership(ctx, retailerId);
+		await requireRetailerOwnership(ctx, retailerId, "read");
 		const rows = await ctx.db
 			.query("products")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.collect();
 		rows.sort(byActiveThenSort);
+		const plan = (await getAccess(ctx, retailerId)).plan;
 		return Promise.all(
 				// Owner-gated dashboard read — seller-only fields stay in.
 			rows.map((row) =>
-				productWithVariants(ctx, row, { activeOnly: false, forOwner: true }),
+				productWithVariants(ctx, row, {
+					activeOnly: false,
+					forOwner: true,
+					plan,
+				}),
 			),
 		);
 	},
@@ -649,16 +1116,15 @@ export const get = query({
 	handler: async (ctx, { productId }) => {
 		const row = await ctx.db.get(productId);
 		if (!row) return null;
-		// Inactive variants (price/stock/SKU) are owner-only. The owning retailer —
-		// or a Kedaipal admin operating the store (act-as) — editing in the dashboard
-		// sees the full set; any other caller, including an unauthenticated direct
-		// query, gets active variants only.
-		const identity = await ctx.auth.getUserIdentity();
-		const owner = await ctx.db.get(row.retailerId);
+		// Inactive variants (price/stock/SKU) are seller-side data. The owner, a
+		// member with the products grant, or a Kedaipal admin (act-as) editing in
+		// the dashboard sees the full set; any other caller, including an
+		// unauthenticated direct query, gets active variants only.
 		const canEdit =
-			identity !== null &&
-			(owner?.userId === identity.subject ||
-				adminUserIds().includes(identity.subject));
+			(await tryRetailerAccess(ctx, row.retailerId, {
+				area: "products",
+				level: "read",
+			})) !== null;
 		// Off-storefront products are counter-only — a non-owner caller (incl. an
 		// unauthenticated direct query) must not read one, matching the promise
 		// that they never leak through a public query. Both the seller's own
@@ -672,12 +1138,16 @@ export const get = query({
 		// in the PR #155 review.
 		if ((!row.active || row.hidden || row.hiddenByCategory) && !canEdit)
 			return null;
+		// A finished event is off the storefront but still readable by its owner
+		// (the RSVPs panel is a history view).
+		if (hiddenFromStorefront(row) && !canEdit) return null;
 		// Shared endpoint: the same `canEdit` that decides whether inactive variants
 		// are visible also decides whether seller-only fields are. An
 		// unauthenticated buyer hitting this by id gets the public shape.
 		return productWithVariants(ctx, row, {
 			activeOnly: !canEdit,
 			forOwner: canEdit,
+			plan: (await getAccess(ctx, row.retailerId)).plan,
 		});
 	},
 });
@@ -685,6 +1155,28 @@ export const get = query({
 // ---------------------------------------------------------------------------
 // Mutations
 // ---------------------------------------------------------------------------
+
+/**
+ * Buyer questions (`z8r3fdkjek`) for a create/update. Refused on a booking
+ * listing — a booking has its own door (`bookings.requestBooking`) with no
+ * buyer items to hang answers on, so a question there could never be asked.
+ * An empty list is allowed on a booking (it's how "none" is spelled).
+ */
+function resolveBuyerQuestions(
+	kind: ReturnType<typeof effectiveKind>,
+	raw: BuyerQuestionInput[] | undefined,
+): BuyerQuestion[] | undefined {
+	if (raw === undefined || raw.length === 0) return undefined;
+	if (kind === "booking")
+		throw new ConvexError(
+			"Questions for the buyer aren't available on a booking listing yet",
+		);
+	try {
+		return sanitizeBuyerQuestions(raw);
+	} catch (err) {
+		throw new ConvexError((err as Error).message);
+	}
+}
 
 export const create = mutation({
 	args: {
@@ -698,29 +1190,89 @@ export const create = mutation({
 		blockWhenOutOfStock: v.optional(v.boolean()),
 		requiresProof: v.optional(v.boolean()),
 		minNoticeDays: v.optional(v.number()),
+		// Prep window in minutes + the buyer's collection note. 0/blank normalize
+		// to unset (z8r3fdff97).
+		prepMinutes: v.optional(v.number()),
+		pickupNote: v.optional(v.string()),
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity (summed across variants). 0/1 normalize to unset.
 		minQuantity: v.optional(v.number()),
+		// Buyer questions (`z8r3fdkjek`) — asked at checkout, answers frozen on
+		// the order line. Refused on a booking listing. On update: undefined =
+		// no change, [] clears.
+		buyerQuestions: v.optional(v.array(buyerQuestionInputValidator)),
+		// Event RSVP config (`z8r3fdff9u`). Present = this product is a
+		// fixed-date event every RSVP locks to. Refused on the booking kind.
+		event: v.optional(
+			v.object({
+				date: v.number(),
+				timeMinutes: v.optional(v.number()),
+				seats: v.optional(v.number()),
+				endDate: v.optional(v.number()),
+				venueId: v.optional(v.id("pickupLocations")),
+				requiresApproval: v.optional(v.boolean()),
+			}),
+		),
+		// Promo price + flash sale config (z8r3fdcw72). Pro-gated; the server
+		// mints `runId` (sanitizePromo), never the client.
+		promo: v.optional(promoInputValidator),
+		// Kind + booking config land together at create and the kind is immutable
+		// after (update deliberately has no kind arg) — see schema comment.
+		kind: v.optional(
+			v.union(
+				v.literal("physical"),
+				v.literal("service"),
+				v.literal("booking"),
+			),
+		),
+		booking: v.optional(
+			v.object({
+				// Unset = unlimited (S7) — a gym has no daily member cap.
+				capacityPerNight: v.optional(v.number()),
+				securityDeposit: v.optional(v.number()),
+				// Fixed-length package; unset = free check-in/check-out. The unit
+				// decides how the end derives — a calendar month, or N days.
+				packageLength: v.optional(v.number()),
+				packageUnit: v.optional(
+					v.union(
+						v.literal("day"),
+						v.literal("night"),
+						v.literal("month"),
+					),
+				),
+				// Instant book — skip the request-to-book approval step.
+				autoAccept: v.optional(v.boolean()),
+				// Weekend per-night rate (sen) + the nights it covers (S13). Unset
+				// = one rate; 0 clears. Refused on a package listing.
+				weekendPrice: v.optional(v.number()),
+				weekendDays: v.optional(v.array(v.number())),
+				// "Only days you're open" (z8r3fdhpm7) — a DAY package that skips
+				// the store's closed days. Refused on any other shape.
+				skipsClosedDays: v.optional(v.boolean()),
+			}),
+		),
 		variants: v.array(variantInputValidator),
 	},
 	handler: async (ctx, args): Promise<Id<"products">> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		const access = await requireRetailerOwnership(ctx, args.retailerId);
+		const access = await requireRetailerOwnership(ctx, args.retailerId, "write");
 		// Soft-lock: a past_due seller can't grow their catalog (storefront + order
 		// pipeline stay live). Admins onboarding a store (act-as) bypass it —
 		// white-glove happens before the seller has paid. See docs/manual-subscription.md.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, args.retailerId);
+		}
 
 		// Product cap — counts archived rows too, so deleting (not archiving) is
-		// what frees a slot. An admin operating the store (act-as) is exempt: a
+		// what frees a slot. Exempt for an admin operating the store (act-as: a
 		// white-glove Enterprise catalog gets stocked past the ceiling by hand,
-		// the same posture as the subscription soft-lock bypass above.
+		// the same posture as the subscription soft-lock bypass above) and for a
+		// full-access store, which has no plan to cap (`productCapExempt`).
 		assertProductCap(
 			await countProductsForRetailer(ctx, args.retailerId),
 			1,
-			access.actingAsAdmin,
+			await productCapExempt(ctx, access),
 		);
 
 		if (args.name.trim().length === 0) throw new ConvexError("Name is required");
@@ -729,6 +1281,109 @@ export const create = mutation({
 
 		const options = normalizeOptionsOrThrow(args.options);
 		const variants = validateVariantSet(options, args.variants);
+
+		// Kind ⟷ booking config travel together, both directions: a booking
+		// listing with no capacity has no availability semantics, and capacity on
+		// a non-booking product is dead config waiting to mislead (86eyj70z1).
+		const kind = args.kind ?? undefined;
+		let booking:
+			| {
+					capacityPerNight?: number;
+					securityDeposit?: number;
+					packageLength?: number;
+					packageUnit?: PackageUnit;
+					autoAccept?: boolean;
+					weekendPrice?: number;
+					weekendDays?: number[];
+					skipsClosedDays?: true;
+			  }
+			| undefined;
+		if (kind === "booking") {
+			if (!args.booking)
+				throw new ConvexError("A booking listing needs its booking settings");
+			try {
+				const packageLength = sanitizePackageLength(
+					args.booking.packageLength,
+					args.booking.packageUnit,
+				);
+				booking = {
+					// Unset capacity = unlimited (S7), not a missing value.
+					capacityPerNight: sanitizeCapacityPerNight(
+						args.booking.capacityPerNight,
+					),
+					securityDeposit: sanitizeSecurityDeposit(
+						args.booking.securityDeposit,
+					),
+					packageLength,
+					packageUnit: args.booking.packageUnit,
+					autoAccept: args.booking.autoAccept === true ? true : undefined,
+					skipsClosedDays: sanitizeSkipsClosedDays(
+						args.booking.skipsClosedDays,
+						{ packageLength, packageUnit: args.booking.packageUnit },
+					),
+					// Free-range only — a package refuses the pair (S13).
+					...sanitizeWeekendRate(
+						args.booking.weekendPrice,
+						args.booking.weekendDays,
+						{ packageLength },
+					),
+				};
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		} else if (args.booking) {
+			throw new ConvexError(
+				"Capacity only applies to a booking listing — pick the Booking kind first",
+			);
+		}
+
+		// Event config (`z8r3fdff9u`). Refused on a booking listing: a stay is
+		// already a date RANGE the guest picks, so a second fixed date would be
+		// two availability models arguing — and a booking has no variants to hang
+		// a food choice off (docs/booking.md S1, the whole reason events aren't
+		// bookings). Pro-gated like `categories`; admin act-as bypasses so
+		// white-glove onboarding can set one up on a Starter store.
+		let event: StoredProductEvent | undefined;
+		if (args.event !== undefined) {
+			if (effectiveKind(kind) === "booking")
+				throw new ConvexError(
+					"A booking listing already takes its own dates — events are for products and services",
+				);
+			if (!access.actingAsAdmin)
+				await assertPlanFeature(ctx, args.retailerId, "events");
+			let sanitized: ProductEvent | undefined;
+			try {
+				sanitized = sanitizeEvent(args.event);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+			if (sanitized !== undefined)
+				event = await validateEventVenue(ctx, args.retailerId, sanitized);
+		}
+
+		const buyerQuestions = resolveBuyerQuestions(
+			effectiveKind(kind),
+			args.buyerQuestions,
+		);
+
+		// Promo config at create (z8r3fdcw72). Pro-gated on SET only — clearing
+		// and plain saves stay un-gated so a downgraded seller is never trapped.
+		// Flash extras are refused on booking/event listings (capacity and seats
+		// already govern them); the promo PRICE itself still applies there.
+		let promo: Doc<"products">["promo"];
+		if (args.promo !== undefined) {
+			if (!access.actingAsAdmin)
+				await assertPlanFeature(ctx, args.retailerId, "promo");
+			assertFlashFieldsAllowed(args.promo, {
+				isBooking: effectiveKind(kind) === "booking",
+				isEvent: event !== undefined,
+			});
+			try {
+				promo = sanitizePromo(args.promo, undefined, Date.now());
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
 
 		// Cross-variant SKU uniqueness against the rest of this retailer's catalog.
 		for (const variant of variants) {
@@ -748,8 +1403,18 @@ export const create = mutation({
 			blockWhenOutOfStock: args.blockWhenOutOfStock,
 			requiresProof: args.requiresProof,
 			minNoticeDays: sanitizeMinNoticeDays(args.minNoticeDays),
+			prepMinutes: sanitizePrepMinutes(args.prepMinutes),
+			pickupNote: sanitizePickupNote(args.pickupNote),
 			hidden: args.hidden,
 			minQuantity: sanitizeMinQuantity(args.minQuantity),
+			// "physical" stays UNSET (the legacy default) so pre-kind and post-kind
+			// rows read identically — one spelling for the default, minQuantity's
+			// 0-normalizes-to-unset posture.
+			kind: kind === "physical" ? undefined : kind,
+			booking,
+			event,
+			promo,
+			buyerQuestions,
 			sortOrder: args.sortOrder,
 			active: true,
 			channel: "whatsapp",
@@ -779,6 +1444,7 @@ async function insertVariants(
 			optionValues: variant.optionValues,
 			sku: variant.sku,
 			price: variant.price,
+			promoPrice: variant.promoPrice,
 			onHand: variant.onHand,
 			reserved: 0,
 			parcelWeightG: variant.parcelWeightG ?? 0,
@@ -798,6 +1464,159 @@ async function insertVariants(
 
 /** Product-level scalar fields only. Option/variant restructuring goes through
  * `saveVariantGrid`; per-row stock/price edits through `updateVariant`. */
+/**
+ * Resolve an event-config edit, enforcing the two rules that protect guests who
+ * have already RSVP'd.
+ *
+ * **The date is immutable once a live RSVP exists**, and so is turning the
+ * event OFF — moving 18 confirmed guests from Thursday to Friday, or quietly
+ * un-locking the date so the next buyer picks their own, is not an edit. The
+ * seller cancels or archives instead, which tells the guests.
+ *
+ * Gated on the LIVE (non-cancelled) headcount, deliberately NOT on
+ * `products.orderedAt` (the `kind`-immutability posture): `orderedAt` is never
+ * cleared, not even when every order is cancelled, so using it would leave a
+ * seller who typo'd a date and cancelled the two test RSVPs permanently unable
+ * to fix it.
+ *
+ * **A seat cap may be raised freely but never lowered below what's taken** —
+ * a cap under the headcount would render "−3 seats left" and refuse the guests
+ * who are already coming.
+ */
+async function resolveEventUpdate(
+	ctx: MutationCtx,
+	product: Doc<"products">,
+	access: RetailerAccess,
+	next: EventInput | null,
+): Promise<StoredProductEvent | undefined> {
+	const current = product.event;
+	const live = current
+		? await tallyEventSeats(ctx, {
+				retailerId: product.retailerId,
+				productId: product._id,
+				date: current.date,
+			})
+		: undefined;
+	const taken = live?.taken ?? 0;
+
+	// Turning the event off.
+	if (next === null) {
+		if (current !== undefined && taken > 0)
+			throw new ConvexError(
+				`${guestsAlready(taken)} already RSVP'd for ${formatFulfilmentDate(current.date)} — cancel or archive this event instead.`,
+			);
+		// Un-gated by plan on purpose: clearing config must never trap a seller
+		// who downgraded (the `categories`/`radiusDelivery` posture).
+		return undefined;
+	}
+
+	if (effectiveKind(product.kind) === "booking")
+		throw new ConvexError(
+			"A booking listing already takes its own dates — events are for products and services",
+		);
+	if (!access.actingAsAdmin)
+		await assertPlanFeature(ctx, product.retailerId, "events");
+
+	const dateUnchanged = current !== undefined && current.date === next.date;
+	if (current !== undefined && !dateUnchanged && taken > 0)
+		throw new ConvexError(
+			`${guestsAlready(taken)} already RSVP'd for ${formatFulfilmentDate(current.date)} — cancel or archive this event instead.`,
+		);
+
+	let event: ProductEvent;
+	try {
+		// Re-saving an event that has already run (fixing the seat cap the
+		// morning after) must not be refused for being in the past — only a
+		// CHANGE of date is held to "not before today".
+		event = sanitizeEvent(next, { allowPastDate: dateUnchanged })!;
+	} catch (err) {
+		throw new ConvexError((err as Error).message);
+	}
+
+	if (event.seats !== undefined && event.seats < taken)
+		throw new ConvexError(
+			`${guestsAlready(taken)} already RSVP'd — the seat cap can't go below ${taken}.`,
+		);
+
+	// The venue is immutable under guests, exactly like the date: every RSVP
+	// froze the old address onto its order page ("where to go is in the pickup
+	// card"), so moving the venue would split one event across two addresses —
+	// earlier guests at the old one, later guests at the new — with no send
+	// path to tell anyone. Compared on the EFFECTIVE venue (what order time
+	// resolves), not the raw id, so a seller who gained a second point and now
+	// must name the venue can still name the one it always was — and still
+	// raise the seat cap — without tripping this.
+	if (current !== undefined && taken > 0) {
+		const wasAt = await resolveEventVenue(ctx, product.retailerId, current);
+		const movesTo =
+			event.venueId !== undefined
+				? event.venueId
+				: (await resolveEventVenue(ctx, product.retailerId, event))?._id;
+		if (wasAt !== null && movesTo !== wasAt._id)
+			throw new ConvexError(
+				`${guestsAlready(taken)} already RSVP'd for ${wasAt.label} — the venue can't move under them. Cancel or archive this event instead.`,
+			);
+	}
+	return validateEventVenue(ctx, product.retailerId, event);
+}
+
+/**
+ * Save-time venue rules (round 4): the venue is the EVENT's property. A
+ * single-point store never picks (unset = the only point); a store with
+ * several points MUST say which one hosts it — an unset venue there would
+ * leave order time picking arbitrarily. HIDDEN (inactive) points count and
+ * are pickable on purpose: hiding a point removes it from the buyer's
+ * standard-order choice, but an event's venue is never the buyer's choice —
+ * an RSVP-only location IS a hidden point. The id is re-branded here after
+ * the ownership check, because the pure sanitizer can't hold Convex types.
+ * Order-time resolution (`resolveEventVenue` in orders.ts) honours the named
+ * venue whatever its active state.
+ */
+/** `ProductEvent` with the venue id re-branded for storage. */
+type StoredProductEvent = Omit<ProductEvent, "venueId"> & {
+	venueId?: Id<"pickupLocations">;
+};
+
+/** Seller-facing refusal for an event on a store with no pickup point. */
+const EVENT_NEEDS_VENUE_MESSAGE =
+	"Add the place this event happens first (Settings → Fulfilment) — an Event venue if it only hosts events, or a pickup point if buyers collect there too.";
+
+async function validateEventVenue(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	event: ProductEvent,
+): Promise<StoredProductEvent> {
+	if (event.venueId !== undefined) {
+		const venue = await ctx.db.get(event.venueId as Id<"pickupLocations">);
+		if (!venue || venue.retailerId !== retailerId)
+			throw new ConvexError(
+				"That pickup point isn't available — pick the event's venue again.",
+			);
+		return { ...event, venueId: venue._id };
+	}
+	const points = await ctx.db
+		.query("pickupLocations")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.take(2);
+	// "place", not "pickup point": with `eventsOnly` (z8r3fdm32x) the second row
+	// may be an Event venue, which is not a pickup point at all.
+	if (points.length > 1)
+		throw new ConvexError(
+			"This store has more than one place — pick which one hosts the event.",
+		);
+	// No point at all: the event would save, advertise RSVP on the storefront,
+	// and then dead-end every guest at the RSVP page ("no collection point set
+	// up yet"). Refused here, where the seller can fix it (`z8r3fdkjek`).
+	if (points.length === 0) throw new ConvexError(EVENT_NEEDS_VENUE_MESSAGE);
+	return { ...event, venueId: undefined };
+}
+
+/** "18 guests have" / "1 guest has" — the subject of every event-edit refusal,
+ * spelled once so the grammar can't drift between them. */
+function guestsAlready(taken: number): string {
+	return taken === 1 ? "1 guest has" : `${taken} guests have`;
+}
+
 export const update = mutation({
 	args: {
 		productId: v.id("products"),
@@ -811,9 +1630,75 @@ export const update = mutation({
 		requiresProof: v.optional(v.boolean()),
 		// 0 clears the override (normalized to unset); undefined = no change.
 		minNoticeDays: v.optional(v.number()),
+		// 0 clears the prep window; "" clears the note. undefined = no change.
+		prepMinutes: v.optional(v.number()),
+		pickupNote: v.optional(v.string()),
 		hidden: v.optional(v.boolean()),
 		// Minimum order quantity. 0 (or 1) clears the rule; undefined = no change.
 		minQuantity: v.optional(v.number()),
+		// Buyer questions (`z8r3fdkjek`) — asked at checkout, answers frozen on
+		// the order line. Refused on a booking listing. On update: undefined =
+		// no change, [] clears.
+		buyerQuestions: v.optional(v.array(buyerQuestionInputValidator)),
+		// Event RSVP config (`z8r3fdff9u`). `undefined` = no change; `null` turns
+		// the event OFF (the `description` posture — a toggle a seller can
+		// un-tick needs a spelling for "off", which an optional object alone
+		// can't express). Whole-object replace like `booking`.
+		event: v.optional(
+			v.union(
+				v.object({
+					date: v.number(),
+					timeMinutes: v.optional(v.number()),
+					seats: v.optional(v.number()),
+					endDate: v.optional(v.number()),
+					venueId: v.optional(v.id("pickupLocations")),
+					requiresApproval: v.optional(v.boolean()),
+				}),
+				v.null(),
+			),
+		),
+		// Promo price + flash sale config (z8r3fdcw72). `undefined` = no change;
+		// `null` turns the promotion OFF (the `event` posture). Whole-object
+		// replace; the server keeps/regenerates `runId` (sanitizePromo).
+		promo: v.optional(v.union(promoInputValidator, v.null())),
+		// Booking config edit. The kind itself is immutable (no kind arg here,
+		// by design); capacity, package length, instant-book and the deposit are
+		// the knobs a seller re-tunes. Rejected on non-booking products. A
+		// lowered capacity never cancels existing bookings (86eyj70z1 edge case)
+		// — the availability module simply stops taking new requests past it.
+		//
+		// WHOLE-OBJECT REPLACE, not a merge: sending `{ capacityPerNight: 5 }`
+		// clears `packageLength`, `packageUnit`, `autoAccept`, `securityDeposit`
+		// and the weekend rate pair. Both callers (the full form and the wizard)
+		// always send every field, so this is safe today — but a future partial
+		// caller would silently wipe a seller's package and instant-book
+		// settings. Send the complete object, or change this to merge first.
+		booking: v.optional(
+			v.object({
+				// Unset = unlimited (S7) — a gym has no daily member cap.
+				capacityPerNight: v.optional(v.number()),
+				securityDeposit: v.optional(v.number()),
+				// Fixed-length package; unset = free check-in/check-out. The unit
+				// decides how the end derives — a calendar month, or N days.
+				packageLength: v.optional(v.number()),
+				packageUnit: v.optional(
+					v.union(
+						v.literal("day"),
+						v.literal("night"),
+						v.literal("month"),
+					),
+				),
+				// Instant book — skip the request-to-book approval step.
+				autoAccept: v.optional(v.boolean()),
+				// Weekend per-night rate (sen) + the nights it covers (S13). Unset
+				// = one rate; 0 clears. Refused on a package listing.
+				weekendPrice: v.optional(v.number()),
+				weekendDays: v.optional(v.array(v.number())),
+				// "Only days you're open" (z8r3fdhpm7) — a DAY package that skips
+				// the store's closed days. Refused on any other shape.
+				skipsClosedDays: v.optional(v.boolean()),
+			}),
+		),
 	},
 	handler: async (ctx, { productId, ...fields }): Promise<void> => {
 		const userId = await requireUserId(ctx);
@@ -821,9 +1706,11 @@ export const update = mutation({
 		const { product: ownedProduct, access } = await requireProductOwnership(
 			ctx,
 			productId,
+			"write",
 		);
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, ownedProduct.retailerId);
+		}
 
 		if (
 			fields.imageStorageIds !== undefined &&
@@ -848,11 +1735,105 @@ export const update = mutation({
 			updates.requiresProof = fields.requiresProof;
 		if (fields.minNoticeDays !== undefined)
 			updates.minNoticeDays = sanitizeMinNoticeDays(fields.minNoticeDays);
+		// Both sanitize to undefined on 0 / "", which patch reads as "remove the
+		// field" — so the seller clearing the input clears the rule.
+		if (fields.prepMinutes !== undefined)
+			updates.prepMinutes = sanitizePrepMinutes(fields.prepMinutes);
+		if (fields.pickupNote !== undefined)
+			updates.pickupNote = sanitizePickupNote(fields.pickupNote);
 		if (fields.hidden !== undefined) updates.hidden = fields.hidden;
 		if (fields.minQuantity !== undefined)
 			// 0/1 sanitize to undefined, which patch treats as "remove the field" —
 			// so sending 0 clears the rule (one spelling for "no minimum").
 			updates.minQuantity = sanitizeMinQuantity(fields.minQuantity);
+		if (fields.buyerQuestions !== undefined)
+			// [] sanitizes to undefined, which patch reads as "remove the field".
+			updates.buyerQuestions = resolveBuyerQuestions(
+				effectiveKind(ownedProduct.kind),
+				fields.buyerQuestions,
+			);
+		if (fields.event !== undefined) {
+			updates.event = await resolveEventUpdate(
+				ctx,
+				ownedProduct,
+				access,
+				fields.event,
+			);
+		}
+		if (fields.booking !== undefined) {
+			if (effectiveKind(ownedProduct.kind) !== "booking")
+				throw new ConvexError(
+					"Capacity only applies to a booking listing",
+				);
+			try {
+				const packageLength = sanitizePackageLength(
+					fields.booking.packageLength,
+					fields.booking.packageUnit,
+				);
+				updates.booking = {
+					capacityPerNight: sanitizeCapacityPerNight(
+						fields.booking.capacityPerNight,
+					),
+					securityDeposit: sanitizeSecurityDeposit(
+						fields.booking.securityDeposit,
+					),
+					packageLength,
+					packageUnit: fields.booking.packageUnit,
+					autoAccept: fields.booking.autoAccept === true ? true : undefined,
+					skipsClosedDays: sanitizeSkipsClosedDays(
+						fields.booking.skipsClosedDays,
+						{ packageLength, packageUnit: fields.booking.packageUnit },
+					),
+					// Free-range only — a package refuses the pair (S13).
+					...sanitizeWeekendRate(
+						fields.booking.weekendPrice,
+						fields.booking.weekendDays,
+						{ packageLength },
+					),
+				};
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+
+		// Promo config (z8r3fdcw72). Setting is Pro-gated; CLEARING never is —
+		// a downgraded seller can always turn their paused promo off. Flash
+		// extras refused where capacity/seats already govern, judged on the
+		// POST-save event state so one save can't sneak both in.
+		if (fields.promo !== undefined) {
+			// A product inside a bulk promotion (z8r3fducfd) takes its window,
+			// label and flash extras from the PROMOTION — the product form
+			// shows them read-only and sends no promo at all. Only a stale tab
+			// gets here; it is told where the setting now lives.
+			const holder = await productPromotion(ctx, productId);
+			if (holder)
+				throw new ConvexError(
+					`This product is part of ${holder.label ?? "a promotion"} — change its dates, label or flash extras on the promotion, or remove the product from it.`,
+				);
+			if (fields.promo === null) {
+				updates.promo = undefined;
+			} else {
+				if (!access.actingAsAdmin)
+					await assertPlanFeature(ctx, ownedProduct.retailerId, "promo");
+				const willBeEvent =
+					fields.event !== undefined
+						? fields.event !== null
+						: ownedProduct.event !== undefined;
+				assertFlashFieldsAllowed(fields.promo, {
+					isBooking: effectiveKind(ownedProduct.kind) === "booking",
+					isEvent: willBeEvent,
+				});
+				try {
+					updates.promo = sanitizePromo(
+						fields.promo,
+						ownedProduct.promo,
+						Date.now(),
+					);
+				} catch (err) {
+					throw new ConvexError((err as Error).message);
+				}
+			}
+		}
 
 		// Lazy slug convergence for legacy rows (pre-slug catalog): the first
 		// edit gives the product its permanent URL, using the freshest name.
@@ -903,9 +1884,11 @@ export const saveVariantGrid = mutation({
 		const { product, access } = await requireProductOwnership(
 			ctx,
 			args.productId,
+			"write",
 		);
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, product.retailerId);
+		}
 
 		const options = normalizeOptionsOrThrow(args.options);
 		const variants = validateVariantSet(options, args.variants);
@@ -949,7 +1932,18 @@ export const saveVariantGrid = mutation({
 				await ctx.db.patch(prior._id, {
 					sku: variant.sku,
 					price: variant.price,
-					onHand: variant.onHand,
+					// Written every save (undefined clears): the Promotion step
+					// edits sale prices through this same grid, and a stale sale
+					// price surviving a clear would keep discounting silently.
+					promoPrice: variant.promoPrice,
+					// `onHand` is deliberately ABSENT (86eypn8ye). The form renders a
+					// count when it opens; by the time Save is tapped that number can
+					// be minutes stale, and writing it back resurrects everything sold
+					// in between — from a save the seller made to fix a typo. Stock
+					// moves only through `adjustStock`, where it is the thing being
+					// asked for. The client still sends `onHand` because the same
+					// validator serves the INSERT below, where it is correct: a
+					// brand-new combination has no stock of its own to protect.
 					parcelWeightG: variant.parcelWeightG ?? prior.parcelWeightG,
 					imageStorageIds: variant.imageStorageIds ?? prior.imageStorageIds,
 					active: variant.active ?? prior.active,
@@ -968,6 +1962,7 @@ export const saveVariantGrid = mutation({
 					optionValues: variant.optionValues,
 					sku: variant.sku,
 					price: variant.price,
+					promoPrice: variant.promoPrice,
 					onHand: variant.onHand,
 					reserved: 0,
 					parcelWeightG: variant.parcelWeightG ?? 0,
@@ -1019,13 +2014,18 @@ export const saveVariantGrid = mutation({
 	},
 });
 
-/** Per-row variant edit (price, stock, sku, weight, images, active). */
+/**
+ * Per-row variant edit (price, sku, weight, images, active).
+ *
+ * Stock is NOT here: it moves only through `adjustStock` (86eypn8ye). This
+ * mutation writes whatever it is handed, so an `onHand` argument would be a
+ * second absolute-write door onto the field the whole ticket exists to protect.
+ */
 export const updateVariant = mutation({
 	args: {
 		variantId: v.id("productVariants"),
 		sku: v.optional(v.union(v.string(), v.null())),
 		price: v.optional(v.number()),
-		onHand: v.optional(v.number()),
 		parcelWeightG: v.optional(v.number()),
 		imageStorageIds: v.optional(v.array(v.string())),
 		active: v.optional(v.boolean()),
@@ -1036,15 +2036,12 @@ export const updateVariant = mutation({
 		const { variant: existing, access } = await requireVariantOwnership(
 			ctx,
 			variantId,
+			"write",
 		);
+		await assertSubscriptionActive(ctx, existing.retailerId);
 
 		if (fields.price !== undefined && fields.price < 0)
 			throw new ConvexError("Price must be non-negative");
-		if (
-			fields.onHand !== undefined &&
-			(!Number.isInteger(fields.onHand) || fields.onHand < 0)
-		)
-			throw new ConvexError("Stock must be a non-negative integer");
 		if (
 			fields.parcelWeightG !== undefined &&
 			(!Number.isInteger(fields.parcelWeightG) || fields.parcelWeightG < 0)
@@ -1058,7 +2055,6 @@ export const updateVariant = mutation({
 
 		const updates: Record<string, unknown> = { updatedAt: Date.now() };
 		if (fields.price !== undefined) updates.price = fields.price;
-		if (fields.onHand !== undefined) updates.onHand = fields.onHand;
 		if (fields.parcelWeightG !== undefined)
 			updates.parcelWeightG = fields.parcelWeightG;
 		if (fields.imageStorageIds !== undefined)
@@ -1086,12 +2082,157 @@ export const updateVariant = mutation({
 	},
 });
 
+/**
+ * The ONLY way stock changes by hand (86eypn8ye).
+ *
+ * Every other write path used to set `onHand` to an absolute number rendered
+ * minutes earlier, so saving an unrelated field — a typo in the name — wrote
+ * back a count that sales had since moved, resurrecting units that were already
+ * out the door. Stock is now removed from the product save entirely and moved
+ * here, where changing it is something the seller *asked* to do.
+ *
+ * Two shapes per adjustment, and the difference is the whole point:
+ *
+ * - `delta` is a MOVEMENT ("I baked 20 more", "sold 3 at the stall"). It is
+ *   correct against any starting number, so a sale landing between the seller's
+ *   last look and this mutation cannot corrupt it. The read happens inside this
+ *   transaction, so two adjustments racing each other both land.
+ * - `setTo` is an OVERWRITE, for the one real job a delta can't express: a
+ *   physical stock count. It carries `expectedOnHand` — what the seller could
+ *   see when they confirmed — and is refused if reality has moved since, so the
+ *   seller re-confirms against a number they have actually seen rather than
+ *   silently writing a sale out of existence.
+ *
+ * Takes a LIST because the multi-variant stock sheet moves several counts at
+ * once ("after the market day"). One mutation is one transaction, so a sheet
+ * either applies whole or not at all — N separate calls would leave the seller
+ * with some rows moved and some not, and no way to tell which.
+ *
+ * Floored at zero rather than throwing, matching `decrementAggregatesForCancel`
+ * and the usage meter: an over-subtraction self-heals instead of dead-ending.
+ * Reserved units are not netted off here — that is the reservation ledger
+ * (86eybbxhf), still unbuilt.
+ */
+export const adjustStock = mutation({
+	args: {
+		adjustments: v.array(
+			v.object({
+				variantId: v.id("productVariants"),
+				/** Signed movement. Mutually exclusive with `setTo`. */
+				delta: v.optional(v.number()),
+				/** Absolute count from a stock take. Requires `expectedOnHand`. */
+				setTo: v.optional(v.number()),
+				/** The count the seller was looking at when they confirmed `setTo`. */
+				expectedOnHand: v.optional(v.number()),
+			}),
+		),
+	},
+	returns: v.array(
+		v.object({ variantId: v.id("productVariants"), onHand: v.number() }),
+	),
+	handler: async (
+		ctx,
+		args,
+	): Promise<{ variantId: Id<"productVariants">; onHand: number }[]> => {
+		const userId = await requireUserId(ctx);
+		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
+
+		if (args.adjustments.length === 0)
+			throw new ConvexError("Nothing to adjust");
+		// Deliberately the per-product variant cap, not a number of its own: the
+		// sheet that sends a batch is built from ONE product's variants
+		// (app.products.index.tsx derives its lines from `p.variants`), so it can
+		// never hold more rows than that product's grid. Splitting this off at 50
+		// would leave a 56-variant product unable to move its own stock.
+		if (args.adjustments.length > MAX_VARIANTS_PER_PRODUCT)
+			throw new ConvexError(
+				`At most ${MAX_VARIANTS_PER_PRODUCT} stock changes at once`,
+			);
+		const seen = new Set<string>();
+		for (const a of args.adjustments) {
+			if (seen.has(a.variantId))
+				throw new ConvexError("Each variant may appear only once");
+			seen.add(a.variantId);
+		}
+
+		const now = Date.now();
+		const results: { variantId: Id<"productVariants">; onHand: number }[] = [];
+
+		for (const adjustment of args.adjustments) {
+			const { variant, access } = await requireVariantOwnership(
+				ctx,
+				adjustment.variantId,
+				"write",
+			);
+			if (!access.actingAsAdmin) {
+				await assertSubscriptionActive(ctx, variant.retailerId);
+			}
+
+			// A bespoke line is priced on a quote and never counted — `onHand` is
+			// coerced to 0 on every write path. Offering to adjust it would invent a
+			// concept the product deliberately doesn't have.
+			if (variant.isCustom)
+				throw new ConvexError("A custom order line has no stock to count.");
+
+			const hasDelta = adjustment.delta !== undefined;
+			const hasSetTo = adjustment.setTo !== undefined;
+			if (hasDelta === hasSetTo)
+				throw new ConvexError("Send exactly one of delta or setTo");
+
+			let next: number;
+			if (hasDelta) {
+				const delta = adjustment.delta as number;
+				if (!Number.isInteger(delta))
+					throw new ConvexError("Stock movement must be a whole number");
+				next = Math.max(0, variant.onHand + delta);
+			} else {
+				const setTo = adjustment.setTo as number;
+				// No upper bound, matching every other stock write path — an invented
+				// ceiling here would be a rule nothing else enforces and nothing tells
+				// the seller about.
+				if (!Number.isInteger(setTo) || setTo < 0)
+					throw new ConvexError("Stock must be a whole number, 0 or more");
+				if (adjustment.expectedOnHand === undefined)
+					throw new ConvexError("Setting an exact count needs expectedOnHand");
+				// The stale-overwrite guard. Deliberately NOT a silent merge: only the
+				// seller knows whether they counted the shelf before or after those
+				// units left, so the answer has to come from them.
+				if (adjustment.expectedOnHand !== variant.onHand)
+					throw new ConvexError(
+						`Stock changed to ${variant.onHand} while you were counting — check the number and confirm again.`,
+					);
+				next = setTo;
+			}
+
+			if (next !== variant.onHand)
+				await ctx.db.patch(adjustment.variantId, {
+					onHand: next,
+					updatedAt: now,
+				});
+			await logAdminAction(
+				ctx,
+				access,
+				"products.adjustStock",
+				adjustment.variantId,
+			);
+			results.push({ variantId: adjustment.variantId, onHand: next });
+		}
+
+		return results;
+	},
+});
+
 export const archive = mutation({
 	args: { productId: v.id("products") },
 	handler: async (ctx, { productId }): Promise<void> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		const { product, access } = await requireProductOwnership(ctx, productId);
+		const { product, access } = await requireProductOwnership(
+			ctx,
+			productId,
+			"write",
+		);
+		await assertSubscriptionActive(ctx, product.retailerId);
 		const wasVisible = isProductVisible(product);
 		await ctx.db.patch(productId, {
 			active: false,
@@ -1128,7 +2269,12 @@ export const deletePermanently = mutation({
 	handler: async (ctx, { productId }): Promise<void> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		const { product, access } = await requireProductOwnership(ctx, productId);
+		const { product, access } = await requireProductOwnership(
+			ctx,
+			productId,
+			"write",
+		);
+		await assertSubscriptionActive(ctx, product.retailerId);
 
 		if (product.orderedAt !== undefined)
 			throw new ConvexError(
@@ -1177,22 +2323,94 @@ const importVariantValidator = v.object({
 
 const importProductValidator = v.object({
 	name: v.string(),
+	/** The sheet's `product_handle`. The export writes the product's id there,
+	 * so a round-tripped sheet can be matched back to its own products — see
+	 * `classifyImportProduct`. Optional: hand-made sheets group by name. */
+	handle: v.optional(v.string()),
 	description: v.optional(v.string()),
 	// Round-tripped from the export's `product_status` (86eyrtz74). Optional so
 	// a client that predates the column, or any hand-made sheet, still imports —
 	// absent reads as active on the create path below.
 	active: v.optional(v.boolean()),
+	// Order rules (z8r3fdff97), from the sheet's `prep_minutes` / `pickup_note`.
+	// Absent = the cell was blank = KEEP what an existing product has; `0`
+	// clears prep. See `importOrderRules`.
+	prepMinutes: v.optional(v.number()),
+	pickupNote: v.optional(v.string()),
 	options: v.array(optionAxisValidator),
 	variants: v.array(importVariantValidator),
 });
 
 type ImportProduct = {
 	name: string;
+	handle?: string;
 	description?: string;
 	active?: boolean;
+	prepMinutes?: number;
+	pickupNote?: string;
 	options: OptionAxis[];
 	variants: VariantInput[];
 };
+
+type ImportOrderRules = {
+	/** Keys present only for the cells the sheet filled. A present key whose
+	 * value is `undefined` CLEARS the field (patch reads it as "remove"). */
+	patch: { prepMinutes?: number; pickupNote?: string };
+	/** The sheet carried a value that a booking listing can't hold, so it was
+	 * left out of `patch` — the preview names the skip. */
+	skippedOnBooking: boolean;
+	/** Prep time on an EVENT product (`z8r3fdff9u`): the form hides the field
+	 * (guests RSVP to the fixed moment, so there's no time for prep to floor),
+	 * and the import must not smuggle in config the form can't show. Pickup
+	 * notes still apply to events, so only prep skips. */
+	skippedOnEvent: boolean;
+};
+
+/**
+ * What an import writes of a product's order rules (z8r3fdff97) — through the
+ * SAME sanitizers as products.create/update, so a bad cell is refused with the
+ * same message the form would give.
+ *
+ * Blank keeps: a blank cell reaches here as `undefined` and stays out of the
+ * patch, so a price-update sheet built from the template (which now carries
+ * both columns) can never wipe a kitchen's prep windows. `0` clears prep. A
+ * note is added or replaced by import, never removed — that is done on the
+ * product, and the import screen says so.
+ *
+ * A booking listing is never written: its form hides both fields and its
+ * orders can never carry a note, so a value the seller can't see would be a
+ * setting that lies. `target` is the matched product; `undefined` on create,
+ * where the import only ever makes plain products.
+ *
+ * Validates BEFORE the booking check, so a bad cell is an error wherever it
+ * lands — one rule for the sheet, not one per matched product.
+ */
+function importOrderRules(
+	product: ImportProduct,
+	target: Doc<"products"> | undefined,
+): ImportOrderRules {
+	const patch: ImportOrderRules["patch"] = {};
+	if (product.prepMinutes !== undefined)
+		patch.prepMinutes = sanitizePrepMinutes(product.prepMinutes);
+	if (product.pickupNote !== undefined)
+		patch.pickupNote = sanitizePickupNote(product.pickupNote);
+	if (target !== undefined && effectiveKind(target.kind) === "booking") {
+		return {
+			patch: {},
+			// Only a value that would DO something counts — a `0` prep cell on a
+			// booking listing clears nothing and deserves no warning.
+			skippedOnBooking:
+				patch.prepMinutes !== undefined || patch.pickupNote !== undefined,
+			skippedOnEvent: false,
+		};
+	}
+	if (target?.event !== undefined && "prepMinutes" in patch) {
+		const skippedOnEvent = patch.prepMinutes !== undefined;
+		delete patch.prepMinutes;
+		return { patch, skippedOnBooking: false, skippedOnEvent };
+	}
+	return { patch, skippedOnBooking: false, skippedOnEvent: false };
+}
 
 type ImportClassification =
 	| { mode: "create" }
@@ -1203,9 +2421,21 @@ type ImportClassification =
 	  };
 
 /**
- * Classify an imported product as a create or an update. Update wins if ANY of
- * its SKUs already exists on a variant; all matched SKUs must belong to the same
- * product (else a cross-product clash — rejected).
+ * Classify an imported product as a create or an update.
+ *
+ * Two ways to match. The sheet's `product_handle` wins when it holds one of
+ * THIS store's product ids — which is exactly what the export writes — and
+ * otherwise any SKU that already exists on a variant does. All matched SKUs
+ * must belong to the same product as each other and as the handle (else a
+ * cross-product clash — rejected).
+ *
+ * Handle matching exists because SKU matching alone can't see a product with
+ * no SKU, and a BOOKING listing never has one: exporting a catalogue, editing
+ * a price and importing it back re-created every such product as a duplicate,
+ * and the booking guard in `importOrderRules` — which only fires on a MATCHED
+ * booking — never got the chance to skip it (found in the z8r3fdff97 test
+ * round). A hand-made sheet is unaffected: its handles are names or slugs,
+ * which `normalizeId` rejects, so it still matches by SKU.
  */
 async function classifyImportProduct(
 	ctx: MutationCtx | QueryCtx,
@@ -1214,6 +2444,19 @@ async function classifyImportProduct(
 ): Promise<ImportClassification> {
 	let target: Doc<"products"> | null = null;
 	const existingBySku = new Map<string, Doc<"productVariants">>();
+	const handle = product.handle?.trim() ?? "";
+	if (handle.length > 0) {
+		const handleId = ctx.db.normalizeId("products", handle);
+		// A handle that isn't an id of ours is a grouping key, not a match.
+		const byHandle = handleId ? await ctx.db.get(handleId) : null;
+		if (byHandle) {
+			if (byHandle.retailerId !== retailerId)
+				throw new ConvexError(
+					`"${product.name}" carries a product_handle from another store — clear that column or export this store's own sheet`,
+				);
+			target = byHandle;
+		}
+	}
 	for (const variant of product.variants) {
 		const sku = normalizeSku(variant.sku, "Variant");
 		if (!sku) continue;
@@ -1257,16 +2500,40 @@ function assertNoDuplicateSkusInBatch(products: ImportProduct[]): void {
 	}
 }
 
+/**
+ * CSV import. Rows are matched to existing variants by SKU.
+ *
+ * ## Why `updateStock` exists and defaults to OFF (86eypn8ye)
+ *
+ * This is the same last-write-wins hazard as the product editor, with a far
+ * bigger window: the seller exports at 10am, edits the sheet over lunch, and
+ * imports at 3pm — and every unit sold in those five hours comes back. Unlike
+ * the editor, the fix cannot be "never write stock here": export → edit →
+ * re-import is a documented round-trip and `stock` is a required column, so a
+ * genuine stock take pasted into a spreadsheet has to keep working.
+ *
+ * So the side effect becomes a choice. Names, prices, descriptions and weights
+ * always update; the sheet's stock column is applied only when the seller ticks
+ * the box, having been told how many counts it replaces and how many of those
+ * would go UP (the resurrection direction — see `bulkUpsertPreview`).
+ *
+ * Products being CREATED always take the sheet's stock: they have no orders and
+ * therefore no sales to overwrite.
+ */
 export const bulkUpsert = mutation({
 	args: {
 		retailerId: v.id("retailers"),
 		currency: v.string(),
 		products: v.array(importProductValidator),
+		/** Apply the sheet's `stock` column to products that already exist.
+		 * Absent = off: stock is left exactly as the store holds it. */
+		updateStock: v.optional(v.boolean()),
 	},
 	handler: async (ctx, args): Promise<{ created: number; updated: number }> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productBulkImport", { key: userId, throws: true });
-		const access = await requireRetailerOwnership(ctx, args.retailerId);
+		const access = await requireRetailerOwnership(ctx, args.retailerId, "write");
+		await assertSubscriptionActive(ctx, args.retailerId);
 
 		const products = args.products as ImportProduct[];
 		if (products.length === 0) throw new ConvexError("No products to import");
@@ -1278,30 +2545,41 @@ export const bulkUpsert = mutation({
 
 		assertNoDuplicateSkusInBatch(products);
 
-		// Classify every product (create vs update) before any writes.
-		const classified: { product: ImportProduct; c: ImportClassification }[] = [];
+		// Classify every product (create vs update) and resolve its order rules
+		// before any writes, so a bad prep or note cell refuses the chunk before
+		// the first insert rather than partway through it.
+		const classified: {
+			product: ImportProduct;
+			c: ImportClassification;
+			rules: ImportOrderRules;
+		}[] = [];
 		for (const product of products) {
+			const c = await classifyImportProduct(ctx, args.retailerId, product);
 			classified.push({
 				product,
-				c: await classifyImportProduct(ctx, args.retailerId, product),
+				c,
+				rules: importOrderRules(
+					product,
+					c.mode === "update" ? c.product : undefined,
+				),
 			});
 		}
 
 		// Product cap — only the rows that would be INSERTED consume a slot; a
 		// sheet that just updates existing products by SKU never touches it.
-		// Admin act-as is exempt (see products.create).
+		// Admin act-as and full-access stores are exempt (see products.create).
 		const insertCount = classified.filter((x) => x.c.mode === "create").length;
 		assertProductCap(
 			await countProductsForRetailer(ctx, args.retailerId),
 			insertCount,
-			access.actingAsAdmin,
+			await productCapExempt(ctx, access),
 		);
 
 		const now = Date.now();
 		let created = 0;
 		let updated = 0;
 
-		for (const { product, c } of classified) {
+		for (const { product, c, rules } of classified) {
 			if (c.mode === "create") {
 				// Same validation as the single-product create: full cartesian,
 				// integer price/stock, per-retailer SKU uniqueness.
@@ -1330,6 +2608,10 @@ export const bulkUpsert = mutation({
 					// path — and archived products came back live on the storefront.
 					// `?? true` keeps every hand-made sheet behaving as before.
 					active: product.active ?? true,
+					// Sanitized; `0` / blank store nothing — the same "no rule" spelling
+					// products.create uses.
+					prepMinutes: rules.patch.prepMinutes,
+					pickupNote: rules.patch.pickupNote,
 					channel: "whatsapp",
 					createdAt: now,
 					updatedAt: now,
@@ -1341,6 +2623,8 @@ export const bulkUpsert = mutation({
 					name: product.name.trim(),
 					description: product.description,
 					currency: args.currency,
+					// Only the cells the sheet filled — see `importOrderRules`.
+					...rules.patch,
 					updatedAt: now,
 				});
 				// Update matched variants in place; skip unmatched (never add a new
@@ -1360,7 +2644,10 @@ export const bulkUpsert = mutation({
 						);
 					await ctx.db.patch(existing._id, {
 						price: variant.price,
-						onHand: variant.onHand,
+						// Opt-in only — see the note on this mutation. Omitting the key
+						// (rather than writing `existing.onHand` back) means an untouched
+						// count is never rewritten at all.
+						...(args.updateStock ? { onHand: variant.onHand } : {}),
 						parcelWeightG: variant.parcelWeightG ?? existing.parcelWeightG,
 						updatedAt: now,
 					});
@@ -1379,11 +2666,96 @@ type PreviewEntry = {
 	action: "create" | "update" | "error";
 	productId: Id<"products"> | null;
 	variantCount: number;
-	changedVariants: number; // create: new active variants; update: variants whose price/stock change
+	changedVariants: number; // create: new active variants; update: variants whose PRICE changes (stock is counted separately — it is opt-in)
 	skippedVariants: number; // update: provided variants with no matching existing variant
 	autoFilled: number; // inactive auto-filled combinations
 	warnings: string[];
+	/** Matched variants whose sheet stock differs from the stored count — what
+	 * `updateStock` would overwrite. 0 on a create (nothing to overwrite). */
+	stockChanges: number;
+	/** The subset of those that would go UP. This is the direction that invents
+	 * units, and the likeliest cause is a sale made after the sheet was exported,
+	 * so it is counted separately and named in the UI. */
+	stockIncreases: number;
+	/** The increases themselves, so the seller can look rather than trust a
+	 * number. Capped per product — the point is to make the risk concrete, not
+	 * to render a spreadsheet. */
+	stockIncreaseSamples: { sku: string; from: number; to: number }[];
+	/** What the import does to the prep window (z8r3fdff97), in minutes; `null`
+	 * on either side = none. `null` overall = no change (a blank cell keeps, or
+	 * the sheet repeats the stored value). */
+	prepChange: { from: number | null; to: number | null } | null;
+	/** Whether the import adds or replaces the pickup note. Never "removed" —
+	 * a blank cell keeps the note; removing one is done on the product. */
+	pickupNoteChange: "added" | "changed" | null;
 };
+
+/** A plan entry for a product the import can't apply — every count zeroed, the
+ * reason carried as its only warning. */
+function previewErrorEntry(
+	product: ImportProduct,
+	autoFilled: number,
+	err: unknown,
+): PreviewEntry {
+	return {
+		name: product.name,
+		action: "error",
+		productId: null,
+		variantCount: product.variants.length,
+		changedVariants: 0,
+		skippedVariants: 0,
+		autoFilled,
+		warnings: [(err as Error).message],
+		stockChanges: 0,
+		stockIncreases: 0,
+		stockIncreaseSamples: [],
+		prepChange: null,
+		pickupNoteChange: null,
+	};
+}
+
+/**
+ * The order-rule half of a preview entry (z8r3fdff97): the diff against what
+ * the product holds, plus the warnings that say where a value won't bite —
+ * a booking listing skips both fields, and a product needing a day or more of
+ * notice has no same-day clock for prep to move (the form's amber note, said
+ * again where the import sets it).
+ */
+function previewOrderRules(
+	rules: ImportOrderRules,
+	target: Doc<"products"> | undefined,
+): Pick<PreviewEntry, "prepChange" | "pickupNoteChange"> & {
+	warnings: string[];
+} {
+	const warnings: string[] = [];
+	if (rules.skippedOnBooking)
+		warnings.push(
+			"Booking listing — prep time and pickup note don't apply, so they're skipped",
+		);
+	if (rules.skippedOnEvent)
+		warnings.push(
+			"Event — guests RSVP to its fixed date, so prep time doesn't apply and is skipped",
+		);
+	let prepChange: PreviewEntry["prepChange"] = null;
+	if ("prepMinutes" in rules.patch) {
+		const from = target?.prepMinutes ?? null;
+		const to = rules.patch.prepMinutes ?? null;
+		if (from !== to) prepChange = { from, to };
+		const notice = target?.minNoticeDays ?? 0;
+		if (to !== null && notice > 0)
+			warnings.push(
+				`Needs ${notice} day${notice === 1 ? "" : "s"}' notice, so prep time won't change what buyers can pick`,
+			);
+	}
+	let pickupNoteChange: PreviewEntry["pickupNoteChange"] = null;
+	const note = rules.patch.pickupNote;
+	if (note !== undefined && note !== target?.pickupNote)
+		pickupNoteChange = target?.pickupNote === undefined ? "added" : "changed";
+	return { prepChange, pickupNoteChange, warnings };
+}
+
+/** Per-product cap on `stockIncreaseSamples`. */
+const MAX_STOCK_SAMPLES_PER_PRODUCT = 5;
 
 /**
  * Non-mutating dry-run for `bulkUpsert`. Classifies each product as create /
@@ -1397,7 +2769,7 @@ export const bulkUpsertPreview = query({
 		products: v.array(importProductValidator),
 	},
 	handler: async (ctx, args) => {
-		const access = await requireRetailerOwnership(ctx, args.retailerId);
+		const access = await requireRetailerOwnership(ctx, args.retailerId, "write");
 		const products = args.products as ImportProduct[];
 		if (totalImportVariants(products) > MAX_BULK_IMPORT_BATCH)
 			throw new ConvexError(
@@ -1416,19 +2788,17 @@ export const bulkUpsertPreview = query({
 			autoFilledTotal += autoFilled;
 
 			let c: ImportClassification;
+			let rules: ImportOrderRules;
 			try {
 				c = await classifyImportProduct(ctx, args.retailerId, product);
+				// The same sanitizers bulkUpsert runs, so a bad prep or note cell
+				// is this product's error line here — never a thrown preview.
+				rules = importOrderRules(
+					product,
+					c.mode === "update" ? c.product : undefined,
+				);
 			} catch (err) {
-				plan.push({
-					name: product.name,
-					action: "error",
-					productId: null,
-					variantCount: product.variants.length,
-					changedVariants: 0,
-					skippedVariants: 0,
-					autoFilled,
-					warnings: [(err as Error).message],
-				});
+				plan.push(previewErrorEntry(product, autoFilled, err));
 				continue;
 			}
 
@@ -1438,19 +2808,11 @@ export const bulkUpsertPreview = query({
 					const options = normalizeOptionsOrThrow(product.options);
 					validateVariantSet(options, product.variants);
 				} catch (err) {
-					plan.push({
-						name: product.name,
-						action: "error",
-						productId: null,
-						variantCount: product.variants.length,
-						changedVariants: 0,
-						skippedVariants: 0,
-						autoFilled,
-						warnings: [(err as Error).message],
-					});
+					plan.push(previewErrorEntry(product, autoFilled, err));
 					continue;
 				}
 				creates++;
+				const orderRules = previewOrderRules(rules, undefined);
 				plan.push({
 					name: product.name,
 					action: "create",
@@ -1459,12 +2821,22 @@ export const bulkUpsertPreview = query({
 					changedVariants: product.variants.filter((vr) => vr.active).length,
 					skippedVariants: 0,
 					autoFilled,
-					warnings: [],
+					warnings: orderRules.warnings,
+					// A new product has no stored count to overwrite — its stock comes
+					// from the sheet regardless of the `updateStock` choice.
+					stockChanges: 0,
+					stockIncreases: 0,
+					stockIncreaseSamples: [],
+					prepChange: orderRules.prepChange,
+					pickupNoteChange: orderRules.pickupNoteChange,
 				});
 			} else {
 				updates++;
 				let changed = 0;
 				let skipped = 0;
+				let stockChanges = 0;
+				let stockIncreases = 0;
+				const stockIncreaseSamples: PreviewEntry["stockIncreaseSamples"] = [];
 				const warnings: string[] = [];
 				for (const variant of product.variants) {
 					const sku = normalizeSku(variant.sku, "Variant");
@@ -1480,9 +2852,28 @@ export const bulkUpsertPreview = query({
 						);
 						continue;
 					}
-					if (existing.price !== variant.price || existing.onHand !== variant.onHand)
-						changed++;
+					// PRICE only. This used to count a stock-only difference as
+					// "changed", which was right when the update path always wrote
+					// both — but stock is now opt-in (86eypn8ye), so the default
+					// import would report "3 changed" and then write nothing,
+					// which is the silent no-op the whole import screen is trying
+					// to stop doing. Stock has its own counts below and its own
+					// line in the UI.
+					if (existing.price !== variant.price) changed++;
+					if (existing.onHand !== variant.onHand) {
+						stockChanges++;
+						if (variant.onHand > existing.onHand) {
+							stockIncreases++;
+							if (stockIncreaseSamples.length < MAX_STOCK_SAMPLES_PER_PRODUCT)
+								stockIncreaseSamples.push({
+									sku,
+									from: existing.onHand,
+									to: variant.onHand,
+								});
+						}
+					}
 				}
+				const orderRules = previewOrderRules(rules, c.product);
 				plan.push({
 					name: product.name,
 					action: "update",
@@ -1491,7 +2882,12 @@ export const bulkUpsertPreview = query({
 					changedVariants: changed,
 					skippedVariants: skipped,
 					autoFilled,
-					warnings,
+					warnings: [...orderRules.warnings, ...warnings],
+					stockChanges,
+					stockIncreases,
+					stockIncreaseSamples,
+					prepChange: orderRules.prepChange,
+					pickupNoteChange: orderRules.pickupNoteChange,
 				});
 			}
 		}
@@ -1504,6 +2900,10 @@ export const bulkUpsertPreview = query({
 				updates,
 				variants: variantsTotal,
 				autoFilled: autoFilledTotal,
+				// Summed from the plan so the import screen can state the cost of
+				// ticking "Update stock too" without walking the entries itself.
+				stockChanges: plan.reduce((n, e) => n + e.stockChanges, 0),
+				stockIncreases: plan.reduce((n, e) => n + e.stockIncreases, 0),
 			},
 			// Cap state so the import screen can warn BEFORE the seller confirms —
 			// the sheet is chunked across several bulkUpsert calls, so without this
@@ -1512,7 +2912,7 @@ export const bulkUpsertPreview = query({
 			// client can read it off any one of them.
 			cap: productCapState(
 				await countProductsForRetailer(ctx, args.retailerId),
-				access.actingAsAdmin,
+				await productCapExempt(ctx, access),
 			),
 		};
 	},
@@ -1522,6 +2922,7 @@ export const generateUploadUrl = mutation({
 	args: {},
 	handler: async (ctx): Promise<string> => {
 		const userId = await requireUserId(ctx);
+		await assertOwnStoreActive(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		return ctx.storage.generateUploadUrl();
 	},
@@ -1542,7 +2943,8 @@ export const reorder = mutation({
 	handler: async (ctx, { retailerId, orderedIds }): Promise<void> => {
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		const access = await requireRetailerOwnership(ctx, retailerId);
+		const access = await requireRetailerOwnership(ctx, retailerId, "write");
+		await assertSubscriptionActive(ctx, retailerId);
 
 		const rows = await ctx.db
 			.query("products")
@@ -1591,6 +2993,8 @@ export const getPublicBySlug = query({
 	handler: async (ctx, { retailerId, slug }) => {
 		const normalized = slug.trim().toLowerCase();
 		if (normalized.length === 0) return null;
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return null;
 		const indexed = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_slug", (q) =>
@@ -1618,10 +3022,71 @@ export const getPublicBySlug = query({
 			!row ||
 			!row.active ||
 			row.hidden === true ||
-			row.hiddenByCategory === true
+			row.hiddenByCategory === true ||
+			hiddenFromStorefront(row)
 		)
 			return null;
-		return productWithVariants(ctx, row, { activeOnly: true });
+		return productWithVariants(ctx, row, {
+			activeOnly: true,
+			plan: (await getAccess(ctx, retailerId)).plan,
+		});
+	},
+});
+
+/**
+ * The seller's live headcount for one event: seats taken, seats left, and the
+ * split per chosen option ("Set A ×11, Set B ×7").
+ *
+ * This query is the whole point of the feature — the alternative is opening 18
+ * orders and counting by hand, which is what she does in WhatsApp today.
+ * Cancelled RSVPs drop out live (the tally's own rule), so cancelling frees a
+ * seat with no extra bookkeeping.
+ *
+ * Owner-gated: the split is sales detail. The buyer's public read gets
+ * `eventSeatsLeft` only.
+ */
+export const eventHeadcount = query({
+	args: { productId: v.id("products") },
+	handler: async (
+		ctx,
+		{ productId },
+	): Promise<{
+		date: number;
+		timeMinutes?: number;
+		seats?: number;
+		endDate?: number;
+		taken: number;
+		left?: number;
+		passed: boolean;
+		options: Array<{ label: string; seats: number }>;
+		/** Per choice question (`z8r3fdkjek`), seat-weighted like `options`. */
+		questions: QuestionTally[];
+	} | null> => {
+		const { product } = await requireProductOwnership(ctx, productId, "read");
+		if (product.event === undefined) return null;
+		const tally = await tallyEventSeats(ctx, {
+			retailerId: product.retailerId,
+			productId,
+			date: product.event.date,
+		});
+		return {
+			date: product.event.date,
+			timeMinutes: product.event.timeMinutes,
+			seats: product.event.seats,
+			endDate: product.event.endDate,
+			taken: tally.taken,
+			left: seatsLeft(product.event, tally.taken),
+			passed: isEventPassed(product.event),
+			// Map → array at the boundary (a Map doesn't survive the Convex wire).
+			// Insertion order preserved, so the panel lists options in the order
+			// guests picked them; the unlabelled single-variant case keeps its
+			// empty label and the UI renders a plain total instead.
+			options: [...tally.byOption.entries()].map(([label, seats]) => ({
+				label,
+				seats,
+			})),
+			questions: questionTallies(product.buyerQuestions, tally.byAnswer),
+		};
 	},
 });
 
@@ -1648,7 +3113,11 @@ export const listForSitemap = query({
 	): Promise<
 		Array<{ storeSlug: string; productSlug: string; updatedAt: number }>
 	> => {
-		const retailers = await ctx.db.query("retailers").collect();
+		const offline = await offlineStoreIds(ctx);
+		const retailers = (await ctx.db.query("retailers").collect()).filter(
+			// An offline store's product pages are the "unavailable" screen.
+			(r) => !offline.has(r._id),
+		);
 		const out: Array<{
 			storeSlug: string;
 			productSlug: string;
@@ -1669,6 +3138,8 @@ export const listForSitemap = query({
 				.collect();
 			for (const row of rows) {
 				if (row.slug === undefined) continue;
+				// Never hand a crawler a finished event's URL — the page 404s.
+				if (hiddenFromStorefront(row)) continue;
 				out.push({
 					storeSlug: retailer.slug,
 					productSlug: row.slug,
@@ -1713,6 +3184,8 @@ export const popularProducts = query({
 		if (!isMytMidnight(since)) {
 			throw new ConvexError("since must be an MYT-midnight epoch");
 		}
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return [];
 		const recent = await ctx.db
 			.query("orders")
 			.withIndex("by_retailer", (q) =>
@@ -1739,7 +3212,9 @@ export const popularProducts = query({
 				),
 			)
 			.collect();
-		const listableIds = new Set<string>(listable.map((p) => p._id));
+		const listableIds = new Set<string>(
+			listable.filter((p) => !hiddenFromStorefront(p)).map((p) => p._id),
+		);
 		return ranked
 			.filter((id) => listableIds.has(id))
 			.slice(0, POPULAR_TOP_CANDIDATES);

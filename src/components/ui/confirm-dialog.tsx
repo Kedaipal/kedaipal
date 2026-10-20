@@ -10,6 +10,7 @@ import {
 	DialogTitle,
 } from "./dialog";
 import { Input } from "./input";
+import { Textarea } from "./textarea";
 
 /**
  * Shared confirmation step for actions that can't be casually undone — deleting,
@@ -39,6 +40,7 @@ export function ConfirmDialog({
 	cancelLabel = "Cancel",
 	destructive = false,
 	confirmPhrase,
+	reason,
 	onConfirm,
 }: {
 	open: boolean;
@@ -55,29 +57,51 @@ export function ConfirmDialog({
 	 * `"DELETE"`). Paste/drop/autofill are blocked; only real keystrokes count.
 	 */
 	confirmPhrase?: string;
-	onConfirm: () => void | Promise<void>;
+	/**
+	 * Collect a short free-text reason with the confirmation. Used where the
+	 * OTHER party is owed an explanation — cancelling an order the buyer is
+	 * waiting on — so the text is written straight into the confirm step rather
+	 * than a second dialog. `required` keeps the confirm button disabled until
+	 * something is typed; the trimmed value reaches `onConfirm`.
+	 */
+	reason?: {
+		label: string;
+		placeholder?: string;
+		required?: boolean;
+		maxLength?: number;
+		/** One line under the field — say who will read it. */
+		helper?: string;
+	};
+	onConfirm: (reason?: string) => void | Promise<void>;
 }) {
 	const [busy, setBusy] = useState(false);
 	const [typed, setTyped] = useState("");
+	const [reasonText, setReasonText] = useState("");
 	const helperId = useId();
+	const reasonId = useId();
 
 	// Fresh box on every open so a stale phrase can't pre-arm the button next
 	// time. A failed confirm leaves the dialog open (open stays true, effect
 	// doesn't re-run), so the typed phrase survives and the user can just retry.
 	useEffect(() => {
-		if (open) setTyped("");
+		if (open) {
+			setTyped("");
+			setReasonText("");
+		}
 	}, [open]);
 
 	const phraseRequired = confirmPhrase != null && confirmPhrase.length > 0;
 	const phraseMatched =
 		!phraseRequired || typed.trim() === confirmPhrase.toUpperCase();
-	const canConfirm = !busy && phraseMatched;
+	const reasonMissing =
+		reason?.required === true && reasonText.trim().length === 0;
+	const canConfirm = !busy && phraseMatched && !reasonMissing;
 
 	async function handleConfirm() {
-		if (!phraseMatched) return;
+		if (!phraseMatched || reasonMissing) return;
 		try {
 			setBusy(true);
-			await onConfirm();
+			await onConfirm(reasonText.trim() || undefined);
 			onOpenChange(false);
 		} catch {
 			// Leave the dialog open so the caller's error toast is visible and the
@@ -141,6 +165,31 @@ export function ConfirmDialog({
 							spellCheck={false}
 							aria-label={`Type ${confirmPhrase.toUpperCase()} to confirm`}
 						/>
+					</div>
+				) : null}
+				{reason ? (
+					<div className="flex flex-col gap-1.5">
+						<label htmlFor={reasonId} className="text-sm font-medium">
+							{reason.label}
+							{reason.required ? null : (
+								<span className="font-normal text-muted-foreground">
+									{" "}
+									(optional)
+								</span>
+							)}
+						</label>
+						<Textarea
+							id={reasonId}
+							value={reasonText}
+							disabled={busy}
+							onChange={(e) => setReasonText(e.target.value)}
+							placeholder={reason.placeholder}
+							maxLength={reason.maxLength}
+							rows={3}
+						/>
+						{reason.helper ? (
+							<p className="text-xs text-muted-foreground">{reason.helper}</p>
+						) : null}
 					</div>
 				) : null}
 				<DialogFooter>

@@ -13,8 +13,21 @@
 //    1dp precision) — converted to integer sen at this boundary, like every
 //    other money field in the repo.
 
+import { toDomesticContactPhone } from "./courierContact";
 import { decryptSecret } from "./credentialCrypto";
+import type { DeliveryJobStatus } from "./deliveryJobs";
 import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
+
+// Provider-agnostic job-status machinery moved to lib/deliveryJobs.ts when
+// Delyva became the second provider (86eyjpv6z) — re-exported here so the
+// many existing `from "./lib/lalamove"` importers keep working unchanged.
+export {
+	type DeliveryJobStatus,
+	TERMINAL_JOB_STATUSES,
+	isActiveJobStatus,
+	riderDrivesOrderStatus,
+	isRiderManagedTransition,
+} from "./deliveryJobs";
 
 export type LalamoveEnv = "sandbox" | "production";
 
@@ -29,16 +42,46 @@ export const LALAMOVE_BASE_URL: Record<LalamoveEnv, string> = {
 	production: "https://rest.lalamove.com",
 };
 
-/** All Kedaipal sellers are MY — market is a constant until a second country. */
-export const LALAMOVE_MARKET = "MY";
+/**
+ * Which Lalamove market a request belongs to (z8r3fdch3r).
+ *
+ * Lalamove segments its REST API by a `Market` header, and the market decides
+ * coverage, currency, service types and the phone country code — so it is a
+ * property of the STORE, never a module constant. It was one until Kedaipal
+ * had a second country, and that constant is what hid Lalamove from Singapore
+ * sellers: Lalamove serves SG perfectly well, our integration didn't.
+ *
+ * Kept as its own type rather than reusing `Country` because the two answer
+ * different questions — a country we sell in is not automatically a market
+ * Lalamove operates in, and `COUNTRY_RIDER_BOOKING` is where that judgement
+ * lives.
+ */
+export type LalamoveMarket = "MY" | "SG";
 
-/** Vehicle types we surface (the MY catalog has more; these cover the ICP). */
+export const DEFAULT_LALAMOVE_MARKET: LalamoveMarket = "MY";
+
+/** Store country → Lalamove market. Only markets we've verified end to end
+ * appear here; anything else has no rider booking (`COUNTRY_RIDER_BOOKING`). */
+export function lalamoveMarketForCountry(
+	country: string | undefined,
+): LalamoveMarket {
+	return country === "SG" ? "SG" : DEFAULT_LALAMOVE_MARKET;
+}
+
+/** Vehicle types we surface (each market's catalog has more; these cover the
+ * ICP and exist in both MY and SG). */
 export type LalamoveVehicleType = "MOTORCYCLE" | "CAR";
 
 export type LalamoveCredentials = {
 	apiKey: string;
 	apiSecret: string;
 	env: LalamoveEnv;
+	/** The store's market, stamped onto every request's `Market` header.
+	 * Rides on the credentials because every call site already carries them —
+	 * threading a second argument through ten signatures would have been ten
+	 * chances to forget one, and a forgotten market silently prices the wrong
+	 * country. */
+	market: LalamoveMarket;
 };
 
 /**
@@ -50,13 +93,35 @@ export type LalamoveCredentials = {
  * derived from Lalamove's own key prefix (`pk_test_…` → sandbox, anything
  * else → production), so a key can never be pointed at the wrong API host.
  */
+/**
+ * Is a usable key pair stored at all? Separate from `resolveLalamoveCredentials`
+ * because it answers a different question — "has this seller connected
+ * Lalamove", which has nothing to do with which market they sell in. Callers
+ * that only need this must not be made to invent a country.
+ */
+export function hasLalamoveCredentials(
+	booking: { apiKey?: string; apiSecret?: string } | undefined,
+): boolean {
+	return (
+		!!booking?.apiKey?.trim() && !!booking?.apiSecret?.trim()
+	);
+}
+
 export function resolveLalamoveCredentials(
 	booking: { apiKey?: string; apiSecret?: string } | undefined,
+	/** The STORE's country. Required on purpose — a default would let a new
+	 * call site quietly bill a Singapore store against the Malaysian market. */
+	country: string | undefined,
 ): LalamoveCredentials | null {
 	const apiKey = booking?.apiKey?.trim();
 	const apiSecret = booking?.apiSecret?.trim();
-	if (!apiKey || !apiSecret) return null;
-	return { apiKey, apiSecret, env: inferLalamoveEnv(apiKey) };
+	if (!hasLalamoveCredentials(booking) || !apiKey || !apiSecret) return null;
+	return {
+		apiKey,
+		apiSecret,
+		env: inferLalamoveEnv(apiKey),
+		market: lalamoveMarketForCountry(country),
+	};
 }
 
 /** Decrypt-at-use (86eyn25gk): stored values may be ciphertext, so `env`
@@ -69,7 +134,14 @@ export async function decryptLalamoveCredentials(
 ): Promise<LalamoveCredentials> {
 	const apiKey = await decryptSecret(credentials.apiKey);
 	const apiSecret = await decryptSecret(credentials.apiSecret);
-	return { apiKey, apiSecret, env: inferLalamoveEnv(apiKey) };
+	// Market survives decryption — it comes from the store, not the key, so
+	// re-deriving it here would be re-deriving it from nothing.
+	return {
+		apiKey,
+		apiSecret,
+		env: inferLalamoveEnv(apiKey),
+		market: credentials.market,
+	};
 }
 
 /** Sandbox vs production straight from the key prefix — Lalamove issues
@@ -120,7 +192,7 @@ export async function signLalamoveRequest(args: {
  * Lalamove's side — pass something stable per logical attempt.
  */
 export async function buildLalamoveHeaders(args: {
-	credentials: Pick<LalamoveCredentials, "apiKey" | "apiSecret">;
+	credentials: Pick<LalamoveCredentials, "apiKey" | "apiSecret" | "market">;
 	method: string;
 	path: string;
 	body: string;
@@ -136,7 +208,7 @@ export async function buildLalamoveHeaders(args: {
 	});
 	return {
 		Authorization: `hmac ${args.credentials.apiKey}:${args.timestamp}:${signature}`,
-		Market: LALAMOVE_MARKET,
+		Market: args.credentials.market,
 		"Request-ID": args.requestId,
 		"Content-Type": "application/json",
 	};
@@ -171,25 +243,30 @@ export function toLalamoveCoordinates(c: {
 }
 
 /** Our WhatsApp phones are stored as bare digits ("60123456789"); Lalamove
- * wants E.164. Malaysian numbers only — everything in the repo already is. */
+ * wants E.164. Formatting only — whether a number may be a Lalamove CONTACT
+ * at all is `toLalamoveContactPhone`'s question. */
 export function toLalamovePhone(waPhone: string): string {
 	const digits = waPhone.replace(/\D/g, "");
 	return `+${digits}`;
 }
 
 /**
- * Normalize a stored WhatsApp number to a Lalamove-MY-acceptable E.164 phone,
- * or null when it isn't Malaysian. Lalamove validates the AREA CODE per
- * market — a +65 (SG) buyer on a JB store is a real case and returns null
- * here, so dispatch can fall back to the seller's own number as the rider
- * contact instead of a 422 at booking time. MY mobiles are 60 + 9–11 digits.
+ * Normalize a stored WhatsApp number to an E.164 phone the given market will
+ * accept, or null when it belongs to another country.
+ *
+ * Lalamove validates the AREA CODE per market, so a number from the wrong
+ * country is a 422 at booking time rather than a soft failure — returning
+ * null lets dispatch fall back to the seller's own number as the rider
+ * contact instead. Buyers can type a WhatsApp number from any country
+ * (z8r3fdh274), so that fallback is an everyday path, not a Johor edge case.
+ * The rule itself is provider-neutral and lives in `./courierContact` — Delyva
+ * applies the same one.
  */
-export function toLalamoveMyPhone(waPhone: string | undefined): string | null {
-	if (!waPhone) return null;
-	const digits = waPhone.replace(/\D/g, "");
-	if (!digits.startsWith("60")) return null;
-	if (digits.length < 11 || digits.length > 13) return null;
-	return `+${digits}`;
+export function toLalamoveContactPhone(
+	waPhone: string | undefined,
+	market: LalamoveMarket,
+): string | null {
+	return toDomesticContactPhone(waPhone, market);
 }
 
 export type LalamoveStop = {
@@ -199,10 +276,21 @@ export type LalamoveStop = {
 };
 
 /** POST /v3/quotations body. Two stops: seller origin → buyer address. */
+/** Each market's quotation locale — `language` is market-scoped in
+ * Lalamove's v3 body (MY accepts en_MY/ms_MY, SG accepts en_SG), and a
+ * locale/market mismatch is a 422. The PR #255 review caught this as the one
+ * market-scoped field the SG sweep missed: with the old `en_MY` hardcode,
+ * every SG quote could have failed as a generic "unavailable". */
+export const MARKET_LANGUAGE: Record<LalamoveMarket, string> = {
+	MY: "en_MY",
+	SG: "en_SG",
+};
+
 export function buildQuotationBody(args: {
 	serviceType: LalamoveVehicleType | string;
 	stops: LalamoveStop[];
-	language?: string;
+	/** The market the request is signed for — sets the locale to match. */
+	market: LalamoveMarket;
 	/** Epoch-ms pickup time for SCHEDULED pricing (pre-orders): quotes the
 	 * rate for that moment instead of right-now. Omit for immediate. */
 	scheduleAt?: number;
@@ -210,7 +298,7 @@ export function buildQuotationBody(args: {
 	return {
 		data: {
 			serviceType: args.serviceType,
-			language: args.language ?? "en_MY",
+			language: MARKET_LANGUAGE[args.market],
 			...(args.scheduleAt !== undefined
 				? { scheduleAt: new Date(args.scheduleAt).toISOString() }
 				: {}),
@@ -539,16 +627,6 @@ export function parseDriverResponse(json: unknown): {
 	};
 }
 
-/** Our normalized job status (deliveryJobs.status). */
-export type DeliveryJobStatus =
-	| "assigning"
-	| "ongoing"
-	| "picked_up"
-	| "completed"
-	| "canceled"
-	| "expired"
-	| "rejected";
-
 const STATUS_MAP: Record<string, DeliveryJobStatus> = {
 	ASSIGNING_DRIVER: "assigning",
 	ON_GOING: "ongoing",
@@ -565,60 +643,6 @@ export function normalizeLalamoveStatus(
 	raw: string | undefined,
 ): DeliveryJobStatus | undefined {
 	return raw ? STATUS_MAP[raw] : undefined;
-}
-
-export const TERMINAL_JOB_STATUSES: ReadonlySet<DeliveryJobStatus> = new Set([
-	"completed",
-	"canceled",
-	"expired",
-	"rejected",
-]);
-
-/** A job in one of these states still occupies the order's "one active job"
- * slot; anything terminal frees it for a rebook. */
-export function isActiveJobStatus(status: DeliveryJobStatus): boolean {
-	return !TERMINAL_JOB_STATUSES.has(status);
-}
-
-/**
- * Whether the rider (via webhook) currently drives the order's canonical
- * status — an ACTIVE job whose webhook has demonstrably delivered events
- * (`lastEventAt` is only ever written by the webhook handler, and the
- * ASSIGNING_DRIVER event lands seconds after booking when the seller has
- * registered the URL). While true, picked-up → shipped and completed →
- * delivered arrive on their own, so the seller's manual advance into those
- * statuses sits behind a disabled-with-reason gate: a manual "shipped" would
- * message the buyer early and WITHOUT the live-tracking link.
- *
- * NOTE (3 Aug): this is no longer the GATE — it only decides the wording. The
- * gate is now "an ACTIVE job exists" (see the order-detail stepper), because
- * requiring a webhook event left it off between booking and the first event,
- * which is exactly when a seller can click a live trip through to delivered.
- * A webhook-less seller is protected by the confirm-gated escape instead, and
- * this predicate picks the honest copy for them ("…as long as your Lalamove
- * webhook is set up" rather than promising it moves on its own).
- */
-export function riderDrivesOrderStatus(job: {
-	status: DeliveryJobStatus;
-	lastEventAt?: number;
-}): boolean {
-	return isActiveJobStatus(job.status) && job.lastEventAt !== undefined;
-}
-
-/**
- * Whether an advance into `targetAnchor` is one the rider's webhook manages
- * (shipped at pickup, delivered at drop-off). Same-anchor moves (a seller's
- * custom stages within the shipped band) don't change canonical status and
- * stay free.
- */
-export function isRiderManagedTransition(
-	targetAnchor: "confirmed" | "packed" | "shipped" | "delivered",
-	orderStatus: string,
-): boolean {
-	return (
-		(targetAnchor === "shipped" || targetAnchor === "delivered") &&
-		targetAnchor !== orderStatus
-	);
 }
 
 /** Provider order id out of a webhook event's `data` — undefined for

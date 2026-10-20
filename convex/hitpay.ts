@@ -25,6 +25,8 @@ import {
 	internalMutation,
 	internalQuery,
 } from "./_generated/server";
+import { paymentsPausedRefusal } from "./lib/buyerPayments";
+import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import {
 	buildPaymentRequestParams,
 	decimalStringToSen,
@@ -41,6 +43,7 @@ import { isMockupGateClosed } from "./lib/order";
 import { extendedPaymentDue } from "./lib/orderClaims";
 import { rateLimiter } from "./lib/rateLimiter";
 import { orderByToken } from "./orders";
+import { buyerPaymentsPaused } from "./subscriptions";
 
 /** Buyer-facing failure copy, shared by both actions so the two doors read
  * the same. */
@@ -61,6 +64,8 @@ type CheckoutContext = {
 	customerName: string | undefined;
 	customerWaPhone: string | undefined;
 	storeName: string;
+	/** Gates which buyer numbers ride the request (`buildPaymentRequestParams`). */
+	storeCountry: Country;
 	credentials: HitpayCredentials | null;
 	enabled: boolean;
 	existing: {
@@ -74,6 +79,10 @@ type CheckoutContext = {
 	 * reconcile checks it too, so a lost webhook can't strand that payment. */
 	previousRequestId: string | undefined;
 	gatewayPaymentId: string | undefined;
+	/** The store is lapsed (z8r3fdr6gg) — no new checkout may be handed out,
+	 * not even a reused link. A payment that lands anyway (a link minted
+	 * before the pause) is still applied: the money already moved. */
+	paymentsPaused: boolean;
 	/** An authentic payment already landed on this order that we couldn't
 	 * auto-apply — minting a second link would invite a second payment. */
 	hasUnresolvedPaymentIssue: boolean;
@@ -96,13 +105,18 @@ export const getCheckoutContext = internalQuery({
 			trackingToken: order.trackingToken ?? "",
 			status: order.status,
 			paymentStatus: order.paymentStatus ?? "unpaid",
+			// A request awaiting the seller's approval is never payable
+			// (`z8r3fdkjek` — bookings and approval-required RSVPs alike).
 			holdsOpen:
-				!isMockupGateClosed(order) && order.deliveryFeePending !== true,
+				order.status !== "booking_requested" &&
+				!isMockupGateClosed(order) &&
+				order.deliveryFeePending !== true,
 			total: order.total,
 			currency: order.currency,
 			customerName: order.customer.name,
 			customerWaPhone: order.customer.waPhone,
 			storeName: retailer.storeName,
+			storeCountry: retailer.country ?? DEFAULT_COUNTRY,
 			credentials: resolveHitpayCredentials(hitpay),
 			enabled: hitpay?.enabled === true,
 			existing:
@@ -121,6 +135,7 @@ export const getCheckoutContext = internalQuery({
 			previousRequestId: order.gatewayPreviousRequestId,
 			gatewayPaymentId: order.gatewayPaymentId,
 			hasUnresolvedPaymentIssue: order.gatewayPaymentIssue !== undefined,
+			paymentsPaused: await buyerPaymentsPaused(ctx, retailer._id),
 		};
 	},
 });
@@ -352,6 +367,10 @@ export const createCheckout = action({
 				"A payment for this order is still being checked by the store — please don't pay again until they confirm.",
 			);
 		}
+		if (context.paymentsPaused) {
+			// Before the reuse below: a still-fresh link is a payment door too.
+			throw new ConvexError(paymentsPausedRefusal(context.storeName));
+		}
 		if (!context.holdsOpen) {
 			// Mirrors claimPayment's holds: the total isn't final yet, so no
 			// payment request may exist for it. The page hides Pay-now in these
@@ -400,6 +419,7 @@ export const createCheckout = action({
 			webhookUrl: siteUrl ? `${siteUrl}/webhook/hitpay` : "",
 			buyerName: context.customerName,
 			buyerPhone: context.customerWaPhone,
+			storeCountry: context.storeCountry,
 		});
 		if (!siteUrl) params.delete("webhook");
 

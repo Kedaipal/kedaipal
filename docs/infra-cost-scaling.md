@@ -90,6 +90,17 @@ Meta bills **by message category**, not by raw count:
 | **Utility template** | transactional notification *outside* the 24h window | ~USD 0.015 (~RM0.07) |
 | **Marketing template** | promotional / broadcast | ~USD 0.06 (~RM0.28) |
 
+> **Meta bills per RECIPIENT country, not per store.** The rates above are
+> Malaysia's. Since [`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274) a
+> buyer can give a WhatsApp number from any country
+> ([`phone-numbers.md`](./phone-numbers.md)), so an order's confirmation
+> template to the UK, India or Indonesia is priced at that country's rate — and
+> it always goes out, because transactional sends bypass the WABA gate. Nothing
+> meters spend per recipient country yet; `outboundMessageLog.toWaPhone`
+> carries the recipient's calling code, so a per-country breakdown can be
+> derived (within the log's retention window) when the Credits COGS model
+> needs it.
+
 **The entire core order flow is free.** When a buyer taps the `wa.me` link, they
 open a 24h service window; the confirm reply, payment ask, QR, and in-window
 status updates all cost nothing. This is why the WhatsApp wedge is cheap to run.
@@ -105,6 +116,12 @@ status updates all cost nothing. This is why the WhatsApp wedge is cheap to run.
 ---
 
 ## 4. Tier economics — why "Scale = infinite WA messages" must change
+
+> **Historical analysis (Jun–Aug 2026).** Scale was retired for **Enterprise**
+> on 1 Oct 2026 (Credits T6, [`pricing.md`](./pricing.md#enterprise--a-contract-not-a-price)).
+> An Enterprise store carries Pro's broadcast quota (100) until broadcasts
+> ship, when its contract prices them — the per-deal contract is where this
+> liability is now decided. The section below is kept as the reasoning.
 
 `convex/lib/plans.ts` currently sets `scale.broadcastQuota = Infinity`
 (`UNLIMITED` sentinel). **This is an unbounded financial liability**: every
@@ -277,6 +294,33 @@ until well past 100 retailers.** No custom logging infra to build beyond the
 message ledger you already designed.
 
 ---
+
+## 7b. Storefront fan-out — where the wall is (noted `z8r3fdjgvd`, 29 Sep 2026)
+
+`products.list` collects every ACTIVE product, then per product every variant
+plus a `storage.getUrl` per variant image. It is a single Convex transaction, so
+the binding limit is the **per-transaction document ceiling** — and blowing it is
+a hard error, not a slow page: the storefront stops rendering.
+
+Raising `MAX_VARIANTS_PER_PRODUCT` 50 → 100 **halves the headroom**:
+
+| | products | variants each | docs read (worst case) |
+|---|---|---|---|
+| Before | 200 (`MAX_PRODUCTS_PER_RETAILER`) | 50 | 10,000 |
+| After | 200 | 100 | **20,000** |
+
+Nowhere near the real cohort — the store that drove the cap raise has **one**
+56-variant product, and a 200-product catalog averaging 100 variants each is not
+a shape any seller has — so this was **not** treated as a blocker. But the two
+caps now multiply into a number past the ceiling, which nothing tests and
+nothing previously wrote down.
+
+**If it is ever approached**, the fix is not a lower cap: it is to stop reading
+every variant for a LIST view. The storefront grid needs a price range and a
+"from" price per product, not the full grid — that is a denormalized
+`priceFrom`/`variantCount` on `products` (both already exist for other reasons)
+plus a per-product variant read only on the product page. Ticket before raising
+either cap again.
 
 ## 8. Recommended action order
 1. ✅ `shortId` capability hardening (HIGH security) — **DONE** (ticket

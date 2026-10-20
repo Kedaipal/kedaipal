@@ -4,12 +4,13 @@ import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { Clock, MessageCircle } from "lucide-react";
 import { useCallback, useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { claimVoucherDiscount } from "../../convex/lib/vouchers";
 import type { ClaimPagePayload } from "../../convex/orderClaims";
 import { ClaimCheckoutPage } from "../components/claim/claim-checkout-page";
 import { ClaimTimerBar } from "../components/claim/claim-timer-bar";
+import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { AppImage } from "../components/ui/app-image";
 import { Skeleton } from "../components/ui/skeleton";
-import { ThemeToggle } from "../components/ui/theme-toggle";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { formatPrice } from "../lib/format";
@@ -54,14 +55,18 @@ export const Route = createFileRoute("/claim/$token")({
 
 function ClaimNotFound() {
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="font-heading text-2xl font-extrabold">
-				Order link not found
-			</h1>
-			<p className="text-sm text-muted-foreground">
-				This link doesn&apos;t match any order. Check the link in your WhatsApp
-				chat, or ask the store to send a fresh one.
-			</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="font-heading text-2xl font-extrabold">
+					Order link not found
+				</h1>
+				<p className="text-sm text-muted-foreground">
+					This link doesn&apos;t match any order. Check the link in your
+					WhatsApp chat, or ask the store to send a fresh one.
+				</p>
+			</div>
+			{/* Unknown token = unknown store, so the badge carries no `store=`. */}
+			<StorefrontFooter surface="claim" />
 		</main>
 	);
 }
@@ -82,6 +87,8 @@ function ClaimSkeleton() {
 				<Skeleton className="h-40 w-full rounded-2xl" />
 				<Skeleton className="h-40 w-full rounded-2xl" />
 			</div>
+			{/* In place before the claim resolves, so it never pops in. */}
+			<StorefrontFooter surface="claim" />
 		</div>
 	);
 }
@@ -183,6 +190,7 @@ function ClaimDeadEnd({
 					</p>
 				) : null}
 			</div>
+			<StorefrontFooter slug={store.slug} surface="claim" />
 		</main>
 	);
 }
@@ -211,6 +219,27 @@ function ClaimRoute() {
 	const status =
 		payload.status === "open" && locallyExpired ? "expired" : payload.status;
 
+	// Off-Season Hold (z8r3fday24): the seller paused ordering after sending
+	// this link. Ranked ABOVE expiry — "they're on a break" is the truer, more
+	// actionable reason, and it's the one the commit would refuse on anyway.
+	// Not a withdrawal: the seller didn't release this order, their whole shop
+	// is resting, so the copy points at the season rather than at the buyer.
+	if (store.orderingPaused && status !== "completed") {
+		// A hold is "a seasonal break"; Kedaipal's switch (z8r3fdudf7) is said
+		// neutrally — never why, and never a reason the buyer can't verify.
+		const seasonal = store.orderingPausedBy === "hold";
+		return (
+			<ClaimDeadEnd
+				store={store}
+				title={
+					seasonal
+						? `${store.storeName} is on a seasonal break`
+						: `${store.storeName} isn't taking orders right now`
+				}
+				body={`Ordering is paused for now, so this link can't be completed — nothing was charged. Message them to find out when they're back.`}
+			/>
+		);
+	}
 	if (status === "expired") {
 		return (
 			<ClaimDeadEnd
@@ -257,6 +286,7 @@ function ClaimRoute() {
 						</Link>
 					) : null}
 				</div>
+				<StorefrontFooter slug={store.slug} surface="claim" />
 			</main>
 		);
 	}
@@ -278,7 +308,13 @@ function ClaimRoute() {
 								<span {...MASK_PII}>{open.buyerName}</span>
 							</>
 						) : null}
-						{` · ${formatPrice(open.itemsTotal, store.currency)}`}
+						{/* NET of the voucher, not the items figure (`z8r3fdr617`).
+						    The voucher is locked at send, so it is knowable here —
+						    fees are not, since they depend on choices the buyer
+						    hasn't made yet, and they only ever ADD. Printing the
+						    gross put "RM 40.00" in the header directly above a
+						    ticket reading "TOTAL RM 32.00". */}
+						{` · ${formatPrice(open.itemsTotal - claimVoucherDiscount(open.voucher, open.itemsTotal), store.currency)}`}
 					</>
 				}
 			/>
@@ -295,14 +331,9 @@ function ClaimRoute() {
 					pickupLocations={pickupLocations ?? []}
 				/>
 			</div>
-			{/* Bottom of the page, under the checkout and above the sticky bar's
-				  reserved space — the same low-prominence slot the storefront and
-				  /track use, so a buyer who found it once finds it everywhere. Only
-				  on this OPEN state: the expired and already-claimed screens are
-				  dead ends a buyer reads and leaves. */}
-			<div className="mt-8 flex justify-center">
-				<ThemeToggle />
-			</div>
+			{/* Direct flex child of the min-h-dvh column, above the fixed purchase
+			    bar's reserved padding — the same placement as /$slug/checkout. */}
+			<StorefrontFooter slug={store.slug} surface="claim" />
 		</div>
 	);
 }

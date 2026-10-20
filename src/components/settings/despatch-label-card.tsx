@@ -6,12 +6,11 @@
  * the parcel. (Pickup orders never get one — they have no address.)
  *
  * Presentational: config in, a patch out via `onSave`, so it unit-tests without
- * Convex (the `wa-order-alerts-card.tsx` posture). The card is the ONE place
+ * Convex (the `order-alerts-card.tsx` posture). The card is the ONE place
  * that tells a seller what this label is and — just as importantly — what it
  * is not: a Kedaipal despatch label, not a courier's official consignment note.
  */
 
-import { Printer } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import {
@@ -24,6 +23,8 @@ import { convexErrorMessage } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { ModeRow, ModeRowGroup } from "../ui/mode-row";
+import { HelperBullets, InfoDisclosure } from "./settings-primitives";
 
 const PAPER_OPTIONS: ReadonlyArray<{
 	value: AwbPaperSize;
@@ -126,57 +127,38 @@ export function DespatchLabelCard({
 	}
 
 	return (
-		<section className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-5 lg:p-6">
-			<div className="flex flex-col gap-1">
-				<h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-					<Printer
-						className="size-4 text-muted-foreground"
-						aria-hidden="true"
-					/>
-					Despatch labels
-				</h3>
-				<p className="text-xs leading-relaxed text-muted-foreground">
-					The address label you stick on a parcel. Print one from any order, or
-					print every packed-and-paid order at once from your Orders page. This
-					is Kedaipal&apos;s own label — not a courier&apos;s official
-					consignment note — so it shows the courier and tracking number{" "}
-					<em>you</em> recorded when marking the order shipped.
-				</p>
-			</div>
+		<div className="flex flex-col gap-4">
+			<p className="text-xs text-muted-foreground">
+				The address label you stick on a parcel — print one from any order, or
+				every packed-and-paid order at once.
+			</p>
+			<InfoDisclosure summary="What this label is">
+				<HelperBullets
+					items={[
+						"Kedaipal's own label, not a courier's official consignment note",
+						"It shows the courier and tracking number you recorded when marking the order shipped",
+					]}
+				/>
+			</InfoDisclosure>
 
-			<fieldset className="flex flex-col gap-2">
-				<legend className="pb-2 text-xs font-medium text-muted-foreground">
+			<div className="flex flex-col gap-2">
+				<span className="text-xs font-medium text-muted-foreground">
 					Label size
-				</legend>
-				<div className="grid gap-2 sm:grid-cols-2">
-					{PAPER_OPTIONS.map((option) => {
-						const active = draft.paperSize === option.value;
-						return (
-							<button
-								key={option.value}
-								type="button"
-								aria-pressed={active}
-								onClick={() =>
-									setDraft((d) => ({ ...d, paperSize: option.value }))
-								}
-								className={cn(
-									"flex flex-col gap-1 rounded-xl border p-3 text-left transition-colors",
-									active
-										? "border-accent bg-accent/5"
-										: "border-input hover:bg-muted",
-								)}
-							>
-								<span className="text-sm font-semibold text-foreground">
-									{option.title}
-								</span>
-								<span className="text-xs leading-relaxed text-muted-foreground">
-									{option.detail}
-								</span>
-							</button>
-						);
-					})}
-				</div>
-			</fieldset>
+				</span>
+				<ModeRowGroup label="Label size">
+					{PAPER_OPTIONS.map((option) => (
+						<ModeRow
+							key={option.value}
+							active={draft.paperSize === option.value}
+							onSelect={() =>
+								setDraft((d) => ({ ...d, paperSize: option.value }))
+							}
+							title={option.title}
+							description={option.detail}
+						/>
+					))}
+				</ModeRowGroup>
+			</div>
 
 			<fieldset className="flex flex-col gap-3">
 				<legend className="pb-1 text-xs font-medium text-muted-foreground">
@@ -259,6 +241,6 @@ export function DespatchLabelCard({
 					</Button>
 				) : null}
 			</div>
-		</section>
+		</div>
 	);
 }

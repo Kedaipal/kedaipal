@@ -1,37 +1,73 @@
 // Subscription reads + the soft-lock access guard. The whole manual-billing model
 // rests on `resolveAccess`: it turns a retailer's subscription into an access
 // descriptor that the seller-side dashboard reads (nav pill, disabled-with-reason
-// UI) and that `assertSubscriptionActive` enforces on growth-write mutations.
+// UI) and that `assertSubscriptionActive` enforces on EVERY seller write.
 //
 // Two invariants the rest of the system depends on:
 //  1. FAIL SAFE — a missing subscription row resolves to FULL access (comped),
 //     logged, never locked. So a backfill miss degrades to "works", not "locked
 //     out" (ticket launch-blocker EC).
-//  2. The storefront + order pipeline NEVER call this — they're public and stay
-//     live regardless of subscription status. Soft-lock freezes only the seller's
-//     dashboard growth-writes (products, settings, future broadcast).
+//  2. The storefront + order pipeline NEVER call the guard — they're public and
+//     stay live regardless of subscription status. The soft lock freezes the
+//     SELLER's dashboard: a lapsed store is view-only, while its buyers browse,
+//     order, track and edit their own orders exactly as before. The one thing
+//     a buyer loses is PAYING (z8r3fdr6gg) — `buyerPaymentsPaused` below is
+//     the single read buyer payment paths make, and it never refuses an order.
 //
 // See docs/manual-subscription.md.
 
-import { ConvexError } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
 	internalMutation,
+	internalQuery,
+	mutation,
 	type MutationCtx,
 	query,
 	type QueryCtx,
 } from "./_generated/server";
-import { isAdmin } from "./lib/auth";
 import {
+	adminUserIds,
+	isAdmin,
+	logAdminAction,
+	resolveMyRetailer,
+	requireAdmin,
+	requireRetailerAccess,
+	storeOwnerIsAdmin,
+	tryRetailerAccess,
+} from "./lib/auth";
+import { isUnclaimed } from "./lib/unclaimedStore";
+import { landCreditGrant } from "./credits";
+import { COMP_LABEL_MAX, COMP_NOTE_MAX, type CompKind } from "./lib/comp";
+import { ENTERPRISE_SELF_SERVE_REFUSAL } from "./lib/enterprise";
+import { rateLimiter } from "./lib/rateLimiter";
+import { subscriptionCoversWaAlerts } from "./lib/sellerAlerts";
+import {
+	autoChargeAllowed,
+	autoRenewMethodLabel,
+	CHARGE_ATTEMPT_LOCK_MS,
+} from "./lib/hitpayBilling";
+import {
+	type BillingCurrency,
+	type BillingCycle,
 	capsForPlan,
+	FULL_ACCESS_PLAN,
 	featuresForPlan,
+	fullAccessCaps,
+	type ListedPlan,
 	type Plan,
 	PLAN_CAPS,
 	type PlanFeature,
 	type PlanFeatures,
 	TRIAL_DAYS,
 } from "./lib/plans";
+import {
+	canEnterHold,
+	canResumeHold,
+	holdBillsNow,
+	resumeBillsNow,
+} from "./lib/seasonalHold";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -41,13 +77,40 @@ export type SubscriptionStatus =
 	| "trialing"
 	| "active"
 	| "past_due"
-	| "cancelled";
+	| "cancelled"
+	| "on_hold";
 
 export type AccessState = {
 	plan: Plan;
 	status: SubscriptionStatus;
+	/** Monthly or annual. Carried so the seller's Settings → Billing tab can tell
+	 * an annual subscriber apart from a monthly one — without it the annual offer
+	 * would keep pitching a switch to someone who already switched. Owner-only,
+	 * like the rest of this descriptor: it is never on the public storefront
+	 * payload. */
+	billingCycle: BillingCycle;
 	comped: boolean;
+	/** Admin-granted comp metadata (z8r3fdeub2) — the SELLER-FACING slice only
+	 * (kind, sponsor label) so the billing tab can say "Sponsored by X".
+	 * `note`/`grantedBy` are admin-internal and never ride a seller payload.
+	 * Absent on fail-open comped rows (missing row / legacy backfill) — those
+	 * render the generic sponsored card. */
+	comp?: { kind: CompKind; label?: string };
+	/** Set while an EXPIRED seller's lock came from an admin turning their comp
+	 * upgrade off (z8r3fdeub2) rather than an unpaid bill. Only meaningful with
+	 * `status: "past_due"`: it swaps "your subscription is past due" for "your
+	 * sponsored access ended" (they never had a subscription) and points them
+	 * at choosing a plan. Owner-only. */
+	compEnded?: { at: number };
+	/** The free period's BACKSTOP deadline (signup + TRIAL_DAYS). */
 	trialEndsAt?: number;
+	/** Start-when-you-sell (z8r3fday24): set once the free period ENDED — at
+	 * the first live order or the backstop — and the first invoice was issued.
+	 * While unset on a `trialing` row the store is still free. Drives the
+	 * pill/banner/billing-tab wording ("Free · until your first order" vs
+	 * "first invoice due"). Owner-only like the rest of this descriptor. */
+	freePeriodEndedAt?: number;
+	freePeriodEndReason?: "first_order" | "backstop";
 	currentPeriodEnd?: number;
 	caps: { orderCap: number; userCap: number; broadcastQuota: number };
 	/** Boolean feature entitlements (CRM, Order Inbox, …) resolved from the plan
@@ -57,6 +120,57 @@ export type AccessState = {
 	active: boolean;
 	/** Soft-lock engaged — dashboard growth-writes must be blocked. */
 	frozen: boolean;
+	/** Off-Season Hold (z8r3fday24): the subscription is paused — ordering is
+	 * off (`caps.orderCap` reads 0 here), everything else stays live, and
+	 * `plan` is the tier the seller resumes to. Never frozen by itself; an
+	 * unpaid hold invoice going overdue locks like any other. */
+	held: boolean;
+	heldAt?: number;
+	/** What bought the current paid period — lets the hold card say whether a
+	 * resume bills the tier at once (hold-bought) or nothing (plan-bought). */
+	periodPaidBy?: "plan" | "hold";
+	/** Saved-method auto-renewal summary (86eyb6z4r) — OWNER-only surface (this
+	 * state rides getMyRetailer, which shoppers never see). `failing` means the
+	 * last charge attempt was declined and dunning is running; `stopped` means
+	 * auto-charging is stopped over a stranded charge (nothing charges until a
+	 * bill is settled); `confirming` means a charge was SENT and its outcome
+	 * is still being confirmed with HitPay — the UI must neither promise a
+	 * charge nor invite a manual payment while it stands; `setupPending`
+	 * means the seller started authorisation but no method attached yet. */
+	autoRenew?: {
+		method: string;
+		methodLabel: string;
+		failedAttempts: number;
+		failing: boolean;
+		stopped: boolean;
+		confirming: boolean;
+		nextChargeAt?: number;
+	};
+	autoRenewSetupPending?: boolean;
+	/** Founding onboard promise (86eyb6z4r). A fact about the store, never a
+	 * price input: it misses every member an admin marked founding and never
+	 * clears after a lapse, so every price reads the server-resolved
+	 * `billingGatewayAvailable.foundingPricing` instead (z8r3fdfty4).
+	 * Owner-only. */
+	foundingIntent?: boolean;
+	/** A downgrade scheduled for the end of the paid period (86eyb6z4r). The
+	 * seller keeps everything they bought until `effectiveAt`; the renewal
+	 * invoice then bills `plan`. Owner-only, and cancellable. */
+	pendingPlanChange?: { plan: ListedPlan; effectiveAt: number };
+	/** The Enterprise contract's SELLER-FACING terms (Credits T6) — what they
+	 * pay, what's included, what an overage block costs. `contactName`,
+	 * `notes`, who set it and the entry stamp are admin-internal and never
+	 * ride a seller payload. Present iff `plan` is `enterprise`. Like the
+	 * rest of `AccessState` it reaches every viewer of the store's payload
+	 * (the plan, status and renewal already do); Settings → Billing is the
+	 * only surface that renders it. */
+	enterprise?: {
+		baseFeeMinor: number;
+		currency: BillingCurrency;
+		includedCredits: number;
+		overageRateMinor: number;
+		blockSize: number;
+	};
 };
 
 /** Pure access resolution from a subscription doc (or null). Exported for tests
@@ -65,8 +179,8 @@ export type AccessState = {
  * `opts.adminFullAccess` is set only on the OWNER read when the caller is a
  * Kedaipal admin operating their OWN store: they run the app for free with the
  * highest tier unlocked (never soft-locked, every Pro+ feature on), so we force
- * full `features` + `active` while KEEPING the real plan/status/trial so the
- * billing page still tells the truth. Mirrors the server bypass in
+ * full `features` + no-limit caps + `active` while KEEPING the real
+ * plan/status/trial so the billing page still tells the truth. Mirrors the server bypass in
  * `assertSubscriptionActive`/`assertPlanFeature`; the nav pill separately reads
  * "Admin" (client `adminOwnStore`). See docs/admin-console.md. */
 export function resolveAccess(
@@ -77,8 +191,10 @@ export function resolveAccess(
 	if (!opts?.adminFullAccess) return base;
 	return {
 		...base,
-		// Highest tier — an admin should have any Pro/Scale-only feature.
-		features: featuresForPlan("scale"),
+		// Full access — the highest tier's features and no limits. The SAME
+		// entitlement a comped store resolves to below (z8r3fdeub2).
+		caps: fullAccessCaps(),
+		features: featuresForPlan(FULL_ACCESS_PLAN),
 		active: true,
 		frozen: false,
 	};
@@ -87,35 +203,96 @@ export function resolveAccess(
 function resolveAccessBase(sub: Doc<"subscriptions"> | null): AccessState {
 	if (!sub) {
 		// Fail safe: never lock out a retailer because their subscription row is
-		// missing (pre-backfill, or a backfill miss). Treat as comped full access.
-		const caps = capsForPlan("pro");
+		// missing (pre-backfill, or a backfill miss). Treat as comped full access
+		// — the same entitlements an admin-granted comp resolves to below.
 		return {
 			plan: "pro",
 			status: "active",
+			// A retailer with no subscription row is comped, so no cycle is really
+			// being billed. "monthly" is the honest default: it is what every real
+			// row starts as, and it keeps the annual offer from being shown to an
+			// account that has no billing relationship at all.
+			billingCycle: "monthly",
 			comped: true,
-			caps,
-			features: featuresForPlan("pro"),
+			caps: fullAccessCaps(),
+			features: featuresForPlan(FULL_ACCESS_PLAN),
 			active: true,
 			frozen: false,
+			held: false,
 		};
 	}
 	const comped = sub.comped === true;
 	// Soft-lock only bites a real (non-comped) past_due subscription.
 	const frozen = sub.status === "past_due" && !comped;
+	// A held subscription keeps its tier's features and the dashboard, but its
+	// EFFECTIVE order cap is 0 — resolved here, never stored, so a resume needs
+	// no rewrite and the stored caps stay the tier's.
+	const held = sub.status === "on_hold";
 	return {
 		plan: sub.plan,
 		status: sub.status,
+		billingCycle: sub.billingCycle,
 		comped,
+		comp: sub.comp
+			? { kind: sub.comp.kind, label: sub.comp.label }
+			: undefined,
+		compEnded:
+			sub.compEndedAt !== undefined ? { at: sub.compEndedAt } : undefined,
 		trialEndsAt: sub.trialEndsAt,
+		freePeriodEndedAt: sub.freePeriodEndedAt,
+		freePeriodEndReason: sub.freePeriodEndReason,
 		currentPeriodEnd: sub.currentPeriodEnd,
-		caps: {
-			orderCap: sub.orderCap,
-			userCap: sub.userCap,
-			broadcastQuota: sub.broadcastQuota,
-		},
-		features: featuresForPlan(sub.plan),
+		// A comp resolves exactly like an admin's own store (z8r3fdeub2): no
+		// limits + the highest tier's features, whatever `plan` the row keeps
+		// for the day the comp is turned off. Resolved, never stored.
+		caps: comped
+			? fullAccessCaps()
+			: {
+					orderCap: held ? 0 : sub.orderCap,
+					userCap: sub.userCap,
+					broadcastQuota: sub.broadcastQuota,
+				},
+		features: featuresForPlan(comped ? FULL_ACCESS_PLAN : sub.plan),
 		active: !frozen,
 		frozen,
+		held,
+		heldAt: sub.heldAt,
+		periodPaidBy: sub.periodPaidBy,
+		autoRenew: sub.autoRenew
+			? {
+					method: sub.autoRenew.method,
+					methodLabel:
+						sub.autoRenew.methodLabel ??
+						autoRenewMethodLabel(sub.autoRenew.method),
+					failedAttempts: sub.autoRenew.failedAttempts ?? 0,
+					failing: (sub.autoRenew.failedAttempts ?? 0) > 0,
+					stopped: !autoChargeAllowed(sub.autoRenew),
+					confirming: sub.autoRenew.lastChargeAttemptAt !== undefined,
+					nextChargeAt: sub.currentPeriodEnd,
+				}
+			: undefined,
+		autoRenewSetupPending:
+			sub.autoRenew === undefined && sub.autoRenewSetup !== undefined
+				? true
+				: undefined,
+		foundingIntent: sub.foundingIntent === true ? true : undefined,
+		pendingPlanChange: sub.pendingPlanChange
+			? {
+					plan: sub.pendingPlanChange.plan,
+					// The change lands with the renewal invoice the cron issues
+					// once the paid period ends.
+					effectiveAt: sub.currentPeriodEnd ?? sub.pendingPlanChange.requestedAt,
+				}
+			: undefined,
+		enterprise: sub.enterprise
+			? {
+					baseFeeMinor: sub.enterprise.baseFeeMinor,
+					currency: sub.enterprise.currency,
+					includedCredits: sub.enterprise.includedCredits,
+					overageRateMinor: sub.enterprise.overageRateMinor,
+					blockSize: sub.enterprise.blockSize,
+				}
+			: undefined,
 	};
 }
 
@@ -129,6 +306,19 @@ export async function loadSubscription(
 		.query("subscriptions")
 		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 		.first();
+}
+
+/** Does this store's subscription cover seller WhatsApp order alerts right
+ * now (z8r3fdv55f)? The one DB-side author — the WA alert actions and the
+ * email suppression read it through their order lookups, so the two can never
+ * disagree about whether a WhatsApp alert is going out. The rule itself is
+ * `subscriptionCoversWaAlerts` (pure). */
+export async function waAlertsCoveredBySubscription(
+	ctx: AnyCtx,
+	retailer: Pick<Doc<"retailers">, "_id" | "userId">,
+): Promise<boolean> {
+	const sub = await loadSubscription(ctx, retailer._id);
+	return subscriptionCoversWaAlerts(sub, storeOwnerIsAdmin(retailer));
 }
 
 /** Resolve a retailer's access in one call. */
@@ -146,10 +336,138 @@ export async function getAccess(
 }
 
 /**
- * Soft-lock guard for seller dashboard GROWTH-WRITES (product create/update,
- * updateSettings, future broadcast/reminder). Throws a `ConvexError` when the
- * subscription is past_due (and not comped). NEVER call from the storefront or
- * the order pipeline — those must stay live for the buyer.
+ * Buyer payments PAUSE while a store is lapsed (z8r3fdr6gg) — the ONE place
+ * that rule lives. A lapsed store (an overdue invoice, or an admin-ended comp:
+ * exactly `resolveAccess(...).frozen`) is view-only, so it cannot mark an
+ * order paid, advance it or fulfil it. A buyer who pays it gets an order
+ * nobody on the platform can act on, and Kedaipal would be lending its
+ * credibility to a payment request from a store that has stopped paying us.
+ * So while it lasts the buyer can still ORDER, but every payment door is shut:
+ * no bank/QR details, no HitPay checkout, no new "I've paid" claim, no "How to
+ * pay" block on the receipt, no claim-link payment deadline. It reopens on
+ * the same order page the moment the store is active again.
+ *
+ * Deliberately NOT paused: trialing (free period + first-invoice window),
+ * comped, on-hold, a missing row (fail open, like `resolveAccess`), and a
+ * store OWNED BY A KEDAIPAL ADMIN — dogfooded free for ever and never
+ * soft-locked, so pausing its buyers would have the two sides disagree
+ * (found by /test-code on IndoMart: no lock banner, yet buyers paused).
+ * Identity-blind on the owner (`storeOwnerIsAdmin`), like the free-period
+ * skip, because a buyer has no identity to check. A
+ * scammer on a fresh store never reaches `past_due`, so widening this to
+ * "never paid" is the open follow-up decision — change it HERE and every
+ * door follows.
+ *
+ * Read on public buyer paths, so it is a pure function of the row (no
+ * missing-row warning, unlike `getAccess`) and its public projection is one
+ * boolean — never the status or the reason.
+ *
+ * ANY new path that asks a buyer to pay — a reminder cron, a new channel —
+ * must ask this itself. The two existing payment asks it doesn't touch (the
+ * seller's manual reminder, counter pay-later) are safe only because they sit
+ * behind the seller soft-lock; an automated send has no seller in the loop.
+ */
+export function buyerPaymentsPausedFor(
+	sub: Doc<"subscriptions"> | null,
+	owner?: { userId: string } | null,
+): boolean {
+	if (!resolveAccess(sub).frozen) return false;
+	return !(owner && storeOwnerIsAdmin(owner));
+}
+
+/** `buyerPaymentsPausedFor`, loading the store's subscription — and its
+ * owner only when the subscription is frozen, so an open store pays one read. */
+export async function buyerPaymentsPaused(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+): Promise<boolean> {
+	const sub = await loadSubscription(ctx, retailerId);
+	if (!buyerPaymentsPausedFor(sub)) return false;
+	return buyerPaymentsPausedFor(sub, await ctx.db.get(retailerId));
+}
+
+/**
+ * Minutes between the first order and its invoice — deliberately NOT 0.
+ * Product: the seller's inbox beat belongs to the ORDER at that moment; the
+ * "your first order is in — here's your first invoice" email landing a few
+ * minutes later reads as a follow-up, not a toll booth, and the due date
+ * (+14d) makes the offset irrelevant. Infrastructure: a zero-delay schedule
+ * on the plain order-create path made every real-timer convex-test suite run
+ * the billing chain CONCURRENTLY with test transactions — convex-test stages
+ * writes on one per-instance stack, which is not concurrency-safe (the
+ * intermittent mockup-blob CI failure) — and a scheduled mutation firing
+ * after instance teardown crashes its scheduler outright. With a minutes
+ * delay the chain is inert inside any test file's lifetime unless a suite
+ * advances fake timers on purpose (the invoices.test.ts pattern). Do not
+ * lower this below a couple of minutes without re-checking that class.
+ */
+const FIRST_INVOICE_DELAY_MS = 10 * 60 * 1000;
+
+/**
+ * Start-when-you-sell (z8r3fday24): a store's FIRST LIVE ORDER ends its free
+ * period and fires the first invoice. Called from the one order-created seam
+ * every channel funnels through (`subscriptionUsage.recordOrderCreated` —
+ * storefront, counter, claim link, booking), so "first live order" means the
+ * first order, full stop. Returns true when this call ended the free period.
+ *
+ * This reads the subscription row from inside the order pipeline — a
+ * deliberate, narrow exception to "the pipeline never reads subscription
+ * status": it is a one-time STAMP plus a scheduled job, never a gate. Nothing
+ * here can refuse or fail the order: every early return is a silent no-op and
+ * the issuance runs in its own scheduled mutation
+ * (`invoices.internalIssueFirstInvoice`). `updatedAt` is left alone — it is
+ * the status-flip moment, and the status does not change here.
+ *
+ * Skips: not trialing, comped, already ended, or a store owned by a Kedaipal
+ * admin (dogfooding — an identity-blind check on the owner's user id against
+ * the same allowlist `isAdmin` uses, so Zaki's own store never bills itself).
+ */
+export async function endFreePeriodOnFirstOrder(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	now: number,
+): Promise<boolean> {
+	const sub = await loadSubscription(ctx, retailerId);
+	if (
+		!sub ||
+		sub.status !== "trialing" ||
+		sub.comped === true ||
+		sub.freePeriodEndedAt !== undefined
+	)
+		return false;
+	const retailer = await ctx.db.get(retailerId);
+	if (!retailer || adminUserIds().includes(retailer.userId)) return false;
+	await ctx.db.patch(sub._id, {
+		freePeriodEndedAt: now,
+		freePeriodEndReason: "first_order",
+	});
+	await ctx.scheduler.runAfter(
+		FIRST_INVOICE_DELAY_MS,
+		internal.invoices.internalIssueFirstInvoice,
+		{ subscriptionId: sub._id },
+	);
+	return true;
+}
+
+/**
+ * Soft-lock guard for EVERY seller dashboard write. A store whose subscription
+ * has lapsed — an unpaid invoice, or an admin turning a comp upgrade off
+ * (z8r3fdeub2) — goes VIEW-ONLY: it still reads everything it ever could, and
+ * nothing it does changes a row. That deliberately includes moving an order's
+ * status, packing, shipping and taking payment, which were allowed until 19 Sep
+ * 2026 (owner decision: "same lock as it was for all expired vendors, all
+ * actions locked, it's all view only"). Growth-writes were never the point —
+ * the point is that an unpaid store cannot be RUN.
+ *
+ * Throws a `ConvexError` when the subscription is past_due (and not comped).
+ * NEVER call from the storefront or the order pipeline — the BUYER's side stays
+ * live: browsing, ordering, paying, tracking and editing their own order all
+ * keep working, which is the whole reason the lock is soft. Paying Kedaipal
+ * stays open too, or the seller could never unlock themselves.
+ *
+ * Every public seller mutation and action is either guarded here or listed,
+ * with its reason, in `convex/sellerLockCoverage.test.ts` — which fails on any
+ * new one that is neither.
  */
 export async function assertSubscriptionActive(
 	ctx: AnyCtx,
@@ -163,10 +481,103 @@ export async function assertSubscriptionActive(
 	const access = await getAccess(ctx, retailerId);
 	if (access.frozen) {
 		throw new ConvexError(
-			"Your subscription is past due. Pay your invoice to keep editing your store — your storefront and existing orders stay live in the meantime.",
+			// A lock from a comp ending has no invoice behind it (z8r3fdeub2) —
+			// "pay your invoice" would send the seller hunting for a bill.
+			access.compEnded
+				? "Your sponsored access has ended, so your store is view-only. Choose a plan in Settings → Billing to start working again — your storefront stays live and buyers can still order in the meantime, but they can't pay you on Kedaipal until you do."
+				: "Your subscription is past due, so your store is view-only. Pay your invoice to start working again — your storefront stays live and buyers can still order in the meantime, but they can't pay you on Kedaipal until you do.",
 		);
 	}
 }
+
+/**
+ * Same lock, for a seller write whose args carry NO store — the upload-URL
+ * minters (`products.generateUploadUrl`, the three on `retailers`), where the
+ * store is implied by the caller. Resolves the caller's OWN store and locks on
+ * that. A storeless caller passes (there is nothing to lock) and so does an
+ * admin, exactly as in `assertSubscriptionActive`; an admin acting-as is
+ * bypassed there too, so resolving their own store here is never wrong.
+ *
+ * The blob these mint can only ever be attached by a guarded mutation, so this
+ * is belt-and-braces — but a lapsed store shouldn't be able to write into our
+ * storage at all, and a reviewer shouldn't have to reason about it.
+ */
+export async function assertOwnStoreActive(ctx: AnyCtx): Promise<void> {
+	if (await isAdmin(ctx)) return;
+	const identity = await ctx.auth.getUserIdentity();
+	if (!identity) return; // the caller's own auth check already refused
+	// Membership-aware (86exr91r4 audit fix #2): the lock must bind the store
+	// the caller WORKS IN, or a lapsed store's helper could keep writing what
+	// its owner cannot.
+	const my = await resolveMyRetailer(ctx);
+	if (my) await assertSubscriptionActive(ctx, my.retailer._id);
+}
+
+/**
+ * The same lock for seller ACTIONS, which have no `ctx.db` and so cannot call
+ * the guard directly (Lalamove/Delyva booking, despatch labels, the payment
+ * reminder). Internal — an action runs it with `ctx.runQuery` before doing
+ * anything the seller would have to undo. A query that throws is the right
+ * shape here: it refuses before the action spends a third-party call or an
+ * outbound message.
+ *
+ * **OWNER-GATED** (PR #279 review). These run FIRST in public actions — before
+ * the action's own auth — and a public action is callable by anyone holding
+ * the deployment URL (it ships in the client bundle). If the lock threw for
+ * every caller, "sponsored access has ended" vs the action's ordinary
+ * not-found/auth answer would be an unauthenticated oracle for order
+ * existence and a store's billing state over the enumerable `shortId` space —
+ * the exact channel the trackingToken rule exists to close. So only the
+ * store's OWNER can trip the lock; anonymous, foreign and admin callers all
+ * pass through to the action's own auth, byte-identical to an unlocked store.
+ * (Admins bypass the lock inside `assertSubscriptionActive` anyway, and the
+ * action's own access check still refuses outsiders — this guard only ever
+ * ADDS the lock refusal, never grants access.)
+ */
+export const assertWritable = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
+		// Owner OR active member trips the lock (86exr91r4 audit fix #2) — a
+		// lapsed store's helper must not keep booking couriers/labels/reminders.
+		// Anonymous, foreign and admin callers still pass straight through to
+		// the action's own auth (the enumeration-oracle posture above), and the
+		// admin bypass inside assertSubscriptionActive is unchanged.
+		const access = await tryRetailerAccess(ctx, retailerId, {
+			anyMember: true,
+		});
+		if (!access || access.role === "admin") return null;
+		await assertSubscriptionActive(ctx, retailerId);
+		return null;
+	},
+});
+
+/** `assertWritable` for the order actions, which know a `shortId` and nothing
+ * else (rider/courier booking, the manual payment reminder). A shortId that
+ * resolves to nothing passes — the action's own "not found" answer is the
+ * clearer one, and there is no store to lock. Same owner gate as above, for
+ * the same oracle reason. */
+export const assertWritableForOrder = internalQuery({
+	args: { shortId: v.string() },
+	handler: async (ctx, { shortId }): Promise<null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
+		const order = await ctx.db
+			.query("orders")
+			.withIndex("by_shortId", (q) => q.eq("shortId", shortId))
+			.unique();
+		if (!order) return null;
+		// Same member-aware lock trip as assertWritable above, resolved from the
+		// order's store.
+		const access = await tryRetailerAccess(ctx, order.retailerId, {
+			anyMember: true,
+		});
+		if (!access || access.role === "admin") return null;
+		await assertSubscriptionActive(ctx, order.retailerId);
+		return null;
+	},
+});
 
 /** Human label for the gate error — kept here (not in the pure module) since
  * it's copy, not catalog. */
@@ -179,7 +590,9 @@ const FEATURE_LABEL: Record<PlanFeature, string> = {
 	radiusDelivery: "Distance-based delivery pricing",
 	delivery: "Lalamove delivery booking",
 	onlinePayments: "Online payments (HitPay)",
-	waOrderAlerts: "WhatsApp order alerts",
+	events: "Event RSVPs",
+	promo: "Promo and flash-sale prices",
+	vouchers: "Issuing voucher codes",
 };
 
 /**
@@ -220,6 +633,637 @@ export function defaultCapsForPlan(plan: Plan): {
 }
 
 // ---------------------------------------------------------------------------
+// Off-Season Hold (z8r3fday24)
+// ---------------------------------------------------------------------------
+
+/** The store's single pending invoice, if any. */
+async function pendingInvoiceFor(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+): Promise<Doc<"invoices"> | null> {
+	return ctx.db
+		.query("invoices")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.filter((q) => q.eq(q.field("status"), "pending"))
+		.first();
+}
+
+/** Void a pending invoice a lifecycle flow is replacing (a plan bill on pause,
+ * a hold bill on resume, any bill on an admin comp) and kill its Pay-now link.
+ * Nothing has been collected — a pending invoice is a request, not money. */
+async function voidPendingInvoice(
+	ctx: MutationCtx,
+	invoice: Doc<"invoices">,
+	by: string,
+	reason: string,
+	now: number,
+): Promise<void> {
+	await ctx.db.patch(invoice._id, {
+		status: "void",
+		voidedAt: now,
+		voidedBy: by,
+		voidReason: reason,
+	});
+	if (invoice.gatewayRequestId) {
+		await ctx.scheduler.runAfter(
+			0,
+			internal.subscriptionPayments.expireInvoiceRequest,
+			{ requestId: invoice.gatewayRequestId },
+		);
+	}
+}
+
+/**
+ * A HANDOVER voids the store's open bill, and returns its number for the audit
+ * line (or `null` when there was none).
+ *
+ * An invoice still `pending` when a store changes hands cannot be collected
+ * through the product, and three of the handover's own steps guarantee it:
+ * `notifyEmail` is cleared, so the invoice mail and all three dunning mails
+ * drop at their `if (!meta.notifyEmail) return`; the previous owner's saved
+ * card is detached, so nothing can auto-pay it; and the daily pass skips an
+ * unclaimed store, so it is never chased. It then re-arms the instant the NEW
+ * owner claims — `overduePending` flips the store to `past_due` and sends them
+ * a "pay to resume" demand for a month they did not own. It also holds the
+ * single-pending-invoice slot (`issueInvoice` refuses a second), so their own
+ * first bill could not be issued until someone noticed.
+ *
+ * So the bill stops at the handover, exactly as it does for every other
+ * lifecycle flow that suspends a store's clock — an admin comp (`setComp`) and
+ * the seasonal hold both void the open plan invoice. Nothing is forgiven that
+ * was ever collected: a pending invoice is a REQUEST, not money, and the row
+ * survives as `void` with `voidedBy` / `voidReason`, so a genuine debt is still
+ * on the record to chase off-platform. An admin who wants it paid settles it
+ * BEFORE transferring — which is what the dialog tells them.
+ *
+ * Runs AFTER `detachAutoRenewForRetailer`, and that order is deliberate: the
+ * detach only SCHEDULES its lost-attempt reconcile, so a charge already in
+ * flight can still land on a bill this voids. That case is already handled and
+ * is not a silent loss — `applyGatewayPayment` refuses to settle a non-pending
+ * invoice and stamps a `late_payment` `gatewayIssue` instead, which surfaces in
+ * the admin "Payments to review" queue. Skipping the void whenever a reconcile
+ * were pending would be worse: the invoice would survive to re-arm on the claim,
+ * which is the bug this exists to close.
+ */
+export async function voidPendingInvoiceOnHandover(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	by: string,
+	now: number,
+): Promise<string | null> {
+	const invoice = await pendingInvoiceFor(ctx, retailerId);
+	if (!invoice) return null;
+	await voidPendingInvoice(
+		ctx,
+		invoice,
+		by,
+		"Store ownership transferred — an open bill cannot follow the store to a new owner.",
+		now,
+	);
+	return invoice.invoiceNumber;
+}
+
+/**
+ * Seller (or admin acting-as): pause the subscription for the season, or
+ * resume it. One switch, two directions, both honest about money:
+ *
+ * PAUSE (`hold: true`) — from `active` or `past_due`, never a trial or a comped
+ * row. Status → `on_hold`, `retailers.orderingPausedAt` set (the storefront
+ * closes ordering; every order-create path refuses). A pending PLAN invoice is
+ * voided — the seller is saying "I'd rather pause than pay the tier". The hold
+ * invoice (HOLD_MONTHLY_PRICES) is issued NOW when the paid period is over or
+ * a bill was just voided; a seller paid through a future date owes nothing
+ * until then and the daily cron bills the hold at `currentPeriodEnd`.
+ *
+ * RESUME (`hold: false`) — from `on_hold`, or from a lock over an unpaid HOLD
+ * invoice. Status → `active` on the tier the row kept, ordering reopens, a
+ * pending hold invoice is voided. The tier invoice is issued NOW unless the
+ * running period was bought by the plan (they already paid for the month);
+ * unused hold days are forfeited — the UI says so before the tap. Either way
+ * the seller keeps full access through the invoice's 14-day grace, and only
+ * that invoice going overdue locks, exactly like a renewal.
+ */
+export const setSeasonalHold = mutation({
+	args: { retailerId: v.id("retailers"), hold: v.boolean() },
+	handler: async (
+		ctx,
+		{ retailerId, hold },
+	): Promise<{ status: SubscriptionStatus; invoiceIssued: boolean }> => {
+		// Billing WRITE — owner-only in v1 (86exr91r4): pausing/resuming moves
+		// what the owner is billed, so no member grant reaches it.
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			ownerOnly: true,
+		});
+		// Billing is view-only under admin act-as (Zaki, 17 Sep 2026): pausing
+		// voids and issues invoices on the SELLER's money, and every legitimate
+		// admin billing action already lives in Admin → Billing, audited. The
+		// owner — including an admin on their own store — is unaffected.
+		if (access.actingAsAdmin)
+			throw new ConvexError(
+				"Billing is view-only while you're acting as a store — the owner pauses or resumes their own plan.",
+			);
+		// Money-adjacent self-serve toggle: each flip can void an invoice, issue
+		// another (which mints a HitPay payment request) and send an email, so it
+		// takes the same limiter as `invoices.switchPendingPlan` — a held button
+		// must not burn the gateway account, the mail sender, or Arif's invoice
+		// list. Keyed by store.
+		await rateLimiter.limit(ctx, "billingSelfServe", {
+			key: retailerId,
+			throws: true,
+		});
+		const sub = await loadSubscription(ctx, retailerId);
+		if (!sub) throw new ConvexError("No subscription found for this store");
+		const now = Date.now();
+		const pending = await pendingInvoiceFor(ctx, retailerId);
+
+		if (hold) {
+			if (sub.status === "on_hold")
+				throw new ConvexError("Your subscription is already on hold.");
+			// A contract pauses by agreement, never by a self-serve tap: the
+			// hold bills Kedaipal's list hold price, which a contract never
+			// agreed to (T6). The billing tab hides the card; this is the door.
+			if (sub.plan === "enterprise")
+				throw new ConvexError(ENTERPRISE_SELF_SERVE_REFUSAL);
+			if (
+				!canEnterHold(
+					sub.status,
+					sub.comped === true,
+					sub.compEndedAt !== undefined,
+				)
+			)
+				throw new ConvexError(
+					sub.comped === true
+						? "Your account is on the house — there's nothing to pause."
+						: sub.compEndedAt !== undefined
+							? "Your sponsored access has ended, so there's no plan to pause yet — choose a plan to get editing again."
+							: "Off-Season Hold is for paid plans. Finish your free period first — a store that isn't selling yet simply doesn't convert.",
+				);
+			if (pending) {
+				await voidPendingInvoice(
+					ctx,
+					pending,
+					access.userId,
+					"Paused for the season — replaced by the hold invoice",
+					now,
+				);
+			}
+			await ctx.db.patch(sub._id, {
+				status: "on_hold",
+				heldAt: now,
+				updatedAt: now,
+			});
+			await ctx.db.patch(retailerId, { orderingPausedAt: now, updatedAt: now });
+			const billNow = holdBillsNow({
+				currentPeriodEnd: sub.currentPeriodEnd,
+				periodPaidBy: sub.periodPaidBy,
+				hadPendingInvoice: pending !== null,
+				now,
+			});
+			if (billNow) {
+				await ctx.scheduler.runAfter(
+					0,
+					internal.invoices.internalIssueRenewalInvoice,
+					{ subscriptionId: sub._id, force: true },
+				);
+			}
+			await ctx.scheduler.runAfter(0, internal.billingEmail.notifyHoldEmail, {
+				retailerId,
+				key: "holdStarted",
+				billsNow: billNow,
+				billsFromAt: billNow ? undefined : sub.currentPeriodEnd,
+			});
+			await logAdminAction(ctx, access, "subscriptions.setSeasonalHold", sub._id);
+			return { status: "on_hold", invoiceIssued: billNow };
+		}
+
+		const pendingIsHold = pending?.kind === "hold";
+		if (!canResumeHold(sub.status, pendingIsHold))
+			throw new ConvexError(
+				sub.status === "on_hold" || sub.status === "past_due"
+					? "There's an unpaid plan invoice on this store — settle it to get back to your plan."
+					: "Your subscription isn't on hold.",
+			);
+		if (pending && pendingIsHold) {
+			await voidPendingInvoice(
+				ctx,
+				pending,
+				access.userId,
+				"Resumed the plan — replaced by the plan invoice",
+				now,
+			);
+		}
+		await ctx.db.patch(sub._id, {
+			status: "active",
+			heldAt: undefined,
+			updatedAt: now,
+		});
+		await ctx.db.patch(retailerId, {
+			orderingPausedAt: undefined,
+			updatedAt: now,
+		});
+		// Credits (86eye2ccu): no grant lands while held — if the month turned
+		// during the hold, this period's grant lands now, with the resume.
+		try {
+			await landCreditGrant(ctx, retailerId, now);
+		} catch (err) {
+			console.error("[credits] resume grant failed — resume continues", {
+				retailerId,
+				err,
+			});
+		}
+		const billNow = resumeBillsNow({
+			currentPeriodEnd: sub.currentPeriodEnd,
+			periodPaidBy: sub.periodPaidBy,
+			now,
+		});
+		if (billNow) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.invoices.internalIssueRenewalInvoice,
+				{ subscriptionId: sub._id, force: true },
+			);
+		}
+		await ctx.scheduler.runAfter(0, internal.billingEmail.notifyHoldEmail, {
+			retailerId,
+			key: "holdResumed",
+			billsNow: billNow,
+			billsFromAt: billNow ? undefined : sub.currentPeriodEnd,
+		});
+		await logAdminAction(ctx, access, "subscriptions.setSeasonalHold", sub._id);
+		return { status: "active", invoiceIssued: billNow };
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Comp accounts (z8r3fdeub2) — admin-granted free access for partners/sponsors
+// ---------------------------------------------------------------------------
+
+/**
+ * The ONE comp-ending path (z8r3fdeub2): an admin turned the comp upgrade off,
+ * and the store becomes an EXPIRED seller — `past_due` with no invoice, the
+ * same lock a lapsed subscription is in. The storefront stays live and buyers
+ * keep ordering, though they can't pay until it settles (`buyerPaymentsPaused`);
+ * dashboard growth-writes are refused by `assertSubscriptionActive` until the
+ * seller picks a plan and pays, which settles the row to `active` like any
+ * renewal. No free period: a comped store already had its runway, and a trial
+ * would turn "off" into two more free weeks.
+ *
+ * `compEndedAt` lets the dashboard say "your sponsored access ended" rather
+ * than "your subscription is past due", and the seller is emailed. The stored
+ * plan + caps stay (the plan picker's default), and a saved auto-renew method
+ * is deliberately KEPT: with no invoice there is nothing to charge, and a plan
+ * the seller picks charges it through the normal subscribe flow (whose copy
+ * names the saved method before the tap). `updatedAt` moves — this IS the
+ * lock-flip moment the founder report reads.
+ */
+async function endComp(
+	ctx: MutationCtx,
+	sub: Doc<"subscriptions">,
+	now: number,
+): Promise<void> {
+	// Defensive: a comped row can't be `on_hold` today (`setComp` releases the
+	// hold, `canEnterHold` refuses comped rows) — but if a fifth producer of
+	// `comped` ever appears, leaving `orderingPausedAt` set under `past_due`
+	// would pause the storefront with no path that ever resumes it (neither
+	// hold flow accepts a past_due row). Cheap to make impossible.
+	if (sub.status === "on_hold") {
+		await ctx.db.patch(sub.retailerId, {
+			orderingPausedAt: undefined,
+			updatedAt: now,
+		});
+	}
+	await ctx.db.patch(sub._id, {
+		comped: false,
+		comp: undefined,
+		compEndedAt: now,
+		status: "past_due",
+		trialEndsAt: undefined,
+		trialReminderSentAt: undefined,
+		freePeriodEndedAt: undefined,
+		freePeriodEndReason: undefined,
+		currentPeriodStart: undefined,
+		currentPeriodEnd: undefined,
+		periodPaidBy: undefined,
+		heldAt: undefined,
+		pendingPlanChange: undefined,
+		updatedAt: now,
+	});
+	await ctx.scheduler.runAfter(0, internal.billingEmail.notifyTrialEmail, {
+		retailerId: sub.retailerId,
+		key: "compEnded",
+		sponsorLabel: sub.comp?.label,
+	});
+}
+
+/**
+ * A pre-built store has just been claimed by its real owner — start their free
+ * period NOW (docs/prebuilt-stores.md).
+ *
+ * THE SIBLING OF `endComp`, AND DELIBERATELY NOT IT. A pre-built store runs on
+ * an `internal` comp while the admin builds it, so the days spent setting it up
+ * are not billed and the daily cron has nothing to lock. Ending that comp the
+ * ordinary way lands the store on `past_due` with no invoice — an EXPIRED
+ * seller — which would make the vendor's very first sign-in a lockout screen,
+ * and would email them that sponsored access they never had has ended. So the
+ * comp ends INTO a trial instead: the 14 days start the moment the store
+ * becomes theirs, exactly as if they had signed up today.
+ *
+ * This is why a pre-built store cannot simply be created `trialing` and handed
+ * over later: `trialEndsAt` is stamped at create, so a store built on the 1st
+ * and handed over on the 20th would arrive with its free period already spent.
+ *
+ * `foundingIntent` is left alone — a founding store that was pre-built is still
+ * a founding store, and the rank was reserved at create.
+ */
+export async function startFreePeriodOnClaim(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	now: number,
+): Promise<void> {
+	const caps = capsForPlan("pro"); // the trial grants Pro-level access
+	const sub = await loadSubscription(ctx, retailerId);
+	if (!sub) {
+		// No row to convert (a store minted before this feature, or a failed
+		// create). Fail OPEN into the ordinary trial rather than leaving the new
+		// owner with no subscription at all.
+		await ctx.db.insert("subscriptions", {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			status: "trialing",
+			trialEndsAt: now + TRIAL_DAYS * DAY_MS,
+			orderCap: caps.orderCap,
+			userCap: caps.userCap,
+			broadcastQuota: caps.broadcastQuota,
+			createdAt: now,
+			updatedAt: now,
+		});
+		return;
+	}
+	// An admin may have comped the store for a REAL reason before handover (a
+	// partner deal, a sponsor). That is a commercial promise to the vendor, not
+	// setup scaffolding, so the handover must not quietly cancel it — only the
+	// `internal` comp this feature puts there is scaffolding.
+	if (sub.comped === true && sub.comp?.kind !== "internal") return;
+	// A store that already PAYS keeps what it paid for. Unreachable while the
+	// only claimable stores were pre-built ones, but `transferStoreOwnership`
+	// hands over a LIVE store, and resetting an active subscription to a free
+	// trial here would wipe a paid period — erasing `currentPeriodEnd` /
+	// `periodPaidBy` and handing back 14 free days for money already taken. A
+	// transfer moves the person, never the plan.
+	//
+	// `!sub.comped` is load-bearing: a pre-built store's `internal` comp sits on
+	// an `active` row too, and that one DOES convert to the trial — which is the
+	// whole point of this function. Paying is "active and nobody is covering it".
+	if (!sub.comped && sub.status === "active") return;
+	await ctx.db.patch(sub._id, {
+		comped: false,
+		comp: undefined,
+		compEndedAt: undefined,
+		status: "trialing",
+		trialEndsAt: now + TRIAL_DAYS * DAY_MS,
+		trialReminderSentAt: undefined,
+		freePeriodEndedAt: undefined,
+		freePeriodEndReason: undefined,
+		currentPeriodStart: undefined,
+		currentPeriodEnd: undefined,
+		periodPaidBy: undefined,
+		heldAt: undefined,
+		pendingPlanChange: undefined,
+		orderCap: caps.orderCap,
+		userCap: caps.userCap,
+		broadcastQuota: caps.broadcastQuota,
+		updatedAt: now,
+	});
+}
+
+/**
+ * The `internal` comp a pre-built store runs on while an admin builds it. Set
+ * at create (admin.createUnclaimedStore) so nothing bills, nothing locks and
+ * nothing emails a store with no owner to read it; ended into a fresh trial by
+ * `startFreePeriodOnClaim` at handover. See docs/prebuilt-stores.md.
+ *
+ * Written here rather than by calling `setComp` because `setComp` is a public
+ * admin mutation that re-reads the store, voids invoices and audits — all
+ * meaningless for a row being inserted in the same transaction as the store.
+ */
+export async function insertSetupComp(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	adminSubject: string,
+	now: number,
+): Promise<void> {
+	const caps = capsForPlan("pro");
+	await ctx.db.insert("subscriptions", {
+		retailerId,
+		plan: "pro",
+		billingCycle: "monthly",
+		status: "active",
+		comped: true,
+		comp: {
+			kind: "internal",
+			note: "Pre-built store — setup in progress, not yet handed over.",
+			grantedBy: adminSubject,
+			grantedAt: now,
+		},
+		orderCap: caps.orderCap,
+		userCap: caps.userCap,
+		broadcastQuota: caps.broadcastQuota,
+		createdAt: now,
+		updatedAt: now,
+	});
+}
+
+/**
+ * Admin: turn a store's comp upgrade ON (partner / sponsor / pilot /
+ * internal). A comp is a toggle with no end date — it stays on until an admin
+ * turns it off (`revokeComp`). While on, the store resolves exactly like a
+ * Kedaipal admin's own store — the highest tier's features and no limits
+ * (`fullAccessCaps`), never billed, never soft-locked — minus admin access;
+ * and there is nothing for the seller to subscribe to, change or pause (every
+ * self-serve billing mutation refuses a comped row). Also the EDIT path:
+ * calling it on a comped store rewrites kind/label/note with no gap in access,
+ * keeping who first turned it on and when.
+ *
+ * What turning it on does, atomically:
+ *  - `comped: true` + the `comp` stamp (who/why) — the stamp is what keeps the
+ *    backfill from healing this row into a trial;
+ *  - status → `active`; every trial / free-period / paid-period stamp and a
+ *    pending plan change cleared (a comp has no billing clock — a leftover
+ *    paid-through date would read "expires {date}" under a sponsor line);
+ *    the stored plan + caps are left alone, since a comp's entitlements are
+ *    resolved at read time (`resolveAccess`);
+ *  - any pending invoice VOIDED (its Pay-now link killed) — comping a
+ *    `past_due` store lifts the lock in the same beat;
+ *  - an `on_hold` store released (ordering reopens — a comped store should be
+ *    selling, and comped rows can never re-enter hold);
+ *  - a previous comp's off-marker cleared — re-comping an expired store;
+ *  - an `adminAuditLog` row, always (targetId = the retailer).
+ *
+ * A store with NO subscription row (pre-backfill fail-open) gets a real row
+ * minted so the comp has somewhere to live. Admin-owned stores are refused —
+ * they already run free via ADMIN_USER_IDS, and a comp would just shadow it.
+ * `updatedAt` moves: this IS a status flip (→ active), the same moment every
+ * settle stamps.
+ */
+export const setComp = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		kind: v.union(
+			v.literal("partner"),
+			v.literal("sponsor"),
+			v.literal("pilot"),
+			v.literal("internal"),
+		),
+		label: v.optional(v.string()),
+		note: v.optional(v.string()),
+	},
+	handler: async (
+		ctx,
+		{ retailerId, kind, label, note },
+	): Promise<{ ok: true }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (adminUserIds().includes(retailer.userId))
+			throw new ConvexError(
+				"This is an admin store — it already runs free, nothing to comp.",
+			);
+		const trimmedLabel = label?.trim() || undefined;
+		const trimmedNote = note?.trim() || undefined;
+		if (trimmedLabel !== undefined && trimmedLabel.length > COMP_LABEL_MAX)
+			throw new ConvexError(
+				`Keep the label under ${COMP_LABEL_MAX} characters — it renders as one line on the seller's billing tab.`,
+			);
+		if (trimmedNote !== undefined && trimmedNote.length > COMP_NOTE_MAX)
+			throw new ConvexError(
+				`Keep the note under ${COMP_NOTE_MAX} characters.`,
+			);
+		const now = Date.now();
+
+		const sub = await loadSubscription(ctx, retailerId);
+		// A store is either on the house or on a contract, never both (T6 —
+		// `setContract` refuses a comped store the same way). A comp laid over
+		// a contract would leave, when it ends, a past-due store whose only
+		// way back is a plan picker a contract store never sees.
+		if (sub?.enterprise !== undefined)
+			throw new ConvexError(
+				"This store is on an Enterprise contract — move it to Pro before comping it.",
+			);
+		// An edit keeps who first turned the comp on, and when; the audit log
+		// records the edit itself.
+		const alreadyOn = sub?.comped === true && sub.comp !== undefined;
+		const comp = {
+			kind,
+			label: trimmedLabel,
+			note: trimmedNote,
+			grantedBy: alreadyOn && sub?.comp ? sub.comp.grantedBy : adminSubject,
+			grantedAt: alreadyOn && sub?.comp ? sub.comp.grantedAt : now,
+		};
+		if (!sub) {
+			// Pre-backfill store, fail-open today — mint the row the comp lives on.
+			const caps = capsForPlan("pro");
+			await ctx.db.insert("subscriptions", {
+				retailerId,
+				plan: "pro",
+				billingCycle: "monthly",
+				status: "active",
+				comped: true,
+				comp,
+				orderCap: caps.orderCap,
+				userCap: caps.userCap,
+				broadcastQuota: caps.broadcastQuota,
+				createdAt: now,
+				updatedAt: now,
+			});
+		} else {
+			const pending = await pendingInvoiceFor(ctx, retailerId);
+			if (pending) {
+				await voidPendingInvoice(
+					ctx,
+					pending,
+					adminSubject,
+					"Comped — this store is on the house",
+					now,
+				);
+			}
+			if (sub.status === "on_hold") {
+				// Release the hold's storefront pause — a comped store should be
+				// selling, and `canEnterHold` refuses comped rows from here on.
+				await ctx.db.patch(retailerId, {
+					orderingPausedAt: undefined,
+					updatedAt: now,
+				});
+			}
+			await ctx.db.patch(sub._id, {
+				comped: true,
+				comp,
+				compEndedAt: undefined,
+				status: "active",
+				trialEndsAt: undefined,
+				trialReminderSentAt: undefined,
+				freePeriodEndedAt: undefined,
+				freePeriodEndReason: undefined,
+				currentPeriodStart: undefined,
+				currentPeriodEnd: undefined,
+				periodPaidBy: undefined,
+				heldAt: undefined,
+				pendingPlanChange: undefined,
+				// An edit is not a status flip — only turning it on moves the clock.
+				updatedAt: alreadyOn ? sub.updatedAt : now,
+			});
+		}
+		// Credits (86eye2ccu): a comped store is metered on its plan's monthly
+		// grant (never locked). Comping a past_due store mid-month lands the
+		// grant it was waiting for; an already-granted period is left alone.
+		try {
+			await landCreditGrant(ctx, retailerId, now);
+		} catch (err) {
+			console.error("[credits] comp grant failed — comp continues", {
+				retailerId,
+				err,
+			});
+		}
+		// Always recorded: an admin store can't be comped (refused above), so this
+		// is by construction an admin acting on someone else's store.
+		await logAdminAction(
+			ctx,
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
+			"subscriptions.setComp",
+			retailerId,
+		);
+		return { ok: true };
+	},
+});
+
+/**
+ * Admin: turn a store's comp upgrade OFF. The store becomes an expired seller
+ * straight away (`endComp`): storefront live, buyers still ordering, editing
+ * locked until the seller picks a plan and pays — and they're emailed saying
+ * so. Works on legacy fail-safe comped rows too (no `comp` stamp). Turning it
+ * back on is always one dialog away.
+ */
+export const revokeComp = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<{ ok: true }> => {
+		const adminSubject = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const sub = await loadSubscription(ctx, retailerId);
+		if (!sub || sub.comped !== true)
+			throw new ConvexError("This store isn't comped.");
+		await endComp(ctx, sub, Date.now());
+		await logAdminAction(
+			ctx,
+			{ retailer, role: "admin", actingAsAdmin: true, userId: adminSubject },
+			"subscriptions.revokeComp",
+			retailerId,
+		);
+		return { ok: true };
+	},
+});
+
+// ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------
 
@@ -229,13 +1273,11 @@ export const current = query({
 	args: {},
 	handler: async (
 		ctx,
-	): Promise<
-		| (AccessState & {
-				billingCycle?: "monthly" | "annual";
-				createdAt?: number;
-		  })
-		| null
-	> => {
+	): Promise<(AccessState & { createdAt?: number }) | null> => {
+		// OWNER-ONLY BY CONSTRUCTION (by_user) — deliberate (86exr91r4): the
+		// dashboard chrome reads access state from the getMyRetailer embed, and
+		// members with billing:read use the billing queries; nothing member-
+		// facing reads this. Do not "fix" to resolveMyRetailer without a caller.
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return null;
 		const retailer = await ctx.db
@@ -247,9 +1289,12 @@ export const current = query({
 		// Admin on their own store → highest tier unlocked, matching the
 		// getMyRetailer embed (caller === owner here). See docs/admin-console.md.
 		const adminFullAccess = await isAdmin(ctx);
+		// `billingCycle` used to be spread on here by hand. It now rides on
+		// AccessState itself — and re-adding it would be a regression, not a
+		// duplicate: `sub?.billingCycle` is `undefined` for a missing row, which
+		// would overwrite resolveAccess's "monthly" default with nothing.
 		return {
 			...resolveAccess(sub, { adminFullAccess }),
-			billingCycle: sub?.billingCycle,
 			createdAt: sub?.createdAt,
 		};
 	},
@@ -274,8 +1319,9 @@ export { PLAN_CAPS };
  * Convergent + idempotent:
  *  - no subscription → create a trialing one (`created`).
  *  - a leftover `comped` row from an earlier backfill run → convert it to the
- *    same 14-day trial (`converted`). At v1 `comped` is only ever produced by an
- *    earlier backfill, so this safely heals a re-run without touching real subs.
+ *    same 14-day trial (`converted`). Only STAMPLESS rows (`comp` undefined)
+ *    qualify — an admin-granted comp (z8r3fdeub2) carries a `comp` stamp and
+ *    survives a re-run untouched.
  *  - any other (real) subscription → leave untouched (`skipped`).
  *
  * Run once between the schema deploy and gating enable (see
@@ -296,8 +1342,10 @@ export const internalBackfillSubscriptions = internalMutation({
 		for (const r of retailers) {
 			const existing = await loadSubscription(ctx, r._id);
 			if (existing) {
-				// Heal a stale comped row from a previous backfill into the trial.
-				if (existing.comped === true) {
+				// Heal a stale comped row from a previous backfill into the trial —
+				// but ONLY the stampless legacy fail-safe rows. An admin-granted
+				// comp carries a `comp` stamp (z8r3fdeub2) and survives a re-run.
+				if (existing.comped === true && existing.comp === undefined) {
 					await ctx.db.patch(existing._id, {
 						plan: "pro",
 						status: "trialing",
@@ -334,73 +1382,204 @@ export const internalBackfillSubscriptions = internalMutation({
 
 /**
  * Daily status cron. Flips:
- *  - `trialing → past_due` when the trial has lapsed (`trialEndsAt < now`).
+ *  - `trialing → past_due` when the FIRST INVOICE is overdue (z8r3fday24 —
+ *    "trial lapsed → locked" is gone: the free period ending, by first order
+ *    or by the `trialEndsAt` backstop, ISSUES the first invoice and that
+ *    invoice's dueDate is the only lock, exactly like a renewal).
  *  - `active → past_due` when the retailer has a still-pending invoice past its
  *    `dueDate` (founding ghost / unpaid renewal). Comped subs are never flipped.
- * Also logs `active` subs nearing `currentPeriodEnd` so Arif chases the manual
- * renewal, and emails a one-time pre-due-date reminder for pending invoices.
- * Runs once daily — a retailer keeps access up to ~24h past the boundary
- * (acceptable grace). See docs/manual-subscription.md.
+ * Since 86eyb6z4r it also RUNS the renewal machine:
+ *  - a lapsed period with no pending invoice auto-issues the renewal invoice
+ *    (invoices.internalIssueRenewalInvoice — the bill Arif used to type), and
+ *    schedules the tokenised auto-charge when a saved method is attached;
+ *  - failed auto-charges are retried on the Kedaipal-owned schedule
+ *    (`autoRenew.nextRetryAt`, lib/hitpayBilling.ts), and an attempt that
+ *    never recorded an outcome is re-run once its lock is stale — the charge
+ *    action reconciles it with HitPay before it can charge again;
+ *  - auto-renew sellers get a one-per-cycle "renewing soon" notice ahead of
+ *    the charge (the no-surprise-MIT rule).
+ * Plus the one-time pre-due-date reminder for pending invoices, and — once an
+ * invoice is PAST due and its subscription actually locked — the post-lock
+ * recovery ladder at +3d / +7d (z8r3fdg3mh), which before now was silence.
+ * Runs once daily — a retailer keeps access up to ~24h past any boundary (acceptable
+ * grace). See docs/manual-subscription.md + docs/hitpay-recurring.md.
  */
 const REMINDER_DAYS_BEFORE = 3;
+/** Post-lock recovery chain (z8r3fdg3mh): days PAST the due date at which each
+ * nudge fires. The lock itself (and `invoiceOverdue`) lands on day 0. */
+const RECOVERY_NUDGE_DAYS = 3;
+const RECOVERY_FINAL_DAYS = 7;
 
 export const internalDailyBillingStatus = internalMutation({
 	args: {},
 	handler: async (
 		ctx,
 	): Promise<{
+		/** Trials locked over an OVERDUE first invoice. */
 		trialExpired: number;
+		/** Free periods the backstop ended → first invoices scheduled. */
+		firstInvoicesIssued: number;
 		overdue: number;
-		lapsed: number;
+		renewalsIssued: number;
+		autoChargeRetries: number;
+		renewalNotices: number;
 		renewalsDue: number;
 		remindersSent: number;
+		/** Post-lock recovery nudges scheduled this run (z8r3fdg3mh). */
+		recoveryNudges: number;
 		trialReminders: number;
 	}> => {
 		const now = Date.now();
 		let trialExpired = 0;
+		let firstInvoicesIssued = 0;
 		let overdue = 0;
-		let lapsed = 0;
+		let renewalsIssued = 0;
+		let autoChargeRetries = 0;
+		let renewalNotices = 0;
 		let renewalsDue = 0;
 		let remindersSent = 0;
+		let recoveryNudges = 0;
+		// Invoices whose subscription LOCKED during this very run. The lock
+		// transition owns day 0 — it sends `invoiceOverdue` and the WhatsApp — so
+		// the recovery ladder below must not also chase them on the same pass.
+		// Normally moot (a daily cron catches an invoice <1 day overdue, which is
+		// under every threshold), but after a missed run the ladder would see a
+		// freshly-locked invoice already 5 days past due and fire a second,
+		// near-identical email the same minute. That is exactly the dunning spam
+		// this chain exists to avoid.
+		const lockedThisRun = new Set<string>();
 		let trialReminders = 0;
 
-		// Trial expiry → lock + "trial ended" email (once, on the transition).
-		// Otherwise, "trial ends in 3 days" email (once, deduped by trialReminderSentAt).
+		// Trials — start-when-you-sell (z8r3fday24). The free period ends at the
+		// store's first live order (stamped by endFreePeriodOnFirstOrder from the
+		// order pipeline's usage seam) or at the `trialEndsAt` backstop here,
+		// whichever comes first. Either way the machine writes the first invoice
+		// (invoices.internalIssueFirstInvoice) and the seller keeps full access
+		// through its 14-day grace — that invoice's dueDate is the ONLY lock.
 		const trialing = await ctx.db
 			.query("subscriptions")
 			.withIndex("by_status", (q) => q.eq("status", "trialing"))
 			.collect();
 		for (const sub of trialing) {
-			if (sub.trialEndsAt === undefined) continue;
-			if (sub.trialEndsAt < now) {
-				await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
-				trialExpired++;
-				await ctx.scheduler.runAfter(0, internal.billingEmail.notifyTrialEmail, {
-					retailerId: sub.retailerId,
-					key: "trialEnded",
-				});
+			// A comped row is never billed and never flipped. The legacy
+			// comped→past_due "keep the status honest" flip is retired
+			// (z8r3fdeub2): stamped comps are always `active`, and a leftover
+			// backfill row just waits for internalBackfillSubscriptions to heal
+			// it into a real trial.
+			if (sub.comped === true) continue;
+			if (sub.freePeriodEndedAt === undefined) {
+				if (sub.trialEndsAt === undefined) continue;
+				if (sub.trialEndsAt < now) {
+					// Backstop: end the free period + issue the first invoice. No lock,
+					// no status change — `updatedAt` stays the flip moment it was.
+					await ctx.db.patch(sub._id, {
+						freePeriodEndedAt: now,
+						freePeriodEndReason: "backstop",
+					});
+					await ctx.scheduler.runAfter(
+						0,
+						internal.invoices.internalIssueFirstInvoice,
+						{ subscriptionId: sub._id },
+					);
+					firstInvoicesIssued++;
+					continue;
+				}
+				// "Free period ends in 3 days" (once, deduped by trialReminderSentAt).
+				// Not for a store already on an Enterprise contract (T6): the
+				// reminder's pitch — "your first invoice is for Pro, prefer
+				// Starter?" — is false for it; its terms were agreed with us.
+				const daysLeft = Math.ceil((sub.trialEndsAt - now) / DAY_MS);
+				if (
+					daysLeft <= 3 &&
+					sub.trialReminderSentAt === undefined &&
+					sub.plan !== "enterprise"
+				) {
+					await ctx.db.patch(sub._id, { trialReminderSentAt: now });
+					await ctx.scheduler.runAfter(
+						0,
+						internal.billingEmail.notifyTrialEmail,
+						{ retailerId: sub.retailerId, key: "trialEndingSoon", daysLeft },
+					);
+					trialReminders++;
+				}
 				continue;
 			}
-			const daysLeft = Math.ceil((sub.trialEndsAt - now) / DAY_MS);
-			if (daysLeft <= 3 && sub.trialReminderSentAt === undefined) {
-				await ctx.db.patch(sub._id, { trialReminderSentAt: now });
-				await ctx.scheduler.runAfter(0, internal.billingEmail.notifyTrialEmail, {
-					retailerId: sub.retailerId,
-					key: "trialEndingSoon",
-					daysLeft,
-				});
-				trialReminders++;
+			// Free period over → the first invoice is the clock.
+			const invoices = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
+				.collect();
+			const pending = invoices.find((inv) => inv.status === "pending");
+			if (pending) {
+				if (pending.dueDate < now) {
+					await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
+					trialExpired++;
+					// "Now locked — pay to resume" (once, on the transition).
+					await ctx.scheduler.runAfter(
+						0,
+						internal.billingEmail.notifyInvoiceOverdue,
+						{ invoiceId: pending._id },
+					);
+					// …and the one WhatsApp of the whole billing chain (z8r3fdg3mh).
+					// Email is the channel that always works; this is the louder
+					// second tap for a cohort that lives in WhatsApp, not inboxes.
+					await ctx.scheduler.runAfter(
+						0,
+						internal.whatsapp.notifyBillingPastDue,
+						{ invoiceId: pending._id },
+					);
+					lockedThisRun.add(pending._id);
+				}
+				continue;
 			}
+			// A settle moves the row to `active`, so a paid invoice here is a
+			// mid-transaction glimpse at most — never re-bill over it.
+			if (invoices.some((inv) => inv.status === "paid")) continue;
+			// The free period ended but no bill exists (the issuance failed, or it
+			// was voided without a replacement): write it again rather than lock.
+			// The bill IS the lock's clock — with none there is nothing to be
+			// overdue on. (To give a store free service, comp it — don't void.)
+			await ctx.scheduler.runAfter(
+				0,
+				internal.invoices.internalIssueFirstInvoice,
+				{ subscriptionId: sub._id },
+			);
+			firstInvoicesIssued++;
 		}
 
-		// Active overdue (founding ghost / unpaid renewal) + renewal-chase flag.
+		// Active + held subs: overdue lock, auto-charge retries, renewal issuance
+		// (the tier invoice for active, the hold invoice for on_hold — one loop,
+		// internalIssueRenewalInvoice picks the kind), and the pre-renewal window.
 		const RENEWAL_WINDOW_MS = 3 * 24 * 60 * 60 * 1000; // 3 days out
-		const active = await ctx.db
-			.query("subscriptions")
-			.withIndex("by_status", (q) => q.eq("status", "active"))
-			.collect();
+		const active = [
+			...(await ctx.db
+				.query("subscriptions")
+				.withIndex("by_status", (q) => q.eq("status", "active"))
+				.collect()),
+			...(await ctx.db
+				.query("subscriptions")
+				.withIndex("by_status", (q) => q.eq("status", "on_hold"))
+				.collect()),
+		];
 		for (const sub of active) {
+			// A comped row has no billing clock at all (z8r3fdeub2) — it never ends
+			// on a date, so nothing below (overdue lock, dunning, renewal issuance)
+			// may touch it. Only an admin turning the comp off changes it.
 			if (sub.comped === true) continue;
+			// Neither does a store NOBODY OWNS (z8r3fdm6up handover). A pre-built
+			// store was shielded by its `internal` comp — "nothing bills, nothing
+			// locks and nothing emails a store with no owner to read it" — and the
+			// comp was doing that work by accident: `transferStoreOwnership` makes
+			// a store unclaimed WITHOUT comping it, and this loop would then issue
+			// a renewal nobody can be told about (`notifyEmail` is cleared at
+			// handover, so the invoice email and all three dunning mails drop at
+			// `if (!meta.notifyEmail) return`), and then LOCK the store when that
+			// invoice went overdue — handing the new owner a past_due shop and a
+			// bill neither party ever saw. Ownership is the real predicate, so it
+			// is tested directly rather than through whatever is comping today.
+			// The clock resumes at the claim, with somebody to read it.
+			const owner = await ctx.db.get(sub.retailerId);
+			if (owner && isUnclaimed(owner)) continue;
 			const invoices = await ctx.db
 				.query("invoices")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
@@ -417,24 +1596,66 @@ export const internalDailyBillingStatus = internalMutation({
 					internal.billingEmail.notifyInvoiceOverdue,
 					{ invoiceId: overduePending._id },
 				);
+				// …and the one WhatsApp of the whole billing chain (z8r3fdg3mh).
+				await ctx.scheduler.runAfter(
+					0,
+					internal.whatsapp.notifyBillingPastDue,
+					{ invoiceId: overduePending._id },
+				);
+				lockedThisRun.add(overduePending._id);
 				continue;
 			}
-			// Period lapsed with NO pending invoice → lock anyway. We never give a paid
-			// vendor free service past their cycle while waiting on Arif to issue a
-			// renewal. (A pending invoice with a future due date keeps them in grace.)
-			const hasPending = invoices.some((inv) => inv.status === "pending");
+			const pendingInvoice = invoices.find((inv) => inv.status === "pending");
+			// Dunning retry: a declined auto-charge whose retry window arrived —
+			// OR an attempt whose action died without recording any outcome (a
+			// stale stamp and no retry scheduled), which nothing else would ever
+			// look at again. The charge action re-guards everything (still
+			// pending, still attached, outcome-unknown reconcile at any age), so
+			// scheduling is safe.
+			const retryDue =
+				sub.autoRenew?.nextRetryAt !== undefined &&
+				sub.autoRenew.nextRetryAt <= now;
+			const unresolvedAttempt =
+				sub.autoRenew?.lastChargeAttemptAt !== undefined &&
+				now - sub.autoRenew.lastChargeAttemptAt >= CHARGE_ATTEMPT_LOCK_MS;
+			// The bill to hand the charge action: the open one — or, with no
+			// open bill but an unresolved attempt, the bill that attempt was
+			// FIRED FOR. That happens when the bill settled by another rail
+			// (Pay-now, admin mark-paid) or was voided while the outcome was
+			// unknown: the action then runs the reconcile only (it never
+			// charges a non-pending bill), so a landed charge is found this
+			// sweep, not a whole cycle later when the next bill exists.
+			const chargeTarget =
+				pendingInvoice?._id ??
+				(unresolvedAttempt ? sub.autoRenew?.pendingChargeInvoiceId : undefined);
 			if (
-				!hasPending &&
+				chargeTarget !== undefined &&
+				autoChargeAllowed(sub.autoRenew) &&
+				(retryDue || unresolvedAttempt)
+			) {
+				await ctx.scheduler.runAfter(
+					0,
+					internal.subscriptionPayments.chargeDueRenewal,
+					{ invoiceId: chargeTarget },
+				);
+				autoChargeRetries++;
+			}
+			// Period lapsed with no pending invoice → ISSUE THE RENEWAL (86eyb6z4r).
+			// This was the lock-them-out branch when renewals were Arif-typed; the
+			// machine now writes the bill instead, and the seller keeps access
+			// through the invoice's grace window exactly like every other pending
+			// invoice. The overdue branch above is still the lock.
+			if (
+				!pendingInvoice &&
 				sub.currentPeriodEnd !== undefined &&
 				sub.currentPeriodEnd < now
 			) {
-				await ctx.db.patch(sub._id, { status: "past_due", updatedAt: now });
-				lapsed++;
 				await ctx.scheduler.runAfter(
 					0,
-					internal.billingEmail.notifySubscriptionLapsed,
-					{ retailerId: sub.retailerId },
+					internal.invoices.internalIssueRenewalInvoice,
+					{ subscriptionId: sub._id },
 				);
+				renewalsIssued++;
 				continue;
 			}
 			if (
@@ -446,8 +1667,45 @@ export const internalDailyBillingStatus = internalMutation({
 				console.info(
 					`[billing] renewal due soon for retailer ${sub.retailerId} (periodEnd ${new Date(sub.currentPeriodEnd).toISOString()})`,
 				);
+				// Auto-renew sellers get a one-per-cycle heads-up BEFORE the charge
+				// (no surprise merchant-initiated debits). Stamp deliberately skips
+				// `updatedAt` — for past_due rows that field is the lock-flip moment
+				// the founder report reads (docs/shipped-log.md).
+				if (
+					sub.autoRenew !== undefined &&
+					sub.renewalNoticeSentForPeriodEnd !== sub.currentPeriodEnd
+				) {
+					await ctx.db.patch(sub._id, {
+						renewalNoticeSentForPeriodEnd: sub.currentPeriodEnd,
+					});
+					await ctx.scheduler.runAfter(
+						0,
+						internal.billingEmail.notifyAutoRenewEmail,
+						{
+							retailerId: sub.retailerId,
+							key: "autoRenewUpcoming",
+							chargeAt: sub.currentPeriodEnd,
+							methodLabel:
+								sub.autoRenew.methodLabel ??
+								autoRenewMethodLabel(sub.autoRenew.method),
+						},
+					);
+					renewalNotices++;
+				}
 			}
 		}
+
+		// Founding-benefit lifecycle (z8r3fdfyw5) — T-14 warning, then revocation
+		// past the window. Its own pass over the `foundingMembers` ledger rather
+		// than a branch in the loops above, because a lapsed member is `past_due`
+		// and NONE of those loops walk `past_due` — see the comment on
+		// internalRevokeLapsedBenefits. Scheduled, not inlined, so a failure there
+		// can't roll back the billing writes this pass has already made.
+		await ctx.scheduler.runAfter(
+			0,
+			internal.foundingMembers.internalRevokeLapsedBenefits,
+			{},
+		);
 
 		// Pre-due-date reminder email — once per pending invoice, in the window
 		// [due − 3 days, due). Stamping `reminderSentAt` keeps it idempotent across
@@ -460,8 +1718,76 @@ export const internalDailyBillingStatus = internalMutation({
 			.withIndex("by_status", (q) => q.eq("status", "pending"))
 			.collect();
 		for (const inv of pending) {
+			// Post-lock recovery chain (z8r3fdg3mh): an invoice already PAST its
+			// due date is out of reminder territory — the seller is locked, and
+			// the ladder below is what chases them. Before this existed the
+			// `invoiceOverdue` mail on the flip was the last contact they ever got.
+			if (inv.dueDate < now) {
+				// Locked moments ago by the loops above — that notice is enough
+				// for today; the ladder picks up from the next daily run.
+				if (lockedThisRun.has(inv._id)) continue;
+				const daysPastDue = Math.floor((now - inv.dueDate) / DAY_MS);
+				// Send only the HIGHEST stage that's due and stamp it, skipping any
+				// it passed. A cron outage that leaves an invoice at day 9 with no
+				// stage must produce one final notice, not a +3d today and a +7d
+				// tomorrow — the seller would read that as a system flailing.
+				const stage =
+					daysPastDue >= RECOVERY_FINAL_DAYS
+						? 2
+						: daysPastDue >= RECOVERY_NUDGE_DAYS
+							? 1
+							: 0;
+				// Decided BEFORE any lookup: an invoice with nothing left to send
+				// is the steady state of this loop forever. `cancelled` is never
+				// reached, so every seller who walked away is parked at stage 2 and
+				// re-scanned daily for the life of the deployment — reading two
+				// documents each time to reach the same `continue` would make the
+				// ladder's cost grow with lifetime churn rather than with work.
+				if (stage <= (inv.recoveryStage ?? 0)) continue;
+				// The chain speaks in the first person about a LOCKED dashboard, so
+				// it must only run where a lock actually happened. An overdue
+				// pending invoice is not sufficient on its own: the loops above
+				// skip comped subscriptions entirely, so a store comped after its
+				// invoice was issued sits overdue forever with full access — and
+				// telling them they're locked would be flatly untrue. `past_due` +
+				// not-comped IS the soft-lock predicate (see accessFor).
+				const lockSub = await ctx.db.get(inv.subscriptionId);
+				if (
+					!lockSub ||
+					lockSub.status !== "past_due" ||
+					lockSub.comped === true
+				)
+					continue;
+				// …and the OTHER way `frozen` is false at `past_due`: the store is
+				// an admin's own. They are never soft-locked and the billing tab
+				// tells them admins have no invoices to settle, so chasing them
+				// would contradict the product to its own operators.
+				const lockRetailer = await ctx.db.get(inv.retailerId);
+				if (!lockRetailer || storeOwnerIsAdmin(lockRetailer)) continue;
+				await ctx.db.patch(inv._id, { recoveryStage: stage });
+				await ctx.scheduler.runAfter(
+					0,
+					internal.billingEmail.notifyInvoiceRecovery,
+					{ invoiceId: inv._id, stage: stage as 1 | 2, daysPastDue },
+				);
+				recoveryNudges++;
+				continue;
+			}
 			if (inv.reminderSentAt !== undefined) continue;
 			if (inv.dueDate <= reminderFrom || inv.dueDate > reminderTo) continue;
+			// "Pay this invoice" is a double-payment nudge while the machine is
+			// mid-flight on the same money: a charge outcome we're still
+			// confirming with HitPay, or a stranded charge a human is sorting
+			// out. Skip WITHOUT stamping reminderSentAt, so the reminder can
+			// still go out once the question resolves and the invoice remains
+			// unpaid inside the window. (Exhausted dunning — declined, retries
+			// done — is a recorded outcome: those sellers are reminded.)
+			const reminderSub = await ctx.db.get(inv.subscriptionId);
+			if (
+				reminderSub?.autoRenew?.lastChargeAttemptAt !== undefined ||
+				reminderSub?.autoRenew?.strandedCharge !== undefined
+			)
+				continue;
 			await ctx.db.patch(inv._id, { reminderSentAt: now });
 			await ctx.scheduler.runAfter(
 				0,
@@ -473,10 +1799,14 @@ export const internalDailyBillingStatus = internalMutation({
 
 		return {
 			trialExpired,
+			firstInvoicesIssued,
 			overdue,
-			lapsed,
+			renewalsIssued,
+			autoChargeRetries,
+			renewalNotices,
 			renewalsDue,
 			remindersSent,
+			recoveryNudges,
 			trialReminders,
 		};
 	},

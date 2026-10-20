@@ -1,40 +1,67 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	Award,
 	Banknote,
 	CalendarClock,
 	Check,
+	Coins,
 	CreditCard,
 	FilePlus2,
+	FileSignature,
+	Hammer,
 	ImagePlus,
 	Landmark,
 	ListChecks,
+	Loader2,
 	ReceiptText,
+	RefreshCw,
 	Send,
 	ShieldX,
+	ShoppingBag,
+	TrendingDown,
 	UserPlus,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import type { TopUpRevenue } from "../../convex/creditPurchases";
+import { ADMIN_STORE_LIST_LIMIT } from "../../convex/lib/adminDirectory";
 import {
 	COUNTRIES,
 	COUNTRY_LABELS,
 	type Country,
 } from "../../convex/lib/country";
 import {
+	invoiceReplaceRefusal,
+	replacementChargeNote,
+} from "../../convex/lib/invoiceReplace";
+import {
+	ANNUAL_MONTHS_RECEIVED,
+	annualQuote,
 	BILLING_CURRENCIES,
 	type BillingCurrency,
+	enterprisePrice,
+	isPlanUpgrade,
+	PLANS,
+	type Plan,
 	planPrice,
 } from "../../convex/lib/plans";
+import {
+	AutoChargeDetail,
+	AutoChargePill,
+} from "../components/admin/auto-charge-status";
+import { contractTemplatesFrom } from "../components/admin/enterprise-contract-form";
+import { EnterpriseContractSheet } from "../components/admin/enterprise-contract-sheet";
+import { GatewayIssuesCard } from "../components/admin/gateway-issues-card";
 import { PageHeader } from "../components/dashboard/page-header";
 import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
 	Dialog,
 	DialogContent,
@@ -45,12 +72,21 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
+import { Select } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
+import { useActAs } from "../hooks/useActAs";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
-import { convexErrorMessage, formatPrice } from "../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { describeAutoCharge } from "../lib/auto-charge-status";
+import {
+	convexErrorMessage,
+	formatPrice,
+	formatShortDate,
+} from "../lib/format";
+import { IMAGE_ACCEPT } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
-import { slugify } from "../lib/slug";
+import { slugify, validateStoreName } from "../lib/slug";
+import { uploadImage } from "../lib/storage-upload";
+import { PLAN_LABEL } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/admin/billing")({
 	component: AdminBillingRoute,
@@ -111,6 +147,12 @@ function AdminBillingContent() {
 
 			<AdminBillingOverview />
 
+			{/* Real money that settled nothing (double payment / wrong amount).
+			    Above the tab fork on purpose: it's the most urgent thing this
+			    page can carry, it must not hide behind whichever tab is open,
+			    and it renders nothing while the queue is empty. */}
+			<GatewayIssuesCard />
+
 			<div className="grid gap-2 sm:grid-cols-2">
 				{tabs.map((t) => (
 					<button
@@ -149,6 +191,7 @@ function AdminBillingContent() {
 					<OnboardClientCard />
 					<IssueInvoiceForm />
 					<PendingInvoices />
+					<AutoRenewOverview />
 					<FoundingMembersList />
 				</div>
 			) : (
@@ -161,12 +204,17 @@ function AdminBillingContent() {
 function AdminCard({
 	children,
 	className = "",
+	id,
 }: {
 	children: ReactNode;
 	className?: string;
+	/** Deep-link anchor (the sellers directory's "Invite seller" lands on
+	 * `#onboard`). */
+	id?: string;
 }) {
 	return (
 		<section
+			id={id}
 			className={`flex flex-col gap-4 rounded-2xl border border-border bg-card p-5 shadow-sm lg:p-6 ${className}`}
 		>
 			{children}
@@ -267,41 +315,187 @@ function AdminBillingOverview() {
 	];
 
 	return (
-		<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-			{stats.map((stat) => (
-				<div
-					key={stat.label}
-					className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${stat.className}`}
-				>
-					{/* The disc is a lift off the tinted tile, not a plate — at 70% */}
-					{/* over a -950 ground it goes near-white and swallows the glyph. */}
-					<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70 dark:bg-white/10">
-						{stat.icon}
+		<div className="flex flex-col gap-2">
+			<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+				{stats.map((stat) => (
+					<div
+						key={stat.label}
+						className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${stat.className}`}
+					>
+						<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70">
+							{stat.icon}
+						</div>
+						<div className="min-w-0">
+							<p className="text-xs font-medium opacity-75">{stat.label}</p>
+							<p className="truncate font-mono text-lg font-bold leading-tight">
+								{stat.value}
+							</p>
+							<p className="truncate text-[11px] opacity-70">{stat.helper}</p>
+						</div>
 					</div>
-					<div className="min-w-0">
-						<p className="text-xs font-medium opacity-75">{stat.label}</p>
-						<p className="truncate font-mono text-lg font-bold leading-tight">
-							{stat.value}
-						</p>
-						<p className="truncate text-[11px] opacity-70">{stat.helper}</p>
-					</div>
-				</div>
-			))}
+				))}
+			</div>
+			<CreditTotals />
 		</div>
+	);
+}
+
+/**
+ * The book-wide credit figures (Kedaipal Credits T5) — two counts of CREDITS,
+ * never money: what sellers have bought and not used (the deferred-revenue
+ * figure — service still owed) and the orders taken past zero that the next
+ * grant or pack will absorb. Beside them, the one money figure: this month's
+ * top-up revenue from paid packs, per currency (Credits T3 × T2 — it waited
+ * for the purchase table rather than guess). Exported for its states test.
+ */
+export function CreditTotals() {
+	const totals = useQuery(convexQuery(api.credits.adminCreditTotals, {})).data;
+	const revenue = useQuery(
+		convexQuery(api.creditPurchases.adminTopUpRevenue, {}),
+	).data;
+	const stores = (n: number) => `${n} store${n === 1 ? "" : "s"}`;
+	const tiles = [
+		{
+			label: "Unused bought credits",
+			value:
+				totals === undefined
+					? "..."
+					: totals.purchasedUnused.toLocaleString("en"),
+			helper:
+				totals === undefined
+					? "Deferred — service still owed"
+					: totals.storesWithPurchased === 0
+						? "No store holds any yet"
+						: `Across ${stores(totals.storesWithPurchased)} — service still owed`,
+			icon: <Coins className="size-4" />,
+			className: "border-border bg-muted/50 text-foreground",
+		},
+		{
+			label: "Orders owed",
+			value:
+				totals === undefined ? "..." : totals.ordersOwed.toLocaleString("en"),
+			helper:
+				totals === undefined
+					? "Taken past zero"
+					: totals.storesOwing === 0
+						? "No store is below zero"
+						: `${stores(totals.storesOwing)} below zero — the next grant or pack settles it`,
+			icon: <TrendingDown className="size-4" />,
+			className:
+				totals !== undefined && totals.ordersOwed > 0
+					? "border-destructive/30 bg-destructive/10 text-destructive"
+					: "border-border bg-muted/50 text-foreground",
+		},
+		topUpTile(revenue),
+	];
+	return (
+		<section aria-label="Credits" className="flex flex-col gap-2">
+			<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+				{tiles.map((tile) => (
+					<div
+						key={tile.label}
+						className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${tile.className}`}
+					>
+						<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-background/70">
+							{tile.icon}
+						</div>
+						<div className="min-w-0">
+							<p className="text-xs font-medium opacity-75">{tile.label}</p>
+							<p className="truncate font-mono text-lg font-bold leading-tight">
+								{tile.value}
+							</p>
+							{/* Wraps: the helper IS the explanation — cut off, it
+							    read "across 0 stores · service still …". */}
+							<p className="text-[11px] leading-snug text-pretty opacity-70">
+								{tile.helper}
+							</p>
+						</div>
+					</div>
+				))}
+			</div>
+			{totals?.truncated ? (
+				<p className="text-[11px] text-muted-foreground">
+					Counted over the first {totals.accounts.toLocaleString("en")} credit
+					accounts only — past that, these totals need a stored counter.
+				</p>
+			) : null}
+		</section>
 	);
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Onboard a client on their behalf. A retailer is always owned 1:1 by the
- * client's own Clerk login — we can't create it *for* them without an orphaned,
- * un-loginable store. So instead the admin fills the details here and gets a
- * prefilled onboarding link to send; the client opens it, signs in once, and
- * confirms — the store is created under *their* account. After they confirm, they
- * appear in the Issue-invoice picker below. See docs/manual-subscription.md.
+ * Onboard a client, two ways — ONE card, because it is one decision made at one
+ * moment with the same facts, and splitting it into two cards would make an
+ * admin read both to find out which they wanted.
+ *
+ *  - **Send them a link** (the original): the admin fills the details and gets a
+ *    prefilled onboarding link to paste. The client opens it, signs in, and
+ *    confirms; the store is created under *their* login. Right whenever the
+ *    client can be trusted to finish a form.
+ *  - **Build it for them** (docs/prebuilt-stores.md): the store is created NOW,
+ *    owned by nobody, and the admin walks straight into it via act-as to add
+ *    products and settings. The vendor claims it later by signing up with the
+ *    handover email. This is the white-glove path for a high-value vendor who
+ *    should be handed a finished shop, not a form.
+ *
+ * The card's own copy used to assert the first was the only possibility ("we
+ * can't create it for them without an orphaned, un-loginable store"). That held
+ * until a store could be unclaimed rather than orphaned — a named state with a
+ * way out. See docs/manual-subscription.md + docs/prebuilt-stores.md.
  */
+/** The top-up revenue tile: paid packs this calendar month, per currency —
+ * summed per currency like Outstanding, never flattened into one number. */
+function topUpTile(revenue: TopUpRevenue | undefined) {
+	const month =
+		revenue === undefined
+			? null
+			: new Date(`${revenue.periodKey}-01T00:00:00Z`).toLocaleString("en", {
+					month: "long",
+					timeZone: "UTC",
+				});
+	const paid = revenue
+		? (
+				Object.entries(revenue.byCurrency) as [
+					BillingCurrency,
+					TopUpRevenue["byCurrency"][BillingCurrency],
+				][]
+			).filter(([, b]) => b.purchases > 0)
+		: [];
+	const packs = paid.reduce((n, [, b]) => n + b.purchases, 0);
+	const credits = paid.reduce((n, [, b]) => n + b.credits, 0);
+	return {
+		label: month ? `Top-ups · ${month}` : "Top-ups",
+		value:
+			revenue === undefined
+				? "..."
+				: paid.length === 0
+					? formatPrice(0, "MYR")
+					: // MYR first — the server builds the record in that order.
+						paid
+							.map(([currency, b]) => formatPrice(b.amountMinor, currency))
+							.join(" + "),
+		helper:
+			revenue === undefined
+				? "Credit packs paid this month"
+				: packs === 0
+					? "No packs paid yet this month"
+					: `${packs} pack${packs === 1 ? "" : "s"} · ${credits.toLocaleString("en")} credits`,
+		icon: <ShoppingBag className="size-4" />,
+		className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+	};
+}
+
 function OnboardClientCard() {
+	// Which door. Held here rather than in the URL: it is a scratch choice
+	// inside one form, and nothing links to a half-filled card.
+	const [mode, setMode] = useState<"link" | "build">("link");
+	const navigate = useNavigate();
+	const { setActAs } = useActAs();
+	const createUnclaimedStore = useMutation(api.retailers.createUnclaimedStore);
+	const startActAsSession = useMutation(api.admin.startActAsSession);
+	const [building, setBuilding] = useState(false);
 	const [storeName, setStoreName] = useState("");
 	const [slug, setSlug] = useState("");
 	const [slugEdited, setSlugEdited] = useState(false);
@@ -321,7 +515,8 @@ function OnboardClientCard() {
 	// Mirror the onboarding form: derive the slug from the name until hand-edited,
 	// and check availability live so we never hand out a link to a taken slug.
 	const derivedSlug = slugEdited ? slug : slugify(storeName);
-	const availability = useSlugAvailability(derivedSlug);
+	const availability = useSlugAvailability(derivedSlug, "create");
+	const nameCheck = validateStoreName(storeName);
 
 	// Live email pre-check (debounced) — Clerk allows one account per email and
 	// we're 1 store per login, so a duplicate email means the invite would dead-end.
@@ -340,10 +535,50 @@ function OnboardClientCard() {
 	).data;
 	const emailTaken = emailCheck?.exists === true;
 
+	// Build mode REQUIRES the handover email. A store built with nobody named
+	// cannot be claimed by anyone, and "I'll set it later" is a thing an admin
+	// forgets — you are building this store FOR a specific person, so name them
+	// now (Zaki, 2 Oct). It stays CHANGEABLE afterwards (Manage → Handover
+	// email), which is what covers a typo; the server keeps accepting an absent
+	// one so an admin can deliberately park a handover whose deal fell through,
+	// and the directory shouts about that state in amber.
 	const ready =
-		storeName.trim().length >= 2 &&
+		nameCheck.ok &&
 		availability.status === "available" &&
-		!emailTaken;
+		!emailTaken &&
+		(mode === "link" || emailLooksValid);
+
+	/**
+	 * Create the store now and walk straight into it. The navigate is the
+	 * easement, not a flourish: an admin who clicks "Build it for them" is about
+	 * to add products, and making them find the new store in the directory first
+	 * would be a step with no purpose.
+	 */
+	async function handleBuild() {
+		if (!ready || building) return;
+		setBuilding(true);
+		try {
+			const result = await createUnclaimedStore({
+				storeName: storeName.trim(),
+				slug: derivedSlug,
+				waPhone: waPhone.trim() || undefined,
+				country,
+				pendingOwnerEmail: email.trim() || undefined,
+			});
+			setActAs(result.retailerId);
+			void startActAsSession({ retailerId: result.retailerId }).catch(() => {});
+			toast.success(`${storeName.trim()} created — you're in it now.`, {
+				description: email.trim()
+					? `Build it out, then they claim it by signing up with ${email.trim()}.`
+					: "Set a handover email from the seller directory when you know it.",
+			});
+			navigate({ to: "/app" });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBuilding(false);
+		}
+	}
 
 	const link =
 		typeof window === "undefined"
@@ -373,12 +608,58 @@ function OnboardClientCard() {
 	}
 
 	return (
-		<AdminCard>
+		<AdminCard id="onboard">
 			<AdminSectionHeading
 				icon={<UserPlus className="size-5" />}
 				title="Onboard a client"
-				description="Fill what you know, copy the invite link, and send it manually. They confirm under their own login before invoicing."
+				description={
+					mode === "link"
+						? "Fill what you know, copy the invite link, and send it manually. They confirm under their own login before invoicing."
+						: "Create the store now and set it up yourself. They claim it later by signing up with the handover email — no form for them to fill."
+				}
 			/>
+
+			{/* The mode picker sits FIRST because it changes what every field below
+			    means (the email is a send-to address in one mode and a handover
+			    target in the other). Each option states its consequence — an admin
+			    picking between two onboarding paths should not have to try one to
+			    find out what it does. */}
+			<fieldset className="flex flex-col gap-2">
+				<legend className="text-sm font-medium">
+					How are they onboarding?
+				</legend>
+				<div className="grid gap-2 sm:grid-cols-2">
+					{[
+						{
+							key: "link" as const,
+							title: "Send them a link",
+							hint: "They sign up and confirm the store under their own login.",
+						},
+						{
+							key: "build" as const,
+							title: "Build it for them",
+							hint: "You create it now and fill it in. They claim it when they sign up.",
+						},
+					].map((option) => (
+						<button
+							key={option.key}
+							type="button"
+							aria-pressed={mode === option.key}
+							onClick={() => setMode(option.key)}
+							className={`flex min-h-16 flex-col items-start gap-0.5 rounded-xl border px-4 py-3 text-left transition-colors ${
+								mode === option.key
+									? "border-accent bg-accent/10"
+									: "border-input bg-background hover:border-ring"
+							}`}
+						>
+							<span className="text-sm font-semibold">{option.title}</span>
+							<span className="text-xs text-muted-foreground">
+								{option.hint}
+							</span>
+						</button>
+					))}
+				</div>
+			</fieldset>
 
 			<label className="flex flex-col gap-1 text-sm font-medium">
 				Store name
@@ -388,6 +669,11 @@ function OnboardClientCard() {
 					placeholder="e.g. Mak Cik Kuih"
 					variant="field"
 				/>
+				{storeName.trim().length > 0 && !nameCheck.ok ? (
+					<p className="text-sm font-normal text-destructive">
+						✗ {nameCheck.message}
+					</p>
+				) : null}
 			</label>
 
 			<label className="flex flex-col gap-1 text-sm font-medium">
@@ -454,9 +740,9 @@ function OnboardClientCard() {
 				</label>
 				<label className="flex flex-col gap-1 text-sm font-medium">
 					<span className="flex min-h-5 items-center gap-1">
-						Client email
+						{mode === "build" ? "Handover email" : "Client email"}
 						<span className="font-normal text-muted-foreground">
-							(to send to)
+							{mode === "build" ? "(required)" : "(to send to)"}
 						</span>
 					</span>
 					<Input
@@ -472,43 +758,77 @@ function OnboardClientCard() {
 							A store ({emailCheck?.storeName}) already uses this email. They
 							can't create a second one; it's one store per login.
 						</span>
+					) : mode === "build" ? (
+						<span className="text-xs text-muted-foreground">
+							The address they'll sign up with — that sign-in hands them the
+							store. You can change it later from Manage → Handover email.
+						</span>
 					) : null}
 				</label>
 			</div>
 
+			{/* Disabled-with-reason rather than hidden in build mode: an admin
+			    onboarding a founding vendor must be told WHY the toggle is
+			    unavailable and what to do instead, not left wondering where it
+			    went. A pre-built store reserves no rank at create — a slot held by
+			    a store that may never be claimed would eat one of ten — so the
+			    rank is claimed the ordinary way, by issuing the founding invoice
+			    after handover. */}
 			<label className="flex items-start gap-2.5 text-sm">
 				<input
 					type="checkbox"
-					checked={founding && foundingAvailable}
-					disabled={!foundingAvailable}
+					checked={mode === "link" && founding && foundingAvailable}
+					disabled={!foundingAvailable || mode === "build"}
 					onChange={(e) => setFounding(e.target.checked)}
 					className="mt-0.5 size-4 disabled:opacity-50"
 				/>
 				<span>
 					<span className="font-medium">Founding Member</span>
 					<span className="block text-xs text-muted-foreground">
-						{foundingAvailable
-							? `Reserves a founding rank + the lifetime discount. Starts on the normal 14-day trial; Pro begins once they pay the founding invoice. ${spotsRemaining}/10 spots left.`
-							: "All 10 founding spots are taken."}
+						{mode === "build"
+							? "Not set at build time — a pre-built store holds no founding rank. Issue them a founding invoice after they claim it."
+							: foundingAvailable
+								? `Reserves a founding rank + the lifetime discount. Starts on the normal 14-day trial; Pro begins once they pay the founding invoice. ${spotsRemaining}/10 spots left.`
+								: "All 10 founding spots are taken."}
 					</span>
 				</span>
 			</label>
 
-			{ready && link ? (
+			{mode === "link" && ready && link ? (
 				<div className="flex flex-col gap-2 rounded-xl border border-dashed border-border bg-muted/30 p-3">
 					<p className="break-all font-mono text-xs text-muted-foreground">
 						{link}
 					</p>
 				</div>
 			) : null}
+			{/* What happens the moment they tap it — a create that also drops them
+			    into act-as is a bigger jump than a copy, so it is written down
+			    before the click rather than discovered after. */}
+			{mode === "build" ? (
+				<p className="text-xs text-muted-foreground">
+					Creating it opens the store straight away in act-as mode so you can
+					add products. Nothing is billed and it stays off kedaipal.com/stores
+					until they claim it — their 14-day free period starts the day they do.
+				</p>
+			) : null}
 
 			<Button
 				type="button"
-				onClick={handleCopy}
-				disabled={!ready}
+				onClick={mode === "build" ? () => void handleBuild() : handleCopy}
+				disabled={!ready || building}
 				className="h-11 lg:w-auto lg:self-start lg:px-6"
 			>
-				{copied ? (
+				{mode === "build" ? (
+					building ? (
+						<>
+							<Loader2 className="size-4 animate-spin" /> Creating…
+						</>
+					) : (
+						<>
+							<Hammer className="size-4" /> Create store &amp; start setting up
+						</>
+					)
+				) : copied ? (
 					<>
 						<Check className="size-4" /> Copied
 					</>
@@ -518,6 +838,20 @@ function OnboardClientCard() {
 					</>
 				)}
 			</Button>
+			{/* Disabled-with-reason — the button above goes quiet on an invalid
+			    name/slug or a taken email, and the three reasons are not the same
+			    fix. */}
+			{!ready ? (
+				<p className="text-xs text-muted-foreground">
+					{!nameCheck.ok
+						? "Enter a store name first."
+						: emailTaken
+							? "That email already runs a store — use a different one."
+							: availability.status !== "available"
+								? "Pick a store link that's available."
+								: "Add the handover email — nobody can claim the store without it."}
+				</p>
+			) : null}
 		</AdminCard>
 	);
 }
@@ -536,10 +870,11 @@ function SlugHint({
 }
 
 const STATUS_LABEL: Record<string, string> = {
-	trialing: "Trial",
+	trialing: "Free period",
 	active: "Active",
 	past_due: "Past due",
 	cancelled: "Cancelled",
+	on_hold: "On hold",
 };
 
 /** Human-readable dropdown label: "Mak Kuih (/mak-kuih) · Pro · Trial · Founding · has pending". */
@@ -550,15 +885,31 @@ function retailerOptionLabel(r: {
 	plan?: string;
 	isFoundingMember: boolean;
 	foundingIntent: boolean;
-	hasPending: boolean;
+	foundingBenefitsRevoked: boolean;
+	pending?: { invoiceNumber: string };
+	comped: boolean;
+	unclaimed: boolean;
 }): string {
 	const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 	const parts = [`${r.storeName} (/${r.slug})`];
 	if (r.plan) parts.push(cap(r.plan));
 	if (r.status) parts.push(STATUS_LABEL[r.status] ?? cap(r.status));
-	if (r.isFoundingMember) parts.push("Founding");
+	// Membership and benefits are two facts, and when Arif is about to bill
+	// someone he needs the second one: "Founding" alone would read as "charge
+	// them RM104" for a member whose benefits lapsed months ago.
+	if (r.isFoundingMember)
+		parts.push(
+			r.foundingBenefitsRevoked ? "Founding · benefits ended" : "Founding",
+		);
 	else if (r.foundingIntent) parts.push("Founding (trial)");
-	if (r.hasPending) parts.push("has pending");
+	if (r.pending) parts.push("has pending");
+	// Comped stores can't be billed (issueInvoice refuses, z8r3fdeub2) — say so
+	// in the picker rather than letting the admin draft a bill that bounces.
+	// A store nobody owns yet is comped too (the `internal` setup comp), but
+	// calling that "on the house" reads as a sponsorship an admin should go and
+	// end. It is scaffolding, and the claim clears it by itself.
+	if (r.unclaimed) parts.push("waiting for its owner");
+	else if (r.comped) parts.push("on the house");
 	return parts.join(" · ");
 }
 
@@ -567,44 +918,196 @@ function retailerOptionLabel(r: {
  * Founding-10 member (founding toggle). Built for minimal typing: amount is
  * derived from plan + cycle + founding; the due date defaults to +14 days.
  */
-function IssueInvoiceForm() {
-	const retailers = useQuery(
+export function IssueInvoiceForm() {
+	const retailerSelectId = useId();
+	const retailerList = useQuery(
 		convexQuery(api.invoices.listRetailersForAdmin, {}),
 	).data;
+	const retailers = retailerList?.stores;
+	// The book runs past the cap, so the OLDEST stores are not in this list
+	// (it is newest-first). Said where the picker is, with the way out —
+	// never a select that silently stops containing a store (z8r3fdpm2p).
+	const storesCapped = retailerList?.capped === true;
 	const spotsRemaining = useQuery(
 		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
 	).data;
 	const issue = useMutation(api.invoices.issueInvoice);
 
 	const [retailerId, setRetailerId] = useState<Id<"retailers"> | "">("");
-	const [plan, setPlan] = useState<"starter" | "pro">("pro");
+	const [plan, setPlan] = useState<Plan>("pro");
 	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
-	const [founding, setFounding] = useState(false);
+	// The operator's OVERRIDE only — not the effective value. See `founding`.
+	const [foundingOverride, setFoundingOverride] = useState(false);
 	const [currency, setCurrency] = useState<BillingCurrency>("MYR");
 	const [busy, setBusy] = useState(false);
+	const [contractSheetOpen, setContractSheetOpen] = useState(false);
+	const [confirmReplace, setConfirmReplace] = useState(false);
 
 	const selected = retailers?.find((r) => r._id === retailerId);
-	const blocked = selected?.hasPending === true;
-	// Auto-apply (and lock) the founding discount when the store is already a
-	// Founding Member OR was onboarded as one (foundingIntent, still on the 14-day
-	// trial) — so the conversion/renewal invoice always carries their discount.
+	// Live contracts the admin could model a new deal on — off the picker list
+	// already loaded, so the "start from" dropdown costs no second query. Same
+	// helper the sellers directory uses, so the two pickers can't drift.
+	const contractTemplates = contractTemplatesFrom(
+		retailers ?? [],
+		retailerId || null,
+	);
+	// An open bill no longer blocks: the admin can REPLACE it at the tier they
+	// actually meant (z8r3fdpm2p). What it changes is the verb on the button.
+	const openBill = selected?.pending;
+	// On the house (z8r3fdeub2) — issueInvoice refuses these server-side; the
+	// button is disabled with the reason instead of bouncing on click.
+	// A store nobody owns yet is ALSO comped — the `internal` setup comp — but
+	// that is scaffolding, not a sponsorship, and it clears itself into a fresh
+	// 14-day Pro trial the moment the vendor claims the store. Telling an admin
+	// to "end the comp" would have them tear down the scaffolding instead of
+	// finishing the handover, so the two states speak separately.
+	const unclaimedStore = selected?.unclaimed === true;
+	const compedStore = selected?.comped === true && !unclaimedStore;
+	// Auto-apply (and lock) the founding discount when the store is on founding
+	// PRICING — an existing Founding Member whose benefits still stand, or a store
+	// onboarded as one (foundingIntent, still on the 14-day trial) — so the
+	// conversion/renewal invoice always carries their discount.
+	//
+	// A member whose benefits were revoked (z8r3fdfyw5) is deliberately NEITHER
+	// ticked NOR locked: ticked would hand back the discount the daily pass just
+	// took, and locked would leave Arif unable to untick it — the machine undoing
+	// its own rule, with no manual way out. Unticked but ENABLED keeps the
+	// standing posture that the admin form is Arif's override in both directions.
+	const foundingBenefitsRevoked = selected?.foundingBenefitsRevoked === true;
 	const isExistingFounding =
-		selected?.isFoundingMember === true || selected?.foundingIntent === true;
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reset the founding toggle to the store's real status whenever the selection changes
+		(selected?.isFoundingMember === true && !foundingBenefitsRevoked) ||
+		selected?.foundingIntent === true;
+	// DERIVED, never stored: a locked store IS on founding pricing, so the
+	// checkbox and the Amount cannot disagree with the lock. This used to be an
+	// effect copying `isExistingFounding` into state on `[retailerId]` — fine
+	// while a store's founding status was fixed for a given retailer, but
+	// revoking or restoring in the Founding members card below now moves it for a
+	// retailerId that never changed. The label and helper copy updated reactively
+	// while the checkbox and Amount did not, so the form read "bills at the
+	// standard price" directly above "RM 104.00 − RM 45.00 founding discount",
+	// and Issue would have charged the founding price to a member whose benefits
+	// had just been taken (found while testing, 18 Sep 2026). Deriving makes that
+	// state unreachable rather than merely re-synced — there is no dependency
+	// array left to get wrong.
+	const founding = isExistingFounding || foundingOverride;
+	// The override is the operator's own tick, so it clears when they pick a
+	// DIFFERENT store — never when a revoke elsewhere on the page changes the
+	// status. Currency clears with it: an SGD pick left over from the previous
+	// store must never silently carry to a Malaysian retailer (an SGD invoice
+	// ships with no bank/DuitNow block).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: retailerId is the TRIGGER, not a read — picking a different store is exactly what clears the operator's override
 	useEffect(() => {
-		setFounding(isExistingFounding);
-		// Currency resets to the default too — an SGD pick left over from the
-		// previous store must never silently carry to a Malaysian retailer (an SGD
-		// invoice ships with no bank/DuitNow block).
+		setFoundingOverride(false);
 		setCurrency("MYR");
+		// A contract store ARMS its contract (z8r3fdkp8h, found live on 2 Oct):
+		// the previous default left Pro · RM 149.00 one click from issue for a
+		// store whose paid Pro bill would take it OFF its contract — the most
+		// drastic action on this form as the silent default. Picking another
+		// plan stays possible (that IS the manual off-ramp), and the line
+		// under the amount then says what paying it does.
+		setPlan(
+			retailers?.find((r) => r._id === retailerId)?.enterprise
+				? "enterprise"
+				: "pro",
+		);
 	}, [retailerId]);
 
-	// Founding is Pro-only — flipping it on forces Pro. It prices per billing
-	// currency (RM104 / S$41 monthly).
-	const effectivePlan = founding ? "pro" : plan;
+	// Founding is Pro-only among the LISTED tiers — flipping it on forces Pro.
+	// It prices per billing currency (RM104 / S$41 monthly).
+	//
+	// Enterprise is the exception, and it has to be: a Founding Member may go
+	// on a contract (Zaki, 3 Oct 2026) because a contract has no list price to
+	// discount — the negotiated fee IS the price. Forcing Pro here regardless
+	// meant a founding store on a contract could not be billed its contract at
+	// all: the Enterprise button looked live, changed nothing, and the form
+	// quietly drafted a founding Pro bill whose payment would END the contract
+	// (z8r3fdpm2p). The server already refuses `founding` on an Enterprise
+	// bill, so the two now agree.
+	const effectivePlan: Plan = founding && plan !== "enterprise" ? "pro" : plan;
+	// Enterprise (T6) bills the store's CONTRACT — its fee, currency and term —
+	// so those controls show the contract's values instead of taking a pick.
+	const contract = selected?.enterprise;
+	const billsContract = effectivePlan === "enterprise";
+	// What actually goes on the invoice, and what the checkbox may claim. A
+	// contract bill carries no founding discount — `issueInvoice` throws on
+	// `founding` with any plan but Pro — so a Founding Member's permanent
+	// membership must not tick itself onto their Enterprise bill.
+	const foundingBill = founding && !billsContract;
+	const effectiveCycle =
+		billsContract && contract ? contract.billingCycle : cycle;
+	const effectiveCurrency =
+		billsContract && contract ? contract.currency : currency;
 	// Derived amount (single source of truth from convex/lib/plans).
-	const total = planPrice(effectivePlan, cycle, founding, currency);
-	const base = planPrice(effectivePlan, cycle, false, currency);
+	const total =
+		effectivePlan === "enterprise"
+			? contract
+				? enterprisePrice(contract, effectiveCycle)
+				: 0
+			: planPrice(effectivePlan, cycle, foundingBill, currency);
+	const base =
+		effectivePlan === "enterprise"
+			? total
+			: planPrice(effectivePlan, cycle, false, currency);
+	// What an annual invoice actually buys the seller. Shown to the operator
+	// because "RM 1,490.00" alone doesn't say whether it covers ten months or
+	// twelve — and this form is where an annual switch is honoured by hand.
+	const annual =
+		effectivePlan === "enterprise"
+			? null
+			: annualQuote(effectivePlan, foundingBill, currency);
+	// Enterprise picked, but no contract written yet. Nothing can be billed —
+	// and the term and the currency have NO answer either. Both of those
+	// controls are locked (the contract decides them), so leaving Monthly and
+	// RM lit would be a definite claim about an undecided thing the admin is
+	// not allowed to correct — the same falsehood a parent checkbox tells when
+	// it reads unchecked over mixed children. They render with nothing
+	// selected until the contract exists.
+	const noContract = billsContract && !contract;
+	// The deliberate off-ramp, named before the tap: a non-enterprise bill on
+	// a contract store ends the contract when it's PAID (settle treats it as
+	// the move to Pro/Starter).
+	const offContractBill = contract !== undefined && !billsContract;
+	// What PAYING this bill does to the store's tier. The plan lives on the
+	// INVOICE until it settles (`settleInvoicePaid`), so issuing changes
+	// nothing — but an admin cannot see from this form WHEN the change lands,
+	// and the answer differs from the one the rest of the product gives: a
+	// seller's own downgrade is SCHEDULED to the period end, while paying an
+	// admin-issued lower-tier bill moves them at once. Undisclosed behaviour
+	// on a money action; said here instead (z8r3fdpm2p).
+	const currentPlan = selected?.plan as Plan | undefined;
+	const tierMove =
+		currentPlan && currentPlan !== effectivePlan && !offContractBill
+			? isPlanUpgrade(currentPlan, effectivePlan)
+				? "up"
+				: "down"
+			: null;
+	// Replacing an open bill — the same two pure rules the server applies, so
+	// the sentence under the button and the refusal it would throw cannot
+	// disagree.
+	const replaceRefusal = openBill
+		? invoiceReplaceRefusal({
+				invoiceNumber: openBill.invoiceNumber,
+				kind: openBill.kind,
+				// The server's own fact, not a proxy for it. Deriving this from
+				// `autoChargeIdle === false` ALSO caught a detached method and
+				// a stranded charge, so the button refused with "hasn't
+				// reported back yet" for two states the server would have
+				// allowed (review, 7 Oct).
+				chargeInFlight: selected?.chargeInFlight === true,
+			})
+		: null;
+	const replaceChargeNote =
+		openBill && !replaceRefusal && !noContract
+			? replacementChargeNote({
+					replacedOrigin: openBill.origin,
+					replacedTotal: openBill.total,
+					replacedCurrency: openBill.currency,
+					newTotal: total,
+					newCurrency: effectiveCurrency,
+					autoChargeIdle: selected?.autoChargeIdle === true,
+					newTotalLabel: formatPrice(total, effectiveCurrency),
+				})
+			: null;
 
 	async function handleIssue() {
 		if (!retailerId) return;
@@ -612,16 +1115,31 @@ function IssueInvoiceForm() {
 		try {
 			// No dueDate — the system sets it (issue + 14 days). The paid cycle
 			// starts at mark-paid.
-			await issue({
+			const res = await issue({
 				retailerId,
 				plan: effectivePlan,
-				billingCycle: cycle,
-				founding,
-				currency,
+				billingCycle: effectiveCycle,
+				founding: foundingBill,
+				currency: effectiveCurrency,
+				// The server re-checks that this is still the open bill, so a
+				// stale page replaces nothing.
+				...(openBill ? { replacePendingId: openBill._id } : {}),
 			});
-			toast.success("Invoice issued — it's now in Pending below.");
+			toast.success(
+				res.replaced
+					? `${res.replaced.invoiceNumber} voided — the new bill is in Pending below.`
+					: "Invoice issued — it's now in Pending below.",
+				res.replaced
+					? {
+							description: res.replaced.keptAutoCharge
+								? "Their saved card is being charged for the new amount."
+								: undefined,
+						}
+					: undefined,
+			);
+			setConfirmReplace(false);
 			setRetailerId("");
-			setFounding(false);
+			setFoundingOverride(false);
 			// Reset to the default so the next store isn't silently billed in SGD.
 			setCurrency("MYR");
 		} catch (err) {
@@ -646,12 +1164,16 @@ function IssueInvoiceForm() {
 				}
 			/>
 
-			<label className="flex flex-col gap-1 text-sm font-medium">
-				Retailer
-				<select
+			<div className="flex flex-col gap-1">
+				<label htmlFor={retailerSelectId} className="text-sm font-medium">
+					Retailer
+				</label>
+				<Select
+					id={retailerSelectId}
+					variant="field"
+					className="w-full"
 					value={retailerId}
 					onChange={(e) => setRetailerId(e.target.value as Id<"retailers">)}
-					className="min-h-11 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 				>
 					<option value="">Select a store…</option>
 					{retailers?.map((r) => (
@@ -659,35 +1181,58 @@ function IssueInvoiceForm() {
 							{retailerOptionLabel(r)}
 						</option>
 					))}
-				</select>
-			</label>
+				</Select>
+				{/* Only when the book genuinely runs past the cap — a list that
+				    always claimed to be partial would be noise on the 5-store
+				    case. It names what is missing (the OLDEST, since this is
+				    newest-first) and the door that can still reach them. */}
+				{storesCapped ? (
+					<p className="text-xs text-muted-foreground">
+						Showing the newest {ADMIN_STORE_LIST_LIMIT} stores. An older one is
+						billed — and put on an Enterprise contract — from Admin · Sellers,
+						which can search the whole book.
+					</p>
+				) : null}
+			</div>
 
 			<div className="grid gap-4 rounded-2xl border border-border/70 bg-muted/20 p-3 lg:grid-cols-2 lg:p-4">
 				<div className="flex flex-col gap-1.5">
 					<span className="text-xs font-medium text-muted-foreground">
 						Plan
 					</span>
+					{/* Every tier, in tier order. Enterprise bills the store's
+					    contract, so it needs one (set in Sellers → the store). */}
 					<div className="grid grid-cols-3 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
-						{(["pro", "starter"] as const).map((p) => (
+						{PLANS.map((p) => (
 							<button
 								key={p}
 								type="button"
-								disabled={founding && p !== "pro"}
+								disabled={
+									// Founding locks the plan to Pro — EXCEPT Enterprise, which
+									// a founding store may take: a contract's negotiated fee is
+									// its own price, so there is no founding discount to lose.
+									//
+									// A missing contract no longer disables Enterprise. A dead
+									// button was the whole complaint: it told the admin the
+									// tier was unavailable when what was actually missing was
+									// a contract they could write in two taps. Picking it now
+									// opens that door (the strip below), and Issue stays
+									// disabled with its reason until the contract exists.
+									founding && p !== "pro" && p !== "enterprise"
+								}
 								onClick={() => setPlan(p)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
 									effectivePlan === p
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
 										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
 								}`}
 							>
-								{effectivePlan === p ? <Check className="size-3.5" /> : null}
+								{effectivePlan === p ? (
+									<Check className="size-3.5 shrink-0" />
+								) : null}
 								{p}
 							</button>
 						))}
-						<span className="flex min-h-10 flex-col items-center justify-center rounded-lg border border-dashed border-border/80 bg-muted/30 px-2 text-center text-[11px] leading-tight text-muted-foreground">
-							<span className="font-semibold">Scale</span>
-							<span className="text-[10px]">soon</span>
-						</span>
 					</div>
 				</div>
 
@@ -700,14 +1245,17 @@ function IssueInvoiceForm() {
 							<button
 								key={c}
 								type="button"
+								disabled={billsContract}
 								onClick={() => setCycle(c)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold capitalize transition-all ${
-									cycle === c
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 capitalize transition-all disabled:cursor-not-allowed ${
+									!noContract && effectiveCycle === c
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
-										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
 								}`}
 							>
-								{cycle === c ? <Check className="size-3.5" /> : null}
+								{!noContract && effectiveCycle === c ? (
+									<Check className="size-3.5 shrink-0" />
+								) : null}
 								{c}
 							</button>
 						))}
@@ -723,19 +1271,29 @@ function IssueInvoiceForm() {
 							<button
 								key={cur}
 								type="button"
+								disabled={billsContract}
 								onClick={() => setCurrency(cur)}
-								className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2 text-sm font-semibold transition-all ${
-									currency === cur
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 transition-all disabled:cursor-not-allowed ${
+									!noContract && effectiveCurrency === cur
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
-										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
 								}`}
 							>
-								{currency === cur ? <Check className="size-3.5" /> : null}
+								{!noContract && effectiveCurrency === cur ? (
+									<Check className="size-3.5 shrink-0" />
+								) : null}
 								{cur === "MYR" ? "RM (MYR)" : "S$ (SGD)"}
 							</button>
 						))}
 					</div>
-					{currency === "SGD" ? (
+					{billsContract ? (
+						<span className="text-[11px] text-muted-foreground">
+							{contract
+								? "Set by the store's Enterprise contract — the term and currency it was agreed in."
+								: "The contract sets both — choose the term while you write it."}
+						</span>
+					) : null}
+					{effectiveCurrency === "SGD" ? (
 						<span className="text-[11px] text-muted-foreground">
 							SGD invoices carry no bank/DuitNow block — payment is arranged
 							over WhatsApp.
@@ -744,24 +1302,85 @@ function IssueInvoiceForm() {
 				</div>
 			</div>
 
+			{/* The contract this bill reads — shown only while Enterprise is the
+			    chosen plan, because that is the only time it decides anything.
+			    Set up / Edit opens the SAME form the seller sheet renders, so a
+			    deal is negotiated in one place however you got there. */}
+			{!billsContract ? null : !contract ? (
+				<div className="flex flex-col gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+					<div className="flex min-w-0 items-start gap-2.5">
+						<FileSignature
+							aria-hidden="true"
+							className="mt-0.5 size-4 shrink-0 text-amber-700 dark:text-amber-400"
+						/>
+						<p className="min-w-0 text-xs text-amber-700 dark:text-amber-400">
+							<span className="block text-sm font-medium">No contract yet</span>
+							Enterprise has no list price — it bills a negotiated deal. Write
+							one and this invoice bills it.
+						</p>
+					</div>
+					<Button
+						type="button"
+						variant="outline"
+						onClick={() => setContractSheetOpen(true)}
+						className="h-11 w-full shrink-0 sm:w-auto"
+					>
+						Set up contract
+					</Button>
+				</div>
+			) : (
+				<div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+					<div className="flex min-w-0 items-start gap-2.5">
+						<FileSignature
+							aria-hidden="true"
+							className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+						/>
+						<p className="min-w-0 text-xs text-muted-foreground">
+							<span className="block text-sm font-medium text-foreground">
+								Billing their contract
+							</span>
+							{contract.includedCredits.toLocaleString("en")} credits a month
+							{contract.contactName ? ` · ${contract.contactName}` : ""}
+						</p>
+					</div>
+					{/* Outline, not ghost: a borderless control at the edge of a
+					    card reads as a caption, and this one is the only way to
+					    correct a fee before the bill goes out. Lighter than the
+					    amber card's primary-weight "Set up contract", because here
+					    nothing is broken — but still visibly a button. */}
+					<Button
+						type="button"
+						variant="outline"
+						onClick={() => setContractSheetOpen(true)}
+						className="h-11 w-full shrink-0 sm:w-auto"
+					>
+						Edit contract
+					</Button>
+				</div>
+			)}
+
 			<label className="flex items-center gap-2.5 text-sm">
 				<input
 					type="checkbox"
-					checked={founding}
-					disabled={isExistingFounding}
-					onChange={(e) => setFounding(e.target.checked)}
+					checked={foundingBill}
+					disabled={isExistingFounding || billsContract}
+					onChange={(e) => setFoundingOverride(e.target.checked)}
 					className="size-4 disabled:opacity-60"
 				/>
 				<span>
 					<span className="font-medium">Founding Member invoice</span>
 					<span className="block text-xs text-muted-foreground">
-						{isExistingFounding
-							? "This store is a Founding Member — lifetime 30% discount applied automatically."
-							: `Pro only · 30% lifetime discount · claims a rank when marked paid${
-									spotsRemaining === 0
-										? " (cohort full — no rank will be claimed)"
-										: ""
-								}`}
+						{billsContract
+							? "Doesn't apply to a contract bill — a negotiated fee has no list price to discount. Membership is untouched."
+							: isExistingFounding
+								? "This store is a Founding Member — lifetime 30% discount applied automatically."
+								: foundingBenefitsRevoked
+									? "Founding Member, but their founding price ended after 3 months unpaid — this invoice bills at the standard price. Tick to re-grant the discount on this invoice only; to give it back for good, use Restore benefits under Founding members."
+									: `Pro only · 30% lifetime discount · claims a rank when marked paid${
+											spotsRemaining === 0
+												? " (cohort full — no rank will be claimed)"
+												: ""
+										}`}
 					</span>
 				</span>
 			</label>
@@ -770,35 +1389,132 @@ function IssueInvoiceForm() {
 				<div className="min-w-0">
 					<p className="text-xs text-muted-foreground">Amount</p>
 					<p className="text-xl font-bold tabular-nums">
-						{formatPrice(total, currency)}
+						{noContract ? "—" : formatPrice(total, effectiveCurrency)}
 					</p>
-					{founding ? (
-						<p className="text-xs text-emerald-700 dark:text-emerald-300">
+					{billsContract && contract ? (
+						<p className="text-xs text-muted-foreground">
+							From the contract:{" "}
+							{formatPrice(contract.baseFeeMinor, contract.currency)} a month
+							{effectiveCycle === "annual" ? " × 10 for the year" : ""}.
+						</p>
+					) : null}
+					{offContractBill ? (
+						<p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+							This store is on an Enterprise contract — paying this{" "}
+							{PLAN_LABEL[effectivePlan]} bill ends the contract and moves it to{" "}
+							{PLAN_LABEL[effectivePlan]}. That's the manual off-ramp; if you
+							meant to bill the contract, pick Enterprise.
+						</p>
+					) : null}
+					{tierMove ? (
+						<p className="text-xs text-muted-foreground">
+							{tierMove === "up"
+								? `Paying moves them from ${PLAN_LABEL[currentPlan as Plan]} to ${PLAN_LABEL[effectivePlan]} — not before. Whatever they've already paid for carries over as ${PLAN_LABEL[effectivePlan]} days.`
+								: `Paying moves them from ${PLAN_LABEL[currentPlan as Plan]} down to ${PLAN_LABEL[effectivePlan]} straight away — an admin-issued change doesn't wait for the period to end, unlike a seller's own downgrade. Whatever they've already paid for carries over as ${PLAN_LABEL[effectivePlan]} days.`}
+						</p>
+					) : null}
+					{foundingBill ? (
+						<p className="text-xs text-emerald-700">
 							{formatPrice(base, currency)} −{" "}
 							{formatPrice(base - total, currency)} founding discount
+						</p>
+					) : null}
+					{annual && cycle === "annual" ? (
+						<p className="text-xs text-muted-foreground">
+							Covers {ANNUAL_MONTHS_RECEIVED} months ·{" "}
+							{formatPrice(annual.saving, currency)} saved (2 months free) ·{" "}
+							{formatPrice(annual.effectiveMonthly, currency)}/mo effective
 						</p>
 					) : null}
 				</div>
 				<Button
 					type="button"
-					onClick={handleIssue}
-					disabled={!retailerId || busy || blocked}
+					onClick={openBill ? () => setConfirmReplace(true) : handleIssue}
+					disabled={
+						!retailerId ||
+						busy ||
+						compedStore ||
+						unclaimedStore ||
+						noContract ||
+						replaceRefusal !== null
+					}
 					className="h-11 w-full sm:w-auto sm:px-6"
 				>
-					{busy ? "Issuing…" : "Issue invoice"}
+					{busy ? "Issuing…" : openBill ? "Replace open bill" : "Issue invoice"}
 				</Button>
 			</div>
-			{blocked ? (
-				<p className="text-xs text-amber-700 dark:text-amber-300">
-					This retailer already has a pending invoice — settle it first.
+			{/* An open bill is a thing to CORRECT, not a wall. The old copy
+			    ("settle it first") sent the admin to another card to void it by
+			    hand — the fix for a mis-tiered bill now lives where the right
+			    one is drafted. */}
+			{openBill ? (
+				replaceRefusal ? (
+					<p className="text-xs text-amber-700">{replaceRefusal}</p>
+				) : (
+					<p className="text-xs text-muted-foreground">
+						{openBill.invoiceNumber} is open for{" "}
+						{formatPrice(openBill.total, openBill.currency)} (
+						{PLAN_LABEL[openBill.plan]}). Issuing voids it and replaces it with
+						this one — it stays in their history as cancelled.
+						{replaceChargeNote ? ` ${replaceChargeNote}` : ""}
+					</p>
+				)
+			) : null}
+			{unclaimedStore ? (
+				<p className="text-xs text-amber-700">
+					Nobody owns this store yet, so there's nobody to bill — the server
+					refuses it and the daily renewal skips it.{" "}
+					{selected?.comped
+						? "It runs unbilled while you build it, and the day the vendor claims it they start a 14-day Pro trial — bill them after that."
+						: "It already carries a live plan, which keeps its current period. Billing picks up again once the new owner claims it."}
 				</p>
 			) : null}
+			{compedStore ? (
+				<p className="text-xs text-amber-700">
+					This store is on the house
+					{selected?.compLabel ? ` (${selected.compLabel})` : ""} — it can't be
+					billed. End the comp from Admin · Sellers first.
+				</p>
+			) : null}
+			{/* Saving in here IS putting the store on Enterprise; the form above
+			    picks the contract up live (Convex reactivity), so the admin never
+			    re-picks the store. */}
+			{/* Replacing voids a live bill and can set a card charge going, so
+			    it states both before the tap — never a toast after it. */}
+			<ConfirmDialog
+				open={confirmReplace}
+				onOpenChange={setConfirmReplace}
+				title={`Replace ${openBill?.invoiceNumber ?? "this bill"}?`}
+				description={
+					openBill ? (
+						<>
+							{openBill.invoiceNumber} (
+							{formatPrice(openBill.total, openBill.currency)},{" "}
+							{PLAN_LABEL[openBill.plan]}) is voided and replaced with a{" "}
+							{PLAN_LABEL[effectivePlan]} bill for{" "}
+							{formatPrice(total, effectiveCurrency)}. The old one stays in
+							their history as cancelled and its Pay-now link stops working.
+							{replaceChargeNote ? ` ${replaceChargeNote}` : ""}
+						</>
+					) : null
+				}
+				confirmLabel="Replace it"
+				onConfirm={handleIssue}
+			/>
+			<EnterpriseContractSheet
+				retailerId={retailerId || null}
+				templates={contractTemplates}
+				open={contractSheetOpen}
+				onOpenChange={setContractSheetOpen}
+			/>
 		</AdminCard>
 	);
 }
 
 function PendingInvoices() {
 	const invoices = useQuery(convexQuery(api.invoices.listPending, {})).data;
+	// One clock per render, so a row's pill and its line can't disagree.
+	const now = Date.now();
 	const markPaid = useMutation(api.invoices.markPaid);
 	const voidInvoice = useMutation(api.invoices.voidInvoice);
 	const [confirming, setConfirming] = useState<
@@ -874,6 +1590,49 @@ function PendingInvoices() {
 									<span className="rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-medium uppercase text-accent">
 										{inv.plan}
 									</span>
+									{/* Off-Season Hold (z8r3fday24): this bill is the RM19/S$9
+									    hold, not the tier — the tier pill above is what they
+									    resume to. */}
+									{inv.kind === "hold" ? (
+										<span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+											Off-Season Hold
+										</span>
+									) : null}
+									{/* Marking this paid grants 365 days instead of 30. Without
+									    the pill an annual and a monthly pending invoice look
+									    identical apart from the amount. */}
+									{inv.billingCycle === "annual" ? (
+										<span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium uppercase text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+											Annual
+										</span>
+									) : null}
+									{/* Which RAIL this bill is on (86eyb6z4r) — so "who needs
+									    chasing vs who settles themselves" is a glance. */}
+									{inv.autoRenew ? (
+										<AutoChargePill
+											description={describeAutoCharge(inv.autoRenew, now)}
+										/>
+									) : inv.hasPayNowLink ? (
+										<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+											Pay-now link
+										</span>
+									) : null}
+									{inv.origin !== "admin" ? (
+										<span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+											{inv.origin === "self_serve"
+												? "Self-serve"
+												: inv.origin === "free_period_end"
+													? "First invoice"
+													: "Renewal"}
+										</span>
+									) : null}
+									{/* Paying this takes the store off its contract (T6) —
+									    worth seeing before marking it paid or voiding it. */}
+									{inv.endsContract ? (
+										<span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+											Ends Enterprise contract
+										</span>
+									) : null}
 								</div>
 								<div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
 									<span className="font-mono">{inv.invoiceNumber}</span>
@@ -886,6 +1645,18 @@ function PendingInvoices() {
 										})}
 									</span>
 								</div>
+								{inv.gatewayIssue ? (
+									<p className="text-xs font-medium text-red-600 dark:text-red-400">
+										{inv.gatewayIssue.kind === "amount_mismatch"
+											? `⚠ A HitPay payment landed that doesn't match this total (${formatPrice(inv.gatewayIssue.amountSen ?? 0, inv.currency)}) — check the HitPay dashboard before settling.`
+											: "⚠ A HitPay payment landed AFTER this invoice was settled/voided — possible double payment, check the HitPay dashboard."}
+									</p>
+								) : null}
+								{inv.autoRenew ? (
+									<AutoChargeDetail
+										description={describeAutoCharge(inv.autoRenew, now)}
+									/>
+								) : null}
 							</div>
 							<div className="flex items-center justify-between gap-3 sm:justify-end">
 								<span className="text-sm font-semibold tabular-nums">
@@ -969,6 +1740,20 @@ function PendingInvoices() {
 							their history as “Cancelled” and frees them up for a corrected
 							invoice. Use this for an invoice issued by mistake — not one
 							that's been paid.
+							{voiding?.carriesScheduledChange ? (
+								<>
+									{" "}
+									<strong className="font-medium text-foreground">
+										This renewal carries a scheduled move to{" "}
+										{voiding.plan === "pro" ? "Pro" : "Starter"}
+									</strong>
+									: voiding it keeps the move scheduled, and the next daily run
+									bills it again.{" "}
+									{voiding.endsContract
+										? "To keep the store on its contract, use “Call off the move to Pro” in Sellers → the store."
+										: "The seller can call the move off from their billing page."}
+								</>
+							) : null}
 						</DialogDescription>
 					</DialogHeader>
 					<label className="flex flex-col gap-1 text-sm font-medium">
@@ -1031,6 +1816,78 @@ function foundingStatus(m: { status?: string; paid: boolean }): {
 	};
 }
 
+/** Which retailers are on the auto-renewal rail + who is failing (86eyb6z4r).
+ * Failing rows sort first (the query orders them), so trouble is the first
+ * thing on screen. */
+function AutoRenewOverview() {
+	const rows = useQuery(
+		convexQuery(api.subscriptionPayments.listAutoRenewForAdmin, {}),
+	).data;
+	const now = Date.now();
+
+	return (
+		<AdminCard>
+			<AdminSectionHeading
+				icon={<RefreshCw className="size-5" />}
+				title="Auto-renewal"
+				description="Retailers with a saved payment method. Their renewals charge themselves; failures dun by email and fall back to the Pay-now link."
+			/>
+			{rows === undefined ? (
+				<Skeleton className="h-16 w-full rounded-xl" />
+			) : rows.length === 0 ? (
+				<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+					Nobody is on auto-renewal yet — sellers turn it on in Settings →
+					Billing.
+				</p>
+			) : (
+				<ul className="flex flex-col gap-2">
+					{rows.map((row) => (
+						<li
+							key={row.retailerId}
+							className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-background p-3"
+						>
+							<div className="min-w-0 space-y-1">
+								<div className="flex flex-wrap items-center gap-2">
+									<p className="min-w-0 truncate text-sm font-semibold">
+										{row.storeName}
+									</p>
+									<span className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+										/{row.slug}
+									</span>
+									<AutoChargePill
+										description={describeAutoCharge(row.charge, now)}
+										showHealthy={false}
+									/>
+								</div>
+								<p className="text-xs text-muted-foreground">
+									{row.methodLabel}
+									{row.lastChargeAt
+										? ` · last charged ${formatShortDate(row.lastChargeAt)}`
+										: " · no charge yet"}
+								</p>
+								<AutoChargeDetail
+									description={describeAutoCharge(row.charge, now)}
+								/>
+							</div>
+						</li>
+					))}
+				</ul>
+			)}
+		</AdminCard>
+	);
+}
+
+/**
+ * Admin: the 10-slot cohort — who's reserved, where each one sits in the pay
+ * cycle, and the state of their founding BENEFITS (z8r3fdfyw5).
+ *
+ * Membership and benefits are shown as two separate facts because they are two
+ * separate facts: the rank pill is permanent, the benefit line is what can be
+ * taken. The automatic rule does the taking at day 90; this list exists so the
+ * question "why is #4 on standard pricing?" is answerable here rather than from
+ * the logs, and so Arif has a lever either way — revoke a member who has
+ * clearly gone, or restore one revoked wrongly.
+ */
 function FoundingMembersList() {
 	const members = useQuery(
 		convexQuery(api.foundingMembers.listForAdmin, {}),
@@ -1038,13 +1895,58 @@ function FoundingMembersList() {
 	const spotsRemaining = useQuery(
 		convexQuery(api.foundingMembers.getSpotsRemaining, {}),
 	).data;
+	const setBenefits = useMutation(api.foundingMembers.adminSetBenefits);
+	// The row awaiting confirmation, and which direction it's going.
+	const [pending, setPending] = useState<{
+		retailerId: Id<"retailers">;
+		storeName: string;
+		rank: number;
+		revoke: boolean;
+	} | null>(null);
+	const [note, setNote] = useState("");
+	const [busy, setBusy] = useState(false);
+
+	async function apply() {
+		if (!pending) return;
+		setBusy(true);
+		try {
+			const changed = await setBenefits({
+				retailerId: pending.retailerId,
+				revoked: pending.revoke,
+				note: note.trim() === "" ? undefined : note.trim(),
+			});
+			// The mutation refuses rather than throws when there is nothing to do
+			// (already in that state, or the retailer is gone) — reporting that as
+			// success would tell Arif he had changed something he hadn't.
+			if (changed) {
+				toast.success(
+					pending.revoke
+						? `Founding benefits revoked for ${pending.storeName} — rank #${pending.rank} and badge kept.`
+						: `Founding benefits restored for ${pending.storeName} — their founding price applies again from now.`,
+				);
+			} else {
+				toast.info(
+					`No change — ${pending.storeName} is already ${pending.revoke ? "revoked" : "on founding pricing"}.`,
+				);
+			}
+			setPending(null);
+			setNote("");
+		} catch (err) {
+			// The lone hand-rolled reader left in the app — `err.message` here is
+			// the raw Convex wrapper, stack frames and all. Every other catch
+			// already goes through the shared unwrapper.
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setBusy(false);
+		}
+	}
 
 	return (
 		<AdminCard>
 			<AdminSectionHeading
 				icon={<Award className="size-5" />}
 				title="Founding members"
-				description="The 10-slot cohort — who's reserved and where they are in the pay cycle."
+				description="The 10-slot cohort — who's reserved, where they are in the pay cycle, and whether their founding benefits still stand. Rank and badge are permanent; benefits end 90 days past paid-through."
 				aside={
 					spotsRemaining !== undefined ? (
 						<span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
@@ -1064,12 +1966,47 @@ function FoundingMembersList() {
 				<ul className="flex flex-col gap-2">
 					{members.map((m) => {
 						const s = foundingStatus(m);
+						const revoked = m.benefitsRevokedAt !== undefined;
+						// The slot is claimed by a store that no longer exists (a partial
+						// account purge). Shown so the header's count and this list agree,
+						// and so the row the daily pass skips is visible rather than
+						// inferred — but with no Revoke/Restore lever, because there is
+						// nothing left to revoke.
+						if (m.retailerMissing) {
+							return (
+								<li
+									key={m.rank}
+									className="flex items-start gap-2.5 rounded-xl border border-dashed border-border bg-muted/30 p-3"
+								>
+									<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-bold text-muted-foreground">
+										#{m.rank}
+									</span>
+									<span className="min-w-0">
+										<span className="block truncate text-sm font-semibold text-muted-foreground">
+											Store deleted
+										</span>
+										<span className="mt-0.5 block text-xs text-muted-foreground">
+											This slot stays claimed and the daily benefit check skips
+											it. Nothing to do — it clears if the account purge is
+											completed.
+										</span>
+									</span>
+								</li>
+							);
+						}
 						return (
 							<li
 								key={m.rank}
-								className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background p-3"
+								className="flex flex-col gap-3 rounded-xl border border-border bg-background p-3 sm:flex-row sm:items-start sm:justify-between"
 							>
-								<div className="flex min-w-0 items-center gap-2.5">
+								{/* Stacked on a phone, side-by-side from sm. Side-by-side all
+								    the way down squeezed the name column between the pill and
+								    the button: "Bearcam…", a slug over three lines, and the
+								    benefit line at two words a row.
+								    items-START, not center: the benefit line makes this block
+								    two or three lines tall, and a centred rank pill drifts down
+								    beside the SLUG instead of the store name it labels. */}
+								<div className="flex w-full items-start gap-2.5 sm:min-w-0 sm:flex-1">
 									<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
 										#{m.rank}
 									</span>
@@ -1077,21 +2014,110 @@ function FoundingMembersList() {
 										<span className="block truncate text-sm font-semibold">
 											{m.storeName}
 										</span>
-										<span className="font-mono text-xs text-muted-foreground">
+										<span className="block font-mono text-xs text-muted-foreground">
 											/{m.slug}
 										</span>
+										{/* The benefit line. Silent for a member whose benefits
+										    are live and nowhere near the window — nine identical
+										    "Benefits active" rows would bury the one that isn't. */}
+										{revoked ? (
+											<span className="mt-0.5 block text-xs text-muted-foreground">
+												Benefits ended{" "}
+												{m.benefitsRevokedAt !== undefined
+													? formatShortDate(m.benefitsRevokedAt)
+													: ""}
+												{m.benefitsRevokedReason === "admin"
+													? " · by admin"
+													: " · lapsed"}
+												{m.benefitsRevokedNote
+													? ` · ${m.benefitsRevokedNote}`
+													: ""}
+											</span>
+										) : m.benefitsEndAt !== undefined &&
+											m.status !== "active" &&
+											m.status !== "on_hold" ? (
+											<span className="mt-0.5 block text-xs text-amber-700 dark:text-amber-400">
+												Benefits end {formatShortDate(m.benefitsEndAt)}
+												{m.warned ? " · warned" : " · not yet warned"}
+											</span>
+										) : null}
 									</span>
 								</div>
-								<span
-									className={`rounded-full px-2.5 py-1 text-xs font-medium ${s.className}`}
-								>
-									{s.label}
-								</span>
+								<div className="flex shrink-0 items-center gap-2 pl-[38px] sm:pl-0">
+									<span
+										className={`rounded-full px-2.5 py-1 text-xs font-medium ${s.className}`}
+									>
+										{s.label}
+									</span>
+									<Button
+										variant="outline"
+										size="sm"
+										onClick={() => {
+											setNote("");
+											setPending({
+												retailerId: m.retailerId,
+												storeName: m.storeName,
+												rank: m.rank,
+												revoke: !revoked,
+											});
+										}}
+									>
+										{revoked ? "Restore benefits" : "Revoke benefits"}
+									</Button>
+								</div>
 							</li>
 						);
 					})}
 				</ul>
 			)}
+
+			<Dialog
+				open={pending !== null}
+				onOpenChange={(o) => {
+					if (!o) setPending(null);
+				}}
+			>
+				<DialogContent showCloseButton={false} className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>
+							{pending?.revoke
+								? `Revoke founding benefits for ${pending?.storeName}?`
+								: `Restore founding benefits for ${pending?.storeName}?`}
+						</DialogTitle>
+						<DialogDescription>
+							{pending?.revoke
+								? `Their 30% founding price ends now and every plan opens to them again at standard prices. Founding rank #${pending?.rank} and the storefront badge are KEPT — those are permanent. They are not emailed; this is a manual move, so tell them yourself.`
+								: `Their 30% founding price applies again straight away and they go back to Founding Pro only. The 90-day lapse clock restarts from today, so if they still don't renew they'll be warned again 14 days before it ends. Use this for a revocation that was wrong, or a deliberate re-grant.`}
+						</DialogDescription>
+					</DialogHeader>
+					<label className="flex flex-col gap-1 text-sm font-medium">
+						Note{" "}
+						<span className="font-normal text-muted-foreground">
+							(optional — shown in this list)
+						</span>
+						<Input
+							value={note}
+							onChange={(e) => setNote(e.target.value)}
+							placeholder={
+								pending?.revoke ? "e.g. closed the business" : "e.g. re-granted"
+							}
+							variant="field"
+						/>
+					</label>
+					<DialogFooter>
+						<Button variant="outline" onClick={() => setPending(null)}>
+							Cancel
+						</Button>
+						<Button disabled={busy} onClick={apply}>
+							{busy
+								? "Saving…"
+								: pending?.revoke
+									? "Revoke benefits"
+									: "Restore benefits"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</AdminCard>
 	);
 }
@@ -1143,19 +2169,12 @@ function PaymentConfigForm() {
 		if (!file) return;
 		setUploading(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () => generateQrUploadUrl({}));
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const url = await generateQrUploadUrl({});
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
+			const { storageId } = upload;
 			await update({ qrImageStorageId: storageId });
 			toast.success("QR updated");
 		} catch (err) {

@@ -1,4 +1,5 @@
 import type { Locale } from "../../convex/lib/locale";
+import { spotlightHref } from "../lib/spotlight";
 
 /**
  * Seller-facing release notes (ClickUp 86eyqgxv9) — the content shown by the
@@ -38,6 +39,21 @@ import type { Locale } from "../../convex/lib/locale";
  * - Add an `href` wherever the feature has a home. The deep link is what turns
  *   an announcement into adoption — without it a seller reads the note, nods,
  *   and never finds the setting.
+ * - **Every entry declares its `kind`** — New feature / Enhancement / Bug fix.
+ *   It is required, so this is a compile error rather than a convention. Judge
+ *   it from the seller's side, not the diff's: see `ReleaseKind`.
+ *
+ * ## Touching this file means a release is going out — run the checklist
+ *
+ * Notes are only ever written for a staging→main merge, so editing this file
+ * is the reliable signal that a **deploy** is imminent. Everything in
+ * [`docs/release-checklist.md`](../../docs/release-checklist.md) is therefore
+ * part of the same change, not a separate errand: bump `package.json` (a test
+ * enforces it), then audit the diff for **environment variables, backfills,
+ * schema/index changes, and anything an operator must switch on by hand** and
+ * write what you find into the release PR body. The point is that the person
+ * merging never has to ask "is there anything for me to do?" — the answer is
+ * already in front of them, including when it is "nothing".
  */
 
 /**
@@ -54,6 +70,32 @@ import type { Locale } from "../../convex/lib/locale";
 export type Localized = { en: string } & Partial<
 	Record<Exclude<Locale, "en">, string>
 >;
+
+/**
+ * What KIND of change an entry is, rendered as a labelled chip above its title.
+ *
+ * Required, not optional: a panel where some entries are labelled and some are
+ * not reads as a bug, and the label is the first thing a seller scans for —
+ * "did something break and get fixed, or is there something new to learn?".
+ * Making it a compile error is what keeps that true for every future entry.
+ *
+ * Three kinds, deliberately not more. A longer taxonomy (performance,
+ * security, copy…) is an engineering view of the work; a seller only sorts
+ * changes into "something I can now do", "something got better", and
+ * "something that was wrong is fixed".
+ */
+export type ReleaseKind = "feature" | "enhancement" | "fix";
+
+/**
+ * The words the seller reads. Kept beside the type rather than in the
+ * component so the copy and the union can never drift, and so a test can
+ * assert every kind has a label.
+ */
+export const RELEASE_KIND_LABELS: Record<ReleaseKind, string> = {
+	feature: "New feature",
+	enhancement: "Enhancement",
+	fix: "Bug fix",
+};
 
 /**
  * Icons an entry may carry, rendered as a tinted tile beside its title.
@@ -76,16 +118,45 @@ export type ReleaseIconName =
 	// the orders header, not a generic grid icon: an announcement whose tile
 	// matches the control the seller has to find is a shorter walk than one that
 	// merely decorates the row.
-	| "table";
+	| "table"
+	// Same reasoning as "table": the glyph the Calendar segment of the orders
+	// view switch actually uses (CalendarRange), so the booking announcements
+	// point at the control they are announcing.
+	| "calendar"
+	// Same reasoning again: the glyph on the new-product wizard's Event card
+	// (CalendarClock), so the events announcement's tile is the card the
+	// seller taps — and not the Booking card's CalendarRange one row above it.
+	| "calendar-clock"
+	// And again: the glyph Settings → Team carries in the tab nav (UsersRound),
+	// so the team announcement's tile is the tab the seller has to find.
+	| "users"
+	// And again: the glyph the credit balance card wears in Settings → Billing
+	// (Gauge), so the credits announcement's tile is the card it rings.
+	| "gauge";
 
 export interface ReleaseEntry {
+	/**
+	 * New feature / Enhancement / Bug fix. Required — see `ReleaseKind`.
+	 *
+	 * Judge it from the SELLER's side, not the diff's: a change that only
+	 * stopped something being wrong is a `fix` however much code it took, and a
+	 * change that lets them do something they could not do before is a
+	 * `feature` however small the diff.
+	 */
+	kind: ReleaseKind;
 	/** One line, benefit-first. Shown as the entry heading. */
 	title: Localized;
 	/** A sentence or two of plain-language detail. */
 	body: Localized;
-	/** In-app deep link to where the feature actually lives, e.g. `/app/settings?tab=fulfilment`. */
+	/**
+	 * In-app deep link to where the feature actually lives, e.g.
+	 * `/app/settings?tab=fulfilment`. When the feature is ONE card on a settings
+	 * tab, use `spotlightHref("<key>")` (src/lib/spotlight.ts) — it lands the
+	 * seller on that card and rings it in the brand mint, instead of the top
+	 * of the tab.
+	 */
 	href?: string;
-	/** Link text. Defaults to "Take a look" when omitted. */
+	/** Link text. Defaults to "Set it up" when omitted — but always write one. */
 	hrefLabel?: Localized;
 	/** Optional icon tile. Omit for the neutral default — a wrong icon is worse than none. */
 	icon?: ReleaseIconName;
@@ -110,6 +181,1134 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.10.4",
+		date: "2026-10-16",
+		// Not notable: a hotfix for one failure. The seller it hit sees her
+		// orders come back when she next opens the page; nobody else saw
+		// anything change. A dot is enough.
+		notable: false,
+		entries: [
+			{
+				kind: "fix",
+				title: {
+					en: "Orders load again when a category name has a symbol in it",
+				},
+				body: {
+					en: "If one of your product categories had a symbol or emoji in its name — ✦ Dresses, 🐆 New in — the Orders page stopped loading the moment an order was placed for it. That's fixed: name your categories however you like, and the Orders page and its Categories filter show them as they are. On every plan.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open Orders" },
+			},
+		],
+	},
+	{
+		version: "2026.10.3",
+		date: "2026-10-15",
+		// Notable: something MOVED, and a buyer-facing rule changed. Despatch
+		// labels left the inbox for the new Deliveries page, delivery pricing
+		// left Fulfilment for a page of its own, and every settings card was
+		// regrouped. And switching HitPay on now hides the bank details buyers
+		// used to see beside it. A seller who reads nothing will go to print
+		// labels where they always did and find a pointer instead — or wonder
+		// why no buyer pays by transfer any more. The dot would not reach them
+		// before that morning.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: { en: "Every delivery in one place, on its own page" },
+				body: {
+					en: "Deliveries is a new page in your menu, right under Orders. Parcels waiting to go out sit at the top with what they still need — a rider booked or a consignment number added — then bookings on the road, any that failed and still need a rider, and what delivery cost you this month. Despatch labels print from here now, beside the parcels they're for. Home gets a Deliveries card, and a banner warns when your Lalamove wallet runs low. The page is on every plan; booking riders and printing labels are Pro.",
+				},
+				href: "/app/deliveries",
+				hrefLabel: { en: "Open Deliveries" },
+				icon: "truck",
+			},
+			{
+				kind: "feature",
+				title: { en: "Tip a rider when nobody takes your booking" },
+				body: {
+					// The tip steps and cap are fixed per market, not this store's money.
+					// currency-literal-ok: TIP_OPTIONS amounts, both markets named
+					en: "A Lalamove booking no rider accepts runs out in the end. While one is still finding a rider, its card on the order page and its row on Deliveries offer Add tip: pick RM 2, RM 5 or RM 10 (S$1, S$2 or S$5 in Singapore) and riders nearby see a better fare. The dialog shows the new trip total first. The tip comes out of your own Lalamove wallet, can't be taken back, and stops at RM 20 (S$10) a booking. Booking riders is on Pro.",
+				},
+				// No link: there is nothing to switch on. It reaches the seller on
+				// the next booking that sits in "Finding rider" — the v2026.10.2
+				// screenshot-proof posture.
+			},
+			{
+				kind: "enhancement",
+				title: { en: "Turn on HitPay and it's the one way buyers pay" },
+				body: {
+					en: "With HitPay on, buyers still saw your bank details and QR beside it, so some paid by hand and you were back to checking screenshots. Now HitPay is the only way to pay on any order it can take, and every payment confirms itself. Your bank and QR details stay saved for orders under HitPay's minimum, and switching back is one tap. Connecting HitPay no longer turns it on by itself — you choose under Payments → How buyers pay. On Pro.",
+				},
+				href: spotlightHref("how_buyers_pay"),
+				hrefLabel: { en: "Choose how buyers pay" },
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: { en: "Put many products on one sale, and end it in one tap" },
+				body: {
+					en: "Promotions is a new page in your menu, right after Products. Pick the products — search, or filter to a category and take them all — set one percentage off and when it runs, check each sale price, and they go on sale together, flash-sale limits included. Edit it later and every product follows; end it and each goes back to its normal price, leaving alone any you've re-priced by hand since. A product's own Promotion card also gains Clear sale prices & settings. On Pro.",
+				},
+				href: "/app/promotions",
+				hrefLabel: { en: "Start a promotion" },
+				icon: "megaphone",
+			},
+			{
+				kind: "feature",
+				title: { en: "Pause your store when you need a break" },
+				body: {
+					en: 'Away for a few days, or sold out for the week? Settings → Store now opens with Accepting orders. Switch it off and your storefront stays up for browsing but stops taking orders, with an optional note for buyers like "Back on 1 Nov". Your counter keeps working, and your plan carries on as usual — Off-Season Hold is still the way to pause billing. Switch it back on whenever you\'re ready. On every plan.',
+				},
+				href: spotlightHref("store_status"),
+				hrefLabel: { en: "Find the switch" },
+			},
+			{
+				kind: "enhancement",
+				title: { en: "Settings, regrouped so you find things faster" },
+				body: {
+					en: "Settings now sits in three groups — Store, Selling and Connections — and on a computer a side rail shows each section's state at a glance, with anything that needs you in amber. Every card reads the same way: a title, one line on what it does, and its current value on the right. Delivery pricing has a page of its own, the three order-alert cards are now one, each connection shows a setup checklist, and Lalamove's webhook registers in one tap. On every plan.",
+				},
+				href: "/app/settings",
+				hrefLabel: { en: "Open Settings" },
+				icon: "settings",
+			},
+			{
+				kind: "enhancement",
+				title: { en: "See when Kedaipal features your shop" },
+				body: {
+					en: "We now run showcases on kedaipal.com/stores — short-lived sections for an event or a theme, picked by us, above the usual store cards. If your shop is in one, your Store listing card says which, links to it, and tells you if anything is keeping you out of view — say, List my store switched off. There's nothing to sign up for. On every plan.",
+				},
+				href: spotlightHref("store_listing"),
+				hrefLabel: { en: "Check your listing" },
+			},
+			{
+				kind: "fix",
+				title: { en: "Product photos save the moment you add them" },
+				body: {
+					en: "Adding, removing or reordering a product's photos used to wait for Save, so leaving the page first lost them. Photos now save themselves as you go — remove one by mistake and Undo brings it back — and leaving a product with other unsaved changes asks before throwing them away. On every plan.",
+				},
+				// No link: it reaches the seller the next time they edit a product.
+			},
+		],
+	},
+	{
+		version: "2026.10.2",
+		date: "2026-10-13",
+		// Notable on two triggers. Something MOVED: Home is rebuilt around
+		// sales, and the Recent orders list a seller opened every morning is
+		// gone from it. And the deciding one — the credit rule changes under the
+		// seller's feet. v2026.10.1 told them "run out and nothing stops"; from
+		// this release an order that arrives at zero lands with its buyer and
+		// items closed. A seller who reads nothing will one day see an inbox row
+		// with no name on it and think the order is broken or lost, on the very
+		// morning they most need to act on it. The dot would not reach them first.
+		notable: true,
+		entries: [
+			{
+				kind: "enhancement",
+				title: {
+					en: "Home leads with what you sold, and what needs you today",
+				},
+				body: {
+					en: "Home used to open on three counts and a list of recent orders. It now leads with what needs you today — new orders, what's due, money to collect — then this week's sales against last week's, your best seller, who came back and where your orders came from. Every number opens the orders it counted, and a week-ahead strip shows your busiest day coming. Recent orders live in Orders now. Today's sales are on every plan; the 7- and 30-day views and the insight cards are Pro.",
+				},
+				href: "/app",
+				hrefLabel: { en: "Open Home" },
+				icon: "chart",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Orders that arrive after your credits run out wait to be opened",
+				},
+				body: {
+					en: "Until now, running out of credits changed nothing on your side. From this release, an order that lands once your balance is at zero still shows in your inbox, but its buyer and items stay closed until credits come in. Each credit opens one waiting order, oldest first — from a top-up, your monthly credits or a paid invoice. A banner counts what's waiting, and a Waiting on credits filter finds them. Orders you already have stay open, and cancelling a waiting one always gives its credit back. On every plan.",
+				},
+				href: spotlightHref("credit_balance"),
+				hrefLabel: { en: "See your balance" },
+				icon: "gauge",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Put a product on sale, or run a flash sale with a countdown",
+				},
+				body: {
+					en: "Set a sale price on any product and pick how long it runs — it snaps back to the normal price by itself when time is up. Buyers see a badge and the old price struck through, plus a live countdown on a timed sale. For a flash sale, sell only the first so-many units at that price, cap how many go in one order, and have unpaid orders cancel themselves so the units go back on sale. The Promotion card sits under each product's price. On Pro.",
+				},
+				href: spotlightHref("promo"),
+				hrefLabel: { en: "Set up a promotion" },
+			},
+			{
+				kind: "feature",
+				title: { en: "Hand out single-use voucher codes" },
+				body: {
+					en: "Say sorry for a late order, thank a regular or run a giveaway. Vouchers, a new page in your menu, makes codes worth an amount or a percentage off, with an expiry if you want one — one at a time, or twenty at once under a batch name. Share each as a code, a QR for your counter or a link that opens checkout with it applied. A code works once, comes off the items after any sale price, and works again if its order is cancelled. On Pro.",
+				},
+				// The page itself, not a ring: Vouchers is a route of its own, and
+				// "New voucher" is the first thing on it.
+				href: "/app/vouchers",
+				hrefLabel: { en: "Create a voucher" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Event venues get a card of their own",
+				},
+				body: {
+					en: "A hall you only use for events had to be a pickup point you switched off, so it hid behind Show inactive. Venues now have their own card in Fulfilment, right under Pickup. Turn on Only hosts events and buyers never see it at checkout; leave it off and one place can be both your pickup point and your venue. A venue set up the old way still works — to move it across, open it, turn on Only hosts events, then switch it back on. Events are on Pro.",
+				},
+				href: spotlightHref("event_venues"),
+				hrefLabel: { en: "See your venues" },
+			},
+			{
+				kind: "enhancement",
+				title: { en: 'Every "I\'ve paid" now comes with the screenshot' },
+				body: {
+					en: "A buyer paying by bank transfer or QR could tap I've paid with nothing attached, and you were left scrolling the chat for proof. The payment screenshot is now the first thing their form asks for, and the button waits until it's attached — a buyer who really can't is told to message you on WhatsApp instead. When a buyer sends more than one, your order page shows the newest reference everywhere and says which submission it came from. On every plan.",
+				},
+				// No link: nothing to switch on. It reaches the seller on the next
+				// order a buyer marks paid — the v2026.09.8 overseas-number posture.
+			},
+		],
+	},
+	{
+		version: "2026.10.1",
+		date: "2026-10-02",
+		// Notable, and not a close call — all three triggers are lit at once.
+		// A whole new way of selling: orders are metered in credits, where the
+		// monthly allowance used to be a line that counted up and did nothing.
+		// A seller-visible number moves: that same allowance is now a balance
+		// that can reach zero. And something MOVED: Scale is off the pricing
+		// page, replaced by a contract nobody can pick for themselves.
+		//
+		// The deciding one is the lock. A seller who reads nothing will one day
+		// find the dashboard refusing to work an order, with the storefront
+		// still cheerfully taking them — the single worst "wait, what?" this
+		// product can produce. The dot would not have told them, and the first
+		// they would hear of it is the morning it happens.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Every order spends a credit, and the balance is on the page",
+				},
+				body: {
+					en: "Your plan's monthly allowance used to be a quiet line that counted up and did nothing much. It is now a balance you can act on: Starter comes with 100 credits a month, Pro with 200, Founding Pro with 300, and one order spends one. The meter sits right under your plan, and warns you once you are into the last fifth of the month. Run out and your storefront keeps taking orders, and they come off your next credits, so a top-up or the 1st of the month clears the balance. Cancel an order nobody had started on and the credit comes back. On every plan.",
+				},
+				href: spotlightHref("credit_balance"),
+				hrefLabel: { en: "See your balance" },
+				icon: "gauge",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Outgrowing Pro is a conversation now, not a bigger shelf price",
+				},
+				body: {
+					en: "Scale was a fixed price that never quite fitted the stores asking for it — several outlets, well past a thousand orders a month, a team that does not stop at three. Enterprise replaces it: the base, the credits included, the rate on anything over and the number of seats are all set around your own numbers, so there is nothing to pick. Wherever a plan is offered you will now find a Talk to Arif button instead of a third card. Starter and Pro are exactly as they were.",
+				},
+				href: spotlightHref("plan_change"),
+				hrefLabel: { en: "Look at your plan" },
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: { en: "Filter the inbox by how an order leaves your hands" },
+				body: {
+					en: "Deliveries, self-collect, drop-offs, bookings and events all sat mixed together in one list — and drop-offs were hiding inside Self-collect, so a drop-off run you meant to pack was invisible unless you read every row. There is now a Fulfilment filter beside the others: tick one or several and the list narrows to just those, as does the CSV you export from it. On every plan.",
+				},
+				// The orders list, not a `?spot=` ring: the filter is a control in
+				// the inbox toolbar, not a card on a settings tab — the same call
+				// v2026.09.9's variant-cap note made about the products list.
+				href: "/app/orders",
+				hrefLabel: { en: "Open your inbox" },
+			},
+			{
+				kind: "feature",
+				title: { en: "Your shop can sit on our public store directory" },
+				body: {
+					en: 'kedaipal.com/stores is a new front door: buyers browse real shops and land straight on yours. A store with a live storefront and at least one product on sale is listed, and you can add a short area line — "Ampang, KL", "Ships nationwide" — so a buyer knows where you are before they tap. If you would rather stay word-of-mouth, one tick takes your shop off the directory and nothing else changes. Your own link works exactly as before either way. On every plan.',
+				},
+				href: spotlightHref("store_listing"),
+				hrefLabel: { en: "Check your listing" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "A renewal can't be charged twice, and a lost charge isn't lost",
+				},
+				body: {
+					en: "When a saved-card renewal was interrupted part-way, our records and the payment gateway could disagree about whether the money had actually moved — which risked a second attempt on a bill you had already paid. We now ask the gateway what it holds before any retry. And if a charge turns up against a bill we had already voided, auto-renewal stops rather than charging again, a banner tells you where that money is, and a person here is already looking at it.",
+				},
+				href: spotlightHref("auto_renewal"),
+				hrefLabel: { en: "Check auto-renewal" },
+			},
+		],
+	},
+	{
+		version: "2026.09.9",
+		date: "2026-09-29",
+		// Notable — authored `false`, and Zaki flipped it, the same way
+		// v2026.09.4 went. Two triggers are lit: the storefront's subpages
+		// MOVED, and a seller-visible number moved (50 choices to 100).
+		// The argument for the dot was that neither needs the seller to act.
+		// The argument that wins is that the storefront is the one surface a
+		// seller SHOWS people — they send that link to every buyer, and their
+		// own shop reshaping itself without a word is exactly the "wait, where
+		// did that go?" this release should answer before a customer asks them
+		// about it. The cap follows it: a seller who hit 50 once and split the
+		// listing in two has no reason to ever try again, so the ceiling only
+		// reaches them if we say it moved. The dot would have told neither.
+		notable: true,
+		entries: [
+			{
+				kind: "enhancement",
+				title: {
+					en: "A shared link opens on the goods, not on your cover photo",
+				},
+				body: {
+					en: "Buyers arrive on a product or a category far more often than on your front page, and those pages used to open with a screenful of cover photo before anything they came for. They now start with a slim bar holding your logo, your name and today's hours, with back and share buttons where a thumb expects them. Product cards carry one full-width button in every state, and a card with something already in the basket counts it up and down in place. The basket bar stays out of sight until there is something in it. Your front page keeps its cover.",
+				},
+				// No link: nothing to switch on, and the thing to look at is the
+				// seller's own storefront, which lives outside /app — every href
+				// here has to be an in-app path.
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "An RSVP stops dragging the rest of the basket to the venue",
+				},
+				body: {
+					en: "A guest who had a mug in the basket and then RSVP'd came out with one order pinned to your event venue — the mug included, with no delivery, no collection and no date. An RSVP now checks out on its own, the way a booking already does, and the basket is left untouched to order normally afterwards. Nothing changes on your side: your storefront, your product cards and your counter all send an RSVP down its own path.",
+				},
+				// No link: the seller has nothing to set up or find. Same reasoning
+				// as v2026.09.8's overseas-number note.
+			},
+			{
+				kind: "enhancement",
+				title: { en: "A product can carry 100 choices, up from 50" },
+				body: {
+					en: "Two option lists that multiply past fifty — adult sizes against a second set, a flavour against a pack size — were refused when you saved, after you had filled the whole grid in. The ceiling is now 100, and if you do cross it the warning arrives while you are still adding values: it counts what you have, says how many you are over, and asks for values back rather than a number of combinations to work out yourself. Where you build them — the wizard, the grid and the refusal itself — they are called choices now, the word you use.",
+				},
+				// Deliberately the products LIST rather than a `?spot=` ring. The
+				// cap is not a card — it is a ceiling the seller meets inside the
+				// variant grid while building options, and it now announces itself
+				// there. A spotlight key would need a PRODUCT_SPOTLIGHT row
+				// describing a card that does not exist. Raised in the release PR.
+				href: "/app/products",
+				hrefLabel: { en: "Open your listings" },
+			},
+			{
+				kind: "fix",
+				title: { en: "An event guest is charged what the page quoted" },
+				body: {
+					en: "If your event venue doubles as one of your pickup points and that point carries a handling fee, the fee was added on top of the total the guest had already agreed to — the button quoted one price and the order came out higher. A guest is attending, not collecting, so it no longer applies at an event. Your fulfilment settings and the venue picker now say so, rather than advertising a fee you were never going to collect.",
+				},
+				href: spotlightHref("pickup_points"),
+				hrefLabel: { en: "Check your pickup points" },
+			},
+		],
+	},
+	{
+		version: "2026.09.8",
+		date: "2026-09-26",
+		// Notable on two of the three triggers at once. Something MOVED: there is
+		// a new Team tab in Settings, and a seller has no reason to open it.
+		// And a seller who reads nothing keeps handing their own login to the
+		// person packing boxes — one shared password, no way to see who did
+		// what, and nothing to take back when that person leaves. That is
+		// precisely what team seats exists to stop, so leaving it to the dot
+		// would leave the risk in place.
+		// The counter-argument (put to Zaki in the release PR, same shape as
+		// v2026.09.7's events note): teammates are Pro, so a Starter seller is
+		// interrupted for something behind a wall. Two things answer it — the
+		// body names the plan in its last line, and Settings → Team is a
+		// designed teaser for Starter (a blurred sample plus the upgrade path),
+		// never a dead end.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Bring your team in — and pick what each person can touch",
+				},
+				body: {
+					en: "A helper could only get in as you, on your password, seeing your bank details and your bill. Now invite them by email and choose area by area what they reach: orders only for whoever packs, orders and products for a manager, and nothing near your money unless you say so. They sign in as themselves, so the order timeline names who confirmed it and who rang it up at the counter. Remove someone and their history still reads — the name stays on what they did. Seats come with your plan: Pro is you plus 2 teammates.",
+				},
+				href: "/app/settings?tab=team",
+				hrefLabel: { en: "Invite your team" },
+				icon: "users",
+			},
+			{
+				kind: "feature",
+				title: { en: "Close the shop for a date without editing your hours" },
+				body: {
+					en: "Balik kampung for a week, a public holiday, a day off for a wedding: the only way to stop orders was to rewrite your weekly hours and remember to put them back. Add the dates instead — they sit right under Opening hours, and each can carry a short reason your buyers see. Checkout turns those days down, your storefront says when you are back, and nights on a stay listing show unavailable. Past closures clear themselves. On every plan.",
+				},
+				href: spotlightHref("closed_dates"),
+				hrefLabel: { en: "Add a closed date" },
+				icon: "calendar",
+			},
+			{
+				kind: "feature",
+				title: { en: "A package that counts only the days you're open" },
+				body: {
+					en: "Sell a 10-day class pass and those ten days ran straight through your day off, so it ended while you were shut. A package priced by the day now asks how it counts: every day in a row, for a rental or a gym pass — or only the days you are open, which skips your days off and closed dates and ends later. The choice sits under Package length and shows a worked example before you save. Buyers see the skipped days before they book.",
+				},
+				// Deliberately the products LIST, not a `?spot=` ring. The choice is
+				// a field inside the Pricing & capacity card, not a card of its own,
+				// and that card already anchors `weekend_rate` — one element can't
+				// carry two ids, and spotlight.test.ts requires each key's own
+				// literal. Giving it a key therefore means restructuring a shipped
+				// card, which belongs to a design pass and not a notes PR. The body
+				// names where to look instead. Raised in the release PR.
+				href: "/app/products",
+				hrefLabel: { en: "Open your listings" },
+			},
+			{
+				kind: "feature",
+				title: { en: "Take orders from buyers with an overseas number" },
+				body: {
+					en: "Every phone field wore a fixed +60 plate, so a buyer whose WhatsApp is Singaporean, Indonesian or Japanese could fill the whole form in and still be refused when they pressed send. They now pick their own flag wherever you ask for a number, and it reads back in groups so a swapped digit is easy to catch. Your storefront, your counter and your tracking page already take it — nothing to switch on. On every plan.",
+				},
+				// No link: there is nothing to set up or find. A link here would take
+				// the seller somewhere only to show them a field that already works.
+			},
+			{
+				kind: "enhancement",
+				title: { en: "Your own words for each kind of order" },
+				body: {
+					en: 'Renaming Confirmed to "Ok go" for your deliveries put those words on your campsite bookings too, and no screen was left that could show you that or undo it. Stages now belong to the kind of order: deliveries, self-collect, bookings and events each keep their own steps and wording, on their own card. Bookings and events take custom steps for the first time, and Reset to defaults is there when you want the standard set back. Bulk-marking a mixed selection now says what it skipped.',
+				},
+				href: "/app/settings?tab=order-status",
+				hrefLabel: { en: "Review your stages" },
+			},
+			{
+				kind: "fix",
+				title: { en: "An error tells you what went wrong" },
+				body: {
+					en: "When the app turned something down — a maps link that wasn't https, a change your plan doesn't allow — the reason came back wrapped in a request id and a stack trace, with the one useful sentence buried in the middle of it. Every message now shows just the sentence.",
+				},
+				// No link: this reaches the seller wherever they already were, so
+				// there is no destination to send them to.
+			},
+		],
+	},
+	{
+		version: "2026.09.7",
+		date: "2026-09-23",
+		// Notable, on the "whole new way of selling" trigger: a seller who
+		// reads nothing will keep collecting RSVPs in a WhatsApp thread and
+		// counting dishes by hand, because the Event card is the fifth of five
+		// in the new-product wizard and nothing else in the app points at it.
+		// The counter-argument (put to Zaki in the release PR): events are Pro,
+		// so a Starter seller is interrupted for something behind a wall — the
+		// body names the plan, and the Event card itself says "Pro" and why.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Host an event — guests RSVP, and the headcount counts itself",
+				},
+				body: {
+					en: "A monthly networking breakfast, a Saturday baking class, a three-day camp: the RSVPs used to live in a WhatsApp thread while you counted by hand. Now pick Event when you add a product, then set the date (a last day too, if it runs longer), the time and how many seats. Guests RSVP on your storefront or at your counter and pick their set, package or tent, and the product page tallies each choice, so you know what to prepare. The date and venue are yours to set, never theirs to pick. RSVPs stop at your seat cap, and the day after it ends the listing leaves your storefront by itself. Price it at zero for a free RSVP. Events are on Pro.",
+				},
+				// `?card=event` opens the wizard with Event already selected
+				// (z8r3fdhkr7) — not on the store's own type. Harmless before that
+				// ships: the route drops a `card` it doesn't know.
+				href: "/app/products/new?card=event",
+				hrefLabel: { en: "Create an event" },
+				icon: "calendar-clock",
+			},
+			{
+				// The first fix: it reaches every seller who adds or edits a
+				// product (#298), where the two below reach counter and booking
+				// sellers.
+				kind: "fix",
+				title: {
+					en: "Your product editor quotes RM, not MYR",
+				},
+				body: {
+					// currency-literal-ok: the note quotes the old and new spelling on purpose.
+					en: 'Price fields and summaries in the product editor printed your currency\'s code — "Price (MYR)", "MYR 12–28" — where the rest of Kedaipal says RM\u00a012. They now read RM, or S$ for a Singapore store, and so does the deposit limit. On every plan.',
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open products" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Counter preorders show the day they're collected",
+				},
+				body: {
+					en: "Take an order at the counter for Saturday and the day you picked used to vanish — the order list and the order itself hid every counter date, on the guess that it was just today's default. Now only that default stays hidden. A day you chose shows on the order card and inside the order, like any storefront order. On every plan.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Bookings in your order list use booking words",
+				},
+				body: {
+					en: 'A guest who\'d checked in could read "Shipped" or "Ready for Pickup" in the order list, and a finished stay "Delivered" — your shop\'s wording, borrowed for a campsite. Each row now speaks its own: Checked In and Checked Out, or Active and Ended for a package. And on Pro, bulk-marking a mix of orders as Packed now leaves bookings alone, since a stay is never packed, and the toast says how many it skipped.',
+				},
+				// No link: a booking seller already works out of Orders, and a
+				// second "Open orders" straight under the counter note's reads as
+				// filler. The counter note keeps it — that seller lives on the
+				// counter screen, so the link actually takes them somewhere.
+			},
+		],
+	},
+	{
+		version: "2026.09.6",
+		date: "2026-09-20",
+		// Not notable, by the corpus's three triggers: nothing moved, no number
+		// a seller pays changes, and everything here is additive — a seller who
+		// reads nothing keeps exactly the behaviour they had yesterday. The
+		// counter-argument (put to Zaki in the release PR): a store WITH opening
+		// hours set will start seeing pickup times on self-collect orders
+		// without having asked, which is new information arriving unbidden —
+		// but it arrives labelled, on the order card, where it explains itself.
+		notable: false,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Say how long each product takes to make — and buyers book a time you can meet",
+				},
+				body: {
+					en: 'A cake that needs two hours shouldn\'t be collectable in fifteen minutes. Give any product a prep time and checkout does the maths: a buyer ordering for today is only offered times you can actually meet — and told why, "needs 2 hours to prepare", instead of a bare "unavailable" — while tomorrow\'s orders absorb the wait overnight. Self-collect orders now carry a pickup time inside your opening hours, so "when are they coming?" finally has an answer on the order. And the new pickup note — "side counter", "bring an ice bag" — travels the whole way: storefront, checkout, the WhatsApp confirmation and the buyer\'s order page. Counter sales skip all of it, because you\'re standing right there. On every plan.',
+				},
+				href: spotlightHref("prep_time"),
+				hrefLabel: { en: "Set a prep time" },
+				icon: "clock",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Open for breakfast, closed till dinner? Your hours can say so now",
+				},
+				body: {
+					en: "A day in your opening hours can now hold two windows — 7:30 to 10:00 for the breakfast crowd, then 5:00 to 9:00 for dinner. Buyers picking a delivery or collection time are held to both windows, and the stretch between them counts as properly closed instead of something your hours couldn't express. Days with one window carry on untouched. On every plan.",
+				},
+				href: spotlightHref("opening_hours"),
+				hrefLabel: { en: "Edit your hours" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Give your address a unit number, and keep the map pin",
+				},
+				body: {
+					en: "Riders and buyers were reaching the right block and phoning to ask which door. Your business address and every pickup point now take a unit line — floor, unit, building — typed once and printed everywhere the address already goes: checkout, the buyer's order page, delivery bookings, labels. It rides beside the map pick instead of replacing it, so the one-tap Waze button keeps working.",
+				},
+				href: spotlightHref("business_address"),
+				hrefLabel: { en: "Add your unit" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "The new-order alert tells you who and how much",
+				},
+				body: {
+					en: 'The pop-up used to read "New order ORD-XCVE" — an order id, and nothing you can triage on. It now leads with the buyer\'s name and the total, and tapping anywhere on it opens the order, not just the small button. The phone notification carries the same facts.',
+				},
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Importing your own export updates your products, not copies them",
+				},
+				body: {
+					en: 'Export your catalogue, fix a cell, import it back — the exact loop the import screen suggests. But a product without a SKU (every booking listing, for a start) came back marked "new", and confirming would have created a duplicate. The sheet\'s own handle column now does the matching, so your export always finds the products it came from. Hand-typed sheets still match by SKU, exactly as before.',
+				},
+				href: "/app/products/import",
+				hrefLabel: { en: "Open import" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "The orders table stopped shoving the whole page sideways",
+				},
+				body: {
+					en: "Switch on enough columns with the sidebar open and the entire dashboard could scroll sideways, carrying the Columns and Export buttons off the edge of the screen. The table now scrolls inside its own box and the page stays put.",
+				},
+			},
+		],
+	},
+	{
+		version: "2026.09.5",
+		date: "2026-09-15",
+		// Notable, and not a close call — on two counts now. (1) MONEY MOVES:
+		// the monthly order allowance drops on Pro and Scale and Scale's price
+		// rises, and both land on every existing paying seller with no
+		// grandfathering. A seller who reads nothing will meet the new number on
+		// an invoice, which is the worst place to meet it. (2) A DAILY JOB MOVES:
+		// tomorrow a seller opens the product editor and the stock box they have
+		// always typed into is gone. The in-editor helper line only reaches
+		// someone already looking at that row, and nothing at all would tell them
+		// the products list grew a Stock button or that importing a sheet no
+		// longer touches their counts.
+		notable: true,
+		entries: [
+			{
+				kind: "enhancement",
+				title: {
+					en: "New monthly order allowances, and a new price for Scale",
+				},
+				body: {
+					// currency-literal-ok: Kedaipal's OWN plan prices (MY + SG), not store money.
+					en: "Two changes to plans, and we would rather you heard them here than on an invoice. The monthly order allowance is now 200 on Pro and 400 on Scale. It was a soft line then — passing it showed in your usage and nothing more. From v2026.10.1 that allowance is a credit balance you can see and top up — your storefront still never closes and no buyer is ever turned away. See the credits note above. Scale moves to RM399 (S$149) from your next invoice; Starter and Pro keep their prices, and founding members keep their discount on the new numbers.",
+				},
+				href: spotlightHref("plan_change"),
+				hrefLabel: { en: "See your plan" },
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Nothing to pay until your first real order",
+				},
+				body: {
+					en: "A new store now starts free and stays free until it actually sells something. Your first live order starts the billing — whichever door it comes through: storefront, counter, claim link or booking. If a fortnight goes by without one, day 14 starts it instead. The first invoice arrives minutes later rather than in the same breath as the order, and you can still switch plan before you pay it.",
+				},
+				href: "/app/settings?tab=billing",
+				hrefLabel: { en: "Open billing" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Going quiet for the season? Pause instead of cancelling",
+				},
+				body: {
+					// currency-literal-ok: Kedaipal's OWN hold price (MY + SG), not store money.
+					en: "The durian's done, the school holidays are over, the night market shuts for a month — whatever your quiet season looks like, you can park your subscription at RM19 a month (S$9) instead of paying the full tier or cancelling and losing the lot. Products, orders and customers all stay exactly where you left them, and your storefront tells buyers you are on a break. Resume whenever. We say what a pause and a resume will bill before you tap either.",
+				},
+				href: spotlightHref("seasonal_hold"),
+				hrefLabel: { en: "Find the hold" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Subscribe yourself, and let it renew itself",
+				},
+				body: {
+					en: "Starting a subscription is now something you do in Settings — pick a plan, pay, done, with no message to us in the middle. Leave auto-renewal on and each month pays itself with the card or Touch 'n Go you set up; switch it off and you get a Pay-now link instead. A failed charge is retried and told to you, never quietly doubled.",
+				},
+				href: spotlightHref("auto_renewal"),
+				hrefLabel: { en: "Set up auto-renewal" },
+				icon: "wallet",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Change plan mid-month without losing what you paid",
+				},
+				body: {
+					en: "Moving up used to mean waiting for the month to turn. Now it takes whatever is left of the period you already paid for, converts it into days on the new plan, and shows you that sum before you confirm. Moving down is scheduled for the end of the period instead, so you keep what you bought until it runs out. Both say what it costs and when it happens.",
+				},
+				href: spotlightHref("plan_change"),
+				hrefLabel: { en: "Change your plan" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Insights stopped counting deposits as money you earned",
+				},
+				body: {
+					en: "A refundable security deposit is your customer's money right up until it isn't — but the revenue rows were adding it to your earnings, so every booking store's numbers read high. Deposits are now left out of the earned figures, and the page says so, instead of leaving you to wonder where the difference went.",
+				},
+				href: "/app/insights",
+				hrefLabel: { en: "Open Insights" },
+				icon: "chart",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "An order card names the deposit inside its total",
+				},
+				body: {
+					en: "A booking's total quietly included the refundable deposit, so the number on the card and the number you actually keep were two different things. The card now names the deposit inside the total — read a day's orders without doing the subtraction in your head.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: 'A small "Powered by Kedaipal" on your buyer pages',
+				},
+				body: {
+					en: "A quiet line on your storefront, your order pages and your printed labels. It sits below your own content, never above it, and nothing about your branding changes. It is a link, so when someone arrives through it and opens their own shop, we can see the introduction came from you.",
+				},
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Confirm buttons stopped hiding below the bottom of the screen",
+				},
+				body: {
+					en: "On a small phone a long dialog could push its own Cancel and confirm buttons off the bottom — a fine way to make a confirmation impossible. Dialogs now cap their height and scroll inside, so the buttons stay where your thumb is.",
+				},
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Stock has its own button now — and a save can't undo your sales",
+				},
+				body: {
+					en: "Tap Stock on any product to add what you made or take off what you sold, and the count updates on its own. Before, stock was a box in the product form: if you opened it, sold a few, then saved a small edit like a spelling fix, the old number went back and those sales came back with it. That can't happen any more.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open products" },
+				icon: "package",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Importing a sheet won't overwrite your stock unless you say so",
+				},
+				body: {
+					en: "A sheet you exported this morning holds this morning's counts, so importing it in the afternoon used to undo everything sold in between. Now stock is left alone unless you tick \"Update stock too\" — and when you do, we tell you how many counts it replaces and how many would go up, so a stock take still works and a price change can't cost you sales.",
+				},
+				href: "/app/products/import",
+				hrefLabel: { en: "Open import" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "A cancelled order stays cancelled",
+				},
+				body: {
+					en: "Marking a cancelled order as confirmed again used to hand its stock back a second time, so your counts could drift above what you actually had — and then the shop would keep taking orders for items you'd run out of. Cancelled orders can no longer be reopened; start a new order instead.",
+				},
+			},
+		],
+	},
+	{
+		version: "2026.09.4",
+		date: "2026-09-08",
+		// The modal, by owner call (Zaki, 8 Sep): the weekend rate was asked for
+		// by the booking anchor seller, and a feature someone asked for should
+		// greet them on their next open rather than wait behind a dot. The
+		// entry's deep link makes the interruption worth it — one tap lands on
+		// the card, ringed. The two fixes ride along.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Charge more for Friday and Saturday nights (at last)",
+				},
+				body: {
+					en: "Campsites, chalets, homestays: the weekend is worth more, and your listing could only say one price. A stay listing now takes a second per-night rate, and you pick the nights it covers — Friday and Saturday by default, Thursday too if that's your crowd. It's the night you sleep that counts, so Sunday night into Monday morning is still a Sunday. Guests see both rates before they pick dates, the pricier nights wear a dot on the calendar, and the receipt itemises weekday nights and weekend nights on their own lines so nobody has to squint at the total — your order shows the same split, nights named. Packages sit this one out: a package is one flat price, and the form says so in the rate's place. On every plan.",
+				},
+				href: spotlightHref("weekend_rate"),
+				hrefLabel: { en: "Set a weekend rate" },
+				icon: "calendar",
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "A stay is not a parcel, and the app has stopped insisting",
+				},
+				body: {
+					en: 'A few corners still treated a booking like a box: a Shipment tracking card on the order, "Delivery on 17 Sep" sitting under a card that already said Check-in, a little truck beside "Checked in", and the immortal "2 night(s)". All gone, on your order page and on the guest\'s tracking page alike. Riders, couriers and tracking numbers still turn up exactly where an actual parcel is involved.',
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "A two-night package stays a two-night package",
+				},
+				body: {
+					en: "Reopen a package listing sold in nights and it would greet you as months — and saving would make that true. The unit you chose is now the unit you get back. While we were in there: the deposit line in the listing wizard speaks your store's currency, instead of insisting on RM to Singapore sellers.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open products" },
+			},
+		],
+	},
+	{
+		version: "2026.09.3",
+		date: "2026-09-07",
+		// Earns the modal on two counts. (1) Things MOVED: Lalamove keys and the
+		// HitPay card left the tabs sellers learned them in for a new
+		// Integrations tab — the textbook "wait, where did that go?" moment, and
+		// a seller hunting Settings for their payment gateway is exactly who the
+		// modal exists for. (2) A NUMBER CAN MOVE for buyers: a store with both
+		// riders and Delyva armed now charges the higher of the two quotes at
+		// checkout, and a seller who can't explain their own delivery fee to a
+		// customer loses more trust than one modal costs.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Meet Delyva: nationwide couriers and cold chain, booked from the order",
+				},
+				body: {
+					en: "Riders are brilliant across town and a bit hopeless with a frozen box bound for Kuching. So: connect your Delyva account with one key (yes, one — we fetch the rest ourselves), set a pickup address and a default parcel type, and every confirmed delivery order grows a courier picker. Check the weight, see real prices with the cheapest already ticked, tap to book. The tracking number finds its way to the buyer's order page on its own. Riders and couriers can both be on at once — you pick per order. Delyva is on Pro, like rider booking.",
+				},
+				href: spotlightHref("delyva"),
+				hrefLabel: { en: "Connect Delyva" },
+				icon: "truck",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Your connected accounts moved into one tab (don't panic)",
+				},
+				body: {
+					en: "Lalamove keys used to hide inside the delivery-charge settings and HitPay lived under Payments, which made sense to exactly nobody. Lalamove, Delyva and HitPay now share a Settings → Integrations tab: keys, webhooks, which account is connected, the lot. Fulfilment keeps the behaviour — what you charge, plus a Courier booking section with one toggle per provider. Nothing was disconnected; it simply has a proper home.",
+				},
+				href: "/app/settings?tab=integrations",
+				hrefLabel: { en: "Open Integrations" },
+				icon: "settings",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Live courier pricing now asks every courier you've switched on",
+				},
+				body: {
+					en: "With riders and Delyva both on, checkout used to ask only Lalamove for a price — then you'd book Delyva at a different one and quietly eat the gap. Now every provider you've connected bids, and the buyer pays the higher quote, so whichever one you book, the fee covers it. Book the cheaper one and the difference is yours; the dispatch card shows \"buyer paid\" next to every price so it's an informed choice. With one provider on, nothing changes. Chilled or frozen carts only ask Delyva, because a rider is not a fridge. Under Delivery charges, on Pro.",
+				},
+				href: spotlightHref("delivery_charge"),
+				hrefLabel: { en: "Check your delivery charge" },
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Singapore stores: riders, at last",
+				},
+				body: {
+					en: "If your store is in Singapore, Lalamove rider booking is now yours too — and in a city that is also the country, a rider covers pretty much every address. Paste your Singapore Lalamove keys under Integrations, switch on Courier booking under Fulfilment, and book from any confirmed delivery order. Live courier pricing works there as well. One heads-up: Lalamove keys belong to one market, so if you ever switch your store's country you'll need a fresh pair.",
+				},
+				href: spotlightHref("lalamove"),
+				hrefLabel: { en: "Add your Lalamove keys" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Pay for a year, get two months on the house",
+				},
+				body: {
+					en: "Pro sellers with a couple of paid invoices behind them will find an annual option in Settings → Billing: pay for ten months, get twelve. One bank transfer instead of twelve reminders from us — which, frankly, we like too. Tap the card and the WhatsApp message is already written. Got a monthly invoice open? We'll swap it for the annual one before you pay, unless it's due within a few days, in which case settle that one and we'll switch you at the next renewal. Change your mind later and the unused months are credited to your next plan or invoice, never lost.",
+				},
+				href: spotlightHref("annual_billing"),
+				hrefLabel: { en: "See the annual offer" },
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Put your registered business on your invoices",
+				},
+				body: {
+					en: "A corporate customer's finance team wants a registered name and an SSM number on paper, not just your store name. Fill in Business details under Settings → Store — legal name, SSM or UEN, billing address, tax number, a billing contact — and it prints in the From block of every invoice and receipt you issue. Every field is optional. It appears only on those PDFs: your storefront never shows it, and it is nothing to do with the pickup address you use for delivery pricing, which stays private.",
+				},
+				href: spotlightHref("business_details"),
+				hrefLabel: { en: "Add business details" },
+				icon: "printer",
+			},
+			{
+				kind: "fix",
+				title: {
+					en: 'The button finally says "invoice" when it means invoice',
+				},
+				body: {
+					en: "An unpaid order's PDF has always been an invoice — the download button just insisted on calling it a receipt. It now reads Download invoice until the order is paid, then Download receipt, on your order page, the counter screen and the buyer's tracking page alike. So a customer whose company pays for them can forward the right document without a raised eyebrow.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "A proper receipt once you've paid us",
+				},
+				body: {
+					en: 'Your paid subscription invoices used to keep saying "Total due" forever, which is an awkward thing to hand an accountant. Every paid invoice in Settings → Billing now has a second download: a receipt with the date, the method and the amount paid — and no payment instructions. The original invoice stays exactly as it was, right beside it, so your records still match ours.',
+				},
+				href: spotlightHref("invoice_history"),
+				hrefLabel: { en: "Download a receipt" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Wrong-country phone numbers now explain themselves",
+				},
+				body: {
+					en: 'Type a +65 number into a Malaysian store (or a +60 into a Singapore one) and you used to get a flat "enter a valid mobile number". It now says what it saw — "that looks like a Singapore mobile number" — and in your Settings it points you to the Store tab, where your country lives. Singapore stores also stop hearing about DuitNow: the home checklist and the payment placeholders speak PayNow now.',
+				},
+				href: spotlightHref("store_country"),
+				hrefLabel: { en: "Check your store country" },
+			},
+		],
+	},
+	{
+		version: "2026.09.2",
+		date: "2026-09-02",
+		// Earns the modal even though 2026.09.1 shipped the day before —
+		// considered, not overlooked. Two things here are invisible otherwise: a
+		// NUMBER MOVES (an order that arrives confirmed leaves the "Confirmed"
+		// count and lands on a new "Not yet opened" row), and a seller who reads
+		// that count every morning and gets no explanation stops trusting the
+		// inbox; and "pinned only" is the THIRD position of a chip nobody taps
+		// twice on spec. Reach is barely the argument either way — `autoOpen`
+		// fires on ANY unseen notable release, so a seller who missed 2026.09.1
+		// already gets one modal carrying both. The cost falls only on sellers
+		// who opened yesterday, and an unexplained count is worse than a tap.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "See who's with you right now",
+				},
+				body: {
+					en: "Three new chips for stays and packages: Active now, Ending this week, Upcoming. A member three weeks into their month used to sit buried below next week's arrivals, because a booking lists under the day it starts — tap Active now and you get everyone currently on your books. Bookings also show where they are in their span (\"Active · 4 days left\"), on the order and on the customer's card. On every plan, like the rest of bookings.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+				icon: "calendar",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Your status chips and the Filters panel are one control now",
+				},
+				body: {
+					en: 'They were two separate filters sharing one name: you could tick every status under "In progress" in the Filters panel and watch the "In progress" chip stay dark. They are one control now — tap a chip and the panel shows it, and back again. The panel lists each status under the chip that counts it, so a stage you renamed yourself is easy to place. Two chips together now mean either, not both, so "In progress" plus "Active now" no longer gives you an empty list. Filtering is part of the Order Inbox, on Pro.',
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Tap Pinned again for a list of just your pinned orders",
+				},
+				body: {
+					en: 'The Pinned chip has three positions now: pinned first, pinned only, then off. "Only" is the shortlist — the handful of orders you are keeping an eye on and nothing else, still narrowed by whatever else you have set. Pins show on cards at last, not only in the table: a filled pin by the customer\'s name and a tinted edge, so "why is this one at the top?" has an answer on a phone. It is a marker there — pin and unpin from the order itself or a table row. On every plan, all three positions.',
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Orders that arrive already confirmed are counted where they belong",
+				},
+				body: {
+					en: 'An order placed straight from your storefront arrives confirmed and counted towards New — but no status you could tick would find it, so your chips and your Filters panel disagreed about the numbers. It has its own status now, "Not yet opened", which you can see and filter for. Expect your Confirmed count — or whatever you renamed it to — to read a little lower, with the difference on that new row. Nothing moved; it is counted in the right place. "Awaiting approval" is filterable at last too.',
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "An empty list now tells you why, and how to get back",
+				},
+				body: {
+					en: "Filter down to nothing and you used to get a blank box. In Table view the message was there all along, just rendered far off to the right of the screen where nobody would ever see it. It sits where you are looking now, names the filter that emptied the list, and carries the button that undoes it — including when the pin was the culprit, which is easy to land on by accident now that the chip cycles.",
+				},
+				href: "/app/orders?view=table",
+				hrefLabel: { en: "Open the table" },
+				icon: "table",
+			},
+		],
+	},
+	{
+		version: "2026.09.1",
+		date: "2026-09-01",
+		// Earns the modal: a whole new way of selling — date-range bookings with
+		// approval, deposits, packages and a calendar — plus one change that
+		// touches EVERY seller (a cancellation now carries a reason to the
+		// buyer). A booking-capable seller who reads nothing keeps turning stays
+		// away in chat by hand; that is the exact workflow this release replaces.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Take bookings — guests pick dates, you approve or decline",
+				},
+				body: {
+					en: "If you rent out plots, rooms, gear or your time, create a booking listing: guests pick check-in and check-out on a calendar that already hides full or closed nights, and send you a request — nothing is charged and no dates are promised until you approve. Approving sends the usual confirmation with the payment link; declining asks you for a reason, which the guest sees word for word. A request you don't answer releases its dates on its own after 24 hours, and the order page counts that clock down for you.",
+				},
+				href: "/app/products/new",
+				hrefLabel: { en: "Create a booking listing" },
+				icon: "calendar",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "A month calendar for your stays — and two taps to close dates",
+				},
+				body: {
+					en: 'Once you have a booking listing, the top of your orders page gains a Calendar view: a month grid showing how many spots are taken each night, with a tap on any day listing that night\'s stays. Tap "Block days…" and then a start and an end to close a range — the whole store or one listing, with a note for yourself. Blocking only stops new requests; any stay already on those dates stays exactly where it is.',
+				},
+				href: "/app/orders/calendar",
+				hrefLabel: { en: "Open the calendar" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Collect a refundable security deposit in the same payment",
+				},
+				body: {
+					en: "Set a deposit on a booking listing and it is stated on the listing page before anyone requests, carried as its own line on every total and receipt, and collected together with the stay in the one payment at approval. After check-out, the order page reminds you to return it — mark it returned in full, or keep part of it with a reason the guest sees. Deposits are held money, so they never count towards your revenue in Insights or a customer's spend.",
+				},
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Fixed-length packages and instant book",
+				},
+				body: {
+					en: "Selling a one-month pass or a fixed 3-day package instead of an open-ended stay? Give a booking listing a package length and one flat price — the guest just picks a start date. Turn on Instant book and the approval step disappears: the booking confirms the moment it's placed, with the confirmation sent straight away. Capacity is now optional too — leave it empty and there's no daily limit at all.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open your listings" },
+				icon: "package",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "See it all in Google Calendar",
+				},
+				body: {
+					en: "Stores with a booking listing get a new Bookings section in Settings, holding a private calendar link. Paste it into Google Calendar (Other calendars → From URL) and your stays, your blocked dates — and every other order you have due, deliveries and pickups included, with their times — appear alongside the rest of your life. Google refreshes it on its own schedule, usually within a day; your Kedaipal calendar is always live. The link is a secret — you can replace it any time if it leaks.",
+				},
+				href: "/app/settings?tab=bookings",
+				hrefLabel: { en: "Connect Google Calendar" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Cancelling an order now tells the buyer why",
+				},
+				body: {
+					en: "The cancel dialog asks for a reason and shows it on the buyer's order page, so nobody is left staring at a bare \"cancelled\". It's optional for everyday orders and required when you decline or cancel a booking — someone planned a trip around those dates. Cancelling several orders at once asks once and applies your reason to all of them. The reason is always visible to the buyer, so write it for them.",
+				},
+			},
+		],
+	},
+	{
+		version: "2026.08.3",
+		date: "2026-08-31",
+		// Earns the modal: the table shipped in 2026.08.2 is the surface a seller
+		// now works in daily, and this release changes how they FILTER it — the
+		// funnels moved onto the column headers, the chips went multi-select, and
+		// search reaches columns it never used to. A seller who reads nothing
+		// keeps using the one filter path they already found and never learns the
+		// table has become the faster one.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Filter straight from any column heading",
+				},
+				body: {
+					en: "In Table view, tap the funnel on a heading — Status, Payment, Order type, Categories, where the order came from — and tick as many values as you want. Filters stack across columns, the heading shows a dot while one is on, and the URL carries them, so the exact view you built is a link you can bookmark or send. Your export follows the same filters, so what you download is what you were looking at. Filtering and searching your orders is part of the Order Inbox, so the table and its funnels are on Pro.",
+				},
+				href: "/app/orders?view=table",
+				hrefLabel: { en: "Open the table" },
+				icon: "table",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Look at more than one status at a time",
+				},
+				body: {
+					en: 'The chips above your orders used to be one-at-a-time. Tap several now — "Completed" and "Cancelled" together to see everything closed, or "New" and "Paid" to see what needs packing. "All" is still there to clear them in one tap. Every count stays on its own chip so you can see the shape of your week before you tap anything — the counts are there on every plan, filtering by them is on Pro.',
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Search now looks in every column, not just four",
+				},
+				body: {
+					en: "Search used to read the order number, customer name, phone and item names, and nothing else — so a tracking number, a payment reference, a street name or a pickup outlet found nothing. It now reads every column the table can show, including the categories an order's items were filed under. Phone numbers still match on the last digits, so 123456789 finds +60123456789 however it was saved. Search is part of the Order Inbox, on Pro.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Try a search" },
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Make the table yours — drag, resize, and tick columns in bulk",
+				},
+				body: {
+					en: "Drag a heading sideways to move that column, or drag its edge to set the width — both are remembered per store on this device, so your layout is waiting for you next time. The Columns panel now has select-all for the whole list and for each group, so setting up a packing view is a couple of taps instead of thirty-six. On a computer the heading row stays put while the rows scroll under it.",
+				},
+				href: "/app/orders?view=table",
+				hrefLabel: { en: "Set up your columns" },
+				icon: "table",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Every cell reads like words, not like a database",
+				},
+				body: {
+					en: 'Your orders showed raw values in places — "self_collect", "received", "payment_window_expired". They now read as Self-collect, Paid and Payment window expired, and the filters offer exactly the same wording as the column beside them. Your CSV export is deliberately unchanged: it still carries the stored values, so any spreadsheet formula you have built on it keeps working.',
+				},
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Categories are recorded at the moment of sale",
+				},
+				body: {
+					en: "An order now remembers which categories its items were filed under when it was sold, instead of looking them up fresh every time. Reorganise your catalogue and last month's orders keep telling the truth about last month — and you can search and filter your orders by category, which was never possible before.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open orders" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Long status labels no longer break in half",
+				},
+				body: {
+					en: '"Ready for Pickup" and longer custom stage names used to wrap mid-phrase in a narrow space, splitting the coloured pill into two ragged pieces on cards, in the table and on the order page. A status is one pill now — it shortens with a "…" when it has to, and the full wording is there when you hover.',
+				},
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Re-uploading your product export can't bring back an archived product",
+				},
+				body: {
+					en: "The export carries a product_status column. Uploading that file back used to ignore it, so an archived product quietly returned to your catalogue. The upload now reads it, the same way it already read variant_status — a round-trip leaves your catalogue exactly as it was.",
+				},
+				href: "/app/products/import",
+				hrefLabel: { en: "Open product upload" },
+			},
+		],
+	},
+	{
 		version: "2026.08.2",
 		date: "2026-08-28",
 		// Earns the modal: the orders page a seller opens every morning now has a
@@ -124,6 +1323,7 @@ export const RELEASES: Release[] = [
 		notable: true,
 		entries: [
 			{
+				kind: "feature",
 				title: {
 					en: "Your orders as a table — the spreadsheet view, without leaving Kedaipal",
 				},
@@ -135,16 +1335,18 @@ export const RELEASES: Release[] = [
 				icon: "table",
 			},
 			{
+				kind: "feature",
 				title: {
 					en: "Pin the orders you need to keep an eye on",
 				},
 				body: {
-					en: "Tap the pin on any order — on a card, a table row, or the order itself — and it stays at the top of your list. It stays there even when your filters would otherwise hide it, so you can park a problem order on top and carry on working through everything else. Nothing ever unpins itself, not even once the order is delivered: that stays your call, and the Pinned chip tells you how many you're holding.",
+					en: "Tap the pin on an order — on a table row or the order itself — and it stays at the top of your list. It stays there even when your filters would otherwise hide it, so you can park a problem order on top and carry on working through everything else. Nothing ever unpins itself, not even once the order is delivered: that stays your call, and the Pinned chip tells you how many you're holding.",
 				},
 				href: "/app/orders",
 				hrefLabel: { en: "Open orders" },
 			},
 			{
+				kind: "enhancement",
 				title: {
 					en: "See a photo of every item while you pack",
 				},
@@ -156,6 +1358,7 @@ export const RELEASES: Release[] = [
 				icon: "package",
 			},
 			{
+				kind: "fix",
 				title: {
 					en: "Your order export finally has the address — and the totals add up",
 				},
@@ -166,6 +1369,7 @@ export const RELEASES: Release[] = [
 				hrefLabel: { en: "Open orders" },
 			},
 			{
+				kind: "enhancement",
 				title: {
 					en: "Your product export is a full catalogue report now",
 				},
@@ -198,6 +1402,7 @@ export const RELEASES: Release[] = [
 		notable: true,
 		entries: [
 			{
+				kind: "enhancement",
 				title: {
 					en: "Your customer gets one WhatsApp — everything else is on their order page",
 				},
@@ -207,6 +1412,7 @@ export const RELEASES: Release[] = [
 				icon: "package",
 			},
 			{
+				kind: "enhancement",
 				title: {
 					en: "Cancelling an order no longer messages the customer",
 				},
@@ -215,6 +1421,7 @@ export const RELEASES: Release[] = [
 				},
 			},
 			{
+				kind: "enhancement",
 				title: {
 					en: "Payment reminders are yours to send now",
 				},
@@ -226,6 +1433,7 @@ export const RELEASES: Release[] = [
 				icon: "megaphone",
 			},
 			{
+				kind: "feature",
 				title: {
 					en: "Get a WhatsApp the moment an online payment lands",
 				},
@@ -237,6 +1445,7 @@ export const RELEASES: Release[] = [
 				icon: "wallet",
 			},
 			{
+				kind: "feature",
 				title: {
 					en: "Send the rest of checkout to your buyer — built for live selling",
 				},
@@ -248,6 +1457,7 @@ export const RELEASES: Release[] = [
 				icon: "clock",
 			},
 			{
+				kind: "feature",
 				title: {
 					en: "Change a price on the spot at the counter",
 				},
@@ -258,6 +1468,7 @@ export const RELEASES: Release[] = [
 				hrefLabel: { en: "Open counter checkout" },
 			},
 			{
+				kind: "feature",
 				title: {
 					en: "See which orders came from TikTok, your bio link, or your poster",
 				},
@@ -269,6 +1480,7 @@ export const RELEASES: Release[] = [
 				icon: "chart",
 			},
 			{
+				kind: "enhancement",
 				title: {
 					en: "Your storefront loads much faster on a phone",
 				},
@@ -279,6 +1491,7 @@ export const RELEASES: Release[] = [
 				hrefLabel: { en: "Check your photos" },
 			},
 			{
+				kind: "fix",
 				title: {
 					en: "Moving your store to Singapore is guided, not blocked",
 				},
@@ -290,6 +1503,7 @@ export const RELEASES: Release[] = [
 				icon: "settings",
 			},
 			{
+				kind: "feature",
 				title: {
 					en: "Find your version — and this list — in the same place",
 				},
@@ -298,6 +1512,7 @@ export const RELEASES: Release[] = [
 				},
 			},
 			{
+				kind: "fix",
 				title: {
 					en: "Your customers' payment screenshots stay in your dashboard",
 				},

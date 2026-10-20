@@ -50,7 +50,7 @@ function Harness({
 				setState(next);
 				onState(next);
 			}}
-			currency="RM"
+			currency="MYR"
 		/>
 	);
 }

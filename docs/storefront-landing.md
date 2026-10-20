@@ -1,4 +1,4 @@
-# Storefront — landing merchandising (buyer redesign PR3)
+# Storefront — landing merchandising (buyer redesign PR3 + UI polish v2 T1–T2)
 
 **Status: implemented.** The store home's lead is merchandised: category
 **image tiles** shrink into a scrollable rail, a data-driven **"Popular this
@@ -8,6 +8,168 @@ storefront buyer redesign (ClickUp `86eybrhrt`, direction B "Market Page"
 locked 20 Jul 2026). Buyer-facing, all-tier. Follows
 [`storefront-checkout-page.md`](./storefront-checkout-page.md) (PR1) and
 [`storefront-product-pages.md`](./storefront-product-pages.md) (PR2).
+
+## Island store card over the cover (ClickUp `z8r3fdvwcy`, 20 Oct 2026)
+
+T1 of the island storefront (parent `z8r3fdvmxw`; mockups: the
+[Island storefront canvas](https://claude.ai/artifact/6YcjMwf5SuSYGb8jVJnbwm),
+boards *Main*, *Storefront-NoCover*, *Storefront-Desktop*). It replaces the
+"hero trimmed and re-tinted" cover below, which painted the identity ON the
+photo under a navy scrim. T2 (`z8r3fdvwcz`, the compact scrolled bar and the
+search hand-over) is separate; this task leaves the page's scroll behaviour,
+the grid's sticky search and the cart pill untouched.
+
+**Anatomy** (`storefront-header.tsx`, static markup — SSR paints all of it):
+
+- **Cover band**: 224px on a phone, 280px from `lg`, photo only under a light
+  scrim (heavier at the top where the icons sit, near-clear through the
+  middle, a touch at the base). The cover `AppImage` keeps `priority` and
+  `sizes="100vw"`, so the route's `<link rel="preload">` still names the
+  same LCP candidate. **No cover**: a soft mint band (`from-accent/15 to-accent/5`)
+  with a faint dot grid, 176px / 224px — shorter than a photo band, since an
+  empty band has nothing to show (the NoCover board's height, not the
+  photo's).
+- **Island**: overlaps the band by 72px (88px `lg`), inset 16px (32px `lg`),
+  `rounded-3xl`, the soft navy lift + hairline ring from
+  [`design-system.md` → Islands](./design-system.md#islands--the-storefronts-floating-surfaces-2026-10-20-clickup-z8r3fdvwcy).
+  Inside: the **64px logo/initials tile** (84px `lg`; `StoreLogoTile`
+  `size="hero"` — navy initials with a card-coloured border now that it sits
+  on the card, never on the photo), the **`h1`** (`font-heading`, 22px →
+  32px, wraps, never truncates) with the **founding badge** beside it (the
+  existing emblem-with-popover, not a text chip — one badge component across
+  the hero and the app bar), and the **blurb** clamped to two lines. No
+  blurb → no row; the identity row is `items-center` so a name alone sits
+  against the tile rather than floating at its top edge.
+- **Facts block**, ruled off above (a left rule beside the identity from
+  `lg`): the **hours row** (`OpeningHoursLine variant="island"` — 8px status
+  dot, the lead word in mint/muted, the rest in the foreground, a chevron;
+  tap opens the weekly schedule), the **closed-dates heads-up** as its own
+  amber line when `closureHeadsUp` has one AND the status row is already
+  taken (a 24/7 store with only a closure ahead shows the closure AS the
+  hours row, once), and **"Delivery & pickup · <area>"** from the enabled
+  fulfilment methods (`fulfilmentLabel`: `offerDelivery` absent = on,
+  `offerSelfCollect` absent = off; "Delivery" / "Pickup" / neither → no
+  line) with the marketplace card's `storeArea` after it. No hours, no
+  closure → only the fulfilment line; nothing at all → no block, no rule.
+  `storeArea` joined the public `getRetailerBySlug` payload for this (it
+  already printed on the `/stores` card).
+- **Actions**: on a phone, **two 44px icon circles at the cover's top-right**
+  — WhatsApp then Share, frosted on a photo, outline on the mint band,
+  `lg:hidden`. From `lg`, the **labelled row inside the island** (`Share
+  store` / `Ask on WhatsApp`, 44px outline pills, `hidden lg:flex`), and the
+  cover carries no buttons. `flex-wrap` on the island drops the row under
+  the identity when the facts column needs the width. Share is the existing
+  `shareLink` (OS share sheet, clipboard fallback) and needs the `slug`.
+  Neither action → no empty strip, no empty row.
+
+**Ask on WhatsApp** — `buildStoreChatLink(retailer, locale)` in
+`src/lib/store-chat.ts` is the ONE author: a `wa.me/<waPhone>?text=…` link
+(`target="_blank" rel="noopener"`) whose prefill names the store in the
+STORE's locale (paraglide `storefront_chat_prefill`: EN "Hi <store>, I'm
+looking at your Kedaipal store and have a question." / MS "Hai <store>, saya
+sedang lihat kedai Kedaipal anda dan ada soalan." / ZH), URL-encoded. The
+helper returns `null` — and the action is not rendered, on either surface —
+when the store has no `waPhone` (already on the public payload; no new
+field) or when the owner switched it off. Share is never affected.
+Buyer-initiated, so it never touches `wabaProtection` or `sendingPaused`;
+it stays live on an Off-Season Hold (asking "when do you reopen" is the
+point).
+
+**The seller's switch** — Settings → Store, beside the marketplace listing
+(`storefront-chat-card.tsx`): "Let buyers message you from your store page"
++ "Shows an Ask on WhatsApp button on your store. Orders still arrive the
+same way with it off." Saves on flip, **on by default, owner-only** (a
+teammate and an acting admin see it disabled with the reason). The status
+line tells the truth, not the switch: ON with no WhatsApp number is "not
+shown yet" with a link to the WhatsApp tab; the glance chip reads On / Off
+/ No number. Storage follows the marketplace opt-out shape:
+`retailers.storefrontChatDisabledAt` (absent = on, no backfill, "since when"
+for free, a re-save keeps the first stamp), derived as
+`storefrontChatEnabled` on BOTH reads (owner + by-slug), written by
+`retailers.setStorefrontChat({ retailerId, enabled })` under
+`requireRetailerAccess(…, { ownerOnly: true })` and the view-only lock like
+every settings write; the credit gate never touches it (`retailers` is a
+way-back module in `creditLockCoverage.test.ts`).
+
+**Tests**: `storefront-header.test.tsx` (island with/without cover, frosted
+vs outline icons, the LCP image stays eager, no blurb → no row, cover icons
+labelled and `lg:hidden`, the labelled row inside the island and `hidden
+lg:flex`, link shape + locale + new tab, Share from either surface, no slug
+→ no Share, switch off → no chat on either surface while Share stays, no
+number → same, neither action → no empty strip, the facts block in every
+combination, the heads-up line only beside a status row),
+`store-chat.test.ts` (link shape, MY/SG numbers, EN/MS/ZH prefill,
+encoding of `&` and an emoji, null on no number / switched off),
+`convex/retailers.test.ts` (flag derivation on both reads, the first stamp
+survives a re-save, owner-only: a `store_settings`-write teammate is refused
+in the gate's words, a stranger is forbidden, neither refusal changes the
+row), `storefront-chat-card.test.tsx` (on/off/no-number lines and glance,
+flip saves and toasts, teammate and acting-admin disabled-with-reason, a
+refused save reads as a sentence and re-enables the switch).
+
+## UI polish v2 — T1+T2 (ClickUp `z8r3fdegb5`, Arif's 12 Sep review)
+
+The first two tranches of Arif's storefront polish (design:
+`claude.ai/artifact/3Pp7fQmtoj9fMYNcnBugCE`; T3 category page and T4 product
+page follow separately):
+
+- **The cover hero renders ONLY on the store home.** Category, product and
+  checkout pages carry the compact **`StorefrontAppBar`**
+  (`storefront-app-bar.tsx`): 44px back (the bar OWNS back — the "← All
+  products" text links are gone), 32px logo/initials tile, store name +
+  founding badge (18px) + the live hours line, and a 44px share icon for the
+  page's canonical URL (`shareLink` in `src/lib/share.ts` — OS share sheet,
+  clipboard fallback; one author with the product page's Copy-link chip). Not
+  sticky, deliberately: T3's category search/chips bar sticks to `top-0`.
+- **Hero trimmed and re-tinted** _(superseded by the island card above,
+  `z8r3fdvwcy`)_: scrim `from-black/80…` →
+  `from-primary/90 via-primary/45 to-primary/15`; logo 64 → 56px
+  `rounded-[18px]` with an **initials tile** fallback (`storeInitials` —
+  a hole where the brand should be reads as broken); the Kedaipal mark left
+  the hero (the footer owns "Powered by"); the badge sits BESIDE the name,
+  label-free (its popover carries the meaning); the hours line became a
+  **pill with a live open/closed dot**. The identity block is
+  `items-center` with a `gap-2` stack — the mock's ~6px rhythm read cramped
+  (Zaki, 28 Sep), so the hero runs `min-h-[10.5rem]` (spec said 9.5rem) with
+  the roomier gaps; deviation flagged to Arif. Desktop adds a **"Share
+  store"** chip (top-right, `lg:` only — mobile heroes stay clean; subpages
+  share via the app bar).
+- **Founding badge is a button** (`founding-member-badge.tsx`): tap (mobile)
+  / hover (desktop, `pointerType === "mouse"` so touch's synthetic
+  mouseenter can't fight the tap toggle) opens a Popover — "Founding Member
+  #N / One of Kedaipal's first sellers. This badge is issued by Kedaipal,
+  not self-declared." Sizes: 28px hero, 18px app bar.
+- **Cart bar → floating pill** (`cart-bar.tsx`): navy `h-14 rounded-full`
+  capsule inset 16px (bottom-right on desktop) — count badge (caps at 99+),
+  "N items / RM total", mint Checkout. **Renders nothing while the cart is
+  empty** (chrome saying "Empty" taught nothing); appears with the first
+  add. Ordering paused keeps the pill (cart persists) with checkout
+  disabled-with-reason. In dark the accent-on-primary pair would be
+  mint-on-mint, so the badge + CTA flip to `dark:bg-background`. Pages
+  reserve `pb-28` (≥96px) so the pill never sits on the footer.
+- **Section headings** (`section-heading.tsx`): the three 11px all-caps
+  eyebrows ("Browse by category" / "Popular this week" / "ALL PRODUCTS")
+  became real `<h2>`s — `font-heading text-[15px] font-extrabold` — with a
+  right-aligned context fact ("Most ordered, last 7 days", "23 items").
+  One component, three call sites, so they can't drift.
+- **Card CTA is one full-width pill in every state** (Arif's 12 Sep
+  supersede): `+ Add` (mint) / `Options`·`Book` (outline, icon) / `Notify`
+  (outline, disabled, "Coming soon" — ships ahead of the notify feature) /
+  the **−/n/+ stepper** once `cartQuantity > 0` (mint, `justify-between`,
+  count tabular; − is `useCart.quickRemoveProduct`, which drops the whole
+  line when a decrement would fall below the product's minimum — symmetric
+  with quick-add's min top-up, and the card has no room to explain a
+  shortfall). **When that tap will clear the line, the − says so**
+  ("Remove Kuih Lapis from cart — minimum order is 4", as both
+  `aria-label` and `title`): on a min-order product this is the DEFAULT
+  state, since quick-add opens the line AT the minimum, and a minus glyph
+  labelled "Remove one" that silently wipes four units is the button lying
+  about its own consequence (PR #308 review). `+` disables at the
+  hard-block stock / event-seat cap, so an enabled + always adds. The
+  disabled `Notify` carries its "coming soon" promise in the accessible
+  name as well as the wrapper's `title`, which only ever reaches a mouse. Price sits on its own `whitespace-nowrap` line
+  (RM 9,999.99 stays whole). Photo inset `p-1.5` in an 18px-radius card;
+  out-of-stock photos go `grayscale opacity-60` under a muted badge.
 
 ## Category rail — small image tiles, in a carousel
 
@@ -20,9 +182,16 @@ full-size rail with text chips, because tiles at `h-[9.5rem] w-[15rem]`
 dominated the fold on a ≤3-category store and pushed the products — the
 actual inventory — below it. Zaki's call (31 Jul) was that losing the
 photography went too far: for a food seller the picture *is* the menu. So the
-tiles came back at `h-24 w-36` (`lg:h-28 lg:w-44`) — roughly a third of the
-old area — which keeps the images without burying the grid. Tile images had
-never left the data or the dashboard; this puts them back on the storefront.
+tiles came back at roughly a third of the old area, which keeps the images
+without burying the grid. Tile images had never left the data or the
+dashboard; this puts them back on the storefront. The polish pass
+(`z8r3fdegb5`) tightened mobile tiles to `124×84` `rounded-[14px]` and made
+desktop a **4-column grid** of `h-[120px]` tiles under the search bar
+(Arif's desktop-home-v2: a wide screen shows every door at once instead of
+hiding them in a scroller) — ONE list, CSS-switched at `lg`, because a
+second DOM tree would double-fetch every tile image. The count moved from a
+top-right pill INTO the label block ("N items" under the name): it's a fact
+about the name, not a badge on the photo.
 
 - Tiles are **links to the existing category pages**, not client-side
   filters: `/c/{slug}` keeps its SSR/SEO and shareable deep links (the
@@ -32,9 +201,9 @@ never left the data or the dashboard; this puts them back on the storefront.
   with the current tile ringed, for lateral hops (kuih → cakes); that was cut
   (Zaki, 31 Jul). Inside a category the page already names it (h1 + blurb)
   and the only job left is browsing what's in it, so a row of siblings just
-  competes with the products it sits on top of. "← All products" is the way
-  back out. No "All" tile either, for the same reason — that link already
-  exists.
+  competes with the products it sits on top of. The app bar's back is the
+  way out (T3 of `z8r3fdegb5` adds sibling CHIPS to that page instead). No
+  "All" tile either, for the same reason — that link already exists.
 - **Scrim is heavier than the old rail's** (`from-primary/90 via-primary/30`).
   These tiles are a third the area with 13px names, and a seller's photo can
   be pale — a white-iced cake on marble left white-on-light. The top of the
@@ -131,26 +300,29 @@ of their old size the products are the page, and the design call was tiles
 ## Layout order (store home)
 
 Search (sticky, first control) → category rail → popular shelf → "All
-products" divider → grid. Rail and shelf both slot into `ProductGrid`'s
+products" heading → grid. Rail and shelf both slot into `ProductGrid`'s
 `beforeGrid` (wrapped in a `gap-6` column so neither leaves a dangling gap
 when it renders nothing),
 so an active search hides them and results take the whole surface (existing
 behaviour, unchanged).
 
-The **"All products" divider belongs to the grid it labels**
-(`AllProductsDivider`, exported from `product-grid.tsx`), not to whichever
-section sits above it. It was briefly owned by the popular shelf, which meant
-it vanished with the shelf on any store under the qualifying-orders threshold
-— leaving category tiles 4px from the first product row, on every
-newly-onboarded seller and every quiet week (PR #155 review). It now renders
-as the last child of `beforeGrid` after a `peer`-marked wrapper, shown via
-`peer-[:not(:empty)]` only when at least one merchandising section actually
-rendered. The wrapper is genuinely `:empty` when they all return null, so all
-four combinations are right with no extra queries or prop-drilling —
-verified in-browser across rail+shelf / rail-only / shelf-only / neither.
+The **"All products" heading belongs to the grid it labels**
+(`AllProductsDivider`, exported from `product-grid.tsx` — a real `<h2>` with
+the live item count since `z8r3fdegb5`, no longer a hairline rule), not to
+whichever section sits above it. It was briefly owned by the popular shelf,
+which meant it vanished with the shelf on any store under the
+qualifying-orders threshold — leaving category tiles 4px from the first
+product row, on every newly-onboarded seller and every quiet week (PR #155
+review). `ProductGrid` renders it right after `beforeGrid` (so it knows the
+product count), as a following sibling of the route's `peer`-marked wrapper,
+shown via `peer-[:not(:empty)]` only when at least one merchandising section
+actually rendered. The wrapper is genuinely `:empty` when they all return
+null, so all four combinations are right with no extra queries or
+prop-drilling — verified in-browser across rail+shelf / rail-only /
+shelf-only / neither.
 
-The **category page** renders neither rail nor shelf — it goes header → back
-link → category name → search → grid.
+The **category page** renders neither rail nor shelf — it goes app bar →
+category name → search → grid.
 
 ## Tests
 
@@ -161,9 +333,23 @@ AND the rolling-window slide),
 single-order hides, non-midnight `since` rejected, **unlisted bestsellers
 never consume a slot**; plus `get` refusing an archived product to a
 non-owner),
-`category-rail.test.tsx` (a tile per category with count + link, no tile ever
-marked as the current page, deterministic gradient fallback, own image when
-set, zero-category null), `featured-product.test.tsx` (loading/empty null, the
-whole ranked set shelved in rank order, unranked catalog products stay off,
-unlisted/sold-out candidates dropped, quick-add wiring, multi-variant → page,
-and the error boundary degrading to nothing).
+`category-rail.test.tsx` (a tile per category with count + link, the section
+heading, no tile ever marked as the current page, deterministic gradient
+fallback, own image when set, zero-category null), `featured-product.test.tsx`
+(loading/empty null, the whole ranked set shelved in rank order, unranked
+catalog products stay off, unlisted/sold-out candidates dropped, quick-add
+wiring, multi-variant → page, and the error boundary degrading to nothing).
+Polish-pass surfaces: `storefront-app-bar.test.tsx` (back ownership +
+listing-back variant, initials tile, badge at 18px, one-line hours,
+44px share), `cart-bar.test.tsx` (empty → nothing, count/total, 99+ cap,
+checkout navigation, paused disabled-with-reason),
+`founding-member-badge.test.tsx` (labelled button, popover copy, cover/theme
+artwork, sm size), `product-page.test.tsx` (the gallery's LCP preload contract: the hint covers
+the mobile branch, each branch requests the sizes the hint is built from, and
+only the first mobile tile is eager), `product-card.test.tsx` (stepper swap +
+wiring + stock-cap
+disable, the min-order − label stating that it clears the line, Notify on
+out-of-stock with its promise in the accessible name, disabled Options on a
+min-trapped product),
+`useCart.test.tsx` (`quickRemoveProduct`: decrement, remove-at-zero,
+below-minimum drop, custom-line immunity).

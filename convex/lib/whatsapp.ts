@@ -104,6 +104,197 @@ export function sellerPaymentReceivedTemplateName(): string | undefined {
 }
 
 /**
+ * The seller's manual payment reminder (docs/payment-reminder.md) as a Meta
+ * utility template (ClickUp z8r3fddtkh). By day 11 the buyer's 24h service
+ * window is almost always closed, so the free-form reminder silently failed
+ * to deliver (131047); a template is the ONLY message shape Meta delivers
+ * with no open window. Same env-gating posture as the confirm template: unset
+ * ⇒ the reminder stays a free-form session message (best-effort, as before),
+ * so the code ships decoupled from Meta template review. Body params are the
+ * confirm template's three — {{1}} shortId, {{2}} store name, {{3}} amount —
+ * and the button URL base is `https://kedaipal.com/track/{{1}}` ← tracking
+ * token (added via Meta's **Add variable** control, never hand-typed braces).
+ */
+export function paymentReminderTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_PAYMENT_REMINDER_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
+ * The seller's subscription-lockout alert (ClickUp z8r3fdg3mh). The ONE
+ * WhatsApp in the whole billing chain, sent at the moment `past_due` lands and
+ * the dashboard locks — issue / due-soon / recovery nudges all stay email.
+ *
+ * It is a utility template, not a session message: sellers hold no open
+ * service window with the shared WABA, so a template is the only shape Meta
+ * will deliver. Same env-gating posture as every sibling — unset ⇒ no WA is
+ * attempted and every email path is byte-identical, so this ships decoupled
+ * from Meta template review.
+ *
+ * Body params are {{1}} store name, {{2}} invoice number, {{3}} amount (e.g.
+ * "MYR 79.00"); the button URL base is
+ * `https://kedaipal.com/app/settings?tab={{1}}` ← the value `billing` (the
+ * seller is authenticated, so no capability token is involved). The variable
+ * is a plain value rather than a `?tab=billing` fragment: every other dynamic
+ * URL param here is an opaque path segment, and a suffix carrying `?` and `=`
+ * is not a shape Meta has approved for us before. Added via Meta's **Add
+ * variable** control, never hand-typed braces.
+ */
+export function billingPastDueTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_BILLING_PAST_DUE_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
+ * Kedaipal Credits balance notices (Credits T3, ClickUp z8r3fdf8hy) — three
+ * Meta utility templates to the SELLER's alert number (`notifyWaPhone`), each
+ * the louder second tap beside an email that always goes out. Same env-gating
+ * posture as every sibling: unset ⇒ nothing is attempted and the email carries
+ * it alone, so the code ships decoupled from Meta review.
+ *
+ * Registered by Zaki (30 Sep 2026) in English (`en`) + Malay (`ms`) under one
+ * name each, category Utility, no header, optional footer "1 credit = 1 order".
+ * Body params, in order:
+ *  - `credits_low_utility`: {{1}} store name, {{2}} orders left (e.g. "10");
+ *  - `credits_locked_utility`: {{1}} store name, {{2}} the balance in words
+ *    ("0 orders left" / "15 orders owed", localized — `creditBalancePhrase`);
+ *  - `credits_unlocked_utility`: {{1}} store name, {{2}} orders left.
+ * Button (all three): URL `https://kedaipal.com/app/settings?tab={{1}}` ← the
+ * value `billing` — the shape `billing_past_due_utility` already uses. Added
+ * via Meta's **Add variable** control, never hand-typed braces.
+ *
+ * ## NOT YET SUBMITTED TO META — and the body text to submit (Credits T3.1)
+ *
+ * They were deliberately held back from review while the gate was store-wide,
+ * because T3.1 changed what they say: there is no store-wide pause any more,
+ * so a body claiming "editing products is paused" would be approved and then
+ * wrong. Re-editing an APPROVED template re-triggers review, so submit once,
+ * with the wording below, which matches `creditEmailCopy.ts` word for word.
+ * The PARAM SHAPES above are unchanged, so nothing in this file moves.
+ *
+ * `credits_low_utility`
+ *  en: {{1}} — {{2}} left on Kedaipal. New orders keep arriving; once you run
+ *      out you won't be able to open the new ones until credits land.
+ *  ms: {{1}} — tinggal {{2}} di Kedaipal. Pesanan baharu terus masuk; sebaik
+ *      kredit habis anda tidak boleh membukanya sehingga kredit masuk.
+ *
+ * `credits_locked_utility`
+ *  en: {{1}} — you're at {{2}}, so new orders are waiting on credits. They
+ *      open oldest first once credits land. Your other orders, your products
+ *      and your settings carry on, and cancelling always works.
+ *  ms: {{1}} — baki anda {{2}}, jadi pesanan baharu menunggu kredit. Ia dibuka
+ *      yang paling lama dahulu sebaik kredit masuk. Pesanan lain, produk dan
+ *      tetapan anda tidak terjejas, dan pembatalan sentiasa boleh.
+ *
+ * `credits_unlocked_utility`
+ *  en: {{1}} — credits added, {{2}} left. The orders that were waiting are
+ *      open again, oldest first.
+ *  ms: {{1}} — kredit ditambah, tinggal {{2}}. Pesanan yang menunggu kini
+ *      dibuka, yang paling lama dahulu.
+ */
+export function creditsLowTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_CREDITS_LOW_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
+ * Referral rewards (86ey82hke): the WhatsApp half of "your bonus credits
+ * landed", one template per side. Env-gated like every seller template —
+ * absent until Meta approves it, and the email carries the news meanwhile.
+ * Params: {{1}} store name, {{2}} credits, {{3}} the other store's name;
+ * button URL https://kedaipal.com/app/settings?tab={{1}} ("billing").
+ */
+export function referralReferrerTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_REFERRAL_REFERRER_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/** See referralReferrerTemplateName — the referee's "bonus landed". */
+export function referralRefereeTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_REFERRAL_REFEREE_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/** See creditsLowTemplateName — out of credits (also re-sent when a monthly
+ * refresh leaves the store still below zero). */
+export function creditsLockedTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_CREDITS_LOCKED_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/** See creditsLowTemplateName — credits are back above zero. */
+export function creditsUnlockedTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_CREDITS_UNLOCKED_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
+ * Every Meta template this deployment is configured to send, keyed by the
+ * env var that names it — the ONE registry the admin console's template
+ * panel reads, so a new template can't be sent without also being watched.
+ * `name` is undefined when the env var is unset (the panel shows it as "not
+ * configured" rather than hiding it, so the operator sees what's missing).
+ */
+export function configuredTemplates(): Array<{
+	envVar: string;
+	purpose: string;
+	name: string | undefined;
+}> {
+	return [
+		{
+			envVar: "WHATSAPP_ORDER_CONFIRM_TEMPLATE",
+			purpose: "Buyer order confirmation (the one message per order)",
+			name: orderConfirmTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_PAYMENT_REMINDER_TEMPLATE",
+			purpose: "Buyer payment reminder (seller-tapped, day 11–14)",
+			name: paymentReminderTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_CLAIM_LINK_TEMPLATE",
+			purpose: "Buyer claim link (price-locked checkout)",
+			name: claimLinkTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_SELLER_NEW_ORDER_TEMPLATE",
+			purpose: "Seller alert — new order",
+			name: sellerNewOrderTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE",
+			purpose: "Seller alert — buyer says they've paid",
+			name: sellerPaymentClaimTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE",
+			purpose: "Seller alert — gateway payment settled",
+			name: sellerPaymentReceivedTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_BILLING_PAST_DUE_TEMPLATE",
+			purpose: "Seller alert — subscription past due (dashboard locked)",
+			name: billingPastDueTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_CREDITS_LOW_TEMPLATE",
+			purpose: "Seller alert — 10 orders left (credits)",
+			name: creditsLowTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_CREDITS_LOCKED_TEMPLATE",
+			purpose: "Seller alert — out of credits (orders still coming in)",
+			name: creditsLockedTemplateName(),
+		},
+		{
+			envVar: "WHATSAPP_CREDITS_UNLOCKED_TEMPLATE",
+			purpose: "Seller alert — credits back above zero",
+			name: creditsUnlockedTemplateName(),
+		},
+	];
+}
+
+/**
  * A failed Cloud API send, carrying the machine-readable bits a caller needs to
  * decide whether retrying could ever help: the HTTP status and Meta's own error
  * code. Without these a caller can only regex the message text, and the two
@@ -188,8 +379,8 @@ async function postMessage(
 	}
 }
 
-export async function sendText(toPhone: string, body: string): Promise<void> {
-	await postMessage({
+export async function sendText(toPhone: string, body: string): Promise<string | undefined> {
+	return postMessage({
 		messaging_product: "whatsapp",
 		recipient_type: "individual",
 		to: toPhone,
@@ -202,8 +393,8 @@ export async function sendImage(
 	toPhone: string,
 	imageLink: string,
 	caption?: string,
-): Promise<void> {
-	await postMessage({
+): Promise<string | undefined> {
+	return postMessage({
 		messaging_product: "whatsapp",
 		recipient_type: "individual",
 		to: toPhone,
@@ -220,8 +411,8 @@ export async function sendDocument(
 	documentLink: string,
 	filename?: string,
 	caption?: string,
-): Promise<void> {
-	await postMessage({
+): Promise<string | undefined> {
+	return postMessage({
 		messaging_product: "whatsapp",
 		recipient_type: "individual",
 		to: toPhone,
@@ -239,8 +430,8 @@ export async function sendCtaUrlButton(
 	body: string,
 	buttonText: string,
 	url: string,
-): Promise<void> {
-	await postMessage({
+): Promise<string | undefined> {
+	return postMessage({
 		messaging_product: "whatsapp",
 		recipient_type: "individual",
 		to: toPhone,
@@ -262,8 +453,8 @@ export async function sendCtaUrlWithImage(
 	body: string,
 	buttonText: string,
 	url: string,
-): Promise<void> {
-	await postMessage({
+): Promise<string | undefined> {
+	return postMessage({
 		messaging_product: "whatsapp",
 		recipient_type: "individual",
 		to: toPhone,

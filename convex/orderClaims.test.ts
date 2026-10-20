@@ -55,6 +55,8 @@ async function seedVariant(
 		block?: boolean;
 		requiresProof?: boolean;
 		minNoticeDays?: number;
+		prepMinutes?: number;
+		pickupNote?: string;
 	} = {},
 ): Promise<Id<"productVariants">> {
 	const asUser = t.withIdentity({ subject: userId });
@@ -67,6 +69,8 @@ async function seedVariant(
 		blockWhenOutOfStock: opts.block ?? false,
 		requiresProof: opts.requiresProof ?? false,
 		minNoticeDays: opts.minNoticeDays,
+		prepMinutes: opts.prepMinutes,
+		pickupNote: opts.pickupNote,
 		variants: [
 			{ optionValues: [], price: opts.price ?? 8900, onHand: opts.onHand ?? 50 },
 		],
@@ -455,6 +459,40 @@ describe("orderClaims — getByToken", () => {
 		expect(payload?.status).toBe("expired");
 		expect(payload?.open).toBeUndefined();
 	});
+
+	// The claim page's overseas-number delivery note (z8r3fdh274) needs to know
+	// whether a courier will be handed the buyer's contact — one bit beside
+	// `collectsFromCustomer`, never the courier config it is derived from.
+	test("the store block carries booksCouriers, and only the bit", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await seedSession(t, USER_A);
+		const { token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				windowMinutes: 60,
+			});
+
+		let payload = await t.query(api.orderClaims.getByToken, { token });
+		expect(payload?.store.booksCouriers).toBe(false);
+
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, {
+				deliveryBooking: {
+					enabled: true,
+					vehicleType: "MOTORCYCLE",
+					apiKey: "enc:v1:ciphertext",
+				},
+			}),
+		);
+		payload = await t.query(api.orderClaims.getByToken, { token });
+		expect(payload?.store.booksCouriers).toBe(true);
+		expect(payload?.store).not.toHaveProperty("deliveryBooking");
+		expect(payload?.store).not.toHaveProperty("delyva");
+	});
 });
 
 describe("orderClaims — commit", () => {
@@ -523,6 +561,40 @@ describe("orderClaims — commit", () => {
 				.unique(),
 		);
 		expect(customer?.orderCount).toBe(1);
+	});
+
+	test("a claim order freezes stockReserved — the THIRD create path (86eypn8ye)", async () => {
+		// Every create path builds its own item snapshot, so a frozen field has to
+		// be stamped in each one. Storefront and counter were done in 86eypn8ye;
+		// claim links landed afterwards and reproduced the gap. Unstamped, cancel
+		// re-resolves `blockWhenOutOfStock` from the CURRENT docs, so flipping a
+		// product to made-to-order after the sale strands its units forever.
+		const t = setup();
+		const { variantId, claimId, token } = await sendOne(t, {
+			block: true,
+			onHand: 10,
+		});
+
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+
+		const orderId = (await getClaim(t, claimId)).orderId as Id<"orders">;
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0].stockReserved).toBe(true);
+		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(8);
+
+		// The seller switches the product to made-to-order AFTER the sale. The
+		// frozen flag is what makes the cancel give the units back anyway.
+		await t.run((ctx) =>
+			ctx.db.patch(variantId, { blockWhenOutOfStock: false }),
+		);
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orders.updateStatus, { orderId, status: "cancelled" });
+		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(10);
 	});
 
 	test("confirm-push env set → the order commits confirmed with the push stamped", async () => {
@@ -659,6 +731,515 @@ describe("orderClaims — commit", () => {
 	});
 });
 
+describe("orderClaims — prep time + pickup note (z8r3fdff97)", () => {
+	const DAY = 86_400_000;
+	/** Minutes since MYT midnight, right now. */
+	const nowMinutes = () =>
+		Math.floor(((Date.now() + 8 * 3600_000) % DAY) / 60_000);
+
+	async function sendPuffs(
+		t: ReturnType<typeof setup>,
+		opts: { prepMinutes?: number; pickupNote?: string } = {},
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, {
+			name: "Ice Cream Puff",
+			...opts,
+		});
+		const sessionId = await seedSession(t, USER_A);
+		const { claimId, token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 6 }],
+				windowMinutes: 60,
+			});
+		const productId = (await t.run((ctx) => ctx.db.get(variantId)))
+			?.productId as Id<"products">;
+		return { retailer, variantId, productId, claimId, token };
+	}
+	const orderOf = async (
+		t: ReturnType<typeof setup>,
+		claimId: Id<"orderClaims">,
+	) => {
+		const orderId = (await getClaim(t, claimId)).orderId as Id<"orders">;
+		return t.run((ctx) => ctx.db.get(orderId));
+	};
+
+	test("the claim page receives each line's live prep window and note", async () => {
+		const t = setup();
+		const { token, productId } = await sendPuffs(t, {
+			prepMinutes: 120,
+			pickupNote: "Side counter.",
+		});
+		// Edited after the link went out — the page shows what stands NOW.
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.products.update, {
+				productId,
+				pickupNote: "Front counter.",
+			});
+		const payload = await t.query(api.orderClaims.getByToken, { token });
+		expect(payload?.open?.lines[0]).toMatchObject({
+			name: "Ice Cream Puff",
+			prepMinutes: 120,
+			pickupNote: "Front counter.",
+		});
+	});
+
+	test("a self-collect time is kept — it used to be silently dropped", async () => {
+		const t = setup();
+		const { claimId, token } = await sendPuffs(t);
+		const tomorrow = fulfilmentDateBounds(0).min + DAY;
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrow,
+			fulfilmentTimeMinutes: 11 * 60 + 30,
+		});
+		expect((await orderOf(t, claimId))?.fulfilmentTimeMinutes).toBe(690);
+	});
+
+	test("the prep floor refuses a same-day pickup inside the window, naming the product", async () => {
+		// Skipped in the last half hour before MYT midnight: from 23:41 the
+		// flat 15-min lead empties the day even WITHOUT prep, the prep rule
+		// defers to opening-hours rules that no-op with hours unset, and the
+		// commit resolves — the server gap the same guards in orders.test.ts
+		// document (ticketed follow-up; remove all five once it refuses).
+		if (nowMinutes() >= 1410) return;
+		const t = setup();
+		const { token } = await sendPuffs(t, { prepMinutes: 120 });
+		await expect(
+			t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: fulfilmentDateBounds(0).min,
+				fulfilmentTimeMinutes: Math.min(1439, nowMinutes() + 1),
+			}),
+		).rejects.toThrow(/Ice Cream Puff.*2 hours to prepare/s);
+	});
+
+	test("a prep window that swallows today asks for a later day; tomorrow takes any time", async () => {
+		// Same near-midnight skip as above — past 23:41 the refusal defers
+		// and the commit resolves.
+		if (nowMinutes() >= 1410) return;
+		const t = setup();
+		const { claimId, token } = await sendPuffs(t, { prepMinutes: 1440 });
+		const today = fulfilmentDateBounds(0).min;
+		await expect(
+			t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: today,
+				fulfilmentTimeMinutes: 23 * 60,
+			}),
+		).rejects.toThrow(/too late for today, pick a later day/);
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: today + DAY,
+			fulfilmentTimeMinutes: 9 * 60,
+		});
+		expect((await orderOf(t, claimId))?.fulfilmentTimeMinutes).toBe(540);
+	});
+
+	test("the last minutes of the day refuse a same-day commit too (the 23:41 gap)", async () => {
+		// From 23:41 MYT the flat 15-minute lead alone empties an all-day
+		// store; the prep rule used to defer to opening-hours rules that no-op
+		// with hours unset, and the commit RESOLVED. Same gate as
+		// orders.create, pinned at 23:45 so the gap's window is always tested.
+		vi.useFakeTimers();
+		try {
+			const FRI = Date.UTC(2026, 5, 26) - 8 * 3600_000;
+			vi.setSystemTime(FRI + (23 * 60 + 45) * 60_000);
+			const t = setup();
+			const { claimId, token } = await sendPuffs(t, { prepMinutes: 240 });
+			await expect(
+				t.mutation(api.orderClaims.commit, {
+					token,
+					deliveryMethod: "self_collect",
+					fulfilmentDate: FRI,
+					fulfilmentTimeMinutes: 1439,
+				}),
+			).rejects.toThrow(/4 hours to prepare.*too late for today/s);
+			await t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: FRI + DAY,
+				fulfilmentTimeMinutes: 9 * 60,
+			});
+			expect((await orderOf(t, claimId))?.fulfilmentDate).toBe(FRI + DAY);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("a closed date is refused at commit, in orders.create's words (z8r3fdhpm7)", async () => {
+		const t = setup();
+		const { retailer, claimId, token } = await sendPuffs(t);
+		const tomorrow =
+			Math.floor((Date.now() + 8 * 3600_000) / DAY) * DAY - 8 * 3600_000 + DAY;
+		await t.withIdentity({ subject: USER_A }).mutation(api.closedDates.add, {
+			retailerId: retailer._id,
+			startDate: tomorrow,
+			endDate: tomorrow,
+			label: "Hari Raya",
+		});
+		await expect(
+			t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: tomorrow,
+			}),
+		).rejects.toThrow(/The store is closed .*\(Hari Raya\) — pick another day/);
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: tomorrow + DAY,
+		});
+		expect((await orderOf(t, claimId))?.fulfilmentDate).toBe(tomorrow + DAY);
+	});
+
+	test("a DATE-ONLY commit's prep runs to midnight — closing time can't hide a day-long prep", async () => {
+		// orders.create's rule: no time sent, so prep is judged to the end of
+		// the day. At 8 PM a 9-to-6 store had no slots with prep AND none
+		// without, so prep used to look blameless and tonight was bookable.
+		vi.useFakeTimers();
+		try {
+			const FRI = Date.UTC(2026, 5, 26) - 8 * 3600_000;
+			vi.setSystemTime(FRI + 20 * 3600_000);
+			const t = setup();
+			const { claimId, token } = await sendPuffs(t, { prepMinutes: 1440 });
+			await t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.retailers.updateSettings, {
+					openingHours: Array.from({ length: 7 }, () => ({
+						open: 9 * 60,
+						close: 18 * 60,
+					})),
+				});
+			await expect(
+				t.mutation(api.orderClaims.commit, {
+					token,
+					deliveryMethod: "self_collect",
+					fulfilmentDate: FRI,
+				}),
+			).rejects.toThrow(/24 hours to prepare.*too late for today/s);
+			await t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "self_collect",
+				fulfilmentDate: FRI + DAY,
+			});
+			expect((await orderOf(t, claimId))?.fulfilmentDate).toBe(FRI + DAY);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	describe("a date-only commit at a COUNTER still races closing time (z8r3fdg9aa)", () => {
+		// orders.create's rule, word for word. The commit used to ask "did a
+		// time arrive?" instead of the checkout's question, so a commit with no
+		// time took the midnight reading even at a counter whose hour IS the
+		// store's. Pinned clock: Fri 26 Jun 2026, MYT.
+		const FRI = Date.UTC(2026, 5, 26) - 8 * 3600_000;
+		const at = (h: number, m = 0) => FRI + (h * 60 + m) * 60_000;
+		const nineToSix = Array.from({ length: 7 }, () => ({
+			open: 9 * 60,
+			close: 18 * 60,
+		}));
+		afterEach(() => vi.useRealTimers());
+
+		/** A 9-to-6 store with one ordinary self-collect counter; returns a
+		 * DATE-ONLY commit (no `fulfilmentTimeMinutes`) for the given day. */
+		async function counterCommit(
+			t: ReturnType<typeof setup>,
+			prepMinutes: number,
+		) {
+			const { retailer, claimId, token } = await sendPuffs(t, { prepMinutes });
+			const asUser = t.withIdentity({ subject: USER_A });
+			await asUser.mutation(api.retailers.updateSettings, {
+				offerSelfCollect: true,
+				openingHours: nineToSix,
+			});
+			const { pickupLocationId } = await asUser.mutation(
+				api.pickupLocations.create,
+				{
+					retailerId: retailer._id,
+					label: "Kedai counter",
+					address: "Seksyen 7, Shah Alam",
+					locationType: "self_collect",
+				},
+			);
+			return {
+				claimId,
+				commit: (fulfilmentDate: number) =>
+					t.mutation(api.orderClaims.commit, {
+						token,
+						deliveryMethod: "self_collect" as const,
+						pickupLocationId,
+						fulfilmentDate,
+					}),
+			};
+		}
+
+		test("prep running past closing is refused, though no time was sent", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(at(17));
+			const t = setup();
+			const { claimId, commit } = await counterCommit(t, 120);
+			await expect(commit(FRI)).rejects.toThrow(
+				/Ice Cream Puff.*2 hours to prepare.*too late for today/s,
+			);
+			await commit(FRI + DAY);
+			expect((await orderOf(t, claimId))?.fulfilmentDate).toBe(FRI + DAY);
+		});
+
+		test("the same commit resolves while the day still has prep-able slots", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(at(14));
+			const t = setup();
+			const { claimId, commit } = await counterCommit(t, 120);
+			await commit(FRI);
+			expect((await orderOf(t, claimId))?.fulfilmentDate).toBe(FRI);
+		});
+
+		test("after closing, a day-long prep is still refused — the DAY's own deadline", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(at(20));
+			const t = setup();
+			const { commit } = await counterCommit(t, 1440);
+			await expect(commit(FRI)).rejects.toThrow(
+				/Ice Cream Puff.*24 hours to prepare.*too late for today/s,
+			);
+		});
+
+		test("a DROP-OFF meet-up keeps its own hour — the shutters were never its deadline", async () => {
+			// The trap: feed `asksForTime` the point's kind, or every meet-up
+			// starts racing closing time. 4:30 PM plus 2h is 6:30 PM — past the
+			// counter's close, fine for a meet-up.
+			vi.useFakeTimers();
+			vi.setSystemTime(at(16, 30));
+			const t = setup();
+			const { retailer, claimId, token } = await sendPuffs(t, {
+				prepMinutes: 120,
+			});
+			const asUser = t.withIdentity({ subject: USER_A });
+			await asUser.mutation(api.retailers.updateSettings, {
+				offerSelfCollect: true,
+				openingHours: nineToSix,
+			});
+			const { pickupLocationId } = await asUser.mutation(
+				api.pickupLocations.create,
+				{
+					retailerId: retailer._id,
+					label: "Pasar Sabtu",
+					address: "Seksyen 7, Shah Alam",
+					locationType: "drop_off",
+				},
+			);
+			await t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "self_collect",
+				pickupLocationId,
+				fulfilmentDate: FRI,
+			});
+			expect((await orderOf(t, claimId))?.fulfilmentDate).toBe(FRI);
+		});
+	});
+
+	test("a collection trip is exempt — the rider collects first, the work comes after", async () => {
+		const t = setup();
+		const { retailer, claimId, token } = await sendPuffs(t, {
+			prepMinutes: 240,
+		});
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, {
+				deliveryBooking: {
+					enabled: false,
+					vehicleType: "MOTORCYCLE",
+					deliveryDirection: "collection",
+				},
+			}),
+		);
+		const soon = Math.min(1439, nowMinutes() + 20);
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+			fulfilmentDate: fulfilmentDateBounds(0).min,
+			fulfilmentTimeMinutes: soon,
+		});
+		const order = await orderOf(t, claimId);
+		expect(order?.deliveryDirection).toBe("collection");
+		expect(order?.fulfilmentTimeMinutes).toBe(soon);
+	});
+
+	test("the pickup note freezes from the LIVE product at commit", async () => {
+		const t = setup();
+		const { claimId, token, productId } = await sendPuffs(t, {
+			pickupNote: "Side counter.",
+		});
+		// A typo fix between send and commit reaches the buyer…
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.products.update, {
+				productId,
+				pickupNote: "Side counter — bring an ice bag.",
+			});
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: fulfilmentDateBounds(0).min + DAY,
+		});
+		// …and an edit AFTER commit never rewrites what they were told.
+		await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.products.update, { productId, pickupNote: "Gone." });
+		expect((await orderOf(t, claimId))?.items[0].pickupNote).toBe(
+			"Side counter — bring an ice bag.",
+		);
+	});
+
+	test("a product without a note freezes no note key at all", async () => {
+		const t = setup();
+		const { claimId, token } = await sendPuffs(t);
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: fulfilmentDateBounds(0).min + DAY,
+		});
+		const order = await orderOf(t, claimId);
+		expect(order?.items[0]).not.toHaveProperty("pickupNote");
+	});
+});
+
+/**
+ * Off-Season Hold (z8r3fday24) on the claim path. A claim sent minutes before
+ * the seller pauses is a live link in a buyer's chat — the one create path the
+ * first cut of the hold missed, found in review. The invariant is "every
+ * order-create path refuses while paused", so it has to hold here too.
+ */
+describe("orderClaims — Off-Season Hold (z8r3fday24)", () => {
+	async function sentClaimThenPause(t: ReturnType<typeof setup>) {
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await seedSession(t, USER_A);
+		const { claimId, token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 8900 }],
+				windowMinutes: 60,
+			});
+		// The seller pauses AFTER the link went out.
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, { orderingPausedAt: Date.now() }),
+		);
+		return { retailer, variantId, claimId, token };
+	}
+
+	test("commit refuses a claim sent before the pause — stock untouched, no order", async () => {
+		const t = setup();
+		const { variantId, claimId, token } = await sentClaimThenPause(t);
+		const before = await t.run((ctx) => ctx.db.get(variantId));
+
+		await expect(
+			t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "delivery",
+				deliveryAddress: MY_ADDRESS,
+			}),
+		).rejects.toThrow(/seasonal break/i);
+
+		// The refusal is total: no order, no stock movement, claim still open.
+		const claim = await getClaim(t, claimId);
+		expect(claim.status).toBe("open");
+		expect(claim.orderId).toBeUndefined();
+		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(
+			before?.onHand,
+		);
+	});
+
+	test("an ALREADY completed claim still returns its order while paused (idempotent re-open)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await seedSession(t, USER_A);
+		const { token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 8900 }],
+				windowMinutes: 60,
+			});
+		const committed = await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+		// Pause AFTER the buyer already completed — reopening their link must
+		// still hand back the order they placed, never the break notice.
+		await t.run((ctx) =>
+			ctx.db.patch(retailer._id, { orderingPausedAt: Date.now() }),
+		);
+		const again = await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+		expect(again.shortId).toBe(committed.shortId);
+	});
+
+	test("resend refuses while paused — a fresh link is a new invitation", async () => {
+		const t = setup();
+		const { claimId } = await sentClaimThenPause(t);
+		await expect(
+			t
+				.withIdentity({ subject: USER_A })
+				.mutation(api.orderClaims.resendClaim, { claimId }),
+			// Resending is the SELLER's act (z8r3fdudf7): their sentence, not
+			// the buyer's "seasonal break".
+		).rejects.toThrow(/Off-Season Hold.*Billing/);
+		// Send count untouched — nothing was pushed to the buyer.
+		expect((await getClaim(t, claimId)).sentCount).toBe(1);
+	});
+
+	test("the buyer page learns on LOAD: getByToken carries orderingPaused", async () => {
+		const t = setup();
+		const { token } = await sentClaimThenPause(t);
+		const payload = await t.query(api.orderClaims.getByToken, { token });
+		expect(payload?.store.orderingPaused).toBe(true);
+		// Still "open" as a claim — the page ranks the pause above it and renders
+		// the dead end, so the buyer never fills a form the commit would refuse.
+		expect(payload?.status).toBe("open");
+	});
+
+	test("an open store is unaffected — commit works and the flag is false", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await seedSession(t, USER_A);
+		const { token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 1, unitPrice: 8900 }],
+				windowMinutes: 60,
+			});
+		expect(
+			(await t.query(api.orderClaims.getByToken, { token }))?.store
+				.orderingPaused,
+		).toBe(false);
+		await expect(
+			t.mutation(api.orderClaims.commit, {
+				token,
+				deliveryMethod: "delivery",
+				deliveryAddress: MY_ADDRESS,
+			}),
+		).resolves.toBeDefined();
+	});
+});
+
 describe("orderClaims — listClaims + crons", () => {
 	test("listClaims shows the live-judged status; foreign sellers see nothing", async () => {
 		const t = setup();
@@ -792,6 +1373,67 @@ describe("orderClaims — payment deadline (the carried timer)", () => {
 		expect(order?.paymentDueAt).toBeUndefined();
 		// The whole point: the held stock came back.
 		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(10);
+	});
+
+	// Buyer payments paused on a lapsed store (z8r3fdr6gg): a deadline the
+	// buyer cannot pay inside is a trap, so none runs while the pause holds.
+	async function lapse(t: ReturnType<typeof setup>, retailerId: Id<"retailers">) {
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			if (!sub) throw new Error("no subscription row");
+			await ctx.db.patch(sub._id, { status: "past_due" });
+		});
+	}
+
+	test("a lapsed store's sweep LIFTS a due deadline instead of cancelling the order", async () => {
+		const t = setup();
+		const { orderId, variantId, retailer } = await committedOrder(t);
+		await lapse(t, retailer._id);
+		await t.run((ctx) => ctx.db.patch(orderId, { paymentDueAt: Date.now() - 1000 }));
+
+		const result = await t.mutation(
+			internal.orderClaims.cancelUnpaidDueOrders,
+			{},
+		);
+		expect(result.cancelled).toBe(0);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).not.toBe("cancelled");
+		expect(order?.paymentDueAt).toBeUndefined();
+		// The hold stands: the order still owns its stock.
+		expect((await t.run((ctx) => ctx.db.get(variantId)))?.onHand).toBe(8);
+	});
+
+	test("a claim committed while the store is lapsed carries no payment deadline", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { onHand: 10 });
+		const sessionId = await seedSession(t, USER_A);
+		const { claimId, token } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				windowMinutes: 15,
+			});
+		// Sent while active, opened after the lapse — the realistic order.
+		await lapse(t, retailer._id);
+		const page = await t.query(api.orderClaims.getByToken, { token });
+		expect(page?.store.paymentsPaused).toBe(true);
+
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+		const order = await t.run(async (ctx) => {
+			const claim = await ctx.db.get(claimId);
+			return claim?.orderId ? ctx.db.get(claim.orderId) : null;
+		});
+		expect(order).not.toBeNull();
+		expect(order?.paymentDueAt).toBeUndefined();
 	});
 
 	test("the sweep leaves protected orders alone: claimed, fee-pending, live gateway session, already-fulfilling", async () => {
@@ -1005,7 +1647,7 @@ describe("orderClaims — the checkout is frozen while its link is out", () => {
 		});
 		expect(session?.liveClaim?.claimId).toBe(claimId);
 		expect(session?.liveClaim?.lines).toHaveLength(1);
-		expect(session?.liveClaim?.itemsTotal).toBe(12000);
+		expect(session?.liveClaim?.total).toBe(12000);
 
 		await asA.mutation(api.orderClaims.cancelClaim, { claimId });
 		const released = await asA.query(api.counterCheckout.getCheckoutSession, {

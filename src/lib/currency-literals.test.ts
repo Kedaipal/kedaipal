@@ -34,12 +34,21 @@ const SRC = join(__dirname, "..");
 /**
  * Surfaces that legitimately name a currency.
  *
- * Everything here prices KEDAIPAL'S OWN subscription, which really is billed
- * in MYR regardless of which country the seller's shop is in — the landing
- * page, the pricing table, the cost calculator, the billing tab and the admin
- * console (where an operator picks the currency explicitly). Confusing the two
- * is the actual hazard: "0% cut" is Kedaipal's subscription posture, never a
- * statement about the seller's own prices.
+ * Everything here prices KEDAIPAL'S OWN subscription — the landing page, the
+ * pricing table, the cost calculator, the billing tab and the admin console
+ * (where an operator picks the currency explicitly). Confusing the two is the
+ * actual hazard: "0% cut" is Kedaipal's subscription posture, never a statement
+ * about the seller's own prices.
+ *
+ * Note this is NOT "always MYR" any more, whatever this comment used to say:
+ * Kedaipal invoices Singaporean sellers in SGD, the billing tab renders those
+ * invoices, and the annual card quotes SGD yearly totals. These surfaces name a
+ * currency because they name KEDAIPAL'S, resolved from `BillingCurrency`.
+ *
+ * Prefer NOT extending this list. `src/lib/annual-billing.ts` needed a default
+ * currency and took `DEFAULT_BILLING_CURRENCY` from `convex/lib/plans.ts`
+ * instead of an entry here — an allowlist entry licenses every future literal
+ * in that file, not just the one you were thinking of.
  *
  * `format.ts` and the `convex/lib` currency/country tables are the definitions
  * themselves — they are where the strings are allowed to live.
@@ -80,6 +89,64 @@ function scannedFiles(): string[] {
 	});
 }
 
+/**
+ * A line the copy tests below may not flag, even outside the allowlist: it
+ * carries — or sits directly under — a `currency-literal-ok: <why>` comment.
+ * For the few lines that NAME a currency on purpose (the Currency card's
+ * "yours is set to SGD", a note quoting Kedaipal's own plan price) without
+ * licensing a whole file the way an allowlist entry would. Always say why.
+ */
+const OK_MARKER = "currency-literal-ok";
+
+/**
+ * Code with comments removed, line by line — prose in a comment ("the
+ * buyer sees it as From RM 40") describes money, it doesn't render any.
+ * Handles `//` and multi-line block comments, JSX `{/* … *\/}` included.
+ */
+function codeLines(src: string): string[] {
+	let inBlock = false;
+	return src.split("\n").map((line) => {
+		let out = "";
+		let j = 0;
+		while (j < line.length) {
+			if (inBlock) {
+				const end = line.indexOf("*/", j);
+				if (end < 0) break;
+				inBlock = false;
+				j = end + 2;
+				continue;
+			}
+			const start = line.indexOf("/*", j);
+			if (start < 0) {
+				out += line.slice(j);
+				break;
+			}
+			out += line.slice(j, start);
+			inBlock = true;
+			j = start + 2;
+		}
+		// A `//` comment — but not the `//` inside "https://".
+		return out.replace(/(^|[^:])\/\/.*$/, "$1");
+	});
+}
+
+/** Every scanned `file:line — code` matching `pattern` outside comments,
+ * minus lines excused by the `currency-literal-ok` marker. */
+function offendingLines(pattern: RegExp): string[] {
+	const offenders: string[] = [];
+	for (const abs of scannedFiles()) {
+		const raw = readFileSync(abs, "utf8").split("\n");
+		codeLines(raw.join("\n")).forEach((code, i) => {
+			if (!pattern.test(code)) return;
+			if (raw[i].includes(OK_MARKER) || raw[i - 1]?.includes(OK_MARKER)) {
+				return;
+			}
+			offenders.push(`${relative(SRC, abs)}:${i + 1} — ${code.trim()}`);
+		});
+	}
+	return offenders;
+}
+
 describe("store money never names a currency in source", () => {
 	/**
 	 * An ISO code passed to `formatPrice` / stored as a default. The store's
@@ -117,6 +184,32 @@ describe("store money never names a currency in source", () => {
 			});
 		}
 		expect(offenders).toEqual([]);
+	});
+
+	/**
+	 * Money written INTO a sentence — "A band fee of RM0 means free", "Enter
+	 * an amount between RM 0 and RM 10,000". The prefix test above only sees
+	 * a symbol standing alone on its line, so both product forms, the delivery
+	 * bands and the counter's price check all quoted ringgit to SG stores
+	 * through it. Spell the amount with `formatDraftPrice` / `formatPrice`.
+	 */
+	test("no hardcoded RM / S$ amount in copy", () => {
+		expect(offendingLines(/\b(RM|S\$)\s?\d/)).toEqual([]);
+	});
+
+	/**
+	 * The ISO code RENDERED as if it were a symbol — `{currency}` as a JSX
+	 * child, or `${currency} 12` in a string. Every product form did this
+	 * ("Price (MYR)", "MYR 12"): the code is data, the seller reads the
+	 * symbol. Wrap it in `currencySymbol(...)` or format the amount. A prop
+	 * pass-through (`currency={currency}`) and a call argument never match.
+	 */
+	test("never renders a raw currency code where a symbol belongs", () => {
+		expect(
+			offendingLines(
+				/(?<![=\w])\{[\w.?]*[cC]urrency\}|\$\{[\w.?]*[cC]urrency\}\s/,
+			),
+		).toEqual([]);
 	});
 
 	/** The allowlist is a claim about which files exist — keep it honest. */

@@ -14,6 +14,7 @@ import { cartesian, type OptionAxis } from "../../lib/variant";
 import { buildSubmitVariants } from "./product-form";
 import {
 	buildWizardSubmitValues,
+	emptyWizardState,
 	type WizardState,
 	wizardStepIssues,
 } from "./product-wizard";
@@ -142,19 +143,19 @@ describe("reconcileForSubmit", () => {
 // --- the wizard's second source of truth ------------------------------------
 
 function wizard(partial: Partial<WizardState>): WizardState {
+	// Built ON `emptyWizardState()`, with NO cast. The `as WizardState` this
+	// replaces silenced every field the literal forgot, so adding one to the
+	// state crashed these tests at runtime ("Cannot read properties of
+	// undefined") instead of failing to compile — the same trap
+	// product-wizard-made-to-order.test.tsx already documents.
 	return {
+		...emptyWizardState(),
 		name: "Kuih lapis",
-		description: "",
-		images: [],
-		shape: null,
+		capacityPerNight: "1",
 		editor: { options: [], rows: [row([])], customLine: null },
 		fulfilmentAnswered: true,
-		hidden: false,
-		categoryIds: [],
-		minQuantity: "",
-		minNoticeDays: "",
 		...partial,
-	} as WizardState;
+	};
 }
 
 describe("wizard submit payload", () => {

@@ -1,10 +1,16 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
+import { CalendarClock, CalendarRange, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { UseCart } from "../../hooks/useCart";
+import { usePromoClock } from "../../hooks/usePromoClock";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
+import { bookingPriceSuffix, weekendRateSuffix } from "../../lib/booking-dates";
+import { formatPrice } from "../../lib/format";
+import { type PromoState, promoTeasing } from "../../lib/promo";
 import { AppImage } from "../ui/app-image";
+import { Button } from "../ui/button";
+import { CountdownBand } from "../ui/countdown-strip";
 import { Markdown } from "../ui/markdown";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
@@ -12,6 +18,7 @@ import {
 	addVariantToCart,
 	CustomOrderCard,
 	EmptyGallery,
+	EventNotice,
 	GoToCheckoutBar,
 	OptionPills,
 	PriceLabel,
@@ -21,10 +28,9 @@ import {
 	TotalPreviewRow,
 	useProductPurchase,
 } from "./product-purchase";
-import {
-	StorefrontHeader,
-	type StorefrontHeaderRetailer,
-} from "./storefront-header";
+import { SeasonalBreakNotice } from "./seasonal-break";
+import { StorefrontAppBar } from "./storefront-app-bar";
+import type { StorefrontHeaderRetailer } from "./storefront-header";
 
 interface ProductPageViewProps {
 	product: StorefrontProduct;
@@ -64,32 +70,46 @@ export function ProductPageView({
 	});
 	const goToCheckout = () =>
 		navigate({ to: "/$slug/checkout", params: { slug: storeSlug } });
+	// Booking listing (S2 `86eyn4kbw`): the stay is picked on the calendar at
+	// the next step, so the whole cart machinery below (options, stepper,
+	// quick-add, go-to-checkout) is replaced by ONE door — "Request to book".
+	const isBooking = product.kind === "booking";
+	// An event RSVP is checked out STANDALONE (`z8r3fdhh45`), like a booking:
+	// it carries its own fixed moment and venue, so it can never share an order
+	// with cart lines whose date the buyer picks. The buy box is replaced by a
+	// CTA into `?rsvp=`, where the seat choice and the guest's details live.
+	const isEvent = product.event !== undefined;
+	// Instant book (S7): there is no approval step, so nothing on this page may
+	// promise one — the buyer books and pays straight away. Mirrors
+	// `booking-checkout-form.tsx`, which has always read this; the product page
+	// hadn't, so an auto-accept listing still advertised a 24-hour wait.
+	const instantBook = product.booking?.autoAccept === true;
+	// A fixed-length package is a single start-date pick, not a range.
+	const isPackage = (product.booking?.packageLength ?? 0) > 0;
+	// Second per-night rate (S13) — stated beside the base price, BEFORE the
+	// calendar, so the split on the receipt is never a surprise.
+	const weekendSuffix = isBooking ? weekendRateSuffix(product.booking) : null;
 	// The route reserves exactly this bar's height as bottom padding — see the
 	// bar's own comment below.
 	const barRef = usePublishedHeight<HTMLDivElement>("--storefront-bar-h");
 
 	return (
 		<>
-			{/* The same brand header the store home and category pages render —
-			    a buyer arriving from a shared WhatsApp link lands in the SELLER's
-			    store, not on an anonymous product card. */}
-			<StorefrontHeader retailer={retailer} asPageHeading={false} />
-
-			{/* Back to the catalog — mirrors the category page's affordance, so
-			    every level of the storefront has the same way out. The cart lives
-			    in the sticky purchase bar below (count + total + go to checkout),
-			    so there's no second cart chip up here saying the same thing. */}
-			<div className="px-5 pt-4 lg:px-8">
-				<Link
-					to="/$slug"
-					params={{ slug: storeSlug }}
-					activeOptions={{ exact: true }}
-					className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
-				>
-					<ArrowLeft className="size-4" aria-hidden />
-					All products
-				</Link>
-			</div>
+			{/* Compact app bar (z8r3fdegb5) — the seller's identity, the way back
+			    and share, without the 176px cover hero: a buyer opening a shared
+			    WhatsApp link sees the product photo on the first screen. The bar
+			    owns "back", so the old "← All products" text link is gone; the
+			    cart lives in the sticky purchase bar below. */}
+			<StorefrontAppBar
+				retailer={retailer}
+				slug={storeSlug}
+				shareUrl={canonicalUrl}
+			/>
+			{/* The countdown is ALWAYS the page's top band (z8r3fdr60v), directly
+			    under the store header — same component, same place, on the claim
+			    checkout, here and on the storefront checkout. */}
+			<ProductPromoBand product={product} />
+			<SeasonalBreakNotice storeName={retailer.storeName} />
 
 			<div className="mt-4 px-5 lg:flex lg:items-start lg:gap-10 lg:px-8">
 				{/* Gallery — snap carousel on mobile (the sheet's pattern), main
@@ -104,9 +124,25 @@ export function ProductPageView({
 							{product.name}
 						</h1>
 						<div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-							<PriceLabel value={pp.priceLabel} className="text-2xl" />
+							<span className="flex items-baseline gap-1">
+								<PriceLabel value={pp.priceLabel} className="text-2xl" />
+								{isBooking ? (
+									<span className="text-sm font-medium text-muted-foreground">
+										{bookingPriceSuffix(
+											product.booking?.packageLength,
+											product.booking?.packageUnit,
+										)}
+									</span>
+								) : null}
+							</span>
 							<ShareLinkChip url={canonicalUrl} />
 						</div>
+						{weekendSuffix && product.booking?.weekendPrice !== undefined ? (
+							<p className="text-sm font-medium text-muted-foreground tabular-nums">
+								{formatPrice(product.booking.weekendPrice, product.currency)}
+								{weekendSuffix}
+							</p>
+						) : null}
 					</div>
 
 					{/* Description sits directly under the title, ahead of the option
@@ -118,14 +154,60 @@ export function ProductPageView({
 						<ProductDescription text={product.description} />
 					) : null}
 
-					<OptionPills pp={pp} />
-					<PurchaseHints pp={pp} />
-					<CustomOrderCard
-						pp={pp}
-						onAdd={(p, variant, qty, custom) =>
-							addVariantToCart(cart, p, variant, qty, custom)
-						}
-					/>
+					{isBooking ? (
+						<div className="mt-4 flex flex-col gap-2">
+							{(product.booking?.securityDeposit ?? 0) > 0 ? (
+								// Stated BEFORE requesting — the deposit must never be a
+								// surprise at payment time (86eyn4kee).
+								<p className="rounded-xl border border-border bg-card px-3 py-2.5 text-sm leading-relaxed">
+									<span className="font-semibold">
+										+{" "}
+										{formatPrice(
+											product.booking?.securityDeposit ?? 0,
+											product.currency,
+										)}{" "}
+										refundable security deposit
+									</span>
+									<span className="text-muted-foreground">
+										{" "}
+										— collected with your payment, returned after check-out.
+									</span>
+								</p>
+							) : null}
+							<p className="rounded-xl bg-accent/5 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+								{isPackage
+									? "Pick your start date on the next step — you'll see live availability on a calendar"
+									: "Pick your dates on the next step — you'll see live availability on a calendar"}
+								{instantBook
+									? ", and your booking is confirmed straight away."
+									: ", and nothing is paid until the seller approves your request."}
+							</p>
+						</div>
+					) : isEvent ? (
+						<>
+							<EventNotice pp={pp} />
+							{/* Where the rest of the decision lives. The option pills and
+							    the seat stepper moved to the RSVP page, so this page must
+							    say where they went — a buyer who saw pickers here before
+							    should not have to wonder. */}
+							<p className="mt-2 rounded-xl bg-accent/5 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+								{pp.hasOptions
+									? "Choose your option and how many seats on the next step."
+									: "Choose how many seats on the next step."}
+							</p>
+						</>
+					) : (
+						<>
+							<OptionPills pp={pp} />
+							<PurchaseHints pp={pp} />
+							<CustomOrderCard
+								pp={pp}
+								onAdd={(p, variant, qty, custom) =>
+									addVariantToCart(cart, p, variant, qty, custom)
+								}
+							/>
+						</>
+					)}
 
 					{/* Purchase controls — fixed bottom bar on mobile (thumb reach),
 					    in-flow under the buy box on desktop (`lg:static`). One block,
@@ -145,19 +227,67 @@ export function ProductPageView({
 						className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-5 py-4 shadow-[0_-12px_30px_rgba(15,23,42,0.08)] backdrop-blur pb-[max(1rem,env(safe-area-inset-bottom))] lg:static lg:z-auto lg:mt-6 lg:border-t-0 lg:bg-transparent lg:p-0 lg:shadow-none lg:backdrop-blur-none"
 					>
 						<div className="mx-auto max-w-xl lg:mx-0 lg:max-w-none">
-							<TotalPreviewRow pp={pp} />
-							<PurchaseActions
-								pp={pp}
-								onAdd={(p, variant, qty, custom) =>
-									addVariantToCart(cart, p, variant, qty, custom)
-								}
-							/>
-							<GoToCheckoutBar
-								cartItemCount={cart.itemCount}
-								cartTotal={cart.total}
-								currency={product.currency}
-								onCheckout={goToCheckout}
-							/>
+							{isBooking ? (
+								<div className="flex flex-col gap-1.5">
+									<Button asChild className="tap-target h-12 w-full">
+										<Link
+											to="/$slug/checkout"
+											params={{ slug: storeSlug }}
+											search={{ booking: product.slug }}
+										>
+											<CalendarRange className="size-4" aria-hidden />
+											{instantBook ? "Book now" : "Request to book"}
+										</Link>
+									</Button>
+									<p className="text-center text-xs text-muted-foreground">
+										{instantBook
+											? "Confirmed instantly — payment details follow."
+											: "Seller confirms within 24 hours — nothing is paid yet."}
+									</p>
+								</div>
+							) : isEvent ? (
+								<div className="flex flex-col gap-1.5">
+									<Button
+										asChild={!pp.eventFull}
+										disabled={pp.eventFull}
+										className="tap-target h-12 w-full"
+									>
+										{pp.eventFull ? (
+											<span>Fully booked</span>
+										) : (
+											<Link
+												to="/$slug/checkout"
+												params={{ slug: storeSlug }}
+												search={{ rsvp: product.slug }}
+											>
+												<CalendarClock className="size-4" aria-hidden />
+												RSVP
+											</Link>
+										)}
+									</Button>
+									<p className="text-center text-xs text-muted-foreground">
+										{pp.eventFull
+											? "Every seat is taken — message the store to ask about a cancellation."
+											: "Your seat is held once you RSVP — nothing is paid on this page."}
+									</p>
+								</div>
+							) : (
+								<>
+									<TotalPreviewRow pp={pp} />
+									<PurchaseActions
+										pp={pp}
+										onAdd={(p, variant, qty, custom) =>
+											addVariantToCart(cart, p, variant, qty, custom)
+										}
+									/>
+									<GoToCheckoutBar
+										cartItemCount={cart.itemCount}
+										cartTotal={cart.total}
+										currency={product.currency}
+										onCheckout={goToCheckout}
+									/>
+								</>
+							)}
 						</div>
 					</div>
 				</div>
@@ -218,7 +348,29 @@ export function ProductDescription({ text }: { text: string }) {
 }
 
 /** Mobile: the sheet's snap carousel. Desktop: main image + thumb strip. */
-function PageGallery({ images, name }: { images: string[]; name: string }) {
+/**
+ * The `sizes` each gallery branch requests, and the preload hint that must
+ * cover BOTH of them — one source, because the product route's `head()`
+ * preloads this gallery's first image and a hint that names a different
+ * candidate than the visible `<img>` is worse than no hint at all: it
+ * downloads bytes nothing paints, leaves the real LCP element unpreloaded,
+ * and mints a Cloudflare transformation per product (IMAGE_WIDTHS is the
+ * billing cap). They drifted exactly that way once — the preload carried the
+ * desktop string alone, so a 390px phone preloaded `w=960` while the carousel
+ * tile it paints asked for `w=640` (PR #308 review).
+ */
+export const GALLERY_MOBILE_SIZES = "256px";
+export const GALLERY_DESKTOP_SIZES = "(min-width: 1024px) 45vw, 100vw";
+/** Below `lg` the carousel tile paints; at `lg` and up the hero does. */
+export const GALLERY_PRELOAD_SIZES = `(min-width: 1024px) 45vw, ${GALLERY_MOBILE_SIZES}`;
+
+export function PageGallery({
+	images,
+	name,
+}: {
+	images: string[];
+	name: string;
+}) {
 	// Track the chosen image by URL, not index: picking a variant can swap the
 	// whole set, and a stale index would either point at the wrong photo or out
 	// of range. A URL that's no longer in the set simply falls back to the first
@@ -235,8 +387,8 @@ function PageGallery({ images, name }: { images: string[]; name: string }) {
 	return (
 		<>
 			{/* Mobile carousel — identical pattern to the detail sheet. */}
-			<div className="-mx-5 flex snap-x snap-mandatory gap-2 overflow-x-auto px-5 lg:hidden">
-				{images.map((url) => (
+			<div className="-mx-5 flex snap-x snap-mandatory gap-2 overflow-x-auto scrollbar-none px-5 lg:hidden">
+				{images.map((url, i) => (
 					<ZoomableImage
 						key={url}
 						src={url}
@@ -244,7 +396,27 @@ function PageGallery({ images, name }: { images: string[]; name: string }) {
 						caption={name}
 						wrapperClassName="w-64 shrink-0 snap-start"
 						className="aspect-square w-full rounded-2xl object-cover"
-						sizes="256px"
+						frame="raised"
+						sizes={GALLERY_MOBILE_SIZES}
+						// The phone's LCP element (z8r3fdegb5): a buyer arriving
+						// from a WhatsApp link paints THIS tile. It must not be
+						// lazy — Lighthouse fails a lazily-loaded LCP image, and a
+						// mobile Lighthouse run is this ticket's done-criterion —
+						// and the route preloads exactly its candidate, so eager
+						// costs no extra bytes on a phone.
+						//
+						// Deliberately NOT set on the desktop hero below. The two
+						// branches are separate trees and `eager` downloads
+						// regardless of visibility, so priority there would make
+						// every phone fetch the 45vw hero it never shows (w=960+ on
+						// mobile data). The hero stays lazy and paints from the same
+						// preload, which names the right candidate at both
+						// breakpoints. The trade runs the other way on desktop: this
+						// tile is display:none there and still fetches one w=640.
+						// That is the cheaper half — a small file on a fat pipe, not
+						// the done-criterion surface — and collapsing the two trees
+						// in T4 removes it outright.
+						priority={i === 0}
 					/>
 				))}
 			</div>
@@ -257,8 +429,9 @@ function PageGallery({ images, name }: { images: string[]; name: string }) {
 					caption={name}
 					wrapperClassName="block w-full"
 					className="aspect-square w-full rounded-2xl object-cover"
+					frame="raised"
 					// Desktop hero fills the left column of the two-column layout.
-					sizes="(min-width: 1024px) 45vw, 100vw"
+					sizes={GALLERY_DESKTOP_SIZES}
 				/>
 				{images.length > 1 ? (
 					<div className="mt-3 flex flex-wrap gap-2">
@@ -281,6 +454,7 @@ function PageGallery({ images, name }: { images: string[]; name: string }) {
 									aspect="size-14"
 									rounded="rounded-md"
 									sizes="56px"
+									frame="hairline"
 								/>
 							</button>
 						))}
@@ -288,5 +462,42 @@ function PageGallery({ images, name }: { images: string[]; name: string }) {
 				) : null}
 			</div>
 		</>
+	);
+}
+
+/**
+ * The scissors countdown for a product with a timed promotion — counting down
+ * TO the drop when it is scheduled, and to the end once it is live.
+ *
+ * Renders nothing for a plain discount: there is no deadline to show, and a
+ * band that never moves is furniture. Mounted as the page's top band, under
+ * the store header, exactly where the claim checkout and the storefront
+ * checkout put theirs (z8r3fdcw72 / z8r3fdr60v).
+ */
+function ProductPromoBand({
+	product,
+}: {
+	product: { promoState?: PromoState };
+}) {
+	const state = product.promoState;
+	const clock = usePromoClock(state);
+	if (!state) return null;
+	const teasing = promoTeasing(state, clock);
+	const deadline = teasing ? state.startsAt : state.endsAt;
+	if (deadline === undefined || deadline <= clock) return null;
+	// What the cut measures against: the whole sale while it runs, and — for a
+	// teaser, which has no "beginning" to measure from — the hour before the
+	// drop, so the strip reads as filling up rather than sitting still.
+	const total =
+		teasing || state.startsAt === undefined
+			? Math.max(deadline - clock, 60 * 60_000)
+			: deadline - state.startsAt;
+	return (
+		<CountdownBand
+			expiresAt={deadline}
+			totalMs={total}
+			label={teasing ? `${state.label} starts in` : `${state.label} ends in`}
+			icon={Zap}
+		/>
 	);
 }

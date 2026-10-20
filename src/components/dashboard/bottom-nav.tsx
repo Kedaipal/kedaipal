@@ -1,6 +1,7 @@
 import { Link, type LinkProps, useLocation } from "@tanstack/react-router";
 import {
 	ChevronRight,
+	GalleryHorizontalEnd,
 	Home,
 	LayoutGrid,
 	LineChart,
@@ -13,10 +14,14 @@ import {
 	ShoppingBag,
 	Siren,
 	Store,
+	Tag,
+	Ticket,
+	Truck,
 	Users,
 } from "lucide-react";
 import { Dialog as MorePrimitive } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
+import { usePermission } from "../../hooks/usePermission";
 import { cn } from "../../lib/utils";
 import { AppVersionRow } from "./app-version-row";
 import { WhatsNewNavItem } from "./whats-new";
@@ -27,7 +32,7 @@ export interface BottomNavProps {
 	// counting the whole in-progress pipeline would only ever climb. Same count as
 	// the inbox "New" chip + the Home tile. See docs/order-inbox.md.
 	newOrdersCount: number;
-	// Show the admin tabs (Sellers / Billing / WABA) instead of the seller nav.
+	// Show the admin tabs (Sellers / Billing / Showcases / WABA) instead of the seller nav.
 	// True for a storeless admin (no seller store to manage) AND for any admin
 	// while they're on an /app/admin route — so an admin can move between ALL
 	// admin pages on mobile, not just land on Sellers. See ClickUp 86ey8r734.
@@ -38,6 +43,9 @@ export interface BottomNavProps {
 	// CRM is plan-locked for this seller (Starter) — mark the Customers row with
 	// a "Pro" chip so the upgrade wall behind it is never a surprise.
 	crmLocked?: boolean;
+	vouchersLocked?: boolean;
+	// Promotions (bulk sale prices) are plan-locked (Starter).
+	promotionsLocked?: boolean;
 	// Insights is plan-locked (Starter) — same treatment on the Insights tab.
 	insightsLocked?: boolean;
 }
@@ -60,8 +68,11 @@ type Tab = {
  * list instead of fighting for a 7th tab. See docs/app-redesign.md.
  */
 const MORE_ROUTES = [
+	"/app/deliveries",
 	"/app/products",
 	"/app/customers",
+	"/app/promotions",
+	"/app/vouchers",
 	"/app/settings",
 	"/app/poster",
 ] as const;
@@ -71,8 +82,16 @@ export function BottomNav({
 	adminNav,
 	hasStore,
 	crmLocked,
+	vouchersLocked,
+	promotionsLocked,
 	insightsLocked,
 }: BottomNavProps) {
+	// Team members (86exr91r4): a member's tabs are the areas they can read
+	// (Counter needs write — it exists to ring up sales). Deep links into a
+	// hidden section still explain themselves via RouteAreaGuard.
+	const ordersPerm = usePermission("orders");
+	const insightsPerm = usePermission("insights");
+
 	const [moreOpen, setMoreOpen] = useState(false);
 	const { pathname } = useLocation();
 	// The More tab reads active while the sheet is up OR while the seller is on
@@ -110,28 +129,45 @@ export function BottomNav({
 					: []),
 				{ to: "/app/admin/sellers", label: "Sellers", icon: Store },
 				{ to: "/app/admin/billing", label: "Billing", icon: ShieldCheck },
+				{
+					to: "/app/admin/showcases",
+					label: "Showcases",
+					icon: GalleryHorizontalEnd,
+				},
 				{ to: "/app/admin/waba", label: "WABA", icon: Siren },
 			]
 		: [
 				{ to: "/app", label: "Home", icon: Home, exact: true },
-				{
-					to: "/app/orders",
-					label: "Orders",
-					icon: ShoppingBag,
-					badge: newOrdersCount,
-					// A badge must land on exactly what it counted — an unfiltered
-					// inbox would make the seller re-find it. Only when there IS
-					// something new: otherwise the tab would filter the inbox down to
-					// an empty "New" list every time it's used for plain navigation.
-					search: newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined,
-				},
-				{ to: "/app/checkout", label: "Counter", icon: QrCode },
-				{
-					to: "/app/insights",
-					label: "Insights",
-					icon: LineChart,
-					pro: insightsLocked,
-				},
+				...(ordersPerm.canRead
+					? [
+							{
+								to: "/app/orders",
+								label: "Orders",
+								icon: ShoppingBag,
+								badge: newOrdersCount,
+								// A badge must land on exactly what it counted — an
+								// unfiltered inbox would make the seller re-find it. Only
+								// when there IS something new: otherwise the tab would
+								// filter the inbox down to an empty "New" list every time
+								// it's used for plain navigation.
+								search:
+									newOrdersCount > 0 ? { bucket: ["new" as const] } : undefined,
+							} as Tab,
+						]
+					: []),
+				...(ordersPerm.canWrite
+					? [{ to: "/app/checkout", label: "Counter", icon: QrCode } as Tab]
+					: []),
+				...(insightsPerm.canRead
+					? [
+							{
+								to: "/app/insights",
+								label: "Insights",
+								icon: LineChart,
+								pro: insightsLocked,
+							} as Tab,
+						]
+					: []),
 			];
 
 	return (
@@ -149,6 +185,8 @@ export function BottomNav({
 						onOpenChange={setMoreOpen}
 						active={moreOpen || onMoreRoute}
 						crmLocked={crmLocked}
+						vouchersLocked={vouchersLocked}
+						promotionsLocked={promotionsLocked}
 					/>
 				) : null}
 			</div>
@@ -253,12 +291,21 @@ function MoreTab({
 	onOpenChange,
 	active,
 	crmLocked,
+	vouchersLocked,
+	promotionsLocked,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	active: boolean;
 	crmLocked?: boolean;
+	vouchersLocked?: boolean;
+	promotionsLocked?: boolean;
 }) {
+	const ordersPerm = usePermission("orders");
+	const productsPerm = usePermission("products");
+	const customersPerm = usePermission("customers");
+	const vouchersPerm = usePermission("vouchers");
+
 	const close = () => onOpenChange(false);
 	return (
 		<MorePrimitive.Root open={open} onOpenChange={onOpenChange}>
@@ -281,21 +328,55 @@ function MoreTab({
 					style={{ bottom: "calc(var(--app-bottomnav-h, 4.75rem) + 0.5rem)" }}
 				>
 					<MorePrimitive.Title className="sr-only">More</MorePrimitive.Title>
-					<MoreRow
-						to="/app/products"
-						icon={Package}
-						label="Products"
-						sub="Catalog, stock & variants"
-						onNavigate={close}
-					/>
-					<MoreRow
-						to="/app/customers"
-						icon={Users}
-						label="Customers"
-						sub="Buyer history & notes"
-						pro={crmLocked}
-						onNavigate={close}
-					/>
+					{/* First: it is the Orders tab's follow-through (86eye9xd4). */}
+					{ordersPerm.canRead ? (
+						<MoreRow
+							to="/app/deliveries"
+							icon={Truck}
+							label="Deliveries"
+							sub="Parcels to send & couriers on the road"
+							onNavigate={close}
+						/>
+					) : null}
+					{productsPerm.canRead ? (
+						<MoreRow
+							to="/app/products"
+							icon={Package}
+							label="Products"
+							sub="Catalog, stock & variants"
+							onNavigate={close}
+						/>
+					) : null}
+					{productsPerm.canRead ? (
+						<MoreRow
+							to="/app/promotions"
+							icon={Tag}
+							label="Promotions"
+							sub="Sale prices on many products"
+							pro={promotionsLocked}
+							onNavigate={close}
+						/>
+					) : null}
+					{customersPerm.canRead ? (
+						<MoreRow
+							to="/app/customers"
+							icon={Users}
+							label="Customers"
+							sub="Buyer history & notes"
+							pro={crmLocked}
+							onNavigate={close}
+						/>
+					) : null}
+					{vouchersPerm.canRead ? (
+						<MoreRow
+							to="/app/vouchers"
+							icon={Ticket}
+							label="Vouchers"
+							sub="Single-use discount codes"
+							pro={vouchersLocked}
+							onNavigate={close}
+						/>
+					) : null}
 					<MoreRow
 						to="/app/poster"
 						icon={Printer}

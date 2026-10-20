@@ -34,15 +34,23 @@ cards and table search identically and the export matches what's on screen.
 Two deliberate details:
 
 - **Phone keeps its own rule** — trailing-digit matching, so `123456789` finds
-  `+60123456789` however it was stored or typed. Plain substring can't do that.
+  the stored `60123456789` with or without its country code. Plain substring
+  can't do that. The typed digits are also tried **without leading zeros** (at
+  least 4 left), because a local number is usually typed with its trunk `0`:
+  a UK buyer's `07911 123456` finds the stored `447911123456` (buyers can give
+  a number from any country since `z8r3fdh274` — see
+  [`phone-numbers.md`](./phone-numbers.md)). Malaysia only ever matched by luck
+  — `60` ends in the trunk `0` — and Singapore has no trunk at all.
 - **Categories participate**, because they are frozen onto the order at checkout
   (see below). That was the one column a live lookup could never have covered.
   Orders placed *before* the field existed need
   `npx convex run migrations:backfillOrderCategoryNames` — see
   [product-categories.md](./product-categories.md).
 
-The haystack is built lazily (only when there IS a term), since it allocates ~36
-strings per order. Expect broader matches than before: a term appearing in a
+The haystack is built lazily (only when there IS a term), since it allocates a
+string per column, per order. Pickup notes participate (`z8r3fdff97`) through the
+same gate as the column — a self-collect order matches "ice bag", a delivery
+order whose line froze the same note does not. Expect broader matches than before: a term appearing in a
 shared field — a city every order ships to — now legitimately matches all of
 them. That breadth is the point.
 
@@ -52,9 +60,8 @@ them. That breadth is the point.
 "Completed or Cancelled" — everything closed — is a real question the single
 value could not ask, and every other enumerable filter on the inbox is already
 a multi-select, so a seller who has learnt "tap several chips" expects it here
-too. Each chip toggles membership; **"All" is the escape hatch, not a member** —
-it lights only while the set is empty and tapping it empties the set. Chip
-counts stay per-bucket. Chip taps `replace` history like the other
+too. Each chip toggles membership; **"All statuses" is the select-all, not a
+member.** Chip counts stay per-bucket. Chip taps `replace` history like the other
 multi-selects (a set built one tap at a time must not leave an entry per tap).
 The wire keeps accepting the old singular `bucket` (folded in by
 `toInboxFilterArgs`, "all" dropped), so deep links (`?bucket=new` from Home /
@@ -63,6 +70,240 @@ only `buckets`, and its presence-check joins `NARROWING_FILTER_KEYS`, which
 retires the gate's `bucket !== "all"` special case. The per-bucket empty-state
 copy ("No new orders…") only renders for a single-bucket selection; a multi
 set falls back to the generic line.
+
+### One flat set: buckets and booking chips are the same row (1 Sep)
+
+The booking-period chips shipped as a **separate dimension that ANDed** with the
+buckets, on the reasoning that buckets are a partition (every order in exactly
+one, so the counts sum) while an active booking is *simultaneously*
+`in_progress`. That reasoning is correct about the data and wrong about the
+product. What it produced:
+
+- two visually identical chips in one row that combined by different rules;
+- **"All statuses" staying lit** while a booking chip narrowed the list — a chip
+  claiming "everything" next to an active filter;
+- and, once an explicit "no status" state existed, **a chip reading `1` above an
+  empty list** (`Ending this week 1` + no bucket = nothing survives the AND).
+
+A distinction the seller cannot see is not a distinction worth having. They are
+**one multi-select set** now: every chip ORs into it, `In progress + Active now`
+means *either*, "All statuses" is the select-all and any chip unlights it.
+Unticking the last chip returns to "All". Same tone, no divider, no third state.
+
+`statuses` and `bookingPeriods` stay separate args on the wire — they are
+computed from different data — but the predicate ORs them in one arm, the same
+shape the category filter already uses, and the UI has exactly **one list, one
+toggle and one count function** (`StatusChipKey`). Booking chips are appended
+only for a store with booking listings, and sit last because booking is a
+minority feature, not because they are a different kind of thing.
+
+The partition property survives where it was actually load-bearing: **counts are
+still per-chip tallies over the full window**, which under a union is the honest
+reading — "this is what tapping me adds" — and is what makes it impossible for a
+chip to advertise rows the list won't show.
+
+### One status axis: the chip row and the panel are two grains of one state (1 Sep)
+
+The round above fixed the chip row against itself; this one fixes it against the
+**Filters panel**, which was a second filter state wearing the same word. The
+chips wrote `buckets` (coarse), the panel's STATUS section wrote `statuses`
+(exact `orders.status`), and the two **ANDed**. So:
+
+- ticking every row under the panel's `IN PROGRESS` heading left the "In
+  progress" chip dark — the panel could not express what the chip expressed;
+- and two selections that each had orders could combine to an empty list, with
+  both controls sitting lit on screen.
+
+**A bucket was never a set of statuses**, which is why syncing them was
+impossible rather than merely unwritten. `orderBucket` routes an **unseen
+push-path order** (born `confirmed`, never opened — 86eyf1rck) to *New*, so
+`New ⊅ {pending, booking_requested}`. On real data a store showed `New 2` on the
+chip while the panel's NEW group totalled `0`.
+
+The fix is a **leaf** — the filterable atom, `INBOX_LEAF_KEYS` in
+`convex/lib/orderBuckets.ts`. Every order resolves to exactly one via
+`orderLeaf`, and a bucket is *defined* as the union of its leaves
+(`BUCKET_LEAVES`), so `orderBucket = leafBucket(orderLeaf(o))` — same membership
+as before, now derived. `confirmed` splits into `confirmed_unseen` (New) and
+`confirmed` (In progress), which makes the leaf set a true partition, so **a
+bucket's count is the sum of its rows' counts** (pinned by tests at both the pure
+and the query layer).
+
+Three surfaces now write ONE field, `statuses`:
+
+| surface | grain |
+| --- | --- |
+| chip row | a whole bucket's leaves per tap — the group control |
+| Filters panel | one leaf per tick, grouped under tri-state bucket headings |
+| Status column header | one leaf per tick |
+
+The chip is therefore **tri-state**: all / some (a dash, `aria-pressed="mixed"`)
+/ none, and a partly-filled chip FILLS on tap exactly like `BulkSelectRow`.
+
+**"All statuses" is the select-all over THE ROW** — on in exactly two states,
+nothing picked or *every chip* picked, and binary rather than tri-state because
+it means the ABSENCE of a selection (a dash on it while one chip is lit would
+read as "partly everything", which is not a state). It is deliberately **not**
+"the axis isn't narrowing": that reading is defensible semantically — once every
+leaf is on, a booking period adds nothing under the union — but it lit "All"
+with all eight leaves on while two booking chips sat visibly dark beside it
+(owner report, 2 Sep), which is the same "a chip claiming everything next to an
+unlit one" problem the rounds above existed to remove. The two readings only
+disagree in states where the seller can SEE unlit chips. The row rule still
+covers the case that produced the narrower one (PR #243 review): the panel's
+Status select-all sets every leaf AND every period, so the row is fully picked
+and "All statuses" lights. Because "every chip picked" cannot be told from "some
+chips picked" without knowing what the row is OFFERING, `statusChipState` takes
+the available periods — empty for a store with no booking listings.
+
+The rules are pure and unit-tested in `src/lib/inbox-status-chips.ts` rather
+than buried in the route.
+
+**The Status section is rendered as a TREE**, because it is the only section
+three levels deep: section → bucket group → leaf. First pass gave the group a
+`BulkSelectRow` at the section's own offset and weight, and the seller had to
+read the words to work out which row was which (owner report). Now each level
+indents from the last, nested groups take `tone="subgroup"` on `BulkSelectRow`
+(smaller box, quieter label — a section heading must outrank a group heading,
+never the reverse), and the leaves sit behind a 1px left rule, which is the cue
+that reads the indent as *containment* rather than as a stray margin. Row height
+stays at the panel's 36px everywhere: a shorter subgroup row looked marginally
+tidier and made a tap target smaller than everything around it, which is not a
+trade worth making.
+
+**The empty-state copy ranks the axis as PLACE, not filter** (PR #243 review).
+The route's `filtersActive` fed the empty state a condition that counted the
+status axis, so one chip tap always rendered the generic "No orders match your
+filters" and the per-bucket copy ("No new orders…") plus the "Nothing in those
+statuses" arm were unreachable dead code. The ranking now lives pure in
+`src/lib/inbox-empty-copy.ts` — search → mockup → non-status filters → status
+selection (not exactly one whole bucket) → the whole bucket's own copy → "no
+orders yet" — with a test per arm, because reachability is exactly what
+regressed. Two clear affordances, two scopes, each matching its promise: the
+cards empty state has no button (its copy points at the chips/panel), while the
+table's **"Clear all filters" is the start-over** — it resets the axis too,
+since in table view the axis is set from the Status column's own filter funnel,
+and it appears for a status-only empty as well (gating it on non-status filters
+left that state with no way out). One more chip-rule corner from the same
+review: with **every leaf selected, "All statuses" stays lit even when period
+chips are on** — the union already matches every order, and the panel's Status
+select-all on a booking store produces exactly that state.
+
+**A card's total NAMES the refundable deposit inside it.** `OrderTotal`
+(`src/components/order/order-total.tsx`) keeps the bold figure at
+`order.total` — what the buyer paid and what lands in the bank — and adds
+"incl. RM X refundable deposit" beneath it when the order carries one. The
+headline is deliberately **not** netted down to the seller's share: it has to
+match the receipt PDF, the CSV `Total` column, the order detail, the WhatsApp
+confirmation and the actual transfer, and netting it here would be the
+Insights by-source leak pointing the other way. What the deposit needed was a
+NAME, not a subtraction — without it RM110 reads as revenue when RM20 of it is
+held money. Wording matches `booking-request-card.tsx`, trimmed because a card
+is scanned rather than read. Table view needs nothing: the column registry
+already carries a separate **Security deposit** column beside `Total`.
+Renders exactly as before on any order without one.
+
+**`top` and `off` are REMEMBERED per store; `only` is not.** The chip cycles
+three ways but they are not the same kind of thing. `top` vs `off` — whether a
+pin floats above the list or is filtered like any other order — is
+*presentation*, how this seller reads their inbox, so it lives in
+`localStorage` beside the layout (`useInboxView`) and the column set
+(`useOrderColumns`); a mode named in the URL still wins. `only` *narrows the
+list*, so it is a filter: URL-only, deliberately never remembered, because
+carrying it forward would silently hide the results of the seller's next
+drill-in. Precedence lives in one place, `resolvePinMode`
+(`src/hooks/useInboxPinMode.ts`).
+
+Without this, a seller who had turned pinning **off** got it switched back on
+every time they arrived from an Insights drill-in: a drill-in builds a fresh
+search object, so `pin` was absent, and absent meant the `top` default rather
+than "what I last chose". Note the scope of the fix — **ordinary filters are
+still URL state and are still replaced by a drill-in**, on purpose: arriving at
+Orders from the nav and finding last week's payment filter silently applied is
+the worse bug, and it would make every shared link a lie.
+
+**The Pinned chip renders whenever the mode is non-default, even at ZERO**
+(PR #243 re-review). Unpinning the last row while in "only" mode empties the
+list and used to take the chip away with it — leaving `?pin=only` in the URL, an
+empty inbox, and copy naming a control no longer on screen, with no way back
+except leaving the page (`clearAllFilters` deliberately doesn't touch `pin`, and
+the panel doesn't own it). A lit "Pinned only · 0" is truthful and is itself the
+exit. Deliberately NOT folding the mode to `"top"` when the count is zero:
+`pinnedCount` is `counts?.pinned ?? 0`, so it reads 0 while the counts load and
+that would silently rewrite a legitimate `?pin=only` bookmark before its data
+arrived — honouring the URL also removes the chip's first-paint flash. The copy
+splits on `anyPinned` too, because "none of them is in the statuses you picked"
+is false when there are no pins at all.
+
+**Two empty-state bugs the wide table hid** (owner report, 2 Sep). The table's
+empty row spans every column, and with a wide column set that cell is ~4,500px
+across — `text-center` put the message halfway along it, i.e. **thousands of
+pixels off-screen at the resting scroll position**, so a seller who filtered to
+nothing saw a blank box with no explanation and no way out. The content is now
+`sticky left-0` and sized to itself, so it rides the horizontal scroll and stays
+readable at any offset (verified at `scrollLeft: 3000` on a 4,580px table). The
+table also **stopped writing its own copy** — it takes `inboxEmptyCopy`'s
+result, so the two views can't describe one state two different ways.
+
+And the copy now names **pinned-only**, ranked directly after search: reaching an
+empty list with it on means the pin set is the binding constraint (pins that
+matched would be showing), so every arm below it would be a lie — "no orders
+need a mockup" is false when unpinned mockup orders exist. It is also the
+easiest constraint to enter by accident, since the Pinned chip is a **three-way**
+cycle and "only" is its second position, so the copy names the way back out.
+
+**`Not yet opened` is a visible row** under NEW. The unseen rule has driven the
+New bucket, the Home tile and the age escalation since 86eyf1rck without ever
+being nameable in the UI; the leaf split is what makes it sayable. It is
+deliberately **absent from `ORDER_STATUS_KEYS`** — that list is the seller's
+*rename* list, and "not yet opened" is a fact about their attention, not a
+pipeline stage they name. It is also self-clearing (open the order and it
+leaves), the same as an unread filter anywhere else.
+
+Two knock-on effects worth knowing:
+
+- **`booking_requested` became filterable**, closing a gap that predated this:
+  the panel built from `ORDER_STATUS_KEYS` (6, correctly excluding it), so
+  "Awaiting Approval" was reachable by the server validator and by nothing a
+  seller could click.
+- **`Ok go 118` becomes `Ok go 116` + `Not yet opened 2`.** More accurate — the
+  old number silently included orders the inbox was badging as New — but it is a
+  seller-visible figure that moves.
+
+Legacy `?bucket=` and any in-flight client sending `buckets` fold through the one
+shared `foldLegacyBuckets`, preserving the old AND as an intersection; the route
+folds at `validateSearch` so the stale param drops out of the URL on the next
+tap. Two cases it cannot recover exactly, both self-healing on refresh and both
+covered by tests: a legacy `statuses: ["confirmed"]` now means confirmed-AND-SEEN
+(nothing distinguishes it from a new client picking "Ok go" alone), and a
+contradictory pair falls back to the panel's own selection rather than to an
+empty array, which the predicate would read as *no filter at all*.
+
+**Booking periods ARE in the filter panel — inside the STATUS section.** They
+were briefly given their own section, then removed: the panel's sections all AND
+with each other, so a section that ORs with the chip row would be a worse lie
+than the one this replaced. Inside Status they OR with the leaves, which is what
+the section already does within itself, and every chip in the row now has a home
+in the panel.
+
+### The Pinned chip has three modes, and is not part of that set
+
+Pinning is the seller's own mark, not a status, so **"All statuses" never clears
+it and turning it on never unlights "All"**. It cycles `top → only → off → top`:
+
+| Mode          | URL             | Behaviour                                          |
+| ------------- | --------------- | -------------------------------------------------- |
+| `top` default | *(absent)*      | a pin outranks every filter (86eyrtz74)            |
+| `only`        | `?pin=only`     | show only pinned — **still ANDs with the filters** |
+| `off`         | `?pin=off`      | pins filtered like any other order                 |
+
+`only` is where "let me see just my pinned orders" lives. It deliberately keeps
+ANDing with everything else rather than short-circuiting: "pinned + New" is a
+sensible question, and a mode that ignored the lit status chips would leave them
+on screen asserting something false. One `pinMode` field rather than two
+booleans, so `{off, only}` can't both be set; the pre-`only` `showPinned` boolean
+is still accepted on the wire and folded in by `toInboxFilterArgs`, and a legacy
+`?nopin=true` still parses as `off`.
 
 - **"New" means "the seller hasn't dealt with it yet."** That was originally
   synonymous with `pending`, because an order sat there until the buyer's
@@ -106,6 +347,95 @@ set falls back to the generic line.
   be "confirmed" *and* "unpaid", so pulling it into its own bucket would yank it
   out of In-progress while still being worked. Payment is a multi-select filter.
 - **Phase it:** Phase 1 was the inbox; Phase 2 added bulk actions.
+
+## Fulfilment — how the order goes out ([`z8r3fdfau9`](https://app.clickup.com/t/z8r3fdfau9))
+
+The inbox could filter on every enumerable thing about an order **except the one
+a seller planning tomorrow actually asks**: which of these do I deliver, and
+which are people coming to collect? The `Fulfilment` column had shipped with the
+table and was the only default-visible enumerable column with no header funnel.
+
+Five options, and they are **exactly the values `fulfilmentKey()` can return**
+(`convex/lib/orderCsv.ts`) — the filter is built from the registry rather than
+holding its own list, because the picker offering a word the column can't print
+is the `storefront` / "Online" drift this file already records:
+
+| key | label | rule |
+| --- | --- | --- |
+| `delivery` | Delivery | the method, or no method at all (every legacy order) |
+| `self_collect` | Self-collect | pickup at the seller's own place |
+| `drop_off` | Drop-off | pickup at an agreed meetup point |
+| `collection` | We collect | `deliveryDirection === "collection"` — the opposite trip |
+| `booking` | Booking | nothing ships; the guest turns up on check-in day |
+| `event` | Event | an RSVP to a fixed-moment event — **stored `self_collect`** |
+
+An RSVP to an approval-gated event (`z8r3fdkjek`) waits in the
+`booking_requested` **status** — the one bookings already use — while staying an
+RSVP. Status and fulfilment are different axes and neither bends the other: that
+order is an **Event** awaiting approval, not a Booking. `eventRsvp` is what tells
+the two apart, which is exactly why the key is derived from `orderFlowKind`
+rather than from the status or the method.
+
+**`fulfilmentKey` is built on `orderFlowKind`, and two refinements sit on top of
+it.** The flow kind comes first and that is not tidiness: an **event RSVP is
+stored `deliveryMethod: "self_collect"`** (the buyer collects at the venue) and
+is told apart only by the frozen `orders.eventRsvp` marker, so reading the
+method files every RSVP under "Self-collect" — the exact flattening this
+function exists to undo for drop-off. `orderStatus.ts` states the rule in one
+line: *derive with `orderFlowKind`, never by re-reading products*.
+
+The two refinements are the cases the stage flow doesn't care about but the
+seller's day does, and **each is gated on its own kind**: a `collection` order is
+stored `deliveryMethod: "delivery"` but the rider goes buyer→store
+([`86eyg0n8e`](https://app.clickup.com/t/86eyg0n8e)), and a `drop_off` order is
+stored `self_collect` but the seller is standing at a pasar, not behind their
+counter ([`86ey30yhr`](https://app.clickup.com/t/86ey30yhr)). Gating each on its
+kind is what keeps the flow kind winning — a booking or an RSVP can never be
+relabelled by a stray direction or a snapshot it had no business carrying.
+Writing those two as an early return instead makes the branch **unreachable**
+(the same value falls out of the tail), and an unreachable guard is one no test
+can hold — which is how it was caught.
+
+Because the column, the funnel, the predicate and the CSV all call this one
+function, the rows a tick keeps are exactly the rows whose cell shows the ticked
+word — a structural guarantee, not a convention to remember.
+
+**Adding a flow kind means adding it here too.** `FULFILMENT_KEYS` is a superset
+of `OrderFlowKind` (it adds the two refinements), so a new kind needs a key, a
+label, a `fulfilmentKeyValidator` literal, and — the one that fails silently —
+whatever field identifies it carried through `orderToCsvSource`.
+
+**Drop-off was promoted into the column as part of this.** It is already its own
+word in buyer emails, WhatsApp copy and the Settings pickup badges; only the
+inbox flattened it into "Self-collect", so a seller running three pasar meetups
+could not tell them apart in the table without also adding the Pickup-location
+column, and could not filter to them at all. ⚠️ **The CSV's `Fulfilment` cell
+therefore changed value** from `self_collect` to `drop_off` on those rows — no
+data changed, but a seller with a spreadsheet formula keyed on `self_collect`
+has to widen it. Call it out in release notes.
+
+**The dimension is presence-driven and hides itself.** `fulfilmentChoicesFrom`
+offers the kinds this seller's window actually contains, in registry order
+(never by count — a list that reshuffles as orders land has to be re-read every
+time), plus anything already **selected**: a lit filter with no visible row is a
+filter the seller cannot switch off, the rule `methodChoicesFor` already follows
+for payment rails. `fulfilmentFilterApplies` is the single "is this worth
+showing" test, asked by **both** the panel section and the column funnel, so the
+two appear and disappear together — a delivery-only store sees neither rather
+than a control that can only narrow to what it already has.
+
+Placement is deliberate: the panel section sits **directly under Order type**,
+not appended after Order date. The two are one journey read twice — how it came
+IN, how it goes OUT — and a seller reaches for them together.
+
+Wiring, all of it the same shape every other dimension uses: `?ful=`
+(`?ful=["delivery","drop_off"]` — the router's JSON array form, same as `pay`
+and `asrc`; a bare `?ful=delivery` is accepted and heals into it)
+→ `InboxFilterArgs.fulfilments` → `buildInboxPredicate` → the CSV export through
+the shared predicate. It is in `NARROWING_FILTER_KEYS`, so it sits behind the
+same Pro gate as payment and category (that record is compiler-enforced complete
+— the reason a filter added without touching it can no longer fail the gate open
+silently).
 
 ## Views: Cards and Table (86eyrtz74)
 
@@ -332,10 +662,14 @@ WhatsApp.
   "these orders, by total" is worth sharing, unlike a 36-toggle layout.
 - **Filter from the column header** (86eyrtz74). A funnel in the header of
   every filterable column opens a multi-select list of that column's values.
-  Filterable today: **Status, Categories, Order type, Came from, Payment,
-  Payment method** (multi) and **Fulfilment date** (single — the due windows
-  overlap, so offering them as a set would let a seller build a combination that
-  reads like an intersection and behaves like a union).
+  Filterable today: **Status, Categories, Order type, Fulfilment, Came from,
+  Payment, Payment method** (multi) and **Fulfilment date** (single — the due
+  windows overlap, so offering them as a set would let a seller build a
+  combination that reads like an intersection and behaves like a union).
+  **Fulfilment's funnel is conditional** — it is registered only when the window
+  holds more than one kind, so on a delivery-only store the header has no funnel
+  rather than one that opens onto a single row (see the Fulfilment section
+  above).
   - **`ui/column-filter-menu.tsx` is generic** and knows nothing about orders —
     it takes options, a selection and a handler, so the next table reuses it
     whole. Everything order-specific (which columns, where the options come
@@ -391,14 +725,25 @@ WhatsApp.
     option showing `0` is the answer to "why is my list empty?". The picker
     never shrinks as it is used; one that did would read as orders vanishing.
     An order counts **once per category**, never once per line, so the number
-    beside an option is the number of rows it will show.
-  - **Two new server dimensions.** `statuses` is exact order status, multi, and
-    deliberately a *separate* dimension from `bucket` rather than a replacement:
-    a bucket is the coarse stage you navigate by, this is the precise one you
-    question ("packed OR shipped — out of my hands but not delivered"), which no
-    single bucket expresses. `categories` matches when ANY line carries ANY
-    chosen name — a mixed ticket belongs to every category it contains — and is
-    only affordable because categories are frozen at checkout.
+    beside an option is the number of rows it will show. **The category facet
+    is a list of `{ name, count }` pairs, not a name-keyed object** (hotfix
+    [`z8r3fdv1r4`](https://app.clickup.com/t/z8r3fdv1r4), 16 Oct 2026): Convex
+    refuses to serialise an object whose field name has a non-ASCII character,
+    and category names are the seller's own words — Her Moolah Collective
+    prefixed theirs with `✦`, and the first order carrying one took the whole
+    inbox down for the store. The other six facets are keyed by enums we own,
+    so they stay objects; the client reads the category one through
+    `categoryCount(facets, name)`, never by index.
+  - **Two new server dimensions.** `statuses` is the status axis, multi. It
+    shipped as a *separate* dimension that ANDed with `bucket`, on the reasoning
+    that a bucket is the coarse stage you navigate by while this is the precise
+    one you question ("packed OR shipped — out of my hands but not delivered").
+    The distinction was real; making it two filter states was not — see
+    [One status axis](#one-status-axis-the-chip-row-and-the-panel-are-two-grains-of-one-state-1-sep).
+    Both grains now write this one field, at leaf granularity, and `bucket` is
+    accepted only as a legacy alias. `categories` matches when ANY line carries
+    ANY chosen name — a mixed ticket belongs to every category it contains — and
+    is only affordable because categories are frozen at checkout.
   - **`source` widened to `sources`** (multi): "online or claim link, but not
     counter" is a real question a single value could not ask. The singular is
     still accepted and folded in by `toInboxFilterArgs`, so bookmarks survive;
@@ -452,7 +797,7 @@ WhatsApp.
   the already-sorted model keeps the active sort applying inside both halves.
   Pinning stays a partition, never a competing sort key.
 - **Export honours the view.** In table view the Export button becomes a
-  two-item menu — *Export visible columns (N)* / *Export all columns (36)* —
+  two-item menu — *Export visible columns (N)* / *Export all columns (N)* —
   rather than a dialog, which would tax a path sellers hit often. In cards view
   there is no column selection to honour, so it stays a one-tap button that
   exports everything.
@@ -492,9 +837,19 @@ into. Only the soft-lock applies.
 **Never bumps `updatedAt`** — bookmarking is not progress on the order, and that
 field drives the time-in-status badge (the `markSeen` trap).
 
-**Discoverability + the staleness escape hatch.** The pin control is on every
-card, every table row and the order detail header, always rendered (never
-hover-only). The **Pinned N** chip appears once something is pinned, leads the
+**Discoverability + the staleness escape hatch.** The pin **toggle** is on every
+table row, the order detail header and the bulk bar, always rendered (never
+hover-only). A **card** shows a pin *marker* instead — a filled accent pin beside
+the customer name plus an accent-tinted border — because the card is a `<a>` and
+a button nested inside an anchor is invalid markup; toggling happens on the row,
+the detail page, or via select-mode. This was originally missing entirely
+(owner report, 1 Sep): cards are the default view and the only one on a phone, so
+pinned orders sorted to the top and then looked identical to everything else —
+"why are these first?" had no answer on screen. The border is *tinted*, not
+thicker, because a wider edge shifts that card's text against its grid
+neighbours and reads as a rendering bug rather than emphasis.
+
+The **Pinned N** chip appears once something is pinned, leads the
 chip row — the seller's own urgency outranks the system's buckets — and its
 count is tallied over the full window, so it states the real total and doesn't
 shrink under a filter. Since pins never auto-clear, that count is the standing
@@ -577,8 +932,11 @@ returns **the filtered page plus the per-bucket counts in a single subscription*
     from burying one that just arrived (the old due-date default did exactly that,
     which confused sellers — see the Sort control below).
   - **Due date** — `compareInboxOrder`: fulfilment date ascending (soonest-first,
-    the fulfilment queue), dateless orders sink to the bottom. Relies on the
-    newest-first input for its within-date tiebreaker.
+    the fulfilment queue), dateless orders sink to the bottom. **Same-day orders
+    fall in time order, untimed after timed** (`z8r3fdff97` — pickups carry a
+    time now, so a kitchen's list reads in the order buyers arrive); the table's
+    Fulfilment date column sorts the same way (`fulfilmentMomentSortKey`). Relies
+    on the newest-first input for its tiebreaker between untimed same-day orders.
   Fulfilment urgency is *also* surfaced by the Due chips + due-today banner + Home
   strip, so due-date is a deliberate opt-in, not the default. Export sorts
   independently (still `compareInboxOrder`, a stable bookkeeping order). See
@@ -630,8 +988,10 @@ and escalates for `pending` **or** unseen.
   `fwin`) sits inline above the advanced filters — fulfilment urgency is a
   primary axis for F&B sellers, not a buried filter. Each order row carries a
   **fulfilment-date badge** (`fulfilment-date-badge.tsx`) that leads with urgency
-  (Overdue / Today / Tomorrow coloured) — **suppressed to neutral on terminal
-  orders and hidden entirely on counter orders** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734),
+  (Overdue / Today / Tomorrow coloured), with the order's time when it has one
+  ("Today · 3:30 PM", `fulfilmentBadgeLabel`, `z8r3fdff97` — never on the
+  muted or Overdue variants, where the day is the whole message) — **suppressed
+  to neutral on terminal orders and hidden entirely on counter orders** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734),
   see [`fulfilment-date.md`](./fulfilment-date.md)). Each card's meta line shows
   the **absolute placed-at datetime + relative age** (`formatOrderTimestamp` +
   `formatStatusAge`, e.g. "12 Jul, 3:45 PM (3h ago)") so the seller reads both
@@ -662,8 +1022,11 @@ and escalates for `pending` **or** unseen.
 - **`order-time-badge.tsx`** — "time in status" pill (e.g. "2h"). Only **pending**
   escalates: amber >4h, red >24h (the missed-order risk window); other statuses
   are neutral.
-- **`order-filters.tsx`** — one coherent filter set: an **"Order type"** pair
-  (Online / Counter → `source`), a **"Came from"** multi-select (marketing
+- **`order-filters.tsx`** — one coherent filter set: an **"Order type"**
+  multi-select (Storefront / Counter / Claim link → `sources`), a
+  **"Fulfilment"** multi-select directly beneath it (how the order goes out →
+  `fulfilments`, z8r3fdfau9 — the twin of Order type, and hidden entirely on a
+  store with only one kind), a **"Came from"** multi-select (marketing
   origin → `attributionSources`, 86eyq0eq9 — a SEPARATE dimension from Order
   type: that is the checkout surface, this is where the buyer arrived from; its
   chips come from the query's `availableSources` because seller tags are
@@ -697,7 +1060,34 @@ and escalates for `pending` **or** unseen.
   order is never counted. `bottom-nav.test.tsx` covers the badge value + that it
   lands on `?bucket=new` (and doesn't filter when there's nothing new).
 
+- `convex/lib/orderCsv.test.ts` → fulfilment — `fulfilmentKey` precedence
+  (collection beats the method, drop-off beats self-collect, no method reads as
+  delivery) and that every key has a real label rather than falling through to
+  `humanizeEnum`.
+- `convex/lib/orderInboxFilter.test.ts` → "fulfilments" — each kind matches only
+  its own orders, several OR together, an empty list filters nothing, it ANDs
+  with payment, and it gates like every other narrowing filter.
+- `convex/orders.test.ts` → fulfilment — facets tallied over the UNFILTERED
+  window, every registry key accepted by the wire validator, and the CSV's
+  `Fulfilment` cell reading `drop_off` (which catches the export projection
+  silently dropping `pickupSnapshot.locationType`).
+- `order-column-filters.test.ts` — the funnel's options read exactly like the
+  column (the fulfilment case builds the order that produces each key), and the
+  funnel is absent until there is a second kind.
+- `order-filters.test.tsx` → "Fulfilment" — hidden on a one-kind store, shown
+  with registry labels + counts, select-all writes exactly what it offered, a
+  selected-but-absent kind stays pickable, each kind is its own token.
+
 ## Phase 2 — bulk actions (shipped)
+
+> **A lapsed store can't use any of this.** From 19 Sep 2026 an expired seller's
+> dashboard is **view-only** (`z8r3fdeub2`): `updateStatus`/`bulkUpdateStatus`
+> and every other order action are refused server-side. The inbox's **Select**
+> button — the door to bulk actions — is disabled with the reason, and a
+> `ViewOnlyNote` sits under the header. Export stays enabled: a seller's own
+> data is never held hostage. See
+> [`manual-subscription.md`](./manual-subscription.md#soft-lock-past_due).
+
 
 - **`convex/orders.ts`**: the core of `updateStatus` was extracted into a shared
   `applyStatusTransition(ctx, order, status)` helper (stock-restore-on-cancel +

@@ -94,15 +94,31 @@ describe("MASK_PII sweep coverage (86eyn25g9)", () => {
 		["src/components/dashboard/customer-card.tsx", 1],
 		["src/components/dashboard/customer-detail.tsx", 1],
 		["src/components/dashboard/customer-list.tsx", 1],
+		// Home's Customers card draws the board's avatar stack — one initial per
+		// buyer. An initial beside that buyer's order history is still identity,
+		// and Home is a Clarity-recorded page, so the stack carries the mask
+		// (z8r3fdrgzj, Zaki 13 Oct 2026).
+		["src/components/home/customers-card.tsx", 1],
 		["src/routes/app.orders.$shortId.tsx", 5],
 		["src/routes/app.orders.index.tsx", 1],
-		["src/routes/app.index.tsx", 1],
+		// NOT src/routes/app.index.tsx. Home carried one masked surface — the
+		// recent-orders list, which showed buyer names — and the sales-first
+		// redesign removed it (z8r3fdrgzj decision 3: the Orders tab and the New
+		// cell already cover it). Home's ONLY buyer-identity surface now is the
+		// Customers card's avatar stack, one masked initial per face, and it
+		// carries its own row above; everything else this route renders is a
+		// count, a product name or a source label. Re-add this row the moment
+		// `app.index.tsx` ITSELF shows a buyer's name, phone, address or note.
 		["src/routes/app.customers.$customerId.tsx", 1],
 		["src/routes/app.checkout.tsx", 6],
 		["src/components/order/order-document-actions.tsx", 1],
 		["src/components/order/book-delivery-card.tsx", 2],
 		["src/components/settings/fulfilment-tab.tsx", 1],
 		["src/components/storefront/checkout-form.tsx", 1],
+		// The booking checkout echoes the buyer's number back ("We'll WhatsApp
+		// the decision to +60 12-345 6789") on /$slug/checkout, where Clarity
+		// boots — it shipped unmasked until z8r3fdh274 rewrote that line.
+		["src/components/storefront/booking-checkout-form.tsx", 1],
 		// Claim links (86eyq0epn). The BUYER-facing two shipped unmasked (PR #227
 		// review): with Clarity booting on /claim, Balanced mode records every
 		// rendered string verbatim, so the buyer's name and phone landed in

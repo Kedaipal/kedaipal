@@ -17,6 +17,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { mytMidnightFromYmd } from "../../../convex/lib/fulfilmentDate";
+import { REVENUE_LEAVES } from "../../../convex/lib/orderBuckets";
 import { bucketRange, RevenueTrend, scrubIndex } from "./revenue-trend";
 
 afterEach(cleanup);
@@ -113,8 +114,19 @@ describe("RevenueTrend — scrub interaction", () => {
 		expect(screen.getByText(/5 orders/)).toBeTruthy();
 		// Deep link into the inbox filtered to that day.
 		const link = screen.getByText("View orders").closest("a");
-		expect(link?.getAttribute("href")).toContain("from=");
-		expect(link?.getAttribute("href")).toContain("to=");
+		const href = link?.getAttribute("href") ?? "";
+		expect(href).toContain("from=");
+		expect(href).toContain("to=");
+		// …and to the SAME statuses the bar counted. A date range alone opened
+		// a longer list than the readout promised, including cancelled orders.
+		// The router JSON-encodes a repeated param, so decode before matching.
+		const decoded = decodeURIComponent(href);
+		for (const leaf of REVENUE_LEAVES) {
+			expect(decoded).toContain(`"${leaf}"`);
+		}
+		expect(decoded).not.toContain('"cancelled"');
+		expect(decoded).not.toContain('"pending"');
+		expect(decoded).not.toContain('"booking_requested"');
 	});
 
 	it("a zero-order bucket shows details but no View-orders link", async () => {

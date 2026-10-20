@@ -18,6 +18,15 @@ export:
 > the order receipt's generate-on-demand-never-store posture, adds the only
 > non-A4 page sizes in the codebase (A6 and an A4 4-up imposition), and brings
 > in-repo QR + Code 128 encoders that `render.ts` draws.
+>
+> A **fourth**: the **credit-pack receipt** (Credits T2, `z8r3fdf8ht` —
+> [`credits.md`](./credits.md#top-up-packs-t2)). Kedaipal's own document like B,
+> and frozen once paid like B's receipt face (`creditPurchases.receiptPdfStorageId`,
+> `buildCreditPurchaseReceiptPdf`): the pack, the credits, the amount, the rail,
+> the date the credits expire and "non-refundable and not redeemable for cash".
+> Built for it and fixed in passing: a gateway-settled invoice receipt printed
+> the raw tag — "Paid: … (hitpay_touch_n_go)" — until `paymentMethodDisplay`
+> routed `hitpay_*` through `gatewayPaymentMethodLabel` ("Touch 'n Go").
 
 ClickUp `86ext578n`. Needed before the first paid customer (~5 Jul 2026).
 
@@ -67,7 +76,7 @@ Pure, render-free (unit-tested):
 
 ### The column registry (86eyrtz74)
 
-`ORDER_COLUMNS` is the single definition of "an order as a row": 36 entries,
+`ORDER_COLUMNS` is the single definition of "an order as a row": 38 entries,
 each with a `key`, a `label` (used as BOTH the CSV header and the table header),
 a `group` (sections the table's column picker), a `width`, and a `value(order)`
 accessor. **The CSV and the dashboard table render from the same array** — the
@@ -85,14 +94,24 @@ and in the column picker with no other change.
   `Subtotal + Custom work + Pickup fee + Delivery fee = Total`. Before
   86eyrtz74 there was no `Custom work` column while `computeOrderTotals` folded
   the mockup quote into `total`, so a made-to-order row silently failed to
-  reconcile. The five columns are kept **adjacent** so a human can check it by
-  eye, and a test pins that adjacency.
-- **`Categories (current)` is a LIVE lookup**, not a snapshot — categories are
-  deliberately never frozen onto an order line (see
-  [`product-categories.md`](./product-categories.md)), so the cell is what those
-  products are filed under *today*. Deduped and sorted across all lines, comma-
-  separated. Resolved by `attachOrderCategories`, batched by distinct
-  `productId` per page.
+  reconcile. The six money columns (with `Security deposit`) are kept
+  **adjacent** so a human can check it by eye, and a test pins that adjacency.
+- **`Categories` is frozen per line at sale time** (`orders.items[].categoryNames`),
+  not looked up — the cell is what those products were filed under when the
+  order was placed. Deduped and sorted across all lines, comma-separated. See
+  [`product-categories.md`](./product-categories.md).
+- **`Fulfilment time` covers self-collect too** (`z8r3fdff97`): a pickup time
+  prints like a delivery slot. The `Fulfilment date` column **sorts by the
+  moment** (`fulfilmentMomentSortKey`) — same-day orders in time order, untimed
+  after them — the same order as the inbox's "due" sort.
+- **`Pickup notes`** (`z8r3fdff97`) sits right after `Pickup address`: the
+  instruction the buyer was given, frozen per line at create
+  (`orders.items[].pickupNote`), deduped in cart order and joined with ` | `
+  (notes are sentences with their own commas). It goes through
+  `orderPickupNotes`, the same gate WhatsApp and /track use, so it is **blank on
+  delivery and counter orders** even though their lines froze a note. Not
+  default-visible in the table (it would repeat the seller's own sentence down
+  every row of that product); searchable like every column.
 - **`orders.trackingToken` is deliberately absent**, along with internal ids,
   storage ids and the `gateway*` / `confirmationPush*` plumbing. The token is
   the capability that unlocks the buyer's no-auth tracking page and exports get
@@ -106,6 +125,17 @@ Rendering (pdf-lib, runs in the default Convex runtime — no `"use node"`):
   payment card, centered footer) using the slate-900/mint palette from
   `src/styles.css`. Text is sanitized to WinAnsi (standard fonts throw on
   emoji/CJK), so a non-Latin store name degrades gracefully instead of crashing.
+  The ORDER document's foot is the clickable **"Powered by Kedaipal"** lockup —
+  the web footer's pill-over-wordmark, `poweredByLockup` + a URI link
+  annotation tagged `?src=powered-by-receipt&store=<slug>`;
+  `OrderReceiptData.storeSlug` exists only for that link and is never printed;
+  see [`powered-by-badge.md`](./powered-by-badge.md). The subscription
+  invoice — Kedaipal's own document — keeps the plain `kedaipal.com` line.
+- `convex/lib/pdf/lockup.ts` — the "Powered by" wordmark
+  (`public/poster/kedaipal-lockup.svg`) rasterised and inlined the same way as
+  the logo below. To refresh: render the SVG to a PNG (`qlmanage -t` on macOS
+  pads to a square — crop to the 98:21 box), then run the generator below with
+  `lockup.ts` / `KEDAIPAL_LOCKUP_PNG_*` / `kedaipalLockupPngBytes` substituted.
 - `convex/lib/pdf/logo.ts` — the Kedaipal brand lockup (`public/logo-2.png`)
   inlined as base64 so `embedPng` needs **no network fetch** (deterministic render
   inside the action). To refresh after a logo change, regenerate it:
@@ -137,6 +167,34 @@ and a footer nudging the `ORD-XXXX` payment reference). The download filename
 matches (`Receipt-…` / `Invoice-…`). No separate invoice builder or table — the
 pay-later counter case reuses this.
 
+**The predicate + nouns live in ONE module** — `convex/lib/orderDocument.ts`
+(`isOrderDocPaid`, `orderDocumentNoun`, `orderDocumentTitle`), imported by the
+mapper, the filename, `ReceiptDownloadButton` and the counter Done-screen
+actions (`z8r3fdcrzj`). Before that, all three download buttons hardcoded
+"Download receipt" while the PDF titled itself "Invoice", so the invoice face —
+the thing a seller chasing a corporate payment needs — was effectively
+undiscoverable. **Every button label now derives from `paid`**: an unpaid order
+offers "Download invoice" everywhere (seller order detail, mobile action sheet,
+buyer tracking page — the buyer's copy is what they forward to whoever pays for
+them).
+
+**Seller legal identity on the "From" block (`z8r3fdcrzj`):**
+`retailers.businessIdentity` — registered name, SSM/UEN (label picked by store
+country via `REGISTRATION_LABEL`), a multiline billing address, tax number, and
+a billing contact — prints under the store name on BOTH faces
+(`businessIdentityToLines`). Every field optional; all-blank renders the legacy
+one-line block byte-identically. Captured in **Settings → Store → Business
+details** (directly under Business name — it's the legal half of store
+identity), with copy stating outright that the fields appear on buyer
+documents. **Deliberately NOT `retailers.businessAddress`** — that field is the
+private radius-mode geo origin (often the seller's home, owner-only by schema
+comment); this one is typed by the seller specifically to be published. It is
+never added to the by-slug storefront payload (a test pins this) — it reaches a
+buyer only inside a PDF their tracking token already unlocks. Because the order
+document is generated on demand, identity saved *after* an order was placed
+appears on that order's future downloads too — intended (the buyer document is
+not a frozen financial record), same posture as a store rename.
+
 Backend:
 - **A:** `orders.generateReceiptPdf` (public action) → returns PDF bytes +
   filename. Authorized through the same `resolveSharedOrder` seam as `orders.get`:
@@ -159,12 +217,28 @@ Backend:
   `issueInvoice`) renders + stores the blob; idempotent (skips if one exists).
   `invoices.getInvoicePdfUrl` returns an ownership-checked signed URL (owning
   retailer **or** admin; `null` while still rendering).
+- **B (paid receipt, `z8r3fdcrzj`):** marking an invoice paid schedules
+  `invoices.generateInvoiceReceiptPdf`, which renders the SAME builder's
+  **receipt face** ("Receipt" title, green Paid pill, `Paid: <date> (<method>)`
+  in the dates strip, an **"Amount paid"** bar, NO payment-instructions card, a
+  thank-you footer) into a **second** blob, `invoices.receiptPdfStorageId` —
+  never an overwrite of the frozen invoice blob, which remains the bill the
+  seller was sent. The face is **explicit opt-in**
+  (`invoiceToSubscriptionData({ asReceipt: true })`), never derived from row
+  status, so the legacy on-demand *invoice* render of an already-paid row still
+  produces an invoice. `getInvoiceReceiptPdfUrl` /
+  `getOrCreateInvoiceReceiptPdfUrl` mirror the invoice pair (same ownership
+  gate; on-demand covers rows paid before this shipped); the generator refuses
+  anything not `paid`, so pending/void rows can never mint one. Surfaced as a
+  second icon button on **paid** rows of the billing tab's invoice history.
+  (The admin console's invoice list is pending-only, so it has nowhere to show
+  a receipt — admins reach one via act-as if ever needed.)
 - **CSV:** `orders.exportOrders` (**action**) — same filter args as
   `searchOrders` (via the shared predicate), or an explicit `orderIds` selection.
   Unlike the reactive inbox (capped at a 1000-doc scan), the export **paginates
   the full result set** in 500-row pages via the internal `exportPage` query, so
   a bookkeeping export is never silently truncated to the latest 1000 orders. A
-  hard `EXPORT_SCAN_CAP` (20,000 docs ≈ 10 months at the Scale tier) bounds the
+  hard `EXPORT_SCAN_CAP` (20,000 docs ≈ 10 months at 2,000 orders a month, an Enterprise-sized store) bounds the
   worst case and is surfaced as a `capped` flag — the inbox warns the seller
   ("Exported the latest N … narrow the date range") rather than returning
   silently-incomplete books. Returns `{ csv, count, capped }`. An action (not a
@@ -200,14 +274,27 @@ seconds before the async render lands, rather than failing silently.
 
 ## Schema
 
-One additive optional field (`convex/schema.ts`, dev-only widen, no backfill):
+Additive optional fields only (`convex/schema.ts`, dev-only widen, no backfill):
 
 ```ts
 // invoices
 pdfStorageId: v.optional(v.id("_storage")),
+receiptPdfStorageId: v.optional(v.id("_storage")), // paid receipt (z8r3fdcrzj)
+
+// retailers — legal identity for buyer documents (z8r3fdcrzj)
+businessIdentity: v.optional(v.object({
+	legalName: v.optional(v.string()),
+	registrationNumber: v.optional(v.string()), // SSM (MY) / UEN (SG)
+	address: v.optional(v.string()), // multiline, paper-only
+	contact: v.optional(v.string()),
+	taxNumber: v.optional(v.string()), // printed string, no tax behaviour
+})),
 ```
 
 ## Out of scope (tracked separately)
 
 Email delivery of invoices/receipts; a dedicated invoice-list UI; payment
-reconciliation; SST/tax compliance.
+reconciliation; SST/tax compliance (LHDN MyInvois e-Invoice included —
+`businessIdentity.taxNumber` is a printed string with no behaviour); sequential
+per-retailer invoice numbering on buyer documents (they reference `ORD-XXXX`;
+a gapless series is a compliance feature to build alongside tax).

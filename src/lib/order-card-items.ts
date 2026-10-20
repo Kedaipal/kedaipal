@@ -61,3 +61,32 @@ export function summarizeOrderCardItems(
 		moreAmount: folded.reduce((sum, it) => sum + it.lineTotal, 0),
 	};
 }
+
+/**
+ * A stable, unique React key for every line of an order's `items[]`, paired
+ * with the line — for `.map(({ key, item }) => …)` in the three item lists
+ * (seller detail, inbox card, buyer tracking page).
+ *
+ * The lists used to key on `variantId` alone, which was unique until a
+ * weekend rate (booking S13) made two lines legitimately share one variant —
+ * React then warned, and on a live re-render could drop or swap the second
+ * line. The array index is not an answer either: the house lint rejects it
+ * as a key, and rightly, because it says nothing about the line. Instead the
+ * key is the line's identity (variant, else product) with an occurrence
+ * counter that only appears from the second repeat, so `variantId` stays the
+ * key for every ordinary order and a split stay reads `<variant>#2`. Lines
+ * are frozen in order at create, so the counter never shifts.
+ */
+export function withLineKeys<
+	T extends { productId?: string; variantId?: string },
+>(items: readonly T[]): Array<{ key: string; item: T }> {
+	const seen = new Map<string, number>();
+	return items.map((item) => {
+		// The inbox card's summary lines carry ids as optional snapshot data;
+		// a line with neither still gets a distinct key via the counter.
+		const identity = item.variantId ?? item.productId ?? "line";
+		const n = (seen.get(identity) ?? 0) + 1;
+		seen.set(identity, n);
+		return { key: n === 1 ? identity : `${identity}#${n}`, item };
+	});
+}

@@ -1,5 +1,7 @@
 import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
+import type { ActionCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { httpAction } from "./_generated/server";
 import { reportSecretMatches } from "./lib/businessReport";
 import { getAdapter } from "./lib/channels/registry";
@@ -9,12 +11,24 @@ import {
 	HITPAY_PROVIDER_LABEL,
 	verifyHitpayWebhook,
 } from "./lib/hitpay";
+import {
+	parseDelyvaWebhookEvent,
+	verifyDelyvaWebhook,
+} from "./lib/delyva";
+import {
+	extractRecurringEvent,
+	resolveBillingGatewayCredentials,
+	verifyEventSignature,
+} from "./lib/hitpayBilling";
+import { keyFingerprint, parseWalletBalance } from "./lib/courierWallet";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
+	type LalamoveWebhookEnvelope,
 	parseLalamoveWebhookEnvelope,
 	verifyLalamoveWebhook,
 } from "./lib/lalamoveSignature";
 import { redactPhone } from "./lib/logRedaction";
+import { extractWabaTemplateEvents } from "./lib/wabaTemplateWebhook";
 import { extractWabaHealthEvents } from "./lib/wabaWebhook";
 
 const http = httpRouter();
@@ -142,9 +156,76 @@ http.route({
 			}
 		}
 
+		// Template lifecycle events ride the same webhook too (z8r3fddtkh):
+		// message_template_status_update / template_category_update /
+		// message_template_quality_update. Every one is persisted for the admin
+		// console; a pause/disable/rejection, a category flip OUT of utility
+		// (6.1× per send from 1 Oct 2026, with an appeal window) or a
+		// YELLOW/RED quality score pages ops the same way a health drop does.
+		for (const ev of extractWabaTemplateEvents(parsedBody)) {
+			console.warn("WABA template webhook", ev.summary);
+			await ctx.runMutation(internal.wabaProtection.recordTemplateEvent, {
+				kind: ev.kind,
+				templateName: ev.templateName,
+				language: ev.language,
+				event: ev.event,
+				previousCategory: ev.previousCategory,
+				newCategory: ev.newCategory,
+				previousQuality: ev.previousQuality,
+				newQuality: ev.newQuality,
+				reason: ev.reason,
+				alerted: ev.shouldAlert,
+			});
+			if (ev.shouldAlert) {
+				await ctx.scheduler.runAfter(
+					0,
+					internal.wabaProtection.sendWabaTemplateAlert,
+					{ summary: ev.summary, kind: ev.kind },
+				);
+			}
+		}
+
 		return new Response("ok", { status: 200 });
 	}),
 });
+
+/**
+ * Apply a Lalamove WALLET_BALANCE_CHANGED event to every store whose saved key
+ * sent it and whose secret signs it (courierWallets, 86eye9xd4 6A). Never
+ * throws: a wallet event that can't be attributed or verified is logged and
+ * dropped — the balance is a convenience, never a reason to fail the route.
+ */
+async function recordLalamoveWallet(
+	ctx: ActionCtx,
+	args: { rawBody: string; envelope: LalamoveWebhookEnvelope; path: string },
+): Promise<void> {
+	const parsed = parseWalletBalance(args.envelope.data);
+	if (!parsed) {
+		console.warn("Lalamove wallet event: unreadable balance, ignoring");
+		return;
+	}
+	const wallets = await ctx.runQuery(internal.courierWallets.getWalletContext, {
+		fingerprint: await keyFingerprint(args.envelope.apiKey),
+	});
+	let applied = 0;
+	for (const wallet of wallets) {
+		const result = await verifyLalamoveWebhook({
+			rawBody: args.rawBody,
+			envelope: args.envelope,
+			path: args.path,
+			apiSecret: await decryptSecret(wallet.apiSecret),
+		});
+		if (!result.valid) continue;
+		await ctx.runMutation(internal.courierWallets.recordBalance, {
+			walletId: wallet.walletId,
+			balance: parsed.balance,
+			currency: parsed.currency,
+			at: args.envelope.timestamp,
+		});
+		applied++;
+	}
+	console.log("Lalamove wallet event", { matched: wallets.length, applied });
+}
 
 /**
  * Lalamove webhook (docs/delivery-lalamove.md, ClickUp 86eyb5hrf).
@@ -195,6 +276,13 @@ http.route({
 			return new Response("server misconfigured", { status: 500 });
 		}
 		const path = new URL(req.url).pathname;
+		if (jobId === null && envelope.eventType === "WALLET_BALANCE_CHANGED") {
+			// No order on a wallet event — the sender key's fingerprint finds
+			// the store, and that store's own secret verifies it (86eye9xd4).
+			// Unattributable or unverifiable: ack and drop, never a retry storm.
+			await recordLalamoveWallet(ctx, { rawBody, envelope, path });
+			return new Response("ok", { status: 200 });
+		}
 		if (jobId === null) {
 			// Not ours to act on: bookings the seller made outside Kedaipal,
 			// wallet events, or an unknown sender. BYO-only means there is no
@@ -250,6 +338,85 @@ http.route({
 });
 
 /**
+ * Delyva courier webhook (86eyjpv6z, docs/delivery-delyva.md). Registered
+ * automatically at connect (POST /webhook per event) — the seller does no
+ * portal setup. Same trust posture as the Lalamove route:
+ *  - events that match no job of ours → 200 ack + ignore (bookings the
+ *    seller made outside Kedaipal; we can't verify them and don't act);
+ *  - a matching job with no stored secret → 500 fail closed;
+ *  - bad signature (`X-Delyvax-Hmac-SHA256`, base64 HMAC-SHA256 of the raw
+ *    body with the account's apiSecret) → 401;
+ *  - signed but wrong customerId for the job's retailer → 200 + log (defense
+ *    in depth; never act on someone else's order).
+ * Idempotency + out-of-order handling live in delyva.applyWebhookEvent.
+ */
+http.route({
+	path: "/webhook/delyva",
+	method: "POST",
+	handler: httpAction(async (ctx, req) => {
+		const rawBody = await req.text();
+		const event = parseDelyvaWebhookEvent(rawBody);
+		if (!event) {
+			// Subscription pings / non-order payloads: ack so Delyva keeps the
+			// URL healthy.
+			console.log("Delyva webhook: non-order body, acking", {
+				bytes: rawBody.length,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		const context = await ctx.runQuery(internal.delyva.getWebhookContext, {
+			delyvaOrderId: event.delyvaOrderId,
+		});
+		if (!context) {
+			console.log("Delyva webhook: no matching delivery job, ignoring", {
+				delyvaOrderId: event.delyvaOrderId,
+				statusCode: event.statusCode,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		if (!context.apiSecret) {
+			// A job we placed but no secret to verify with — credentials were
+			// removed after booking. Fail closed (WhatsApp-route posture).
+			console.error("Delyva webhook rejected: no verifying secret stored", {
+				delyvaOrderId: event.delyvaOrderId,
+			});
+			return new Response("server misconfigured", { status: 500 });
+		}
+		const valid = await verifyDelyvaWebhook({
+			rawBody,
+			// Stored secrets are encrypted at rest (86eyn25gk); the signature is
+			// always over the plaintext secret.
+			apiSecret: await decryptSecret(context.apiSecret),
+			signatureHeader: req.headers.get("X-Delyvax-Hmac-SHA256"),
+		});
+		if (!valid) {
+			console.warn("Delyva webhook rejected: invalid signature", {
+				delyvaOrderId: event.delyvaOrderId,
+			});
+			return new Response("invalid signature", { status: 401 });
+		}
+		if (
+			event.customerId !== undefined &&
+			context.customerId !== null &&
+			event.customerId !== context.customerId
+		) {
+			console.warn("Delyva webhook: customerId mismatch, ignoring", {
+				delyvaOrderId: event.delyvaOrderId,
+			});
+			return new Response("ok", { status: 200 });
+		}
+		await ctx.runMutation(internal.delyva.applyWebhookEvent, {
+			jobId: context.jobId,
+			statusCode: event.statusCode,
+			consignmentNo: event.consignmentNo,
+			statusText: event.statusText,
+			eventAt: event.eventAt ?? Date.now(),
+		});
+		return new Response("ok", { status: 200 });
+	}),
+});
+
+/**
  * HitPay v1 completion webhook (86eyb6z3a, docs/hitpay-gateway.md) — the URL
  * is passed per payment request at mint time, so sellers register nothing.
  *
@@ -271,6 +438,134 @@ http.route({
 	method: "POST",
 	handler: httpAction(async (ctx, req) => {
 		const rawBody = await req.text();
+
+		// --- Branch 1: V2 event webhook (Kedaipal's own account, 86eyb6z4r) ---
+		// Dashboard-registered events (charge.created, recurring_billing.*)
+		// arrive as JSON signed via the `Hitpay-Signature` header — raw-body
+		// HMAC with KEDAIPAL's salt, a different scheme from the per-request v1
+		// form webhooks below (seller BYO accounts, `hmac` field). The header is
+		// the discriminator: v1 callbacks never carry it.
+		const eventSignature = req.headers.get("hitpay-signature");
+		if (eventSignature) {
+			const credentials = resolveBillingGatewayCredentials({
+				HITPAY_BILLING_API_KEY: process.env.HITPAY_BILLING_API_KEY,
+				HITPAY_BILLING_SALT: process.env.HITPAY_BILLING_SALT,
+				HITPAY_BILLING_WEBHOOK_SALT: process.env.HITPAY_BILLING_WEBHOOK_SALT,
+			});
+			if (!credentials) {
+				// We only receive these if we registered the endpoint — a missing
+				// salt is OUR misconfiguration. Fail closed like /webhook/whatsapp.
+				console.error(
+					"HitPay event webhook rejected: HITPAY_BILLING_SALT not configured",
+				);
+				return new Response("server misconfigured", { status: 500 });
+			}
+			// Dashboard-registered events are signed with the ENDPOINT's own
+			// secret, not the API-key salt (see BillingGatewayCredentials).
+			const valid = await verifyEventSignature(
+				rawBody,
+				eventSignature,
+				credentials.webhookSalt,
+			);
+			if (!valid) {
+				console.warn(
+					"HitPay event webhook rejected: invalid signature — if this is every event, HITPAY_BILLING_WEBHOOK_SALT is missing or wrong (it is the signing secret of the registered endpoint, NOT the API-key salt)",
+					{
+						eventObject: req.headers.get("hitpay-event-object"),
+						eventType: req.headers.get("hitpay-event-type"),
+						// Derived from the value actually used — a blank env var
+						// resolves to the API-salt fallback, and re-reading the raw
+						// env here would claim a dedicated salt was in play during
+						// exactly the misconfiguration this log exists to diagnose.
+						usingDedicatedSalt:
+							credentials.webhookSalt !== credentials.salt,
+					},
+				);
+				return new Response("invalid signature", { status: 401 });
+			}
+			let payload: unknown;
+			try {
+				payload = JSON.parse(rawBody);
+			} catch {
+				console.error("HitPay event webhook: unparseable JSON, acking");
+				return new Response("ok", { status: 200 });
+			}
+			const event = extractRecurringEvent(payload, {
+				eventObject: req.headers.get("hitpay-event-object"),
+				eventType: req.headers.get("hitpay-event-type"),
+			});
+			if (!event) {
+				console.log("HitPay event webhook: unrecognised event, acking");
+				return new Response("ok", { status: 200 });
+			}
+			if (event.kind === "charge") {
+				// Corroboration for the synchronous charge path (which usually
+				// settled already — the settle mutation no-ops duplicates).
+				if (event.status !== "succeeded") {
+					console.log("HitPay event webhook: non-succeeded charge, acking", {
+						status: event.status,
+					});
+					return new Response("ok", { status: 200 });
+				}
+				if (!event.recurringBillingId) {
+					console.log(
+						"HitPay event webhook: charge without a billing id, acking",
+					);
+					return new Response("ok", { status: 200 });
+				}
+				const recurring = await ctx.runQuery(
+					internal.subscriptionPayments.resolveRecurringContext,
+					{ billingId: event.recurringBillingId },
+				);
+				if (!recurring?.settleInvoiceId) {
+					console.log("HitPay event webhook: no invoice to settle, acking", {
+						billingId: event.recurringBillingId,
+					});
+					return new Response("ok", { status: 200 });
+				}
+				const result = await ctx.runMutation(
+					internal.invoices.internalSettleFromGateway,
+					{
+						invoiceId: recurring.settleInvoiceId,
+						paymentId: event.paymentId,
+						amountSen: event.amountSen ?? -1,
+						currency: event.currency ?? "",
+						methodCode: event.methodCode ?? recurring.methodCode,
+						// A charge event on the recurring-billing session IS the
+						// saved-method rail — it may advance the counter and
+						// answer an attempt stamp.
+						viaSessionCharge: true,
+					},
+				);
+				console.log("HitPay event webhook processed", {
+					kind: "charge",
+					applied: result.applied,
+					reason: result.reason,
+				});
+				return new Response("ok", { status: 200 });
+			}
+			await ctx.runMutation(
+				internal.subscriptionPayments.applyRecurringEvent,
+				event.kind === "method_attached"
+					? {
+							kind: event.kind,
+							billingId: event.billingId,
+							methodCode: event.methodCode,
+							methodLabel: event.methodLabel,
+						}
+					: event.kind === "method_detached"
+						? { kind: event.kind, billingId: event.billingId }
+						: {
+								kind: event.kind,
+								billingId: event.billingId,
+								status: event.status,
+							},
+			);
+			console.log("HitPay event webhook processed", { kind: event.kind });
+			return new Response("ok", { status: 200 });
+		}
+
+		// --- Branch 2: v1 form-encoded completion webhooks ---------------------
 		const fields: Record<string, string> = {};
 		for (const [key, value] of new URLSearchParams(rawBody)) {
 			fields[key] = value;
@@ -288,6 +583,17 @@ http.route({
 			paymentRequestId: requestId,
 		});
 		if (!context) {
+			// Not a buyer order — a request minted on KEDAIPAL's own account: a
+			// subscription invoice's Pay-now link or a credit-pack checkout
+			// (Credits T2)? One resolver, one hop; the verifying salt is the env
+			// one for both.
+			const billingContext = await ctx.runQuery(
+				internal.subscriptionPayments.resolveBillingRequestContext,
+				{ paymentRequestId: requestId },
+			);
+			if (billingContext) {
+				return handleBillingCompletionWebhook(ctx, fields, billingContext);
+			}
 			console.log("HitPay webhook: no matching order, ignoring", {
 				requestId,
 			});
@@ -355,6 +661,119 @@ http.route({
 			reason: result.reason,
 		});
 		return new Response("ok", { status: 200 });
+	}),
+});
+
+/**
+ * v1 completion webhook for a request minted on KEDAIPAL's own account — a
+ * SUBSCRIPTION-INVOICE Pay-now link (86eyb6z4r) or a CREDIT-PACK checkout
+ * (Credits T2, z8r3fdf8ht). Same wire format as the buyer-order branch above,
+ * but the verifying salt is the env credential (plaintext — never a
+ * per-seller stored secret). Each settle owns its amount check and duplicate
+ * guard (invoices.internalSettleFromGateway / creditPurchases.settlePurchase),
+ * mirroring receiveGatewayPayment's posture.
+ */
+async function handleBillingCompletionWebhook(
+	ctx: ActionCtx,
+	fields: Record<string, string>,
+	context:
+		| { kind: "invoice"; invoiceId: Id<"invoices"> }
+		| { kind: "credit_purchase"; purchaseId: Id<"creditPurchases"> },
+): Promise<Response> {
+	const requestId = fields.payment_request_id;
+	const label = context.kind === "invoice" ? "invoice" : "credit purchase";
+	const salt = process.env.HITPAY_BILLING_SALT;
+	if (!salt) {
+		// A request we minted with credentials that have since vanished — our
+		// misconfiguration, fail closed.
+		console.error(
+			`HitPay ${label} webhook rejected: HITPAY_BILLING_SALT not configured`,
+			{ requestId },
+		);
+		return new Response("server misconfigured", { status: 500 });
+	}
+	const valid = await verifyHitpayWebhook(fields, salt);
+	if (!valid) {
+		console.warn(`HitPay ${label} webhook rejected: invalid hmac`, {
+			requestId,
+		});
+		return new Response("invalid signature", { status: 401 });
+	}
+	if (fields.status !== "completed") {
+		// Authentic but not a settlement (a declined attempt) — the checkout
+		// stays open for another try until it expires, so nothing changes.
+		console.log(`HitPay ${label} webhook: non-completed status, acking`, {
+			requestId,
+			status: fields.status,
+		});
+		return new Response("ok", { status: 200 });
+	}
+	const amountSen = decimalStringToSen(fields.amount ?? "");
+	if (amountSen === null || !fields.payment_id) {
+		console.error(`HitPay ${label} webhook: malformed completed payload`, {
+			requestId,
+			amount: fields.amount,
+		});
+		return new Response("ok", { status: 200 });
+	}
+	const payment = {
+		paymentId: fields.payment_id,
+		amountSen,
+		currency: fields.currency ?? "",
+	};
+	const result =
+		context.kind === "invoice"
+			? await ctx.runMutation(internal.invoices.internalSettleFromGateway, {
+					invoiceId: context.invoiceId,
+					...payment,
+					// v1 completion = the seller paid the Pay-now link — never the
+					// saved-method session, so no counter bump, no stamp answer.
+					viaSessionCharge: false,
+				})
+			: await ctx.runMutation(internal.creditPurchases.settlePurchase, {
+					purchaseId: context.purchaseId,
+					...payment,
+				});
+	console.log(`HitPay ${label} webhook processed`, {
+		requestId,
+		applied: result.applied,
+		reason: result.reason,
+	});
+	return new Response("ok", { status: 200 });
+}
+
+/**
+ * Seller booking-calendar ICS feed (booking S6, 86eyn4kf2) — ONE-WAY: Google
+ * (or any calendar app) polls this URL on its own schedule. The token in the
+ * path is the whole capability (/track posture); unknown tokens 404 with no
+ * detail. Read-only by construction, so a feed failure can never touch an
+ * order (locked posture).
+ */
+http.route({
+	pathPrefix: "/cal/",
+	method: "GET",
+	handler: httpAction(async (ctx, req) => {
+		const path = new URL(req.url).pathname;
+		let token = path.slice("/cal/".length);
+		if (token.endsWith(".ics")) token = token.slice(0, -".ics".length);
+		// Tokens are generated alphanumerics — anything else can't match.
+		if (!/^[A-Za-z0-9]{10,}$/.test(token)) {
+			return new Response("Not found", { status: 404 });
+		}
+		const feed = await ctx.runQuery(internal.calendarFeed.feedByToken, {
+			token,
+		});
+		if (feed === null) return new Response("Not found", { status: 404 });
+		return new Response(feed, {
+			status: 200,
+			headers: {
+				"Content-Type": "text/calendar; charset=utf-8",
+				// Calendar apps poll on long intervals anyway; a short shared
+				// max-age just absorbs double-fetches.
+				"Cache-Control": "private, max-age=300",
+				"Content-Disposition": 'inline; filename="kedaipal-bookings.ics"',
+			},
+		});
 	}),
 });
 

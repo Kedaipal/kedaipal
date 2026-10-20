@@ -52,6 +52,44 @@
 	min-width: 2.75rem;
 }
 
+/* A swipe rail scrolls without painting a scrollbar. Phones already overlay
+   theirs; desktop browsers and devtools' phone emulation draw a permanent grey
+   bar under every chip row and card rail. The rail's peek (the next card cut
+   off at the edge) is what tells a buyer there's more, never the bar. */
+@utility scrollbar-none {
+	scrollbar-width: none;
+	&::-webkit-scrollbar {
+		display: none;
+	}
+}
+
+/* A scroll SHADOW: a soft shade at the top/bottom edge only while there's
+   more list that way, gone at the end. The `local` covers scroll with the
+   content and hide the `scroll`-attached shades once an edge is reached — pure
+   CSS, no listener. For a list that may hide its scrollbar (the collapsed
+   sidebar rail) or whose scrollbar overlays and stays invisible until used
+   (macOS), so "there's more" never rests on a half-cut row alone. Paints on
+   `--card`: use it on a scroller that sits on a card surface. */
+@utility scroll-shadow-y {
+	background:
+		linear-gradient(var(--card) 30%, transparent) top / 100% 2.5rem no-repeat
+			local,
+		linear-gradient(transparent, var(--card) 70%) bottom / 100% 2.5rem
+			no-repeat local,
+		radial-gradient(
+				farthest-side at 50% 0,
+				color-mix(in oklab, var(--foreground) 14%, transparent),
+				transparent
+			)
+			top / 100% 0.625rem no-repeat scroll,
+		radial-gradient(
+				farthest-side at 50% 100%,
+				color-mix(in oklab, var(--foreground) 14%, transparent),
+				transparent
+			)
+			bottom / 100% 0.625rem no-repeat scroll;
+}
+
 @utility safe-bottom {
 	padding-bottom: env(safe-area-inset-bottom);
 }
@@ -65,20 +103,20 @@
    the existing theme palette (navy + mint).
    ============================================= */
 
-/* Marquee strip */
+/* Logo-wall marquee rows (payment rails, couriers) — Mobbin-style, slow, and
+   the reverse direction is a property of the animation, not a second keyframe
+   set to keep in sync. */
 @keyframes kp-marquee {
 	to {
 		transform: translateX(-50%);
 	}
 }
 
+/* The hero's seller-kinds strip (28s); the logo walls use the slow variants. */
 @utility animate-kp-marquee {
 	animation: kp-marquee 28s linear infinite;
 }
 
-/* Slower + reversed — the payment logo wall's alternating rows (Mobbin-style).
-   Same keyframes: reverse direction is a property of the animation, not a
-   second keyframe set to keep in sync. */
 @utility animate-kp-marquee-slow {
 	animation: kp-marquee 45s linear infinite;
 }
@@ -87,24 +125,310 @@
 	animation: kp-marquee 45s linear infinite reverse;
 }
 
-/* Slow push-in for photo backdrops (the how-it-works step collages) —
-   alternate direction so the loop breathes instead of snapping back. */
-@keyframes kp-kenburns {
-	to {
+/* Spotlight glow for a card a What's-new note deep-linked to (docs/whats-new.md).
+   Three soft mint pulses of an outer halo, then it settles into the plain
+   ring. The animation owns box-shadow while it runs, which would ERASE the
+   card's `ring-2 ring-accent/40` for those seconds — so the first layer here
+   is that same 2px ring, and the resting state after the last pulse is
+   identical to the animated one's first layer. */
+@keyframes kp-spotlight {
+	0%,
+	100% {
+		box-shadow:
+			0 0 0 2px color-mix(in oklab, var(--accent) 40%, transparent),
+			0 0 0 2px color-mix(in oklab, var(--accent) 45%, transparent);
+	}
+	50% {
+		box-shadow:
+			0 0 0 2px color-mix(in oklab, var(--accent) 40%, transparent),
+			0 0 0 14px color-mix(in oklab, var(--accent) 0%, transparent);
+	}
+}
+@utility animate-kp-spotlight {
+	animation: kp-spotlight 1.6s ease-out 3;
+}
+
+/* A product card on a LIVE flash sale (z8r3fdcw72). A slow mint heartbeat —
+   a halo that leaves the card and fades, then a beat of rest, 2.4s, infinite —
+   to pull the eye across a grid without strobing it. Deliberately gentler and
+   slower than kp-spotlight above, which fires three times and stops: this one
+   runs for as long as the sale does, so it has to be something you can sit
+   next to.
+
+   OUTWARD ONLY (z8r3fdudm2). The halo's spread never shrinks inside a cycle:
+   it fades in on the ring (2px), travels out to 12px as it fades away, and
+   rests there invisible until the loop restarts. A there-and-back keyframe
+   (0 → 10px → 0) read as the ring being sucked back into the card. The
+   restart is invisible because the halo is fully transparent at both ends.
+
+   The RING is painted by the keyframes too, as kp-spotlight does. Tailwind's
+   `ring-2` is itself a box-shadow, and an animation owns the whole property,
+   so a halo-only keyframe erased the ring for as long as the sale ran. The
+   `ring-2 ring-accent/35` utility stays on the element for
+   `prefers-reduced-motion`, where the animation is off and the ring is the
+   whole indication that remains — this layer matches it exactly.
+
+   12px is a BUDGET, not a taste: it is the grid's `gap-3`, so a halo never
+   paints over the next card, and it is the vertical room the Popular shelf
+   leaves inside its scroller. A horizontal scroller clips on BOTH axes
+   (overflow-x: auto forces overflow-y to clip too), so a shelf with only its
+   side padding showed the pulse left and right and cut it off top and bottom.
+   Any scroller that holds a ProductCard must leave 12px on every side —
+   `flash-glow-keyframes.test.ts` holds the shelf to it. */
+@keyframes kp-flash-glow {
+	0% {
+		box-shadow:
+			0 0 0 2px color-mix(in oklab, var(--accent) 35%, transparent),
+			0 0 0 2px color-mix(in oklab, var(--accent) 0%, transparent);
+	}
+	15% {
+		box-shadow:
+			0 0 0 2px color-mix(in oklab, var(--accent) 35%, transparent),
+			0 0 0 4px color-mix(in oklab, var(--accent) 40%, transparent);
+	}
+	70%,
+	100% {
+		box-shadow:
+			0 0 0 2px color-mix(in oklab, var(--accent) 35%, transparent),
+			0 0 0 12px color-mix(in oklab, var(--accent) 0%, transparent);
+	}
+}
+@utility animate-kp-flash-glow {
+	animation: kp-flash-glow 2.4s ease-out infinite;
+}
+
+/* Pop-in for a badge or stamp that just changed (hero stage): one quick
+   overshoot from small, then rest. Keyed remounts retrigger it. */
+@keyframes kp-pop {
+	0% {
+		transform: scale(0.6);
+		opacity: 0;
+	}
+	70% {
 		transform: scale(1.08);
+		opacity: 1;
+	}
+	100% {
+		transform: scale(1);
+		opacity: 1;
 	}
 }
 
-@utility animate-kp-kenburns {
-	animation: kp-kenburns 14s ease-in-out infinite alternate;
+@utility animate-kp-pop {
+	animation: kp-pop 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Hero stage beats (hero-stage.tsx). Transform/opacity throughout, with one
+   deliberate exception: kp-row-in animates max-height so an arriving chat row
+   pushes the list down instead of overlapping it — layout work, but on a
+   four-row list once per beat. Every one is stopped by the reduced-motion
+   block below. */
+@keyframes kp-row-in {
+	0% {
+		max-height: 0;
+		opacity: 0;
+		transform: translateY(-0.6em);
+	}
+	60% {
+		max-height: 5em;
+		opacity: 0;
+		transform: translateY(-0.2em);
+	}
+	100% {
+		max-height: 5em;
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+@utility animate-kp-row-in {
+	animation: kp-row-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes kp-stamp {
+	0% {
+		transform: rotate(-14deg) scale(1.9);
+		opacity: 0;
+	}
+	55% {
+		transform: rotate(-6deg) scale(0.96);
+		opacity: 1;
+	}
+	100% {
+		transform: rotate(-6deg) scale(1);
+		opacity: 1;
+	}
+}
+@utility animate-kp-stamp {
+	animation: kp-stamp 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* The order leaving the chat for the inbox: an arc across the stage gap.
+   Container-query units, so the distance is a fraction of the stage. */
+@keyframes kp-handoff {
+	0% {
+		transform: translate(0, 0) scale(0.85);
+		opacity: 0;
+	}
+	12% {
+		opacity: 1;
+	}
+	50% {
+		transform: translate(12cqw, -24cqh) scale(1);
+	}
+	88% {
+		opacity: 1;
+	}
+	100% {
+		transform: translate(25cqw, -27cqh) scale(0.9);
+		opacity: 0;
+	}
+}
+@utility animate-kp-handoff {
+	animation: kp-handoff 1.15s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+@keyframes kp-card-in {
+	0% {
+		transform: translateY(-0.6em) scale(0.97);
+		opacity: 0;
+	}
+	100% {
+		transform: translateY(0) scale(1);
+		opacity: 1;
+	}
+}
+@utility animate-kp-card-in {
+	animation: kp-card-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes kp-toast-in {
+	0% {
+		transform: translateY(0.9em);
+		opacity: 0;
+	}
+	100% {
+		transform: translateY(0);
+		opacity: 1;
+	}
+}
+@utility animate-kp-toast-in {
+	animation: kp-toast-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes kp-drive {
+	0% {
+		transform: translateX(-1.2em);
+		opacity: 0;
+	}
+	100% {
+		transform: translateX(0);
+		opacity: 1;
+	}
+}
+@utility animate-kp-drive {
+	animation: kp-drive 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+
+/* A simulated tap (payment handshake): the button presses, and a ring blooms
+   off it. Both keyed remounts, both transform/opacity. */
+@keyframes kp-press {
+	0% {
+		transform: scale(1);
+	}
+	35% {
+		transform: scale(0.94);
+	}
+	100% {
+		transform: scale(1);
+	}
+}
+@utility animate-kp-press {
+	animation: kp-press 0.45s ease-out both;
+}
+
+@keyframes kp-ring {
+	0% {
+		transform: scale(0.6);
+		opacity: 0.6;
+	}
+	100% {
+		transform: scale(1.5);
+		opacity: 0;
+	}
+}
+@utility animate-kp-ring {
+	animation: kp-ring 0.6s ease-out both;
+}
+
+/* A badge waiting on someone (the seller's "Payment claimed"): a slow scale
+   breath, the amber-pulse the old handshake did in opacity. */
+@keyframes kp-breathe {
+	0%,
+	100% {
+		transform: scale(1);
+	}
+	50% {
+		transform: scale(1.05);
+	}
+}
+@utility animate-kp-breathe {
+	animation: kp-breathe 1.1s ease-in-out infinite;
+}
+
+/* Skeleton shimmer for the dispatch card's first beat: the quote rows hold
+   their height while "20+ couriers" are asked. Background-position only. */
+@keyframes kp-shimmer {
+	0% {
+		background-position: 120% 0;
+	}
+	100% {
+		background-position: -120% 0;
+	}
+}
+@utility animate-kp-shimmer {
+	background-image: linear-gradient(
+		90deg,
+		var(--color-muted) 0%,
+		var(--color-border) 45%,
+		var(--color-muted) 90%
+	);
+	background-size: 220% 100%;
+	animation: kp-shimmer 1.3s linear infinite;
+}
+
+/* One red pulse off the "Missed" stamp on the phone hero's Before strip —
+   box-shadow, which paints no layout. Fires once per keyed remount. */
+@keyframes kp-pulse-red {
+	0% {
+		box-shadow: 0 0 0 0 hsl(0 84% 60% / 0.45);
+	}
+	100% {
+		box-shadow: 0 0 0 0.9em hsl(0 84% 60% / 0);
+	}
+}
+@utility animate-kp-pulse-red {
+	animation: kp-pulse-red 0.9s ease-out 0.35s both;
 }
 
 @media (prefers-reduced-motion: reduce) {
+	.animate-kp-row-in,
+	.animate-kp-stamp,
+	.animate-kp-handoff,
+	.animate-kp-card-in,
+	.animate-kp-toast-in,
+	.animate-kp-drive,
+	.animate-kp-pop,
+	.animate-kp-press,
+	.animate-kp-ring,
+	.animate-kp-breathe,
+	.animate-kp-shimmer,
+	.animate-kp-pulse-red,
 	.animate-kp-marquee,
 	.animate-kp-marquee-slow,
 	.animate-kp-marquee-slow-reverse,
-	.animate-kp-kenburns,
-	.animate-kp-highlight-sweep {
+	.animate-kp-highlight-sweep,
+	.animate-kp-spotlight {
 		animation: none;
 	}
 }
@@ -156,6 +480,174 @@
 	background-size: 200px 200px, auto, auto;
 	background-repeat: repeat, no-repeat, no-repeat;
 	background-color: hsl(0 0% 100%);
+}
+
+/* =============================================
+   Marketplace showcases (z8r3fdr6mv) — curated looks
+   =============================================
+   An admin picks a MOOD, never a colour: every theme is a dark ground with
+   light text, so the banner, the ticket's info panel and the compact band read
+   the same in light and dark mode with one text treatment. The palette lives
+   here, as variables on one class, so the components stay on semantic tokens
+   (`bg-[var(--sc-a)]`) and a new theme is one block in this file plus its id
+   in convex/lib/showcase.ts. The ticket "paper" is deliberately NOT a theme
+   variable and does not flip in dark mode — it is a cream ticket in every
+   theme, which is what makes the row read as one pile of tickets.
+   EVERY variable is defined by exactly one class: the base holds what no
+   look changes, each look holds its whole palette. Tailwind orders utilities
+   by how many declarations they carry, not by name, so a variable set in
+   both the base and a look is won by whichever the sort puts later — "No
+   tint" (more declarations) lost its neutral ground to the base's green.
+   `showcase.test.ts` fails if a variable is ever defined twice.
+   The cover scrim reads its strengths from `--sc-scrim-*` (defaults in
+   `bg-showcase-cover-scrim`), so a look can lighten it — "No tint" does. */
+@utility kp-showcase {
+	--sc-paper: hsl(40 100% 97%);
+	--sc-tear: hsl(39 45% 64%);
+	--sc-ink: hsl(28 100% 24%);
+	--sc-ink-soft: hsl(38 79% 34%);
+	--sc-text: hsl(0 0% 100%);
+}
+@utility kp-showcase-campfire {
+	--sc-a: hsl(160 58% 10%);
+	--sc-b: hsl(157 52% 15%);
+	--sc-accent: hsl(43 96% 56%);
+	--sc-accent-fg: hsl(35 100% 12%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+@utility kp-showcase-festive {
+	--sc-a: hsl(343 71% 17%);
+	--sc-b: hsl(344 66% 32%);
+	--sc-accent: hsl(43 86% 63%);
+	--sc-accent-fg: hsl(35 100% 12%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+@utility kp-showcase-ocean {
+	--sc-a: hsl(213 73% 16%);
+	--sc-b: hsl(209 70% 25%);
+	--sc-accent: hsl(199 95% 74%);
+	--sc-accent-fg: hsl(213 73% 12%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+@utility kp-showcase-sunset {
+	--sc-a: hsl(15 84% 19%);
+	--sc-b: hsl(21 90% 40%);
+	--sc-accent: hsl(48 96% 77%);
+	--sc-accent-fg: hsl(20 90% 14%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+@utility kp-showcase-midnight {
+	--sc-a: hsl(222 47% 11%);
+	--sc-b: hsl(263 83% 23%);
+	--sc-accent: hsl(255 92% 85%);
+	--sc-accent-fg: hsl(263 70% 16%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+@utility kp-showcase-kedaipal {
+	--sc-a: hsl(222 47% 11%);
+	--sc-b: hsl(160 84% 20%);
+	--sc-accent: hsl(160 84% 60%);
+	--sc-accent-fg: hsl(222 47% 11%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+/* "No tint": the admin's cover in its own colours. The ground is neutral
+   charcoal (what shows with no cover), and the cover's shade is neutral AND
+   lighter — only enough behind the words to keep white text readable. */
+@utility kp-showcase-plain {
+	--sc-a: hsl(0 0% 7%);
+	--sc-b: hsl(0 0% 16%);
+	--sc-accent: hsl(0 0% 98%);
+	--sc-accent-fg: hsl(0 0% 9%);
+	--sc-text-soft: hsl(0 0% 88%);
+	--sc-scrim-top: 72%;
+	--sc-scrim-mid: 36%;
+	--sc-scrim-foot: 55%;
+	--sc-scrim-left: 84%;
+	--sc-scrim-left-mid: 52%;
+	--sc-scrim-right: 0%;
+	--sc-scrim-edge: 0%;
+}
+/* The colour-wheel look. Its palette is set INLINE from the admin's pick
+   (`customShowcasePalette`, src/lib/showcase-color.ts, which pins the shade);
+   these are only the fallback should a row ever lack its colour. */
+@utility kp-showcase-custom {
+	--sc-a: hsl(160 58% 10%);
+	--sc-b: hsl(157 52% 15%);
+	--sc-accent: hsl(43 96% 56%);
+	--sc-accent-fg: hsl(35 100% 12%);
+	--sc-text-soft: hsl(214 32% 83%);
+}
+
+/* A showcase ticket's die-cut (z8r3fdr6mv): three REAL holes — top and
+   bottom where the stub's perforation meets the edge, and the left end of the
+   tear under the info panel. A mask, not painted circles: a painted notch is
+   only invisible on the one flat colour it was painted in, and the ticket sits
+   on gradients, glows and admin-uploaded cover photos. Each layer is "opaque
+   everywhere except one circle"; `intersect` keeps what every layer keeps.
+   The positions are the ticket's own geometry: the stub is 72px wide with a
+   2px dashed border (line centre 71px from the right), and the info panel is
+   84px tall above a 2px tear (centre at 85px). The shadow cannot be a
+   box-shadow (the mask clips it) — the wrapper casts a `drop-shadow`, which
+   follows the cut outline. */
+@utility kp-ticket-cut {
+	--cut-r: 9px;
+	--cut-x: calc(100% - 71px);
+	--cut-y: 85px;
+	--cut-hole: transparent calc(var(--cut-r) - 0.5px), #000 var(--cut-r);
+	-webkit-mask:
+		radial-gradient(circle var(--cut-r) at var(--cut-x) 0, var(--cut-hole)),
+		radial-gradient(circle var(--cut-r) at var(--cut-x) 100%, var(--cut-hole)),
+		radial-gradient(circle var(--cut-r) at 0 var(--cut-y), var(--cut-hole));
+	-webkit-mask-composite: source-in;
+	mask:
+		radial-gradient(circle var(--cut-r) at var(--cut-x) 0, var(--cut-hole)),
+		radial-gradient(circle var(--cut-r) at var(--cut-x) 100%, var(--cut-hole)),
+		radial-gradient(circle var(--cut-r) at 0 var(--cut-y), var(--cut-hole));
+	mask-composite: intersect;
+}
+
+/* The showcase's dark ground. */
+@utility bg-showcase {
+	background-image: linear-gradient(170deg, var(--sc-a) 0%, var(--sc-b) 100%);
+}
+
+/* A showcase's own cover photo under its title (z8r3fdr6mv). The admin is
+   told "we darken it so the title stays readable" — so the fade is weighted
+   to where the TEXT is: the top on a phone (title, tagline, then the ticket
+   rail), the left column on desktop. The first cut faded to fully
+   transparent mid-banner and a bright campsite photo erased the tagline. */
+@utility bg-showcase-cover-scrim {
+	background-image: linear-gradient(
+		180deg,
+		color-mix(in oklab, var(--sc-a) var(--sc-scrim-top, 88%), transparent) 0%,
+		color-mix(in oklab, var(--sc-a) var(--sc-scrim-mid, 70%), transparent) 45%,
+		color-mix(in oklab, var(--sc-b) var(--sc-scrim-foot, 82%), transparent) 100%
+	);
+}
+/* The desktop stage's fade (title column on the left). A separate utility
+   applied with `lg:`, not a media query inside the phone one: the admin
+   preview renders the PHONE stage on a desktop screen, and a viewport query
+   painted the desktop fade over the phone layout there. */
+@utility bg-showcase-cover-scrim-wide {
+	background-image: linear-gradient(
+		90deg,
+		color-mix(in oklab, var(--sc-a) var(--sc-scrim-left, 92%), transparent) 0%,
+		color-mix(in oklab, var(--sc-a) var(--sc-scrim-left-mid, 78%), transparent) 38%,
+		color-mix(in oklab, var(--sc-b) var(--sc-scrim-right, 45%), transparent) 70%,
+		color-mix(in oklab, var(--sc-b) var(--sc-scrim-edge, 30%), transparent) 100%
+	);
+}
+
+/* A store cover inside a ticket panel: dark fade from the left so the name
+   stays legible over any photo — a cover that already carries its own words
+   (an event banner) is the case this exists for. */
+@utility bg-showcase-scrim {
+	background-image: linear-gradient(
+		90deg,
+		hsl(215 30% 6% / 0.82) 0%,
+		hsl(215 30% 6% / 0.6) 55%,
+		hsl(215 30% 6% / 0.3) 100%
+	);
 }
 
 /* Final CTA mesh — mint glow on deep navy */
@@ -242,8 +734,24 @@
 		var(--primary-foreground);
 	--color-primary:
 		var(--primary);
+	--color-segment-foreground:
+		var(--segment-foreground);
+	--color-segment:
+		var(--segment);
 	--color-cta-mesh-foreground:
 		var(--cta-mesh-foreground);
+	--color-countdown-paper:
+		var(--countdown-paper);
+	--color-countdown-ink:
+		var(--countdown-ink);
+	--color-countdown-ok:
+		var(--countdown-ok);
+	--color-countdown-low:
+		var(--countdown-low);
+	--color-countdown-critical:
+		var(--countdown-critical);
+	--color-countdown-cut:
+		var(--countdown-cut);
 	--color-popover-foreground:
 		var(--popover-foreground);
 	--color-popover:
@@ -289,10 +797,53 @@
 	--primary: hsl(222 47% 11%);
 	--primary-foreground: hsl(210 40% 98%);
 
+	/* The selected half of a pill toggle (MY/SG, Monthly/Annual). The house
+	   navy a step lighter than --primary: at 11% lightness a 40px pill reads
+	   BLACK, not navy (Arif, 19 Oct 2026 — "use our navy blue, not black"),
+	   while the same hue at 22% is unmistakably blue and still ours. Same
+	   hue, one step; never a second blue. */
+	--segment: hsl(222 47% 22%);
+	--segment-foreground: hsl(210 40% 98%);
+
 	/* Text for bg-cta-mesh — that surface is always dark regardless of theme
 	   (see bg-cta-mesh below), so its foreground must stay fixed-light too;
 	   --primary-foreground flips in .dark and would go navy-on-navy there. */
 	--cta-mesh-foreground: hsl(210 40% 98%);
+
+	/* Countdown strip (the SLB) — receipt paper that stays DARK in BOTH themes,
+	   for the same reason bg-cta-mesh does. The obvious spelling, `bg-primary`
+	   + `text-accent` (what this bar shipped as), breaks in .dark: both
+	   --primary and --accent resolve to mint there, so the figures would sit
+	   mint-on-mint. Fixed surface ⇒ its ink and stage ramp are fixed too, and
+	   are the ON-DARK variants: the light-surface pair (accent-emphasis,
+	   amber-700, red-700) fails contrast here exactly as the raw tokens fail
+	   on white. One ramp, one author — every surface the strip lands on gets
+	   the same colours.
+
+	   PAPER IS THE NAVY, THE CUT IS LIGHTER — you are seeing the page THROUGH
+	   the tear. The first dark pass made both near-black and the tear vanished
+	   (Zaki, 9 Oct — "can't really see the torn page"); the fix is a plain
+	   lightness step between the two, as the bright version had, and the darker
+	   of the two is the paper because that is what the band reads as. ~23
+	   points of lightness apart, wider than the bright version's ~12, because
+	   the eye reads equal steps as smaller down at this end of the scale.
+	   The opening is only a GENTLE LIFT off the paper — about 11 points of
+	   lightness, the same soft step the bright version had between white card
+	   and its grey opening. That ratio is the whole trick, and it took three
+	   wrong turns to see it: what made the bright strip work was never a
+	   strong paper-vs-opening contrast, it was that the INK contrasted hard
+	   with BOTH grounds, so the tear read as a tonal shift while the words
+	   stayed solid across it. Crank the two grounds apart instead (tried: a
+	   dark opening, a mid one, then a properly light one) and the ink is
+	   forced to fail on one side or to change colour halfway through a word,
+	   which looks exactly as bad as it sounds. So: one light ink, one ramp,
+	   everywhere — the SHAPE carries the tear, not the brightness. */
+	--countdown-paper: hsl(222 47% 11%);
+	--countdown-cut: hsl(217 33% 22%);
+	--countdown-ink: hsl(210 40% 98%);
+	--countdown-ok: hsl(158 64% 52%);
+	--countdown-low: hsl(43 96% 56%);
+	--countdown-critical: hsl(0 91% 71%);
 
 	/* Secondary — soft slate */
 	--secondary: hsl(210 40% 96%);
@@ -351,6 +902,12 @@
 	/* Mint becomes primary in dark */
 	--primary: hsl(160 84% 39%);
 	--primary-foreground: hsl(222 47% 11%);
+
+	/* A navy pill on a navy card vanishes, so the selected segment lifts
+	   well clear of --card (9%) instead of going mint: mint is the action
+	   colour, and a toggle's current value is a state, not an action. */
+	--segment: hsl(222 47% 34%);
+	--segment-foreground: hsl(210 40% 98%);
 
 	--secondary: hsl(217 33% 17%);
 	--secondary-foreground: hsl(210 40% 98%);

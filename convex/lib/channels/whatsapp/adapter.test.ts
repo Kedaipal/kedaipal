@@ -278,6 +278,22 @@ describe("whatsappAdapter.send — template kind (86eyf1rck)", () => {
 		globalThis.fetch = original;
 	});
 
+	test("a plain text send returns the wamid too — the counter confirmation is one", async () => {
+		const original = globalThis.fetch;
+		globalThis.fetch = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ messages: [{ id: "wamid.TEXT1" }] }), {
+					status: 200,
+				}),
+		) as unknown as typeof fetch;
+		const receipt = await whatsappAdapter.send("60123456789", {
+			kind: "text",
+			body: "hello",
+		});
+		expect(receipt).toEqual({ providerMessageId: "wamid.TEXT1" });
+		globalThis.fetch = original;
+	});
+
 	test("template send with an id-less 2xx response resolves undefined receipt", async () => {
 		const fetchMock = installFetchMock(); // returns "{}"
 		const receipt = await whatsappAdapter.send("60123456789", {

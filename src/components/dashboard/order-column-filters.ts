@@ -1,7 +1,11 @@
 import { sourceLabel } from "../../../convex/lib/attribution";
 import type { Country } from "../../../convex/lib/country";
 import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
+import { INBOX_LEAF_KEYS, leafLabel } from "../../../convex/lib/orderBuckets";
 import {
+	FULFILMENT_KEYS,
+	type FulfilmentKey,
+	fulfilmentLabel,
 	ORDER_SOURCE_KEYS,
 	ORDER_SOURCE_LABELS,
 	type OrderColumnKey,
@@ -14,7 +18,7 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
-import { ORDER_STATUS_KEYS, type OrderStatus } from "../../lib/orderStatus";
+import type { OrderStatus } from "../../lib/orderStatus";
 import type { ColumnFilterOption } from "../ui/column-filter-menu";
 
 /**
@@ -47,8 +51,10 @@ export interface OrderColumnFilterState {
 	 * "Uncategorized" option via `CATEGORY_UNCATEGORIZED`, split back out on
 	 * apply — exactly how `paymentMethods` carries its own absence. */
 	categoriesUnspecified: boolean;
-	/** Checkout surface. */
+	/** Checkout surface — how the order came IN. */
 	sources: string[];
+	/** How the order goes OUT (z8r3fdfau9) — `fulfilmentKey` values. */
+	fulfilments: string[];
 	paymentStatuses: string[];
 	/**
 	 * Settlement methods, with `""` standing for "no method recorded". The URL
@@ -62,11 +68,34 @@ export interface OrderColumnFilterState {
 	fulfilmentWindow?: FulfilmentWindow;
 }
 
+export interface CategoryFacet {
+	name: string;
+	count: number;
+}
+
+/** The count beside a category option; `CATEGORY_UNCATEGORIZED` for the
+ * orders carrying none. 0 when the facets haven't loaded or the name is
+ * absent from the window — the same answer every other facet gives. */
+export function categoryCount(
+	facets: OrderFilterFacets | undefined,
+	name: string,
+): number {
+	return facets?.category.find((c) => c.name === name)?.count ?? 0;
+}
+
 /** Per-option row counts over the UNFILTERED window, from `searchOrders`. */
 export interface OrderFilterFacets {
-	status: Record<string, number>;
-	category: Record<string, number>;
+	/** Keyed by status LEAF, not `orders.status` — see INBOX_LEAF_KEYS. */
+	statusLeaf: Record<string, number>;
+	/** A list, not a name-keyed object: category names are the seller's own
+	 * words, and Convex can't serialise an object key with a non-ASCII
+	 * character in it (z8r3fdv1r4). `""` is the uncategorized count. Read it
+	 * through `categoryCount`. */
+	category: CategoryFacet[];
 	source: Record<string, number>;
+	/** Keyed by `fulfilmentKey`, so a count here is the count of rows whose
+	 * Fulfilment cell shows that word (z8r3fdfau9). */
+	fulfilment: Record<string, number>;
 	paymentStatus: Record<string, number>;
 	paymentMethod: Record<string, number>;
 	attribution: Record<string, number>;
@@ -132,6 +161,45 @@ function opt(
 }
 
 /**
+ * Which fulfilment kinds to offer (z8r3fdfau9): the ones this seller's window
+ * actually contains, plus anything already selected. In registry order, never
+ * by count, so the list doesn't reshuffle as orders land.
+ *
+ * Presence-driven rather than the full five because most stores only ever do
+ * one or two: a delivery-only seller has no business being shown permanently-
+ * zero "Booking" and "We collect" rows — the rule `showBookingPeriods` and the
+ * category/attribution sections already follow. A SELECTED kind is folded back
+ * in even when nothing matches it, because a lit filter the seller can't see is
+ * a filter they can't switch off (`methodChoicesFor`'s rule, and the reason
+ * this is one exported helper rather than a copy in each surface).
+ *
+ * **Fewer than two entries means neither surface renders** — see
+ * `fulfilmentFilterApplies`. One option can only narrow to what you already
+ * have, which is a control that does nothing.
+ */
+export function fulfilmentChoicesFrom(
+	facets: OrderFilterFacets | undefined,
+	selected: readonly string[] = [],
+): FulfilmentKey[] {
+	// `facets?.fulfilment?.[key]`, both links optional: `OrderFilterFacets`
+	// requires the field, so a payload missing it can only come from a backend
+	// older than this frontend — which the deploy order rules out, but a throw
+	// is a blank inbox and the house `opt()` idiom already guards this way.
+	return FULFILMENT_KEYS.filter(
+		(key) => (facets?.fulfilment?.[key] ?? 0) > 0 || selected.includes(key),
+	);
+}
+
+/** Whether the fulfilment dimension is worth showing at all — the ONE rule, so
+ * the panel section and the column funnel appear and disappear together. */
+export function fulfilmentFilterApplies(
+	facets: OrderFilterFacets | undefined,
+	selected: readonly string[] = [],
+): boolean {
+	return fulfilmentChoicesFrom(facets, selected).length > 1;
+}
+
+/**
  * Build the header-filter bindings, keyed by column. Returns a plain map so the
  * table can ask `filters.get(column.key)` and render nothing when there's no
  * entry — the presence of the funnel icon is what tells a seller the column is
@@ -151,10 +219,14 @@ export function buildOrderColumnFilters({
 	// Status — in LIFECYCLE order, never alphabetical or by count: a seller
 	// reading a status list is reading a pipeline, and "Cancelled, Confirmed,
 	// Delivered, Packed…" destroys the one thing that makes it scannable.
+	// LEAVES, not raw statuses — the same atom the chip row and the Filters panel
+	// select on. A column header offering a different status vocabulary from the
+	// panel two feet away is how the inbox came to have two disagreeing filters
+	// in the first place; there is exactly one status axis now, at three grains.
 	map.set("status", {
 		label: "Status",
-		options: ORDER_STATUS_KEYS.map((s) =>
-			opt(s, statusLabel(s), facets?.status),
+		options: INBOX_LEAF_KEYS.map((leaf) =>
+			opt(leaf, leafLabel(leaf, statusLabel), facets?.statusLeaf),
 		),
 		selected: state.statuses,
 		onChange: (statuses) => onApply({ statuses }),
@@ -170,8 +242,16 @@ export function buildOrderColumnFilters({
 	map.set("categories", {
 		label: "Categories",
 		options: [
-			...availableCategories.map((c) => opt(c, c, facets?.category)),
-			opt(CATEGORY_UNCATEGORIZED, "Uncategorized", facets?.category),
+			...availableCategories.map((c) => ({
+				value: c,
+				label: c,
+				count: categoryCount(facets, c),
+			})),
+			{
+				value: CATEGORY_UNCATEGORIZED,
+				label: "Uncategorized",
+				count: categoryCount(facets, CATEGORY_UNCATEGORIZED),
+			},
 		],
 		selected: state.categoriesUnspecified
 			? [...state.categories, CATEGORY_UNCATEGORIZED]
@@ -192,6 +272,25 @@ export function buildOrderColumnFilters({
 		selected: state.sources,
 		onChange: (sources) => onApply({ sources }),
 	});
+
+	// Fulfilment (z8r3fdfau9) — immediately after Order type on purpose: one is
+	// how the order came in, the other how it goes out, and a seller planning a
+	// day reaches for them together.
+	//
+	// Registered only when there is more than one kind to choose between, so the
+	// funnel icon itself is the honest signal: on a delivery-only store the
+	// column has no funnel rather than a funnel that opens onto a single row.
+	// Same call as the panel's section, from the same helper.
+	if (fulfilmentFilterApplies(facets, state.fulfilments)) {
+		map.set("fulfilment", {
+			label: "Fulfilment",
+			options: fulfilmentChoicesFrom(facets, state.fulfilments).map((key) =>
+				opt(key, fulfilmentLabel(key), facets?.fulfilment),
+			),
+			selected: state.fulfilments,
+			onChange: (fulfilments) => onApply({ fulfilments }),
+		});
+	}
 
 	map.set("attribution", {
 		label: "Came from",
