@@ -36,5 +36,12 @@ export const DARK_CLERK_VARIABLES = {
 export function clerkAppearance(
 	resolved: ResolvedTheme,
 ): Appearance | undefined {
-	return resolved === "dark" ? { variables: DARK_CLERK_VARIABLES } : undefined;
+	if (resolved !== "dark") return undefined;
+	return {
+		variables: DARK_CLERK_VARIABLES,
+		// The card's logo is the dashboard-configured NAVY lockup, which vanishes
+		// on the dark card exactly as it did in the storefront header. Same
+		// light-ink asset the Wordmark component swaps to.
+		layout: { logoImageUrl: "/logo-dark.svg" },
+	};
 }
