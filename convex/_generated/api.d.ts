@@ -64,6 +64,7 @@ import type * as lib_closedDates from "../lib/closedDates.js";
 import type * as lib_comp from "../lib/comp.js";
 import type * as lib_confirmationPush from "../lib/confirmationPush.js";
 import type * as lib_contact from "../lib/contact.js";
+import type * as lib_convexTestSettle from "../lib/convexTestSettle.js";
 import type * as lib_country from "../lib/country.js";
 import type * as lib_countrySetup from "../lib/countrySetup.js";
 import type * as lib_courierBooking from "../lib/courierBooking.js";
@@ -260,6 +261,7 @@ declare const fullApi: ApiFromModules<{
   "lib/comp": typeof lib_comp;
   "lib/confirmationPush": typeof lib_confirmationPush;
   "lib/contact": typeof lib_contact;
+  "lib/convexTestSettle": typeof lib_convexTestSettle;
   "lib/country": typeof lib_country;
   "lib/countrySetup": typeof lib_countrySetup;
   "lib/courierBooking": typeof lib_courierBooking;

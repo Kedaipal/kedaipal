@@ -480,5 +480,6 @@
 	"pricing_feat_handshake": "付款确认机制 + 收据",
 	"pricing_feat_insights": "商家数据分析 + 报表",
 	"pricing_feat_courier": "快递实时报价配送",
-	"pricing_feat_broadcast": "向顾客名单群发讯息"
+	"pricing_feat_broadcast": "向顾客名单群发讯息",
+	"storefront_chat_prefill": "{storeName} 你好，我正在看你的 Kedaipal 店铺，有个问题想请教。"
 }

@@ -480,5 +480,6 @@
 	"poster_powered_by": "POWERED BY",
 	"poster_chat_online": "Online",
 	"poster_chat_bubble1": "Can I place an order? 😋",
-	"poster_chat_bubble2": "Paid — that was easy! 👍"
+	"poster_chat_bubble2": "Paid — that was easy! 👍",
+	"storefront_chat_prefill": "Hi {storeName}, I'm looking at your Kedaipal store and have a question."
 }

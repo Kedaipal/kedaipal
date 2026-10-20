@@ -262,7 +262,9 @@ const INTAKE_MODULES = ["counterCheckout", "orderClaims"];
 
 /** The WAYS BACK — topping up (T2), paying or changing a plan, resuming a
  * hold, settings and the team: a gated store must always be able to reach
- * every one of them, or the gate becomes a trap. None may carry the guard. */
+ * every one of them, or the gate becomes a trap. None may carry the guard.
+ * `retailers` covers every store setting, `setStorefrontChat` included
+ * (z8r3fdvwcy): settings are paid for by the subscription, never by credits. */
 const WAY_BACK_MODULES = [
 	"creditPurchases",
 	"invoices",
