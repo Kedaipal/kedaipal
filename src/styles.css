@@ -924,6 +924,18 @@
 	--segment: hsl(222 47% 34%);
 	--segment-foreground: hsl(210 40% 98%);
 
+	/* The countdown on a DARK page. The light-page pair (paper 22%, opening
+	   33%) was tuned for a navy band on white, where the opening is a gentle
+	   lift and both halves still sit below the page. On a 6% page the same
+	   pair inverts the reading: the 33% opening becomes the brightest surface
+	   on screen and the "cut paper" reads as a bright slab (Zaki, 21 Oct 2026,
+	   on the checkout band). Here the paper is a card-level band and the
+	   opening is a VOID — the page showing through the cut — a step DARKER
+	   than the paper, the same ~7-point distance the light pair keeps. The
+	   ink is one light colour on both grounds either way. */
+	--countdown-paper: hsl(222 47% 15%);
+	--countdown-cut: hsl(222 47% 7%);
+
 	--secondary: hsl(217 33% 17%);
 	--secondary-foreground: hsl(210 40% 98%);
 

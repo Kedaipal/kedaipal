@@ -72,6 +72,9 @@ Progress-bar fills and dots that use `bg-foreground` as a neutral ink (`customer
 
 Black is not a Kedaipal colour. Arif named it first for the pill toggles (19 Oct 2026 — "use our navy blue, not black") and Zaki for the storefront badges and the countdown (20 Oct): `--primary` at 11% lightness reads **black** at badge size, so a `bg-primary` sale badge, a `bg-primary/90` sale strip and an 11% receipt-paper countdown all looked like black stickers on the product. The dark ink is **`--segment`**: the same navy hue a step lighter — 22% in light, 34% in dark — as `bg-segment text-segment-foreground`. Buttons stay `bg-primary`; the countdown's paper and cut moved up the same step. The coverage gate now **fails on any solid black-family surface** (`bg-black`, `bg-slate-900`…); a translucent scrim is fine, and the one legitimate black object — a phone bezel inside a product mockup — lives in exempt files.
 
+
+**The countdown has a dark pair of its own.** The light pair (paper 22 %, opening 33 %) is a navy band on a white page, where the opening is a gentle lift. On the 6 % dark page that same opening became the brightest surface on screen and the cut read as a bright slab (Zaki, 21 Oct 2026). Under `.dark` the paper drops to a card-level 15 % and the opening to 7 % — a VOID, the page showing through the cut — keeping the same ~7-point distance in the other direction. The ink and the stage ramp are unchanged on both grounds.
+
 ## Scope: where dark mode applies
 
 `isThemedRouteId` decides, keyed on matched **route ids** (not pathnames) so the router's own precedence settles `/pricing` vs `/$slug` — the same reason [`buyer-routes.ts`](../src/lib/buyer-routes.ts) does. The shell emits the pre-paint script only on themed routes and actively strips the class everywhere else.

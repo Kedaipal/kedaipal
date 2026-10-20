@@ -402,15 +402,24 @@ export function Sidebar({
 				    word fades with the rail like the user's name below; both words are
 				    in the DOM and CSS picks one, so SSR's light-first pass never prints
 				    the wrong verb for a frame. The three-way picker (match device)
-				    stays in Settings → App → Appearance. */}
+				    stays in Settings → App → Appearance.
+
+				    ONE ICON COLUMN. Every glyph in this rail — nav icons, the avatar
+				    below — centres 22px in from the row when expanded and 26px when
+				    collapsed. The toggle's 44px hit disc would centre its glyph 8px
+				    further right under the same padding, and it shipped that way
+				    once: the sun sat visibly off the column in both states (Zaki,
+				    21 Oct 2026). `-ml-2` pulls the disc back onto the column, and
+				    `gap-0` lets the word start where the user's name does (the disc's
+				    own right half is the gap). */}
 				<div
 					className={cn(
-						"flex items-center gap-2 rounded-lg py-1 pr-2",
+						"flex items-center gap-0 rounded-lg py-1 pr-2",
 						collapsed ? "pl-3" : "pl-2",
 						motion,
 					)}
 				>
-					<ThemeToggle variant="ghost" />
+					<ThemeToggle variant="ghost" className="-ml-2" />
 					<span
 						aria-hidden={collapsed || undefined}
 						className={cn(
