@@ -8,7 +8,7 @@ The palette was not invented for this ticket. `src/styles.css` has carried a com
 
 **Sellers** — Settings → **App → Appearance**: Light, Dark, or Match device, each with a preview swatch. Default is Match device.
 
-**Buyers** — a sun/moon button low on **every** buyer page: the storefront family (in the footer, beside the powered-by badge), `/track`, and the open `/claim` checkout. Two states, not three: the page already matched their phone on arrival, so the only thing worth offering is "actually, the other one". Deliberately below the fold — a theme switch must never compete with the buy button.
+**Buyers** — a quiet "Dark mode" / "Light mode" row low on **every** buyer page, in the footer above the powered-by badge and in the same language as "Discover more stores" (a bordered icon disc beside the badge was tried and read as clutter — Zaki, 21 Oct 2026): the storefront family, `/track`, and the open `/claim` checkout. Two states, not three: the page already matched their phone on arrival, so the only thing worth offering is "actually, the other one". Deliberately below the fold — a theme switch must never compete with the buy button.
 
 It has to be on all of them, not just the storefront. A buyer who ordered over WhatsApp may never see a storefront at all: they get a tracking link and nothing else, so `/track` is their only chance to override what their phone picked. And keeping the slot consistent (bottom utility row, next to the privacy link or the powered-by badge) means someone who finds it once finds it everywhere. `theme-routes.test.ts` fails if a buyer route ships without one.
 
