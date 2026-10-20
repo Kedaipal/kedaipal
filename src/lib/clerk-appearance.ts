@@ -40,8 +40,11 @@ export function clerkAppearance(
 	return {
 		variables: DARK_CLERK_VARIABLES,
 		// The card's logo is the dashboard-configured NAVY lockup, which vanishes
-		// on the dark card exactly as it did in the storefront header. Same
-		// light-ink asset the Wordmark component swaps to.
-		layout: { logoImageUrl: "/logo-dark.svg" },
+		// on the dark card exactly as it did in the storefront header. This Clerk
+		// version exposes no appearance-level logo URL (that is a dashboard
+		// setting), so in dark the logo box is hidden rather than shown wrong —
+		// the card's own title names Kedaipal. A light-ink upload in the Clerk
+		// dashboard, or a Clerk version with `layout.logoImageUrl`, restores it.
+		elements: { logoBox: "dark:hidden" },
 	};
 }
