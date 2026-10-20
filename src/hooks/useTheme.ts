@@ -59,18 +59,28 @@ export function useTheme(): UseThemeResult {
  * Keeps the `.dark` class on <html> in step with the preference. Mounted once,
  * in the root shell.
  *
- * The pre-paint script already set the class before React ran, so most of the
- * time this is a no-op — but it is load-bearing twice: it re-applies on every
- * commit, which repairs the one case the script cannot (when hydration fails and
- * React re-renders the root, it strips every attribute off <html>, class and
- * colorScheme included, and a dark-mode seller would otherwise sit on a white
- * page until they reloaded); and it runs in a layout effect, before paint, so a
- * preference change never flashes. The DOM write is idempotent.
+ * The pre-paint script already set the class before React ran, so on the happy
+ * path this is an idempotent no-op. It stays for the moments the script cannot
+ * reach: a preference change, an OS flip, another tab's choice — each of those
+ * also writes the DOM directly in `lib/theme.ts`, and this layout effect is the
+ * belt to those braces, running before paint so a change never flashes.
+ *
+ * It writes the STORE's value, never the rendered `resolved`. During hydration
+ * React renders from the server snapshot ("light") and only afterwards
+ * re-renders from the store, and this effect fires in between — written from
+ * `resolved`, it stripped `.dark` off a page the script had already darkened
+ * and put it back a second later: a white flash on every full load, and the
+ * "components loaded on a white page, then it switched" Zaki saw on the
+ * landing page (21 Oct 2026 hands-on test). The store has read storage by the
+ * time any effect runs, so it is the truth on the client; `resolved` stays the
+ * dependency because its changes are exactly the moments the DOM may have moved.
+ * `useTheme.test.tsx` hydrates a darkened document and asserts it never passes
+ * through light.
  */
 export function useThemeSync(): { resolved: ResolvedTheme } {
 	const { resolved } = useTheme();
 	useIsomorphicLayoutEffect(() => {
-		applyResolvedTheme(resolved);
+		applyResolvedTheme(getThemeSnapshot().resolved);
 	}, [resolved]);
 	return { resolved };
 }

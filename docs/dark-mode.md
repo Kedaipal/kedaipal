@@ -52,7 +52,7 @@ It is a hand-written ES5 copy of `readStoredPreference` + `resolveTheme` + `appl
 Two decisions worth knowing:
 
 - **A raw `<script>` in the shell, not `head({ scripts })`.** TanStack's supported head-scripts API re-appends and re-runs the script after hydration, which is wrong for a one-shot. The raw tag in `RootDocument` has no such effect, and `suppressHydrationWarning` was already on `<html>` — it covers extra attributes, which is exactly what the script adds.
-- **`useThemeScope` re-applies on every commit, in a layout effect.** Belt and braces for the case the script cannot cover: when hydration fails and React re-renders the root, it strips *every* attribute off `<html>`, class included, and a dark-mode seller would sit on a white page until they reloaded. The DOM write is idempotent, so this is free on the happy path.
+- **`useThemeSync` re-applies in a layout effect — from the STORE, never from the rendered value.** During hydration React renders from the server snapshot ("light") and only then re-renders from the store; the effect fires in between. The first cut wrote the rendered value, which stripped `.dark` off a page the script had already darkened and put it back a second later — a white flash on every full load, caught in the 21 Oct hands-on test. The effect now writes `getThemeSnapshot().resolved`, and `useTheme.test.tsx` hydrates a darkened document under a `MutationObserver` to assert it never passes through light. The DOM write is idempotent, so this is free on the happy path.
 
 ### Inverted surfaces — the softened recipe
 

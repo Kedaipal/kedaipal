@@ -146,8 +146,8 @@ function refresh(preference: ThemePreference = snapshot.preference): void {
 
 /**
  * Reads storage once on first client subscribe. It deliberately does NOT touch
- * the DOM: `useThemeScope` owns every write, because only it knows whether the
- * current route is themed at all.
+ * the DOM: the pre-paint script already did, and `useThemeSync` (a layout
+ * effect in the root shell) re-applies from this snapshot after hydration.
  */
 function hydrateOnce(): void {
 	if (hydrated || typeof window === "undefined") return;
