@@ -307,6 +307,10 @@ export const disconnect = mutation({
 	args: { retailerId: v.optional(v.id("retailers")) },
 	handler: async (ctx, { retailerId }) => {
 		const access = await resolveStoreAccess(ctx, retailerId, "write");
+		// The view-only lock (comp-off / expired stores) — the Delyva
+		// disconnect's posture; plan gating never applies to disconnecting.
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, access.retailer._id);
 		const prev = access.retailer.easyparcel as EasyparcelConfig | undefined;
 		if (!prev) return;
 		await ctx.db.patch(access.retailer._id, {
@@ -336,12 +340,15 @@ export const updateSettings = mutation({
 	},
 	handler: async (ctx, args): Promise<{ ok: boolean; message?: string }> => {
 		const access = await resolveStoreAccess(ctx, args.retailerId, "write");
+		// The view-only lock applies to every settings write (the Delyva
+		// posture); the PLAN gate below applies to the enable direction only.
+		if (!access.actingAsAdmin)
+			await assertSubscriptionActive(ctx, access.retailer._id);
 		const config = access.retailer.easyparcel as EasyparcelConfig | undefined;
 		if (!config) return { ok: false, message: "Connect EasyParcel first." };
 		if (!access.actingAsAdmin && args.enabled === true && !config.enabled) {
 			// Gate only the ENABLE direction; pausing stays free (downgrade
 			// never traps).
-			await assertSubscriptionActive(ctx, access.retailer._id);
 			await assertPlanFeature(ctx, access.retailer._id, "delivery");
 		}
 		let pickupAddress = config.pickupAddress;
@@ -1180,10 +1187,13 @@ export const markCancelled = mutation({
 	handler: async (ctx, { shortId }): Promise<{ ok: boolean; message?: string }> => {
 		const order = await resolveSharedOrder(ctx, { shortId });
 		if (!order) return { ok: false, message: "Order not found." };
-		await requireRetailerAccess(ctx, order.retailerId, {
+		const access = await requireRetailerAccess(ctx, order.retailerId, {
 			area: "orders",
 			level: "write",
 		});
+		// The view-only lock — the Delyva cancelBooking posture.
+		if (access.role !== "admin")
+			await assertSubscriptionActive(ctx, order.retailerId);
 		const jobs = await ctx.db
 			.query("deliveryJobs")
 			.withIndex("by_order", (q) => q.eq("orderId", order._id))

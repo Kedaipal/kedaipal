@@ -24,13 +24,19 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useAction, useMutation } from "convex/react";
-import { ExternalLink, FlaskConical, RefreshCw, Snowflake, Wallet } from "lucide-react";
+import {
+	ExternalLink,
+	FlaskConical,
+	RefreshCw,
+	Snowflake,
+	Wallet,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { MY_STATES, postcodeRule } from "../../../convex/lib/address";
-import type { Country } from "../../../convex/lib/country";
+import { COUNTRY_CURRENCY, type Country } from "../../../convex/lib/country";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import type { FixHighlight } from "../../lib/country-setup-copy";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
@@ -239,367 +245,372 @@ export function EasyparcelCard({
 	return (
 		<AccountCard id={shellId} highlight={highlight}>
 			<div className="flex flex-col gap-4">
-			<div className="flex flex-col gap-2">
-				<div className="flex items-center gap-2.5">
-					{/* No brand mark shipped yet (marks are never redrawn or
+				<div className="flex flex-col gap-2">
+					<div className="flex items-center gap-2.5">
+						{/* No brand mark shipped yet (marks are never redrawn or
 					    re-tinted) — the name carries the identity until EasyParcel's
 					    approved asset lands. */}
-					<h2 className="font-heading text-lg font-bold">EasyParcel</h2>
-					{!canUse ? <ProBadge /> : null}
-					<span className="ml-auto flex shrink-0">
-						{!connected ? (
-							<Glance tone="grey">Not connected</Glance>
-						) : setupDone < 2 ? (
-							<Glance tone="warn">Setup {setupDone} of 2</Glance>
-						) : settings?.isDemo ? (
-							<Glance tone="warn">Test mode</Glance>
-						) : (
-							<Glance>Connected</Glance>
-						)}
-					</span>
-				</div>
-				<p className="text-sm text-muted-foreground">
-					Singapore parcel couriers — J&amp;T, SingPost, Qxpress, Ninja Van,
-					Teleport and more — on your own EasyParcel account. Booking is
-					switched on under{" "}
-					<Link
-						to="/app/settings/delivery-pricing"
-						className="font-medium text-accent-emphasis hover:underline"
-					>
-						Delivery pricing → Courier booking
-					</Link>
-					.
-				</p>
-			</div>
-
-			{countryBlocked ? (
-				<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-					EasyParcel booking isn&apos;t available in your store&apos;s country
-					— Malaysian stores book couriers through Delyva instead. Your account
-					stays connected until you disconnect it below.
-				</p>
-			) : null}
-
-			{settings === undefined ? (
-				<p className="text-sm text-muted-foreground">Loading…</p>
-			) : connected ? (
-				<>
-					<SectionLabel>Setup</SectionLabel>
-					<SetupChecklist>
-						<SetupStep
-							n={1}
-							state="done"
-							title={
-								<>
-									Account
-									{settings.isDemo ? (
-										<Glance tone="warn">Demo account</Glance>
-									) : (
-										<Glance>Live</Glance>
-									)}
-								</>
-							}
-							detail={
-								editingKey ? (
-									"Paste the key from your live EasyParcel account."
-								) : (
-									<>
-										key{" "}
-										<span className="font-mono">…{settings.apiKeyHint}</span> ·{" "}
-										<button
-											type="button"
-											onClick={() => setEditingKey(true)}
-											className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
-										>
-											Replace
-										</button>
-									</>
-								)
-							}
-						>
-							{settings.isDemo ? (
-								<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-									<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
-									<span>
-										<strong>Test mode — no courier will come.</strong> This key
-										authenticated on EasyParcel&apos;s demo environment, so
-										bookings are simulated and its credit is play money. Connect
-										the key from your live account at{" "}
-										<a
-											href={`https://${portalHost}`}
-											target="_blank"
-											rel="noopener noreferrer"
-											className="font-medium underline underline-offset-2"
-										>
-											{portalHost}
-										</a>{" "}
-										before telling buyers.
-									</span>
-								</p>
-							) : null}
-							{editingKey ? (
-								<div className="mt-1 flex flex-col gap-2">
-									<KeyInput
-										value={apiKey}
-										disabled={busy}
-										onChange={setApiKey}
-									/>
-									<div className="flex flex-wrap items-center gap-2">
-										<Button
-											type="button"
-											className="h-11"
-											isLoading={busy}
-											disabled={!typedKey || busy}
-											onClick={() => void handleConnect()}
-										>
-											Save new key
-										</Button>
-										<Button
-											type="button"
-											variant="outline"
-											className="h-11"
-											onClick={() => {
-												setEditingKey(false);
-												setApiKey("");
-											}}
-										>
-											Keep the stored key
-										</Button>
-									</div>
-								</div>
-							) : null}
-						</SetupStep>
-
-						{/* Its own field, not the business address: a parcel courier
-						    prices on the postcode, and this is where pickups happen. */}
-						<SetupStep
-							n={2}
-							state={storedAddress ? "done" : "action"}
-							title="Pickup address"
-							detail={
-								storedAddress && !editingPickup && !addressDirty ? (
-									<>
-										{[
-											[storedAddress.unit, storedAddress.address1]
-												.filter(Boolean)
-												.join(" "),
-											storedAddress.address2,
-											`${storedAddress.postcode}${storedAddress.city ? ` ${storedAddress.city}` : ""}`,
-										]
-											.filter(Boolean)
-											.join(", ")}{" "}
-										—{" "}
-										<button
-											type="button"
-											onClick={() => setEditingPickup(true)}
-											className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
-										>
-											change it
-										</button>
-									</>
-								) : (
-									`Where couriers collect from. The ${postcodeRule(country).label.toLowerCase()} decides the price, so make it exact.`
-								)
-							}
-						>
-							{storedAddress && !editingPickup && !addressDirty ? null : (
-								<PickupAddressFields
-									retailerId={retailerId}
-									country={country}
-									draft={addressDraft}
-									dirty={addressDirty}
-									opened={editingPickup}
-									disabled={busy}
-									error={addressError}
-									onChange={(patch) => {
-										setAddress({ ...addressDraft, ...patch });
-										setAddressError(null);
-									}}
-									onSave={saveAddress}
-									onCancel={() => {
-										setAddress(null);
-										setAddressError(null);
-										setEditingPickup(false);
-									}}
-								/>
-							)}
-						</SetupStep>
-					</SetupChecklist>
-
-					{/* The wallet is the thing that fails first on a prepaid platform —
-					    it gets its own section, not a footnote. */}
-					<SectionLabel>Wallet</SectionLabel>
-					<div className="flex items-center gap-2 rounded-xl border border-input bg-muted/30 px-3 py-2.5">
-						<Wallet className="size-4 shrink-0 text-muted-foreground" />
-						<span className="text-sm">
-							{settings.balanceMinor !== undefined ? (
-								<strong className="font-semibold">
-									{formatPrice(
-										settings.balanceMinor,
-										settings.balanceCurrency ?? "SGD",
-									)}
-								</strong>
+						<h2 className="font-heading text-lg font-bold">EasyParcel</h2>
+						{!canUse ? <ProBadge /> : null}
+						<span className="ml-auto flex shrink-0">
+							{!connected ? (
+								<Glance tone="grey">Not connected</Glance>
+							) : setupDone < 2 ? (
+								<Glance tone="warn">Setup {setupDone} of 2</Glance>
+							) : settings?.isDemo ? (
+								<Glance tone="warn">Test mode</Glance>
 							) : (
-								"Balance unknown"
+								<Glance>Connected</Glance>
 							)}
-							<span className="text-muted-foreground">
-								{" "}
-								· prepaid — each booking draws from this
-							</span>
 						</span>
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							className="ml-auto h-9"
-							isLoading={refreshing}
-							onClick={() => void handleRefreshBalance()}
-						>
-							<RefreshCw className="size-3.5" />
-							Refresh
-						</Button>
 					</div>
-
-					{/* The constraint, surfaced where the account lives — never
-					    discovered at a failed pickup. */}
-					<p className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-						<Snowflake className="mt-0.5 size-3.5 shrink-0" />
-						<span>
-							<strong className="text-foreground">
-								Ambient parcels only.
-							</strong>{" "}
-							EasyParcel couriers don&apos;t take chilled or frozen goods — a
-							cold parcel would be refused at pickup or discarded in transit.
-						</span>
+					<p className="text-sm text-muted-foreground">
+						Singapore parcel couriers — J&amp;T, SingPost, Qxpress, Ninja Van,
+						Teleport and more — on your own EasyParcel account. Booking is
+						switched on under{" "}
+						<Link
+							to="/app/settings/delivery-pricing"
+							className="font-medium text-accent-emphasis hover:underline"
+						>
+							Delivery pricing → Courier booking
+						</Link>
+						.
 					</p>
+				</div>
 
-					{/* Where the on/off lives — the one cross-page pointer, so a
-					    seller who lands here first still finds the switch. */}
-					{!countryBlocked ? (
-						<p className="text-xs text-muted-foreground">
-							{settings.enabled
-								? "Booking is on — you'll see EasyParcel on your delivery orders."
-								: "Booking is currently off."}{" "}
-							Manage it under{" "}
-							<Link
-								to="/app/settings/delivery-pricing"
-								className="font-medium text-accent-emphasis hover:underline"
+				{countryBlocked ? (
+					<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+						EasyParcel booking isn&apos;t available in your store&apos;s country
+						— Malaysian stores book couriers through Delyva instead. Your
+						account stays connected until you disconnect it below.
+					</p>
+				) : null}
+
+				{settings === undefined ? (
+					<p className="text-sm text-muted-foreground">Loading…</p>
+				) : connected ? (
+					<>
+						<SectionLabel>Setup</SectionLabel>
+						<SetupChecklist>
+							<SetupStep
+								n={1}
+								state="done"
+								title={
+									<>
+										Account
+										{settings.isDemo ? (
+											<Glance tone="warn">Demo account</Glance>
+										) : (
+											<Glance>Live</Glance>
+										)}
+									</>
+								}
+								detail={
+									editingKey ? (
+										"Paste the key from your live EasyParcel account."
+									) : (
+										<>
+											key{" "}
+											<span className="font-mono">…{settings.apiKeyHint}</span>{" "}
+											·{" "}
+											<button
+												type="button"
+												onClick={() => setEditingKey(true)}
+												className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
+											>
+												Replace
+											</button>
+										</>
+									)
+								}
 							>
-								Delivery pricing → Courier booking
-							</Link>
-							.
+								{settings.isDemo ? (
+									<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+										<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
+										<span>
+											<strong>Test mode — no courier will come.</strong> This
+											key authenticated on EasyParcel&apos;s demo environment,
+											so bookings are simulated and its credit is play money.
+											Connect the key from your live account at{" "}
+											<a
+												href={`https://${portalHost}`}
+												target="_blank"
+												rel="noopener noreferrer"
+												className="font-medium underline underline-offset-2"
+											>
+												{portalHost}
+											</a>{" "}
+											before telling buyers.
+										</span>
+									</p>
+								) : null}
+								{editingKey ? (
+									<div className="mt-1 flex flex-col gap-2">
+										<KeyInput
+											value={apiKey}
+											disabled={busy}
+											onChange={setApiKey}
+										/>
+										<div className="flex flex-wrap items-center gap-2">
+											<Button
+												type="button"
+												className="h-11"
+												isLoading={busy}
+												disabled={!typedKey || busy}
+												onClick={() => void handleConnect()}
+											>
+												Save new key
+											</Button>
+											<Button
+												type="button"
+												variant="outline"
+												className="h-11"
+												onClick={() => {
+													setEditingKey(false);
+													setApiKey("");
+												}}
+											>
+												Keep the stored key
+											</Button>
+										</div>
+									</div>
+								) : null}
+							</SetupStep>
+
+							{/* Its own field, not the business address: a parcel courier
+						    prices on the postcode, and this is where pickups happen. */}
+							<SetupStep
+								n={2}
+								state={storedAddress ? "done" : "action"}
+								title="Pickup address"
+								detail={
+									storedAddress && !editingPickup && !addressDirty ? (
+										<>
+											{[
+												[storedAddress.unit, storedAddress.address1]
+													.filter(Boolean)
+													.join(" "),
+												storedAddress.address2,
+												`${storedAddress.postcode}${storedAddress.city ? ` ${storedAddress.city}` : ""}`,
+											]
+												.filter(Boolean)
+												.join(", ")}{" "}
+											—{" "}
+											<button
+												type="button"
+												onClick={() => setEditingPickup(true)}
+												className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
+											>
+												change it
+											</button>
+										</>
+									) : (
+										`Where couriers collect from. The ${postcodeRule(country).label.toLowerCase()} decides the price, so make it exact.`
+									)
+								}
+							>
+								{storedAddress && !editingPickup && !addressDirty ? null : (
+									<PickupAddressFields
+										retailerId={retailerId}
+										country={country}
+										draft={addressDraft}
+										dirty={addressDirty}
+										opened={editingPickup}
+										disabled={busy}
+										error={addressError}
+										onChange={(patch) => {
+											setAddress({ ...addressDraft, ...patch });
+											setAddressError(null);
+										}}
+										onSave={saveAddress}
+										onCancel={() => {
+											setAddress(null);
+											setAddressError(null);
+											setEditingPickup(false);
+										}}
+									/>
+								)}
+							</SetupStep>
+						</SetupChecklist>
+
+						{/* The wallet is the thing that fails first on a prepaid platform —
+					    it gets its own section, not a footnote. */}
+						<SectionLabel>Wallet</SectionLabel>
+						<div className="flex items-center gap-2 rounded-xl border border-input bg-muted/30 px-3 py-2.5">
+							<Wallet className="size-4 shrink-0 text-muted-foreground" />
+							<span className="text-sm">
+								{settings.balanceMinor !== undefined ? (
+									<strong className="font-semibold">
+										{formatPrice(
+											settings.balanceMinor,
+											// EasyParcel reports its own currency; until a snapshot
+											// carries one, the store country's currency is the only
+											// honest guess (never a literal — the currency sweep).
+											settings.balanceCurrency ?? COUNTRY_CURRENCY[country],
+										)}
+									</strong>
+								) : (
+									"Balance unknown"
+								)}
+								<span className="text-muted-foreground">
+									{" "}
+									· prepaid — each booking draws from this
+								</span>
+							</span>
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								className="ml-auto h-9"
+								isLoading={refreshing}
+								onClick={() => void handleRefreshBalance()}
+							>
+								<RefreshCw className="size-3.5" />
+								Refresh
+							</Button>
+						</div>
+
+						{/* The constraint, surfaced where the account lives — never
+					    discovered at a failed pickup. */}
+						<p className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+							<Snowflake className="mt-0.5 size-3.5 shrink-0" />
+							<span>
+								<strong className="text-foreground">
+									Ambient parcels only.
+								</strong>{" "}
+								EasyParcel couriers don&apos;t take chilled or frozen goods — a
+								cold parcel would be refused at pickup or discarded in transit.
+							</span>
 						</p>
-					) : null}
 
-					<div className="flex flex-wrap items-center gap-2">
-						<button
-							type="button"
-							onClick={() => setConfirmingDisconnect(true)}
-							className="ml-auto min-h-11 text-sm font-medium text-destructive hover:underline"
-						>
-							Disconnect
-						</button>
-					</div>
-
-					<ConfirmDialog
-						open={confirmingDisconnect}
-						onOpenChange={setConfirmingDisconnect}
-						title="Disconnect EasyParcel?"
-						description="The Book button disappears from your orders. Parcels already booked keep delivering and their tracking keeps updating from EasyParcel until they finish. Your pickup address is kept, so reconnecting is just one key."
-						confirmLabel="Disconnect"
-						destructive
-						onConfirm={() =>
-							void run(
-								() => disconnect({ retailerId: actAsRetailerId }),
-								"EasyParcel disconnected",
-							)
-						}
-					/>
-				</>
-			) : (
-				<>
-					<ul className="flex flex-col gap-1.5 text-sm">
-						<Bullet>
-							<strong>One tap</strong> from the order to a booked courier — no
-							re-typing addresses.
-						</Bullet>
-						<Bullet>
-							You <strong>pick the courier</strong> and see every price before
-							you spend.
-						</Bullet>
-						<Bullet>
-							The <strong>courier&apos;s own label PDF</strong> comes back with
-							the booking, with the tracking number already on your buyer&apos;s
-							order.
-						</Bullet>
-						<Bullet>
-							Runs on <strong>your own EasyParcel account</strong> at their
-							normal rates. <strong>Kedaipal adds nothing</strong> to your
-							price.
-						</Bullet>
-					</ul>
-
-					<div className="flex flex-col gap-2 rounded-xl border border-input bg-muted/30 p-3 text-sm">
-						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							How to connect
-						</p>
-						<ol className="flex list-decimal flex-col gap-1 pl-5">
-							<li>
-								Create a free account at{" "}
-								<a
-									href={`https://${portalHost}`}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="inline-flex items-center gap-1 font-medium text-accent hover:underline"
+						{/* Where the on/off lives — the one cross-page pointer, so a
+					    seller who lands here first still finds the switch. */}
+						{!countryBlocked ? (
+							<p className="text-xs text-muted-foreground">
+								{settings.enabled
+									? "Booking is on — you'll see EasyParcel on your delivery orders."
+									: "Booking is currently off."}{" "}
+								Manage it under{" "}
+								<Link
+									to="/app/settings/delivery-pricing"
+									className="font-medium text-accent-emphasis hover:underline"
 								>
-									{portalHost} <ExternalLink className="size-3" />
-								</a>{" "}
-								and top up some credit — EasyParcel is prepaid, each booking
-								draws from your balance.
-							</li>
-							<li>
-								In the EasyParcel dashboard, open{" "}
-								<span className="font-medium">
-									Integrations → Add New Store → API Key
-								</span>{" "}
-								and choose <span className="font-medium">Individual API</span>.
-							</li>
-							<li>
-								Paste the API key below — that&apos;s the only thing we need.
-							</li>
-						</ol>
-					</div>
-
-					<KeyInput
-						value={apiKey}
-						disabled={locked || busy}
-						onChange={setApiKey}
-					/>
-
-					<div className="flex flex-col gap-2">
-						<Button
-							type="button"
-							className="h-11 self-start"
-							isLoading={busy}
-							disabled={locked || !typedKey || busy}
-							onClick={() => void handleConnect()}
-						>
-							Connect EasyParcel
-						</Button>
-						{locked ? (
-							<p className="text-xs text-muted-foreground">
-								Courier booking is a Pro feature — upgrade in Settings → Billing
-								to connect. (Disconnecting is never locked.)
-							</p>
-						) : !typedKey ? (
-							<p className="text-xs text-muted-foreground">
-								One key is all we need — we check it with EasyParcel and store
-								it encrypted.
+									Delivery pricing → Courier booking
+								</Link>
+								.
 							</p>
 						) : null}
-					</div>
-				</>
-			)}
+
+						<div className="flex flex-wrap items-center gap-2">
+							<button
+								type="button"
+								onClick={() => setConfirmingDisconnect(true)}
+								className="ml-auto min-h-11 text-sm font-medium text-destructive hover:underline"
+							>
+								Disconnect
+							</button>
+						</div>
+
+						<ConfirmDialog
+							open={confirmingDisconnect}
+							onOpenChange={setConfirmingDisconnect}
+							title="Disconnect EasyParcel?"
+							description="The Book button disappears from your orders. Parcels already booked keep delivering and their tracking keeps updating from EasyParcel until they finish. Your pickup address is kept, so reconnecting is just one key."
+							confirmLabel="Disconnect"
+							destructive
+							onConfirm={() =>
+								void run(
+									() => disconnect({ retailerId: actAsRetailerId }),
+									"EasyParcel disconnected",
+								)
+							}
+						/>
+					</>
+				) : (
+					<>
+						<ul className="flex flex-col gap-1.5 text-sm">
+							<Bullet>
+								<strong>One tap</strong> from the order to a booked courier — no
+								re-typing addresses.
+							</Bullet>
+							<Bullet>
+								You <strong>pick the courier</strong> and see every price before
+								you spend.
+							</Bullet>
+							<Bullet>
+								The <strong>courier&apos;s own label PDF</strong> comes back
+								with the booking, with the tracking number already on your
+								buyer&apos;s order.
+							</Bullet>
+							<Bullet>
+								Runs on <strong>your own EasyParcel account</strong> at their
+								normal rates. <strong>Kedaipal adds nothing</strong> to your
+								price.
+							</Bullet>
+						</ul>
+
+						<div className="flex flex-col gap-2 rounded-xl border border-input bg-muted/30 p-3 text-sm">
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								How to connect
+							</p>
+							<ol className="flex list-decimal flex-col gap-1 pl-5">
+								<li>
+									Create a free account at{" "}
+									<a
+										href={`https://${portalHost}`}
+										target="_blank"
+										rel="noopener noreferrer"
+										className="inline-flex items-center gap-1 font-medium text-accent hover:underline"
+									>
+										{portalHost} <ExternalLink className="size-3" />
+									</a>{" "}
+									and top up some credit — EasyParcel is prepaid, each booking
+									draws from your balance.
+								</li>
+								<li>
+									In the EasyParcel dashboard, open{" "}
+									<span className="font-medium">
+										Integrations → Add New Store → API Key
+									</span>{" "}
+									and choose <span className="font-medium">Individual API</span>
+									.
+								</li>
+								<li>
+									Paste the API key below — that&apos;s the only thing we need.
+								</li>
+							</ol>
+						</div>
+
+						<KeyInput
+							value={apiKey}
+							disabled={locked || busy}
+							onChange={setApiKey}
+						/>
+
+						<div className="flex flex-col gap-2">
+							<Button
+								type="button"
+								className="h-11 self-start"
+								isLoading={busy}
+								disabled={locked || !typedKey || busy}
+								onClick={() => void handleConnect()}
+							>
+								Connect EasyParcel
+							</Button>
+							{locked ? (
+								<p className="text-xs text-muted-foreground">
+									Courier booking is a Pro feature — upgrade in Settings →
+									Billing to connect. (Disconnecting is never locked.)
+								</p>
+							) : !typedKey ? (
+								<p className="text-xs text-muted-foreground">
+									One key is all we need — we check it with EasyParcel and store
+									it encrypted.
+								</p>
+							) : null}
+						</div>
+					</>
+				)}
 			</div>
 		</AccountCard>
 	);

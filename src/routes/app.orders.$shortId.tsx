@@ -444,6 +444,27 @@ function OrderDetailRoute() {
 	).data;
 	const hasActiveDelyvaBooking =
 		!!delyvaInfo?.job && isActiveJobStatus(delyvaInfo.job.status);
+	// And for an EasyParcel booking (z8r3fdcje2) — same dedup, same reason:
+	// riderOwnsTransition on the server covers every provider, so the client
+	// gate has to know about each one too.
+	const easyparcelInfo = useQuery(
+		convexQuery(
+			api.easyparcel.getDispatchState,
+			order?.deliveryMethod === "delivery" && order.shortId
+				? { shortId: order.shortId }
+				: "skip",
+		),
+	).data;
+	const hasActiveEasyparcelBooking =
+		!!easyparcelInfo?.job && isActiveJobStatus(easyparcelInfo.job.status);
+	// The parcel-courier bookings share their copy shape; the rider wording is
+	// Lalamove's own. One variable so the branches below can't disagree about
+	// which courier is on the order.
+	const activeCourierName = hasActiveDelyvaBooking
+		? ("Delyva" as const)
+		: hasActiveEasyparcelBooking
+			? ("EasyParcel" as const)
+			: null;
 	// Rider dispatch IS this vendor's delivery method (they picked Lalamove as
 	// their delivery CHARGE — every checkout was priced as a rider trip). They
 	// never ship parcels, so no manual courier surface is offered anywhere on
@@ -466,13 +487,15 @@ function OrderDetailRoute() {
 	// cancel/delete warnings point the seller AT that card by name.
 	const dispatchCardName = hasActiveDelyvaBooking
 		? "Delyva Courier"
-		: (
-					dispatchInfo?.job
-						? dispatchInfo.job.deliveryDirection === "collection"
-						: dispatchInfo?.deliveryDirection === "collection"
-				)
-			? "Lalamove Collection"
-			: "Lalamove Delivery";
+		: hasActiveEasyparcelBooking
+			? "EasyParcel Courier"
+			: (
+						dispatchInfo?.job
+							? dispatchInfo.job.deliveryDirection === "collection"
+							: dispatchInfo?.deliveryDirection === "collection"
+					)
+				? "Lalamove Collection"
+				: "Lalamove Delivery";
 	// A rider is mid-trip with this order: manual shipped/delivered advances are
 	// gated behind a confirm, so the buyer's order page can't claim "on the way"
 	// before the rider actually has the parcel (or without the tracking link).
@@ -489,15 +512,20 @@ function OrderDetailRoute() {
 	// flow, not shipped/delivered, so this gate would both lie and strand.
 	// Derived from the same signal the tracking card reads, so the stepper gate
 	// and that card can't drift apart.
-	// A live Delyva courier booking gates the same way, with no collection
-	// exclusion to make: Delyva v1 only ever ships TO the buyer.
+	// A live parcel-courier booking (Delyva or EasyParcel) gates the same way,
+	// with no collection exclusion to make: both only ever ship TO the buyer.
 	const riderHandlingTrip =
-		(hasActiveRiderBooking && !collectionService) || hasActiveDelyvaBooking;
+		(hasActiveRiderBooking && !collectionService) ||
+		hasActiveDelyvaBooking ||
+		hasActiveEasyparcelBooking;
 	// Has that booking actually reported yet? Only then can we promise the
-	// status moves on its own — otherwise the seller may have no webhook.
+	// status moves on its own — otherwise the seller may have no webhook (or,
+	// for EasyParcel, the first status poll hasn't landed).
 	const riderWebhookReporting = hasActiveDelyvaBooking
 		? !!delyvaInfo?.job && riderDrivesOrderStatus(delyvaInfo.job)
-		: !!dispatchInfo?.job && riderDrivesOrderStatus(dispatchInfo.job);
+		: hasActiveEasyparcelBooking
+			? !!easyparcelInfo?.job && riderDrivesOrderStatus(easyparcelInfo.job)
+			: !!dispatchInfo?.job && riderDrivesOrderStatus(dispatchInfo.job);
 	// Collection order whose goods are still with the buyer: nothing downstream
 	// ("packed", "cleaning", "ready") can be true yet. Mirrors the server gate
 	// in orders.advanceToStage.
@@ -908,9 +936,9 @@ function OrderDetailRoute() {
 									!blocked &&
 									awaitingCollection &&
 									anchorOrdinal(nextStage.anchor) >= anchorOrdinal("packed");
-								// Delyva ships parcels, Lalamove sends riders — the copy has
+								// Couriers ship parcels, Lalamove sends riders — the copy has
 								// to name what the seller actually booked (86eyjpv6z).
-								const riderMoment = hasActiveDelyvaBooking
+								const riderMoment = activeCourierName
 									? nextStage.anchor === "delivered"
 										? "the courier delivers it"
 										: "the courier collects it"
@@ -1020,21 +1048,23 @@ function OrderDetailRoute() {
 											<p className="text-xs leading-relaxed text-muted-foreground">
 												{riderWebhookReporting ? (
 													<>
-														{hasActiveDelyvaBooking
-															? "A Delyva courier booking is on this order"
+														{activeCourierName
+															? `A${activeCourierName === "EasyParcel" ? "n" : ""} ${activeCourierName} courier booking is on this order`
 															: "A Lalamove rider is on this order"}{" "}
 														— it moves to <b>{stageLabel(nextStage, "en")}</b>{" "}
 														on its own when {riderMoment}.
 													</>
 												) : (
 													<>
-														{hasActiveDelyvaBooking
-															? "A Delyva courier is booked for this order"
+														{activeCourierName
+															? `A${activeCourierName === "EasyParcel" ? "n" : ""} ${activeCourierName} courier is booked for this order`
 															: "A Lalamove rider is booked for this order"}{" "}
 														— it moves to <b>{stageLabel(nextStage, "en")}</b>{" "}
-														on its own once {riderMoment}, as long as your{" "}
-														{hasActiveDelyvaBooking ? "Delyva" : "Lalamove"}{" "}
-														webhook is set up.
+														on its own once {riderMoment}
+														{activeCourierName === "EasyParcel"
+															? " — EasyParcel is checked every half hour"
+															: `, as long as your ${activeCourierName ?? "Lalamove"} webhook is set up`}
+														.
 													</>
 												)}{" "}
 												<button

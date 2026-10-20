@@ -273,443 +273,447 @@ export function DelyvaCard({
 	return (
 		<AccountCard id={shellId} highlight={highlight}>
 			<div className="flex flex-col gap-4">
-			<div className="flex flex-col gap-2">
-				<div className="flex items-center gap-2.5">
-					{/* The DelyvaNow wordmark — what the seller sees in their own
+				<div className="flex flex-col gap-2">
+					<div className="flex items-center gap-2.5">
+						{/* The DelyvaNow wordmark — what the seller sees in their own
 					    portal, so the card visually matches the account it manages
 					    (the Lalamove-logo precedent). PNG from Delyva's own site;
 					    brand marks are never redrawn or re-tinted. */}
-					<AppImage
-						src="/img/delyva-logo.png"
-						alt=""
-						aspect="h-5 w-auto"
-						fill={false}
-						className="shrink-0"
-					/>
-					{/* The wordmark carries the visual identity; the heading stays in
+						<AppImage
+							src="/img/delyva-logo.png"
+							alt=""
+							aspect="h-5 w-auto"
+							fill={false}
+							className="shrink-0"
+						/>
+						{/* The wordmark carries the visual identity; the heading stays in
 					    the tree for structure/anchors, unseen (the image would double
 					    it visually). */}
-					<h2 className="sr-only font-heading text-lg font-bold">Delyva</h2>
-					{!canUse ? <ProBadge /> : null}
-					<span className="ml-auto flex shrink-0">
-						{!connected ? (
-							<Glance tone="grey">Not connected</Glance>
-						) : setupDone < 3 ? (
-							<Glance tone="warn">Setup {setupDone} of 3</Glance>
-						) : settings?.isDemo ? (
-							// The account step carries "Demo account"; the header says
-							// what it means for the store at a glance.
-							<Glance tone="warn">Test mode</Glance>
-						) : (
-							<Glance>Connected</Glance>
-						)}
-					</span>
-				</div>
-				<p className="text-sm text-muted-foreground">
-					Nationwide and cold-chain parcel couriers — J&amp;T, DHL, Ninja and
-					more — on your own Delyva account. Booking is switched on under{" "}
-					<Link
-						to="/app/settings/delivery-pricing"
-						className="font-medium text-accent-emphasis hover:underline"
-					>
-						Delivery pricing → Courier booking
-					</Link>
-					.
-				</p>
-			</div>
-
-			{countryBlocked ? (
-				<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-					Delyva courier booking isn&apos;t available in your store&apos;s
-					country yet — arrange your own courier and record the tracking number
-					on the order. Your account stays connected until you disconnect it
-					below.
-				</p>
-			) : null}
-
-			{settings === undefined ? (
-				<p className="text-sm text-muted-foreground">Loading…</p>
-			) : connected ? (
-				<>
-					<SectionLabel>Setup</SectionLabel>
-					<SetupChecklist>
-						<SetupStep
-							n={1}
-							state="done"
-							title={
-								<>
-									Account
-									{settings.isDemo ? (
-										<Glance tone="warn">Demo account</Glance>
-									) : settings.isDemo === false ? (
-										<Glance>Live</Glance>
-									) : null}
-								</>
-							}
-							detail={
-								editingKey ? (
-									"Paste the key from your live Delyva account."
-								) : (
-									<>
-										{settings.accountName ? (
-											<strong className="font-medium text-foreground">
-												{settings.accountName}
-											</strong>
-										) : (
-											"Connected"
-										)}{" "}
-										· key{" "}
-										<span className="font-mono">…{settings.apiKeyHint}</span> ·{" "}
-										<button
-											type="button"
-											onClick={() => setEditingKey(true)}
-											className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
-										>
-											Replace
-										</button>
-									</>
-								)
-							}
+						<h2 className="sr-only font-heading text-lg font-bold">Delyva</h2>
+						{!canUse ? <ProBadge /> : null}
+						<span className="ml-auto flex shrink-0">
+							{!connected ? (
+								<Glance tone="grey">Not connected</Glance>
+							) : setupDone < 3 ? (
+								<Glance tone="warn">Setup {setupDone} of 3</Glance>
+							) : settings?.isDemo ? (
+								// The account step carries "Demo account"; the header says
+								// what it means for the store at a glance.
+								<Glance tone="warn">Test mode</Glance>
+							) : (
+								<Glance>Connected</Glance>
+							)}
+						</span>
+					</div>
+					<p className="text-sm text-muted-foreground">
+						Nationwide and cold-chain parcel couriers — J&amp;T, DHL, Ninja and
+						more — on your own Delyva account. Booking is switched on under{" "}
+						<Link
+							to="/app/settings/delivery-pricing"
+							className="font-medium text-accent-emphasis hover:underline"
 						>
-							{settings.isDemo ? (
-								<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-									<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
-									<span>
-										<strong>Test mode — no courier will come.</strong> This key
-										belongs to Delyva&apos;s demo environment
-										{settings.companyCode ? (
-											<>
-												{" "}
-												(company{" "}
-												<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
-													{settings.companyCode}
-												</code>
-												)
-											</>
-										) : null}
-										, so bookings are simulated and its credit is play money —
-										topping up a real Delyva wallet won&apos;t change that.
-										Connect the key from your live account at{" "}
-										<a
-											href="https://delyva.com"
-											target="_blank"
-											rel="noopener noreferrer"
-											className="font-medium underline underline-offset-2"
-										>
-											delyva.com
-										</a>{" "}
-										before telling buyers.
-									</span>
-								</p>
-							) : null}
-							{editingKey ? (
-								<div className="mt-1 flex flex-col gap-2">
-									<KeyInput
-										value={apiKey}
-										disabled={busy}
-										onChange={setApiKey}
-									/>
-									<div className="flex flex-wrap items-center gap-2">
-										<Button
-											type="button"
-											className="h-11"
-											isLoading={busy}
-											disabled={!typedKey || busy}
-											onClick={() => void handleConnect()}
-										>
-											Save new key
-										</Button>
-										<Button
-											type="button"
-											variant="outline"
-											className="h-11"
-											onClick={() => {
-												setEditingKey(false);
-												setApiKey("");
-											}}
-										>
-											Keep the stored key
-										</Button>
-									</div>
-								</div>
-							) : null}
-						</SetupStep>
+							Delivery pricing → Courier booking
+						</Link>
+						.
+					</p>
+				</div>
 
-						{/* Its own field, not the business address: a parcel courier
+				{countryBlocked ? (
+					<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+						Delyva courier booking isn&apos;t available in your store&apos;s
+						country yet — arrange your own courier and record the tracking
+						number on the order. Your account stays connected until you
+						disconnect it below.
+					</p>
+				) : null}
+
+				{settings === undefined ? (
+					<p className="text-sm text-muted-foreground">Loading…</p>
+				) : connected ? (
+					<>
+						<SectionLabel>Setup</SectionLabel>
+						<SetupChecklist>
+							<SetupStep
+								n={1}
+								state="done"
+								title={
+									<>
+										Account
+										{settings.isDemo ? (
+											<Glance tone="warn">Demo account</Glance>
+										) : settings.isDemo === false ? (
+											<Glance>Live</Glance>
+										) : null}
+									</>
+								}
+								detail={
+									editingKey ? (
+										"Paste the key from your live Delyva account."
+									) : (
+										<>
+											{settings.accountName ? (
+												<strong className="font-medium text-foreground">
+													{settings.accountName}
+												</strong>
+											) : (
+												"Connected"
+											)}{" "}
+											· key{" "}
+											<span className="font-mono">…{settings.apiKeyHint}</span>{" "}
+											·{" "}
+											<button
+												type="button"
+												onClick={() => setEditingKey(true)}
+												className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
+											>
+												Replace
+											</button>
+										</>
+									)
+								}
+							>
+								{settings.isDemo ? (
+									<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+										<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
+										<span>
+											<strong>Test mode — no courier will come.</strong> This
+											key belongs to Delyva&apos;s demo environment
+											{settings.companyCode ? (
+												<>
+													{" "}
+													(company{" "}
+													<code className="rounded bg-amber-200/60 px-1 dark:bg-amber-900/60">
+														{settings.companyCode}
+													</code>
+													)
+												</>
+											) : null}
+											, so bookings are simulated and its credit is play money —
+											topping up a real Delyva wallet won&apos;t change that.
+											Connect the key from your live account at{" "}
+											<a
+												href="https://delyva.com"
+												target="_blank"
+												rel="noopener noreferrer"
+												className="font-medium underline underline-offset-2"
+											>
+												delyva.com
+											</a>{" "}
+											before telling buyers.
+										</span>
+									</p>
+								) : null}
+								{editingKey ? (
+									<div className="mt-1 flex flex-col gap-2">
+										<KeyInput
+											value={apiKey}
+											disabled={busy}
+											onChange={setApiKey}
+										/>
+										<div className="flex flex-wrap items-center gap-2">
+											<Button
+												type="button"
+												className="h-11"
+												isLoading={busy}
+												disabled={!typedKey || busy}
+												onClick={() => void handleConnect()}
+											>
+												Save new key
+											</Button>
+											<Button
+												type="button"
+												variant="outline"
+												className="h-11"
+												onClick={() => {
+													setEditingKey(false);
+													setApiKey("");
+												}}
+											>
+												Keep the stored key
+											</Button>
+										</div>
+									</div>
+								) : null}
+							</SetupStep>
+
+							{/* Its own field, not the business address: a parcel courier
 						    prices on postcode/state, and this is the address Delyva
 						    activates for cold chain. */}
-						<SetupStep
-							n={2}
-							state={storedAddress ? "done" : "action"}
-							title="Pickup address"
-							detail={
-								storedAddress && !editingPickup && !addressDirty ? (
-									<>
-										{[
-											storedAddress.address1,
-											storedAddress.address2,
-											`${storedAddress.postcode} ${storedAddress.city}`,
-										]
-											.filter(Boolean)
-											.join(", ")}{" "}
-										—{" "}
-										<button
-											type="button"
-											onClick={() => setEditingPickup(true)}
-											className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
-										>
-											change it
-										</button>
-									</>
-								) : (
-									`Where couriers collect from. The ${postcodeRule(country).label.toLowerCase()} decides the price, so make it exact — and match what Delyva has on file for cold chain.`
-								)
-							}
-						>
-							{storedAddress && !editingPickup && !addressDirty ? null : (
-								<PickupAddressFields
-									retailerId={retailerId}
-									country={country}
-									draft={addressDraft}
-									dirty={addressDirty}
-									opened={editingPickup}
-									disabled={busy}
-									error={addressError}
-									onChange={(patch) => {
-										setAddress({ ...addressDraft, ...patch });
-										setAddressError(null);
-									}}
-									onSave={saveAddress}
-									onCancel={() => {
-										setAddress(null);
-										setAddressError(null);
-										setEditingPickup(false);
-									}}
-								/>
-							)}
-						</SetupStep>
+							<SetupStep
+								n={2}
+								state={storedAddress ? "done" : "action"}
+								title="Pickup address"
+								detail={
+									storedAddress && !editingPickup && !addressDirty ? (
+										<>
+											{[
+												storedAddress.address1,
+												storedAddress.address2,
+												`${storedAddress.postcode} ${storedAddress.city}`,
+											]
+												.filter(Boolean)
+												.join(", ")}{" "}
+											—{" "}
+											<button
+												type="button"
+												onClick={() => setEditingPickup(true)}
+												className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
+											>
+												change it
+											</button>
+										</>
+									) : (
+										`Where couriers collect from. The ${postcodeRule(country).label.toLowerCase()} decides the price, so make it exact — and match what Delyva has on file for cold chain.`
+									)
+								}
+							>
+								{storedAddress && !editingPickup && !addressDirty ? null : (
+									<PickupAddressFields
+										retailerId={retailerId}
+										country={country}
+										draft={addressDraft}
+										dirty={addressDirty}
+										opened={editingPickup}
+										disabled={busy}
+										error={addressError}
+										onChange={(patch) => {
+											setAddress({ ...addressDraft, ...patch });
+											setAddressError(null);
+										}}
+										onSave={saveAddress}
+										onCancel={() => {
+											setAddress(null);
+											setAddressError(null);
+											setEditingPickup(false);
+										}}
+									/>
+								)}
+							</SetupStep>
 
-						<SetupStep
-							n={3}
-							state={settings.webhooksSubscribed ? "done" : "action"}
-							title="Tracking webhook"
-							detail={
-								settings.webhooksSubscribed
-									? "Registered — tracking numbers and Shipped/Delivered updates run themselves."
-									: "Delyva hasn't accepted it yet, so booked orders won't move to Shipped and Delivered on their own. Booking still works."
-							}
-						>
-							{!settings.webhooksSubscribed ? (
-								<Button
-									type="button"
-									className="mt-1 h-11 self-start"
-									isLoading={busy}
-									onClick={() =>
-										void run(
-											() => resubscribe({ retailerId: actAsRetailerId }),
-											"Tracking webhook registered",
-										)
-									}
-								>
-									Register again
-								</Button>
-							) : null}
-						</SetupStep>
-					</SetupChecklist>
+							<SetupStep
+								n={3}
+								state={settings.webhooksSubscribed ? "done" : "action"}
+								title="Tracking webhook"
+								detail={
+									settings.webhooksSubscribed
+										? "Registered — tracking numbers and Shipped/Delivered updates run themselves."
+										: "Delyva hasn't accepted it yet, so booked orders won't move to Shipped and Delivered on their own. Booking still works."
+								}
+							>
+								{!settings.webhooksSubscribed ? (
+									<Button
+										type="button"
+										className="mt-1 h-11 self-start"
+										isLoading={busy}
+										onClick={() =>
+											void run(
+												() => resubscribe({ retailerId: actAsRetailerId }),
+												"Tracking webhook registered",
+											)
+										}
+									>
+										Register again
+									</Button>
+								) : null}
+							</SetupStep>
+						</SetupChecklist>
 
-					<SectionLabel>Defaults</SectionLabel>
-					<div className="flex flex-col gap-1.5">
-						<span className="text-xs font-medium text-muted-foreground">
-							Default parcel type
-						</span>
-						<div className="grid grid-cols-3 gap-2">
-							{ITEM_TYPES.map((type) => (
-								// The house tile (ModeButton) — this was a hand-rolled copy
-								// of it, which is how two tiles drift apart.
-								<ModeButton
-									key={type.value}
-									active={settings.defaultItemType === type.value}
-									disabled={busy}
-									title={type.label}
-									subtitle={type.hint}
-									onClick={() =>
-										void run(
-											() =>
-												updateSettings({
-													retailerId: actAsRetailerId,
-													defaultItemType: type.value,
-												}),
-											`Default parcel type set to ${type.label}`,
-										)
-									}
-								/>
-							))}
+						<SectionLabel>Defaults</SectionLabel>
+						<div className="flex flex-col gap-1.5">
+							<span className="text-xs font-medium text-muted-foreground">
+								Default parcel type
+							</span>
+							<div className="grid grid-cols-3 gap-2">
+								{ITEM_TYPES.map((type) => (
+									// The house tile (ModeButton) — this was a hand-rolled copy
+									// of it, which is how two tiles drift apart.
+									<ModeButton
+										key={type.value}
+										active={settings.defaultItemType === type.value}
+										disabled={busy}
+										title={type.label}
+										subtitle={type.hint}
+										onClick={() =>
+											void run(
+												() =>
+													updateSettings({
+														retailerId: actAsRetailerId,
+														defaultItemType: type.value,
+													}),
+												`Default parcel type set to ${type.label}`,
+											)
+										}
+									/>
+								))}
+							</div>
+							<p className="text-xs text-muted-foreground">
+								Just the default — you can switch it per order when you book.
+							</p>
 						</div>
-						<p className="text-xs text-muted-foreground">
-							Just the default — you can switch it per order when you book.
-						</p>
-					</div>
 
-					{/* Cold-chain activation is a manual step at Delyva's end and the
+						{/* Cold-chain activation is a manual step at Delyva's end and the
 					    single most likely reason a frozen seller's first booking
 					    fails. */}
-					{settings.defaultItemType !== "PARCEL" ? (
-						<p className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-							<Snowflake className="mt-0.5 size-3.5 shrink-0" />
-							<span>
-								<strong className="text-foreground">
-									Cold chain needs a one-time activation.
-								</strong>{" "}
-								Delyva activates your pickup address for chilled/frozen by hand
-								— email{" "}
-								<a
-									href="mailto:support@delyva.com"
-									className="font-medium text-accent hover:underline"
-								>
-									support@delyva.com
-								</a>{" "}
-								with this address if you haven&apos;t. Usually 1–2 business
-								days; ordinary parcels book right away.
-							</span>
-						</p>
-					) : null}
-
-					{/* Where the on/off lives — the one cross-page pointer, so a
-					    seller who lands here first still finds the switch. */}
-					{!countryBlocked ? (
-						<p className="text-xs text-muted-foreground">
-							{settings.enabled
-								? "Booking is on — you'll see Delyva on your delivery orders."
-								: "Booking is currently off."}{" "}
-							Manage it under{" "}
-							<Link
-								to="/app/settings/delivery-pricing"
-								className="font-medium text-accent-emphasis hover:underline"
-							>
-								Delivery pricing → Courier booking
-							</Link>
-							.
-						</p>
-					) : null}
-
-					<div className="flex flex-wrap items-center gap-2">
-						<button
-							type="button"
-							onClick={() => setConfirmingDisconnect(true)}
-							className="ml-auto min-h-11 text-sm font-medium text-destructive hover:underline"
-						>
-							Disconnect
-						</button>
-					</div>
-
-					<ConfirmDialog
-						open={confirmingDisconnect}
-						onOpenChange={setConfirmingDisconnect}
-						title="Disconnect Delyva?"
-						description="The Book button disappears from your orders and we'll remove our tracking webhook from your Delyva account. Couriers already booked keep delivering, but those orders will stop updating themselves — you'll mark them shipped and delivered by hand. Your pickup address and parcel type are kept, so reconnecting is just one key."
-						confirmLabel="Disconnect"
-						destructive
-						onConfirm={() =>
-							void run(
-								() => disconnect({ retailerId: actAsRetailerId }),
-								"Delyva disconnected",
-							)
-						}
-					/>
-				</>
-			) : (
-				<>
-					<ul className="flex flex-col gap-1.5 text-sm">
-						<Bullet>
-							<strong>One tap</strong> from the order to a booked courier — no
-							re-typing addresses.
-						</Bullet>
-						<Bullet>
-							You <strong>pick the courier</strong> and see every price before
-							you spend.
-						</Bullet>
-						<Bullet>
-							The tracking number reaches your buyer <strong>by itself</strong>,
-							and the order marks itself Shipped then Delivered.
-						</Bullet>
-						<Bullet>
-							<strong>Cold chain</strong> — chilled and frozen couriers, which
-							most parcel platforms refuse.
-						</Bullet>
-						<Bullet>
-							Runs on <strong>your own Delyva account</strong> at their normal
-							rates. <strong>Kedaipal adds nothing</strong> to your price.
-						</Bullet>
-					</ul>
-
-					<div className="flex flex-col gap-2 rounded-xl border border-input bg-muted/30 p-3 text-sm">
-						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							How to connect
-						</p>
-						<ol className="flex list-decimal flex-col gap-1 pl-5">
-							<li>
-								Create a free account at{" "}
-								<a
-									href="https://delyva.com"
-									target="_blank"
-									rel="noopener noreferrer"
-									className="inline-flex items-center gap-1 font-medium text-accent hover:underline"
-								>
-									delyva.com <ExternalLink className="size-3" />
-								</a>{" "}
-								and top up some credit — Delyva is prepaid, each booking draws
-								from your balance.
-							</li>
-							<li>
-								In the Delyva portal, open{" "}
-								<span className="font-medium">Settings → API Integrations</span>
-								.
-							</li>
-							<li>
-								Paste the API key below — that&apos;s the only thing we need.
-							</li>
-						</ol>
-						<a
-							href="/guides/delyva-setup.html"
-							target="_blank"
-							rel="noopener noreferrer"
-							className="flex items-center gap-1 self-start text-xs font-medium text-accent hover:underline"
-						>
-							Full step-by-step guide (print-ready){" "}
-							<ExternalLink className="size-3" />
-						</a>
-					</div>
-
-					<KeyInput
-						value={apiKey}
-						disabled={locked || busy}
-						onChange={setApiKey}
-					/>
-
-					<div className="flex flex-col gap-2">
-						<Button
-							type="button"
-							className="h-11 self-start"
-							isLoading={busy}
-							disabled={locked || !typedKey || busy}
-							onClick={() => void handleConnect()}
-						>
-							Connect Delyva
-						</Button>
-						{locked ? (
-							<p className="text-xs text-muted-foreground">
-								Courier booking is a Pro feature — upgrade in Settings → Billing
-								to connect. (Disconnecting is never locked.)
-							</p>
-						) : !typedKey ? (
-							<p className="text-xs text-muted-foreground">
-								One key is all we need — we fetch the rest from Delyva and store
-								it encrypted.
+						{settings.defaultItemType !== "PARCEL" ? (
+							<p className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+								<Snowflake className="mt-0.5 size-3.5 shrink-0" />
+								<span>
+									<strong className="text-foreground">
+										Cold chain needs a one-time activation.
+									</strong>{" "}
+									Delyva activates your pickup address for chilled/frozen by
+									hand — email{" "}
+									<a
+										href="mailto:support@delyva.com"
+										className="font-medium text-accent hover:underline"
+									>
+										support@delyva.com
+									</a>{" "}
+									with this address if you haven&apos;t. Usually 1–2 business
+									days; ordinary parcels book right away.
+								</span>
 							</p>
 						) : null}
-					</div>
-				</>
-			)}
+
+						{/* Where the on/off lives — the one cross-page pointer, so a
+					    seller who lands here first still finds the switch. */}
+						{!countryBlocked ? (
+							<p className="text-xs text-muted-foreground">
+								{settings.enabled
+									? "Booking is on — you'll see Delyva on your delivery orders."
+									: "Booking is currently off."}{" "}
+								Manage it under{" "}
+								<Link
+									to="/app/settings/delivery-pricing"
+									className="font-medium text-accent-emphasis hover:underline"
+								>
+									Delivery pricing → Courier booking
+								</Link>
+								.
+							</p>
+						) : null}
+
+						<div className="flex flex-wrap items-center gap-2">
+							<button
+								type="button"
+								onClick={() => setConfirmingDisconnect(true)}
+								className="ml-auto min-h-11 text-sm font-medium text-destructive hover:underline"
+							>
+								Disconnect
+							</button>
+						</div>
+
+						<ConfirmDialog
+							open={confirmingDisconnect}
+							onOpenChange={setConfirmingDisconnect}
+							title="Disconnect Delyva?"
+							description="The Book button disappears from your orders and we'll remove our tracking webhook from your Delyva account. Couriers already booked keep delivering, but those orders will stop updating themselves — you'll mark them shipped and delivered by hand. Your pickup address and parcel type are kept, so reconnecting is just one key."
+							confirmLabel="Disconnect"
+							destructive
+							onConfirm={() =>
+								void run(
+									() => disconnect({ retailerId: actAsRetailerId }),
+									"Delyva disconnected",
+								)
+							}
+						/>
+					</>
+				) : (
+					<>
+						<ul className="flex flex-col gap-1.5 text-sm">
+							<Bullet>
+								<strong>One tap</strong> from the order to a booked courier — no
+								re-typing addresses.
+							</Bullet>
+							<Bullet>
+								You <strong>pick the courier</strong> and see every price before
+								you spend.
+							</Bullet>
+							<Bullet>
+								The tracking number reaches your buyer{" "}
+								<strong>by itself</strong>, and the order marks itself Shipped
+								then Delivered.
+							</Bullet>
+							<Bullet>
+								<strong>Cold chain</strong> — chilled and frozen couriers, which
+								most parcel platforms refuse.
+							</Bullet>
+							<Bullet>
+								Runs on <strong>your own Delyva account</strong> at their normal
+								rates. <strong>Kedaipal adds nothing</strong> to your price.
+							</Bullet>
+						</ul>
+
+						<div className="flex flex-col gap-2 rounded-xl border border-input bg-muted/30 p-3 text-sm">
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								How to connect
+							</p>
+							<ol className="flex list-decimal flex-col gap-1 pl-5">
+								<li>
+									Create a free account at{" "}
+									<a
+										href="https://delyva.com"
+										target="_blank"
+										rel="noopener noreferrer"
+										className="inline-flex items-center gap-1 font-medium text-accent hover:underline"
+									>
+										delyva.com <ExternalLink className="size-3" />
+									</a>{" "}
+									and top up some credit — Delyva is prepaid, each booking draws
+									from your balance.
+								</li>
+								<li>
+									In the Delyva portal, open{" "}
+									<span className="font-medium">
+										Settings → API Integrations
+									</span>
+									.
+								</li>
+								<li>
+									Paste the API key below — that&apos;s the only thing we need.
+								</li>
+							</ol>
+							<a
+								href="/guides/delyva-setup.html"
+								target="_blank"
+								rel="noopener noreferrer"
+								className="flex items-center gap-1 self-start text-xs font-medium text-accent hover:underline"
+							>
+								Full step-by-step guide (print-ready){" "}
+								<ExternalLink className="size-3" />
+							</a>
+						</div>
+
+						<KeyInput
+							value={apiKey}
+							disabled={locked || busy}
+							onChange={setApiKey}
+						/>
+
+						<div className="flex flex-col gap-2">
+							<Button
+								type="button"
+								className="h-11 self-start"
+								isLoading={busy}
+								disabled={locked || !typedKey || busy}
+								onClick={() => void handleConnect()}
+							>
+								Connect Delyva
+							</Button>
+							{locked ? (
+								<p className="text-xs text-muted-foreground">
+									Courier booking is a Pro feature — upgrade in Settings →
+									Billing to connect. (Disconnecting is never locked.)
+								</p>
+							) : !typedKey ? (
+								<p className="text-xs text-muted-foreground">
+									One key is all we need — we fetch the rest from Delyva and
+									store it encrypted.
+								</p>
+							) : null}
+						</div>
+					</>
+				)}
 			</div>
 		</AccountCard>
 	);

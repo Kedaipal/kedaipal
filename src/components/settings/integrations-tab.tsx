@@ -21,7 +21,7 @@ import type {
 	HitpaySummary,
 } from "../../../convex/retailers";
 import type { useUpdateSettings } from "../../hooks/useUpdateSettings";
-import { type CardTarget, type FixHighlight } from "../../lib/country-setup-copy";
+import type { CardTarget, FixHighlight } from "../../lib/country-setup-copy";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
 import { DelyvaCard } from "./delyva-card";

@@ -4140,9 +4140,17 @@ async function riderOwnsTransition(
  * owns the live job. The order-detail stepper offers an explicit "Update
  * manually" confirm that overrides it. */
 function riderGateMessage(provider: CourierProviderId): string {
-	return provider === "delyva"
-		? "A Delyva courier booking is on this order — it updates itself when the courier collects and delivers, with the tracking number attached. Open the order and use “Update manually” to move it yourself."
-		: "A Lalamove rider is on this order — with your Lalamove webhook set up, it updates itself when the rider picks up or drops off. Open the order and use “Update manually” to move it yourself.";
+	// A Record, not a ternary: a new provider id refuses to compile here
+	// instead of silently borrowing another provider's message.
+	const MESSAGES: Record<CourierProviderId, string> = {
+		lalamove:
+			"A Lalamove rider is on this order — with your Lalamove webhook set up, it updates itself when the rider picks up or drops off. Open the order and use “Update manually” to move it yourself.",
+		delyva:
+			"A Delyva courier booking is on this order — it updates itself when the courier collects and delivers, with the tracking number attached. Open the order and use “Update manually” to move it yourself.",
+		easyparcel:
+			"An EasyParcel courier booking is on this order — it updates itself when the courier collects and delivers (checked every half hour), with the tracking number attached. Open the order and use “Update manually” to move it yourself.",
+	};
+	return MESSAGES[provider];
 }
 
 // Exported for the Lalamove webhook's auto-transitions (convex/lalamove.ts) —
