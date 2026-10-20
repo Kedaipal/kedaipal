@@ -34,6 +34,7 @@ import {
 import type { Country } from "../../../convex/lib/country";
 import type { DelyvaItemType } from "../../../convex/lib/delyva";
 import { useActAsRetailerId } from "../../hooks/useActAs";
+import type { FixHighlight } from "../../lib/country-setup-copy";
 import { convexErrorMessage } from "../../lib/format";
 import { parseGoogleAddress } from "../../lib/google-address";
 import { ProBadge } from "../app/pro-gate";
@@ -44,6 +45,7 @@ import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
 import { ModeButton } from "../ui/mode-button";
 import {
+	AccountCard,
 	Glance,
 	SectionLabel,
 	SetupChecklist,
@@ -80,10 +82,16 @@ const EMPTY_ADDRESS: PickupAddressDraft = {
 };
 
 export function DelyvaCard({
+	shellId,
+	highlight,
 	retailerId,
 	canUse,
 	country,
 }: {
+	/** The Integrations section shell this card wraps itself in — owned here
+	 * so hiding the card (country not served) takes the border with it. */
+	shellId: string;
+	highlight: FixHighlight | undefined;
 	/** The store being edited — the autocomplete bills Google per session
 	 * against it and region-locks predictions to its country. */
 	retailerId: Id<"retailers">;
@@ -259,11 +267,12 @@ export function DelyvaCard({
 	}
 
 	// Nothing to offer in a country Delyva doesn't serve, and nothing connected
-	// to unwind — stay out of the tab entirely.
+	// to unwind — stay out of the tab entirely (shell included).
 	if (countryBlocked && !connected) return null;
 
 	return (
-		<div className="flex flex-col gap-4">
+		<AccountCard id={shellId} highlight={highlight}>
+			<div className="flex flex-col gap-4">
 			<div className="flex flex-col gap-2">
 				<div className="flex items-center gap-2.5">
 					{/* The DelyvaNow wordmark — what the seller sees in their own
@@ -701,7 +710,8 @@ export function DelyvaCard({
 					</div>
 				</>
 			)}
-		</div>
+			</div>
+		</AccountCard>
 	);
 }
 
