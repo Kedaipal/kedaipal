@@ -123,7 +123,7 @@ function renderEdit({
 
 function saveButton() {
 	return screen.getByRole("button", {
-		name: /all changes saved|save changes/i,
+		name: /^(all changes saved|save changes|\d+ photos? didn't upload)$/i,
 	}) as HTMLButtonElement;
 }
 
@@ -251,6 +251,37 @@ describe("ProductForm edit — photo-only changes (z8r3fdtk82)", () => {
 		unmount();
 		// An Undo from another page would write a list this form no longer shows.
 		expect(toastDismiss).toHaveBeenCalledWith(id);
+	});
+
+	it("a photo that didn't upload holds Save with its reason — never 'All changes saved' beside a failed tile (z8r3fdtk85)", async () => {
+		// Storage unreachable: the tile fails, retryable.
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new TypeError("Failed to fetch");
+			}),
+		);
+		const { last } = renderEdit();
+		await addPhoto();
+		await screen.findByText("Didn't upload");
+
+		// The tile re-renders a tick before the parent's effect reaches the
+		// bar, so wait on the bar itself rather than the tile.
+		await waitFor(() =>
+			expect(saveButton().textContent).toMatch(/1 photo didn't upload/),
+		);
+		expect(saveButton().disabled).toBe(true);
+		// And it is unsaved work for the leave guard.
+		expect(last()).toBe("changes");
+
+		// Remove the failed tile: nothing left to say, bar rests again.
+		fireEvent.click(
+			screen.getByRole("button", { name: "Remove photo that didn't upload" }),
+		);
+		await waitFor(() =>
+			expect(saveButton().textContent).toMatch(/All changes saved/),
+		);
+		expect(last()).toBe("none");
 	});
 
 	it("a failed autosave keeps the photo as an unsaved change Save can still send", async () => {

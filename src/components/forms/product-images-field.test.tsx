@@ -46,7 +46,6 @@ const timedOut: UploadResult = {
 		"Couldn't reach Kedaipal to start the upload. Check your connection and try again.",
 };
 
-const onError = vi.fn();
 const states: PhotoUploadState[] = [];
 let latest: ProductImage[] = [];
 
@@ -57,7 +56,6 @@ function Harness({ initial = [] }: { initial?: ProductImage[] }) {
 		<ProductImagesField
 			images={images}
 			onChange={setImages}
-			onError={onError}
 			onUploadStateChange={(s) => states.push(s)}
 		/>
 	);
@@ -81,7 +79,6 @@ function deferred() {
 
 beforeEach(() => {
 	uploadImage.mockReset();
-	onError.mockReset();
 	states.length = 0;
 	latest = [];
 	URL.createObjectURL = vi.fn(() => "blob:preview");
@@ -97,12 +94,12 @@ describe("ProductImagesField — upload tiles", () => {
 		pick("a.jpg");
 
 		expect(await screen.findByText("Uploading…")).toBeTruthy();
-		expect(states.at(-1)).toBe("uploading");
+		expect(states.at(-1)).toEqual({ kind: "uploading" });
 
 		await act(async () => upload.resolve(ok("s-a")));
 		await waitFor(() => expect(latest.map((i) => i.id)).toEqual(["s-a"]));
 		expect(screen.queryByText("Uploading…")).toBeNull();
-		expect(states.at(-1)).toBe("idle");
+		expect(states.at(-1)).toEqual({ kind: "idle" });
 	});
 
 	it("a failed upload becomes 'Didn't upload' with Retry, says why, and Retry lands it", async () => {
@@ -114,8 +111,9 @@ describe("ProductImagesField — upload tiles", () => {
 		expect(screen.getByRole("alert").textContent).toMatch(
 			/1 photo didn't upload: Couldn't reach Kedaipal/,
 		);
-		// Unsaved work the parent must guard — not idle, not uploading.
-		expect(states.at(-1)).toBe("failed");
+		// Unsaved work the parent must guard — not idle, not uploading — and
+		// COUNTED, so its Save bar can say how many instead of "all saved".
+		expect(states.at(-1)).toEqual({ kind: "failed", count: 1 });
 		expect(latest).toEqual([]);
 
 		uploadImage.mockResolvedValueOnce(ok("s-a"));
@@ -123,7 +121,7 @@ describe("ProductImagesField — upload tiles", () => {
 		await waitFor(() => expect(latest.map((i) => i.id)).toEqual(["s-a"]));
 		expect(screen.queryByText("Didn't upload")).toBeNull();
 		expect(screen.queryByRole("alert")).toBeNull();
-		expect(states.at(-1)).toBe("idle");
+		expect(states.at(-1)).toEqual({ kind: "idle" });
 		expect(uploadImage).toHaveBeenCalledTimes(2);
 	});
 
@@ -138,10 +136,10 @@ describe("ProductImagesField — upload tiles", () => {
 		);
 		await waitFor(() => expect(screen.queryByText("Didn't upload")).toBeNull());
 		expect(latest).toEqual([]);
-		expect(states.at(-1)).toBe("idle");
+		expect(states.at(-1)).toEqual({ kind: "idle" });
 	});
 
-	it("a file Retry can't fix is refused with its reason — no dead Retry tile", async () => {
+	it("a file Retry can't fix is refused with its reason UNDER THE GRID — no dead Retry tile", async () => {
 		uploadImage.mockResolvedValueOnce({
 			ok: false,
 			retryable: false,
@@ -151,14 +149,22 @@ describe("ProductImagesField — upload tiles", () => {
 		render(<Harness />);
 		pick("a.heic");
 
-		await waitFor(() =>
-			expect(onError).toHaveBeenCalledWith(
-				'"a.heic" is in a format browsers can\'t show.',
-			),
+		// Said beside the photos, where the seller is looking — not handed to
+		// the form to show two screens down (z8r3fdtk85 /test-code).
+		const alert = await screen.findByRole("alert");
+		expect(alert.textContent).toBe(
+			'"a.heic" is in a format browsers can\'t show.',
 		);
 		expect(screen.queryByText("Didn't upload")).toBeNull();
 		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-		expect(states.at(-1)).toBe("idle");
+		expect(states.at(-1)).toEqual({ kind: "idle" });
+
+		// The next pick clears it — a stale refusal beside a photo that then
+		// landed would read as if THAT photo were refused.
+		uploadImage.mockResolvedValueOnce(ok("s-b"));
+		pick("b.jpg");
+		await waitFor(() => expect(latest.map((i) => i.id)).toEqual(["s-b"]));
+		expect(screen.queryByRole("alert")).toBeNull();
 	});
 
 	it("each photo in a pick lands or fails on its own — no all-or-nothing", async () => {
@@ -173,7 +179,7 @@ describe("ProductImagesField — upload tiles", () => {
 			expect(latest.map((i) => i.id)).toEqual(["s-a", "s-c"]),
 		);
 		expect(screen.getAllByText("Didn't upload")).toHaveLength(1);
-		expect(states.at(-1)).toBe("failed");
+		expect(states.at(-1)).toEqual({ kind: "failed", count: 1 });
 	});
 
 	it("photos still uploading count toward the 5-photo limit", async () => {
@@ -190,7 +196,9 @@ describe("ProductImagesField — upload tiles", () => {
 		pick("a.jpg");
 		await screen.findByText("Uploading…");
 		pick("b.jpg", "c.jpg");
-		expect(onError).toHaveBeenCalledWith("Maximum 5 images per product");
+		expect(screen.getByRole("alert").textContent).toBe(
+			"Maximum 5 images per product",
+		);
 
 		// 3 stored + 1 in flight + 1 more = full: the Add tile goes.
 		pick("d.jpg");

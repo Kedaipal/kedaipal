@@ -104,6 +104,7 @@ import {
 	type ProductFormSubmitValues,
 } from "./product-form";
 import {
+	failedPhotosLabel,
 	type PhotoUploadState,
 	type ProductImage,
 	ProductImagesField,
@@ -1257,8 +1258,11 @@ export function ProductWizard({
 		revealRef.current?.scrollIntoView({ block: "nearest" });
 		setReveal(null);
 	}, [reveal]);
-	const [photoUploads, setPhotoUploads] = useState<PhotoUploadState>("idle");
-	const uploading = photoUploads === "uploading";
+	const [photoUploads, setPhotoUploads] = useState<PhotoUploadState>({
+		kind: "idle",
+	});
+	const uploading = photoUploads.kind === "uploading";
+	const photosFailed = photoUploads.kind === "failed" ? photoUploads.count : 0;
 	const [submitting, setSubmitting] = useState(false);
 	// The one destructive answer the wizard ever asks for — a type switch that
 	// drops typed prices, or leaving an unsaved draft. One piece of state, so
@@ -1717,7 +1721,7 @@ export function ProductWizard({
 	// would lose it, so it counts as unsaved work (z8r3fdtk85).
 	const unsaved: UnsavedState = uploading
 		? "uploading"
-		: isDirty || photoUploads === "failed"
+		: isDirty || photosFailed > 0
 			? "changes"
 			: "none";
 	useEffect(() => {
@@ -2173,7 +2177,6 @@ export function ProductWizard({
 							images={state.images}
 							onChange={(images) => patch({ images })}
 							onUploadStateChange={setPhotoUploads}
-							onError={setServerError}
 						/>
 						{showDescription ? (
 							<label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -3662,10 +3665,17 @@ export function ProductWizard({
 					<Button
 						type="button"
 						onClick={goNext}
-						disabled={!structurallyAnswered || uploading}
+						// A photo in "Didn't upload" would be left behind on this step
+						// and the product created without it — held, with the reason,
+						// until the seller retries or removes it (z8r3fdtk85).
+						disabled={!structurallyAnswered || uploading || photosFailed > 0}
 						className="h-12 w-full shadow-lg shadow-accent/20 lg:shadow-none"
 					>
-						{uploading ? "Uploading…" : "Continue"}
+						{uploading
+							? "Uploading…"
+							: photosFailed > 0
+								? failedPhotosLabel(photosFailed)
+								: "Continue"}
 					</Button>
 				) : (
 					<Button

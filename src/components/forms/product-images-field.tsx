@@ -16,11 +16,23 @@ export type ProductImage = { id: string; url: string };
 
 /**
  * Where the grid's uploads stand, for the parent: `uploading` while any photo
- * is still going up (the parent holds its submit), `failed` while a photo that
- * didn't make it is still on screen waiting for Retry or Remove (unsaved work —
- * leaving would lose it), otherwise `idle`.
+ * is still going up (the parent holds its submit), `failed` while photos that
+ * didn't make it are still on screen waiting for Retry or Remove (unsaved work
+ * — leaving would lose them, and a save bar reading "All changes saved" beside
+ * them would be lying), otherwise `idle`.
  */
-export type PhotoUploadState = "idle" | "uploading" | "failed";
+export type PhotoUploadState =
+	| { kind: "idle" }
+	| { kind: "uploading" }
+	| { kind: "failed"; count: number };
+
+/** The one sentence a parent's primary button reads while photos sit failed —
+ * the form's Save and the wizard's Continue say the same thing. */
+export function failedPhotosLabel(count: number): string {
+	return count === 1
+		? "1 photo didn't upload"
+		: `${count} photos didn't upload`;
+}
 
 /** A picked photo that isn't in `images` yet — on its way up, or stopped. */
 type PendingTile = {
@@ -48,7 +60,6 @@ export function ProductImagesField({
 	images,
 	onChange,
 	onUploadStateChange,
-	onError,
 	autosaveStatus,
 }: {
 	images: ProductImage[];
@@ -56,13 +67,17 @@ export function ProductImagesField({
 	/** Lets the parent hold its submit while a photo is uploading, and count a
 	 * failed one as unsaved work. */
 	onUploadStateChange?: (state: PhotoUploadState) => void;
-	onError: (message: string) => void;
 	/** Set when the photos save themselves (an existing product, z8r3fdtk82):
 	 * the grid then says, beside the count, whether they've landed. */
 	autosaveStatus?: PhotoAutosaveStatus;
 }) {
 	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
 	const [pending, setPending] = useState<PendingTile[]>([]);
+	// A pick the grid refused outright (a HEIC, one over the cap). Said HERE,
+	// under the photos the seller is looking at — routed to the form's error
+	// slot it landed two screens down beside Save, and nothing seemed to
+	// happen (z8r3fdtk85 /test-code). Cleared by the next pick.
+	const [refusal, setRefusal] = useState<string | null>(null);
 
 	// The list a finishing upload appends to. Synced from the prop every render
 	// AND advanced the moment we append, so two uploads finishing between
@@ -73,16 +88,21 @@ export function ProductImagesField({
 	// per-minute write limit, and appends land in pick order.
 	const queueRef = useRef<Promise<void>>(Promise.resolve());
 
-	const uploadState: PhotoUploadState = pending.some(
+	const failedCount = pending.filter((t) => t.status === "failed").length;
+	const uploadKind: PhotoUploadState["kind"] = pending.some(
 		(t) => t.status === "uploading",
 	)
 		? "uploading"
-		: pending.length > 0
+		: failedCount > 0
 			? "failed"
 			: "idle";
 	useEffect(() => {
-		onUploadStateChange?.(uploadState);
-	}, [uploadState, onUploadStateChange]);
+		onUploadStateChange?.(
+			uploadKind === "failed"
+				? { kind: "failed", count: failedCount }
+				: { kind: uploadKind },
+		);
+	}, [uploadKind, failedCount, onUploadStateChange]);
 
 	function patchTile(key: string, next: PendingTile | null) {
 		setPending((now) =>
@@ -116,15 +136,16 @@ export function ProductImagesField({
 				// goes and the reason is said once, where the seller is looking.
 				URL.revokeObjectURL(tile.previewUrl);
 				patchTile(tile.key, null);
-				onError(result.message);
+				setRefusal(result.message);
 			}
 		});
 	}
 
 	function handleFiles(files: readonly File[]) {
 		if (files.length === 0) return;
+		setRefusal(null);
 		if (images.length + pending.length + files.length > MAX_IMAGES) {
-			onError(`Maximum ${MAX_IMAGES} images per product`);
+			setRefusal(`Maximum ${MAX_IMAGES} images per product`);
 			return;
 		}
 		const tiles: PendingTile[] = files.map((file) => ({
@@ -298,6 +319,11 @@ export function ProductImagesField({
 					</label>
 				) : null}
 			</div>
+			{refusal ? (
+				<p role="alert" className="text-xs text-destructive">
+					{refusal}
+				</p>
+			) : null}
 			{/* The tile says THAT it failed; this says why and what to do. One
 			    line per distinct reason, so five timeouts read as one sentence. */}
 			{failedMessages.map((message) => {

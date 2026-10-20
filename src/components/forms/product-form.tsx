@@ -3,6 +3,7 @@ import { useStore } from "@tanstack/react-form";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
+	AlertCircle,
 	BadgeCheck,
 	CalendarClock,
 	CalendarDays,
@@ -161,6 +162,7 @@ import {
 	whereAnswer,
 } from "./product-answers";
 import {
+	failedPhotosLabel,
 	MAX_IMAGES,
 	type PhotoUploadState,
 	type ProductImage,
@@ -1036,8 +1038,11 @@ export function ProductForm({
 			url: initialValues?.imageUrls?.[i] ?? "",
 		})),
 	);
-	const [photoUploads, setPhotoUploads] = useState<PhotoUploadState>("idle");
-	const uploading = photoUploads === "uploading";
+	const [photoUploads, setPhotoUploads] = useState<PhotoUploadState>({
+		kind: "idle",
+	});
+	const uploading = photoUploads.kind === "uploading";
+	const photosFailed = photoUploads.kind === "failed" ? photoUploads.count : 0;
 	const [serverError, setServerError] = useState<string | null>(null);
 	// The credit lock's typed refusal, when that's what the save hit — its way
 	// back renders under the sentence (Credits T3).
@@ -1454,7 +1459,7 @@ export function ProductForm({
 	// would lose it, so it counts as unsaved work (z8r3fdtk85).
 	const unsaved: UnsavedState = uploading
 		? "uploading"
-		: dirty || photoUploads === "failed"
+		: dirty || photosFailed > 0
 			? "changes"
 			: "none";
 	useEffect(() => {
@@ -1721,7 +1726,6 @@ export function ProductForm({
 					images={images}
 					onChange={changeImages}
 					onUploadStateChange={setPhotoUploads}
-					onError={setServerError}
 					autosaveStatus={autosaveOn ? photoAutosave.status : undefined}
 				/>
 			</ProductStepCard>
@@ -2578,6 +2582,10 @@ export function ProductForm({
 					// nothing. It flips back to Save the moment any field moves, and
 					// photos that just autosaved leave it reading "saved".
 					const nothingToSave = isEdit && !dirty && !isSubmitting;
+					// Photos sitting in "Didn't upload" are not saved and Save can't
+					// send them (Retry on the tile can) — so the bar says THAT, not
+					// "All changes saved" (z8r3fdtk85 /test-code blocker).
+					const photosHeld = photosFailed > 0 && !isSubmitting;
 					return (
 						<div className="sticky bottom-20 z-10 flex gap-2 lg:static">
 							{stickyAction}
@@ -2588,19 +2596,22 @@ export function ProductForm({
 									isSubmitting ||
 									uploading ||
 									saveLock !== undefined ||
-									nothingToSave
+									nothingToSave ||
+									photosHeld
 								}
 								className={cn(
 									"h-12 flex-1 shadow-lg shadow-accent/20 lg:shadow-none",
 									// The resting state of every edit page, so it is not
 									// drawn as a half-transparent disabled button: on a phone
 									// the bar is sticky, and the form showed through it.
-									nothingToSave &&
+									(nothingToSave || photosHeld) &&
 										!saveLock &&
 										"bg-muted text-muted-foreground shadow-none disabled:opacity-100",
 								)}
 							>
-								{nothingToSave && !saveLock ? (
+								{photosHeld && !saveLock ? (
+									<AlertCircle className="size-4" />
+								) : nothingToSave && !saveLock ? (
 									<CheckCircle2 className="size-4" />
 								) : (
 									<Save className="size-4" />
@@ -2609,9 +2620,11 @@ export function ProductForm({
 									? "Saving…"
 									: saveLock
 										? `${submitLabel} — ${saveLock.label}`
-										: nothingToSave
-											? "All changes saved"
-											: submitLabel}
+										: photosHeld
+											? failedPhotosLabel(photosFailed)
+											: nothingToSave
+												? "All changes saved"
+												: submitLabel}
 							</Button>
 						</div>
 					);
