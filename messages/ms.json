@@ -480,5 +480,6 @@
 	"poster_powered_by": "POWERED BY",
 	"poster_chat_online": "Dalam talian",
 	"poster_chat_bubble1": "Nak order, boleh? 😋",
-	"poster_chat_bubble2": "Dah bayar — senang je! 👍"
+	"poster_chat_bubble2": "Dah bayar — senang je! 👍",
+	"storefront_chat_prefill": "Hai {storeName}, saya sedang lihat kedai Kedaipal anda dan ada soalan."
 }

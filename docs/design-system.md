@@ -233,6 +233,42 @@ Every settings surface is built from `src/components/settings/settings-primitive
 - **`SetupChecklist` / `SetupStep`** — a third-party account's setup, numbered, each step a mint tick, an amber "Action needed" with its fix **in the step**, or not started. It stays readable after onboarding: a fully set-up account reads as quiet ticked rows and one header chip.
 - **Layout** — desktop is the section rail (`SettingsRail`, each row carrying its tab's glance) beside the content; mobile is the grouped index (`SettingsIndex`, the same glances). A rail glance follows the same tones: the Store row normally reads the store's name, but a store that isn't taking orders reads **Paused** / **Offline** in warn (`storeGlance`), so it's visible from every other tab. The store on/off card sits first on the Store tab, full width above the columns. `SettingsColumns` puts two independent card columns from `xl`; `SettingsSection` labels a group of cards ("Identity", "Business & country"). Where the mobile order must differ from the desktop columns, use `contents` + `order-*` rather than rendering a card twice.
 
+### Islands — the storefront's floating surfaces (2026-10-20, ClickUp `z8r3fdvwcy`)
+
+The store home has one family of raised surfaces that float over content
+rather than sit in the flow, and they share one recipe so the page reads as
+one app: the **island store card** (`storefront-header.tsx`), the **cart pill**
+(`cart-bar.tsx`), and T2's compact scrolled bar (`z8r3fdvwcz`, to come).
+
+- **Inset 16px** from the screen edges (`mx-4` / `inset-x-4`; 32px from `lg`
+  where the page column already has `px-8`).
+- **Pill or 24px radius** — `rounded-full` for a one-line capsule (the cart
+  pill), `rounded-3xl` for a card.
+- **Soft navy lift**: `shadow-xl shadow-primary/15` plus a hairline
+  `ring-1 ring-foreground/5`, and in dark mode **no shadow, a lighter ring**
+  (`dark:shadow-none dark:ring-white/10`) — a shadow on a dark page is
+  invisible and the ring is what separates the card from the band.
+- **Frosted over content**: anything that sits on a photo is
+  `bg-primary/45 backdrop-blur ring-1 ring-white/25` with a white glyph.
+  Never lightened to match the outline variant — a pale sky would swallow
+  a pale circle.
+- The island **overlaps the band it floats over** (`-mt-18`, `lg:-mt-22`),
+  with no `z-index` of its own: it is a positioned later sibling, so it
+  paints above the band's absolute children without entering the stacking
+  fight with the grid's sticky search (`z-30`) or the cart pill.
+
+**Cover icon buttons** — actions on a cover photo or on the no-cover mint
+band are **44px icon circles** (`size-11 rounded-full`) at the band's
+top-right, right-aligned, 8px apart, each with an `aria-label` that names
+the action and its object ("Ask Kek Sayang Bakery on WhatsApp", "Share this
+store"). Two variants, chosen by what is under them: *frosted* (above) on a
+photo, *outline* (`bg-card border-border text-foreground shadow-sm`) on the
+mint band. From `lg` the same actions become a labelled row of 44px outline
+pills **inside** the island (`Share store` / `Ask on WhatsApp`) and the cover
+carries no buttons — a desktop has room for words, a phone has room for
+glyphs. Both surfaces render from the same props, so neither can offer an
+action the other lacks.
+
 ## Patterns & anti-patterns
 - **Focus:** every interactive element needs the visible ring (`focus-visible:ring-3 ring-ring/50`) — primitives already do; preserve it on custom elements.
 - **Form errors take you to the problem.** A `useAppForm` form's `onSubmit` must go through `submitThenFocusError(form, e)` ([`src/components/forms/focus-error.ts`](../src/components/forms/focus-error.ts)) instead of a bare `form.handleSubmit()`. On a failed submit it scrolls to and focuses the **first** invalid control (in DOM order, re-looking on a short timer so it never races React's commit) so the seller never hunts a long form for a red line. **That retry rides a timer, never `requestAnimationFrame`** — a document whose `visibilityState` is `"hidden"` runs no rAF callbacks at all, and a Chrome window fully covered by another app is hidden, which is exactly how this gets hand-tested. On rAF the whole chain ran (submit → settle → `.finally()`) and then stopped dead, so "take me to the error" looked permanently broken in the only environment anyone ever checks it in, while the seller's visible page was the one place it worked (`z8r3fdrkq2`). jsdom fires rAF regardless of visibility, so only the test that stubs rAF out can see this — keep it. Field controls already set `aria-invalid` (via `isError`) and show their message beneath via `FieldError`. **Submit-time business rules must also be addressed to their exact input** — the pattern is the product variant grid's `VariantIssue` (`{where, index, field, message}` from `buildSubmitVariants`/`collectOptionIssues` → the editor marks that cell `aria-invalid` + message beneath, cleared on edit); same idea for the checkout pickup picker (`error` prop on the radio list) and the pickup dialog's address/fee. A `data-form-error` banner is the **fallback for true server errors only**, never for a validation the UI could point at.

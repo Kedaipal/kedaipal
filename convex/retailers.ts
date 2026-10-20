@@ -828,8 +828,8 @@ type RetailerPublic = {
 	// both the owner read and the by-slug storefront payload.
 	storeDescription?: string;
 	// Marketplace card area line (z8r3fdkmyp) — public by nature (it renders on
-	// the /stores card); only the owner read carries it, the directory reads
-	// the row itself.
+	// the /stores card); the owner read carries it for the settings card and
+	// the by-slug payload for the store home's fulfilment line (z8r3fdvwcy).
 	storeArea?: string;
 	// Marketplace listing switch state (z8r3fdkmyp): true = the seller opted
 	// OUT of /stores. Derived from `marketplaceUnlistedAt`. On the owner read
@@ -838,6 +838,12 @@ type RetailerPublic = {
 	// storefront footer's "Discover more stores" link: a seller who chose to
 	// stay out shouldn't have their buyers pointed at the directory.
 	marketplaceUnlisted?: boolean;
+	// Storefront chat action (z8r3fdvwcy): whether the store home shows "Ask
+	// on WhatsApp". Derived from `storefrontChatDisabledAt` (absent = on). On
+	// the owner read (the Settings → Store switch) AND the by-slug payload
+	// (the header decides whether to render the action from it). Public-safe:
+	// the button itself is public, and `waPhone` already rides this payload.
+	storefrontChatEnabled: boolean;
 	// "What does your store sell?" — the default kind for NEW products in the
 	// wizard (86eyj70z1 decision 5). Owner-facing config, harmless if public.
 	storeType?: "physical" | "service" | "booking";
@@ -1172,6 +1178,7 @@ async function buildRetailerPublic(
 		storeDescription: row.storeDescription,
 		storeArea: row.storeArea,
 		marketplaceUnlisted: row.marketplaceUnlistedAt !== undefined,
+		storefrontChatEnabled: row.storefrontChatDisabledAt === undefined,
 		storeType: row.storeType,
 		waPhone: row.waPhone,
 		notifyEmail: row.notifyEmail,
@@ -1357,6 +1364,9 @@ export const getRetailerBySlug = query({
 					slug: active.slug,
 					storeName: active.storeName,
 					storeDescription: active.storeDescription,
+					// The island card's "Delivery & pickup · <area>" line (z8r3fdvwcy) —
+					// public by nature, it already prints on the /stores card.
+					storeArea: active.storeArea,
 					waPhone: active.waPhone,
 					checkoutPhone: process.env.WHATSAPP_CHECKOUT_PHONE ?? active.waPhone,
 					confirmPushEnabled: orderConfirmTemplateName() !== undefined,
@@ -1401,6 +1411,7 @@ export const getRetailerBySlug = query({
 					paymentsPaused: await buyerPaymentsPaused(ctx, active._id),
 					acceptsVouchers: await storeShowsVoucherEntry(ctx, active._id),
 					marketplaceUnlisted: active.marketplaceUnlistedAt !== undefined,
+					storefrontChatEnabled: active.storefrontChatDisabledAt === undefined,
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
 					// reply after the shopper commits to an order.
@@ -1917,6 +1928,32 @@ export const createUnclaimedStore = mutation({
  * with different safeguards (the owner must agree); this is not a back door to
  * it.
  */
+/**
+ * Settings → Store: the "Ask on WhatsApp" action on the store home
+ * (z8r3fdvwcy). `enabled: true` clears the opt-out stamp, `false` sets it —
+ * verb-shaped like the marketplace switch, and like it a re-save keeps the
+ * FIRST stamp ("since when" must not be rewritten). Owner-only: it exposes
+ * the store's own WhatsApp number to every buyer, the same class as the
+ * WhatsApp tab. Locked view-only like every other settings write; the credit
+ * gate never touches it (settings are paid for by the subscription).
+ */
+export const setStorefrontChat = mutation({
+	args: { retailerId: v.id("retailers"), enabled: v.boolean() },
+	handler: async (ctx, { retailerId, enabled }): Promise<{ ok: true }> => {
+		await requireRetailerAccess(ctx, retailerId, { ownerOnly: true });
+		await assertSubscriptionActive(ctx, retailerId);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		await ctx.db.patch(retailerId, {
+			storefrontChatDisabledAt: enabled
+				? undefined
+				: (retailer.storefrontChatDisabledAt ?? Date.now()),
+			updatedAt: Date.now(),
+		});
+		return { ok: true };
+	},
+});
+
 export const setPendingOwnerEmail = mutation({
 	args: {
 		retailerId: v.id("retailers"),
