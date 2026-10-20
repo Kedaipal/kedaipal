@@ -261,14 +261,18 @@ function StoreNotFound() {
 function StorefrontSkeleton() {
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
-			{/* Mirrors the new hero shape — logo tile beside a name + blurb stack,
+			{/* Mirrors the island shape (z8r3fdvwcy) — a band, then the card
+			    floating over its edge with the tile beside a name + blurb stack,
 			    no Kedaipal mark (the footer carries "Powered by"). */}
-			<header className="flex flex-col justify-end bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-9 lg:rounded-b-3xl lg:px-8">
-				<div className="flex items-end gap-3.5">
-					<Skeleton className="size-14 shrink-0 rounded-[18px]" />
-					<div className="flex flex-col gap-2">
-						<Skeleton className="h-6 w-40" />
-						<Skeleton className="h-4 w-48" />
+			<header>
+				<div className="h-44 bg-gradient-to-b from-accent/15 to-accent/5 lg:h-56 lg:rounded-b-3xl" />
+				<div className="relative -mt-18 mx-4 rounded-3xl bg-card p-4 ring-1 ring-foreground/5 lg:-mt-22 lg:mx-8 lg:px-7 lg:py-6 dark:ring-white/10">
+					<div className="flex items-start gap-3.5">
+						<Skeleton className="size-16 shrink-0 rounded-[18px] lg:size-21 lg:rounded-[22px]" />
+						<div className="flex flex-col gap-2 pt-1">
+							<Skeleton className="h-6 w-40" />
+							<Skeleton className="h-4 w-48" />
+						</div>
 					</div>
 				</div>
 			</header>

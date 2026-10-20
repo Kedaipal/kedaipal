@@ -1,9 +1,19 @@
+import { Link } from "@tanstack/react-router";
 import useEmblaCarousel from "embla-carousel-react";
-import { ShieldCheck } from "lucide-react";
+import { ArrowRight, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import { COUNTRIES, type Country } from "../../../convex/lib/country";
+import type { BillingCycle } from "../../../convex/lib/plans";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { buildWaContactLink } from "../../lib/contact";
+import {
+	type DemoPlacement,
+	trackDemoCta,
+	trackSignupCta,
+} from "../../lib/ga-events";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
+import { WhatsAppIcon } from "../dashboard/brand-icons";
 
 /**
  * Shared primitives for the landing page redesign. Everything uses the
@@ -26,6 +36,144 @@ export function ctaPillClass(
 			"border-2 border-border bg-background text-foreground hover:border-foreground/25 hover:bg-muted focus-visible:ring-ring/20",
 	} as const;
 	return cn(base, variants[variant]);
+}
+
+/**
+ * The page's ONE accent ask (demo-first, z8r3fdtpub T1, 19 Oct 2026): a
+ * WhatsApp link that opens a chat with Kedaipal, prefilled. Every payer to
+ * date closed on a demo or a referral, so this pill carries the mint
+ * everywhere it appears — hero, nav, final CTA, dock — and the self-serve
+ * sign-up is a text link beside it (`StartFreeLink`). The `ctaPillClass`
+ * accent variant is reserved for it: a second mint pill is a second ask.
+ */
+export function DemoPill({
+	placement,
+	long = false,
+	className,
+}: {
+	placement: DemoPlacement;
+	/** "Book a demo on WhatsApp" rather than "Book a demo" — where the pill has the room. */
+	long?: boolean;
+	className?: string;
+}) {
+	const supportWa = useSupportWaNumber();
+	return (
+		<a
+			href={buildWaContactLink(m.demo_wa_message(), supportWa)}
+			target="_blank"
+			rel="noopener noreferrer"
+			className={cn(ctaPillClass("accent"), className)}
+			onClick={() => trackDemoCta(placement)}
+		>
+			<WhatsAppIcon className="size-[1.1em] shrink-0" />
+			{long ? m.book_demo_cta_long() : m.book_demo_cta()}
+		</a>
+	);
+}
+
+/**
+ * The self-serve door, a rung below the demo: "Start free — pay when you
+ * sell" as a text link. Keeps its own `cta_signup_click` so the two asks
+ * stay comparable in GA4 (the two-week read the ticket calls for).
+ */
+export function StartFreeLink({
+	placement,
+	className,
+}: {
+	placement: string;
+	className?: string;
+}) {
+	return (
+		<Link
+			to="/sign-up/$"
+			params={{ _splat: "" }}
+			className={cn(
+				"group inline-flex min-h-11 items-center gap-1.5 text-sm font-semibold underline-offset-4 transition-colors hover:underline",
+				className,
+			)}
+			onClick={() => trackSignupCta(placement)}
+		>
+			{m.final_cta()}
+			<ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
+		</Link>
+	);
+}
+
+/**
+ * "Flat fee. Never a cut of your sales." — the commission badge (Arif, 14 Oct
+ * 2026), in the hero and on the pricing surfaces. Credits are live (one per
+ * order), so the TRUE claim is "no cut of your sales": never "zero fees" or
+ * "free per order" (`pricing-copy.test.ts` guards the vocabulary).
+ */
+export function CommissionBadge({ className }: { className?: string }) {
+	return (
+		<span
+			className={cn(
+				"inline-flex w-fit items-center gap-2 rounded-full border border-foreground/80 px-3.5 py-1.5 text-xs font-semibold text-foreground",
+				className,
+			)}
+		>
+			<span aria-hidden className="size-2 rounded-full bg-accent" />
+			{m.commission_badge()}
+		</span>
+	);
+}
+
+/**
+ * Monthly / annual, the one control for it on `/` and `/pricing` (one idea,
+ * one control). The annual badge is "2 months free", never a percentage — a
+ * standing % badge reads as a markdown on a flat price (Arif, 28 Jul + 9 Aug
+ * 2026). The credits rule sits under it in BOTH positions so flipping the
+ * toggle moves nothing: credits stay monthly on annual, locked for the
+ * prepaid year.
+ */
+export function BillingCycleToggle({
+	cycle,
+	onChange,
+	className,
+}: {
+	cycle: BillingCycle;
+	onChange: (cycle: BillingCycle) => void;
+	className?: string;
+}) {
+	const pill = (active: boolean) =>
+		cn(
+			"relative min-h-10 rounded-full px-5 text-sm font-semibold transition-colors",
+			active
+				? "bg-segment text-segment-foreground"
+				: "text-muted-foreground hover:text-foreground",
+		);
+	return (
+		<div className={cn("flex flex-col items-center", className)}>
+			<fieldset
+				aria-label={m.pricingpage_toggle_label()}
+				className="m-0 inline-flex items-center rounded-full border border-border bg-card p-1.5 shadow-sm"
+			>
+				<button
+					type="button"
+					aria-pressed={cycle === "monthly"}
+					onClick={() => onChange("monthly")}
+					className={pill(cycle === "monthly")}
+				>
+					{m.pricingpage_toggle_monthly()}
+				</button>
+				<button
+					type="button"
+					aria-pressed={cycle === "annual"}
+					onClick={() => onChange("annual")}
+					className={pill(cycle === "annual")}
+				>
+					{m.pricingpage_toggle_annual()}
+					<span className="absolute -right-2 -top-2.5 whitespace-nowrap rounded-full bg-accent px-2 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
+						{m.pricingpage_annual_badge()}
+					</span>
+				</button>
+			</fieldset>
+			<p className="mx-auto mt-3 max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
+				{m.pricingpage_annual_credits_note()}
+			</p>
+		</div>
+	);
 }
 
 /**
@@ -201,7 +349,7 @@ export function RegionToggle({
 						// the first cut's min-h-9 (36px) failed the 29 Aug mobile audit.
 						"tap-target min-w-16 rounded-full px-4 text-sm font-semibold transition-colors",
 						region === c
-							? "bg-primary text-primary-foreground"
+							? "bg-segment text-segment-foreground"
 							: "text-muted-foreground hover:text-foreground",
 					)}
 				>

@@ -816,6 +816,12 @@ export default defineSchema({
 		// (orderingPausedAt): "since when" costs nothing and answers support
 		// questions a flag cannot.
 		marketplaceUnlistedAt: v.optional(v.number()),
+		// Storefront chat opt-OUT (z8r3fdvwcy). The store home carries an "Ask
+		// on WhatsApp" action — a buyer-initiated wa.me link to `waPhone` — on by
+		// default; this stamp is the owner saying "not on my store page". Same
+		// shape as the listing stamp above: absent = on, no backfill, "since
+		// when" for free. Set/cleared by `retailers.setStorefrontChat`.
+		storefrontChatDisabledAt: v.optional(v.number()),
 		// Marketplace "Store highlights" sponsorship window (z8r3fdkmyp): the
 		// store rides the labelled sponsored rail on /stores while this epoch-ms
 		// is in the future. ADMIN-set only (admin.setMarketplaceSponsorship,

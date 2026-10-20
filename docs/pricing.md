@@ -2,7 +2,7 @@
 
 > **1 Oct 2026 (Credits T6 `z8r3fdkp8h`):** **Scale is retired before it ever
 > went public; the third tier is Enterprise** — no list price, quoted per deal,
-> reached through a "Talk to Arif" WhatsApp chat on every surface that sells a
+> reached through a "Get an Enterprise quote" WhatsApp chat (the button read "Talk to Arif" until 19 Oct 2026) on every surface that sells a
 > plan. A store is on Enterprise only while an admin has attached a contract,
 > and every Enterprise invoice and monthly grant is read from that contract.
 > Decided by Arif, 30 Sep 2026: Scale at RM399 for 500 credits was Pro plus
@@ -252,7 +252,7 @@ today's is.
 | --- | --- | --- | --- | --- | --- |
 | **Starter** | RM79/mo · S$29 | Single home seller, just starting | 100 | 1 (you) | 1 |
 | **Pro** | RM149/mo · S$59 | Established single shop | 200 | 3 (you + 2) | 1 |
-| **Enterprise** | **Custom** — "Talk to Arif"; floor RM888/mo (not public) | Built for 1,500+ orders a month | Per contract (HSL: 1,500) | Unlimited | Multiple — **coming soon** |
+| **Enterprise** | **Custom** — "Get an Enterprise quote"; floor RM888/mo (not public) | Built for 1,500+ orders a month | Per contract (HSL: 1,500) | Unlimited | Multiple — **coming soon** |
 | *Off-Season Hold* | **RM19/mo · S$9** — a status, not a tier; **never on a public surface** (retired separately, `z8r3fdfuhr`) | A paid seller paused between seasons: ordering off, everything else live, one tap back | 0 | — | — |
 
 The credits column is the **Kedaipal Credits** grant (ClickUp `86eye2ccu`,
@@ -307,7 +307,7 @@ Presentation rules:
 - **Enterprise is a conversation, never a checkout.** Its card shows
   **"Custom"** where a price would be (in the same box, so the three cards'
   taglines and feature lists line up), "Built for 1,500+ orders a month" as
-  its tagline, and a **"Talk to Arif"** button that opens WhatsApp with a prefilled message naming
+  its tagline, and a **"Get an Enterprise quote"** button that opens WhatsApp with a prefilled message naming
   the threshold (`enterpriseTalkUrl`, `src/lib/enterprise-contact.ts` — the one
   author of that link on every surface; in-app it also names the store's
   slug). `enterprise_talk_clicked` records the tap with its `surface`

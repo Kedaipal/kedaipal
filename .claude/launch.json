@@ -224,6 +224,19 @@
       ],
       "port": 3160,
       "autoPort": false
+    },
+    {
+      "name": "web-showcase-wt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "exec",
+        "vite",
+        "dev",
+        "--port",
+        "3170"
+      ],
+      "port": 3170,
+      "autoPort": false
     }
   ]
 }

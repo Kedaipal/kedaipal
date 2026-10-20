@@ -6,43 +6,83 @@ import {
 	screen,
 	within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DAY_MS, todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
-import { StorefrontHeader, storeInitials } from "./storefront-header";
+import {
+	fulfilmentLabel,
+	StorefrontHeader,
+	storeInitials,
+} from "./storefront-header";
 
-afterEach(cleanup);
+vi.mock("../../lib/share", () => ({ shareLink: vi.fn() }));
+
+afterEach(() => {
+	cleanup();
+	vi.clearAllMocks();
+});
 
 const retailer = {
 	storeName: "Dapur Nadia",
 	storeDescription: "Kuih & pastry pre-order",
+	waPhone: "60123456789",
+	locale: "en" as const,
 };
 
-describe("StorefrontHeader", () => {
-	// The full hero renders ONLY on the store home since z8r3fdegb5 (subpages
-	// carry the compact StorefrontAppBar), and the home is *about* the store —
-	// so the store name is unconditionally the page's <h1>.
-	it("makes the store name the page <h1>", () => {
+/** The two surfaces the actions live on: the cover's icon circles (mobile,
+ * `lg:hidden`) and the island's labelled row (`hidden lg:flex`). jsdom
+ * applies no CSS, so both render; the tests tell them apart by name. */
+const coverChat = () =>
+	screen.queryByRole("link", { name: /^Ask Dapur Nadia on WhatsApp$/ });
+const coverShare = () =>
+	screen.queryByRole("button", { name: "Share this store" });
+const rowChat = () => screen.queryByRole("link", { name: "Ask on WhatsApp" });
+const rowShare = () => screen.queryByRole("button", { name: "Share store" });
+
+describe("StorefrontHeader — the island (z8r3fdvwcy)", () => {
+	it("makes the store name the page <h1>, inside an 'About this store' island", () => {
 		render(<StorefrontHeader retailer={retailer} />);
-		const heading = screen.getByRole("heading", { level: 1 });
+		const island = screen.getByRole("region", { name: "About this store" });
+		const heading = within(island).getByRole("heading", { level: 1 });
 		expect(heading.textContent).toBe("Dapur Nadia");
+		expect(heading.className).not.toContain("truncate");
 	});
 
-	it("falls back to the generic tagline when the seller has no blurb", () => {
-		render(<StorefrontHeader retailer={{ storeName: "Lekor Mr Ganu" }} />);
-		expect(screen.getByText("Browse & order on WhatsApp")).toBeTruthy();
+	it("with a cover: the photo is the LCP image under a scrim, and the icons are frosted", () => {
+		const { container } = render(
+			<StorefrontHeader
+				retailer={{ ...retailer, coverImageUrl: "https://img/cover.jpg" }}
+				slug="dapur-nadia"
+			/>,
+		);
+		const cover = container.querySelector(
+			"img[alt='Dapur Nadia cover']",
+		) as HTMLImageElement;
+		expect(cover).toBeTruthy();
+		expect(cover.getAttribute("loading")).not.toBe("lazy");
+		expect(cover.getAttribute("fetchpriority")).toBe("high");
+		expect(coverShare()?.className).toContain("backdrop-blur");
+		expect(coverChat()?.className).toContain("bg-primary/45");
+	});
+
+	it("without a cover: a mint band stands in and the icons go outline", () => {
+		render(<StorefrontHeader retailer={retailer} slug="dapur-nadia" />);
+		expect(screen.queryByRole("img", { name: /cover/ })).toBeNull();
+		expect(coverShare()?.className).toContain("border-border");
+		expect(coverShare()?.className).not.toContain("backdrop-blur");
+		expect(coverChat()?.className).toContain("bg-card");
+	});
+
+	it("no blurb → no blurb row", () => {
+		const { container } = render(
+			<StorefrontHeader retailer={{ storeName: "Lekor Mr Ganu" }} />,
+		);
+		expect(container.querySelector("p.line-clamp-2")).toBeNull();
+		expect(screen.queryByText("Browse & order on WhatsApp")).toBeNull();
 	});
 
 	it("renders an initials tile when the store has no logo — never a hole", () => {
 		render(<StorefrontHeader retailer={retailer} />);
 		expect(screen.getByText("DN")).toBeTruthy();
-	});
-
-	it("offers Share store only when it has the slug to share", () => {
-		render(<StorefrontHeader retailer={retailer} slug="dapur-nadia" />);
-		expect(screen.getByRole("button", { name: /share store/i })).toBeTruthy();
-		cleanup();
-		render(<StorefrontHeader retailer={retailer} />);
-		expect(screen.queryByRole("button", { name: /share store/i })).toBeNull();
 	});
 
 	it("carries no Kedaipal mark — the footer owns 'Powered by'", () => {
@@ -52,6 +92,155 @@ describe("StorefrontHeader", () => {
 		);
 		expect(srcs).not.toContain("/logo-3.svg");
 		expect(srcs).not.toContain("/logo-dark.svg");
+	});
+});
+
+describe("StorefrontHeader — cover icons and the labelled row", () => {
+	it("mobile: WhatsApp then Share as 44px labelled icon circles, hidden from lg", () => {
+		render(<StorefrontHeader retailer={retailer} slug="dapur-nadia" />);
+		const chat = coverChat() as HTMLAnchorElement;
+		const share = coverShare() as HTMLButtonElement;
+		expect(chat.getAttribute("aria-label")).toBe("Ask Dapur Nadia on WhatsApp");
+		expect(chat.className).toContain("size-11");
+		expect(share.className).toContain("size-11");
+		// Left → right: WhatsApp, Share.
+		expect(
+			chat.compareDocumentPosition(share) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(chat.parentElement?.className).toContain("lg:hidden");
+	});
+
+	it("desktop: the labelled row lives inside the island and is hidden below lg", () => {
+		render(<StorefrontHeader retailer={retailer} slug="dapur-nadia" />);
+		const island = screen.getByRole("region", { name: "About this store" });
+		const share = rowShare() as HTMLButtonElement;
+		const chat = rowChat() as HTMLAnchorElement;
+		expect(island.contains(share)).toBe(true);
+		expect(island.contains(chat)).toBe(true);
+		expect(share.className).toContain("h-11");
+		expect(share.parentElement?.className).toContain("hidden");
+		expect(share.parentElement?.className).toContain("lg:flex");
+	});
+
+	it("Ask on WhatsApp is a wa.me link with the store-named prefill, opening in a new tab", () => {
+		render(<StorefrontHeader retailer={retailer} slug="dapur-nadia" />);
+		for (const link of [coverChat(), rowChat()]) {
+			expect(link?.getAttribute("href")).toBe(
+				`https://wa.me/60123456789?text=${encodeURIComponent(
+					"Hi Dapur Nadia, I'm looking at your Kedaipal store and have a question.",
+				)}`,
+			);
+			expect(link?.getAttribute("target")).toBe("_blank");
+			expect(link?.getAttribute("rel")).toContain("noopener");
+		}
+	});
+
+	it("speaks the store's locale in the prefill", () => {
+		render(<StorefrontHeader retailer={{ ...retailer, locale: "ms" }} />);
+		expect(
+			decodeURIComponent(coverChat()?.getAttribute("href") ?? ""),
+		).toContain("Hai Dapur Nadia, saya sedang lihat");
+	});
+
+	it("Share shares the store URL from either surface", async () => {
+		const { shareLink } = await import("../../lib/share");
+		render(<StorefrontHeader retailer={retailer} slug="dapur-nadia" />);
+		fireEvent.click(coverShare() as HTMLElement);
+		fireEvent.click(rowShare() as HTMLElement);
+		expect(shareLink).toHaveBeenCalledTimes(2);
+		expect(shareLink).toHaveBeenCalledWith("/dapur-nadia");
+	});
+
+	it("offers Share only when it has the slug to share", () => {
+		render(<StorefrontHeader retailer={retailer} />);
+		expect(coverShare()).toBeNull();
+		expect(rowShare()).toBeNull();
+		// The chat action does not depend on the slug.
+		expect(coverChat()).toBeTruthy();
+	});
+
+	it("the owner switched chat off: no WhatsApp action on either surface, Share stays", () => {
+		render(
+			<StorefrontHeader
+				retailer={{ ...retailer, storefrontChatEnabled: false }}
+				slug="dapur-nadia"
+			/>,
+		);
+		expect(coverChat()).toBeNull();
+		expect(rowChat()).toBeNull();
+		expect(coverShare()).toBeTruthy();
+		expect(rowShare()).toBeTruthy();
+	});
+
+	it("no WhatsApp number on the store: no chat action, Share stays", () => {
+		render(
+			<StorefrontHeader
+				retailer={{ ...retailer, waPhone: undefined }}
+				slug="dapur-nadia"
+			/>,
+		);
+		expect(coverChat()).toBeNull();
+		expect(rowChat()).toBeNull();
+		expect(coverShare()).toBeTruthy();
+	});
+
+	it("neither action: no empty icon strip, no empty row", () => {
+		const { container } = render(
+			<StorefrontHeader
+				retailer={{ storeName: "Quiet", waPhone: undefined }}
+			/>,
+		);
+		expect(container.querySelector(".lg\\:hidden")).toBeNull();
+		expect(container.querySelector(".hidden.lg\\:flex")).toBeNull();
+	});
+});
+
+describe("StorefrontHeader — the facts block", () => {
+	it("says what the store fulfils, with the area when the seller wrote one", () => {
+		render(
+			<StorefrontHeader
+				retailer={{
+					...retailer,
+					offerSelfCollect: true,
+					storeArea: "TTDI, KL",
+				}}
+			/>,
+		);
+		expect(screen.getByText("Delivery & pickup")).toBeTruthy();
+		expect(screen.getByText("· TTDI, KL")).toBeTruthy();
+	});
+
+	it("no hours and no closure → the facts block is only the fulfilment line", () => {
+		const { container } = render(<StorefrontHeader retailer={retailer} />);
+		expect(screen.getByText("Delivery")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /Open|Closed/ })).toBeNull();
+		expect(container.querySelectorAll("p.min-h-6")).toHaveLength(1);
+	});
+
+	it("a store offering neither delivery nor pickup carries no facts block at all", () => {
+		const { container } = render(
+			<StorefrontHeader
+				retailer={{
+					...retailer,
+					offerDelivery: false,
+					offerSelfCollect: false,
+				}}
+			/>,
+		);
+		expect(container.querySelector(".border-t")).toBeNull();
+	});
+});
+
+describe("fulfilmentLabel", () => {
+	it("reads the legacy defaults: delivery absent = on, pickup absent = off", () => {
+		expect(fulfilmentLabel({})).toBe("Delivery");
+		expect(fulfilmentLabel({ offerSelfCollect: true })).toBe(
+			"Delivery & pickup",
+		);
+		expect(
+			fulfilmentLabel({ offerDelivery: false, offerSelfCollect: true }),
+		).toBe("Pickup");
+		expect(fulfilmentLabel({ offerDelivery: false })).toBeNull();
 	});
 });
 
@@ -77,11 +266,14 @@ describe("StorefrontHeader — opening hours line (86eyp5rav)", () => {
 		close: 1439,
 	}));
 
-	it("renders the live status line when the store configured hours", () => {
+	it("renders the live status row when the store configured hours", () => {
 		render(
 			<StorefrontHeader retailer={{ ...retailer, openingHours: allDayWeek }} />,
 		);
-		expect(screen.getByText("Open 24 hours today")).toBeTruthy();
+		const row = screen.getByRole("button", { name: /Open 24 hours today/ });
+		// The island row, not the old pill: a full-width row with a chevron.
+		expect(row.className).toContain("w-full");
+		expect(row.className).not.toContain("rounded-full");
 	});
 
 	it("renders nothing for the 24/7 default (no configured hours)", () => {
@@ -93,6 +285,10 @@ describe("StorefrontHeader — opening hours line (86eyp5rav)", () => {
 describe("StorefrontHeader — closed dates (z8r3fdhpm7)", () => {
 	// Clock-independent: every range is built from the real "today".
 	const today = todayMytMidnight(Date.now());
+	const allDayWeek = Array.from({ length: 7 }, () => ({
+		open: 0,
+		close: 1439,
+	}));
 
 	it("on a closed date, a 24/7 store says so — with the reason and when it reopens", () => {
 		render(
@@ -106,11 +302,13 @@ describe("StorefrontHeader — closed dates (z8r3fdhpm7)", () => {
 			/>,
 		);
 		expect(
-			screen.getByText("Closed today · Hari Raya · reopens tomorrow"),
+			screen.getByRole("button", {
+				name: "Closed today · Hari Raya · reopens tomorrow",
+			}),
 		).toBeTruthy();
 	});
 
-	it("warns about a closure starting within two weeks, before the buyer picks a date", () => {
+	it("a 24/7 store with only a closure ahead: the heads-up IS the hours row, once", () => {
 		const start = today + 3 * DAY_MS;
 		render(
 			<StorefrontHeader
@@ -126,7 +324,35 @@ describe("StorefrontHeader — closed dates (z8r3fdhpm7)", () => {
 				}}
 			/>,
 		);
-		expect(screen.getByText(/^Closed .* · Balik kampung$/)).toBeTruthy();
+		expect(screen.getAllByText(/Balik kampung/)).toHaveLength(1);
+		const row = screen.getByRole("button", { name: /Balik kampung/ });
+		// Its own amber, never the live-status mint: the store is OPEN today.
+		expect(screen.getByText(/Balik kampung/).className).toContain(
+			"text-amber-700",
+		);
+		expect(row.querySelector(".bg-accent")).toBeNull();
+	});
+
+	it("a store with hours AND a closure ahead: status row, then the closed-dates line", () => {
+		const start = today + 3 * DAY_MS;
+		render(
+			<StorefrontHeader
+				retailer={{
+					...retailer,
+					openingHours: allDayWeek,
+					closedDates: [
+						{ startDate: start, endDate: start, label: "Stocktake" },
+					],
+				}}
+			/>,
+		);
+		const status = screen.getByRole("button", { name: /Open 24 hours today/ });
+		const headsUp = screen.getByText(/^Closed .* · Stocktake$/);
+		expect(headsUp.closest("button")).toBeNull();
+		expect(
+			status.compareDocumentPosition(headsUp) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
 	});
 
 	it("stays silent for a 24/7 store whose only closure is far off", () => {
@@ -143,10 +369,6 @@ describe("StorefrontHeader — closed dates (z8r3fdhpm7)", () => {
 	});
 
 	it("the schedule dialog never shows today's weekly hours as open on a closed date", () => {
-		const allDayWeek = Array.from({ length: 7 }, () => ({
-			open: 0,
-			close: 1439,
-		}));
 		render(
 			<StorefrontHeader
 				retailer={{
@@ -159,7 +381,7 @@ describe("StorefrontHeader — closed dates (z8r3fdhpm7)", () => {
 			/>,
 		);
 		const trigger = screen.getByRole("button", { name: /Closed today/ });
-		// A wrapped status stays left-aligned beside its icon (a <button>
+		// A wrapped status stays left-aligned beside its dot (a <button>
 		// centres by default).
 		expect(trigger.className).toContain("text-left");
 		fireEvent.click(trigger);

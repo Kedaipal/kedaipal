@@ -13,7 +13,10 @@ export function Footer() {
 		"inline-flex min-h-11 items-center transition-colors hover:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
 	return (
-		<footer className="bg-primary pb-[max(2rem,env(safe-area-inset-bottom))] text-primary-foreground">
+		<footer
+			id="site-footer"
+			className="bg-primary pb-[max(2rem,env(safe-area-inset-bottom))] text-primary-foreground"
+		>
 			<div className="mx-auto max-w-6xl px-5 py-14 md:px-8">
 				<div className="grid gap-10 md:grid-cols-[minmax(0,1fr)_minmax(24rem,auto)] md:items-start">
 					<div className="max-w-sm">

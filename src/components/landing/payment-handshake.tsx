@@ -1,17 +1,13 @@
-import { useInView, useReducedMotion } from "framer-motion";
-import { Check, Download, ImagePlus } from "lucide-react";
-import { useRef } from "react";
-import { useBeatLoop } from "../../hooks/useBeatLoop";
+import { Check, Clock, Download, ImagePlus, MapPin } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { WhatsAppIcon } from "../dashboard/brand-icons";
-import { FadeIn } from "./fade-in";
-import { Eyebrow } from "./landing-ui";
 
 /**
- * "The payment handshake" — the landing section for universal pain #2
- * (chasing "dah transfer" screenshots). Left: claim + proof bullets.
- * Right: the flow ACTED OUT on loop, as it really runs since 4 Aug 2026
+ * "The payment handshake" — phase 02 of the seller-flow walkthrough
+ * (`seller-flow.tsx`, 19 Oct 2026; it was its own section until then, with
+ * a copy column the walkthrough's step text now carries). The flow ACTED
+ * OUT, as it really runs since 4 Aug 2026
  * (docs/one-message-per-order.md, docs/payment-handshake.md): the buyer is
  * never messaged after checkout — they pay from **How to pay** on their order
  * page, tap **I've paid**, attach the (mandatory, z8r3fdnpxf) screenshot and
@@ -25,24 +21,24 @@ import { Eyebrow } from "./landing-ui";
  *
  * Two panes, buyer phone beside the seller's order card, side by side from a
  * 30rem-wide column and stacked below it (a 390 phone can't hold both at a
- * legible size). CSS only, like the hero stage: `useBeatLoop` flips a beat
- * index, keyed remounts replay the `kp-*` keyframes, `transition-*` classes
- * do the rest. The clock only runs on a visible tab with the mock in view;
- * reduced motion renders the LAST story beat as a still. Every pane has a
- * fixed height so beats never shift the page (the buried-chats lesson), and
- * the frame is never blank on beat 0 — the first beat IS a state. The mock is
- * decorative (`aria-hidden`); the copy column carries the content.
+ * legible size). CSS only, like the hero stage: the walkthrough's timeline
+ * flips a beat index, keyed remounts replay the `kp-*` keyframes,
+ * `transition-*` classes do the rest. Reduced motion renders the LAST story
+ * beat as a still. Every pane has a fixed height so beats never shift the
+ * page (the buried-chats lesson), and the frame is never blank on beat 0 —
+ * the first beat IS a state. The mock is decorative; the walkthrough's step
+ * copy carries the content.
  */
 
 /**
  * Beat holds, ms, on the M4 timeline: idle → tap "I've paid" (1.2 s) → the
  * screenshot lands (2.0 s) → Submit (3.2 s) → the seller taps (5.0 s) → both
- * sides flip (5.6 s) → fade (7.5 s), 8 s a loop.
+ * sides flip (5.6 s), 7.8 s a phase. The walkthrough's timeline reads these
+ * (`seller-flow-timeline.ts`); the fade between phases is the frame's.
  */
-export const HANDSHAKE_BEATS = [1200, 800, 1200, 1800, 600, 1900, 500] as const;
+export const HANDSHAKE_BEATS = [1200, 800, 1200, 1800, 600, 2200] as const;
 /** The beat both sides read "Payment received" (the reduced-motion still). */
 export const RECEIVED_BEAT = 5;
-const RESET_BEAT = 6;
 
 type BuyerState = "pay" | "waiting" | "received";
 type SellerState = "unpaid" | "claimed" | "received";
@@ -60,7 +56,7 @@ function sellerStateAt(beat: number): SellerState {
 }
 
 /** A simulated tap: the button presses and a ring blooms off it. */
-function TapRing() {
+export function TapRing() {
 	return (
 		<span
 			aria-hidden
@@ -83,11 +79,48 @@ function ProofThumb({ className }: { className?: string }) {
 	);
 }
 
-function PaneLabel({ children }: { children: string }) {
+export function PaneLabel({ children }: { children: string }) {
 	return (
 		<span className="text-[0.8em] font-bold uppercase tracking-[0.1em] text-slate-500">
 			{children}
 		</span>
+	);
+}
+
+/**
+ * The real order page's next section under the payment card for a
+ * self-collect order (`track.$token.tsx`, "Pick up at"): the point, its
+ * self-collect chip, the address and the schedule note (the real section's
+ * Waze / Maps doors are below this phone's fold — the waiting state plus
+ * them overran the box). It sits under every state.
+ */
+function PickupPoint() {
+	return (
+		<div className="flex flex-col gap-[0.7em] rounded-[1.1em] border border-slate-200 bg-white p-[1em]">
+			<span className="text-[0.7em] font-bold uppercase tracking-[0.12em] text-slate-500">
+				{m.handshake_pickup_label()}
+			</span>
+			<div className="flex items-start gap-[0.6em]">
+				<MapPin className="mt-[0.15em] size-[1.1em] shrink-0 text-accent-emphasis" />
+				<span className="flex min-w-0 flex-col gap-[0.25em]">
+					<span className="flex flex-wrap items-center gap-[0.5em]">
+						<span className="text-[0.95em] font-semibold leading-tight">
+							{m.handshake_pickup_name()}
+						</span>
+						<span className="shrink-0 rounded-full bg-accent/10 px-[0.6em] py-[0.15em] text-[0.65em] font-semibold uppercase tracking-wide text-accent-emphasis">
+							{m.handshake_pickup_chip()}
+						</span>
+					</span>
+					<span className="text-[0.85em] leading-snug text-slate-500">
+						{m.handshake_pickup_address()}
+					</span>
+					<span className="flex items-center gap-[0.35em] text-[0.85em] font-medium text-accent-emphasis">
+						<Clock className="size-[0.9em] shrink-0" />
+						{m.handshake_pickup_hours()}
+					</span>
+				</span>
+			</div>
+		</div>
 	);
 }
 
@@ -101,7 +134,7 @@ function BuyerPhone({ beat, still }: { beat: number; still: boolean }) {
 
 	return (
 		<div className="relative mx-auto w-[25em] max-w-full shrink-0 rounded-[2.6em] bg-slate-950 p-[0.55em] shadow-[0_30px_60px_-24px_hsl(222_47%_11%_/_0.5)] ring-1 ring-white/15">
-			<div className="relative flex h-[32em] flex-col overflow-hidden rounded-[2.1em] bg-slate-50 p-[1.2em] text-left text-slate-800">
+			<div className="relative flex h-[47em] flex-col overflow-hidden rounded-[2.1em] bg-slate-50 p-[1.2em] text-left text-slate-800">
 				<span className="absolute left-1/2 top-[0.7em] h-[1.4em] w-[6em] -translate-x-1/2 rounded-full bg-slate-950" />
 				<div className="mt-[1.6em]">
 					<PaneLabel>{m.handshake_buyer_label()}</PaneLabel>
@@ -115,10 +148,36 @@ function BuyerPhone({ beat, still }: { beat: number; still: boolean }) {
 				<span className="text-[0.95em] text-slate-500">
 					{m.handshake_buyer_store_line()}
 				</span>
+				{/* The order's own line and status, as phase 02's phone carries them:
+				    one order, one phone chrome across the walkthrough. */}
+				<div className="mt-[0.9em] flex items-center justify-between gap-[0.6em] rounded-[0.9em] border border-slate-200 bg-white px-[0.9em] py-[0.7em]">
+					<span className="truncate text-[0.9em] font-semibold">
+						{m.handshake_seller_order_meta()}
+					</span>
+					<span
+						key={state === "received" ? "confirmed" : "pending"}
+						className={cn(
+							"whitespace-nowrap rounded-full px-[0.8em] py-[0.3em] text-[0.8em] font-semibold",
+							state === "received"
+								? "bg-blue-100 text-blue-800"
+								: "bg-orange-100 text-orange-800",
+							state === "received" && !still && "animate-kp-pop",
+						)}
+					>
+						{state === "received"
+							? m.handshake_seller_confirmed()
+							: m.handshake_seller_pending()}
+					</span>
+				</div>
 
 				{/* The state area is a fixed box so the three states never resize
-				    the phone. Only the current one is mounted; its mount pops it. */}
-				<div className="relative mt-[1em] h-[20em]">
+				    the phone. Only the current one is mounted; its mount pops it.
+				    Every state carries the real page's next section under it (the
+				    pickup point), and the box is sized to the tallest of them (How
+				    to pay), so the phone never shows an empty half (Arif, 19 Oct).
+				    The phone is a real phone's proportion now (25:47), not the squat
+				    32em the first cut clipped at. */}
+				<div className="relative mt-[0.9em] h-[34em]">
 					{state === "pay" ? (
 						<div key="pay" className={cn("flex flex-col gap-[0.8em]", pop)}>
 							<span className="text-[1.05em] font-bold">
@@ -163,6 +222,7 @@ function BuyerPhone({ beat, still }: { beat: number; still: boolean }) {
 								{tapPaid ? <TapRing /> : null}
 								{m.handshake_ive_paid()}
 							</span>
+							<PickupPoint />
 						</div>
 					) : null}
 
@@ -185,6 +245,7 @@ function BuyerPhone({ beat, still }: { beat: number; still: boolean }) {
 									</span>
 								</span>
 							</div>
+							<PickupPoint />
 						</div>
 					) : null}
 
@@ -206,9 +267,7 @@ function BuyerPhone({ beat, still }: { beat: number; still: boolean }) {
 								<Download className="size-[1.1em]" />
 								{m.handshake_buyer_receipt()}
 							</span>
-							<span className="text-[0.9em] text-slate-500">
-								{m.handshake_buyer_status()}
-							</span>
+							<PickupPoint />
 						</div>
 					) : null}
 				</div>
@@ -297,7 +356,7 @@ function SellerCard({ beat, still }: { beat: number; still: boolean }) {
 	const confirmed = state === "received";
 
 	return (
-		<div className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-[1.8em] border border-border bg-card p-[1.4em] text-left shadow-xl shadow-primary/10 @[30rem]:self-stretch">
+		<div className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-[1.8em] border border-border bg-card p-[1.4em] text-left shadow-xl shadow-primary/10">
 			<PaneLabel>{m.handshake_seller_label()}</PaneLabel>
 			<div className="mt-[0.8em] flex items-start justify-between gap-[0.8em]">
 				<span className="flex min-w-0 flex-col">
@@ -340,14 +399,15 @@ function SellerCard({ beat, still }: { beat: number; still: boolean }) {
 								{m.handshake_seller_unpaid_body()}
 							</span>
 						</div>
-						<div className="flex gap-[0.6em]">
-							<span className="flex h-[3.2em] flex-1 items-center justify-center rounded-full border border-border text-[0.95em] font-bold">
-								{m.handshake_seller_mark_received()}
-							</span>
-							<span className="flex h-[3.2em] items-center justify-center rounded-full border border-border px-[1em] text-[0.9em] font-semibold text-muted-foreground">
-								{m.handshake_seller_send_reminder()}
-							</span>
-						</div>
+						{/* The dashboard stacks these full-width (a secondary button, then
+						    the window-boxed reminder); side by side the first wrapped
+						    onto two lines at this width. */}
+						<span className="flex h-[3.2em] items-center justify-center rounded-full border border-border text-[0.95em] font-bold">
+							{m.handshake_seller_mark_received()}
+						</span>
+						<span className="flex h-[3.2em] items-center justify-center rounded-full border border-border px-[1em] text-[0.9em] font-semibold text-muted-foreground">
+							{m.handshake_seller_send_reminder()}
+						</span>
 					</div>
 				) : null}
 
@@ -472,84 +532,30 @@ function SellerCard({ beat, still }: { beat: number; still: boolean }) {
 	);
 }
 
-function HandshakePlay() {
-	const shouldReduceMotion = useReducedMotion();
-	const stageRef = useRef<HTMLDivElement>(null);
-	const inView = useInView(stageRef, { margin: "-10% 0px" });
-	const beat = useBeatLoop(!shouldReduceMotion && inView, HANDSHAKE_BEATS);
-	const still = Boolean(shouldReduceMotion);
+/**
+ * The two panes, beat passed in: the seller-flow walkthrough owns the clock
+ * (phase 02) and the `aria-hidden` frame around them. `@container` so the
+ * panes size off the column they are given: side by side with em = a slice
+ * of the width from 30rem, stacked at a fixed em below it. Both panes are
+ * fixed-height, so the mock holds one height per layout and the beats never
+ * move the page; the seller card is sized to its states and centred on the
+ * phone, not stretched to it (a 46em-tall card two-thirds empty was the
+ * same hole the phone had). `still` renders the received frame (reduced motion).
+ */
+export function HandshakePanes({
+	beat,
+	still,
+}: {
+	beat: number;
+	still: boolean;
+}) {
 	const storyBeat = still ? RECEIVED_BEAT : beat;
-	const resetting = !still && beat === RESET_BEAT;
-
 	return (
-		// `@container` so the panes size off the column they are given: side by
-		// side with em = a slice of the width from 30rem, stacked at a fixed em
-		// below it. Both panes are fixed-height, so the mock holds one height per
-		// layout and the beats never move the page.
-		<div ref={stageRef} aria-hidden="true" className="@container w-full">
-			<div
-				className={cn(
-					"flex flex-col items-stretch gap-[1.6em] text-[10px] transition-opacity duration-300 motion-reduce:transition-none @[30rem]:flex-row @[30rem]:items-end @[30rem]:gap-[2.4em] @[30rem]:text-[clamp(8.5px,1.85cqw,11px)]",
-					resetting ? "opacity-0" : "opacity-100",
-				)}
-			>
+		<div className="@container w-full">
+			<div className="flex flex-col items-stretch gap-[1.6em] text-[10px] @[30rem]:flex-row @[30rem]:items-center @[30rem]:gap-[2.4em] @[30rem]:text-[clamp(9px,2cqw,12px)]">
 				<BuyerPhone beat={storyBeat} still={still} />
 				<SellerCard beat={storyBeat} still={still} />
 			</div>
 		</div>
-	);
-}
-
-export function PaymentHandshake() {
-	const points = [
-		m.handshake_point_1(),
-		m.handshake_point_2(),
-		m.handshake_point_3(),
-	];
-
-	return (
-		<section aria-labelledby="handshake-heading" className="bg-background">
-			<div className="mx-auto max-w-6xl px-5 py-20 md:px-8 md:py-32">
-				{/* The mock column gets the wider half: two panes need the room, and
-				    the copy column reads fine at 45%. */}
-				<div className="grid items-center gap-12 md:grid-cols-[0.9fr_1.1fr] md:gap-12 lg:gap-16">
-					<FadeIn>
-						<Eyebrow>{m.handshake_label()}</Eyebrow>
-						<h2
-							id="handshake-heading"
-							className="mt-4 text-3xl font-bold leading-[1.08] md:text-5xl"
-							style={{ letterSpacing: "-0.02em" }}
-						>
-							{m.handshake_heading()}
-						</h2>
-						<p className="mt-4 text-base leading-relaxed text-muted-foreground md:text-lg">
-							{m.handshake_body_1()}{" "}
-							<strong className="font-semibold text-foreground">
-								{m.handshake_body_strong()}
-							</strong>{" "}
-							{m.handshake_body_2()}
-						</p>
-						<ul className="mt-7 space-y-3.5">
-							{points.map((point) => (
-								<li
-									key={point}
-									className="flex gap-3 text-[15px] leading-relaxed text-foreground/80"
-								>
-									<Check className="mt-0.5 size-4 shrink-0 text-accent" />
-									{point}
-								</li>
-							))}
-						</ul>
-						<p className="mt-6 text-[13px] text-muted-foreground">
-							{m.handshake_note()}
-						</p>
-					</FadeIn>
-
-					<FadeIn delay={0.15}>
-						<HandshakePlay />
-					</FadeIn>
-				</div>
-			</div>
-		</section>
 	);
 }

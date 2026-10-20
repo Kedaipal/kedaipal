@@ -3,11 +3,13 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+	annualQuote,
 	ENTERPRISE_FROM_ORDERS,
 	LISTED_PLANS,
 	PLAN_CREDIT_GRANT,
 	PLAN_MONTHLY_PRICES,
 } from "../../../convex/lib/plans";
+import { m } from "../../paraglide/messages";
 import { PricingTeaser } from "./pricing-teaser";
 
 /**
@@ -15,7 +17,7 @@ import { PricingTeaser } from "./pricing-teaser";
  * z8r3fdfu31) and Enterprise (T6, z8r3fdkp8h): the Starter and Pro cards open
  * on their monthly credits, the sub says every plan includes an order
  * allowance, the taglines match `/pricing`, and the third card is Enterprise —
- * "Custom", no number, a "Talk to Arif" WhatsApp link where the others have a
+ * "Custom", no number, a "Get an Enterprise quote" WhatsApp link where the others have a
  * sign-up, and its unbuilt rows carry "Soon" instead of reading as included.
  */
 
@@ -94,7 +96,7 @@ describe("PricingTeaser — credits, and Enterprise by conversation", () => {
 		).toBeTruthy();
 	});
 
-	it("prices Enterprise as Custom and sends it to a chat with Arif, not a sign-up", () => {
+	it("prices Enterprise as Custom and sends it to a quote chat, not a sign-up", () => {
 		render(<PricingTeaser />);
 		expect(screen.getByText("Custom")).toBeTruthy();
 		expect(screen.queryByText(/Coming soon/i)).toBeNull();
@@ -102,7 +104,7 @@ describe("PricingTeaser — credits, and Enterprise by conversation", () => {
 		expect(
 			screen.getAllByRole("link", { name: /Start free — pay when you sell/ }),
 		).toHaveLength(2);
-		const talk = screen.getByRole("link", { name: /Talk to Arif/ });
+		const talk = screen.getByRole("link", { name: /Get an Enterprise quote/ });
 		const href = talk.getAttribute("href") ?? "";
 		expect(href).toContain("wa.me/60123456789");
 		expect(decodeURIComponent(href)).toContain("Kedaipal Enterprise");
@@ -160,5 +162,28 @@ describe("PricingTeaser — credits, and Enterprise by conversation", () => {
 		expect(text()).not.toMatch(/RM\s?\d/);
 		// Enterprise has no price in either currency.
 		expect(screen.getByText("Custom")).toBeTruthy();
+	});
+
+	it("offers the annual cycle: the toggle swaps the monthly number for the annual-effective one and says the year's total", () => {
+		render(<PricingTeaser />);
+		const annualMonthly = Math.floor(
+			annualQuote("pro", false, "MYR").effectiveMonthly / 100,
+		);
+		const annualTotal = annualQuote("pro", false, "MYR").annualTotal / 100;
+		expect(screen.queryByText(`RM ${annualMonthly}`)).toBeNull();
+		fireEvent.click(
+			screen.getByRole("button", {
+				name: new RegExp(`^${m.pricingpage_toggle_annual()}`),
+			}),
+		);
+		expect(screen.getByText(`RM ${annualMonthly}`)).toBeTruthy();
+		expect(
+			screen.getByText(
+				m.pricingpage_billed_annual({ total: `RM${annualTotal}` }),
+			),
+		).toBeTruthy();
+		expect(screen.getByText(m.pricingpage_annual_badge())).toBeTruthy();
+		// Credits stay monthly on annual, said under the toggle.
+		expect(screen.getByText(m.pricingpage_annual_credits_note())).toBeTruthy();
 	});
 });
