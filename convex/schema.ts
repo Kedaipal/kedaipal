@@ -2804,7 +2804,11 @@ export default defineSchema({
 		// Provider-qualified since Delyva (86eyjpv6z): two providers' order ids
 		// are both opaque strings, so a bare providerOrderId index + .unique()
 		// would let a cross-provider collision throw in a webhook handler.
-		.index("by_provider_order", ["provider", "providerOrderId"]),
+		.index("by_provider_order", ["provider", "providerOrderId"])
+		// The EasyParcel status cron's read (z8r3fdcje2): that API has no
+		// webhook, so a poll sweeps the ACTIVE easyparcel jobs — one indexed
+		// query per active status, never a table scan.
+		.index("by_provider_status", ["provider", "status"]),
 
 	// --- Counter Checkout (in-person order spine, docs/counter-checkout.md) ----
 	// A seller-initiated, in-person checkout session. The seller opens Counter
