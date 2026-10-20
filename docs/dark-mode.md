@@ -14,6 +14,10 @@ It has to be on all of them, not just the storefront. A buyer who ordered over W
 
 The expired / already-claimed / not-found screens are the deliberate exception: they are dead ends a buyer reads and leaves, and a theme control there is chrome on a page nobody dwells on.
 
+**Sellers, in passing** — the same sun/moon rides the dashboard's mobile header (beside the account button) and the sidebar's foot (icon in the collapsed rail, with its verb when expanded). It writes the same preference the Appearance screen does; the two can never disagree, because `lib/theme.ts` is the one store both read. Appearance stays the home of "match device".
+
+**Everyone else** — the marketing nav (beside the language switcher), the legal pages' header, and `/stores` (beside the region switch, in both the hero and the scrolled header). `theme-routes.test.ts` fails if a route ships with none of these and is not classified as a widget/redirect page that inherits.
+
 Both write the same key, because they are the same browser on the same device. The Appearance screen says so in as many words ("Applies to this device only"), along with the fact that a seller's choice does not reach their buyers.
 
 ## How it works
@@ -64,6 +68,10 @@ In light mode a handful of surfaces invert against the page: `bg-foreground text
 
 Progress-bar fills and dots that use `bg-foreground` as a neutral ink (`customers-card`, `sources-card`) are left alone: a near-white bar on a dark card is a legible neutral, not a slab.
 
+### Navy, never black
+
+Black is not a Kedaipal colour. Arif named it first for the pill toggles (19 Oct 2026 — "use our navy blue, not black") and Zaki for the storefront badges and the countdown (20 Oct): `--primary` at 11% lightness reads **black** at badge size, so a `bg-primary` sale badge, a `bg-primary/90` sale strip and an 11% receipt-paper countdown all looked like black stickers on the product. The dark ink is **`--segment`**: the same navy hue a step lighter — 22% in light, 34% in dark — as `bg-segment text-segment-foreground`. Buttons stay `bg-primary`; the countdown's paper and cut moved up the same step. The coverage gate now **fails on any solid black-family surface** (`bg-black`, `bg-slate-900`…); a translucent scrim is fine, and the one legitimate black object — a phone bezel inside a product mockup — lives in exempt files.
+
 ## Scope: where dark mode applies
 
 `isThemedRouteId` decides, keyed on matched **route ids** (not pathnames) so the router's own precedence settles `/pricing` vs `/$slug` — the same reason [`buyer-routes.ts`](../src/lib/buyer-routes.ts) does. The shell emits the pre-paint script only on themed routes and actively strips the class everywhere else.
@@ -73,12 +81,13 @@ Progress-bar fills and dots that use `bg-foreground` as a neutral ink (`customer
 | Seller app (`/app/*`) | Yes |
 | Storefront (`/$slug`, product, category, checkout) | Yes |
 | Order tracking (`/track/$token`), claim links (`/claim/$token`) | Yes, with their own toggle |
-| Marketing site (`/`, `/pricing`, `/cost`, legal) | **No** |
-| Sign-in / sign-up / onboarding | **No** |
-| Marketplace directory (`/stores`), team invites (`/join/$token`), referral landing (`/referral/$slug`) | **No** — not themed routes today; see Known gaps for the `/stores` seam |
+| Marketing site (`/`, `/pricing`, `/cost`), legal pages | Yes — toggle in the nav / legal header |
+| Sign-in / sign-up / onboarding | Yes — Clerk's widgets take the theme through `clerkAppearance` (no control of their own; they inherit) |
+| Marketplace directory (`/stores`) | Yes — toggle beside the region switch, in the hero and the compact header |
+| Team invites (`/join/$token`), referral landing (`/referral/$slug`) | Yes — inherit; one-tap pages with no chrome of their own |
 | Store poster, QR codes (preview and exported PNG) | **No** — theme-immune by construction, and a QR on a dark ground does not scan |
 
-The marketing site is out of scope by decision, not oversight: it is a designed brand surface with hardcoded mesh backgrounds (`bg-hero-mesh` is literally `hsl(0 0% 100%)`) and a `bg-primary` footer whose token flips hue to mint in dark. Doing it properly is its own ticket. `theme-routes.test.ts` pins all of the above.
+The first cut (Aug 2026) themed only the app and the storefront and left the marketing site light, on the grounds that it was a designed brand surface with hardcoded mesh backgrounds and a `bg-primary` footer whose token flips hue to mint. That scope stopped at a seam every buyer footer linked straight across — "Discover more stores" landed a dark-mode buyer on a white directory — so on 20 Oct 2026 Zaki widened it to everything this repo renders. The blog is the only exception, and only because it is a separate repo. What that took: a `.dark` half for `bg-hero-mesh` in CSS, the landing footer and the seller-flow stage swapped to the card surface in dark (where `bg-primary` would have gone mint), the marquee onto the emphasis-panel recipe, Clerk handed our dark values on the one `<ClerkProvider>`, and the three acted-out product mockups exempted from the colour gate as what they are — pictures of the app on a phone, bezel and all.
 
 ## The buyer's brand surfaces
 
@@ -105,7 +114,6 @@ KP_WRITE_DARK_BUDGET=1 pnpm vitest run src/lib/dark-mode-coverage.test.ts
 
 ## Known gaps
 
-- **`/stores` is light while the storefront that links to it may be dark.** Every buyer footer carries "Discover more stores", so a dark-mode buyer who taps it lands on a light directory. `/stores` is a public marketing-shaped page with no `dark:` work yet, so it is classified unthemed rather than half-themed. Theming it is a scoped follow-up, not a one-liner; until then the seam is known and deliberate.
 - The marketing site, sign-in and onboarding stay light (above).
 - `theme-color` meta and `site.webmanifest` stay pinned to `#0F172A`. It is a dark navy that reads correctly against both themes; splitting it per theme is churn for a 2%-lightness seam in the browser chrome.
 - The `/claim` dead-end screens (expired, already claimed, not found) carry no toggle — see the reasoning above. If a buyer ever needs one there, the same three lines drop in.

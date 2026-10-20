@@ -7,6 +7,7 @@ import { cn } from "../../lib/utils";
 import { RegionToggle } from "../landing/landing-ui";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
+import { ThemeToggle } from "../ui/theme-toggle";
 
 /**
  * /stores' compact header (z8r3fdr6mv): once the hero scrolls past, a
@@ -154,6 +155,7 @@ export function StoresCompactHeader({
 						onChange={onRegion}
 						className="[&>button]:min-w-11 [&>button]:px-2.5 lg:[&>button]:min-w-16 lg:[&>button]:px-4"
 					/>
+					<ThemeToggle variant="ghost" />
 					<Button
 						asChild
 						className="tap-target hidden bg-primary px-4 font-bold text-primary-foreground hover:bg-primary/90 lg:inline-flex"

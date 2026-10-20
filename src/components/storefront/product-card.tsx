@@ -282,8 +282,12 @@ export function ProductCard({
 					<span
 						className={cn(
 							"absolute left-2 top-2 flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide shadow-sm",
+							// `bg-segment`, not `bg-primary`: the house navy a step lighter
+							// than --primary, because at 11% a 20px badge reads BLACK — and
+							// black is not a Kedaipal colour. Navy in both themes (34% in
+							// dark), where bg-primary would have flipped it to mint.
 							promoEndsAt !== undefined
-								? "bg-primary text-primary-foreground"
+								? "bg-segment text-segment-foreground"
 								: "bg-accent text-accent-foreground",
 						)}
 					>
@@ -300,7 +304,7 @@ export function ProductCard({
 				    live) and the units left, so the card sells the urgency without
 				    adding a row to the text zone. */}
 				{hasSaleStrip ? (
-					<span className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-primary/90 px-2 py-1 text-[11px] text-primary-foreground backdrop-blur-sm">
+					<span className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-segment/90 px-2 py-1 text-[11px] text-segment-foreground backdrop-blur-sm">
 						{countdownAt !== undefined ? (
 							<span className="flex items-center gap-1 font-semibold tabular-nums">
 								<Zap className="size-3 shrink-0" aria-hidden />

@@ -35,13 +35,14 @@
  * here must agree with that script — change one, change the other, and
  * `theme.dom.test.ts` pins them together with a truth table.
  *
- * WHERE IT APPLIES: the seller app (`/app/*`) and the buyer surfaces
- * (storefront, /track, /claim) only — see `isThemedRouteId`. The marketing site
- * stays light: it is a designed brand surface with hardcoded mesh backgrounds,
- * and it is deliberately out of this ticket's scope.
+ * WHERE IT APPLIES: everywhere this repo renders — seller app, buyer surfaces,
+ * the marketing site, legal pages, /stores, sign-in (Clerk takes the theme
+ * through `clerkAppearance`). The first cut themed only the app and the
+ * storefront and left the marketing site light; that stopped at a seam every
+ * buyer footer linked straight across (Zaki, 20 Oct 2026). Only the blog is
+ * outside — it is a separate repo. The print/export surfaces (poster, QR) are
+ * theme-immune by construction, not by scope.
  */
-
-import { isBuyerRouteId } from "./buyer-routes";
 
 export type ThemePreference = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";
@@ -105,30 +106,6 @@ export function applyResolvedTheme(resolved: ResolvedTheme): void {
 	const root = document.documentElement;
 	root.classList.toggle("dark", resolved === "dark");
 	root.style.colorScheme = resolved;
-}
-
-/**
- * Puts the document back to light regardless of preference — for the marketing
- * routes, which are out of scope (see the header note) and must never inherit a
- * seller's dark choice when they navigate `/app` → `/pricing`.
- */
-export function clearAppliedTheme(): void {
-	if (typeof document === "undefined") return;
-	const root = document.documentElement;
-	root.classList.remove("dark");
-	root.style.colorScheme = "light";
-}
-
-/**
- * Which routes the theme applies to. Uses matched ROUTE IDS, not pathnames, so
- * the router's own precedence settles `/pricing` (marketing, always light) vs
- * `/$slug` (a storefront, themed) — the same reason `buyer-routes.ts` keys on
- * ids. Adding a themed surface means adding it here; `theme-routes.test.ts`
- * fails if an id listed here stops existing.
- */
-export function isThemedRouteId(routeId: string): boolean {
-	if (isBuyerRouteId(routeId)) return true;
-	return routeId === "/app" || routeId.startsWith("/app/");
 }
 
 // --- external store -------------------------------------------------------

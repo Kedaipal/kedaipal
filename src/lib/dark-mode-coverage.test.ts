@@ -68,8 +68,10 @@ const SATURATED_BG_RE = new RegExp(
 );
 
 /**
- * Directories whose files can render with `.dark` on <html>. Mirrors
- * `isThemedRouteId` — keep the two in step.
+ * Directories whose files can render with `.dark` on <html> — since 20 Oct
+ * 2026 that is every directory of UI (the first cut themed only the app and
+ * the storefront; the marketing site, /stores and the legal pages joined when
+ * the seam between them stopped being defensible).
  */
 const THEMED_COMPONENT_DIRS = [
 	"components/dashboard",
@@ -94,9 +96,15 @@ const THEMED_COMPONENT_DIRS = [
 	"components/products",
 	"components/promotions",
 	"components/vouchers",
+	"components/cost",
+	"components/landing",
+	"components/legal",
+	"components/onboarding",
+	"components/marketplace",
 ];
 
-const THEMED_ROUTE_RE = /^routes[/\\](app\.|\$slug|track\.|claim\.)/;
+// Every route. Only the blog is outside the theme, and it is another repo.
+const THEMED_ROUTE_RE = /^routes[/\\]/;
 
 /**
  * Exempt inside themed scope, with the reason. These are not oversights: a
@@ -113,15 +121,25 @@ const EXEMPT_FILES: Record<string, string> = {
 		"fullscreen lightbox chrome on a fixed bg-black/90 ground",
 	"components/storefront/category-rail.tsx":
 		"the deterministic fallback gradients — saturated decorative fills standing in for photography, read under the same scrim a real photo gets; a per-line marker on each of the five would be noise",
+	"components/landing/hero-stage.tsx":
+		"the product acted out on a phone — a PICTURE of the app, with its own light screen and black bezel in both themes; a screenshot does not follow the viewer's theme",
+	"components/landing/payment-handshake.tsx":
+		"the payment flow acted out on a phone — same reasoning as hero-stage",
+	"components/landing/pay-now.tsx":
+		"the online-payment flow acted out on a phone — same reasoning as hero-stage",
+	"components/marketplace/showcase-stage.tsx":
+		"showcase art: every mood is a dark ground with light text, read the same in both themes (styles.css, kp-showcase-*)",
+	"components/marketplace/showcase-ticket.tsx":
+		"showcase art, as showcase-stage",
 };
 
 /** Whole subtrees that never see the theme. */
 const EXEMPT_DIRS = ["components/poster"];
 
 /**
- * Directories that never render under `.dark`, with the reason: the marketing
- * site and the pre-sign-in flow are deliberately light (see lib/theme.ts), and
- * `/stores` is not a themed route.
+ * Directories that never render under `.dark`, with the reason. Empty since
+ * 20 Oct 2026 — everything renders under the theme now — but kept so a future
+ * unthemed directory has a home and the classification guard stays exhaustive.
  *
  * Every directory under src/components must be in THIS map, in
  * THEMED_COMPONENT_DIRS or in EXEMPT_DIRS — the test below fails otherwise.
@@ -129,15 +147,19 @@ const EXEMPT_DIRS = ["components/poster"];
  * exactly how the list above went stale between August and October while
  * `home/`, `promotions/`, `vouchers/` and seven others shipped unscanned.
  */
-const UNTHEMED_COMPONENT_DIRS: Record<string, string> = {
-	"components/cost": "/cost calculator — marketing site, always light",
-	"components/landing": "landing page — marketing site, always light",
-	"components/legal": "legal pages — marketing site, always light",
-	"components/onboarding":
-		"pre-sign-in onboarding — light, the same scope line i18n draws",
-	"components/marketplace":
-		"/stores directory — not a themed route today (docs/dark-mode.md)",
-};
+const UNTHEMED_COMPONENT_DIRS: Record<string, string> = {};
+
+/**
+ * Black is not a Kedaipal colour. The dark ink is NAVY: `bg-segment` for chips,
+ * badges, pill toggles and the countdown's paper (`--primary` at 11% lightness
+ * reads black at that size — Arif, 19 Oct 2026, "use our navy blue, not
+ * black"; Zaki, 20 Oct, for the badges and the countdown), `bg-primary` for
+ * buttons. The one place black belongs is a phone bezel inside a product
+ * mockup, and those files are exempt above. Translucent `bg-black/NN` scrims
+ * are not ink and stay allowed.
+ */
+const BLACK_INK_RE =
+	/\b(?:bg|border|from|via|to)-(?:black|(?:slate|zinc|neutral|gray|stone)-9[05]0)\b(?!\/)/g;
 
 const SKIP_DIRS = new Set(["paraglide", "node_modules"]);
 
@@ -335,7 +357,37 @@ if (process.env.KP_WRITE_DARK_BUDGET) {
 	);
 }
 
+function blackInkSites(abs: string): string[] {
+	const lines = readFileSync(abs, "utf8").split("\n");
+	const mask = commentMask(lines);
+	const out: string[] = [];
+	lines.forEach((line, i) => {
+		if (mask[i]) return;
+		const hits = [...line.matchAll(BLACK_INK_RE)].map((m) => m[0]);
+		if (hits.length === 0 || optedOut(lines, mask, i)) return;
+		out.push(`${i + 1}: ${[...new Set(hits)].join(" ")}`);
+	});
+	return out;
+}
+
 describe("dark-mode colour coverage", () => {
+	test("no solid black surface — the dark ink is navy", () => {
+		const found = FILES.flatMap((f) => {
+			const sites = blackInkSites(f.abs);
+			return sites.length ? [`${f.rel}: ${sites.join("; ")}`] : [];
+		});
+		expect(
+			found.sort(),
+			[
+				"Black is not a Kedaipal colour. For a dark badge, chip, pill or band",
+				"use `bg-segment text-segment-foreground` (navy a step lighter than",
+				"--primary, in both themes); for a button use `bg-primary`.",
+				"A translucent scrim (`bg-black/40`) is fine. If this really is a",
+				"black object — a device bezel — mark the line `dark-ok` with the reason.",
+			].join("\n"),
+		).toEqual([]);
+	});
+
 	test("every component directory is classified: themed, unthemed or exempt", () => {
 		const dirs = readdirSync(join(__dirname, "..", "components"), {
 			withFileTypes: true,

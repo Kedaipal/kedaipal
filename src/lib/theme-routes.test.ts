@@ -1,116 +1,116 @@
 // @vitest-environment node
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { BUYER_ROUTE_IDS } from "./buyer-routes";
-import { isThemedRouteId } from "./theme";
 
 /**
- * Which surfaces dark mode reaches (z8r3fdadub).
+ * Dark mode reaches every page, and every page a visitor dwells on carries a
+ * way to flip it (z8r3fdadub).
  *
- * The shell emits the pre-paint theme script only on themed routes and strips
- * the class everywhere else, so a mistake here is visible two ways: a marketing
- * page inheriting a seller's dark preference, or an app page that never goes
- * dark at all. Both are silent — nothing throws — hence this test.
+ * The shell emits the pre-paint script unconditionally and Clerk's widgets
+ * take the theme through the provider — both asserted below from source. What
+ * the rest of this file guards is the CHROME: a route with no toggle is a page
+ * the visitor cannot fix, and the first cut shipped exactly that gap on /track
+ * (a WhatsApp-ordered buyer never sees a storefront). Every route file must
+ * therefore either render a piece of chrome that carries `<ThemeToggle />`, or
+ * be listed in NO_CONTROL with the reason — a closed list, so a new route has
+ * to be classified before it ships.
  */
-describe("themed route ids", () => {
-	const routeTree = readFileSync(
-		join(__dirname, "../routeTree.gen.ts"),
-		"utf8",
-	);
+const src = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
 
-	test("the seller app is themed", () => {
-		expect(isThemedRouteId("/app")).toBe(true);
-		expect(isThemedRouteId("/app/")).toBe(true);
-		expect(isThemedRouteId("/app/orders")).toBe(true);
-		expect(isThemedRouteId("/app/settings")).toBe(true);
-		expect(isThemedRouteId("/app/admin/sellers")).toBe(true);
+/** Chrome that carries the toggle, and how a route file reveals it renders it. */
+const CHROME: ReadonlyArray<{ file: string; rendersAs: RegExp }> = [
+	{
+		file: "components/storefront/storefront-footer.tsx",
+		rendersAs: /StorefrontFooter/,
+	},
+	{ file: "components/landing/nav.tsx", rendersAs: /<Nav\b|LandingPage/ },
+	{ file: "components/legal/legal-layout.tsx", rendersAs: /LegalLayout/ },
+	{
+		file: "components/marketplace/stores-compact-header.tsx",
+		rendersAs: /StoresCompactHeader/,
+	},
+];
+
+/**
+ * Routes that render no toggle of their own and INHERIT the theme instead.
+ * Each is a widget, a redirect or a one-tap page nobody dwells on; a control
+ * there would be chrome on a page the visitor reads and leaves.
+ */
+const NO_CONTROL: Record<string, string> = {
+	"__root.tsx": "the shell itself — it emits the theme, it does not sit in it",
+	"sign-in.$.tsx": "Clerk's widget, themed through clerkAppearance",
+	"sign-up.$.tsx": "Clerk's widget, themed through clerkAppearance",
+	"onboarding.tsx": "Clerk's SignUp plus a one-time form",
+	"join.$token.tsx": "one-tap invite acceptance",
+	"referral.$slug.tsx": "a referral landing that hands straight off",
+	"sitemap[.]xml.ts": "not a page",
+};
+
+describe("the theme reaches every page", () => {
+	test("the shell emits the pre-paint script on every route", () => {
+		const root = src("routes/__root.tsx");
+		expect(root).toContain("THEME_INIT_SCRIPT");
+		// The first cut gated it on a themed-route check; a stale preference
+		// then could never darken the marketing site. There is no such gate now.
+		expect(root).not.toMatch(/themed\s*\?/);
+		expect(root).toContain("useThemeSync()");
 	});
 
-	test("buyer surfaces are themed", () => {
-		expect(isThemedRouteId("/$slug")).toBe(true);
-		expect(isThemedRouteId("/$slug_/checkout")).toBe(true);
-		expect(isThemedRouteId("/$slug_/p/$productSlug")).toBe(true);
-		expect(isThemedRouteId("/track/$token")).toBe(true);
-		expect(isThemedRouteId("/claim/$token")).toBe(true);
+	test("Clerk's widgets take the theme", () => {
+		expect(src("routes/__root.tsx")).toMatch(/appearance=\{clerkAppearance\(/);
 	});
 
-	test("the marketing site is NOT themed", () => {
-		// These are designed brand surfaces with hardcoded mesh backgrounds and a
-		// `bg-primary` footer whose token flips hue. Out of scope by decision, not
-		// by oversight — see lib/theme.ts.
-		for (const id of [
-			"/",
-			"/pricing",
-			"/cost",
-			"/privacy",
-			"/terms",
-			"/acceptable-use",
-			"/onboarding",
-			"__root__",
-		]) {
-			expect(isThemedRouteId(id), `${id} must stay light`).toBe(false);
-		}
-	});
-
-	test("sign-in and sign-up stay light", () => {
-		// Clerk renders its own widget with its own appearance config; theming it
-		// is a separate job nobody has done.
-		expect(isThemedRouteId("/sign-in/$")).toBe(false);
-		expect(isThemedRouteId("/sign-up/$")).toBe(false);
-	});
-
-	test("a prefix collision cannot smuggle a route in", () => {
-		// `startsWith("/app")` alone would match a future `/apply` or `/appeal`.
-		expect(isThemedRouteId("/apply")).toBe(false);
-		expect(isThemedRouteId("/appeal/$id")).toBe(false);
-		// And confirm no such route exists today, so the guard above is honest.
-		expect(routeTree).not.toMatch(/id: '\/app(?!\/|')/);
-	});
-
-	test("every buyer page offers a theme control", () => {
-		// The seller reaches Appearance through Settings. A buyer has no settings
-		// screen, so the control has to be ON the page — and it cannot be only on
-		// the storefront: someone who ordered over WhatsApp may never see one, and
-		// /track would then be a page they cannot re-theme at all.
-		//
-		// Indirect is fine (the storefront family renders it inside
-		// StorefrontFooter); the assertion below proves that indirection is real
-		// rather than assumed.
-		const footer = readFileSync(
-			join(__dirname, "../components/storefront/storefront-footer.tsx"),
-			"utf8",
+	test("every piece of chrome that claims the toggle really carries it", () => {
+		for (const c of CHROME)
+			expect(src(c.file), c.file).toContain("ThemeToggle");
+		// The landing page composes Nav; index.tsx reveals itself as LandingPage.
+		expect(src("components/landing/landing-page.tsx")).toMatch(/<Nav\b/);
+		// The /app shell: its header and sidebar carry the toggle, so every
+		// app.* route is covered by rendering inside app.tsx.
+		expect(src("components/dashboard/mobile-header.tsx")).toContain(
+			"ThemeToggle",
 		);
-		expect(footer).toContain("ThemeToggle");
+		expect(src("components/dashboard/sidebar.tsx")).toContain("ThemeToggle");
+		expect(src("routes/app.tsx")).toMatch(/MobileHeader/);
+		expect(src("routes/app.tsx")).toMatch(/<Sidebar\b/);
+	});
+
+	test("every route carries a theme control or is classified as inheriting", () => {
+		const files = readdirSync(join(__dirname, "../routes")).filter(
+			(f) => /\.tsx?$/.test(f) && !/\.test\./.test(f),
+		);
+		expect(files.length).toBeGreaterThan(20);
 
 		const missing: string[] = [];
-		for (const id of BUYER_ROUTE_IDS) {
-			// Route ids map to flat route filenames: "/track/$token" →
-			// "track.$token.tsx".
-			const file = `${id.slice(1).replace(/\//g, ".")}.tsx`;
-			const source = readFileSync(join(__dirname, "../routes", file), "utf8");
-			if (!/ThemeToggle|StorefrontFooter/.test(source)) missing.push(file);
+		for (const file of files) {
+			if (file in NO_CONTROL) continue;
+			if (file.startsWith("app.")) continue; // the /app shell carries it
+			const source = src(`routes/${file}`);
+			const ok =
+				/ThemeToggle/.test(source) ||
+				CHROME.some((c) => c.rendersAs.test(source));
+			if (!ok) missing.push(file);
 		}
 
 		expect(
 			missing.sort(),
 			[
-				"These buyer routes render no theme control, so a shopper who lands",
-				"there has no way to override the theme their device picked.",
+				"These routes render no theme control, so a visitor who lands there has",
+				"no way to override the theme their device picked.",
 				"",
-				"Add `<ThemeToggle />` low on the page (the storefront and /track put it",
-				"in the bottom utility row — keep the slot consistent so someone who",
-				"finds it once finds it everywhere), or render StorefrontFooter.",
+				"Render chrome that carries it (StorefrontFooter, Nav, LegalLayout, the",
+				"/stores headers), place `<ThemeToggle />` in the page's own utility row,",
+				"or — for a widget / redirect page nobody dwells on — add the file to",
+				"NO_CONTROL with the reason.",
 			].join("\n"),
 		).toEqual([]);
 	});
 
-	test("every themed app route id in the tree is classified", () => {
-		// Catches the reverse drift: a new /app route that somehow fails the check.
-		const ids = [...routeTree.matchAll(/id: '(\/app[^']*)'/g)].map((m) => m[1]);
-		expect(ids.length).toBeGreaterThan(10);
-		for (const id of ids) {
-			expect(isThemedRouteId(id), `${id} should be themed`).toBe(true);
+	test("NO_CONTROL names only routes that exist", () => {
+		const files = new Set(readdirSync(join(__dirname, "../routes")));
+		for (const file of Object.keys(NO_CONTROL)) {
+			expect(files.has(file), `${file} is listed but gone`).toBe(true);
 		}
 	});
 });

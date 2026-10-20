@@ -28,7 +28,7 @@ Defined as HSL CSS vars in `:root` + `.dark` and exposed as Tailwind colors (`bg
 | `border` / `input` / `ring` | hairlines, field borders, focus ring (ring = mint) |
 | `sidebar-*` | dashboard chrome |
 
-Dark mode: `.dark` class on an ancestor; **mint becomes `primary`**. Every new surface must read correctly in both — use tokens and it's automatic. Full behaviour, scope and the toggle: [`dark-mode.md`](./dark-mode.md).
+Dark mode: `.dark` class on an ancestor; **mint becomes `primary`**. It reaches every page this repo renders (the blog is a separate repo). Every new surface must read correctly in both — use tokens and it's automatic. Full behaviour, scope and the toggle: [`dark-mode.md`](./dark-mode.md).
 
 ### Writing UI that survives dark mode
 
@@ -40,6 +40,7 @@ Dark mode: `.dark` class on an ancestor; **mint becomes `primary`**. Every new s
    - **Primary action button, selected chip, rank badge** → `bg-primary text-background dark:text-primary-foreground`. In light the fill is byte-identical (`--primary` *is* navy) and the label stays `text-background` — `#fff`, not `text-primary-foreground`'s `hsl(210 40% 98%)`; adopting the recipe must never repaint the theme every current user is in. In dark: solid mint, navy label, the same as every other primary control. The full table, with the panel and avatar recipes and the one sanctioned exception, is in [`dark-mode.md`](./dark-mode.md#inverted-surfaces--the-softened-recipe).
    - **Emphasis panel** (the due-today banner, the Home hero stat, the settings identity card) → keep the light classes and add `dark:bg-accent/12 dark:border dark:border-accent/30 dark:text-foreground`. Check nested children too — a `text-background/75` label inside becomes invisible.
    - **Avatar / identity chip** → add `dark:bg-accent/15 dark:text-accent-emphasis`.
+6. **Black is not a Kedaipal colour — the dark ink is navy.** `--primary` at 11% lightness reads *black* at badge and pill size (Arif, 19 Oct 2026; Zaki, 20 Oct). For a dark chip, badge, pill toggle or band use **`bg-segment text-segment-foreground`** — the same navy a step lighter, 22% in light and 34% in dark, so it is navy in both. Buttons stay `bg-primary`. Never `bg-black` / `bg-slate-900` and friends as a surface: **machine-enforced** by the same coverage test, which fails on any solid black-family surface. A phone bezel in a product mockup is the one black object, and those files are exempt with the reason.
 
    The one sanctioned exception is `order-bulk-bar.tsx`: a transient floating toolbar that is *supposed* to invert against whatever is behind it, and it says so in a comment.
 

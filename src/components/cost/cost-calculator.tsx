@@ -464,12 +464,14 @@ function QualifiedBody({ result, ratioLabel, currency }: ResultCardProps) {
 					<dt className="text-cta-mesh-foreground/70">
 						{m.cost_missed_revenue()}
 					</dt>
+					{/* dark-ok: on bg-cta-mesh, which is deep navy in BOTH themes. */}
 					<dd className="font-bold tabular-nums text-red-300">
 						{money(result.missedRevenue, currency)}
 					</dd>
 				</div>
 				<div className="flex items-center justify-between gap-4 rounded-xl bg-white/[0.06] px-4 py-3">
 					<dt className="text-cta-mesh-foreground/70">{m.cost_chase_cost()}</dt>
+					{/* dark-ok: on bg-cta-mesh, which is deep navy in BOTH themes. */}
 					<dd className="font-bold tabular-nums text-red-300">
 						{money(result.chaseCost, currency)}
 					</dd>

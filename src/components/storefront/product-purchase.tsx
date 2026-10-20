@@ -1180,7 +1180,7 @@ export function GoToCheckoutBar({
 			<span className="flex items-center gap-2.5 text-sm font-semibold text-foreground">
 				<span className="relative flex size-6 items-center justify-center">
 					<ShoppingBag className="size-5 text-accent" />
-					<span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+					<span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-segment px-1 text-[10px] font-bold text-segment-foreground">
 						{cartItemCount}
 					</span>
 				</span>

@@ -1,0 +1,40 @@
+import type { ClerkProvider } from "@clerk/tanstack-react-start";
+import type { ComponentProps } from "react";
+import type { ResolvedTheme } from "./theme";
+
+type Appearance = NonNullable<
+	ComponentProps<typeof ClerkProvider>["appearance"]
+>;
+
+/**
+ * Clerk's widgets (sign-in, sign-up, the UserButton menu) draw their own
+ * surfaces from their own palette, so our `.dark` tokens never reach them: in
+ * dark mode a sign-in card would float as a white plate. This hands Clerk the
+ * same values `.dark` gives everything else (z8r3fdadub), on the ONE
+ * `<ClerkProvider>` so every Clerk surface in the app agrees.
+ *
+ * Light mode passes nothing and keeps Clerk's defaults — the brief was a dark
+ * theme, not a restyle of the sign-in page sellers already know. `@clerk/themes`
+ * (its `dark` base theme) is not a dependency; these `variables` are the public
+ * knobs and need no package.
+ *
+ * Literal hsl strings on purpose: Clerk reads these at its own render, outside
+ * our stylesheet, so `var(--card)` is not an option. They mirror `.dark` in
+ * `styles.css`; `theme.dom.test.ts` pins the two together.
+ */
+export const DARK_CLERK_VARIABLES = {
+	colorBackground: "hsl(222 47% 9%)",
+	colorText: "hsl(210 40% 98%)",
+	colorTextSecondary: "hsl(215 20% 65%)",
+	colorPrimary: "hsl(160 84% 39%)",
+	colorInputBackground: "hsl(217 33% 17%)",
+	colorInputText: "hsl(210 40% 98%)",
+	colorNeutral: "hsl(210 40% 98%)",
+	colorDanger: "hsl(0 63% 45%)",
+} as const;
+
+export function clerkAppearance(
+	resolved: ResolvedTheme,
+): Appearance | undefined {
+	return resolved === "dark" ? { variables: DARK_CLERK_VARIABLES } : undefined;
+}

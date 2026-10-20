@@ -1,21 +1,28 @@
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "../../hooks/useTheme";
+import { cn } from "../../lib/utils";
 
 /**
- * The buyer's theme control (z8r3fdadub).
+ * The quick theme control (z8r3fdadub). Two states, not three: the page has
+ * already matched the device on arrival, so the only thing left worth offering
+ * in passing is "actually, the other one". Tapping it writes an explicit
+ * preference to this browser; the seller's three-way picker (Settings → App →
+ * Appearance) is where "match device" can be chosen again.
  *
- * TWO states, not three, unlike the seller's Appearance settings. A shopper who
- * arrived from a WhatsApp link is here to place an order; the page has already
- * matched their phone by default, so the only thing left worth offering is
- * "actually, the other one". Exposing a "match device" option would mean
- * explaining a concept to solve a problem they don't have. Tapping it writes an
- * explicit preference to this browser, which is exactly what a buyer means by
- * tapping it.
+ * It rides every piece of chrome — buyer footers, the marketing nav, the
+ * /stores header, the dashboard header and sidebar — because a theme toggle
+ * that exists on some pages and not others is a page the visitor can't fix.
  *
- * It lives in the storefront FOOTER on purpose: a theme switch must never
- * compete with the buy button. Nothing above the fold moves.
+ * `outline` is the footer form (a bordered disc beside the powered-by badge);
+ * `ghost` matches the icon buttons it sits between in a nav bar.
  */
-export function ThemeToggle({ className }: { className?: string }) {
+export function ThemeToggle({
+	className,
+	variant = "outline",
+}: {
+	className?: string;
+	variant?: "outline" | "ghost";
+}) {
 	const { resolved, setPreference } = useTheme();
 	const goingDark = resolved === "light";
 	const label = goingDark ? "Switch to dark mode" : "Switch to light mode";
@@ -26,9 +33,11 @@ export function ThemeToggle({ className }: { className?: string }) {
 			onClick={() => setPreference(goingDark ? "dark" : "light")}
 			aria-label={label}
 			title={label}
-			className={`flex size-11 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-				className ?? ""
-			}`}
+			className={cn(
+				"flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+				variant === "outline" && "border border-border",
+				className,
+			)}
 		>
 			{/* Both glyphs render and CSS picks one. `resolved` reports light during
 			    SSR and the first hydration pass — the class is already on <html> by

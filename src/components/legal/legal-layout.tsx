@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { AppImage } from "../ui/app-image";
+import { ThemeToggle } from "../ui/theme-toggle";
 
 interface LegalLayoutProps {
 	/** Document title rendered as the page H1. */
@@ -38,12 +39,15 @@ export function LegalLayout({
 							priority
 						/>
 					</Link>
-					<Link
-						to="/"
-						className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
-					>
-						← Back to home
-					</Link>
+					<div className="flex items-center gap-1">
+						<ThemeToggle variant="ghost" />
+						<Link
+							to="/"
+							className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+						>
+							← Back to home
+						</Link>
+					</div>
 				</div>
 			</header>
 

@@ -11,6 +11,7 @@ import { getLocale, locales, setLocale } from "../../paraglide/runtime";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { ThemeToggle } from "../ui/theme-toggle";
 import { DemoPill } from "./landing-ui";
 
 // Short trigger label + full dropdown label per locale — keeps the button
@@ -273,6 +274,7 @@ export function Nav() {
 							className="mx-2 hidden h-6 w-px bg-border lg:block"
 						/>
 						<LanguageSwitcher />
+						<ThemeToggle variant="ghost" />
 						<NavAuthCta />
 						<Button
 							type="button"

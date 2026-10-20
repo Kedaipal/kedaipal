@@ -14,8 +14,9 @@ import { Toaster } from "sonner";
 import type { Country } from "../../convex/lib/country";
 import { useClarity } from "../hooks/useClarity";
 import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
-import { useThemeScope } from "../hooks/useTheme";
+import { useTheme, useThemeSync } from "../hooks/useTheme";
 import { isBuyerRouteId } from "../lib/buyer-routes";
+import { clerkAppearance } from "../lib/clerk-appearance";
 import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
 import { readVisitorRegion } from "../lib/geo-region";
@@ -97,6 +98,8 @@ function Providers({ children }: { children: React.ReactNode }) {
 	// subtree; that crossing is rare (storefront → landing) and a clean remount
 	// is exactly what a provider swap needs.
 	const isBuyerSurface = useMatches().some((m) => isBuyerRouteId(m.routeId));
+	// Clerk paints its own widgets from its own palette; hand it ours in dark.
+	const { resolved } = useTheme();
 	const publishableKey = clientEnv.VITE_CLERK_PUBLISHABLE_KEY;
 	if (!publishableKey || !clientEnv.VITE_CONVEX_URL) {
 		return <SetupNotice />;
@@ -113,7 +116,10 @@ function Providers({ children }: { children: React.ReactNode }) {
 			{isBuyerSurface ? (
 				<ConvexProvider client={convex}>{children}</ConvexProvider>
 			) : (
-				<ClerkProvider publishableKey={publishableKey}>
+				<ClerkProvider
+					publishableKey={publishableKey}
+					appearance={clerkAppearance(resolved)}
+				>
 					<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
 						{children}
 					</ConvexProviderWithClerk>
@@ -152,24 +158,21 @@ function SetupNotice() {
 function RootDocument({ children }: { children: React.ReactNode }) {
 	useGoogleAnalytics();
 	useClarity();
-	// `themed` is false on the marketing site, which is deliberately always-light
-	// (see lib/theme.ts). `resolved` is handed to sonner, which renders its own
-	// surfaces outside our token tree and would otherwise be light-on-light.
-	const { themed, resolved } = useThemeScope();
+	// `resolved` is handed to sonner, which renders its own surfaces outside our
+	// token tree and would otherwise be light-on-light in dark mode.
+	const { resolved } = useThemeSync();
 	return (
 		<html lang={getLocale()} suppressHydrationWarning>
 			<head>
 				{/* Sets the .dark class BEFORE first paint — without it every
-				    dark-mode visitor gets a white flash while React hydrates.
-				    Emitted only on themed routes, so the marketing pages can't be
-				    darkened by a stale preference. Sits above <HeadContent /> so it
-				    doesn't queue behind the stylesheet link. See lib/theme.ts. */}
-				{themed ? (
-					<script
-						// biome-ignore lint/security/noDangerouslySetInnerHtml: static build-time constant, no interpolated input
-						dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }}
-					/>
-				) : null}
+				    dark-mode visitor gets a white flash while React hydrates. On
+				    every page: the theme applies to the whole site. Sits above
+				    <HeadContent /> so it doesn't queue behind the stylesheet link.
+				    See lib/theme.ts. */}
+				<script
+					// biome-ignore lint/security/noDangerouslySetInnerHtml: static build-time constant, no interpolated input
+					dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }}
+				/>
 				<HeadContent />
 			</head>
 			<body className="min-h-dvh bg-background font-sans text-foreground antialiased">

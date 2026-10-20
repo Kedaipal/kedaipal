@@ -1,4 +1,3 @@
-import { useMatches } from "@tanstack/react-router";
 import {
 	useCallback,
 	useEffect,
@@ -7,10 +6,8 @@ import {
 } from "react";
 import {
 	applyResolvedTheme,
-	clearAppliedTheme,
 	getServerThemeSnapshot,
 	getThemeSnapshot,
-	isThemedRouteId,
 	type ResolvedTheme,
 	setThemePreference,
 	subscribeTheme,
@@ -59,31 +56,21 @@ export function useTheme(): UseThemeResult {
 }
 
 /**
- * Keeps the `.dark` class on <html> in step with BOTH the preference and the
- * current route. Mounted once, in the root shell.
+ * Keeps the `.dark` class on <html> in step with the preference. Mounted once,
+ * in the root shell.
  *
- * Three jobs, and each is load-bearing:
- *  1. Marketing routes stay light. Navigating `/app` → `/pricing` is a SPA
- *     transition, so nothing else would ever take the class back off.
- *  2. It re-applies on every commit, which repairs the one case the pre-paint
- *     script cannot: when hydration fails and React re-renders the root, it
- *     strips every attribute off <html> — class and colorScheme included — and
- *     a dark-mode seller would otherwise sit on a white page until they
- *     reloaded. The DOM write is idempotent, so this costs nothing normally.
- *  3. It runs in a layout effect, before paint, so entering `/app` from a
- *     marketing page doesn't flash light first.
- *
- * Returns whether the current route is themed, so the shell knows whether to
- * emit the pre-paint script at all.
+ * The pre-paint script already set the class before React ran, so most of the
+ * time this is a no-op — but it is load-bearing twice: it re-applies on every
+ * commit, which repairs the one case the script cannot (when hydration fails and
+ * React re-renders the root, it strips every attribute off <html>, class and
+ * colorScheme included, and a dark-mode seller would otherwise sit on a white
+ * page until they reloaded); and it runs in a layout effect, before paint, so a
+ * preference change never flashes. The DOM write is idempotent.
  */
-export function useThemeScope(): { themed: boolean; resolved: ResolvedTheme } {
+export function useThemeSync(): { resolved: ResolvedTheme } {
 	const { resolved } = useTheme();
-	const themed = useMatches().some((m) => isThemedRouteId(m.routeId));
-
 	useIsomorphicLayoutEffect(() => {
-		if (themed) applyResolvedTheme(resolved);
-		else clearAppliedTheme();
-	}, [themed, resolved]);
-
-	return { themed, resolved };
+		applyResolvedTheme(resolved);
+	}, [resolved]);
+	return { resolved };
 }
