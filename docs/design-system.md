@@ -20,6 +20,7 @@ Defined as HSL CSS vars in `:root` + `.dark` and exposed as Tailwind colors (`bg
 | `background` / `foreground` | page base |
 | `card` / `popover` | raised surfaces |
 | `primary` | navy — primary emphasis, dark surfaces |
+| `segment` | the selected half of a pill toggle (MY/SG, Monthly/Annual) — the house navy one step lighter than `primary`, because at 11% a 40px pill reads black (Arif, 19 Oct 2026); lifts further in dark, never mint (a current value is a state, not an action) |
 | `accent` | **mint — the brand action color** (primary buttons default to this) |
 | `secondary` | soft slate — low-emphasis fills |
 | `muted` / `muted-foreground` | subtle bg / secondary text |

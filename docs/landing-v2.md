@@ -28,6 +28,17 @@ positioning, with one new section.
 
 ## Section order
 
+**Since 19 Oct 2026 (z8r3fdtpub, the showcase pass — see
+[Demo-first and the seller-flow walkthrough](#demo-first-and-the-seller-flow-walkthrough-19-oct-2026)):**
+
+`Nav → Hero (+ marquee) → Video demo (+ the door to /stores) → **Seller flow
+walkthrough** → Payment methods → **Fit check** → Pricing → FAQ → Final CTA →
+Footer`, plus the phone-only **WhatsApp dock**. The Real sellers section was
+cut the same day (below).
+
+Landing v2 as shipped on 13 Sep 2026 (the Delivery and Handshake sections
+below are historical — their mocks live on inside the walkthrough):
+
 `Nav → Hero (+ seller-kinds marquee) → Video demo → Real sellers → Payment
 handshake → **Delivery** → Payment methods → Pricing → FAQ → Final CTA → Footer`
 
@@ -185,9 +196,145 @@ happens to be the cheapest mock quote, and wrong for SG every cycle.
 per beat) to the shipped frame in both regions rather than freezing it at
 beat 0.
 
+## Demo-first and the seller-flow walkthrough (19 Oct 2026)
+
+ClickUp [z8r3fdtpub](https://app.clickup.com/t/z8r3fdtpub) (T1 + T2 + T3) with
+[z8r3fdhj8p](https://app.clickup.com/t/z8r3fdhj8p) items 2, 3, 4 and 9 ·
+mockups on the [Landing showcase redesign](https://claude.ai/artifact/2pYxCzQjMymUJwGHQDJAft)
+canvas, approved by Arif 19 Oct.
+
+**Why.** GA4, 21 Sep–18 Oct: `/` took 498 sessions in 28 days, held them for
+6m25s, and 2.8% clicked a sign-up CTA — while every payer to date had closed
+on a demo or a referral. The page held attention and asked for the wrong
+thing. On a 390px phone it also ran 11,420px with no CTA between the hero's
+link (y=381) and the pricing card (y=8,007).
+
+| Piece | Where |
+|---|---|
+| The one accent ask + the sign-up text link + the badge | `DemoPill`, `StartFreeLink`, `CommissionBadge` in [`landing-ui.tsx`](../src/components/landing/landing-ui.tsx) |
+| The walkthrough | [`seller-flow.tsx`](../src/components/landing/seller-flow.tsx), its clock [`seller-flow-timeline.ts`](../src/components/landing/seller-flow-timeline.ts), `useTimeline` in [`useBeatLoop.ts`](../src/hooks/useBeatLoop.ts) |
+| The mocks it plays | `AfterPhone` ([`hero-stage.tsx`](../src/components/landing/hero-stage.tsx)), `PayNowPanes` ([`pay-now.tsx`](../src/components/landing/pay-now.tsx)), `HandshakePanes` ([`payment-handshake.tsx`](../src/components/landing/payment-handshake.tsx)), `DispatchCard` + `CourierCatalogue` ([`delivery.tsx`](../src/components/landing/delivery.tsx)) — all take `beat` from the walkthrough |
+| The fit check | [`fit-check.tsx`](../src/components/landing/fit-check.tsx) |
+| The dock | [`wa-dock.tsx`](../src/components/landing/wa-dock.tsx), [`useSectionVisibility.ts`](../src/hooks/useSectionVisibility.ts) |
+| Funnel event | `demo_cta` (`placement`) — [`analytics.md`](./analytics.md) |
+| Copy | `flow_*`, `paynow_*`, `fit_*`, `dock_*`, `commission_badge`, `book_demo_cta_long` in `messages/*.json` |
+| Tests | `seller-flow.test.tsx`, `seller-flow-timeline.test.ts`, `pay-now.test.tsx`, `cta.test.tsx`, `wa-dock.test.tsx`, `useSectionVisibility.test.tsx`, `fit-check.test.tsx`, the rewritten `payment-handshake.test.tsx` and `delivery.test.tsx`, and new guards in `landing-redesign.test.ts` |
+
+**Demo-first (T1).** "Book a demo on WhatsApp" is the mint pill in the hero,
+the nav bar, the final CTA and `/pricing`'s close; "Start free — pay when you
+sell" is the text link under it everywhere. 86eye3p6z §C still holds — one
+KIND of accent pill on the page — and it is now the demo. The guarantee line
+came back under the hero's CTA pair (it is what a demo promises). The
+commission badge, "Flat fee. Never a cut of your sales." (Arif, 14 Oct), rides
+the hero, the pricing teaser and `/pricing`; credits are live, so the true
+claim is "no cut", never "zero fees". Pricing cards went outline. Signed-in
+sellers keep `Go to Dashboard` on every surface. Every demo link fires
+`demo_cta` with its placement — the two-week read is demo clicks per 100
+visits against sign-up clicks, and demo-booked → paid against sign-up → paid.
+
+**Pricing teaser, after the hands-on pass (19 Oct).** The monthly / annual
+toggle came to the teaser as the same control `/pricing` uses
+(`BillingCycleToggle` in `landing-ui.tsx`, "2 months free", credits-stay-
+monthly note under it); the annual number is `annualQuote`'s effective
+monthly with the year's total under it, so the two surfaces quote one annual.
+The Enterprise door reads "Get an Enterprise quote" (was "Talk to Arif"; the
+chat still lands with Arif). `/pricing`'s Pro card lost its mint pill — the
+demo is the one accent ask on that page too.
+
+**The walkthrough (T3).** One navy frame, four steps, the real UI: **01** the
+order lands in the Orders inbox (`AfterPhone`, beats 0–1), **02** the buyer
+taps Pay now and the phone LEAVES for HitPay's hosted page ("Opening secure
+checkout…"), picks DuitNow, scans the QR, and comes back CONFIRMING
+("Checking with HitPay — this usually takes a few seconds.") before both
+sides read paid — the buyer's "Payment Confirmed · Paid via DuitNow" with the
+HitPay reference, the seller's dashboard card "Payment received · Paid online
+via HitPay just now"; nobody tapped (`PayNowPanes`, `PAYNOW_BEATS`; added 19
+Oct at Arif's ask, "showcase our payment provider flow as well"). **The first
+cut of this phase was wrong and Arif caught it on sight:** it put HitPay in
+an in-page sheet (it is a redirect, `docs/hitpay-gateway.md`), kept a "paid
+by bank transfer instead?" door a HitPay store withholds (86eye9xd4), and
+invented both cards' copy. Every state in it is now a state the product has,
+and `pay-now.test.tsx` pins the confirming beat, the absent transfer door
+and the real rail names, **03** the buyer's order
+page and the seller's order card walk the handshake for buyers who still
+transfer (`HandshakePanes`, `HANDSHAKE_BEATS`; its phone carries the same
+order line + status as 02 and, under the waiting and received states, the
+real page's next section — "Pick up at", with the point, address and
+hours — because a fixed-height phone showing an empty lower half
+read as unfinished, Arif 19 Oct), **04** the dispatch card
+quotes, books and ships (`DispatchCard`, `DISPATCH_BEATS`) with the courier
+catalogue under it. The four beat tables are flattened into ONE timeline
+(`TIMELINE`, 19 steps), so
+the mocks stay the source of their own stories and the walkthrough cannot
+drift from them; the mocks' old reset beats went — the frame cross-fades
+between phases instead. **All three phases stay mounted in ONE grid cell**,
+the inactive two `invisible` at their last beat: the tallest phase sets the
+frame's height, so a swap never reflows the section or the page (the first
+cut mounted one phase at a time and the fresh reviewer measured the heading
+jumping 159px and `#payments` 318px on every loop at 1440). `useTimeline` is
+`useBeatLoop` with a `goTo`: a click on a step jumps there and the
+auto-advance resumes; hovering the frame pauses it and the bubble says
+"Paused while you look". Reduced motion renders each phase's LAST beat as a
+still, never advances by itself, and the step buttons still page through. The
+frame mounts its mocks only once near the viewport and is `aria-hidden`; the
+step copy (`flow_step_*`) carries the content, and each step button's
+accessible name is "Step N: title body" (a visually-hidden prefix — an
+`aria-label` would have replaced the copy and left the section silent to a
+screen reader). The courier catalogue sits OUTSIDE the frame on every
+breakpoint: it is information, not decoration. A bubble in the corner says who gets a
+message at each step — the buyer's one confirmation at 01, the seller's own
+payment-received alert at 02, and "No WhatsApp to Aina" at 03 and 04, because
+one message per order (`docs/one-message-per-order.md`) means her order page
+carries confirmed and shipped. (The first cut sent Aina a WhatsApp on every
+step — three messages the product never sends.) Phase 04 follows the region: Singapore gets the rider-only step copy,
+Lalamove on the card, no chilled or frozen pill, and the "being enabled"
+note, exactly as the Delivery section did. The hero's inbox, the handshake and the card now tell ONE order
+(ORD-0182 · Aina · RM 181 from Kedai Daging Amir — truth fix 4, pinned by
+`landing-redesign.test.ts`). Not taken from the ticket's T3 list: the hero
+split-card chips, the count-ups, the pill shimmer and the comparison row —
+motion on a 174-visitor page, and a comparison needs claims we can prove.
+
+**The fit check (T2).** The three locked ICP gates (RM2,000+ a month through
+WhatsApp · money changes hands on every order · sells every week, all year)
+as three cards before pricing, with the "not yet for you" row — the filter —
+and an outline WhatsApp link for the unsure (`fit_wa_message`, its own ask).
+The RM2,000 floor is test-pinned in every locale.
+
+**The dock (T1).** One pill, "Book a demo on WhatsApp": a bottom bar on a
+phone above the home indicator, rendered below `md` only — from `md` up the fixed nav bar carries the pill. It
+appears once the hero has scrolled out, hides while the final CTA or the
+footer is on screen (a phone's footer is taller than the viewport, and the
+dock sat on its last lines), never shows to a signed-in seller (every other
+surface gives them their dashboard door; the dock is a prospect's tool), and
+never renders on SSR or first paint (`useSectionVisibility` is `null` until
+the observer reports). The first cut copied docket.io's per-section question
+chips beside the pill; three loose bubbles stacked bottom-right read as
+clutter on sight (Arif, 19 Oct) and the hero already asks the one question
+that matters, so the chips, their copy and the section-tracking hook went.
+
+**The Real sellers section is gone (19 Oct, Arif: "do we even need this?").**
+Five anonymised kind cards with stock photos under "Real sellers, real
+orders" proved nothing a buyer could check — the ticket's item 9 said as
+much — and the video above already names the five kinds. Its one honest
+piece, the door to the real stores on `/stores`, moved under the video as an
+outline pill (`proof_browse_stores`, "Browse the stores running on
+Kedaipal"). The cards' copy, the rail controls, the directory caption and the
+twelve `seller-*` images left with it; `proof_label/heading/sub` stay for the
+`/pricing` proof block. A named seller quote, when one exists, gets a home of
+its own rather than a card wall.
+
+**Truth fixes that rode along (z8r3fdhj8p).** FAQ 1 and the final CTA stop
+promising "live in 5 minutes"; the guarantee line is the one time-to-live
+claim (test: no landing key says five minutes). FAQ 8 keeps the locked
+"pay when you sell" and states the day-15 invoice as the backstop it is —
+`docs/pricing.md`: a store with no order by day 15 gets its first invoice
+then — rather than leaving the two to read as a contradiction. The proof rail
+lost the navy "why they switch" closer with its founder metrics, then the
+section itself (above). The nav's first anchor is `/#flow` ("How it works").
+
 ## One region for the page
 
-Two sections now react to MY/SG (Delivery, Pricing). Each owning its own
+Two sections react to MY/SG (the seller-flow walkthrough — Delivery until 19 Oct 2026 — and Pricing). Each owning its own
 `useLandingRegion()` would give the page two toggles that can disagree for a
 render — the cookie write is shared, the React state was not. `index.tsx`
 mounts `LandingRegionProvider`; both sections read

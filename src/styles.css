@@ -734,6 +734,10 @@
 		var(--primary-foreground);
 	--color-primary:
 		var(--primary);
+	--color-segment-foreground:
+		var(--segment-foreground);
+	--color-segment:
+		var(--segment);
 	--color-cta-mesh-foreground:
 		var(--cta-mesh-foreground);
 	--color-countdown-paper:
@@ -792,6 +796,14 @@
 	/* Primary — midnight navy */
 	--primary: hsl(222 47% 11%);
 	--primary-foreground: hsl(210 40% 98%);
+
+	/* The selected half of a pill toggle (MY/SG, Monthly/Annual). The house
+	   navy a step lighter than --primary: at 11% lightness a 40px pill reads
+	   BLACK, not navy (Arif, 19 Oct 2026 — "use our navy blue, not black"),
+	   while the same hue at 22% is unmistakably blue and still ours. Same
+	   hue, one step; never a second blue. */
+	--segment: hsl(222 47% 22%);
+	--segment-foreground: hsl(210 40% 98%);
 
 	/* Text for bg-cta-mesh — that surface is always dark regardless of theme
 	   (see bg-cta-mesh below), so its foreground must stay fixed-light too;
@@ -890,6 +902,12 @@
 	/* Mint becomes primary in dark */
 	--primary: hsl(160 84% 39%);
 	--primary-foreground: hsl(222 47% 11%);
+
+	/* A navy pill on a navy card vanishes, so the selected segment lifts
+	   well clear of --card (9%) instead of going mint: mint is the action
+	   colour, and a toggle's current value is a state, not an action. */
+	--segment: hsl(222 47% 34%);
+	--segment-foreground: hsl(210 40% 98%);
 
 	--secondary: hsl(217 33% 17%);
 	--secondary-foreground: hsl(210 40% 98%);
