@@ -8,10 +8,10 @@ import { BLOG_URL } from "../../lib/site-links";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { getLocale, locales, setLocale } from "../../paraglide/runtime";
-import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { ThemeToggle } from "../ui/theme-toggle";
+import { Wordmark } from "../ui/wordmark";
 import { DemoPill } from "./landing-ui";
 
 // Short trigger label + full dropdown label per locale — keeps the button
@@ -216,13 +216,7 @@ export function Nav() {
 						className="flex min-h-11 shrink-0 items-center"
 						aria-label={m.nav_home()}
 					>
-						<AppImage
-							src="/logo-3.svg"
-							alt="Kedaipal"
-							aspect="h-7 w-auto sm:h-8"
-							fill={false}
-							priority
-						/>
+						<Wordmark aspect="h-7 w-auto sm:h-8" priority />
 					</Link>
 					{/* Two groups, one rule: in-page anchors into the pitch, then the
 					    three ROUTES a visitor can leave for — the price, the store

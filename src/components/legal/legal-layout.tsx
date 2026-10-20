@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { AppImage } from "../ui/app-image";
 import { ThemeToggle } from "../ui/theme-toggle";
+import { Wordmark } from "../ui/wordmark";
 
 interface LegalLayoutProps {
 	/** Document title rendered as the page H1. */
@@ -31,13 +31,7 @@ export function LegalLayout({
 			<header className="sticky top-0 z-40 w-full border-b border-border/60 bg-background/80 backdrop-blur-md">
 				<div className="mx-auto flex h-16 max-w-3xl items-center justify-between px-5 md:px-8">
 					<Link to="/" className="flex items-center">
-						<AppImage
-							src="/logo-3.svg"
-							alt="Kedaipal"
-							aspect="h-9 w-auto"
-							fill={false}
-							priority
-						/>
+						<Wordmark aspect="h-9 w-auto" priority />
 					</Link>
 					<div className="flex items-center gap-1">
 						<ThemeToggle variant="ghost" />
