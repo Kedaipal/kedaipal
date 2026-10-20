@@ -91,13 +91,17 @@ export function StorefrontFooter({
 					</Link>
 				</div>
 			) : null}
-			<div className="flex items-center justify-center gap-3">
-				{/* The buyer's theme control, deliberately down here: the page already
-				    matched their phone on arrival, so this is an override, not a
-				    decision they owe us above the fold. This footer is on every buyer
-				    surface (z8r3fdcwd0), so the toggle rides it everywhere — one slot,
-				    found once, found everywhere. */}
-				<ThemeToggle />
+			{/* The buyer's theme control, deliberately down here: the page already
+			    matched their device on arrival, so this is an override, not a
+			    decision they owe us above the fold. Its own quiet row in the same
+			    language as "Discover more stores" — a bordered disc beside the
+			    Powered-by badge read as clutter (Zaki, 21 Oct 2026). This footer is
+			    on every buyer surface (z8r3fdcwd0), so the control rides it
+			    everywhere: one slot, found once, found everywhere. */}
+			<div className="mb-5 flex justify-center">
+				<ThemeToggle variant="text" />
+			</div>
+			<div className="flex justify-center">
 				<a
 					href={poweredByHref(surface, slug)}
 					target="_blank"

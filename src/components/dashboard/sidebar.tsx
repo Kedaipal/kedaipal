@@ -33,6 +33,7 @@ import { hasFeature } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
+import { ThemeToggle } from "../ui/theme-toggle";
 import { AppVersionRow } from "./app-version-row";
 import { TierPill } from "./tier-pill";
 import { WhatsNewNavItem } from "./whats-new";
@@ -397,6 +398,31 @@ export function Sidebar({
 						strokeWidth={2.5}
 					/>
 				</button>
+				{/* Quick theme flip, the same control the mobile header carries. The
+				    word fades with the rail like the user's name below; both words are
+				    in the DOM and CSS picks one, so SSR's light-first pass never prints
+				    the wrong verb for a frame. The three-way picker (match device)
+				    stays in Settings → App → Appearance. */}
+				<div
+					className={cn(
+						"flex items-center gap-2 rounded-lg py-1 pr-2",
+						collapsed ? "pl-3" : "pl-2",
+						motion,
+					)}
+				>
+					<ThemeToggle variant="ghost" />
+					<span
+						aria-hidden={collapsed || undefined}
+						className={cn(
+							"overflow-hidden whitespace-nowrap text-xs font-medium text-muted-foreground",
+							collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
+							motion,
+						)}
+					>
+						<span className="dark:hidden">Dark mode</span>
+						<span className="hidden dark:inline">Light mode</span>
+					</span>
+				</div>
 				<div
 					className={cn(
 						"flex items-center gap-2 rounded-lg py-2 pr-2",

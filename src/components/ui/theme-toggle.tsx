@@ -13,19 +13,43 @@ import { cn } from "../../lib/utils";
  * /stores header, the dashboard header and sidebar — because a theme toggle
  * that exists on some pages and not others is a page the visitor can't fix.
  *
- * `outline` is the footer form (a bordered disc beside the powered-by badge);
- * `ghost` matches the icon buttons it sits between in a nav bar.
+ * `ghost` is the icon disc that sits between other icon buttons (nav bars,
+ * the dashboard header, the sidebar foot); `text` is the quiet labelled row
+ * the buyer footers use — the same visual language as "Discover more stores",
+ * because a bordered disc parked beside the Powered-by badge read as clutter
+ * (Zaki, 21 Oct 2026); `outline` is the bordered disc for anywhere else.
  */
 export function ThemeToggle({
 	className,
 	variant = "outline",
 }: {
 	className?: string;
-	variant?: "outline" | "ghost";
+	variant?: "outline" | "ghost" | "text";
 }) {
 	const { resolved, setPreference } = useTheme();
 	const goingDark = resolved === "light";
 	const label = goingDark ? "Switch to dark mode" : "Switch to light mode";
+
+	if (variant === "text") {
+		return (
+			<button
+				type="button"
+				onClick={() => setPreference(goingDark ? "dark" : "light")}
+				aria-label={label}
+				className={cn(
+					"group inline-flex min-h-11 items-center gap-1.5 rounded-full px-4 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/10 hover:text-accent-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+					className,
+				)}
+			>
+				<Moon className="size-4 dark:hidden" aria-hidden="true" />
+				<Sun className="hidden size-4 dark:block" aria-hidden="true" />
+				{/* The verb names the ACTION, like the aria-label; CSS picks it so
+				    SSR's light-first pass never prints the wrong one for a frame. */}
+				<span className="dark:hidden">Dark mode</span>
+				<span className="hidden dark:inline">Light mode</span>
+			</button>
+		);
+	}
 
 	return (
 		<button
