@@ -64,6 +64,7 @@ How the product actually works. Read in this order.
 | [founder-business-report.md](./founder-business-report.md) | Kedaipal's own weekly numbers: invoice-derived MRR per currency, the four-way `past_due` split, the secret-guarded endpoint, and prod-readable Convex MCP. |
 | [email-notifications.md](./email-notifications.md) | Retailer email alerts (Resend) — new order, confirmed, payment claimed. |
 | [analytics.md](./analytics.md) | GA4 + Microsoft Clarity: env-gated boot, the `/track`/`/claim` exclusion, the funnel events (client, server-side key events, Clarity Smart-event mirror), `MASK_PII` for session replay, privacy disclosure, and the weekly heatmap/recording review ritual. |
+| [seo.md](./seo.md) | **SEO / AEO / GEO:** the one site identity (`site-identity.ts`), JSON-LD per route, the storefront index rule the sitemap and `robots` share, `robots.txt` AI-crawler policy and `/llms.txt`. |
 
 ## Roadmaps (designed / in-progress)
 

@@ -22,6 +22,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
+import { breadcrumbListJsonLd, productCrumbs } from "../lib/breadcrumbs";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import {
 	absoluteProxiedImageUrl,
@@ -37,6 +38,8 @@ interface ProductLoaderData {
 	slug: string;
 	productName: string;
 	productSlug: string;
+	/** First visible category, for the breadcrumb; null → Store › Product. */
+	primaryCategory: { name: string; slug: string } | null;
 	description: string;
 	canonicalUrl: string;
 	ogImageUrl: string | undefined;
@@ -108,6 +111,16 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			throw notFound();
 		}
 
+		// The breadcrumb's middle crumb (z8r3fdh2z3). A transient failure here
+		// shortens the trail to Store › Product; it never fails the page.
+		const categoryRead = await ssrRead(() =>
+			client.query(api.categories.primaryPublicForProduct, {
+				retailerId: retailer._id,
+				productId: product._id,
+			}),
+		);
+		const primaryCategory = categoryRead.ok ? categoryRead.value : null;
+
 		const productDescription = product.description?.replace(/\s+/g, " ").trim();
 		const description =
 			productDescription ||
@@ -118,6 +131,7 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			slug: retailer.slug,
 			productName: product.name,
 			productSlug: params.productSlug,
+			primaryCategory,
 			description,
 			canonicalUrl: `${SITE_URL}/${retailer.slug}/p/${params.productSlug}`,
 			// Social cards + JSON-LD go through the image proxy too: link unfurlers
@@ -149,7 +163,9 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			return storeUnavailableHead(loaderData.storeName);
 		const {
 			storeName,
+			slug,
 			productName,
+			primaryCategory,
 			description,
 			canonicalUrl,
 			ogImageUrl,
@@ -252,7 +268,22 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 						]
 					: []),
 			],
-			scripts: [jsonLdScript(jsonLd)],
+			scripts: [
+				jsonLdScript(jsonLd),
+				// Store › Category › Product (z8r3fdh2z3).
+				jsonLdScript(
+					breadcrumbListJsonLd(
+						productCrumbs({
+							siteUrl: SITE_URL,
+							storeName,
+							storeSlug: slug,
+							category: primaryCategory,
+							productName,
+							productUrl: canonicalUrl,
+						}),
+					),
+				),
+			],
 		};
 	},
 	notFoundComponent: ProductNotFound,

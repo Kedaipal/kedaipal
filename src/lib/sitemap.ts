@@ -5,6 +5,10 @@
  *
  * Slugs are validated lowercase [a-z0-9-] at write time (store + product +
  * category), so no XML escaping is needed in <loc> values.
+ *
+ * Which stores appear is NOT decided here: the Convex queries apply the one
+ * storefront index rule (`convex/lib/storefrontIndex.ts`, z8r3fdh2ye) and
+ * this file lists what it is given.
  */
 
 export interface SitemapStore {
@@ -18,6 +22,24 @@ export interface SitemapProduct {
 	updatedAt: number;
 }
 
+export interface SitemapCategory {
+	storeSlug: string;
+	categorySlug: string;
+	updatedAt: number;
+}
+
+/**
+ * The seller setup guides in `public/guides/` — static HTML, so the route
+ * can't discover them; listed here so they are crawlable (z8r3fdh2ye). Low
+ * priority: they answer a vendor's setup question, not a buyer's or a
+ * prospect's. Add a guide here when it is added to `public/guides/`.
+ */
+export const GUIDE_PATHS = [
+	"/guides/hitpay-setup.html",
+	"/guides/lalamove-setup.html",
+	"/guides/delyva-setup.html",
+] as const;
+
 function day(ms: number): string {
 	return new Date(ms).toISOString().split("T")[0];
 }
@@ -26,10 +48,12 @@ export function buildSitemapXml({
 	siteUrl,
 	stores,
 	products,
+	categories = [],
 }: {
 	siteUrl: string;
 	stores: SitemapStore[];
 	products: SitemapProduct[];
+	categories?: SitemapCategory[];
 }): string {
 	const urls = [
 		`  <url>\n    <loc>${siteUrl}/</loc>\n    <changefreq>weekly</changefreq>\n    <priority>1.0</priority>\n  </url>`,
@@ -43,9 +67,19 @@ export function buildSitemapXml({
 		`  <url>\n    <loc>${siteUrl}/privacy</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.3</priority>\n  </url>`,
 		`  <url>\n    <loc>${siteUrl}/terms</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.3</priority>\n  </url>`,
 		`  <url>\n    <loc>${siteUrl}/acceptable-use</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.3</priority>\n  </url>`,
+		...GUIDE_PATHS.map(
+			(path) =>
+				`  <url>\n    <loc>${siteUrl}${path}</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.4</priority>\n  </url>`,
+		),
 		...stores.map(
 			({ slug, updatedAt }) =>
 				`  <url>\n    <loc>${siteUrl}/${slug}</loc>\n    <lastmod>${day(updatedAt)}</lastmod>\n    <changefreq>daily</changefreq>\n    <priority>0.8</priority>\n  </url>`,
+		),
+		// Category pages (z8r3fdh2ye): SSR'd with their own meta and a
+		// BreadcrumbList, between the store home and its product leaves.
+		...categories.map(
+			({ storeSlug, categorySlug, updatedAt }) =>
+				`  <url>\n    <loc>${siteUrl}/${storeSlug}/c/${categorySlug}</loc>\n    <lastmod>${day(updatedAt)}</lastmod>\n    <changefreq>weekly</changefreq>\n    <priority>0.7</priority>\n  </url>`,
 		),
 		// Product pages (86eybrhrt PR2). Priority sits below the store home —
 		// the storefront is the entry a seller shares, a product page is a leaf

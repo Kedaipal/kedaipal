@@ -25,8 +25,10 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
+import { breadcrumbListJsonLd, categoryCrumbs } from "../lib/breadcrumbs";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { absoluteProxiedImageUrl } from "../lib/image-proxy";
+import { jsonLdScript } from "../lib/json-ld";
 import { ssrRead } from "../lib/ssr-read";
 
 interface CategoryLoaderData {
@@ -125,7 +127,9 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			return storeUnavailableHead(loaderData.storeName);
 		const {
 			storeName,
+			slug,
 			categoryName,
+			categorySlug,
 			description,
 			canonicalUrl,
 			ogImageUrl,
@@ -162,6 +166,21 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			// cover image, so the page's LCP element is a product photo — the old
 			// hint made every category deep link download a banner it never shows.
 			links: [{ rel: "canonical", href: canonicalUrl }],
+			// Store › Category, so the result reads as a trail, not a URL path
+			// (z8r3fdh2z3).
+			scripts: [
+				jsonLdScript(
+					breadcrumbListJsonLd(
+						categoryCrumbs({
+							siteUrl: SITE_URL,
+							storeName,
+							storeSlug: slug,
+							categoryName,
+							categorySlug,
+						}),
+					),
+				),
+			],
 		};
 	},
 	notFoundComponent: CategoryNotFound,

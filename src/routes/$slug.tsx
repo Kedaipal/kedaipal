@@ -58,6 +58,9 @@ interface StorefrontLoaderData {
 	// Closed dates (z8r3fdhpm7) — the JSON-LD's holiday hours
 	// (specialOpeningHoursSpecification). Undefined = none.
 	closedDates: ClosedDateRange[] | undefined;
+	/** The sitemap's rule (z8r3fdh2ye): a store the sitemap leaves out is
+	 * also `noindex`, or excluding it would leave the page indexable anyway. */
+	indexable: boolean;
 }
 
 export const Route = createFileRoute("/$slug")({
@@ -137,6 +140,7 @@ export const Route = createFileRoute("/$slug")({
 			coverImageUrl: retailer.coverImageUrl ?? undefined,
 			openingHours: retailer.openingHours,
 			closedDates: retailer.closedDates,
+			indexable: retailer.indexable ?? true,
 		};
 	},
 	head: ({ loaderData }) => {
@@ -153,6 +157,7 @@ export const Route = createFileRoute("/$slug")({
 			locale,
 			openingHours,
 			closedDates,
+			indexable,
 		} = loaderData;
 		const title = `${storeName} — Order on WhatsApp | Kedaipal`;
 		const ogLocale = OG_LOCALE[locale];
@@ -160,7 +165,12 @@ export const Route = createFileRoute("/$slug")({
 		const meta = [
 			{ title },
 			{ name: "description", content: description },
-			{ name: "robots", content: "index, follow" },
+			// A cancelled or empty store still serves 200, so the sitemap rule
+			// is repeated here as `noindex` — same answer, same source.
+			{
+				name: "robots",
+				content: indexable ? "index, follow" : "noindex, follow",
+			},
 			// Open Graph
 			{ property: "og:type", content: "website" },
 			{ property: "og:site_name", content: "Kedaipal" },

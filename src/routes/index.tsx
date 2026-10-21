@@ -16,6 +16,16 @@ import { useMarketingLanding } from "../hooks/useMarketingLanding";
 import { DEMO_DURATION_ISO, DEMO_VIDEO } from "../lib/demo-video";
 import { jsonLdScript } from "../lib/json-ld";
 import { faqJsonLd } from "../lib/landing-faq";
+import {
+	AREA_SERVED,
+	AVAILABLE_LANGUAGES,
+	FOUNDING_DATE,
+	LEGAL_COUNTRY,
+	LEGAL_ENTITY,
+	ORG_DESCRIPTION,
+	SAME_AS,
+	SUPPORT_EMAIL,
+} from "../lib/site-identity";
 
 /**
  * "Home sellers" was the pre-Jul-2026 ICP. The feature-grounded cohort is a
@@ -78,10 +88,23 @@ const jsonLd = [
 		"@context": "https://schema.org",
 		"@type": "Organization",
 		name: "Kedaipal",
+		legalName: LEGAL_ENTITY,
 		url: SITE_URL,
 		logo: LOGO_URL,
-		description:
-			"B2B SaaS order hub for sellers in Malaysia and Singapore who take orders, deposits and bookings in WhatsApp — meat suppliers, central kitchens, bakers, service shops and apparel drops. Real storefront, real order pipeline, courier booking from the order, no Meta setup needed.",
+		description: ORG_DESCRIPTION,
+		// Entity resolution (z8r3fdh2z3): the profiles the footer links and the
+		// support address, declared so an engine can tie kedaipal.com to them.
+		// Read from `site-identity.ts`, the same constant the footer renders.
+		sameAs: SAME_AS,
+		foundingDate: FOUNDING_DATE,
+		address: { "@type": "PostalAddress", addressCountry: LEGAL_COUNTRY },
+		contactPoint: {
+			"@type": "ContactPoint",
+			contactType: "customer support",
+			email: SUPPORT_EMAIL,
+			areaServed: AREA_SERVED,
+			availableLanguage: AVAILABLE_LANGUAGES,
+		},
 	},
 	{
 		"@context": "https://schema.org",
@@ -143,7 +166,7 @@ export const Route = createFileRoute("/")({
 			{
 				property: "og:image:alt",
 				content:
-					"Kedaipal — Sell on WhatsApp. Never lose an order or a payment.",
+					"Kedaipal — Stop losing orders buried in WhatsApp chat. Storefront + order pipeline for sellers on WhatsApp.",
 			},
 			{ property: "og:locale", content: "en_MY" },
 			{ name: "twitter:card", content: "summary_large_image" },

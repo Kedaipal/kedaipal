@@ -4,7 +4,7 @@ import {
 	takesBuyerOrders,
 	takesCounterOrders,
 } from "./lib/storeAvailability";
-import { offlineStoreIds, storeAvailabilityOf } from "./storeAvailability";
+import { storeAvailabilityOf } from "./storeAvailability";
 
 // One customisable key survives the one-message-per-order cut (86eyd63r8):
 // `confirm`, the write-in reply for a buyer who messages their ORD- reference
@@ -280,6 +280,8 @@ import {
 	voidPendingInvoiceOnHandover,
 } from "./subscriptions";
 import { detachAutoRenewForRetailer } from "./subscriptionPayments";
+import { isStorefrontIndexable } from "./storefrontIndex";
+import { indexableStores } from "./storefrontIndex";
 import {
 	type ClaimRefusal,
 	isUnclaimed,
@@ -879,6 +881,10 @@ type RetailerPublic = {
 	// lands in your WhatsApp" instead of the wa.me handoff. Public-safe (a
 	// deployment-level flag, not seller data); only the by-slug payload sets it.
 	confirmPushEnabled?: boolean;
+	/** Whether search engines are told about this storefront (z8r3fdh2ye) —
+	 * the sitemap rule, so the page's `robots` meta can't disagree with the
+	 * sitemap. Only the by-slug payload sets it. */
+	indexable?: boolean;
 	// Collection-service store (86eyg0n8e): the rider collects FROM the buyer's
 	// address and brings the order TO the seller (Bearcamp gear-wash). Flips
 	// checkout copy ("Collection address — where should we collect from?") and
@@ -1412,6 +1418,7 @@ export const getRetailerBySlug = query({
 					acceptsVouchers: await storeShowsVoucherEntry(ctx, active._id),
 					marketplaceUnlisted: active.marketplaceUnlistedAt !== undefined,
 					storefrontChatEnabled: active.storefrontChatDisabledAt === undefined,
+					indexable: await isStorefrontIndexable(ctx, active, false),
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
 					// reply after the shopper commits to an order.
@@ -3951,21 +3958,13 @@ export const backfillPaymentMethods = internalMutation({
 export const listSlugsForSitemap = query({
 	args: {},
 	handler: async (ctx): Promise<Array<{ slug: string; updatedAt: number }>> => {
-		const rows = await ctx.db.query("retailers").collect();
-		const offline = await offlineStoreIds(ctx);
-		return (
-			rows
-				// Taken offline by Kedaipal (z8r3fdudf7): the page is a noindex
-				// "unavailable" screen — never hand it to a crawler.
-				.filter((r) => !offline.has(r._id))
-				// A pre-built store's storefront works by direct link — that is how
-				// an admin shows the vendor their shop before handover — but it is
-				// nobody's shop yet, so it must not be submitted to search engines.
-				// Indexing a URL whose store may never be claimed (or may be renamed
-				// at handover) spends the slug's ranking on a page that could vanish.
-				.filter((r) => !isUnclaimed(r))
-				.map((r) => ({ slug: r.slug, updatedAt: r._creationTime }))
-		);
+		// One rule for what a crawler may see (z8r3fdh2ye): claimed, online,
+		// not cancelled, at least one visible product — `convex/lib/storefrontIndex.ts`.
+		// `updatedAt` is the newest store or product write, not creation time.
+		return (await indexableStores(ctx)).map(({ retailer, lastmod }) => ({
+			slug: retailer.slug,
+			updatedAt: lastmod,
+		}));
 	},
 });
 
