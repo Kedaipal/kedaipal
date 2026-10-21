@@ -57,6 +57,7 @@ import {
 import { contractTemplatesFrom } from "../components/admin/enterprise-contract-form";
 import { EnterpriseContractSheet } from "../components/admin/enterprise-contract-sheet";
 import { GatewayIssuesCard } from "../components/admin/gateway-issues-card";
+import { StatTile, type StatTileProps } from "../components/admin/stat-tile";
 import { PageHeader } from "../components/dashboard/page-header";
 import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
 import { AppImage } from "../components/ui/app-image";
@@ -277,40 +278,34 @@ function AdminBillingOverview() {
 	const dueSoon =
 		invoices?.filter((inv) => inv.dueDate <= Date.now() + 7 * DAY_MS).length ??
 		0;
-	// Not TONE_PANEL: these tiles read `text-X-800` where the registry's panels
-	// read `text-X-700`, so adopting it would repaint blue + emerald in light
-	// mode. The registry is only free to take a surface it already matches.
-	const stats = [
+	const stats: StatTileProps[] = [
 		{
 			label: "Pending",
 			value: invoices === undefined ? "..." : String(invoices.length),
 			helper: "Invoices to settle",
 			icon: <ReceiptText className="size-4" />,
-			className:
-				"border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200",
+			tone: "info",
 		},
 		{
 			label: "Due soon",
 			value: invoices === undefined ? "..." : String(dueSoon),
 			helper: "Within 7 days",
 			icon: <CalendarClock className="size-4" />,
-			className:
-				"border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200",
+			tone: "warn",
 		},
 		{
 			label: "Outstanding",
 			value: invoices === undefined ? "..." : outstanding,
 			helper: "Pending total",
 			icon: <Banknote className="size-4" />,
-			className:
-				"border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200",
+			tone: "success",
 		},
 		{
 			label: "Founding",
 			value: spotsRemaining === undefined ? "..." : `${spotsRemaining}/10`,
 			helper: "Spots left",
 			icon: <ListChecks className="size-4" />,
-			className: "border-border bg-muted/50 text-foreground",
+			tone: "neutral",
 		},
 	];
 
@@ -318,21 +313,7 @@ function AdminBillingOverview() {
 		<div className="flex flex-col gap-2">
 			<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
 				{stats.map((stat) => (
-					<div
-						key={stat.label}
-						className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${stat.className}`}
-					>
-						<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70">
-							{stat.icon}
-						</div>
-						<div className="min-w-0">
-							<p className="text-xs font-medium opacity-75">{stat.label}</p>
-							<p className="truncate font-mono text-lg font-bold leading-tight">
-								{stat.value}
-							</p>
-							<p className="truncate text-[11px] opacity-70">{stat.helper}</p>
-						</div>
-					</div>
+					<StatTile key={stat.label} {...stat} />
 				))}
 			</div>
 			<CreditTotals />
@@ -354,7 +335,7 @@ export function CreditTotals() {
 		convexQuery(api.creditPurchases.adminTopUpRevenue, {}),
 	).data;
 	const stores = (n: number) => `${n} store${n === 1 ? "" : "s"}`;
-	const tiles = [
+	const tiles: StatTileProps[] = [
 		{
 			label: "Unused bought credits",
 			value:
@@ -368,7 +349,7 @@ export function CreditTotals() {
 						? "No store holds any yet"
 						: `Across ${stores(totals.storesWithPurchased)} — service still owed`,
 			icon: <Coins className="size-4" />,
-			className: "border-border bg-muted/50 text-foreground",
+			tone: "neutral",
 		},
 		{
 			label: "Orders owed",
@@ -381,10 +362,8 @@ export function CreditTotals() {
 						? "No store is below zero"
 						: `${stores(totals.storesOwing)} below zero — the next grant or pack settles it`,
 			icon: <TrendingDown className="size-4" />,
-			className:
-				totals !== undefined && totals.ordersOwed > 0
-					? "border-destructive/30 bg-destructive/10 text-destructive"
-					: "border-border bg-muted/50 text-foreground",
+			tone:
+				totals !== undefined && totals.ordersOwed > 0 ? "danger" : "neutral",
 		},
 		topUpTile(revenue),
 	];
@@ -392,25 +371,7 @@ export function CreditTotals() {
 		<section aria-label="Credits" className="flex flex-col gap-2">
 			<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
 				{tiles.map((tile) => (
-					<div
-						key={tile.label}
-						className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${tile.className}`}
-					>
-						<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-background/70">
-							{tile.icon}
-						</div>
-						<div className="min-w-0">
-							<p className="text-xs font-medium opacity-75">{tile.label}</p>
-							<p className="truncate font-mono text-lg font-bold leading-tight">
-								{tile.value}
-							</p>
-							{/* Wraps: the helper IS the explanation — cut off, it
-							    read "across 0 stores · service still …". */}
-							<p className="text-[11px] leading-snug text-pretty opacity-70">
-								{tile.helper}
-							</p>
-						</div>
-					</div>
+					<StatTile key={tile.label} {...tile} />
 				))}
 			</div>
 			{totals?.truncated ? (
@@ -447,7 +408,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 /** The top-up revenue tile: paid packs this calendar month, per currency —
  * summed per currency like Outstanding, never flattened into one number. */
-function topUpTile(revenue: TopUpRevenue | undefined) {
+function topUpTile(revenue: TopUpRevenue | undefined): StatTileProps {
 	const month =
 		revenue === undefined
 			? null
@@ -483,8 +444,7 @@ function topUpTile(revenue: TopUpRevenue | undefined) {
 					? "No packs paid yet this month"
 					: `${packs} pack${packs === 1 ? "" : "s"} · ${credits.toLocaleString("en")} credits`,
 		icon: <ShoppingBag className="size-4" />,
-		className:
-			"border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200",
+		tone: "success",
 	};
 }
 
