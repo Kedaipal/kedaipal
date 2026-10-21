@@ -405,39 +405,31 @@ export function Sidebar({
 						strokeWidth={2.5}
 					/>
 				</button>
-				{/* Quick theme flip, the same control the mobile header carries. The
-				    word fades with the rail like the user's name below; both words are
-				    in the DOM and CSS picks one, so SSR's light-first pass never prints
-				    the wrong verb for a frame. The three-way picker (match device)
-				    stays in Settings → App → Appearance.
+				{/* Quick theme flip, the same control the mobile header carries —
+				    icon only, like every other theme control in the app (z8r3fdwc19;
+				    the "Dark mode" word beside it was dropped). The three-way picker
+				    (match device) stays in Settings → App → Appearance.
 
-				    ONE ICON COLUMN. Every glyph in this rail — nav icons, the avatar
-				    below — centres 22px in from the row when expanded and 26px when
-				    collapsed. The toggle's 44px hit disc would centre its glyph 8px
-				    further right under the same padding, and it shipped that way
-				    once: the sun sat visibly off the column in both states (Zaki,
-				    21 Oct 2026). `-ml-2` pulls the disc back onto the column, and
-				    `gap-0` lets the word start where the user's name does (the disc's
-				    own right half is the gap). */}
+				    It has TWO homes, cross-faded like the What's-new row below, with
+				    the hidden one `inert`:
+				    - expanded: the right end of the profile row. A lone icon on a row
+				      of its own reads as an unlabelled nav item; beside the profile
+				      is where a utility control belongs (ClickUp, Linear).
+				    - collapsed: its own row above the avatar, because the 68px rail
+				      has no room beside it.
+				    ONE ICON COLUMN in the collapsed form: every glyph in the rail
+				    centres 26px in. The 44px disc would centre its glyph 8px further
+				    right under the row's padding (it shipped that way once — Zaki,
+				    21 Oct 2026), so `-ml-2` pulls it back onto the column. */}
 				<div
+					inert={!collapsed}
 					className={cn(
-						"flex items-center gap-0 rounded-lg py-1 pr-2",
-						collapsed ? "pl-3" : "pl-2",
+						"flex items-center overflow-hidden rounded-lg pr-2 pl-3",
+						collapsed ? "max-h-14 py-1 opacity-100" : "max-h-0 py-0 opacity-0",
 						motion,
 					)}
 				>
 					<ThemeToggle variant="ghost" className="-ml-2" />
-					<span
-						aria-hidden={collapsed || undefined}
-						className={cn(
-							"overflow-hidden whitespace-nowrap text-xs font-medium text-muted-foreground",
-							collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
-							motion,
-						)}
-					>
-						<span className="dark:hidden">Dark mode</span>
-						<span className="hidden dark:inline">Light mode</span>
-					</span>
 				</div>
 				<div
 					className={cn(
@@ -451,7 +443,7 @@ export function Sidebar({
 						<div
 							aria-hidden={collapsed || undefined}
 							className={cn(
-								"flex min-w-0 flex-col overflow-hidden",
+								"flex min-w-0 flex-1 flex-col overflow-hidden",
 								collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
 								motion,
 							)}
@@ -466,6 +458,25 @@ export function Sidebar({
 							) : null}
 						</div>
 					) : null}
+					{/* The expanded home. `-my-2` keeps the row at the avatar's
+					    height, and `-mr-4` lands the glyph's right edge on the version
+					    pill's below — one right-hand edge for the foot — while giving
+					    the name every pixel it can; `p-0.5` inside the clip
+					    leaves room for the disc's focus ring. */}
+					<div
+						inert={collapsed}
+						className={cn(
+							"-my-2 ml-auto shrink-0 overflow-hidden",
+							// Collapsed, the margin and padding go too: at zero width they
+							// would still push the rail 20px wider than its 68px.
+							collapsed
+								? "mr-0 max-w-0 p-0 opacity-0"
+								: "-mr-4 max-w-12 p-0.5 opacity-100",
+							motion,
+						)}
+					>
+						<ThemeToggle variant="ghost" />
+					</div>
 				</div>
 				{/* One meta line, not three stacked rows: "what changed" on the
 				    left, "what am I running" on the right — the two questions this

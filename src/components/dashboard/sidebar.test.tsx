@@ -266,6 +266,43 @@ describe("a short window scrolls the link list; the chrome never squashes", () =
 		expect(openNav?.classList).toContain("scroll-shadow-y");
 	});
 
+	it("the theme flip is icon only: beside the profile when expanded, on its own row when collapsed — never both live (z8r3fdwc19)", () => {
+		collapsed = false;
+		const open = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		const live = () =>
+			Array.from(
+				open.container.querySelectorAll<HTMLButtonElement>(
+					'button[aria-label^="Switch to"]',
+				),
+			).filter((b) => !b.closest("[inert]"));
+		expect(open.container.textContent).not.toMatch(/Dark mode|Light mode/);
+		expect(live()).toHaveLength(1);
+		// Expanded: it lives in the profile row, after the user button.
+		const profileRow = open.container
+			.querySelector('[data-slot="user-button"]')
+			?.closest("div.flex");
+		expect(profileRow?.contains(live()[0])).toBe(true);
+		cleanup();
+
+		collapsed = true;
+		const rail = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		const railLive = Array.from(
+			rail.container.querySelectorAll<HTMLButtonElement>(
+				'button[aria-label^="Switch to"]',
+			),
+		).filter((b) => !b.closest("[inert]"));
+		expect(railLive).toHaveLength(1);
+		const railProfile = rail.container
+			.querySelector('[data-slot="user-button"]')
+			?.closest("div.flex");
+		// Collapsed: the live one is the row above the avatar, not the profile one.
+		expect(railProfile?.contains(railLive[0])).toBe(false);
+	});
+
 	it("expands to 216px, not 240 — the foot's meta line is what sets the floor (z8r3fdwc19)", () => {
 		collapsed = false;
 		const { container } = render(
