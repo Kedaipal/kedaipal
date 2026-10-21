@@ -29,7 +29,10 @@ bookings (a request-to-book uses its credit at request) and event RSVPs.
 Creation is when the buyer confirmation and the seller alert go out and the Meta
 cost lands. The balance may go **below zero**; the ledger never refuses an
 order, and **the storefront never pauses** — running out locks the *seller*
-(T3), never the buyer.
+(T3), never the buyer. **One door does refuse: the counter** — a seller can't
+ring up a counter sale or send a claim link without a credit in hand, because a
+counter sale born below zero would be invisible to the seller who just made it.
+See [The counter needs a credit in hand](#the-counter-needs-a-credit-in-hand-z8r3fdwbbb).
 
 ### Monthly grants
 
@@ -932,6 +935,10 @@ It follows that there is **no store-wide credit refusal at all**:
 which resolves a `shortId`). A guard that can't name an order can't be this
 gate.
 
+(The counter's store-level rule, `assertCounterSaleFunded`, is not this gate
+and doesn't lock anything that exists: it refuses to START a sale the store
+can't pay for. See [below](#the-counter-needs-a-credit-in-hand-z8r3fdwbbb).)
+
 - **Gated** (server-enforced, per order): accepting and moving an order on
   (`updateStatus`, `advanceToStage`, approving a booking), marking payment
   received by hand, courier booking (Lalamove, Delyva), despatch labels
@@ -1136,6 +1143,112 @@ refusal and every gate surface's copy.
   absence reads as funded.
 - **The release note** belongs to the staging→main release that ships this, not
   to the feature PR — `/prep-staging` writes it.
+
+## The counter needs a credit in hand (z8r3fdwbbb)
+
+Every counter sale uses a credit, like every channel. Until z8r3fdwbbb the
+counter also took sales at zero, like every channel, and the result was worse
+there than anywhere else. The sale was born **gated**, so it **vanished**: the
+seller rang up a walk-in, saw a normal "done" screen, tapped "View order" and
+got `GatedOrderPage`, and the sale they had just made with the buyer standing
+in front of them wasn't in the inbox. Hiding a storefront order stops a seller
+settling by hand with a buyer they never saw. At the counter they *did* see
+the buyer, so hiding the order protects nothing and reads as a lost sale.
+
+**The rule (Zaki, 21 Oct 2026):** the counter rings up a sale only when that
+sale's debit would be **funded** — `counterSaleCreditsNeeded(total)`, which is
+`debitIsFunded(total - 1)` restated as "how many to add":
+
+| Balance | Counter | Says |
+| --- | --- | --- |
+| 1 or more | open — a store on its **last** credit takes that sale, funded and visible | (low line at ≤ `lowCreditLine`) |
+| 0 | closed | top up |
+| −3 | closed | "**4 credits** reopen it — orders waiting on credits are opened first" (`fundingAdvance` funds the queue before a new sale) |
+
+It is still "pressure on the seller, never the buyer": the seller is the one
+tapping, and the way back is in their hands right then. Every door the
+**buyer** drives stays open — the storefront, bookings, RSVPs, the buyer's
+store-QR check-in, and finishing a claim link the seller already sent.
+
+**Where it's enforced** — `assertCounterSaleFunded` (`convex/creditLock.ts`):
+
+- `counterCheckout.createOrderFromSession` — the authoritative check, in the
+  **same transaction** as the debit, so two tills racing for the last credit
+  can't both pass (OCC on the credit account retries the loser, which then
+  reads zero). This is what makes "a counter sale is never born gated"
+  structural, and `counterCreditBlock.test.ts` pins it.
+- `startAnonymousSession`, `bindSessionManualPhone` — no cart that can't finish.
+- `orderClaims.sendClaim`, `resendClaim` — the credit is spent when the BUYER
+  completes the link, but the seller is the one sending it. A link already out
+  when the balance hits zero still completes for the buyer (and that order is
+  gated like any other below-zero order — the one remaining way a
+  counter-originated order can wait).
+- **Not** `startSessionFromStoreQr` (the buyer's check-in) or `orderClaims.commit`.
+
+`creditLockCoverage.test.ts` holds both lists: the five seller writes must carry
+the guard, and the buyer doors must not.
+
+**Fails open where the gate does** — an unmetered store (admin-owned or
+sponsored) and the missing-subscription fail-safe are never closed. **Not exempt
+for an admin caller**, unlike the per-order gate: that gate's admin arm is about
+who is *looking*, and this rule is about the order the *seller* will see — a
+sale an admin rang up at zero would vanish from the seller's own inbox. An admin
+who means to let a store trade adds credits with `adminAdjust`.
+
+**Outranked by the availability rule.** An Off-Season Hold or Kedaipal's switch
+closes the counter first (`assertTakesCounterOrders` runs before this), and a
+past-due store is view-only before either — topping up a held store reopens
+nothing, so it is never told to.
+
+**What the seller sees** (`useCounterClosed`, `src/hooks/useCounterClosed.ts`,
+reading `creditLock.counterCreditState` — the guard's own resolver, so a button
+can never look open over a refusal):
+
+- **Closed:** the banner under the Counter header carries the sentence
+  (`counterCreditClosedMessage`, one author for the refusal and the banner) and
+  the way back (`CreditLockCta` — Top up / Pick a plan / …), so the seller tops
+  up and finishes the checkout they're in; the checkout and its cart are kept.
+  "New order", "Review order", "Send link" and a claim's "Retry" are disabled
+  with the reason. The refusal itself is the typed `CreditLockErrorData`, so
+  any toast that already understands the gate understands this.
+- **Low:** at or below `lowCreditLine`, one line — "3 orders left — the counter
+  stops ringing up sales at 0." — with "Top up credits". The rule is spoken
+  while it can still be avoided, not only once it bites. Shown only to a reader
+  who may see the balance (the owner, or a teammate with the Credits grant): a
+  front-desk teammate is told whether the till is open, not what the store holds.
+- **Audience:** a teammate who can buy packs is sent to top up; one who can't is
+  told to ask the owner (`creditLockAudience`, as everywhere else).
+- **Inside a checkout:** the reason under the disabled primary carries its own
+  quiet way-back link (`lockCta`) — the page banner has scrolled away by the
+  time a long cart or a phone reaches that button.
+- **The empty list:** never points at the greyed-out "New order". Closed for
+  credits it says buyers who scan the poster still check in (their check-in is
+  never refused) and the sale finishes once credits land; closed by a hold or
+  Kedaipal's switch it says new checkouts can't start.
+- **The last sale:** `counterCreditState.lastSale` (balance exactly 1) puts one
+  line in the review dialog — "This sale uses your last credit — the counter
+  closes after it…". Told to EVERY reader, the cashier included: it is the one
+  balance fact the person ringing the sale up needs.
+
+**One message per surface, and it never lies about the counter.** The
+`/test-code` pass found the app-wide credits banner (`SubscriptionBanner`)
+saying "**Orders keep coming in**" directly above the counter's "can't ring up
+a sale", in a different unit. Two fixes:
+
+- **The app-wide banner, the low/out/still-short emails (en/ms/zh) and the
+  unsubmitted WhatsApp template bodies** now say **online** orders keep coming
+  in and name the counter as the exception ("The counter stops ringing up sales
+  at 0." / "…can't ring up a sale until credits land."), on every page — the
+  rule is discoverable wherever the balance is, not only at the till.
+  `creditEmailCopy.test.ts` fails if a locale drops the counter clause.
+- **On `/app/checkout` the app-wide credit banners stand down** (`yieldCredits`,
+  from `app.tsx`): the counter's own banner says the same thing in the till's
+  terms with the way back. Stacked, they said it twice and filled a phone's
+  first screen.
+
+**Units:** a BALANCE is said in orders ("3 orders left", "2 orders owed"), as on
+the meter and the banner; only an amount to ADD is said in credits ("Waiting on
+3 credits", "4 credits reopen it").
 
 ## The meter, the seller lock and the notices (T3)
 

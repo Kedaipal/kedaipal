@@ -66,14 +66,20 @@ import {
 	tryRetailerAccess,
 } from "./lib/auth";
 import {
+	type CreditLockAudience,
 	type CreditUnlockRoute,
 	GATED_CELL_LABEL,
 	cancelRefundDecision,
+	counterCreditClosedMessage,
+	counterCreditErrorData,
+	counterLowCreditLine,
+	counterSaleCreditsNeeded,
 	creditLockAudience,
 	creditLockErrorData,
 	creditLockExempt,
 	creditUnlockRoute,
 	creditsToUnlockOrder,
+	lowCreditLine,
 	orderCreditFunded,
 	ordersAwaitingCredit,
 	sellerRefundsLeft,
@@ -330,13 +336,12 @@ export async function assertOrderCreditAvailable(
 	);
 }
 
-/** The typed refusal, with the way back THIS reader can take. */
-async function gateRefusal(
+/** Who is reading a refusal, by the way back they can take. */
+async function readerAudience(
 	ctx: AnyCtx,
 	retailerId: Id<"retailers">,
-	gate: CreditGateState,
-	creditsToUnlockOrder: number,
-) {
+	route: CreditUnlockRoute,
+): Promise<CreditLockAudience> {
 	const access = await tryRetailerAccess(ctx, retailerId, { anyMember: true });
 	const isMember = access?.role === "member";
 	// A teammate holding Credits write may buy a pack (T2), so for them a
@@ -347,17 +352,164 @@ async function gateRefusal(
 			area: "credits",
 			level: "write",
 		})) !== null;
+	return creditLockAudience({ isMember, canBuyCredits, route });
+}
+
+/** The typed refusal, with the way back THIS reader can take. */
+async function gateRefusal(
+	ctx: AnyCtx,
+	retailerId: Id<"retailers">,
+	gate: CreditGateState,
+	creditsToUnlockOrder: number,
+) {
 	return creditLockErrorData({
 		route: gate.unlockRoute,
-		audience: creditLockAudience({
-			isMember,
-			canBuyCredits,
-			route: gate.unlockRoute,
-		}),
+		audience: await readerAudience(ctx, retailerId, gate.unlockRoute),
 		creditsToUnlock: creditsToUnlockOrder,
 		ordersWaiting: gate.ordersWaiting,
 	});
 }
+
+// ---------------------------------------------------------------------------
+// The counter needs a credit in hand (z8r3fdwbbb)
+// ---------------------------------------------------------------------------
+
+/** Where the store stands for a COUNTER sale. `null` = the store is never
+ * closed for credits (unmetered, or the missing-subscription fail-safe). */
+type CounterCredit = {
+	/** 0 while the counter can ring up a sale (`counterSaleCreditsNeeded`). */
+	creditsNeeded: number;
+	total: number;
+	/** `lowCreditLine` of this period's grant. */
+	lowLine: number;
+	unlockRoute: CreditUnlockRoute;
+};
+
+/**
+ * The ONE answer to "can the counter ring up a sale right now?", read by the
+ * guard and by the counter page, so a button can never look open over a
+ * refusal (or greyed over a sale that would go through).
+ *
+ * It asks the question the LEDGER will ask: the balance `projectedCredits`
+ * gives is the one `debitCreditForOrder` sees, a pending month roll included,
+ * so "the counter is open" means "this sale's credit is paid for and the order
+ * will be visible". It fails open where `resolveCreditGate` does — an
+ * unmetered store and the missing-subscription fail-safe have no zero to be at.
+ *
+ * Deliberately NOT exempt for a Kedaipal admin CALLER, unlike the per-order
+ * gate. That gate's admin arm is about who is LOOKING (support sees a store as
+ * it is). This is about the order the seller will see afterwards: a sale an
+ * admin rang up at zero would be born gated and vanish from the seller's own
+ * inbox — the exact confusion this rule exists to end. An admin who means to
+ * let a store trade puts credits in with `adminAdjust`.
+ */
+async function counterCredit(
+	ctx: AnyCtx,
+	retailer: Doc<"retailers">,
+	now: number,
+): Promise<CounterCredit | null> {
+	const sub = await ctx.db
+		.query("subscriptions")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+		.first();
+	if (storeUnmetered(retailer, sub)) return null;
+	const status = sub?.status ?? null;
+	if (creditLockExempt({ status })) return null;
+	const account = await loadCreditAccount(ctx, retailer._id);
+	const projected = await projectedCredits(ctx, retailer._id, account, now);
+	if (!projected) return null;
+	return {
+		creditsNeeded: counterSaleCreditsNeeded(projected.total),
+		total: projected.total,
+		lowLine: lowCreditLine(projected.periodGrant),
+		unlockRoute: creditUnlockRoute(status),
+	};
+}
+
+/**
+ * The counter's credit guard — every SELLER write that starts or completes a
+ * counter sale or a claim link calls it (`creditLockCoverage.test.ts` holds
+ * the list). Never a buyer door: a buyer finishing a link the seller already
+ * sent, or checking in from the store QR, is never refused over the seller's
+ * balance.
+ *
+ * In `createOrderFromSession` it runs in the SAME transaction as the debit, so
+ * two tills racing for the last credit can't both pass — OCC on the credit
+ * account retries the loser, which then sees zero and is refused.
+ */
+export async function assertCounterSaleFunded(
+	ctx: AnyCtx,
+	retailer: Doc<"retailers">,
+): Promise<void> {
+	const state = await counterCredit(ctx, retailer, Date.now());
+	if (!state || state.creditsNeeded === 0) return;
+	const gate = await resolveCreditGate(ctx, retailer, Date.now());
+	throw new ConvexError(
+		counterCreditErrorData({
+			route: state.unlockRoute,
+			audience: await readerAudience(ctx, retailer._id, state.unlockRoute),
+			creditsNeeded: state.creditsNeeded,
+			ordersWaiting: gate.ordersWaiting,
+		}),
+	);
+}
+
+/** What the counter page shows about credits. */
+export type CounterCreditView = {
+	/** The refusal sentence while the counter is closed for credits, else null. */
+	closedReason: string | null;
+	unlockRoute: CreditUnlockRoute;
+	audience: CreditLockAudience;
+	/** The "running low" heads-up, or null. Only for a reader who may see the
+	 * balance (the owner, or a teammate with the Credits grant) — a front-desk
+	 * teammate isn't shown the store's balance, only whether the till is open. */
+	lowCreditLine: string | null;
+	/** The next sale is the last one the credits cover — the counter closes
+	 * after it. Told to EVERY reader, the cashier included: it is about the
+	 * till they are standing at, and "the counter will close after this sale"
+	 * is the one balance fact the person ringing it up needs. */
+	lastSale: boolean;
+};
+
+/** The counter page's read — same resolver as the guard. */
+export const counterCreditState = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<CounterCreditView | null> => {
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
+		const state = await counterCredit(ctx, access.retailer, Date.now());
+		if (!state) return null;
+		const audience = await readerAudience(ctx, retailerId, state.unlockRoute);
+		const closedReason =
+			state.creditsNeeded > 0
+				? counterCreditClosedMessage(
+						state.unlockRoute,
+						audience,
+						state.creditsNeeded,
+					)
+				: null;
+		const seesBalance =
+			access.role !== "member" ||
+			(await tryRetailerAccess(ctx, retailerId, {
+				area: "credits",
+				level: "read",
+			})) !== null;
+		const low =
+			closedReason === null &&
+			seesBalance &&
+			state.lowLine > 0 &&
+			state.total <= state.lowLine;
+		return {
+			closedReason,
+			unlockRoute: state.unlockRoute,
+			audience,
+			lowCreditLine: low ? counterLowCreditLine(state.total) : null,
+			lastSale: state.creditsNeeded === 0 && state.total === 1,
+		};
+	},
+});
 
 /**
  * The same gate for seller ACTIONS (courier booking, despatch labels, the

@@ -10,6 +10,7 @@ import {
 	claimResendState,
 	claimResendVisible,
 } from "../../../convex/lib/orderClaims";
+import { useCounterClosedReason } from "../../hooks/useCounterClosed";
 import { formatCountdown } from "../../lib/countdown";
 import { convexErrorMessage } from "../../lib/format";
 import { storefrontOrigin } from "../../lib/storefront-url";
@@ -99,6 +100,10 @@ export function ClaimRetryButton({
 	className?: string;
 }) {
 	const resendClaim = useMutation(api.orderClaims.resendClaim);
+	// A re-send is a fresh order invitation, refused while the counter is
+	// closed (a hold, Kedaipal's switch, or no credit in hand — z8r3fdwbbb).
+	// The banner on the Counter page carries the full sentence and the way back.
+	const closedReason = useCounterClosedReason();
 	if (!stillOpen || !claimResendVisible(claim.lastSendOutcome)) return null;
 	const resend = claimResendState(claim, now);
 	const label = !resend.canResend
@@ -109,13 +114,14 @@ export function ClaimRetryButton({
 	return (
 		<button
 			type="button"
-			disabled={!resend.canResend}
+			disabled={!resend.canResend || closedReason !== null}
 			title={
-				!resend.canResend
+				closedReason ??
+				(!resend.canResend
 					? resend.reason === "max_sends"
 						? `Sent ${CLAIM_MAX_SENDS} times already — copy the link and message them directly`
 						: "A moment between retries keeps this from spamming the buyer"
-					: undefined
+					: undefined)
 			}
 			onClick={async () => {
 				try {

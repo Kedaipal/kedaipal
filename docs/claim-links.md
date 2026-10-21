@@ -581,6 +581,17 @@ Ranking on the page: the pause outranks `expired` (it's the truer, more
 actionable reason) but never `completed`. It reads as the shop resting, not as
 the seller withdrawing this particular order — that's what `cancelled` says.
 
+## Sending needs a credit in hand; finishing never does (z8r3fdwbbb)
+
+`sendClaim` and `resendClaim` refuse while the store can't pay for the sale's
+credit (`assertCounterSaleFunded` — the counter's rule, since a claim is a
+counter sale finished on the buyer's phone). "Send link" and "Retry" are
+disabled with the reason on the Counter page. The credit is still spent at
+`commit`, and `commit` is **never** refused over the seller's balance: a link
+already out when the balance hits zero completes for the buyer, and that order
+waits on credits like any other below-zero order. See
+[`credits.md`](./credits.md#the-counter-needs-a-credit-in-hand-z8r3fdwbbb).
+
 ## WhatsApp send
 
 Every buyer- or seller-authored string entering `bodyParams` goes through

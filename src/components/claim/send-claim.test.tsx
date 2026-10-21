@@ -23,6 +23,11 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("../../hooks/useActAs", () => ({
 	useActAsRetailerId: () => undefined,
 }));
+// The counter is open in these tests — its closed states are pinned in
+// claim-actions.test.tsx and the counter page tests.
+vi.mock("../../hooks/useCounterClosed", () => ({
+	useCounterClosedReason: () => null,
+}));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const NOW = 1_756_000_000_000;
