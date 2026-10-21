@@ -485,6 +485,9 @@ WhatsApp.
   drop to their own line, right-aligned. In table view the chip row also stops
   at the Columns pill instead of bleeding 20px under it. Checked at 299 / 320 /
   375 / 393px.
+  The rows inside every filter and column panel (`FilterOptionRow`,
+  `BulkSelectRow`) are now 44px below `lg` — the house touch target — and stay
+  a compact 36px on desktop; `size="touch"` keeps a row 44px at every width.
 - **Where the controls live** — settled after the first build crowded five of
   them into one row and squeezed the search input down to its own padding:
   - **The view switch is in the PAGE HEADER**, beside Select and Export. Those
