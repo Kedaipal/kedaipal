@@ -15,6 +15,7 @@ import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as CostRouteImport } from './routes/cost'
 import { Route as AppRouteImport } from './routes/app'
 import { Route as AcceptableUseRouteImport } from './routes/acceptable-use'
@@ -86,6 +87,11 @@ const PricingRoute = PricingRouteImport.update({
 const OnboardingRoute = OnboardingRouteImport.update({
   id: '/onboarding',
   path: '/onboarding',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LlmsDottxtRoute = LlmsDottxtRouteImport.update({
+  id: '/llms.txt',
+  path: '/llms.txt',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CostRoute = CostRouteImport.update({
@@ -310,6 +316,7 @@ export interface FileRoutesByFullPath {
   '/acceptable-use': typeof AcceptableUseRoute
   '/app': typeof AppRouteWithChildren
   '/cost': typeof CostRoute
+  '/llms.txt': typeof LlmsDottxtRoute
   '/onboarding': typeof OnboardingRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
@@ -359,6 +366,7 @@ export interface FileRoutesByTo {
   '/$slug': typeof SlugRoute
   '/acceptable-use': typeof AcceptableUseRoute
   '/cost': typeof CostRoute
+  '/llms.txt': typeof LlmsDottxtRoute
   '/onboarding': typeof OnboardingRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
@@ -410,6 +418,7 @@ export interface FileRoutesById {
   '/acceptable-use': typeof AcceptableUseRoute
   '/app': typeof AppRouteWithChildren
   '/cost': typeof CostRoute
+  '/llms.txt': typeof LlmsDottxtRoute
   '/onboarding': typeof OnboardingRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
@@ -462,6 +471,7 @@ export interface FileRouteTypes {
     | '/acceptable-use'
     | '/app'
     | '/cost'
+    | '/llms.txt'
     | '/onboarding'
     | '/pricing'
     | '/privacy'
@@ -511,6 +521,7 @@ export interface FileRouteTypes {
     | '/$slug'
     | '/acceptable-use'
     | '/cost'
+    | '/llms.txt'
     | '/onboarding'
     | '/pricing'
     | '/privacy'
@@ -561,6 +572,7 @@ export interface FileRouteTypes {
     | '/acceptable-use'
     | '/app'
     | '/cost'
+    | '/llms.txt'
     | '/onboarding'
     | '/pricing'
     | '/privacy'
@@ -612,6 +624,7 @@ export interface RootRouteChildren {
   AcceptableUseRoute: typeof AcceptableUseRoute
   AppRoute: typeof AppRouteWithChildren
   CostRoute: typeof CostRoute
+  LlmsDottxtRoute: typeof LlmsDottxtRoute
   OnboardingRoute: typeof OnboardingRoute
   PricingRoute: typeof PricingRoute
   PrivacyRoute: typeof PrivacyRoute
@@ -671,6 +684,13 @@ declare module '@tanstack/react-router' {
       path: '/onboarding'
       fullPath: '/onboarding'
       preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/llms.txt': {
+      id: '/llms.txt'
+      path: '/llms.txt'
+      fullPath: '/llms.txt'
+      preLoaderRoute: typeof LlmsDottxtRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/cost': {
@@ -1040,6 +1060,7 @@ const rootRouteChildren: RootRouteChildren = {
   AcceptableUseRoute: AcceptableUseRoute,
   AppRoute: AppRouteWithChildren,
   CostRoute: CostRoute,
+  LlmsDottxtRoute: LlmsDottxtRoute,
   OnboardingRoute: OnboardingRoute,
   PricingRoute: PricingRoute,
   PrivacyRoute: PrivacyRoute,

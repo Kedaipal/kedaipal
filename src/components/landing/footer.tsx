@@ -1,10 +1,22 @@
 import { Link } from "@tanstack/react-router";
 import { Instagram, Mail, Music2 } from "lucide-react";
 import { LEGAL_CONTACT_EMAIL } from "../../lib/legal";
-import { BLOG_URL, INSTAGRAM_URL, TIKTOK_URL } from "../../lib/site-links";
+import { SOCIAL_LINKS, type SocialLinkId } from "../../lib/site-identity";
+import { BLOG_URL } from "../../lib/site-links";
 import { m } from "../../paraglide/messages";
 import { AppImage } from "../ui/app-image";
 import { PaymentStripCompact } from "./payment-methods";
+
+// The profile URLs live in `site-identity.ts` so the footer and the
+// Organization `sameAs` on `/` can never point at different accounts.
+const SOCIAL_ICON: Record<SocialLinkId, typeof Instagram> = {
+	instagram: Instagram,
+	tiktok: Music2,
+};
+const SOCIAL_LABEL: Record<SocialLinkId, () => string> = {
+	instagram: m.footer_instagram,
+	tiktok: m.footer_tiktok,
+};
 
 export function Footer() {
 	const contactLinkClass =
@@ -47,24 +59,21 @@ export function Footer() {
 									<Mail className="size-4 transition-transform group-hover:-rotate-6" />
 									<span>{LEGAL_CONTACT_EMAIL}</span>
 								</a>
-								<a
-									href={INSTAGRAM_URL}
-									target="_blank"
-									rel="noopener noreferrer"
-									className={contactLinkClass}
-								>
-									<Instagram className="size-4 transition-transform group-hover:-rotate-6" />
-									<span>{m.footer_instagram()}</span>
-								</a>
-								<a
-									href={TIKTOK_URL}
-									target="_blank"
-									rel="noopener noreferrer"
-									className={contactLinkClass}
-								>
-									<Music2 className="size-4 transition-transform group-hover:-rotate-6" />
-									<span>{m.footer_tiktok()}</span>
-								</a>
+								{SOCIAL_LINKS.map((link) => {
+									const Icon = SOCIAL_ICON[link.id];
+									return (
+										<a
+											key={link.id}
+											href={link.url}
+											target="_blank"
+											rel="noopener noreferrer"
+											className={contactLinkClass}
+										>
+											<Icon className="size-4 transition-transform group-hover:-rotate-6" />
+											<span>{SOCIAL_LABEL[link.id]()}</span>
+										</a>
+									);
+								})}
 							</div>
 						</div>
 
