@@ -436,6 +436,12 @@ imported nowhere (a scaffold leftover), and it was the only thing pulling
 `@tanstack/react-query`/`query-core` into the lockfile. If a future change
 adopts TanStack Query directly, add it as a first-class pinned dependency.
 
+It came back as exactly that in z8r3fdue6f (SSR first paint): **`1.166.10`**,
+the release that shipped in the same wave as our `react-router@1.168.10` (and
+the version the original scaffold had resolved against it). It hooks the
+router's `dehydrate`/`hydrate` options and its redirect type, so it is on the
+exact-pin list and moves with the family in the lockstep upgrade.
+
 ## App versioning — calendar `YYYY.MM.N` (2026-08-24, ClickUp 86eyqgxna)
 
 Before this, the app had **no version at all** — no `version` in `package.json`,

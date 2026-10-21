@@ -30,6 +30,7 @@ import {
 } from "../lib/image-proxy";
 import { jsonLdScript } from "../lib/json-ld";
 import { ssrRead } from "../lib/ssr-read";
+import { ssrRetailerBySlug } from "../lib/storefront-ssr";
 import { hasStartingPrice } from "../lib/variant";
 
 interface ProductLoaderData {
@@ -66,10 +67,12 @@ interface ProductLoaderData {
 export const Route = createFileRoute("/$slug_/p/$productSlug")({
 	loader: async ({
 		params,
+		context,
 	}): Promise<ProductLoaderData | StoreUnavailableLoaderData | null> => {
-		const client = getConvexHttpClient();
-		const retailerRead = await ssrRead(() =>
-			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
+		// Seeds the cache the component reads (z8r3fdue6f — see $slug.tsx).
+		const retailerRead = await ssrRetailerBySlug(
+			context.queryClient,
+			params.slug,
 		);
 		// Transient upstream failure: render the shell (client query paints the
 		// product) instead of an error page (86eyheqzv). Definitive notFounds
@@ -96,6 +99,11 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 		const retailer = result.retailer;
 
 		// Unknown, archived, hidden or category-suppressed → 404, never a leak.
+		// Read for head() + the 404 decision only, over the plain HTTP client:
+		// seeding it would switch the page body to server-rendered, which lands
+		// with the catalog prefetches once their payload is measured
+		// (z8r3fdue6f / 86eyjv002). `ssrEnsure` is where it goes.
+		const client = getConvexHttpClient();
 		const productRead = await ssrRead(() =>
 			client.query(api.products.getPublicBySlug, {
 				retailerId: retailer._id,

@@ -35,7 +35,7 @@ import {
 	proxiedImageUrl,
 } from "../lib/image-proxy";
 import { jsonLdScript } from "../lib/json-ld";
-import { ssrRead } from "../lib/ssr-read";
+import { ssrRetailerBySlug } from "../lib/storefront-ssr";
 
 interface StorefrontLoaderData {
 	storeName: string;
@@ -63,11 +63,11 @@ interface StorefrontLoaderData {
 export const Route = createFileRoute("/$slug")({
 	loader: async ({
 		params,
+		context,
 	}): Promise<StorefrontLoaderData | StoreUnavailableLoaderData | null> => {
-		const client = getConvexHttpClient();
-		const read = await ssrRead(() =>
-			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
-		);
+		// Seeds the cache the component reads, so the SSR HTML carries the
+		// store itself, not only its meta (z8r3fdue6f — lib/storefront-ssr.ts).
+		const read = await ssrRetailerBySlug(context.queryClient, params.slug);
 		// Transient upstream failure: render the shell (head() falls back to
 		// defaults, the client's reactive query paints the store) instead of
 		// serving the buyer an error page (86eyheqzv). A definitive notFound
@@ -105,7 +105,7 @@ export const Route = createFileRoute("/$slug")({
 			retailer.coverImageUrl ?? retailer.logoUrl;
 		if (!ogImageUrl) {
 			try {
-				const products = await client.query(api.products.list, {
+				const products = await getConvexHttpClient().query(api.products.list, {
 					retailerId: retailer._id,
 				});
 				ogImageUrl = products.find((p) => p.imageUrls[0])?.imageUrls[0];
