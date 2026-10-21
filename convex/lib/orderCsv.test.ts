@@ -1,4 +1,6 @@
 import { describe, expect, test } from "vitest";
+import type { Doc } from "../_generated/dataModel";
+import { redactGatedOrder } from "./orderGate";
 import {
 	ALL_ORDER_COLUMN_KEYS,
 	csvAmount,
@@ -673,6 +675,205 @@ describe("fulfilment date sorts by the moment (z8r3fdff97)", () => {
 		expect(orderColumnSortValue(column, at(JUN_30_MYT, 930))).toBe(
 			fulfilmentMomentSortKey(at(JUN_30_MYT, 930)),
 		);
+	});
+});
+
+describe("booking span columns", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	// MYT midnights, the way the booking fields are stored.
+	const SEP_1 = Date.UTC(2026, 7, 31, 16, 0, 0);
+	const day = (n: number) => SEP_1 + (n - 1) * DAY; // day(n) = n Sep
+	const col = (
+		key: "bookingStart" | "bookingLastDay" | "bookingDays" | "bookingSkips",
+	) => {
+		const c = ORDER_COLUMNS_BY_KEY.get(key);
+		if (!c) throw new Error(`missing ${key} column`);
+		return c;
+	};
+	const booking = (over: Partial<CsvOrder>): CsvOrder => ({
+		...minimal,
+		deliveryMethod: "booking",
+		fulfilmentDate: over.bookingCheckIn,
+		...over,
+	});
+
+	test("a STAY: check-in, the check-out itself, and its nights", () => {
+		const stay = booking({ bookingCheckIn: day(25), bookingCheckOut: day(27) });
+		expect(cell(stay, "Booking start")).toBe("2026-09-25");
+		// The check-out morning is a day the guest is still on site.
+		expect(cell(stay, "Booking last day")).toBe("2026-09-27");
+		expect(cell(stay, "Booking days")).toBe("2");
+		expect(orderColumnDisplay(col("bookingDays"), stay)).toBe("2 nights");
+	});
+
+	test("a PACKAGE: the last day is the night before the exclusive check-out (S7)", () => {
+		const month = booking({
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(31), // 1 Oct, exclusive
+			bookingPackaged: true,
+		});
+		expect(cell(month, "Booking start")).toBe("2026-09-01");
+		// Never "2026-10-01" — that would promise a day the buyer doesn't have.
+		expect(cell(month, "Booking last day")).toBe("2026-09-30");
+		expect(cell(month, "Booking days")).toBe("30");
+		expect(orderColumnDisplay(col("bookingDays"), month)).toBe("30 days");
+	});
+
+	test("an OPEN-DAYS package counts only the days it uses (z8r3fdhpm7)", () => {
+		// 7-day span with Sat 5 / Sun 6 Sep shut: 5 open days.
+		const openDays = booking({
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(8),
+			bookingPackaged: true,
+			bookingSkippedDays: [day(5), day(6)],
+		});
+		expect(cell(openDays, "Booking last day")).toBe("2026-09-07");
+		expect(cell(openDays, "Booking days")).toBe("5");
+		expect(orderColumnDisplay(col("bookingDays"), openDays)).toBe("5 days");
+	});
+
+	test("a customer SKIP moves the last day out, stays out of Days, and is counted (z8r3fdh3ay)", () => {
+		// The 5-open-day plan above, after the seller skipped Thu 3 Sep for the
+		// customer: check-out moved out one open day (8 → 9 Sep) and the skip
+		// joined the unused days, so the member still gets 5.
+		const skipped = booking({
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(9),
+			bookingPackaged: true,
+			bookingOpenDays: true,
+			bookingSkippedDays: [day(3), day(5), day(6)],
+			bookingCustomerSkips: [day(3)],
+		});
+		expect(cell(skipped, "Booking last day")).toBe("2026-09-08");
+		expect(cell(skipped, "Booking days")).toBe("5");
+		expect(cell(skipped, "Booking skips")).toBe("1");
+		expect(orderColumnDisplay(col("bookingSkips"), skipped)).toBe("1 skip");
+		expect(
+			orderColumnDisplay(col("bookingSkips"), {
+				...skipped,
+				bookingCustomerSkips: [day(3), day(4)],
+			}),
+		).toBe("2 skips");
+	});
+
+	test("Skips reads 0 only on a plan that CAN be skipped", () => {
+		const skippable = booking({
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(8),
+			bookingPackaged: true,
+			bookingOpenDays: true,
+		});
+		expect(cell(skippable, "Booking skips")).toBe("0");
+		expect(orderColumnDisplay(col("bookingSkips"), skippable)).toBe("None");
+		// A stay or a calendar package never had the option — "0" would offer it.
+		const stay = booking({ bookingCheckIn: day(25), bookingCheckOut: day(27) });
+		expect(cell(stay, "Booking skips")).toBe("");
+		expect(orderColumnSortValue(col("bookingSkips"), stay)).toBeUndefined();
+	});
+
+	test("one day reads singular", () => {
+		const one = booking({
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(2),
+			bookingPackaged: true,
+		});
+		expect(orderColumnDisplay(col("bookingDays"), one)).toBe("1 day");
+	});
+
+	test("a non-booking order blanks all three, and sinks in a sort", () => {
+		for (const label of [
+			"Booking start",
+			"Booking last day",
+			"Booking days",
+			"Booking skips",
+		]) {
+			expect(cell(minimal, label)).toBe("");
+		}
+		for (const key of [
+			"bookingStart",
+			"bookingLastDay",
+			"bookingDays",
+			"bookingSkips",
+		] as const) {
+			expect(orderColumnDisplay(col(key), minimal)).toBe("");
+			expect(orderColumnSortValue(col(key), minimal)).toBeUndefined();
+		}
+	});
+
+	test("sorts on the epoch / the number, not the text", () => {
+		const short = booking({ bookingCheckIn: day(1), bookingCheckOut: day(3) });
+		const long = booking({ bookingCheckIn: day(1), bookingCheckOut: day(13) });
+		// "12 nights" < "2 nights" as text; the number sorts it right.
+		expect(orderColumnSortValue(col("bookingDays"), short)).toBe(2);
+		expect(orderColumnSortValue(col("bookingDays"), long)).toBe(12);
+		expect(orderColumnSortValue(col("bookingLastDay"), long)).toBe(day(13));
+		expect(orderColumnSortValue(col("bookingStart"), long)).toBe(day(1));
+	});
+
+	test("a GATED booking keeps its span AND its shut days — Days never overcounts", () => {
+		// Run the real redaction, so this breaks if the allowlist ever drops the
+		// span (dates go blank), the skipped days (Days silently reads 8) or the
+		// customer skips (Skips blanks beside a Days that already took them).
+		const doc = {
+			shortId: "ORD-7001",
+			createdAt: SEP_1,
+			status: "confirmed",
+			deliveryMethod: "booking",
+			fulfilmentDate: day(1),
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(9),
+			bookingPackaged: true,
+			bookingOpenDays: true,
+			bookingSkippedDays: [day(3), day(5), day(6)],
+			bookingCustomerSkips: [day(3)],
+			customer: { name: "Siti Secret", waPhone: "+60199999999" },
+			items: [{ name: "Meal plan", quantity: 1, price: 30000 }],
+			subtotal: 30000,
+			total: 30000,
+			currency: "MYR",
+		} as unknown as Doc<"orders">;
+		const gated = redactGatedOrder(doc, { gated: true, creditsToUnlock: 1 });
+		const row: CsvOrder = {
+			shortId: gated.shortId,
+			createdAt: gated.createdAt,
+			status: gated.status,
+			creditGated: gated.creditGated,
+			deliveryMethod: gated.deliveryMethod,
+			bookingCheckIn: gated.bookingCheckIn,
+			bookingCheckOut: gated.bookingCheckOut,
+			bookingPackaged: gated.bookingPackaged,
+			bookingSkippedDays: gated.bookingSkippedDays,
+			bookingCustomerSkips: gated.bookingCustomerSkips,
+			bookingOpenDays: gated.bookingOpenDays,
+			customer: gated.customer,
+			items: gated.items,
+			subtotal: gated.subtotal,
+			total: gated.total,
+			currency: gated.currency,
+		};
+		expect(cell(row, "Booking start")).toBe("2026-09-01");
+		expect(cell(row, "Booking last day")).toBe("2026-09-08");
+		expect(cell(row, "Booking skips")).toBe("1");
+		// The span is 8; the member bought 5.
+		expect(cell(row, "Booking days")).toBe("5");
+		expect(orderColumnDisplay(col("bookingDays"), row)).toBe("5 days");
+		expect(ordersToCsv([row])).not.toContain("Siti Secret");
+	});
+
+	test("sit beside the fulfilment date, as one set — not appended last", () => {
+		const keys = ALL_ORDER_COLUMN_KEYS;
+		const at = keys.indexOf("fulfilmentTime");
+		const set = [
+			"bookingStart",
+			"bookingLastDay",
+			"bookingDays",
+			"bookingSkips",
+		] as const;
+		expect(keys.slice(at + 1, at + 1 + set.length)).toEqual([...set]);
+		for (const k of set) {
+			expect(col(k).group).toBe("booking");
+			expect(DEFAULT_ORDER_COLUMN_KEYS).not.toContain(k);
+		}
 	});
 });
 

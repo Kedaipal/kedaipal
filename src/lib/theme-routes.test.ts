@@ -55,6 +55,7 @@ const NO_CONTROL: Record<string, string> = {
 	"join.$token.tsx": "one-tap invite acceptance",
 	"referral.$slug.tsx": "a referral landing that hands straight off",
 	"sitemap[.]xml.ts": "not a page",
+	"llms[.]txt.ts": "not a page — a text/plain server route for AI crawlers",
 };
 
 describe("the theme reaches every page", () => {

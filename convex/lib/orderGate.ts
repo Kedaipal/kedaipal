@@ -85,6 +85,15 @@ const GATED_ORDER_FIELDS = [
 	"bookingCheckIn",
 	"bookingCheckOut",
 	"bookingPackaged",
+	// Every unused day inside the span (z8r3fdhpm7 + z8r3fdh3ay) — the store's
+	// closures and the days the SELLER logged as skipped. Nothing the buyer
+	// typed, and without it the span lies: the period chip said "6 open days
+	// left" and Booking days said 7 on a gated package bought as 5.
+	"bookingSkippedDays",
+	// The seller-logged subset of the above, and whether the plan can be
+	// skipped at all — so a gated row's Skips cell agrees with its Days cell.
+	"bookingCustomerSkips",
+	"bookingOpenDays",
 	// Whether the money arrived. The buyer's bank REFERENCE is not here — that
 	// is their data and it is how a seller would reconcile by hand.
 	"paymentStatus",

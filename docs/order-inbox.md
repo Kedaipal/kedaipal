@@ -478,6 +478,16 @@ WhatsApp.
   hard rule for wide content) and its row controls **grow to 44px touch targets
   below `lg`** — with the checkbox's *visual* box staying 18px inside that target,
   since growing the box itself would give a phone a giant empty square.
+- **Narrow phones (found 21 Oct, PR #402 review):** the mobile header's five
+  actions need ~350px, which only just fits a 393px phone — and the title was
+  the part allowed to shrink, so at 375px and below the view switch sat on top
+  of "Orders". The row now WRAPS: the title keeps its width and the actions
+  drop to their own line, right-aligned. In table view the chip row also stops
+  at the Columns pill instead of bleeding 20px under it. Checked at 299 / 320 /
+  375 / 393px.
+  The rows inside every filter and column panel (`FilterOptionRow`,
+  `BulkSelectRow`) are now 44px below `lg` — the house touch target — and stay
+  a compact 36px on desktop; `size="touch"` keeps a row 44px at every width.
 - **Where the controls live** — settled after the first build crowded five of
   them into one row and squeezed the search input down to its own padding:
   - **The view switch is in the PAGE HEADER**, beside Select and Export. Those
@@ -576,6 +586,40 @@ WhatsApp.
   while the key list changes on a toggle, and a separate key means a layout
   written by an older build still loads instead of failing a shape check and
   dropping the seller's arrangement.
+- **Booking span columns — Booking start · Booking last day · Booking days ·
+  Booking skips**
+  (group **Booking**, right after Fulfilment in the picker and right after
+  Fulfilment time in the export). Added as a SET: a booking's Fulfilment date is
+  only its first day, and a lone count with no span would be half a fact.
+  - *Start* is `bookingCheckIn`. *Last day* goes through `bookingLastDay`
+    (`convex/lib/bookingAvailability.ts`, the one author of the S7 rule — also
+    used by `describeBookingSpan` and `describeBookingPeriod`): a **package's**
+    last usable day is the night before its exclusive check-out, a **stay's** is
+    the check-out itself. Never a package's exclusive check-out — that is a day
+    the buyer doesn't have.
+  - *Days* is `countedDays`, so an open-days package counts only the days it
+    uses. The CSV cell is a bare number (it sums); the table reads `2 nights`
+    for a stay and `30 days` for a package, because the units differ.
+  - All three are blank on non-booking orders and sink in a sort. Opt-in, not
+    default-visible — offered to every store, the `Security deposit` precedent.
+  - **Gated (credit) rows print all four.** `bookingCheckIn/Out/Packaged`,
+    `bookingSkippedDays`, `bookingCustomerSkips` and `bookingOpenDays` are on
+    the `GATED_ORDER_FIELDS` allowlist — store closures and seller-logged skips,
+    not buyer data. They joined it with these
+    columns: without them a gated open-days package overcounted everywhere the
+    span is read (Days said 7 for a member who bought 5, and the booking-period
+    chip said "6 days left" with 3 visits to go). Pinned by tests that run the
+    real `redactGatedOrder`.
+  - *Skips* counts `orders.bookingCustomerSkips` — the days the seller skipped
+    for the customer (`z8r3fdh3ay`). It explains the other three: each skip
+    moved the last day out by one open day and is already left out of Days
+    (`bookingSkippedDays` holds every unused day, skips included). Reads `0` /
+    "None" only on a plan that CAN be skipped (`bookingOpenDays`); blank on a
+    stay or calendar package, where "0 skips" would suggest an option it never
+    had. Orders placed before `bookingOpenDays` was frozen read blank until
+    their first skip — the skip mutations fall back to the listing
+    (`isSkippablePlan`), but the registry reads only the order. A count, not "1 of 3": `maxSkips` lives on the listing, so a later
+    edit would rewrite an exported row.
 - **Drag the HEADERS to reorder** — @dnd-kit horizontal, with the header itself
   as the drag handle. No separate grip: the shared `useSortableSensors` starts a
   pointer drag only after 8px and a touch drag only after a 250ms hold, so a
@@ -600,6 +644,12 @@ WhatsApp.
   `FilterOptionRow`): the panel opens with most columns on, so a tint would
   stripe two-thirds of the list without saying anything — unlike a filter, where
   a selected option is exceptional.
+  The panel is capped at Radix's measured
+  `--radix-popover-content-available-height`, with the column list as its one
+  flexible region. A fixed `52vh` on the list alone ignored the header above it
+  and the page banner, so on a 763px laptop window the panel ran 58px past the
+  viewport and its last rows — the Booking group, which sits last — could not be
+  scrolled to.
   The Columns panel is otherwise **show/hide only**, and turning a column on appends
   it to the right-hand end, where the seller can see what they added and drag it
   from there. `resolveOrderColumns` honours the caller's order, so the exported

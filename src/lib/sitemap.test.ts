@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { buildSitemapXml } from "./sitemap";
+import { buildSitemapXml, GUIDE_PATHS } from "./sitemap";
 
 const SITE = "https://kedaipal.com";
 
@@ -52,5 +54,57 @@ describe("buildSitemapXml", () => {
 			"<priority>0.8</priority>",
 		);
 		expect(xml.slice(productIdx)).toContain("<priority>0.6</priority>");
+	});
+});
+
+describe("buildSitemapXml — index hygiene (z8r3fdh2ye)", () => {
+	test("lists category pages between the store and its products, weekly at 0.7", () => {
+		const xml = buildSitemapXml({
+			siteUrl: SITE,
+			stores: [{ slug: "s", updatedAt: Date.UTC(2026, 9, 1) }],
+			categories: [
+				{
+					storeSlug: "s",
+					categorySlug: "kuih",
+					updatedAt: Date.UTC(2026, 9, 5),
+				},
+			],
+			products: [{ storeSlug: "s", productSlug: "p", updatedAt: 0 }],
+		});
+		const store = xml.indexOf(`<loc>${SITE}/s</loc>`);
+		const category = xml.indexOf(`<loc>${SITE}/s/c/kuih</loc>`);
+		const product = xml.indexOf(`<loc>${SITE}/s/p/p</loc>`);
+		expect(category).toBeGreaterThan(store);
+		expect(product).toBeGreaterThan(category);
+		const block = xml.slice(category, product);
+		expect(block).toContain("<lastmod>2026-10-05</lastmod>");
+		expect(block).toContain("<changefreq>weekly</changefreq>");
+		expect(block).toContain("<priority>0.7</priority>");
+	});
+
+	test("lists every seller setup guide, monthly at 0.4", () => {
+		const xml = buildSitemapXml({ siteUrl: SITE, stores: [], products: [] });
+		for (const path of GUIDE_PATHS) {
+			const i = xml.indexOf(`<loc>${SITE}${path}</loc>`);
+			expect(i, path).toBeGreaterThan(-1);
+			expect(xml.slice(i, i + 160)).toContain("<priority>0.4</priority>");
+		}
+	});
+
+	test("the guide list names files that exist", () => {
+		for (const path of GUIDE_PATHS) {
+			expect(
+				existsSync(join(__dirname, "..", "..", "public", path)),
+				path,
+			).toBe(true);
+		}
+	});
+
+	test("the sitemap lists what it is given — a store the rule excluded is simply absent", () => {
+		// The exclusion itself lives in Convex (`storefrontIndex.test.ts`); here
+		// the contract is only that nothing is invented: no store → nothing
+		// dated (only store, category and product entries carry a lastmod).
+		const xml = buildSitemapXml({ siteUrl: SITE, stores: [], products: [] });
+		expect(xml).not.toContain("<lastmod>");
 	});
 });

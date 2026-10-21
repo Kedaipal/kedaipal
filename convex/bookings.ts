@@ -77,7 +77,17 @@ import {
 	MAX_CUSTOMER_NOTE,
 	requireOrderAccess,
 } from "./orders";
-import { assertOrderCreditAvailable } from "./creditLock";
+import {
+	assertOrderCreditAvailable,
+	orderGatedForSeller,
+} from "./creditLock";
+import {
+	applyCustomerSkip,
+	isSkippablePlan,
+	latestCustomerSkip,
+	planSkipBlocker,
+	undoLatestSkip,
+} from "./lib/bookingSkips";
 import { effectivePrice } from "./lib/promo";
 import { assertSubscriptionActive, getAccess } from "./subscriptions";
 import { recordOrderCreated } from "./subscriptionUsage";
@@ -224,6 +234,10 @@ export const availability = query({
 		 * on a shut day, and an open-days one steps over them. Empty for a stay,
 		 * which the weekly day off never touches. */
 		closedWeekdays: number[];
+		/** Open-days packages only (z8r3fdh3ay): the listing's "up to N skips
+		 * per package", stated beside the rule before the buyer pays. Unset =
+		 * no limit. */
+		maxSkips?: number;
 	} | null> => {
 		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
 			throw new ConvexError("Availability window must be calendar days");
@@ -267,6 +281,10 @@ export const availability = query({
 				closureRule(product.booking) === "unavailable"
 					? []
 					: closedWeekdays(retailer.openingHours),
+			maxSkips:
+				closureRule(product.booking) === "skipped"
+					? product.booking?.maxSkips
+					: undefined,
 		};
 	},
 });
@@ -544,6 +562,13 @@ export const requestBooking = mutation({
 			// an open-days term weren't counted. A later hours edit never
 			// re-describes a paid package.
 			bookingSkippedDays: skipped.length > 0 ? skipped : undefined,
+			// Frozen (z8r3fdh3ay): sold as days of service, so the seller can
+			// "Skip a day" of it for life — whatever the listing says later.
+			// Stamped `false` too on every other package, so a later flip of the
+			// listing can't make an every-day pass skippable either.
+			bookingOpenDays: isPackageListing
+				? closureRule(product.booking) === "skipped"
+				: undefined,
 			securityDeposit,
 			// The check-in day IS the order's due date — the inbox sort, due-today
 			// strip and urgency badges all read fulfilmentDate, so a request for
@@ -852,5 +877,213 @@ export const expireStaleRequests = internalMutation({
 				cancelCause: "system",
 			});
 		}
+	},
+});
+
+/**
+ * What the seller's "Skip a day" control needs for one order (z8r3fdh3ay), or
+ * null when the order isn't a skippable plan at all — a stay, an every-day
+ * pass, a month, or a credit-gated order (invisible, T3.1) — so the control
+ * doesn't render rather than render disabled. Everything ELSE (which days can
+ * be picked, the preview of the new last day, why it's blocked) is computed on
+ * the client from the order through `convex/lib/bookingSkips`, the same module
+ * the mutation runs — this only adds the two facts the order row doesn't
+ * carry: the listing's cap and the store's schedule.
+ */
+export const skipPlan = query({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{
+		/** The listing's "up to N skips per package" — unset = no limit. */
+		maxSkips?: number;
+		/** The store's weekly days off + closed dates — with these the dialog
+		 * resolves the extension exactly as `skipPackageDay` will
+		 * (`storeClosedOn`). */
+		closedWeekdays: number[];
+		closedDates: ClosedDateRange[];
+	} | null> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "read",
+		});
+		if (order.deliveryMethod !== "booking") return null;
+		if (await orderGatedForSeller(ctx, order)) return null;
+		const listing = order.bookingProductId
+			? await ctx.db.get(order.bookingProductId)
+			: null;
+		if (
+			!isSkippablePlan(order, closureRule(listing?.booking) === "skipped")
+		) {
+			return null;
+		}
+		return {
+			maxSkips: listing?.booking?.maxSkips,
+			closedWeekdays: closedWeekdays(access.retailer.openingHours),
+			closedDates: access.retailer.closedDates ?? [],
+		};
+	},
+});
+
+/** Load + vet an order for a skip write — the shared front half of both
+ * mutations. Throws seller copy. The subscription and credit guards stay in
+ * each handler — the lock-coverage tests read them there. */
+async function loadSkippablePlan(
+	ctx: MutationCtx,
+	orderId: Doc<"orders">["_id"],
+) {
+	// Order-pipeline work rides the orders grant, like approve/decline.
+	const { order, access } = await requireOrderAccess(ctx, orderId, {
+		area: "orders",
+		level: "write",
+	});
+	const listing = order.bookingProductId
+		? await ctx.db.get(order.bookingProductId)
+		: null;
+	if (
+		order.deliveryMethod !== "booking" ||
+		!isSkippablePlan(order, closureRule(listing?.booking) === "skipped")
+	) {
+		throw new ConvexError(
+			"Only a package counted in open days can skip a day",
+		);
+	}
+	return { order, access, listing };
+}
+
+/**
+ * "Skip a day" (z8r3fdh3ay): the customer missed — or will miss — `day` of
+ * their open-days plan, so it stops counting and the plan's last day moves
+ * out by one open day. ONLY `bookingCheckOut` (plus the two day lists) moves:
+ * check-in, price, quantity and payment never do — a skip is not a refund.
+ *
+ * Seller-only by design: the buyer asks in WhatsApp, as today. And no
+ * WhatsApp goes out (owner call, 23 Sep) — the buyer's tracking page is the
+ * record, and the seller has just been talking to them anyway.
+ *
+ * Idempotent on the day: a second skip of the same day (two teammates, a
+ * double tap) is a no-op that says so, not an error.
+ */
+export const skipPackageDay = mutation({
+	args: { orderId: v.id("orders"), day: v.number() },
+	handler: async (
+		ctx,
+		{ orderId, day },
+	): Promise<{ alreadySkipped: boolean; lastDay: number }> => {
+		const { order, access, listing } = await loadSkippablePlan(ctx, orderId);
+		if (!access.actingAsAdmin) {
+			await assertSubscriptionActive(ctx, order.retailerId);
+		}
+		await assertOrderCreditAvailable(ctx, order);
+		const checkOut = order.bookingCheckOut as number;
+		if ((order.bookingCustomerSkips ?? []).includes(day)) {
+			return { alreadySkipped: true, lastDay: checkOut - DAY_MS };
+		}
+		if (!isMytMidnight(day)) throw new ConvexError("Pick a calendar day");
+		const blocker = planSkipBlocker(order, {
+			maxSkips: listing?.booking?.maxSkips,
+		});
+		if (blocker !== null) throw new ConvexError(blocker);
+
+		const retailer = access.retailer;
+		let result: ReturnType<typeof applyCustomerSkip>;
+		try {
+			result = applyCustomerSkip(
+				order,
+				day,
+				storeClosedOn(
+					closedWeekdays(retailer.openingHours),
+					retailer.closedDates,
+				),
+			);
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+		// The day the plan grows onto must be bookable — the one availability
+		// authority, so a capped listing can't be overbooked through a skip.
+		// The old check-out onward is the only new ground; a shut day stepped
+		// over on the way is never used, so only the new last day is asked.
+		if (listing) {
+			const full = await findFullNights(
+				ctx,
+				listing,
+				result.lastDay,
+				result.checkOut,
+			);
+			if (full.length > 0) {
+				throw new ConvexError(
+					`The plan would move onto ${formatFulfilmentDate(result.lastDay)}, which is blocked or fully booked — unblock it first`,
+				);
+			}
+		}
+
+		const now = Date.now();
+		await ctx.db.patch(order._id, {
+			bookingCheckOut: result.checkOut,
+			bookingSkippedDays: result.skippedDays,
+			bookingCustomerSkips: result.customerSkips,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			action: "booking_day_skipped",
+			note: `Skipped ${formatFulfilmentDate(day)} — last day now ${formatFulfilmentDate(result.lastDay)}`,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
+			createdAt: now,
+		});
+		await logAdminAction(ctx, access, "bookings.skipPackageDay", orderId);
+		return { alreadySkipped: false, lastDay: result.lastDay };
+	},
+});
+
+/**
+ * Undo the LATEST skip (z8r3fdh3ay) — the day counts again and the plan gives
+ * back the day it added. `day` is the skip the seller saw as latest: if
+ * another skip landed since (a teammate, another tab), this refuses rather
+ * than undoing one they never looked at. Older skips are final, so the
+ * history can't be rewritten out of order.
+ */
+export const unskipPackageDay = mutation({
+	args: { orderId: v.id("orders"), day: v.number() },
+	handler: async (ctx, { orderId, day }): Promise<{ lastDay: number }> => {
+		const { order, access } = await loadSkippablePlan(ctx, orderId);
+		if (!access.actingAsAdmin) {
+			await assertSubscriptionActive(ctx, order.retailerId);
+		}
+		await assertOrderCreditAvailable(ctx, order);
+		const latest = latestCustomerSkip(order);
+		if (latest === undefined) throw new ConvexError("There's no skip to undo");
+		if (latest !== day) {
+			throw new ConvexError(
+				"Only the latest skip can be undone — this one is final",
+			);
+		}
+		// Same state gates as a skip, minus the cap (undoing frees one).
+		const blocker = planSkipBlocker(order, {});
+		if (blocker !== null) throw new ConvexError(blocker);
+
+		const result = undoLatestSkip(order);
+		const now = Date.now();
+		await ctx.db.patch(order._id, {
+			bookingCheckOut: result.checkOut,
+			// Convex reads `undefined` as "remove" — the one spelling for none.
+			bookingSkippedDays:
+				result.skippedDays.length > 0 ? result.skippedDays : undefined,
+			bookingCustomerSkips:
+				result.customerSkips.length > 0 ? result.customerSkips : undefined,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			action: "booking_day_skip_undone",
+			note: `Undid the skip on ${formatFulfilmentDate(day)} — last day back to ${formatFulfilmentDate(result.lastDay)}`,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
+			createdAt: now,
+		});
+		await logAdminAction(ctx, access, "bookings.unskipPackageDay", orderId);
+		return { lastDay: result.lastDay };
 	},
 });
