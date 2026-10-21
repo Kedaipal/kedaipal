@@ -8,7 +8,9 @@ The palette was not invented for this ticket. `src/styles.css` has carried a com
 
 **Sellers** — Settings → **App → Appearance**: Light, Dark, or Match device, each with a preview swatch. Default is Match device.
 
-**Buyers** — a quiet "Dark mode" / "Light mode" row low on **every** buyer page, in the footer above the powered-by badge and in the same language as "Discover more stores" (a bordered icon disc beside the badge was tried and read as clutter — Zaki, 21 Oct 2026): the storefront family, `/track`, and the open `/claim` checkout. Two states, not three: the page already matched their phone on arrival, so the only thing worth offering is "actually, the other one". Deliberately below the fold — a theme switch must never compete with the buy button.
+**Sellers, desktop sidebar** — icon only too (z8r3fdwc19; it first shipped with a "Dark mode" word beside it). Expanded, it sits at the right end of the profile row, its glyph's right edge on the version pill's below; collapsed, the 68px rail has no room beside the avatar, so it takes its own row above it, on the rail's one icon column. Both forms stay mounted and cross-fade, the hidden one `inert` — the What's-new row's pattern.
+
+**Buyers** — an icon-only sun/moon in the **header** of every buyer page, always the **last icon in the top-right row** (z8r3fdwc19): on the store home it joins the cover's WhatsApp and Share discs and wears their skin (frosted on a photo, outline on the no-cover band), and on desktop — where those two move into the island as labelled buttons — it is the one icon left on the cover; on category, product and checkout it ends the compact app bar after Share; on `/track` it shares the store-eyebrow row; on `/claim` it ends the store header (dead-end screens included). Two states, not three: the page already matched their phone on arrival, so the only thing worth offering is "actually, the other one". It first shipped as a labelled "Dark mode" row in the footer above the powered-by badge; that read as stray chrome sitting on our badge (Zaki, 21 Oct 2026), and a header utility icon is where buyers look for one anyway. An icon in an existing icon row never competes with the buy button.
 
 It has to be on all of them, not just the storefront. A buyer who ordered over WhatsApp may never see a storefront at all: they get a tracking link and nothing else, so `/track` is their only chance to override what their phone picked. And keeping the slot consistent (bottom utility row, next to the privacy link or the powered-by badge) means someone who finds it once finds it everywhere. `theme-routes.test.ts` fails if a buyer route ships without one.
 
@@ -118,6 +120,5 @@ KP_WRITE_DARK_BUDGET=1 pnpm vitest run src/lib/dark-mode-coverage.test.ts
 
 ## Known gaps
 
-- The marketing site, sign-in and onboarding stay light (above).
 - `theme-color` meta and `site.webmanifest` stay pinned to `#0F172A`. It is a dark navy that reads correctly against both themes; splitting it per theme is churn for a 2%-lightness seam in the browser chrome.
-- The `/claim` dead-end screens (expired, already claimed, not found) carry no toggle — see the reasoning above. If a buyer ever needs one there, the same three lines drop in.
+- Pages with no store header carry no toggle: the store-not-found page, the buyer loading skeletons, and a `/claim` link whose store can't be resolved. Each is read and left in seconds; the theme still applies from the device or the stored pick.

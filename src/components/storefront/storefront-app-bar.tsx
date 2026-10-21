@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Share2 } from "lucide-react";
 import { shareLink } from "../../lib/share";
+import { ThemeToggle } from "../ui/theme-toggle";
 import { FoundingMemberBadge } from "./founding-member-badge";
 import { hasHoursLine, OpeningHoursLine } from "./opening-hours-line";
 import {
@@ -17,8 +18,10 @@ import {
  * Anatomy: a 44px back button (this bar OWNS "back" — the old "← All
  * products" text links below the header are gone), the store's 32px logo
  * tile + name + founding badge + live hours line as one tappable block that
- * also leads home, and a 44px share icon for the page's canonical URL (the
- * OS share sheet on mobile — the WhatsApp path — clipboard elsewhere).
+ * also leads home, a 44px share icon for the page's canonical URL (the
+ * OS share sheet on mobile — the WhatsApp path — clipboard elsewhere), and
+ * the theme flip last — the same last slot it holds on every buyer header
+ * (z8r3fdwc19).
  *
  * Not sticky, deliberately: the category page's search-and-chips bar (T3)
  * sticks to `top-0`, and two competing sticky bars would stack into an
@@ -110,6 +113,7 @@ export function StorefrontAppBar({
 				>
 					<Share2 className="size-5" aria-hidden />
 				</button>
+				<ThemeToggle variant="ghost" className="hover:bg-transparent" />
 			</div>
 		</header>
 	);
