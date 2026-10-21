@@ -65,9 +65,7 @@ describe("PlanSkipsNote", () => {
 		);
 		expect(screen.getByText(/Skipped at your request:/)).toBeTruthy();
 		expect(screen.getByText("Tue 6 Oct")).toBeTruthy();
-		expect(
-			screen.getByText(/\(1 of 3\)\. Your last day is now Mon, 12 Oct 2026\./),
-		).toBeTruthy();
+		expect(screen.getByText(/\(1 of 3\)\./)).toBeTruthy();
 		expect(screen.getByText(/up to 3 per package/)).toBeTruthy();
 		// Wed, Thu, Fri, then (weekend skipped) Mon.
 		expect(screen.getByText("4 days left, today included")).toBeTruthy();

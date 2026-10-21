@@ -1,14 +1,11 @@
 import { CalendarX2 } from "lucide-react";
 import { packageDaysLeft } from "../../../convex/lib/bookingPeriod";
-import {
-	DAY_MS,
-	formatFulfilmentDate,
-} from "../../../convex/lib/fulfilmentDate";
 import { describeNights, formatNight } from "../../lib/booking-dates";
 
 /**
  * The buyer's half of "Skip a day" (z8r3fdh3ay), under the plan card on
- * `/track`: how many days are left, every day they skipped, and — because the
+ * `/track`: how many days are left, every day they skipped (the "Last day"
+ * row above already shows where the plan now ends), and — because the
  * buyer is never messaged about a skip and there is no buyer button — that
  * skipping exists at all and how to ask for one. The seller does the skip;
  * this page is the record (no WhatsApp goes out, owner call 23 Sep).
@@ -84,9 +81,7 @@ export function PlanSkipsNote({
 								? ` (${skips.length} daripada ${maxSkips})`
 								: ` (${skips.length} of ${maxSkips})`
 							: ""}
-						{ms
-							? `. Hari terakhir anda kini ${formatFulfilmentDate(checkOut - DAY_MS)}.`
-							: `. Your last day is now ${formatFulfilmentDate(checkOut - DAY_MS)}.`}
+						.
 					</span>
 				</p>
 			) : null}

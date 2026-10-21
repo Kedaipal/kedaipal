@@ -559,19 +559,22 @@ describe("skips per package (z8r3fdh3ay)", () => {
 	});
 
 	it("the strip names the cap on an open-days package", () => {
-		const summary = describeProduct({
-			rows: [row({ price: "300" })],
-			currency: "MYR",
-			booking: {
-				capacityPerNight: "",
-				packageLength: "20",
-				packageUnit: "day",
-				skipsClosedDays: true,
-				maxSkips: "3",
-			},
-		} as SummaryInput);
-		expect(JSON.stringify(summary)).toContain(
-			"20-day package (open days only, up to 3 skips)",
-		);
+		expect(
+			describeProduct(
+				{
+					options: [],
+					rows: [row({ price: "300" })],
+					customLine: null,
+					booking: {
+						capacityPerNight: "",
+						packageLength: "20",
+						packageUnit: "day",
+						skipsClosedDays: true,
+						maxSkips: "3",
+					},
+				},
+				"MYR",
+			),
+		).toContain("20-day package (open days only, up to 3 skips)");
 	});
 });

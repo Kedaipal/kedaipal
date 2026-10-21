@@ -1693,3 +1693,143 @@ mutation-checked: removing any of them turns its test red.
   Mondays"**: a different feature.
 - **Peak-date pricing**: `peakDates[]` beside `weekendDays`, still S13's
   follow-up.
+
+## Skip a day — open-days plans (`z8r3fdh3ay`)
+
+Sue Chef Kitchen (FM #3) sells prepaid dinner plans: 5 or 20 meal days, Mon–Fri,
+public holidays off, and a customer may skip a day and carry it forward. She
+tracked who had how many days left by hand.
+
+### The ticket was half-built already — reconciled before coding
+
+The ticket (written 23 Sep) asked for a new `packageUnit: "businessDay"` that
+counts Mon–Fri and skips seller **blocks**. That shipped a day later under
+another name: closed dates (`z8r3fdhpm7`) added the **open-days** day package
+(`skipsClosedDays`). It skips the store's **weekly days off** and its **closed
+dates**, freezes the skipped days on `orders.bookingSkippedDays`, refuses a
+start on a shut day, and counts "N open days left". A Mon–Fri store with
+Sat/Sun as days off and holidays as closed dates IS Sue's plan. So Part A
+(the unit, its derivation, start gating, copy, the days-left line) was **not
+rebuilt**. Building it would have made a second, competing "skip these days"
+mechanism. Two of the ticket's rules were deliberately not carried over:
+
+- **Blocks don't become skipped days.** Closed dates made "a block means
+  *can't be booked*, a closure means *the store isn't operating*" a locked
+  decision (`closureRule`). The ticket's "a block inside the range is a skipped
+  day, not a conflict" predates it and would undo it.
+- **No "N active plans will skip this day" line on the block dialog.** A block
+  never skips a plan day now, so the line would be false. A closed date added
+  after a sale doesn't extend a frozen term either; the seller's remedy for a
+  member who lost a day that way is exactly this feature: skip it for them.
+
+What was missing was **Part B, the seller-driven skip**. That is what this
+section covers.
+
+### Shape — one list stays the truth, a second says why
+
+- `orders.bookingSkippedDays` now holds **every unused day in the span**: the
+  shut days AND the customer's skips. Capacity (`occupiesNight`), the seller
+  grid, the Google Calendar feed (`usedDayRuns`), and every "N days" count
+  (`countedDays`, `describeBookingPeriod`) were already correct for it, with no
+  second field to union. That's why the skip isn't a separate list those
+  readers would each have to learn.
+- `orders.bookingCustomerSkips` is the **subset** the customer skipped, in the
+  order the seller logged them. It carries the why: labelled as a skip ("Tue 7
+  Oct skipped on request", never "store closed"), counted against the cap, and
+  the last entry is what Undo reverses.
+- `orders.bookingOpenDays` is **frozen at create** for every package (`true` /
+  `false`), so a later listing edit can't take "Skip a day" off a plan sold as
+  days of service, or put it on an every-day pass. Orders from before this
+  fall back to the listing's current rule.
+- `products.booking.maxSkips` is the optional "up to N skips per package".
+  It's open-days only (`sanitizeMaxSkips` refuses it elsewhere, never
+  store-and-ignore), 1–99, and 0 or blank means no limit. It's read **live**
+  at skip time: it's a policy, not a term of the sale.
+
+**Only open-days plans skip.** An every-day pass, a gym month and a stay are
+access time, which isn't owed back when unused (the norm closed dates already
+follows). `skipPlan` returns null for them and the control doesn't render.
+
+### One author — `convex/lib/bookingSkips.ts`
+
+`applyCustomerSkip` / `undoLatestSkip` / `planSkipBlocker` / `skipDayIssue`
+are pure. The mutations run them, and the seller's dialog runs them for its
+preview, so the "last day moves to Mon 12 Oct" the seller sees is the date
+written. A skip:
+
+1. Refuses a day outside the span, one already skipped, or a shut day the plan
+   already steps over ("it never used a day"). **Past days inside the plan are
+   allowed**, because customers tell the seller late.
+2. Extends `bookingCheckOut` to the first day on/after the old check-out the
+   store is open **now** (`storeClosedOn` of today's schedule: the replacement
+   day is being promised today), freezing any shut days stepped over on the
+   way. A plan can't run past `MAX_PACKAGE_DAYS` from its start (the
+   `bookingsOverlapping` look-back), so that is **refused, not truncated**.
+3. Asks the one availability authority (`findFullNights`) about the new last
+   day, so a capped listing can't be overbooked through a skip. A blocked or
+   full day refuses with "unblock it first".
+4. Never moves check-in, price, quantity or payment. A skip is not a refund.
+
+Undo reverses **only the latest** skip (`unskipPackageDay` takes the day the
+seller saw as latest and refuses if another landed since). Older skips are
+final, and the dialog says so. A plan that has ended, been marked Ended, been
+cancelled, or is still a request can't be skipped or undone. All of these
+reasons are shown beside the disabled button, not just thrown.
+
+**No WhatsApp is sent**, on skip or undo (owner call, 23 Sep; pinned by
+asserting nothing is scheduled). **Only the seller skips**: there's no buyer
+button and no keyword, because the buyer asks on WhatsApp, which is the
+product's thesis. Both mutations carry the subscription and per-order credit
+guards (classified in both lock-coverage tests), and write an `orderEvents`
+row with the new optional **`action`** field (`booking_day_skipped` /
+`booking_day_skip_undone`). The Activity card titles a row by its action
+("Day skipped") instead of repeating "Confirmed". The ticket's
+`orderEvents.type` didn't exist; `action` is the narrow version of it.
+
+### Where each side meets it
+
+- **Seller, order page**: a *Customer skips* row in the Fulfilment card, under
+  the dates it changes. With no skips it explains the feature ("Customer
+  missing a day? Skip it here…"). Then it shows "2 of 3 used", every skip, and
+  Undo on the latest ("Final" on the rest). The dialog opens on the next
+  skippable day, greys out what can't be picked (and says which kinds), and
+  previews the new last day.
+- **Seller, listing**: under "Only days you're open" in the shared
+  `PackageDayCounting` control (form + wizard, one control), *Skips per
+  package*, whose hint is where the seller learns "Skip a day" exists. The
+  summary strip reads "20-day package (open days only, up to 3 skips)".
+- **Seller, inbox + customer card**: the period line gains "· 1 skip"
+  (`describeBookingPeriod`), so the desk sees it without opening the order.
+- **Buyer, checkout**: the open-days rule line adds "Can't make a day? Ask
+  <store> — they can skip it and add a day to the end (up to N per package)".
+- **Buyer, `/track`**: under the plan card (`PlanSkipsNote`), "N days left,
+  today included" (`packageDaysLeft`, today = last day → "Last day: today"),
+  "Skipped at your request: Tue 6 Oct (1 of 3). Your last day is now …", and
+  the how-to-ask line until the plan ends. The items line names closures and
+  skips separately (`describeSkippedDays`). EN + MS.
+- **Google Calendar feed**: no change. It already draws one event per run of
+  used days off `bookingCheckOut` + `bookingSkippedDays`, so a skip splits the
+  event and moves its end (pinned in `bookingSkips.test.ts`).
+
+### Tests
+
+`convex/lib/bookingSkips.test.ts` (extension across a weekend and a closed
+date, last-day skip, second skip, every refusal, the year ceiling, exact undo
+incl. sold-with closures, latest-only, plan blockers, the feed runs),
+`convex/bookingSkips.test.ts` (the Mon–Fri plan end to end: frozen flag,
+extension, money untouched, event row + actor, nothing scheduled, idempotent
+re-skip, weekend + cap refusals, undo order, capacity refusal, stranger
+refused, every-day pass has no skip, legacy fallback, `maxSkips` round-trip /
+clear / refusals), `bookingPeriod.test.ts`, `booking-dates.test.ts`,
+`product-summary.test.ts`, and component tests for `SkipDayCard` and
+`PlanSkipsNote`. Guards mutation-checked: removing the cap, capacity,
+frozen-flag or latest-only check each turns a test red.
+
+### Deliberately NOT done
+
+- **A `Skipped days` CSV column.** The export has no booking-span columns at
+  all (no start, last day or days left), so a lone skip count would be half a
+  fact. The right follow-up is booking columns as a set.
+- **A buyer-side skip or a WhatsApp keyword**: owner call, see above.
+- **Skips on every-day / month packages** ("freeze my membership"): a
+  different product with its own rules.

@@ -290,7 +290,9 @@ function SkipDayDialog({
 					modifiersClassNames={{
 						selected:
 							"!bg-primary !text-primary-foreground hover:!bg-primary font-semibold !rounded-lg",
-						skipped: "line-through",
+						// On the BUTTON: a cell's text-decoration never reaches the
+						// inline-block button inside it (seen rendered, 21 Oct).
+						skipped: "[&>button]:line-through [&>button]:decoration-2",
 					}}
 				/>
 				<p className="text-[11px] leading-snug text-muted-foreground">
