@@ -71,6 +71,10 @@ In light mode a handful of surfaces invert against the page: `bg-foreground text
 
 Progress-bar fills and dots that use `bg-foreground` as a neutral ink (`customers-card`, `sources-card`) are left alone: a near-white bar on a dark card is a legible neutral, not a slab.
 
+### A dense white fill is a plate, not a scrim
+
+The coverage gate treats translucent `white`/`black` as a scrim that composites over whatever sits behind it, and lets it through without a `dark:` pair. For **white fills that holds only below 40%**. `bg-white/10`–`/30` is a sheen and reads in both themes. From `bg-white/40` up, the white dominates the ground: the admin billing tiles shipped `bg-white/70` icon wells that showed as near-white discs, with a pale icon on them, on a `-950` tile in dark (z8r3fdwf9t). So `bg-white/NN` at **≥40 needs a dark pair** (the stat tiles use `dark:bg-current/15`, a tint of the tile's own ink) or a `dark-ok` marker when the ground really is fixed (a dot over a cover photo). Black scrims stay exempt at any opacity, and borders/rings stay exempt, because a hairline is not a surface. The gate also skips comment lines now, so a comment that names the colour it replaced is never counted.
+
 ### Navy, never black
 
 Black is not a Kedaipal colour. Arif named it first for the pill toggles (19 Oct 2026 — "use our navy blue, not black") and Zaki for the storefront badges and the countdown (20 Oct): `--primary` at 11% lightness reads **black** at badge size, so a `bg-primary` sale badge, a `bg-primary/90` sale strip and an 11% receipt-paper countdown all looked like black stickers on the product. The dark ink is **`--segment`**: the same navy hue a step lighter — 22% in light, 34% in dark — as `bg-segment text-segment-foreground`. Buttons stay `bg-primary`; the countdown's paper and cut moved up the same step. The coverage gate now **fails on any solid black-family surface** (`bg-black`, `bg-slate-900`…); a translucent scrim is fine, and the one legitimate black object — a phone bezel inside a product mockup — lives in exempt files.
