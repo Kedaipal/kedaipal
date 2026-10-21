@@ -78,11 +78,13 @@ export function OrderColumnPicker({
 					</span>
 				</Button>
 			</PopoverTrigger>
-			{/* Capped at Radix's MEASURED room below the trigger, with the list as
-			    the one flexible region. The old fixed `52vh` on the list ignored
-			    the header above it and the banner above the page, so on a laptop
-			    window the panel ran past the viewport and its last rows — the
-			    Booking group, which sits last — could not be scrolled to. */}
+			{/* Two caps, two jobs. The PANEL is capped at Radix's MEASURED room
+			    below the trigger, with the list as its one flexible region — that
+			    is what keeps every row reachable. The list's own `52vh` only keeps
+			    the panel compact on a tall monitor; on its own it ignored the
+			    header and the page banner, so on a laptop window the panel ran
+			    past the viewport and its last rows — the Booking group, which
+			    sits last — could not be scrolled to. */}
 			<PopoverContent
 				align="end"
 				data-testid="column-picker-panel"
