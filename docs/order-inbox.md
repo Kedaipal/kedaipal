@@ -478,6 +478,13 @@ WhatsApp.
   hard rule for wide content) and its row controls **grow to 44px touch targets
   below `lg`** — with the checkbox's *visual* box staying 18px inside that target,
   since growing the box itself would give a phone a giant empty square.
+- **Narrow phones (found 21 Oct, PR #402 review):** the mobile header's five
+  actions need ~350px, which only just fits a 393px phone — and the title was
+  the part allowed to shrink, so at 375px and below the view switch sat on top
+  of "Orders". The row now WRAPS: the title keeps its width and the actions
+  drop to their own line, right-aligned. In table view the chip row also stops
+  at the Columns pill instead of bleeding 20px under it. Checked at 299 / 320 /
+  375 / 393px.
 - **Where the controls live** — settled after the first build crowded five of
   them into one row and squeezed the search input down to its own padding:
   - **The view switch is in the PAGE HEADER**, beside Select and Export. Those
