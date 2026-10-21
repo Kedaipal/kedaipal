@@ -158,10 +158,10 @@ function PromotionRoute() {
 			</div>
 			<ViewOnlyNote />
 
-			<section className="flex flex-col gap-3 rounded-3xl bg-foreground p-5 text-background">
+			<section className="flex flex-col gap-3 rounded-3xl bg-foreground p-5 text-background dark:text-foreground dark:border dark:border-accent/30 dark:bg-accent/12 dark:text-foreground">
 				<div className="flex items-start justify-between gap-3">
 					<div className="flex flex-col gap-1">
-						<span className="text-[11px] font-bold uppercase tracking-[0.08em] text-background/65">
+						<span className="text-[11px] font-bold uppercase tracking-[0.08em] text-background/65 dark:text-foreground/65">
 							{countdown?.label ?? (ended ? "Ended" : "Running")}
 						</span>
 						<span className="font-heading text-3xl font-extrabold tabular-nums text-accent">
@@ -172,7 +172,7 @@ function PromotionRoute() {
 						<PhaseBadge phase={phase} paused={pausedByPlan} />
 					</div>
 				</div>
-				<p className="text-[13px] text-background/80">
+				<p className="text-[13px] text-background/80 dark:text-foreground/80">
 					{promotion.percentOff}% off · {products.length}{" "}
 					{products.length === 1 ? "product" : "products"} ·{" "}
 					{windowLine(promotion, phase, now, { timeLeft: false })}
@@ -181,7 +181,7 @@ function PromotionRoute() {
 						: ""}
 				</p>
 				{phase === "applying" ? (
-					<p className="text-xs text-background/70">
+					<p className="text-xs text-background/70 dark:text-foreground/70">
 						Putting the sale price on {queue.pending} more{" "}
 						{queue.pending === 1 ? "product" : "products"}… this finishes on its
 						own in a few seconds.
@@ -208,7 +208,7 @@ function PromotionRoute() {
 							asChild={setGate === null}
 							disabled={setGate !== null}
 							variant="secondary"
-							className="tap-target bg-background/12 text-background hover:bg-background/20"
+							className="tap-target bg-background/12 dark:bg-foreground/12 text-background dark:text-foreground hover:bg-background/20 dark:hover:bg-foreground/20"
 						>
 							{setGate === null ? (
 								<Link
@@ -225,7 +225,7 @@ function PromotionRoute() {
 							type="button"
 							disabled={lockReason !== null}
 							onClick={() => setConfirmEnd(true)}
-							className="tap-target bg-background text-destructive hover:bg-background/90"
+							className="tap-target bg-background text-destructive hover:bg-background/90 dark:hover:bg-foreground/90"
 						>
 							End now
 						</Button>

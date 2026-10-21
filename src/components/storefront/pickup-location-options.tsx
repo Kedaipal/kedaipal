@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { formatPrice } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
+import { TONE_CHIP } from "../../lib/tone";
 import { ClampedNote } from "../ui/clamped-note";
 
 /** Pickup kind — "self_collect" (seller's place) or "drop_off" (meetup point). */
@@ -127,7 +128,10 @@ export function PickupSummaryCard({
 }
 
 /** "+ RM2.00 fee" chip on a paid pickup point — the charge must be visible on
- *  the option itself, before the buyer picks it, not only in the totals. */
+ *  the option itself, before the buyer picks it, not only in the totals.
+ *  Tone comes from the shared registry rather than hand-written classes: the
+ *  identical pill also renders seller-side (Settings → Fulfilment), and two
+ *  hand-copied colour maps drift on the first change — dark mode was the proof. */
 function PickupFeeChip({
 	fee,
 	currency,
@@ -137,7 +141,9 @@ function PickupFeeChip({
 }) {
 	if (!fee || fee <= 0) return null;
 	return (
-		<span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+		<span
+			className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${TONE_CHIP.warn}`}
+		>
 			+ {formatPrice(fee, currency)} fee
 		</span>
 	);

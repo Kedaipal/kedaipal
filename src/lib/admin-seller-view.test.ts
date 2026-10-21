@@ -52,6 +52,7 @@ function row(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		comped: false,
 		createdAt: at(-180),
 		unclaimed: false,
+		referralEditable: true,
 		purging: false,
 		marketplace: { internal: false },
 		country: "MY",
@@ -194,6 +195,88 @@ describe("sellerExpiry — the wording follows the state", () => {
 			NOW,
 		);
 		expect(soon.tone).toBe("warn");
+	});
+
+	// z8r3fdw12q — Wagyu Walid on prod: period ended 16 Oct, renewal issued
+	// 17 Oct due 31 Oct, cell read "Renews 16 Oct · 4 days ago".
+	describe("active, period lapsed, renewal invoice pending — the bill's due date is the deadline", () => {
+		const renewal = {
+			invoiceNumber: "INV-202610-61Q3",
+			dueDate: at(11),
+			total: 10400,
+			currency: "MYR",
+			hasPayNowLink: true,
+			plan: "pro",
+			billingCycle: "monthly",
+			kind: "plan",
+		} as const;
+
+		it("lapsed + pending → Invoice due, days remaining, sorted by the due date", () => {
+			const e = sellerExpiry(
+				row({
+					subscriptionStatus: "active",
+					currentPeriodEnd: at(-4),
+					pendingInvoice: renewal,
+				}),
+				NOW,
+			);
+			expect(e).toEqual({
+				headline: `Invoice due ${formatDeadline(at(11), NOW)}`,
+				detail: "in 11 days",
+				tone: "muted",
+				at: at(11),
+			});
+		});
+
+		it("period still running + pending (an early plan-change bill) → still Renews", () => {
+			const e = sellerExpiry(
+				row({
+					subscriptionStatus: "active",
+					currentPeriodEnd: at(9),
+					pendingInvoice: { ...renewal, dueDate: at(2) },
+				}),
+				NOW,
+			);
+			expect(e).toMatchObject({
+				headline: `Renews ${formatDeadline(at(9), NOW)}`,
+				detail: "in 9 days",
+				at: at(9),
+			});
+		});
+
+		it("lapsed + no invoice yet (cron has not run) → unchanged Renews · N days ago, red", () => {
+			const e = sellerExpiry(
+				row({ subscriptionStatus: "active", currentPeriodEnd: at(-1) }),
+				NOW,
+			);
+			expect(e).toMatchObject({
+				headline: `Renews ${formatDeadline(at(-1), NOW)}`,
+				detail: "1 day ago",
+				tone: "danger",
+			});
+		});
+
+		it("a hold renews on the same cron: lapsed + pending hold bill → Invoice due", () => {
+			const e = sellerExpiry(
+				row({
+					subscriptionStatus: "on_hold",
+					currentPeriodEnd: at(-2),
+					pendingInvoice: { ...renewal, kind: "hold", dueDate: at(12) },
+				}),
+				NOW,
+			);
+			expect(e).toMatchObject({
+				headline: `Invoice due ${formatDeadline(at(12), NOW)}`,
+				detail: "in 12 days",
+				at: at(12),
+			});
+			expect(
+				sellerExpiry(
+					row({ subscriptionStatus: "on_hold", currentPeriodEnd: at(5) }),
+					NOW,
+				).headline,
+			).toBe(`Hold renews ${formatDeadline(at(5), NOW)}`);
+		});
 	});
 
 	it("trialing ends at the backstop until the first invoice exists, then the invoice's due date is the deadline", () => {
@@ -740,6 +823,7 @@ describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.
 	it("once claimed it reads like any other seller again", () => {
 		const claimed = row({
 			unclaimed: false,
+			referralEditable: true,
 			claimedAt: at(-2),
 			subscriptionStatus: "trialing",
 			trialEndsAt: at(12),

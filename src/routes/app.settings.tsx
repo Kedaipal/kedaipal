@@ -12,6 +12,7 @@ import {
 	Landmark,
 	MapPinned,
 	MessageCircle,
+	Moon,
 	Plug,
 	Plus,
 	QrCode,
@@ -57,6 +58,7 @@ import {
 import { TierPill } from "../components/dashboard/tier-pill";
 import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
+import { AppearanceTab } from "../components/settings/appearance-tab";
 import { BillingTab } from "../components/settings/billing-tab";
 import { BookingsTab } from "../components/settings/bookings-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
@@ -124,7 +126,7 @@ import {
 	currencySymbol,
 	formatMobile,
 } from "../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { IMAGE_ACCEPT } from "../lib/image-upload";
 import { NOTE_LINK_HINT } from "../lib/linkify";
 import { LOCALE_LABELS } from "../lib/message-templates";
 import type { StatusLabels } from "../lib/orderStatus";
@@ -137,6 +139,7 @@ import {
 	type SettingsSpotlightKey,
 	SPOTLIGHT_ANCHOR,
 } from "../lib/spotlight";
+import { uploadImage } from "../lib/storage-upload";
 import { hasFeature, tierPill } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
@@ -165,7 +168,8 @@ type SettingsTab =
 	| "fulfilment"
 	| "integrations"
 	| "bookings"
-	| "order-status";
+	| "order-status"
+	| "appearance";
 
 // Legacy deep-link support: the fulfilment tab used to be "pickup" (self-collect
 // only). Old bookmarks / checklist links carry `?tab=pickup` — normalise them so
@@ -243,6 +247,15 @@ const SETTINGS_TABS: ReadonlyArray<{
 		description: "Buyer-facing order stages",
 		icon: <ClipboardList className="size-4" />,
 	},
+	// Not a store setting: every tab above configures what BUYERS see, this one
+	// configures the app on THIS DEVICE. Hence its own group below rather than a
+	// seventh row under Selling.
+	{
+		id: "appearance",
+		label: "Appearance",
+		description: "Light, dark or match device",
+		icon: <Moon className="size-4" />,
+	},
 ];
 
 const SETTINGS_TAB_IDS: ReadonlyArray<SettingsTab> = SETTINGS_TABS.map(
@@ -264,6 +277,9 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 		tabs: ["payments", "fulfilment", "order-status", "whatsapp"],
 	},
 	{ label: "Connections", tabs: ["integrations", "bookings"] },
+	// Last by urgency, not by laziness: you set your store up before you tune how
+	// it looks, and this is the only group that changes nothing a buyer sees.
+	{ label: "App", tabs: ["appearance"] },
 ];
 
 /** The store type as a glance word ("Set · Food & goods"). */
@@ -682,8 +698,12 @@ function SettingsRoute() {
 						Settings
 					</h2>
 
-					{/* Store identity card — doubles as the deep link + tier badge. */}
-					<div className="flex items-center gap-3 rounded-2xl bg-foreground p-3.5 text-background">
+					{/* Store identity card — doubles as the deep link + tier badge.
+					    In dark it becomes a mint-tinted panel rather than flipping to a
+					    white plate: `bg-foreground` inverts to near-white on a dark page,
+					    which reads as a hole punched in the screen. Same recipe as the
+					    other emphasis panels (Home's due-today banner and hero stat). */}
+					<div className="flex items-center gap-3 rounded-2xl bg-foreground p-3.5 text-background dark:border dark:border-accent/30 dark:bg-accent/12 dark:text-foreground">
 						<span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-accent font-heading text-base font-extrabold text-accent-foreground">
 							<AppImage
 								src={retailer.logoUrl}
@@ -1190,6 +1210,10 @@ function SettingsRoute() {
 							/>
 						</AreaGate>
 					) : null}
+
+					{/* No AreaGate: this is a device preference, not store data — a
+					    teammate with no settings grant still picks their own theme. */}
+					{activeTab === "appearance" ? <AppearanceTab /> : null}
 				</div>
 			</div>
 		</div>
@@ -1644,20 +1668,13 @@ function LogoForm({
 		if (!file) return;
 		setUploading(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () => generateLogoUploadUrl());
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const url = await generateLogoUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
-			setLocalPreview(URL.createObjectURL(prepared.blob));
+			const { storageId } = upload;
+			setLocalPreview(URL.createObjectURL(upload.blob));
 			await onSave(storageId);
 			toast.success("Logo saved.");
 		} catch (err) {
@@ -1751,20 +1768,15 @@ function CoverImageForm({
 		if (!file) return;
 		setUploading(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () =>
+				generateCoverImageUploadUrl(),
+			);
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const url = await generateCoverImageUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
-			setLocalPreview(URL.createObjectURL(prepared.blob));
+			const { storageId } = upload;
+			setLocalPreview(URL.createObjectURL(upload.blob));
 			await onSave(storageId);
 			toast.success("Cover image saved.");
 		} catch (err) {
@@ -2101,22 +2113,15 @@ function PaymentMethodsForm({
 		if (!file) return;
 		setUploadingKey(key);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () => generateQrUploadUrl());
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const url = await generateQrUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
+			const { storageId } = upload;
 			update(key, {
 				qrImageStorageId: storageId,
-				qrPreviewUrl: URL.createObjectURL(prepared.blob),
+				qrPreviewUrl: URL.createObjectURL(upload.blob),
 			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));

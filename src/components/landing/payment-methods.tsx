@@ -41,6 +41,7 @@ function MethodChip({
 			<span
 				className={cn(
 					logoPillClass,
+					// dark-ok: ink on the white brand plate, both themes.
 					"h-11 px-4 text-sm font-bold text-slate-800",
 				)}
 			>
@@ -201,6 +202,7 @@ export function PaymentStripCompact() {
 					) : (
 						<span
 							key={method.id}
+							// dark-ok: a white plate under the brand mark, both themes.
 							className="inline-flex h-[30px] items-center rounded-full bg-white/[0.92] px-2.5 text-[11px] font-bold text-slate-800"
 						>
 							{method.name}

@@ -9,6 +9,8 @@
  * A profile URL or the description changes here and nowhere else.
  */
 
+import { INSTAGRAM_URL, TIKTOK_URL } from "./site-links";
+
 export const SITE_URL = "https://kedaipal.com";
 
 /** The entity behind the product. Singapore-incorporated (see `/terms`). */
@@ -29,16 +31,14 @@ export const AREA_SERVED = ["MY", "SG"] as const;
 export const AVAILABLE_LANGUAGES = ["en", "ms", "zh"] as const;
 
 /**
- * Public profiles, in the order the footer shows them. Add a directory here
- * once its listing is live and it joins `sameAs` automatically.
+ * Public profiles, in the order the footer shows them. The URLs themselves
+ * are `site-links.ts` constants (where `footer.test.tsx` pins the live
+ * handles — a wrong one once shipped). Add a directory here once its listing
+ * is live and it joins `sameAs` automatically.
  */
 export const SOCIAL_LINKS = [
-	{
-		id: "instagram",
-		label: "Instagram",
-		url: "https://www.instagram.com/kedaipal_my/",
-	},
-	{ id: "tiktok", label: "TikTok", url: "https://www.tiktok.com/@kedaipal" },
+	{ id: "instagram", label: "Instagram", url: INSTAGRAM_URL },
+	{ id: "tiktok", label: "TikTok", url: TIKTOK_URL },
 ] as const;
 
 export type SocialLinkId = (typeof SOCIAL_LINKS)[number]["id"];

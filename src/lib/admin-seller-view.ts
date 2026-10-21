@@ -331,6 +331,46 @@ function toneForDeadline(at: number, now: number): ExpiryTone {
 }
 
 /**
+ * The "lapsed but renewing" window (z8r3fdw12q): the paid period has ended,
+ * the daily cron has issued the renewal invoice (the tier bill for `active`,
+ * the hold bill for `on_hold` — one loop, `internalIssueRenewalInvoice`
+ * picks the kind) and the seller keeps access through that invoice's 14-day
+ * grace. `currentPeriodEnd` only moves when the bill settles, so for those
+ * two weeks "Renews 16 Oct · 4 days ago" sat beside the sheet's "due 31 Oct"
+ * and read as a data problem (Wagyu Walid, prod, 20 Oct 2026). The bill's
+ * due date is the deadline now — the same rule the `trialing` branch applies
+ * to its first invoice, and the seller's own billing tab applies as
+ * `isRenewing` ("Active · renewing").
+ *
+ * Deliberately NOT applied while the period is still running: a pending
+ * invoice there is something else (an early plan-change bill, a contract's
+ * next term billed ahead) and the period end is still the date the store
+ * turns over on, so "Renews …" keeps its meaning for every seller who is not
+ * lapsed. Lapsed with NO invoice yet (the cron runs once a day) stays
+ * "Renews … · N days ago" — there is no bill to point at, and the red says
+ * so honestly. Undefined = not in the window.
+ */
+function renewingDeadline(
+	row: AdminSellerRow,
+	now: number,
+): SellerExpiry | undefined {
+	if (
+		!row.pendingInvoice ||
+		row.currentPeriodEnd === undefined ||
+		row.currentPeriodEnd > now
+	) {
+		return undefined;
+	}
+	const at = row.pendingInvoice.dueDate;
+	return {
+		headline: `Invoice due ${formatDeadline(at, now)}`,
+		detail: describeDays(at, now, "overdue"),
+		tone: toneForDeadline(at, now),
+		at,
+	};
+}
+
+/**
  * What "expires" means for this row. The wording follows the state, because
  * one column labelled "Expiry" would be wrong for most rows: an active store
  * renews, a trial ends, a past-due store has a bill that was due.
@@ -394,6 +434,9 @@ export function sellerExpiry(row: AdminSellerRow, now: number): SellerExpiry {
 			if (row.currentPeriodEnd === undefined) {
 				return { headline: "Active", detail: "No period end", tone: "muted" };
 			}
+			// Period over, renewal bill out: its due date is the deadline.
+			const renewing = renewingDeadline(row, now);
+			if (renewing) return renewing;
 			const at = row.currentPeriodEnd;
 			return {
 				headline: `Renews ${formatDeadline(at, now)}`,
@@ -433,6 +476,10 @@ export function sellerExpiry(row: AdminSellerRow, now: number): SellerExpiry {
 			if (row.currentPeriodEnd === undefined) {
 				return { headline: "On hold", detail: "No period end", tone: "muted" };
 			}
+			// A hold renews on the same cron and the same grace: once the hold
+			// bill is out past the period end, it is the deadline, not the hold.
+			const renewing = renewingDeadline(row, now);
+			if (renewing) return renewing;
 			const at = row.currentPeriodEnd;
 			return {
 				headline: `Hold renews ${formatDeadline(at, now)}`,
@@ -859,6 +906,10 @@ const CSV_HEADER = [
 	"Last paid",
 	"Signup source",
 	"Referrer",
+	// The referral programme's row (z8r3fdetf5) — who gets bonus credits —
+	// distinct from "Referrer" above, the store whose badge or link brought
+	// the signup.
+	"Referred by",
 	"Joined",
 	"Last act-as",
 ];
@@ -902,6 +953,11 @@ function sellerToCsvRow(
 			: "",
 		row.signupSource ?? "",
 		row.signupReferrer ? `/${row.signupReferrer.slug}` : "",
+		row.referral
+			? row.referral.referrer
+				? `/${row.referral.referrer.slug}`
+				: "(deleted store)"
+			: "",
 		csvDate(row.createdAt),
 		csvDate(row.lastActAsAt),
 	];

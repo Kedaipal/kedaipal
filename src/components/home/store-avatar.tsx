@@ -13,7 +13,7 @@ export function StoreAvatar({
 	return (
 		<span
 			className={cn(
-				"flex shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-foreground font-heading text-[15px] font-extrabold text-background",
+				"flex shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-foreground font-heading text-[15px] font-extrabold text-background dark:bg-accent/15 dark:text-accent-emphasis",
 				className,
 			)}
 			aria-hidden="true"

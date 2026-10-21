@@ -174,7 +174,7 @@ export function AutoRenewalCard({
 			<div className="flex items-start justify-between gap-3">
 				<div className="flex items-start gap-3">
 					{attention ? (
-						<AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-600" />
+						<AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-600 dark:text-amber-400" />
 					) : (
 						<RefreshCw className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
 					)}
@@ -258,7 +258,7 @@ export function AutoRenewalCard({
 							type="button"
 							onClick={turnOn}
 							disabled={busy || ownerOnly}
-							className="inline-flex h-10 w-fit items-center rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60"
+							className="inline-flex h-10 w-fit items-center rounded-lg bg-primary px-4 text-sm font-medium text-background disabled:opacity-60"
 						>
 							{busy
 								? "Opening secure setup…"

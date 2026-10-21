@@ -54,7 +54,10 @@ describe("OnboardingTopBar", () => {
 		renderBar();
 		const home = await screen.findByRole("link", { name: "Kedaipal home" });
 		expect(home.getAttribute("href")).toBe("/");
-		expect(screen.getByAltText("Kedaipal")).toBeTruthy();
+		// Two instances carry the alt — the navy mark and its light-ink twin,
+		// with CSS showing one per theme (Wordmark). jsdom applies no stylesheet,
+		// so both are present here.
+		expect(screen.getAllByAltText("Kedaipal")).toHaveLength(2);
 	});
 
 	it("names the signed-in account the store will belong to", async () => {

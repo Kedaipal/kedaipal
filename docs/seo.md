@@ -21,8 +21,8 @@ Everything the company says about itself — legal entity, description, support
 address, markets, languages, public profiles — lives in
 [`src/lib/site-identity.ts`](../src/lib/site-identity.ts). The landing's
 `Organization` JSON-LD, the footer's social links and `/llms.txt` all read it,
-so a profile URL or the description changes in one place and every surface
-follows. **Add a directory listing there once it is live** and it joins
+so a profile URL (itself a `site-links.ts` constant) or the description
+changes in one place and every surface follows. **Add a directory listing there once it is live** and it joins
 `sameAs` automatically.
 
 The GEO premise (the audit of 22 Sep 2026): an answer engine builds its

@@ -10,12 +10,13 @@ Ticket: [`z8r3fdrgzj`](https://app.clickup.com/t/z8r3fdrgzj). Design canvas:
 eight artboards (Home · Pro / Starter / desktop, Onboarding 1–3, Credits low /
 out).
 
-> **Scope note — dark mode is deliberately out.** The canvas renders the sales
-> hero as `background: var(--foreground)`, which inverts to a near-white slab
-> under the app's dark tokens, and every label inside it is written against
-> `var(--background)`. Dark mode is not shipped yet (Zaki, 12 Oct 2026), so Home
-> is built for light only and the hero's dark treatment is settled when dark
-> mode lands — not guessed at here. See PR #241.
+> **Dark mode.** The canvas renders the sales hero as `background:
+> var(--foreground)`, which would invert to a near-white slab under the app's
+> dark tokens. Home was built light-only (Zaki, 12 Oct 2026) and the hero's dark
+> treatment was settled when dark mode landed (`z8r3fdadub`, PR #241): the hero
+> and the welcome card become the mint-tinted emphasis panel every inverted
+> surface uses in dark, and the inverted buttons and selected chips take
+> `bg-primary` (mint). See [`dark-mode.md`](./dark-mode.md).
 
 ---
 

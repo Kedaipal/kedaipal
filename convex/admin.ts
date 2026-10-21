@@ -51,6 +51,7 @@ import {
 	renewalCurrency,
 } from "./lib/plans";
 import { loadCreditAccount } from "./credits";
+import { referralForReferee } from "./referrals";
 import { storeIsInternal } from "./marketplace";
 import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
 import { contractForAdmin } from "./lib/enterprise";
@@ -142,6 +143,24 @@ export type AdminSellerRow = {
 	 * (`retailers.signupReferrerId`, z8r3fdcwd0), resolved to its CURRENT slug
 	 * + name. Absent = no badge referrer, or one that has since been purged. */
 	signupReferrer?: { slug: string; storeName: string };
+	/** Who REFERRED this store through the referral programme (z8r3fdetf5) —
+	 * the `referrals` row the reward keys off, distinct from the badge
+	 * attribution above. `referrer` is null when that store has since been
+	 * deleted (the referral stands). */
+	referral?: {
+		referrer: { slug: string; storeName: string } | null;
+		via: "link" | "admin";
+		at: number;
+		/** The reward (T2), once the store's first invoice was paid. */
+		reward?: {
+			refereeCredits: number;
+			referrerCredits?: number;
+			referrerOutcome: "granted" | "unmetered" | "deleted" | "self";
+		};
+	};
+	/** Whether an admin can still set, change or remove the referral: the
+	 * store hasn't paid its first plan invoice (the reward's moment). */
+	referralEditable: boolean;
 	createdAt: number;
 	/** Pre-built store, not yet handed over (docs/prebuilt-stores.md). An admin
 	 * built it before the vendor had an account, so it has no owner: every
@@ -384,6 +403,12 @@ export const listSellersForAdmin = query({
 				{ plan: sub?.plan ?? "pro", billingCycle: sub?.billingCycle ?? "monthly" },
 			);
 			const lastActAsAt = await loadLastActAs(ctx, r._id);
+			// One index read per store (`by_referee`); the referrer's doc only
+			// when there is a referral.
+			const referral = await referralForReferee(ctx, r._id);
+			const referralReferrer = referral
+				? await ctx.db.get(referral.referrerId)
+				: null;
 			// One index read per store (`by_retailer`), the cached balances only.
 			const creditAccount = await loadCreditAccount(ctx, r._id);
 			// Seats (86exr91r4) — two short index reads per store; cap through
@@ -456,6 +481,34 @@ export const listSellersForAdmin = query({
 							},
 						}
 					: {}),
+				...(referral
+					? {
+							referral: {
+								referrer: referralReferrer
+									? {
+											slug: referralReferrer.slug,
+											storeName: referralReferrer.storeName,
+										}
+									: null,
+								via: referral.via,
+								at: referral.createdAt,
+								...(referral.rewardedAt !== undefined
+									? {
+											reward: {
+												refereeCredits: referral.refereeCredits ?? 0,
+												referrerCredits: referral.referrerCredits,
+												referrerOutcome: referral.referrerOutcome ?? "granted",
+											},
+										}
+									: {}),
+							},
+						}
+					: {}),
+				// Any paid invoice means the first plan invoice is paid (a hold
+				// bill only ever follows one) — the same answer
+				// `referrals.hasPaidPlanInvoice` gives the mutations that
+				// enforce it.
+				referralEditable: lastPaidCurrency === undefined,
 				createdAt: r._creationTime,
 				unclaimed: isUnclaimed(r),
 				pendingOwnerEmail: r.pendingOwnerEmail,

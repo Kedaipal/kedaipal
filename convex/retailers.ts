@@ -241,6 +241,7 @@ import { sanitizeAttributionSource } from "./lib/attribution";
 import { isChoosablePickupPoint } from "./lib/pickupChoice";
 import { sanitizeUnitLine, UNIT_LINE_MAX_LENGTH } from "./lib/address";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
+import { referralSourceTag } from "./lib/referral";
 import { isValidGaClientId } from "./lib/ga4";
 import { sendEmail } from "./lib/email";
 import { renderHandoverInvite } from "./lib/handoverEmailCopy";
@@ -315,6 +316,7 @@ import {
 import { TEMPLATE_MAX_LENGTH } from "./lib/whatsappCopy";
 import { type CreditGateState, resolveCreditGate } from "./creditLock";
 import { ensureCreditAccount } from "./credits";
+import { insertReferral, resolveSignupReferrer } from "./referrals";
 import {
 	assertSupportedCurrency,
 	DEFAULT_CURRENCY,
@@ -1681,6 +1683,12 @@ export const createRetailer = mutation({
 		// signupSource. A hint: resolved to a store id here, dropped when it
 		// names no store.
 		signupReferrerSlug: v.optional(v.string()),
+		// The `/referral/<slug>` link the seller arrived through (z8r3fdetf5),
+		// read from the 30-day referral cookie rather than the session — a
+		// referee who taps the link today and signs up tomorrow keeps the
+		// reward they were shown. A hint like the two above: resolved here, and
+		// recorded only when the store behind it can refer right now.
+		referralSlug: v.optional(v.string()),
 		// GA4 client id from the seller's `_ga` cookie (z8r3fdd1v1), so the
 		// server-side key events stitch to their client-side funnel. A hint like
 		// signupSource: validated here (wire format only), dropped otherwise.
@@ -1750,7 +1758,7 @@ export const createRetailer = mutation({
 
 		// Absent/blank → undefined (untagged), present-but-garbage → "other" —
 		// identical semantics to orders.attributionSource.
-		const signupSource = sanitizeAttributionSource(args.signupSource);
+		const taggedSource = sanitizeAttributionSource(args.signupSource);
 		// Wire-format check only — a malformed value is dropped (unlike
 		// signupSource's "other" bucket: a garbage client id has no signal value).
 		const gaClientId =
@@ -1768,7 +1776,16 @@ export const createRetailer = mutation({
 					.withIndex("by_slug", (q) => q.eq("slug", referrerSlug))
 					.first()
 			: null;
-		const signupReferrerId = referrer?._id;
+		// A referral (z8r3fdetf5) — resolved BEFORE the insert so the new
+		// store's own slug can never answer. It is the explicit "this store
+		// sent me" relationship, so it outranks a badge referrer as the
+		// attribution, and lends its tag to a session that carried none (the
+		// referee who comes back days later by typing kedaipal.com).
+		const referral = await resolveSignupReferrer(ctx, args.referralSlug);
+		const signupReferrerId = referral?._id ?? referrer?._id;
+		const signupSource =
+			taggedSource ??
+			(referral ? referralSourceTag(referral.slug) : undefined);
 
 		const now = Date.now();
 		// Consent is implied: the onboarding UI gates submission on a required,
@@ -1819,6 +1836,15 @@ export const createRetailer = mutation({
 		// Open the credit account with the trial allowance (Credits, 86eye2ccu),
 		// so the balance exists from day one rather than at the first order.
 		await ensureCreditAccount(ctx, retailerId, now);
+		if (referral) {
+			await insertReferral(ctx, {
+				refereeId: retailerId,
+				referrerId: referral._id,
+				via: "link",
+				recordedBy: "system",
+				now,
+			});
+		}
 
 		return { slug };
 	},

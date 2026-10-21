@@ -197,6 +197,24 @@ export function creditsLowTemplateName(): string | undefined {
 	return name && name.trim().length > 0 ? name.trim() : undefined;
 }
 
+/**
+ * Referral rewards (86ey82hke): the WhatsApp half of "your bonus credits
+ * landed", one template per side. Env-gated like every seller template —
+ * absent until Meta approves it, and the email carries the news meanwhile.
+ * Params: {{1}} store name, {{2}} credits, {{3}} the other store's name;
+ * button URL https://kedaipal.com/app/settings?tab={{1}} ("billing").
+ */
+export function referralReferrerTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_REFERRAL_REFERRER_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/** See referralReferrerTemplateName — the referee's "bonus landed". */
+export function referralRefereeTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_REFERRAL_REFEREE_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
 /** See creditsLowTemplateName — out of credits (also re-sent when a monthly
  * refresh leaves the store still below zero). */
 export function creditsLockedTemplateName(): string | undefined {

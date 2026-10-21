@@ -7,7 +7,8 @@ import { api } from "../../../convex/_generated/api";
 import type { PaymentMethod } from "../../../convex/lib/payment";
 import { qrFilenameBase, saveImageFromUrl } from "../../lib/download";
 import { convexErrorMessage } from "../../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
+import { IMAGE_ACCEPT } from "../../lib/image-upload";
+import { prepareImage, uploadPrepared } from "../../lib/storage-upload";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
 import { Input } from "../ui/input";
@@ -175,9 +176,13 @@ export function ManualPaymentDialog({
 		// renders as a broken box, with nothing telling either side why. So the
 		// proof is decoded (and shrunk) before it is stored — see
 		// lib/image-upload.ts.
-		const prepared = await prepareImageUpload(file);
+		const prepared = await prepareImage(file);
 		if (!prepared.ok) {
-			fail(copy.rejectMessage(prepared.reason));
+			fail(
+				prepared.reason.kind === "rejected"
+					? copy.rejectMessage(prepared.reason.reject)
+					: copy.uploadFailed,
+			);
 			return;
 		}
 		// Checked AFTER preparing, not before: the file is re-encoded on the way
@@ -187,30 +192,31 @@ export function ManualPaymentDialog({
 			fail(copy.rejectMessage("too_large"));
 			return;
 		}
-		try {
-			const uploadUrl = await generateUploadUrl({ token });
-			const uploadRes = await fetch(uploadUrl, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!uploadRes.ok) throw new Error(copy.uploadFailed);
-			const uploaded = (await uploadRes.json()) as { storageId: string };
-			revokePreview();
-			const previewUrl = URL.createObjectURL(prepared.blob);
-			previewUrlRef.current = previewUrl;
-			setProof({
-				status: "ready",
-				name: file.name,
-				storageId: uploaded.storageId,
-				previewUrl,
-			});
-		} catch (err) {
-			// `convexErrorMessage` carries the rate limiter's own "try again in N"
-			// wording through, which is the honest thing to show for the one
-			// failure a buyer can fix only by waiting.
-			fail(err instanceof Error ? convexErrorMessage(err) : copy.uploadFailed);
+		const uploaded = await uploadPrepared(prepared, () =>
+			generateUploadUrl({ token }),
+		);
+		if (!uploaded.ok) {
+			// A server refusal carries its own sentence — the rate limiter's "try
+			// again in N" is the honest thing to show for the one failure a buyer
+			// can fix only by waiting. Every other way an upload stops (a
+			// deadline, offline, a dropped connection) is the buyer's own words
+			// for "try again", in their language (z8r3fdtk85).
+			fail(
+				uploaded.reason.kind === "refused"
+					? uploaded.message
+					: copy.uploadFailed,
+			);
+			return;
 		}
+		revokePreview();
+		const previewUrl = URL.createObjectURL(uploaded.blob);
+		previewUrlRef.current = previewUrl;
+		setProof({
+			status: "ready",
+			name: file.name,
+			storageId: uploaded.storageId,
+			previewUrl,
+		});
 	}
 
 	const trimmedRef = reference.trim();
@@ -364,6 +370,8 @@ export function ManualPaymentDialog({
 														src={m.qrImageUrl}
 														alt={`${m.label} QR code`}
 														caption={m.label}
+														// dark-ok: the seller's payment QR. It must sit on
+														// white to scan, in either theme.
 														className="max-h-56 w-auto rounded-lg border border-border bg-white"
 													/>
 													<p className="text-xs text-muted-foreground">

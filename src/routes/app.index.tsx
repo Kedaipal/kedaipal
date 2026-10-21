@@ -31,6 +31,7 @@ import { EmptySalesCard } from "../components/home/empty-sales-card";
 import { ExceptionRows } from "../components/home/exception-rows";
 import { HomeSkeleton } from "../components/home/home-skeleton";
 import { PlanAheadCard } from "../components/home/plan-ahead-card";
+import { ReferCard } from "../components/home/refer-card";
 import { SalesSection } from "../components/home/sales-section";
 import {
 	type ChecklistItem,
@@ -527,6 +528,11 @@ function DashboardHome() {
 					{phase === "waiting" ? null : shareCard}
 				</div>
 			</section>
+
+			{/* Referring another SELLER (z8r3fdfp97) — its own section, not part
+			    of "Your store" (that card shares the store with buyers), and
+			    last because it is never urgent. Renders nothing on a trial. */}
+			<ReferCard retailerId={retailer._id} />
 
 			<StorefrontQrDialog
 				open={qrOpen}

@@ -45,6 +45,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		billingCycle: "monthly",
 		comped: false,
 		unclaimed: false,
+		referralEditable: true,
 		marketplace: { internal: false },
 		createdAt: 0,
 		purging: false,

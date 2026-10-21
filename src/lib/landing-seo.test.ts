@@ -18,7 +18,7 @@ import { describe, expect, it } from "vitest";
  * source-scan gates: `currency-literals.test.ts`, `convex-read-pattern.test.ts`).
  */
 
-const ROUTE = join(__dirname, "..", "routes", "index.tsx");
+const ROUTE = join(__dirname, "landing-seo.ts");
 const SERP_BUDGET = 155;
 const DIFFERENTIATOR = "no Meta setup";
 /** The locked 8 Sep 2026 tagline the description opens with. */
@@ -26,8 +26,9 @@ const TAGLINE = "Sell on WhatsApp. Never lose an order or a payment.";
 
 function readSeoDesc(): string {
 	const src = readFileSync(ROUTE, "utf8");
-	const match = src.match(/const SEO_DESC =\s*"((?:[^"\\]|\\.)*)";/);
-	if (!match) throw new Error("SEO_DESC literal not found in routes/index.tsx");
+	const match = src.match(/export const SEO_DESC =\s*"((?:[^"\\]|\\.)*)";/);
+	if (!match)
+		throw new Error("SEO_DESC literal not found in lib/landing-seo.ts");
 	return JSON.parse(`"${match[1]}"`);
 }
 

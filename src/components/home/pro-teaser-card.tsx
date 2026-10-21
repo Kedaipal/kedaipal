@@ -17,7 +17,7 @@ import { Button } from "../ui/button";
 export function ProTeaserCard() {
 	return (
 		<section className="flex flex-col gap-3.5 rounded-2xl border border-border bg-card p-4">
-			<span className="inline-flex w-fit items-center gap-1 rounded-full bg-foreground px-2 py-0.5 text-[11px] font-bold text-background">
+			<span className="inline-flex w-fit items-center gap-1 rounded-full bg-primary px-2 py-0.5 text-[11px] font-bold text-background dark:text-primary-foreground">
 				<Lock className="size-3" aria-hidden="true" />
 				Pro
 			</span>

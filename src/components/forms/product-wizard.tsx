@@ -103,7 +103,12 @@ import {
 	type ProductFormInitialValues,
 	type ProductFormSubmitValues,
 } from "./product-form";
-import { type ProductImage, ProductImagesField } from "./product-images-field";
+import {
+	failedPhotosLabel,
+	type PhotoUploadState,
+	type ProductImage,
+	ProductImagesField,
+} from "./product-images-field";
 import {
 	EMPTY_PROMO_DRAFT,
 	type PromoDraft,
@@ -1253,7 +1258,11 @@ export function ProductWizard({
 		revealRef.current?.scrollIntoView({ block: "nearest" });
 		setReveal(null);
 	}, [reveal]);
-	const [uploading, setUploading] = useState(false);
+	const [photoUploads, setPhotoUploads] = useState<PhotoUploadState>({
+		kind: "idle",
+	});
+	const uploading = photoUploads.kind === "uploading";
+	const photosFailed = photoUploads.kind === "failed" ? photoUploads.count : 0;
 	const [submitting, setSubmitting] = useState(false);
 	// The one destructive answer the wizard ever asks for — a type switch that
 	// drops typed prices, or leaving an unsaved draft. One piece of state, so
@@ -1708,9 +1717,11 @@ export function ProductWizard({
 		state.minQuantity.trim().length > 0 ||
 		state.minNoticeDays.trim().length > 0;
 
+	// A photo that didn't upload is still on screen waiting for Retry — leaving
+	// would lose it, so it counts as unsaved work (z8r3fdtk85).
 	const unsaved: UnsavedState = uploading
 		? "uploading"
-		: isDirty
+		: isDirty || photosFailed > 0
 			? "changes"
 			: "none";
 	useEffect(() => {
@@ -1966,8 +1977,28 @@ export function ProductWizard({
 				<button
 					type="button"
 					onClick={goBack}
-					aria-label={stepPos === 0 ? "Back to products" : "Previous step"}
-					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+					// Back unmounts the photo grid: an upload in flight would land
+					// with no tile to show it, a failed one would be dropped without
+					// a word. Held with the reason until the photos settle — the
+					// same reason Continue carries (PR #392 review).
+					disabled={uploading || photosFailed > 0}
+					aria-label={
+						uploading
+							? "Back — wait for the photo to finish uploading"
+							: photosFailed > 0
+								? `Back — ${failedPhotosLabel(photosFailed)}, retry or remove it first`
+								: stepPos === 0
+									? "Back to products"
+									: "Previous step"
+					}
+					title={
+						uploading
+							? "Wait for the photo to finish uploading"
+							: photosFailed > 0
+								? `${failedPhotosLabel(photosFailed)} — retry or remove it first`
+								: undefined
+					}
+					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
 				>
 					<ChevronLeft className="size-5" />
 				</button>
@@ -2165,8 +2196,7 @@ export function ProductWizard({
 						<ProductImagesField
 							images={state.images}
 							onChange={(images) => patch({ images })}
-							onUploadingChange={setUploading}
-							onError={setServerError}
+							onUploadStateChange={setPhotoUploads}
 						/>
 						{showDescription ? (
 							<label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -3655,10 +3685,17 @@ export function ProductWizard({
 					<Button
 						type="button"
 						onClick={goNext}
-						disabled={!structurallyAnswered || uploading}
+						// A photo in "Didn't upload" would be left behind on this step
+						// and the product created without it — held, with the reason,
+						// until the seller retries or removes it (z8r3fdtk85).
+						disabled={!structurallyAnswered || uploading || photosFailed > 0}
 						className="h-12 w-full shadow-lg shadow-accent/20 lg:shadow-none"
 					>
-						{uploading ? "Uploading…" : "Continue"}
+						{uploading
+							? "Uploading…"
+							: photosFailed > 0
+								? failedPhotosLabel(photosFailed)
+								: "Continue"}
 					</Button>
 				) : (
 					<Button

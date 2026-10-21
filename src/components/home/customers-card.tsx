@@ -71,7 +71,7 @@ export function CustomersCard({
 									className={cn(
 										"flex size-6 items-center justify-center rounded-full border-2 border-card text-[10px] font-bold",
 										i === 0
-											? "bg-foreground text-background"
+											? "bg-primary text-background dark:text-primary-foreground"
 											: i === 1
 												? "bg-accent text-accent-foreground"
 												: "bg-muted text-foreground",

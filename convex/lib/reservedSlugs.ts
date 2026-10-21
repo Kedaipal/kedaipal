@@ -39,6 +39,7 @@ const LIVE_ROUTES = [
 	"onboarding",
 	"pricing",
 	"privacy",
+	"referral", // a seller's referral link (z8r3fdetf5) — moved up from MARKETING
 	"sign-in",
 	"sign-up",
 	"stores", // the marketplace home (z8r3fdkmyp) — moved up from GENERIC
@@ -133,7 +134,8 @@ const MARKETING = [
 	"news",
 	"partners",
 	"press",
-	"referral",
+	// "referral" graduated to LIVE_ROUTES — the referral link lives there now
+	// (z8r3fdetf5); the plural stays parked for a future programme page.
 	"referrals",
 	"releases",
 	"roadmap",
