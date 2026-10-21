@@ -28,6 +28,7 @@ import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { absoluteProxiedImageUrl } from "../lib/image-proxy";
 import { ssrRead } from "../lib/ssr-read";
+import { ssrRetailerBySlug } from "../lib/storefront-ssr";
 
 interface CategoryLoaderData {
 	storeName: string;
@@ -50,10 +51,12 @@ interface CategoryLoaderData {
 export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 	loader: async ({
 		params,
+		context,
 	}): Promise<CategoryLoaderData | StoreUnavailableLoaderData | null> => {
-		const client = getConvexHttpClient();
-		const retailerRead = await ssrRead(() =>
-			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
+		// Seeds the cache the component reads (z8r3fdue6f — see $slug.tsx).
+		const retailerRead = await ssrRetailerBySlug(
+			context.queryClient,
+			params.slug,
 		);
 		// Transient upstream failure: render the shell (client query paints the
 		// category) instead of an error page (86eyheqzv). Definitive notFounds
@@ -80,6 +83,11 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 		const retailer = result.retailer;
 
 		// Unknown or archived category → 404, never a silent empty page.
+		// Read for head() + the 404 decision only, over the plain HTTP client:
+		// seeding it would switch the page body to server-rendered, which lands
+		// with the catalog prefetches once their payload is measured
+		// (z8r3fdue6f / 86eyjv002). `ssrEnsure` is where it goes.
+		const client = getConvexHttpClient();
 		const pageRead = await ssrRead(() =>
 			client.query(api.categories.getPublicPage, {
 				retailerId: retailer._id,

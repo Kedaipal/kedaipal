@@ -111,6 +111,18 @@ SEO trade-off, accepted: a crawler hitting a transient blip gets a meta-less
 200 instead of a 5xx. Rare, and crawlers refetch; humans are the priority on
 these routes.
 
+**The hydrated path (z8r3fdue6f).** The storefront home, category and
+product loaders no longer read the store over a bare HTTP client: they go
+through `ssrEnsure` (`src/lib/storefront-ssr.ts`), which seeds the request's
+own query cache so the HTML ships the store and the first client render
+paints from it. The contract above is unchanged — `ssrEnsure` IS `ssrRead`
+plus two things: a **3 s cap** (a slow Convex soft-degrades like a failed one
+instead of holding the first byte), and the guarantee that a failed or
+timed-out read ships **nothing** for its key (only answered queries are
+dehydrated), so the browser falls back to the skeleton + live query exactly
+as it did before seeding existed. See
+[`frontend-caching.md`](./frontend-caching.md#ssr-per-request-clients).
+
 ### 2. Branded error boundary with retry
 
 `src/components/route-error.tsx`, wired as `defaultErrorComponent` in
@@ -169,6 +181,8 @@ shape lives in pure `src/lib/sitemap.ts` with tests.
 ## Tests
 
 `src/lib/ssr-read.test.ts` (threw vs answered-null contract),
+`src/lib/storefront-ssr.test.ts` (seeded read: answer ships, failure and
+timeout ship nothing, `$slug` loader still 404s/301s/soft-degrades),
 `src/lib/sitemap.test.ts` (XML shape, lastmod truncation, priorities),
 `src/lib/buyer-routes.test.ts` (ids exist in the generated tree; Clerk
 surfaces never classified as buyer), `src/components/route-error.test.tsx`
