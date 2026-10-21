@@ -86,7 +86,8 @@ the one reader of the placeholder; nothing else tests the prefix by hand.
 4. **Send the invitation** from the same Manage menu → **Handover email → Send
    invitation** (`retailers.sendHandoverInvite`). The row reads "Handover —
    invite them" in amber until it has gone. The email carries an ordinary
-   sign-in link and no token, so it is safe to forward and useless on its own —
+   sign-in link (which creates the login for a first-timer) and no token, so it
+   is safe to forward and useless on its own —
    pasting the link by hand still works if you prefer.
 
 The directory carries an **Unclaimed** chip, placed straight after **Past due**:
@@ -146,6 +147,19 @@ address, never by holding a URL, so the email contains an ordinary `/app`
 sign-in link. A forwarded invite gets the next person a sign-in page and nothing
 else — the property a magic link would destroy. `handoverEmailCopy.test.ts`
 fails on any token-shaped URL.
+
+**That sign-in page creates a login for an address it doesn't know**
+([`z8r3fdwdvq`](https://app.clickup.com/t/z8r3fdwdvq)). The recipient is
+usually new to Kedaipal, and email-code sign-in refuses an unknown address
+outright ("Couldn't find your account"), which left a brand-new vendor stuck on
+the first screen of their own handover. `/sign-in` runs Clerk's sign-in-or-up flow
+(`<SignIn withSignUp>`), so the unknown address carries on into creating a login,
+and the `/app` gate sends both legs back to `/app`, which routes a storeless
+login to `/onboarding`'s claim screen. The email says so in every locale ("new
+to Kedaipal? The same link creates your login"). The same fall-through covers
+every other way a new person reaches sign-in without choosing it: an alert
+email opened from a `notifyEmail` inbox that has no login, a bookmarked `/app`,
+the landing nav's "Sign in".
 
 **It names nothing but the store's name.** The recipient has consented to
 nothing yet, so the email must not ship them a catalogue, a buyer's details or a

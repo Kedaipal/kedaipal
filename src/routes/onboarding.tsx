@@ -82,14 +82,18 @@ function OnboardingRoute() {
 	const search = Route.useSearch();
 	// An admin-invited client (has a prefill token) is brand-new — send them to
 	// SIGN-UP, not sign-in (sign-in would dead-end with "couldn't find account").
-	// Everyone else reaching /onboarding signed-out already has an account → sign-in.
+	// Everyone else reaching /onboarding signed-out goes to sign-in, which falls
+	// through to sign-up for an unknown address (z8r3fdwdvq) — both legs return here.
 	const fallback = search.prefill ? (
 		<RedirectToSignUp
 			signUpForceRedirectUrl={location.href}
 			signUpFallbackRedirectUrl={location.href}
 		/>
 	) : (
-		<RedirectToSignIn signInForceRedirectUrl={location.href} />
+		<RedirectToSignIn
+			signInForceRedirectUrl={location.href}
+			signUpForceRedirectUrl={location.href}
+		/>
 	);
 	return (
 		<Show when="signed-in" fallback={fallback}>
