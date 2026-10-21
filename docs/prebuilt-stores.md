@@ -153,8 +153,14 @@ fails on any token-shaped URL.
 usually new to Kedaipal, and email-code sign-in refuses an unknown address
 outright ("Couldn't find your account"), which left a brand-new vendor stuck on
 the first screen of their own handover. `/sign-in` runs Clerk's sign-in-or-up flow
-(`<SignIn withSignUp>`), so the unknown address carries on into creating a login,
-and the `/app` gate sends both legs back to `/app`, which routes a storeless
+(`<SignIn withSignUp>`), so the unknown address carries on into creating a login.
+That only works because `ClerkProvider` (`src/routes/__root.tsx`) sets
+`signInUrl="/sign-in"`: without it, every `RedirectToSignIn` (the `/app` gate
+this email's link goes through) falls back to Clerk's hosted Account Portal,
+which never sees `withSignUp`. The first cut of this fix missed that and passed
+only because testing came in through the landing nav's "Sign in". Driving the
+gate signed-out found it, and `sign-in.test.tsx` now pins the provider. From there,
+the `/app` gate sends both legs back to `/app`, which routes a storeless
 login to `/onboarding`'s claim screen. The email says so in every locale, on
 its own line right above the button ("New to Kedaipal? The button below creates
 your login — there's no separate sign-up").
@@ -167,10 +173,14 @@ as fine print *under* the button (`wrapHtml`'s optional `afterCta`), so
 reassurance never stands between the reader and the action.
 `handoverEmailCopy.test.ts` pins that order.
 
-The same fall-through covers
-every other way a new person reaches sign-in without choosing it: an alert
-email opened from a `notifyEmail` inbox that has no login, a bookmarked `/app`,
-the landing nav's "Sign in".
+The same fall-through means no
+other way a new person reaches sign-in without choosing it **dead-ends** any more:
+a bookmarked `/app`, the landing nav's "Sign in", the admin's prefilled
+onboarding link, an order-alert email opened from a `notifyEmail` inbox that
+has no login. "No longer dead-ends" is all it promises, though. That alert inbox
+gets a fresh login and lands on `/onboarding`'s "create your store", **not** on
+the order: no store is waiting for that address, and reaching a store's orders
+needs a team invite.
 
 **It names nothing but the store's name.** The recipient has consented to
 nothing yet, so the email must not ship them a catalogue, a buyer's details or a

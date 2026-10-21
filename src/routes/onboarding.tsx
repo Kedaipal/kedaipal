@@ -1,8 +1,4 @@
-import {
-	RedirectToSignIn,
-	RedirectToSignUp,
-	Show,
-} from "@clerk/tanstack-react-start";
+import { RedirectToSignIn, Show } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -79,17 +75,13 @@ function OnboardingRoute() {
 	// Preserve the prefill token across the auth round-trip — otherwise Clerk would
 	// bounce the client back to a bare /onboarding and drop the prefill.
 	const location = useLocation();
-	const search = Route.useSearch();
-	// An admin-invited client (has a prefill token) is brand-new — send them to
-	// SIGN-UP, not sign-in (sign-in would dead-end with "couldn't find account").
-	// Everyone else reaching /onboarding signed-out goes to sign-in, which falls
-	// through to sign-up for an unknown address (z8r3fdwdvq) — both legs return here.
-	const fallback = search.prefill ? (
-		<RedirectToSignUp
-			signUpForceRedirectUrl={location.href}
-			signUpFallbackRedirectUrl={location.href}
-		/>
-	) : (
+	// One door for everyone signed out, the admin's prefilled invite included:
+	// sign-in, which falls through to sign-up for an unknown address
+	// (z8r3fdwdvq). The invite used to go straight to SIGN-UP because sign-in
+	// dead-ended on a new address — but that only swapped the dead end: a
+	// prefilled address that already had a login got "email already taken".
+	// Both legs come back to this exact URL, prefill token and all.
+	const fallback = (
 		<RedirectToSignIn
 			signInForceRedirectUrl={location.href}
 			signUpForceRedirectUrl={location.href}

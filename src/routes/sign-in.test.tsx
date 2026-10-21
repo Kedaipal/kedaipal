@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 // The sign-in page's redirect contract. Everything here is a Clerk prop, so
 // the test reads the props the page hands <SignIn>.
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -43,5 +46,18 @@ describe("/sign-in", () => {
 		expect(props.fallbackRedirectUrl).toBe("/app");
 		expect(props.forceRedirectUrl).toBeUndefined();
 		expect(props.signUpForceRedirectUrl).toBeUndefined();
+	});
+
+	it("is where every Clerk redirect lands — not Clerk's hosted page", () => {
+		// RedirectToSignIn (the /app and /onboarding gates) goes wherever
+		// ClerkProvider's signInUrl says. Unset, Clerk falls back to its hosted
+		// Account Portal, which never sees `withSignUp`, so the handover email's
+		// /app link still dead-ended a new vendor. Found driving the gate signed
+		// out; rendering the whole root to prove one prop isn't worth it, so the
+		// source carries the contract.
+		const root = readFileSync(join(__dirname, "__root.tsx"), "utf8");
+		const provider = /<ClerkProvider\b[^>]*>/.exec(root)?.[0] ?? "";
+		expect(provider).toContain('signInUrl="/sign-in"');
+		expect(provider).toContain('signUpUrl="/sign-up"');
 	});
 });
