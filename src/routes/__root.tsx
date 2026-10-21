@@ -10,6 +10,7 @@ import {
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { ConvexProvider } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
+import { useMemo } from "react";
 import { Toaster } from "sonner";
 import type { Country } from "../../convex/lib/country";
 import { useClarity } from "../hooks/useClarity";
@@ -99,7 +100,12 @@ function Providers({ children }: { children: React.ReactNode }) {
 	// is exactly what a provider swap needs.
 	const isBuyerSurface = useMatches().some((m) => isBuyerRouteId(m.routeId));
 	// Clerk paints its own widgets from its own palette; hand it ours in dark.
+	// Memoised on the theme: `Providers` re-renders on every route match, and a
+	// fresh appearance object each time is a prop change Clerk has to diff —
+	// harmless today, but one line keeps a restyle on navigation impossible
+	// (PR #241 review).
 	const { resolved } = useTheme();
+	const appearance = useMemo(() => clerkAppearance(resolved), [resolved]);
 	const publishableKey = clientEnv.VITE_CLERK_PUBLISHABLE_KEY;
 	if (!publishableKey || !clientEnv.VITE_CONVEX_URL) {
 		return <SetupNotice />;
@@ -116,10 +122,7 @@ function Providers({ children }: { children: React.ReactNode }) {
 			{isBuyerSurface ? (
 				<ConvexProvider client={convex}>{children}</ConvexProvider>
 			) : (
-				<ClerkProvider
-					publishableKey={publishableKey}
-					appearance={clerkAppearance(resolved)}
-				>
+				<ClerkProvider publishableKey={publishableKey} appearance={appearance}>
 					<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
 						{children}
 					</ConvexProviderWithClerk>

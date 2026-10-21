@@ -58,7 +58,9 @@ describe("the theme reaches every page", () => {
 	});
 
 	test("Clerk's widgets take the theme", () => {
-		expect(src("routes/__root.tsx")).toMatch(/appearance=\{clerkAppearance\(/);
+		const root = src("routes/__root.tsx");
+		expect(root).toMatch(/clerkAppearance\(resolved\)/);
+		expect(root).toMatch(/appearance=\{appearance\}/);
 	});
 
 	test("every piece of chrome that claims the toggle really carries it", () => {
