@@ -20,7 +20,7 @@ import { isBuyerRouteId } from "../lib/buyer-routes";
 import { clerkAppearance } from "../lib/clerk-appearance";
 import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
-import { readVisitorRegion } from "../lib/geo-region";
+import { readVisitorMarket, readVisitorRegion } from "../lib/geo-region";
 import { readReferralSlugOnServer } from "../lib/referral-cookie";
 import { THEME_INIT_SCRIPT } from "../lib/theme";
 import { getLocale } from "../paraglide/runtime";
@@ -37,8 +37,16 @@ export const Route = createRootRoute({
 	 * is a header lookup — no I/O — so authenticated `/app` renders that never
 	 * use it are not measurably slower for carrying it.
 	 */
-	loader: (): { region: Country | null; referralSlug: string | null } => ({
+	loader: (): {
+		region: Country | null;
+		market: Country | null;
+		referralSlug: string | null;
+	} => ({
 		region: readVisitorRegion(),
+		// `/stores`' market (z8r3fdwduz): geo-IP ONLY. Unlike `region` it never
+		// reads the pricing toggle's cookie — the directory has no switch, so a
+		// stored pricing pick must not decide which market a buyer browses.
+		market: readVisitorMarket(),
 		// The referral the visitor arrived with (z8r3fdetf5), when they hold
 		// the cookie — so the landing reserves the invite's place in the first
 		// paint rather than pushing the hero down when it resolves. A cookie
