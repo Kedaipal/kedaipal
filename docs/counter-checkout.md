@@ -830,9 +830,13 @@ went through and was born gated — **invisible** to the seller who had just run
 it up. The banner under the header says why and carries the way back (Top up /
 Pick a plan); "New order" and "Review order" are disabled with the reason; an
 open checkout keeps its cart, so topping up finishes it. At or below the
-low-credit line the page says "N credits left — the counter stops ringing up
+low-credit line the page says "N orders left — the counter stops ringing up
 sales at 0." first. A buyer's store-QR check-in is never refused — the
-seller's complete is. Hold and Kedaipal's switch outrank it. Full rule:
+seller's complete is. Hold and Kedaipal's switch outrank it. Inside a checkout the reason under the disabled button
+carries its own "Top up credits" link; the empty list says buyers still check
+in rather than pointing at the greyed-out "New order"; the review dialog says
+when a sale uses the last credit; and the app-wide credits banner stands down
+on this page so the till's own banner is the one message. Full rule:
 [`credits.md`](./credits.md#the-counter-needs-a-credit-in-hand-z8r3fdwbbb).
 
 ## Pending

@@ -82,3 +82,17 @@ export function useCounterLowCredit(): {
 	if (!credit?.lowCreditLine) return null;
 	return { line: credit.lowCreditLine, canTopUp: credit.audience !== "member" };
 }
+
+/** The next counter sale uses the store's last credit — the review dialog says
+ * the counter closes after it, so the seller isn't surprised mid-queue. */
+export function useCounterLastSale(): boolean {
+	const retailer = useDashboardRetailer();
+	return (
+		useQuery(
+			convexQuery(
+				api.creditLock.counterCreditState,
+				retailer ? { retailerId: retailer._id } : "skip",
+			),
+		).data?.lastSale === true
+	);
+}

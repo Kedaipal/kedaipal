@@ -654,9 +654,14 @@ export function counterCreditClosedMessage(
 
 /** The heads-up BEFORE the counter closes — the rule is discoverable while it
  * can still be avoided, not only once it bites. Shown at or below
- * `lowCreditLine`, to readers who may see the balance. */
+ * `lowCreditLine`, to readers who may see the balance.
+ *
+ * A BALANCE is said in orders ("3 orders left"), like the meter and every
+ * other balance surface; only an amount to ADD is said in credits ("Waiting on
+ * 3 credits", "4 credits reopen it"). The first version said "3 credits left"
+ * right under a banner saying "3 orders left" (found hands-on). */
 export function counterLowCreditLine(creditsLeft: number): string {
-	return `${credits(creditsLeft)} left — the counter stops ringing up sales at 0.`;
+	return `${orders(creditsLeft)} left — the counter stops ringing up sales at 0.`;
 }
 
 /** The phrase every gate refusal and every gate surface contains — what the

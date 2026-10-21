@@ -78,15 +78,15 @@ describe("useCounterClosed — one closed reason, availability first", () => {
 
 describe("useCounterLowCredit", () => {
 	test("the heads-up, with a top-up link only for a reader who can take it", () => {
-		mockReads(OPEN, { ...CREDIT_OPEN, lowCreditLine: "3 credits left" });
+		mockReads(OPEN, { ...CREDIT_OPEN, lowCreditLine: "3 orders left" });
 		expect(renderHook(() => useCounterLowCredit()).result.current).toEqual({
-			line: "3 credits left",
+			line: "3 orders left",
 			canTopUp: true,
 		});
 		mockReads(OPEN, {
 			...CREDIT_OPEN,
 			audience: "member",
-			lowCreditLine: "3 credits left",
+			lowCreditLine: "3 orders left",
 		});
 		expect(
 			renderHook(() => useCounterLowCredit()).result.current?.canTopUp,

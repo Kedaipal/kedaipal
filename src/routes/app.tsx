@@ -221,6 +221,8 @@ function AppShell() {
 								<SubscriptionBanner
 									subscription={retailer.subscription}
 									slug={retailer.slug}
+									// The Counter carries its own credit banner (z8r3fdwbbb).
+									yieldCredits={location.pathname === "/app/checkout"}
 								/>
 							)}
 						</div>

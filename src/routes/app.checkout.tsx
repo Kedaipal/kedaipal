@@ -105,8 +105,9 @@ import {
 	VoucherField,
 } from "../components/vouchers/voucher-field";
 import {
+	type CounterClosed,
 	useCounterClosed,
-	useCounterClosedReason,
+	useCounterLastSale,
 	useCounterLowCredit,
 } from "../hooks/useCounterClosed";
 import {
@@ -128,6 +129,7 @@ import {
 	variantStockNote,
 } from "../lib/counter-stock";
 import { TOP_UP_SEARCH } from "../lib/credit-top-up";
+import { lockCta } from "../lib/credits-ui";
 import { convexErrorMessage, currencySymbol, formatPrice } from "../lib/format";
 import { priceDelta } from "../lib/price-delta";
 import { effectiveVariantPrice, type PromoState } from "../lib/promo";
@@ -281,7 +283,11 @@ function CounterCheckoutRoute() {
 				/>
 			) : (
 				<>
-					<OpenCheckoutsList onResume={openSession} onCancel={cancel} />
+					<OpenCheckoutsList
+						onResume={openSession}
+						onCancel={cancel}
+						closed={closed}
+					/>
 					{/* Claim links sent to buyers (86eyq0epn) — live countdown, resend,
 					    cancel, and recent outcomes. Renders nothing until one is sent. */}
 					<ClaimsPanel onResume={openSession} />
@@ -395,9 +401,13 @@ function MissingSession({ onBack }: { onBack: () => void }) {
 function OpenCheckoutsList({
 	onResume,
 	onCancel,
+	closed,
 }: {
 	onResume: (id: string) => void;
 	onCancel: (id: string) => void;
+	/** Why the counter is closed, if it is — the empty state must not send
+	 * the seller to a "New order" button that is greyed out. */
+	closed: CounterClosed | null;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
 	const sessions = useQuery(
@@ -433,7 +443,7 @@ function OpenCheckoutsList({
 			{sessions === undefined ? (
 				<p className="text-sm text-muted-foreground">Loading…</p>
 			) : sessions.length === 0 ? (
-				<EmptyCheckouts />
+				<EmptyCheckouts closed={closed} />
 			) : (
 				<div className="flex flex-col gap-3">
 					<div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -514,7 +524,7 @@ function OpenCheckoutsList({
 	);
 }
 
-function EmptyCheckouts() {
+function EmptyCheckouts({ closed }: { closed: CounterClosed | null }) {
 	return (
 		<div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border px-6 py-10 text-center">
 			<span className="flex size-14 items-center justify-center rounded-2xl bg-accent/12 text-accent">
@@ -523,11 +533,31 @@ function EmptyCheckouts() {
 			<div className="max-w-sm">
 				<h2 className="text-base font-semibold">No open checkouts</h2>
 				<p className="mt-1 text-sm text-muted-foreground">
-					Put up your printed poster, or tap{" "}
-					<span className="font-medium">New order</span> to show your store QR.
-					When a buyer scans it, their checkout appears here with a code to
-					match. Can't scan? <span className="font-medium">New order</span> also
-					lets you type their number or ring up a cash sale.
+					{/* A closed counter's empty state must not point at the greyed-out
+					    "New order" (found hands-on, z8r3fdwbbb). The two causes differ
+					    for the buyer: out of credits, a poster scan still checks them
+					    in (only the SELLER's sale waits); on a hold or Kedaipal's
+					    switch, the scan is refused too. */}
+					{closed?.creditLock ? (
+						<>
+							Buyers who scan your poster still check in here — you can finish
+							their sale once credits land. The note above has the way back.
+						</>
+					) : closed ? (
+						<>
+							The counter is closed, so new checkouts can't start — the note
+							above says why and how to reopen it.
+						</>
+					) : (
+						<>
+							Put up your printed poster, or tap{" "}
+							<span className="font-medium">New order</span> to show your store
+							QR. When a buyer scans it, their checkout appears here with a code
+							to match. Can't scan?{" "}
+							<span className="font-medium">New order</span> also lets you type
+							their number or ring up a cash sale.
+						</>
+					)}
 				</p>
 			</div>
 		</div>
@@ -1323,7 +1353,9 @@ function BuildOrderScreen({
 		convexQuery(api.products.listForCounter, { retailerId }),
 	).data;
 	const createOrder = useMutation(api.counterCheckout.createOrderFromSession);
-	const closedReason = useCounterClosedReason();
+	const closed = useCounterClosed();
+	const closedReason = closed?.reason ?? null;
+	const lastSale = useCounterLastSale();
 	const saveDraft = useMutation(api.counterCheckout.saveSessionDraft);
 	const saveName = useMutation(api.counterCheckout.setSessionCustomerName);
 	const [query, setQuery] = useState("");
@@ -2494,6 +2526,21 @@ function BuildOrderScreen({
 											{action.helper}
 										</p>
 									) : null}
+									{/* Closed for credits: the way back sits with the
+									    reason, not only in the page banner, which has
+									    scrolled away by the time a long cart or a phone
+									    reaches this button (z8r3fdwbbb). A quiet link, so
+									    it never competes with the primary it explains. */}
+									{closed?.creditLock &&
+									closed.creditLock.audience !== "member" ? (
+										<Link
+											to="/app/settings"
+											search={lockCta(closed.creditLock.unlockRoute).search}
+											className="mx-auto flex min-h-11 w-fit items-center text-sm font-semibold text-accent hover:underline"
+										>
+											{lockCta(closed.creditLock.unlockRoute).label}
+										</Link>
+									) : null}
 								</>
 							);
 						})()}
@@ -2570,6 +2617,7 @@ function BuildOrderScreen({
 					if (!submitting) setConfirmOpen(o);
 				}}
 				buyerName={buyer.displayName}
+				lastSale={lastSale}
 				lines={cartEntries.map(([variantId, l]) => ({ variantId, line: l }))}
 				itemsTotal={itemsTotal}
 				voucherDiscount={voucherDiscount}
@@ -2899,6 +2947,7 @@ function ConfirmCheckoutDialog({
 	open,
 	onOpenChange,
 	buyerName,
+	lastSale = false,
 	lines,
 	itemsTotal,
 	voucherDiscount,
@@ -2913,6 +2962,9 @@ function ConfirmCheckoutDialog({
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	buyerName: string | undefined;
+	/** This sale spends the store's last credit — say the counter closes after
+	 * it, before the tap rather than as a surprise at the next walk-in. */
+	lastSale?: boolean;
 	lines: Array<{ variantId: string; line: CartLine }>;
 	/** Σ lines, gross of the voucher. */
 	itemsTotal: number;
@@ -3016,6 +3068,16 @@ function ConfirmCheckoutDialog({
 						</div>
 					</div>
 				</div>
+
+				{lastSale ? (
+					<p className="flex items-start gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+						<Coins className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+						<span>
+							This sale uses your last credit — the counter closes after it
+							until credits land. Your storefront keeps taking orders.
+						</span>
+					</p>
+				) : null}
 
 				<DialogFooter>
 					<Button

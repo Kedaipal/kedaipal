@@ -464,6 +464,11 @@ export type CounterCreditView = {
 	 * balance (the owner, or a teammate with the Credits grant) — a front-desk
 	 * teammate isn't shown the store's balance, only whether the till is open. */
 	lowCreditLine: string | null;
+	/** The next sale is the last one the credits cover — the counter closes
+	 * after it. Told to EVERY reader, the cashier included: it is about the
+	 * till they are standing at, and "the counter will close after this sale"
+	 * is the one balance fact the person ringing it up needs. */
+	lastSale: boolean;
 };
 
 /** The counter page's read — same resolver as the guard. */
@@ -501,6 +506,7 @@ export const counterCreditState = query({
 			unlockRoute: state.unlockRoute,
 			audience,
 			lowCreditLine: low ? counterLowCreditLine(state.total) : null,
+			lastSale: state.creditsNeeded === 0 && state.total === 1,
 		};
 	},
 });

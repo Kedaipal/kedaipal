@@ -1211,13 +1211,44 @@ can never look open over a refusal):
   "New order", "Review order", "Send link" and a claim's "Retry" are disabled
   with the reason. The refusal itself is the typed `CreditLockErrorData`, so
   any toast that already understands the gate understands this.
-- **Low:** at or below `lowCreditLine`, one line — "3 credits left — the counter
+- **Low:** at or below `lowCreditLine`, one line — "3 orders left — the counter
   stops ringing up sales at 0." — with "Top up credits". The rule is spoken
   while it can still be avoided, not only once it bites. Shown only to a reader
   who may see the balance (the owner, or a teammate with the Credits grant): a
   front-desk teammate is told whether the till is open, not what the store holds.
 - **Audience:** a teammate who can buy packs is sent to top up; one who can't is
   told to ask the owner (`creditLockAudience`, as everywhere else).
+- **Inside a checkout:** the reason under the disabled primary carries its own
+  quiet way-back link (`lockCta`) — the page banner has scrolled away by the
+  time a long cart or a phone reaches that button.
+- **The empty list:** never points at the greyed-out "New order". Closed for
+  credits it says buyers who scan the poster still check in (their check-in is
+  never refused) and the sale finishes once credits land; closed by a hold or
+  Kedaipal's switch it says new checkouts can't start.
+- **The last sale:** `counterCreditState.lastSale` (balance exactly 1) puts one
+  line in the review dialog — "This sale uses your last credit — the counter
+  closes after it…". Told to EVERY reader, the cashier included: it is the one
+  balance fact the person ringing the sale up needs.
+
+**One message per surface, and it never lies about the counter.** The
+`/test-code` pass found the app-wide credits banner (`SubscriptionBanner`)
+saying "**Orders keep coming in**" directly above the counter's "can't ring up
+a sale", in a different unit. Two fixes:
+
+- **The app-wide banner, the low/out/still-short emails (en/ms/zh) and the
+  unsubmitted WhatsApp template bodies** now say **online** orders keep coming
+  in and name the counter as the exception ("The counter stops ringing up sales
+  at 0." / "…can't ring up a sale until credits land."), on every page — the
+  rule is discoverable wherever the balance is, not only at the till.
+  `creditEmailCopy.test.ts` fails if a locale drops the counter clause.
+- **On `/app/checkout` the app-wide credit banners stand down** (`yieldCredits`,
+  from `app.tsx`): the counter's own banner says the same thing in the till's
+  terms with the way back. Stacked, they said it twice and filled a phone's
+  first screen.
+
+**Units:** a BALANCE is said in orders ("3 orders left", "2 orders owed"), as on
+the meter and the banner; only an amount to ADD is said in credits ("Waiting on
+3 credits", "4 credits reopen it").
 
 ## The meter, the seller lock and the notices (T3)
 

@@ -428,7 +428,7 @@ describe("counterCreditState — what the counter page shows before the tap", ()
 		// Starter's low line is 20 — the rule is spoken while it can be avoided.
 		await setBalance(t, s.retailerId, 3);
 		expect((await read(OWNER))?.lowCreditLine).toBe(
-			"3 credits left — the counter stops ringing up sales at 0.",
+			"3 orders left — the counter stops ringing up sales at 0.",
 		);
 		// A front-desk teammate isn't shown the store's balance.
 		expect((await read(MEMBER))?.lowCreditLine).toBeNull();
@@ -439,6 +439,39 @@ describe("counterCreditState — what the counter page shows before the tap", ()
 		expect(owner?.lowCreditLine).toBeNull();
 		expect(owner?.audience).toBe("owner");
 		expect((await read(MEMBER))?.closedReason).toMatch(/Ask the store owner/);
+	});
+
+	test("lastSale: the next sale spends the last credit — told to every reader, the cashier included", async () => {
+		const t = setup();
+		const s = await store(t);
+		await t.run((ctx) =>
+			ctx.db.insert("retailerMembers", {
+				retailerId: s.retailerId,
+				userId: MEMBER,
+				email: "m@example.com",
+				status: "active",
+				permissions: { orders: "write" },
+				invitedBy: OWNER,
+				invitedAt: Date.now(),
+				acceptedAt: Date.now(),
+			}),
+		);
+		const lastSale = async (subject: string) =>
+			(
+				await t
+					.withIdentity({ subject })
+					.query(api.creditLock.counterCreditState, {
+						retailerId: s.retailerId,
+					})
+			)?.lastSale;
+		await setBalance(t, s.retailerId, 2);
+		expect(await lastSale(OWNER)).toBe(false);
+		await setBalance(t, s.retailerId, 1);
+		expect(await lastSale(OWNER)).toBe(true);
+		expect(await lastSale(MEMBER)).toBe(true);
+		// Closed is not "last" — there is no sale left to warn about.
+		await setBalance(t, s.retailerId, 0);
+		expect(await lastSale(OWNER)).toBe(false);
 	});
 
 	test("null where credits don't apply", async () => {
