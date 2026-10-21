@@ -821,6 +821,20 @@ origin), so it resumes the existing session instead of forking a duplicate.
 anonymous session is simply a `buyer_identified` row with no phone, and an anonymous
 order is `customer: {name: undefined, waPhone: undefined}` (both already optional).
 
+## Closed at zero credits (`z8r3fdwbbb`)
+
+The counter needs a credit **in hand**: a sale whose debit would leave the
+balance below zero is refused, at the start of a checkout and again at
+"Create order" (in the same transaction as the debit). Before this, such a sale
+went through and was born gated — **invisible** to the seller who had just rung
+it up. The banner under the header says why and carries the way back (Top up /
+Pick a plan); "New order" and "Review order" are disabled with the reason; an
+open checkout keeps its cart, so topping up finishes it. At or below the
+low-credit line the page says "N credits left — the counter stops ringing up
+sales at 0." first. A buyer's store-QR check-in is never refused — the
+seller's complete is. Hold and Kedaipal's switch outrank it. Full rule:
+[`credits.md`](./credits.md#the-counter-needs-a-credit-in-hand-z8r3fdwbbb).
+
 ## Pending
 
 - ~~**Resend from order detail**~~ — moot: nothing sends the document any more

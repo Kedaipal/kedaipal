@@ -11,6 +11,7 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Clock,
+	Coins,
 	EyeOff,
 	Image as ImageIcon,
 	LayoutGrid,
@@ -75,6 +76,7 @@ import { ClaimsPanel } from "../components/claim/send-claim";
 import { WaitingOnBuyerScreen } from "../components/claim/waiting-on-buyer";
 import { DoneScreen } from "../components/counter/done-screen";
 import { ManualBindDialog } from "../components/counter/manual-bind-dialog";
+import { CreditLockCta } from "../components/credits/credit-lock-cta";
 import { BRAND_GLYPHS } from "../components/dashboard/brand-icons";
 import { BuyerQuestionsFields } from "../components/order/buyer-questions-fields";
 import { AppImage } from "../components/ui/app-image";
@@ -102,7 +104,11 @@ import {
 	previewDiscount,
 	VoucherField,
 } from "../components/vouchers/voucher-field";
-import { useCounterClosedReason } from "../hooks/useCounterClosed";
+import {
+	useCounterClosed,
+	useCounterClosedReason,
+	useCounterLowCredit,
+} from "../hooks/useCounterClosed";
 import {
 	useActAsRetailerId,
 	useDashboardRetailer,
@@ -121,6 +127,7 @@ import {
 	productSoldOut,
 	variantStockNote,
 } from "../lib/counter-stock";
+import { TOP_UP_SEARCH } from "../lib/credit-top-up";
 import { convexErrorMessage, currencySymbol, formatPrice } from "../lib/format";
 import { priceDelta } from "../lib/price-delta";
 import { effectiveVariantPrice, type PromoState } from "../lib/promo";
@@ -165,7 +172,9 @@ function CounterCheckoutRoute() {
 	const [created, setCreated] = useState<CreatedOrder | null>(null);
 
 	const cancelSession = useMutation(api.counterCheckout.cancelCheckoutSession);
-	const closedReason = useCounterClosedReason();
+	const closed = useCounterClosed();
+	const closedReason = closed?.reason ?? null;
+	const lowCredit = useCounterLowCredit();
 
 	const openSession = useCallback(
 		(id: string) => navigate({ search: { session: id } }),
@@ -228,10 +237,32 @@ function CounterCheckoutRoute() {
 			{/* A closed counter says so where the seller is about to ring up —
 			    not only as a refusal at the last tap. Open checkouts stay listed
 			    (they can still be cancelled); nothing can be placed. */}
-			{closedReason ? (
+			{closed ? (
 				<div className="flex items-start gap-2.5 rounded-xl border border-border bg-muted/50 p-3 text-muted-foreground">
 					<Lock className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-					<p className="text-sm leading-relaxed">{closedReason}</p>
+					<div className="min-w-0">
+						<p className="text-sm leading-relaxed">{closed.reason}</p>
+						{/* Closed for credits: the way back sits under the sentence,
+						    so the seller tops up and finishes the sale they're in. */}
+						<CreditLockCta lock={closed.creditLock} />
+					</div>
+				</div>
+			) : lowCredit ? (
+				// The rule, spoken while it can still be avoided (z8r3fdwbbb).
+				<div className="flex flex-col gap-2 rounded-xl border border-border bg-muted/50 p-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+					<p className="flex items-start gap-2.5 leading-relaxed">
+						<Coins className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+						{lowCredit.line}
+					</p>
+					{lowCredit.canTopUp ? (
+						<Link
+							to="/app/settings"
+							search={TOP_UP_SEARCH}
+							className="ml-6.5 inline-flex min-h-11 shrink-0 items-center font-semibold text-accent hover:underline sm:ml-0 sm:min-h-0"
+						>
+							Top up credits
+						</Link>
+					) : null}
 				</div>
 			) : null}
 

@@ -112,7 +112,11 @@ import {
 	storablePendingReason,
 	summarizeCartWeight,
 } from "./lib/delivery";
-import { creditGateFor, forSeller } from "./creditLock";
+import {
+	assertCounterSaleFunded,
+	creditGateFor,
+	forSeller,
+} from "./creditLock";
 import { rateLimiter } from "./lib/rateLimiter";
 import {
 	freezeLineAnswers,
@@ -332,6 +336,10 @@ export const sendClaim = mutation({
 		// follows the counter's rule (z8r3fdudf7): open under the seller's own
 		// pause, closed by a hold or Kedaipal's switch.
 		await assertTakesCounterOrders(ctx, retailer, "seller");
+		// The credit is spent when the buyer completes the link, but the SELLER is
+		// the one sending it — so it is refused here, never at the buyer's commit
+		// (z8r3fdwbbb). A link sent at zero would land an order the seller can't see.
+		await assertCounterSaleFunded(ctx, retailer);
 		if (session.status !== "buyer_identified")
 			throw new ConvexError("This checkout isn't open any more");
 		if (!session.waPhone)
@@ -447,6 +455,7 @@ export const resendClaim = mutation({
 		// Re-sending pushes a fresh link into the buyer's chat — a new order
 		// invitation, refused while paused exactly like sendClaim.
 		await assertTakesCounterOrders(ctx, access.retailer, "seller");
+		await assertCounterSaleFunded(ctx, access.retailer);
 		const now = Date.now();
 		if (effectiveClaimStatus(claim, now) !== "open")
 			throw new ConvexError(
