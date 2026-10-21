@@ -158,6 +158,18 @@ const UNTHEMED_COMPONENT_DIRS: Record<string, string> = {};
  * mockup, and those files are exempt above. Translucent `bg-black/NN` scrims
  * are not ink and stay allowed.
  */
+/**
+ * A translucent WHITE fill at or above this opacity is a light PLATE, not a
+ * scrim (z8r3fdwf9t). Below it, white is a sheen that composites over whatever
+ * is behind it and reads in both themes (`bg-white/10` on a dark card,
+ * `bg-white/15` on a photo). At 40% and up it dominates the ground: the admin
+ * billing tiles shipped `bg-white/70` icon wells that were near-white discs on
+ * a `-950` tile in dark, and the blanket "any `/NN` is a scrim" exemption is
+ * what let them through. Black stays exempt at any opacity — a dark scrim is
+ * dark in both themes.
+ */
+const WHITE_PLATE_MIN_OPACITY = 40;
+
 const BLACK_INK_RE =
 	/\b(?:bg|border|from|via|to)-(?:black|(?:slate|zinc|neutral|gray|stone)-9[05]0)\b(?!\/)/g;
 
@@ -239,10 +251,16 @@ function uncoveredOn(line: string): string[] {
 
 		const [, prop, family, step] = match;
 
-		// Translucent scrims composite over whatever is behind them.
+		// Translucent scrims composite over whatever is behind them — except a
+		// white FILL dense enough to be a plate (WHITE_PLATE_MIN_OPACITY).
 		if (
 			(family === "white" || family === "black") &&
-			token.utility.includes("/")
+			token.utility.includes("/") &&
+			!(
+				prop === "bg" &&
+				family === "white" &&
+				Number(token.utility.split("/")[1]) >= WHITE_PLATE_MIN_OPACITY
+			)
 		) {
 			continue;
 		}
@@ -327,8 +345,10 @@ function optedOut(lines: string[], mask: boolean[], i: number): boolean {
 function countFor(abs: string): string[] {
 	const lines = readFileSync(abs, "utf8").split("\n");
 	const mask = commentMask(lines);
+	// Comment text is not a class list: a comment that NAMES the colour it
+	// replaced (`was \`bg-white/70\``) must not count. Same rule as blackInkSites.
 	return lines.flatMap((line, i) =>
-		optedOut(lines, mask, i) ? [] : uncoveredOn(line),
+		mask[i] || optedOut(lines, mask, i) ? [] : uncoveredOn(line),
 	);
 }
 
@@ -450,6 +470,15 @@ describe("dark-mode colour coverage", () => {
 		expect(uncoveredOn('className="bg-black/50"')).toEqual([]);
 		expect(uncoveredOn('className="bg-emerald-600 text-white"')).toEqual([]);
 		expect(uncoveredOn('className="bg-orange-500"')).toEqual([]);
+		// A thin white sheen is a scrim; a dense one is a plate (z8r3fdwf9t).
+		expect(uncoveredOn('className="bg-white/15"')).toEqual([]);
+		expect(uncoveredOn('className="border-white/70"')).toEqual([]);
+		expect(uncoveredOn('className="bg-white/70"')).toEqual(["bg-white/70"]);
+		expect(uncoveredOn('className="bg-white/40"')).toEqual(["bg-white/40"]);
+		expect(uncoveredOn('className="bg-white/70 dark:bg-current/15"')).toEqual(
+			[],
+		);
+		expect(uncoveredOn('className="bg-black/70"')).toEqual([]);
 		// …but a light PLATE is still caught, saturated sibling or not.
 		expect(uncoveredOn('className="bg-amber-100 text-amber-800"')).toEqual([
 			"bg-amber-100",

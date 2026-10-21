@@ -6,7 +6,6 @@ import {
 	poweredByHref,
 } from "../../../convex/lib/poweredBy";
 import { AppImage } from "../ui/app-image";
-import { ThemeToggle } from "../ui/theme-toggle";
 
 /**
  * "Powered by Kedaipal" buyer-facing footer badge (ticket 86ey8zh3r, on
@@ -91,16 +90,6 @@ export function StorefrontFooter({
 					</Link>
 				</div>
 			) : null}
-			{/* The buyer's theme control, deliberately down here: the page already
-			    matched their device on arrival, so this is an override, not a
-			    decision they owe us above the fold. Its own quiet row in the same
-			    language as "Discover more stores" — a bordered disc beside the
-			    Powered-by badge read as clutter (Zaki, 21 Oct 2026). This footer is
-			    on every buyer surface (z8r3fdcwd0), so the control rides it
-			    everywhere: one slot, found once, found everywhere. */}
-			<div className="mb-5 flex justify-center">
-				<ThemeToggle variant="text" />
-			</div>
 			<div className="flex justify-center">
 				<a
 					href={poweredByHref(surface, slug)}
