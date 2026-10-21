@@ -57,7 +57,10 @@ import {
 import { contractTemplatesFrom } from "../components/admin/enterprise-contract-form";
 import { EnterpriseContractSheet } from "../components/admin/enterprise-contract-sheet";
 import { GatewayIssuesCard } from "../components/admin/gateway-issues-card";
-import { StatTile, type StatTileProps } from "../components/admin/stat-tile";
+import {
+	StatTileGrid,
+	type StatTileProps,
+} from "../components/admin/stat-tile";
 import { PageHeader } from "../components/dashboard/page-header";
 import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
 import { AppImage } from "../components/ui/app-image";
@@ -266,15 +269,15 @@ function AdminBillingOverview() {
 			(pendingByCurrency.get(inv.currency) ?? 0) + inv.total,
 		);
 	}
+	// One amount per currency — the tile keeps each whole and wraps at the "+".
 	const outstanding =
 		pendingByCurrency.size === 0
-			? formatPrice(0, "MYR")
+			? [formatPrice(0, "MYR")]
 			: [...pendingByCurrency.entries()]
 					.sort(([a], [b]) =>
 						a === "MYR" ? -1 : b === "MYR" ? 1 : a.localeCompare(b),
 					)
-					.map(([currency, sum]) => formatPrice(sum, currency))
-					.join(" + ");
+					.map(([currency, sum]) => formatPrice(sum, currency));
 	const dueSoon =
 		invoices?.filter((inv) => inv.dueDate <= Date.now() + 7 * DAY_MS).length ??
 		0;
@@ -298,7 +301,11 @@ function AdminBillingOverview() {
 			value: invoices === undefined ? "..." : outstanding,
 			helper: "Pending total",
 			icon: <Banknote className="size-4" />,
-			tone: "success",
+			// Purple ("in flight"), not green: this is money sellers still OWE, and
+			// green on this page means money in (Top-ups). Not blue either — that
+			// would read as a copy of the Pending tile beside it — and not amber,
+			// which is Due soon's "act now".
+			tone: "progress",
 		},
 		{
 			label: "Founding",
@@ -310,12 +317,19 @@ function AdminBillingOverview() {
 	];
 
 	return (
-		<div className="flex flex-col gap-2">
-			<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-				{stats.map((stat) => (
-					<StatTile key={stat.label} {...stat} />
-				))}
-			</div>
+		<div className="flex flex-col gap-4">
+			<section
+				aria-labelledby="billing-invoice-stats"
+				className="flex flex-col gap-2"
+			>
+				<h2
+					id="billing-invoice-stats"
+					className="text-xs font-medium text-muted-foreground"
+				>
+					Subscription invoices
+				</h2>
+				<StatTileGrid tiles={stats} />
+			</section>
 			<CreditTotals />
 		</div>
 	);
@@ -368,12 +382,17 @@ export function CreditTotals() {
 		topUpTile(revenue),
 	];
 	return (
-		<section aria-label="Credits" className="flex flex-col gap-2">
-			<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-				{tiles.map((tile) => (
-					<StatTile key={tile.label} {...tile} />
-				))}
-			</div>
+		<section
+			aria-labelledby="billing-credit-stats"
+			className="flex flex-col gap-2"
+		>
+			<h2
+				id="billing-credit-stats"
+				className="text-xs font-medium text-muted-foreground"
+			>
+				Credits
+			</h2>
+			<StatTileGrid tiles={tiles} />
 			{totals?.truncated ? (
 				<p className="text-[11px] text-muted-foreground">
 					Counted over the first {totals.accounts.toLocaleString("en")} credit
@@ -434,9 +453,7 @@ function topUpTile(revenue: TopUpRevenue | undefined): StatTileProps {
 				: paid.length === 0
 					? formatPrice(0, "MYR")
 					: // MYR first — the server builds the record in that order.
-						paid
-							.map(([currency, b]) => formatPrice(b.amountMinor, currency))
-							.join(" + "),
+						paid.map(([currency, b]) => formatPrice(b.amountMinor, currency)),
 		helper:
 			revenue === undefined
 				? "Credit packs paid this month"
