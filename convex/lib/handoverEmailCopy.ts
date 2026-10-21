@@ -34,60 +34,109 @@ export type HandoverEmailVars = {
 
 type Rendered = { subject: string; html: string; text: string };
 
-const copy: Record<Locale, (v: HandoverEmailVars) => Rendered> = {
-	en: (v) => {
-		const store = escapeHtml(v.storeName);
-		const email = escapeHtml(v.email);
-		const subject = `${v.storeName} is ready for you on Kedaipal`;
-		const lines = [
-			`We've set up <strong>${store}</strong> on Kedaipal, and it's waiting for you.`,
-			`Sign in with <strong>${email}</strong> — new to Kedaipal? The same link creates your login. That address is the key, so it has to be the one you use. The whole shop becomes yours on your first sign-in: your products, your settings, your storefront link.`,
-			"Nothing is charged today. You get 14 days on Pro from the day you take it over, and you can decide about a plan after that.",
-			"If you weren't expecting this, you can ignore it — nothing happens until someone signs in with that address.",
-		];
-		return {
-			subject,
-			html: wrapHtml("🎁", `${v.storeName} is ready for you`, lines, v.appUrl, "Take over my store"),
-			text: `We've set up ${v.storeName} on Kedaipal, and it's waiting for you.\n\nSign in with ${v.email} — new to Kedaipal? The same link creates your login. That address is the key, so it has to be the one you use. The whole shop becomes yours on your first sign-in: your products, your settings, your storefront link.\n\nNothing is charged today. You get 14 days on Pro from the day you take it over, and you can decide about a plan after that.\n\nTake over my store: ${v.appUrl}\n\nIf you weren't expecting this, you can ignore it — nothing happens until someone signs in with that address.`,
-		};
-	},
-	ms: (v) => {
-		const store = escapeHtml(v.storeName);
-		const email = escapeHtml(v.email);
-		const subject = `${v.storeName} sudah sedia untuk anda di Kedaipal`;
-		const lines = [
-			`Kami telah siapkan <strong>${store}</strong> di Kedaipal, dan ia menunggu anda.`,
-			`Log masuk dengan <strong>${email}</strong> — baru di Kedaipal? Pautan yang sama mencipta log masuk anda. Alamat itulah kuncinya, jadi anda mesti guna yang itu. Seluruh kedai menjadi milik anda pada log masuk pertama: produk, tetapan dan pautan kedai anda.`,
-			"Tiada bayaran hari ini. Anda dapat 14 hari Pro bermula hari anda mengambil alih, dan boleh pilih pelan selepas itu.",
-			"Jika anda tidak menjangkakan e-mel ini, abaikan sahaja — tiada apa berlaku sehingga seseorang log masuk dengan alamat itu.",
-		];
-		return {
-			subject,
-			html: wrapHtml("🎁", `${v.storeName} sudah sedia untuk anda`, lines, v.appUrl, "Ambil alih kedai saya"),
-			text: `Kami telah siapkan ${v.storeName} di Kedaipal, dan ia menunggu anda.\n\nLog masuk dengan ${v.email} — baru di Kedaipal? Pautan yang sama mencipta log masuk anda. Alamat itulah kuncinya, jadi anda mesti guna yang itu. Seluruh kedai menjadi milik anda pada log masuk pertama: produk, tetapan dan pautan kedai anda.\n\nTiada bayaran hari ini. Anda dapat 14 hari Pro bermula hari anda mengambil alih, dan boleh pilih pelan selepas itu.\n\nAmbil alih kedai saya: ${v.appUrl}\n\nJika anda tidak menjangkakan e-mel ini, abaikan sahaja — tiada apa berlaku sehingga seseorang log masuk dengan alamat itu.`,
-		};
-	},
-	zh: (v) => {
-		const store = escapeHtml(v.storeName);
-		const email = escapeHtml(v.email);
-		const subject = `${v.storeName} 已在 Kedaipal 为您准备好`;
-		const lines = [
-			`我们已在 Kedaipal 建好 <strong>${store}</strong>，正等着您。`,
-			`请用 <strong>${email}</strong> 登录 —— 第一次用 Kedaipal？同一个链接会为您创建账号。这个邮箱就是钥匙，必须用它。首次登录后整间店就是您的：商品、设置、店铺链接全都在。`,
-			"今天不收费。从您接手那天起有 14 天 Pro 使用期，之后再决定方案。",
-			"如果您并不知情，忽略即可 —— 在有人用该邮箱登录之前，什么都不会发生。",
-		];
-		return {
-			subject,
-			html: wrapHtml("🎁", `${v.storeName} 已为您准备好`, lines, v.appUrl, "接手我的店铺"),
-			text: `我们已在 Kedaipal 建好 ${v.storeName}，正等着您。\n\n请用 ${v.email} 登录 —— 第一次用 Kedaipal？同一个链接会为您创建账号。这个邮箱就是钥匙，必须用它。首次登录后整间店就是您的：商品、设置、店铺链接全都在。\n\n今天不收费。从您接手那天起有 14 天 Pro 使用期，之后再决定方案。\n\n接手我的店铺：${v.appUrl}\n\n如果您并不知情，忽略即可 —— 在有人用该邮箱登录之前，什么都不会发生。`,
-		};
-	},
+// The address is the one thing the recipient must get right, so it sits in its
+// own card rather than mid-sentence — the green of the billing emails' Pay-now
+// panel, so a Kedaipal email has one "this is the part that matters" look.
+// `display:block` spans, not divs: wrapHtml wraps every line in a <p>.
+function keyCard(label: string, email: string, note: string): string {
+	return `<span style="display:block;margin:4px 0 4px 0;padding:14px 16px;border:1px solid #a7f3d0;background:#ecfdf5;border-radius:12px;"><span style="display:block;font-size:12px;font-weight:600;letter-spacing:0.02em;color:#047857;">${label}</span><span style="display:block;margin:4px 0 0 0;font-size:16px;font-weight:700;color:#111827;word-break:break-all;">${email}</span><span style="display:block;margin:6px 0 0 0;font-size:12px;line-height:1.5;color:#047857;">${note}</span></span>`;
+}
+
+type Copy = {
+	subject: string;
+	headline: string;
+	intro: (store: string) => string;
+	keyLabel: string;
+	keyNote: string;
+	/** HTML points at the button; the plain-text part at the link under it. */
+	firstTimer: { html: string; text: string };
+	takeover: string;
+	free: string;
+	cta: string;
+	ignore: string;
+	/** ": " — full-width "：" in Chinese. */
+	colon: string;
+};
+
+const copy: Record<Locale, (storeName: string) => Copy> = {
+	en: (storeName) => ({
+		subject: `${storeName} is ready for you on Kedaipal`,
+		headline: `${storeName} is ready for you`,
+		intro: (store) => `We've set up ${store} on Kedaipal, and it's waiting for you.`,
+		keyLabel: "Sign in with",
+		keyNote: "This address is the key — it has to be the one you use.",
+		firstTimer: {
+			html: "<strong>New to Kedaipal?</strong> The button below creates your login — there's no separate sign-up.",
+			text: "New to Kedaipal? The link below creates your login — there's no separate sign-up.",
+		},
+		takeover: "The whole shop becomes yours on your first sign-in: your products, your settings, your storefront link.",
+		free: "Nothing is charged today. You get 14 days on Pro from the day you take it over, and you can decide about a plan after that.",
+		cta: "Take over my store",
+		ignore: "If you weren't expecting this, you can ignore it — nothing happens until someone signs in with that address.",
+		colon: ": ",
+	}),
+	ms: (storeName) => ({
+		subject: `${storeName} sudah sedia untuk anda di Kedaipal`,
+		headline: `${storeName} sudah sedia untuk anda`,
+		intro: (store) => `Kami telah siapkan ${store} di Kedaipal, dan ia menunggu anda.`,
+		keyLabel: "Log masuk dengan",
+		keyNote: "Alamat inilah kuncinya — anda mesti guna yang ini.",
+		firstTimer: {
+			html: "<strong>Baru di Kedaipal?</strong> Butang di bawah mencipta log masuk anda — tiada pendaftaran berasingan.",
+			text: "Baru di Kedaipal? Pautan di bawah mencipta log masuk anda — tiada pendaftaran berasingan.",
+		},
+		takeover: "Seluruh kedai menjadi milik anda pada log masuk pertama: produk, tetapan dan pautan kedai anda.",
+		free: "Tiada bayaran hari ini. Anda dapat 14 hari Pro bermula hari anda mengambil alih, dan boleh pilih pelan selepas itu.",
+		cta: "Ambil alih kedai saya",
+		ignore: "Jika anda tidak menjangkakan e-mel ini, abaikan sahaja — tiada apa berlaku sehingga seseorang log masuk dengan alamat itu.",
+		colon: ": ",
+	}),
+	zh: (storeName) => ({
+		subject: `${storeName} 已在 Kedaipal 为您准备好`,
+		headline: `${storeName} 已为您准备好`,
+		intro: (store) => `我们已在 Kedaipal 建好 ${store}，正等着您。`,
+		keyLabel: "请用这个邮箱登录",
+		keyNote: "这个邮箱就是钥匙 —— 必须用它。",
+		firstTimer: {
+			html: "<strong>第一次用 Kedaipal？</strong>点下面的按钮就会为您创建账号，无需另外注册。",
+			text: "第一次用 Kedaipal？点下面的链接就会为您创建账号，无需另外注册。",
+		},
+		takeover: "首次登录后整间店就是您的：商品、设置、店铺链接全都在。",
+		free: "今天不收费。从您接手那天起有 14 天 Pro 使用期，之后再决定方案。",
+		cta: "接手我的店铺",
+		ignore: "如果您并不知情，忽略即可 —— 在有人用该邮箱登录之前，什么都不会发生。",
+		colon: "：",
+	}),
 };
 
 export function renderHandoverInvite(
 	locale: Locale,
 	vars: HandoverEmailVars,
 ): Rendered {
-	return copy[locale](vars);
+	const c = copy[locale](vars.storeName);
+	// Order: who it's for → the address that unlocks it → what they get →
+	// what it costs → "new here?" right above the button it refers to. The
+	// "weren't expecting this" reassurance goes UNDER the button, as fine
+	// print, so it never stands between the reader and the action.
+	const lines = [
+		c.intro(`<strong>${escapeHtml(vars.storeName)}</strong>`),
+		keyCard(c.keyLabel, escapeHtml(vars.email), c.keyNote),
+		c.takeover,
+		c.free,
+		c.firstTimer.html,
+	];
+	const text = [
+		c.intro(vars.storeName),
+		`${c.keyLabel}${c.colon}${vars.email}\n${c.keyNote}`,
+		c.takeover,
+		c.free,
+		c.firstTimer.text,
+		`${c.cta}${c.colon}${vars.appUrl}`,
+		c.ignore,
+	].join("\n\n");
+	return {
+		subject: c.subject,
+		html: wrapHtml("🎁", c.headline, lines, vars.appUrl, c.cta, escapeHtml(c.ignore)),
+		text,
+	};
 }

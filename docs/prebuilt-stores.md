@@ -155,8 +155,19 @@ outright ("Couldn't find your account"), which left a brand-new vendor stuck on
 the first screen of their own handover. `/sign-in` runs Clerk's sign-in-or-up flow
 (`<SignIn withSignUp>`), so the unknown address carries on into creating a login,
 and the `/app` gate sends both legs back to `/app`, which routes a storeless
-login to `/onboarding`'s claim screen. The email says so in every locale ("new
-to Kedaipal? The same link creates your login"). The same fall-through covers
+login to `/onboarding`'s claim screen. The email says so in every locale, on
+its own line right above the button ("New to Kedaipal? The button below creates
+your login — there's no separate sign-up").
+
+**The email's layout, in reading order:** who it's for → the sign-in address in
+a green key card (the one thing they must get right, never mid-sentence; the
+billing emails' Pay-now green) → what they get → what it costs → "new here?"
+next to the button it names → the button → the "weren't expecting this?" line
+as fine print *under* the button (`wrapHtml`'s optional `afterCta`), so
+reassurance never stands between the reader and the action.
+`handoverEmailCopy.test.ts` pins that order.
+
+The same fall-through covers
 every other way a new person reaches sign-in without choosing it: an alert
 email opened from a `notifyEmail` inbox that has no login, a bookmarked `/app`,
 the landing nav's "Sign in".
