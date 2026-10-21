@@ -683,7 +683,9 @@ describe("booking span columns", () => {
 	// MYT midnights, the way the booking fields are stored.
 	const SEP_1 = Date.UTC(2026, 7, 31, 16, 0, 0);
 	const day = (n: number) => SEP_1 + (n - 1) * DAY; // day(n) = n Sep
-	const col = (key: "bookingStart" | "bookingLastDay" | "bookingDays") => {
+	const col = (
+		key: "bookingStart" | "bookingLastDay" | "bookingDays" | "bookingSkips",
+	) => {
 		const c = ORDER_COLUMNS_BY_KEY.get(key);
 		if (!c) throw new Error(`missing ${key} column`);
 		return c;
@@ -730,6 +732,45 @@ describe("booking span columns", () => {
 		expect(orderColumnDisplay(col("bookingDays"), openDays)).toBe("5 days");
 	});
 
+	test("a customer SKIP moves the last day out, stays out of Days, and is counted (z8r3fdh3ay)", () => {
+		// The 5-open-day plan above, after the seller skipped Thu 3 Sep for the
+		// customer: check-out moved out one open day (8 → 9 Sep) and the skip
+		// joined the unused days, so the member still gets 5.
+		const skipped = booking({
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(9),
+			bookingPackaged: true,
+			bookingOpenDays: true,
+			bookingSkippedDays: [day(3), day(5), day(6)],
+			bookingCustomerSkips: [day(3)],
+		});
+		expect(cell(skipped, "Booking last day")).toBe("2026-09-08");
+		expect(cell(skipped, "Booking days")).toBe("5");
+		expect(cell(skipped, "Booking skips")).toBe("1");
+		expect(orderColumnDisplay(col("bookingSkips"), skipped)).toBe("1 skip");
+		expect(
+			orderColumnDisplay(col("bookingSkips"), {
+				...skipped,
+				bookingCustomerSkips: [day(3), day(4)],
+			}),
+		).toBe("2 skips");
+	});
+
+	test("Skips reads 0 only on a plan that CAN be skipped", () => {
+		const skippable = booking({
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(8),
+			bookingPackaged: true,
+			bookingOpenDays: true,
+		});
+		expect(cell(skippable, "Booking skips")).toBe("0");
+		expect(orderColumnDisplay(col("bookingSkips"), skippable)).toBe("None");
+		// A stay or a calendar package never had the option — "0" would offer it.
+		const stay = booking({ bookingCheckIn: day(25), bookingCheckOut: day(27) });
+		expect(cell(stay, "Booking skips")).toBe("");
+		expect(orderColumnSortValue(col("bookingSkips"), stay)).toBeUndefined();
+	});
+
 	test("one day reads singular", () => {
 		const one = booking({
 			bookingCheckIn: day(1),
@@ -740,10 +781,20 @@ describe("booking span columns", () => {
 	});
 
 	test("a non-booking order blanks all three, and sinks in a sort", () => {
-		for (const label of ["Booking start", "Booking last day", "Booking days"]) {
+		for (const label of [
+			"Booking start",
+			"Booking last day",
+			"Booking days",
+			"Booking skips",
+		]) {
 			expect(cell(minimal, label)).toBe("");
 		}
-		for (const key of ["bookingStart", "bookingLastDay", "bookingDays"] as const) {
+		for (const key of [
+			"bookingStart",
+			"bookingLastDay",
+			"bookingDays",
+			"bookingSkips",
+		] as const) {
 			expect(orderColumnDisplay(col(key), minimal)).toBe("");
 			expect(orderColumnSortValue(col(key), minimal)).toBeUndefined();
 		}
@@ -761,7 +812,8 @@ describe("booking span columns", () => {
 
 	test("a GATED booking keeps its span AND its shut days — Days never overcounts", () => {
 		// Run the real redaction, so this breaks if the allowlist ever drops the
-		// span (dates go blank) or the skipped days (Days silently reads 7).
+		// span (dates go blank), the skipped days (Days silently reads 8) or the
+		// customer skips (Skips blanks beside a Days that already took them).
 		const doc = {
 			shortId: "ORD-7001",
 			createdAt: SEP_1,
@@ -769,9 +821,11 @@ describe("booking span columns", () => {
 			deliveryMethod: "booking",
 			fulfilmentDate: day(1),
 			bookingCheckIn: day(1),
-			bookingCheckOut: day(8),
+			bookingCheckOut: day(9),
 			bookingPackaged: true,
-			bookingSkippedDays: [day(5), day(6)],
+			bookingOpenDays: true,
+			bookingSkippedDays: [day(3), day(5), day(6)],
+			bookingCustomerSkips: [day(3)],
 			customer: { name: "Siti Secret", waPhone: "+60199999999" },
 			items: [{ name: "Meal plan", quantity: 1, price: 30000 }],
 			subtotal: 30000,
@@ -789,6 +843,8 @@ describe("booking span columns", () => {
 			bookingCheckOut: gated.bookingCheckOut,
 			bookingPackaged: gated.bookingPackaged,
 			bookingSkippedDays: gated.bookingSkippedDays,
+			bookingCustomerSkips: gated.bookingCustomerSkips,
+			bookingOpenDays: gated.bookingOpenDays,
 			customer: gated.customer,
 			items: gated.items,
 			subtotal: gated.subtotal,
@@ -796,8 +852,9 @@ describe("booking span columns", () => {
 			currency: gated.currency,
 		};
 		expect(cell(row, "Booking start")).toBe("2026-09-01");
-		expect(cell(row, "Booking last day")).toBe("2026-09-07");
-		// The span is 7; the member bought 5.
+		expect(cell(row, "Booking last day")).toBe("2026-09-08");
+		expect(cell(row, "Booking skips")).toBe("1");
+		// The span is 8; the member bought 5.
 		expect(cell(row, "Booking days")).toBe("5");
 		expect(orderColumnDisplay(col("bookingDays"), row)).toBe("5 days");
 		expect(ordersToCsv([row])).not.toContain("Siti Secret");
@@ -806,12 +863,14 @@ describe("booking span columns", () => {
 	test("sit beside the fulfilment date, as one set — not appended last", () => {
 		const keys = ALL_ORDER_COLUMN_KEYS;
 		const at = keys.indexOf("fulfilmentTime");
-		expect(keys.slice(at + 1, at + 4)).toEqual([
+		const set = [
 			"bookingStart",
 			"bookingLastDay",
 			"bookingDays",
-		]);
-		for (const k of ["bookingStart", "bookingLastDay", "bookingDays"] as const) {
+			"bookingSkips",
+		] as const;
+		expect(keys.slice(at + 1, at + 1 + set.length)).toEqual([...set]);
+		for (const k of set) {
 			expect(col(k).group).toBe("booking");
 			expect(DEFAULT_ORDER_COLUMN_KEYS).not.toContain(k);
 		}

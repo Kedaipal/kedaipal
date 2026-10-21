@@ -289,10 +289,16 @@ export type CsvOrder = {
 	/** Sold as a fixed-length package (S7) — decides whether the Last day cell
 	 * is the night before check-out or the check-out itself. */
 	bookingPackaged?: boolean;
-	/** Shut days an open-days package stepped over (z8r3fdhpm7) — the Days
-	 * cell subtracts them. On the gate's allowlist with the span (they are the
-	 * store's closures, not buyer data), so a gated row's count stays right. */
+	/** Every unused day inside the span — shut days (z8r3fdhpm7) AND the
+	 * customer's skips (z8r3fdh3ay) — which the Days cell subtracts. On the
+	 * gate's allowlist with the span, so a gated row's count stays right. */
 	bookingSkippedDays?: readonly number[];
+	/** The days the CUSTOMER skipped (z8r3fdh3ay), a subset of
+	 * `bookingSkippedDays` — the Skips cell counts them. */
+	bookingCustomerSkips?: readonly number[];
+	/** Frozen "this package counts open days, so it can be skipped" — the
+	 * Skips cell reads 0 on such a plan and blanks on every other booking. */
+	bookingOpenDays?: boolean;
 	customer: { name?: string; waPhone?: string };
 	items: Array<{
 		name: string;
@@ -405,6 +411,7 @@ export type OrderColumnKey =
 	| "bookingStart"
 	| "bookingLastDay"
 	| "bookingDays"
+	| "bookingSkips"
 	| "customer"
 	| "phone"
 	| "fulfilment"
@@ -577,6 +584,18 @@ export function bookingDaysOf(o: CsvOrder): number | undefined {
 }
 
 /**
+ * How many days the customer skipped (z8r3fdh3ay). 0 on a plan that CAN be
+ * skipped but hasn't been; undefined on every booking that can't be — a stay
+ * or a fixed calendar package reading "0 skips" would suggest an option it
+ * never had.
+ */
+export function bookingSkipsOf(o: CsvOrder): number | undefined {
+	if (!bookingSpan(o)) return undefined;
+	const skips = o.bookingCustomerSkips?.length ?? 0;
+	return skips > 0 || o.bookingOpenDays === true ? skips : undefined;
+}
+
+/**
  * Every column, in export order.
  *
  * ORDERING RULE: the 18 columns that existed before 86eyrtz74 keep their
@@ -679,6 +698,26 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 			return `${days} ${unit}${days === 1 ? "" : "s"}`;
 		},
 		sortKey: bookingDaysOf,
+	},
+	{
+		// Last in the set: it explains the other three — every skip moved the
+		// last day out by one open day and is already left out of Days.
+		key: "bookingSkips",
+		label: "Booking skips",
+		group: "booking",
+		numeric: true,
+		width: 124,
+		value: (o) => {
+			const skips = bookingSkipsOf(o);
+			return skips === undefined ? "" : String(skips);
+		},
+		display: (o) => {
+			const skips = bookingSkipsOf(o);
+			if (skips === undefined) return "";
+			if (skips === 0) return "None";
+			return `${skips} skip${skips === 1 ? "" : "s"}`;
+		},
+		sortKey: bookingSkipsOf,
 	},
 	{
 		key: "customer",

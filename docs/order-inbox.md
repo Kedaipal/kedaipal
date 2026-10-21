@@ -576,7 +576,8 @@ WhatsApp.
   while the key list changes on a toggle, and a separate key means a layout
   written by an older build still loads instead of failing a shape check and
   dropping the seller's arrangement.
-- **Booking span columns — Booking start · Booking last day · Booking days**
+- **Booking span columns — Booking start · Booking last day · Booking days ·
+  Booking skips**
   (group **Booking**, right after Fulfilment in the picker and right after
   Fulfilment time in the export). Added as a SET: a booking's Fulfilment date is
   only its first day, and a lone count with no span would be half a fact.
@@ -591,16 +592,22 @@ WhatsApp.
     for a stay and `30 days` for a package, because the units differ.
   - All three are blank on non-booking orders and sink in a sort. Opt-in, not
     default-visible — offered to every store, the `Security deposit` precedent.
-  - **Gated (credit) rows print all three.** `bookingCheckIn/Out/Packaged` and
-    `bookingSkippedDays` are on the `GATED_ORDER_FIELDS` allowlist — the skipped
-    days are the STORE's closures, not buyer data. They joined it with these
+  - **Gated (credit) rows print all four.** `bookingCheckIn/Out/Packaged`,
+    `bookingSkippedDays`, `bookingCustomerSkips` and `bookingOpenDays` are on
+    the `GATED_ORDER_FIELDS` allowlist — store closures and seller-logged skips,
+    not buyer data. They joined it with these
     columns: without them a gated open-days package overcounted everywhere the
     span is read (Days said 7 for a member who bought 5, and the booking-period
     chip said "6 days left" with 3 visits to go). Pinned by tests that run the
     real `redactGatedOrder`.
-  - **Pending:** a *Skips* column (count of `orders.bookingCustomerSkips`, the
-    buyer's own skipped days from `z8r3fdh3ay`) joins this group once that
-    branch is on staging.
+  - *Skips* counts `orders.bookingCustomerSkips` — the days the seller skipped
+    for the customer (`z8r3fdh3ay`). It explains the other three: each skip
+    moved the last day out by one open day and is already left out of Days
+    (`bookingSkippedDays` holds every unused day, skips included). Reads `0` /
+    "None" only on a plan that CAN be skipped (`bookingOpenDays`); blank on a
+    stay or calendar package, where "0 skips" would suggest an option it never
+    had. A count, not "1 of 3": `maxSkips` lives on the listing, so a later
+    edit would rewrite an exported row.
 - **Drag the HEADERS to reorder** — @dnd-kit horizontal, with the header itself
   as the drag handle. No separate grip: the shared `useSortableSensors` starts a
   pointer drag only after 8px and a touch drag only after a 250ms hold, so a
