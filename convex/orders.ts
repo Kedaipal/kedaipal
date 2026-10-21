@@ -3637,9 +3637,9 @@ function orderToCsvSource(o: Doc<"orders"> & { creditGated?: boolean }): CsvOrde
 		// export-vs-screen split `pickupSnapshot.locationType` already caused
 		// once on this exact projection. Pinned by a test.
 		eventRsvp: o.eventRsvp,
-		// The booking span the Booking columns read. A gated row arrives here
-		// already redacted (`forSeller`), so `bookingSkippedDays` is absent on
-		// it and the Days cell blanks rather than miscounting.
+		// The booking span the Booking columns read. All four survive the
+		// credit gate's redaction (`forSeller`), so a gated booking's cells
+		// match a funded one's.
 		bookingCheckIn: o.bookingCheckIn,
 		bookingCheckOut: o.bookingCheckOut,
 		bookingPackaged: o.bookingPackaged,

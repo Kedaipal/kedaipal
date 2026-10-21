@@ -591,11 +591,13 @@ WhatsApp.
     for a stay and `30 days` for a package, because the units differ.
   - All three are blank on non-booking orders and sink in a sort. Opt-in, not
     default-visible — offered to every store, the `Security deposit` precedent.
-  - **Gated (credit) rows**: Start and Last day print — `bookingCheckIn/Out/
-    Packaged` are on the `GATED_ORDER_FIELDS` allowlist. `bookingSkippedDays` is
-    not, so **Days blanks** rather than print the uncorrected span ("7" for a
-    member who bought 5 open days). Pinned by a test that runs the real
-    `redactGatedOrder`.
+  - **Gated (credit) rows print all three.** `bookingCheckIn/Out/Packaged` and
+    `bookingSkippedDays` are on the `GATED_ORDER_FIELDS` allowlist — the skipped
+    days are the STORE's closures, not buyer data. They joined it with these
+    columns: without them a gated open-days package overcounted everywhere the
+    span is read (Days said 7 for a member who bought 5, and the booking-period
+    chip said "6 days left" with 3 visits to go). Pinned by tests that run the
+    real `redactGatedOrder`.
   - **Pending:** a *Skips* column (count of `orders.bookingCustomerSkips`, the
     buyer's own skipped days from `z8r3fdh3ay`) joins this group once that
     branch is on staging.

@@ -282,16 +282,16 @@ export type CsvOrder = {
 	 * (the same reasoning as `deliveryDirection` above). */
 	creditGated?: boolean;
 	/** The booking span (S1/S7), MYT-midnight epoch ms with an EXCLUSIVE
-	 * check-out — both on the credit gate's allowlist, so a gated booking keeps
-	 * its dates. Absent on every non-booking order, whose booking cells blank. */
+	 * check-out — on the credit gate's allowlist, so a gated booking keeps its
+	 * dates. Absent on every non-booking order, whose booking cells blank. */
 	bookingCheckIn?: number;
 	bookingCheckOut?: number;
 	/** Sold as a fixed-length package (S7) — decides whether the Last day cell
 	 * is the night before check-out or the check-out itself. */
 	bookingPackaged?: boolean;
 	/** Shut days an open-days package stepped over (z8r3fdhpm7) — the Days
-	 * cell subtracts them. NOT on the gate's allowlist, which is why Days blanks
-	 * on a gated row instead of printing the uncorrected span. */
+	 * cell subtracts them. On the gate's allowlist with the span (they are the
+	 * store's closures, not buyer data), so a gated row's count stays right. */
 	bookingSkippedDays?: readonly number[];
 	customer: { name?: string; waPhone?: string };
 	items: Array<{
@@ -569,15 +569,10 @@ export function bookingLastDayOf(o: CsvOrder): number | undefined {
  * How many days the booking uses — nights for a stay, counted days for a
  * package, minus the shut days an open-days package stepped over
  * (`countedDays`, the count every "N days" on an order reads).
- *
- * Undefined on a GATED row: `bookingSkippedDays` is redacted there, so the
- * count would silently be the raw span — "7" for a member who bought 4 open
- * days. A blank beside the Customer cell's "waiting on credits" is honest; a
- * wrong number is not.
  */
 export function bookingDaysOf(o: CsvOrder): number | undefined {
 	const span = bookingSpan(o);
-	if (!span || o.creditGated) return undefined;
+	if (!span) return undefined;
 	return countedDays(span.checkIn, span.checkOut, o.bookingSkippedDays);
 }
 

@@ -85,6 +85,11 @@ const GATED_ORDER_FIELDS = [
 	"bookingCheckIn",
 	"bookingCheckOut",
 	"bookingPackaged",
+	// The shut days an open-days package steps over (z8r3fdhpm7). The STORE's
+	// closures, not anything the buyer typed — and without them the span lies:
+	// the period chip said "6 open days left" and the CSV's Booking days said
+	// 7 on a gated package the member bought as 5.
+	"bookingSkippedDays",
 	// Whether the money arrived. The buyer's bank REFERENCE is not here — that
 	// is their data and it is how a seller would reconcile by hand.
 	"paymentStatus",

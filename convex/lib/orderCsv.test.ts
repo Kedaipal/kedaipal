@@ -759,10 +759,9 @@ describe("booking span columns", () => {
 		expect(orderColumnSortValue(col("bookingStart"), long)).toBe(day(1));
 	});
 
-	test("a GATED booking keeps its dates and blanks Days — never the raw span", () => {
+	test("a GATED booking keeps its span AND its shut days — Days never overcounts", () => {
 		// Run the real redaction, so this breaks if the allowlist ever drops the
-		// span (dates go blank) or starts carrying skipped days (Days could then
-		// be printed honestly, and this test should be revisited).
+		// span (dates go blank) or the skipped days (Days silently reads 7).
 		const doc = {
 			shortId: "ORD-7001",
 			createdAt: SEP_1,
@@ -796,12 +795,11 @@ describe("booking span columns", () => {
 			total: gated.total,
 			currency: gated.currency,
 		};
-		expect(gated.bookingSkippedDays).toBeUndefined();
 		expect(cell(row, "Booking start")).toBe("2026-09-01");
 		expect(cell(row, "Booking last day")).toBe("2026-09-07");
-		// The span is 7; the member bought 5. Blank beats a wrong "7".
-		expect(cell(row, "Booking days")).toBe("");
-		expect(orderColumnDisplay(col("bookingDays"), row)).toBe("");
+		// The span is 7; the member bought 5.
+		expect(cell(row, "Booking days")).toBe("5");
+		expect(orderColumnDisplay(col("bookingDays"), row)).toBe("5 days");
 		expect(ordersToCsv([row])).not.toContain("Siti Secret");
 	});
 
