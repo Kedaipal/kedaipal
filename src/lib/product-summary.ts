@@ -10,6 +10,7 @@
 import { describeEvent } from "../../convex/lib/productEvent";
 import {
 	MAX_SECURITY_DEPOSIT,
+	MAX_SKIPS_CAP,
 	type PackageUnit,
 	weekendDaysLabel,
 } from "../../convex/lib/productKind";
@@ -62,6 +63,8 @@ export type SummaryInput = {
 		autoAccept?: boolean;
 		/** "Only days you're open" (z8r3fdhpm7) — named on a day package. */
 		skipsClosedDays?: boolean;
+		/** "Skips per package" as typed (z8r3fdh3ay); blank = no limit. */
+		maxSkips?: string;
 		/** Weekend per-night rate as typed (major units) + the nights it covers (S13).
 		 * Blank/absent = one rate; ignored on a package. */
 		weekendPrice?: string;
@@ -156,7 +159,7 @@ export function describeProduct(
 				// course that skips closed days is a different product from five
 				// days in a row, so the strip says which.
 				unit === "day" && booking.skipsClosedDays
-					? `${length}-day package (open days only)`
+					? `${length}-day package (open days only${skipsCapSuffix(booking.maxSkips)})`
 					: `${length}-${unit} package`,
 			);
 		}
@@ -291,4 +294,45 @@ export function describeProduct(
 	if (customLine) parts.push("+ custom option");
 
 	return parts.join(" · ");
+}
+
+/**
+ * Why a typed "skips per package" draft (z8r3fdh3ay) can't be saved, or null
+ * when it can. Blank = no limit. Mirrors the server's `sanitizeMaxSkips`
+ * bound, shared by the form and the wizard so the two can't drift.
+ */
+export function maxSkipsDraftIssue(draft: string): string | null {
+	const trimmed = draft.trim();
+	if (trimmed.length === 0) return null;
+	const n = Number(trimmed);
+	if (!/^\d+$/.test(trimmed) || n < 1 || n > MAX_SKIPS_CAP) {
+		return `Enter a whole number from 1 to ${MAX_SKIPS_CAP}, or leave it blank for no limit`;
+	}
+	return null;
+}
+
+/** The draft as the mutation takes it — 0 clears (the server's one spelling
+ * for "no limit"). Only call once `maxSkipsDraftIssue` is null. */
+export function maxSkipsFromDraft(draft: string): number {
+	const trimmed = draft.trim();
+	return trimmed.length === 0 ? 0 : Number(trimmed);
+}
+
+/** ", up to 3 skips" for the summary strip when a valid cap is typed. */
+function skipsCapSuffix(draft: string | undefined): string {
+	const trimmed = draft?.trim() ?? "";
+	if (trimmed.length === 0 || maxSkipsDraftIssue(trimmed) !== null) return "";
+	return `, up to ${trimmed} skip${trimmed === "1" ? "" : "s"}`;
+}
+
+/**
+ * A booking listing's capacity as the edit form's draft. UNSET means
+ * unlimited (S7) and seeds a BLANK field — `String(undefined)` seeded the
+ * literal "undefined", which the number input showed as empty while the
+ * form refused it as invalid, so no unlimited listing (every gym and meal
+ * plan) could be saved from its edit page, and the summary strip read
+ * "undefined at a time". Found in the z8r3fdh3ay hands-on test.
+ */
+export function capacityDraftFromListing(capacity: number | undefined): string {
+	return capacity === undefined ? "" : String(capacity);
 }

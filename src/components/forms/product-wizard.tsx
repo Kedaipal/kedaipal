@@ -64,6 +64,8 @@ import { asPackageUnit } from "../../lib/package-unit";
 import type { UnsavedState } from "../../lib/product-form-dirty";
 import {
 	isSecurityDepositInRange,
+	maxSkipsDraftIssue,
+	maxSkipsFromDraft,
 	securityDepositRangeMessage,
 	weekendRateConsequence,
 } from "../../lib/product-summary";
@@ -197,6 +199,9 @@ export type WizardState = {
 	/** Booking kind, DAY package only — "Only days you're open" (z8r3fdhpm7):
 	 * the term skips the store's closed days. Sent only for a day package. */
 	skipsClosedDays: boolean;
+	/** Booking kind, open-days package only — "Skips per package" as typed
+	 * (z8r3fdh3ay); blank = no limit. Sent only with skipsClosedDays. */
+	maxSkips: string;
 	/** Booking kind only — refundable security deposit (RM, as typed; blank =
 	 * none). Collected with the payment, returned after check-out (S5). */
 	securityDeposit: string;
@@ -256,6 +261,7 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		packageUnit: "month",
 		autoAccept: false,
 		skipsClosedDays: false,
+		maxSkips: "",
 		securityDeposit: "",
 		weekendPrice: "",
 		weekendDays: [...DEFAULT_WEEKEND_DAYS],
@@ -595,6 +601,15 @@ export function wizardStepIssues(
 				});
 			}
 		}
+		// "Skips per package" (z8r3fdh3ay) — judged only while it's on screen
+		// (an open-days day package); the field shows the sentence itself.
+		const maxSkipsIssue =
+			pkgRaw.length > 0 && state.packageUnit === "day" && state.skipsClosedDays
+				? maxSkipsDraftIssue(state.maxSkips)
+				: null;
+		if (maxSkipsIssue !== null) {
+			issues.push({ field: "maxSkips", message: maxSkipsIssue });
+		}
 		const depositRaw = state.securityDeposit.trim();
 		if (depositRaw.length > 0) {
 			if (!isSecurityDepositInRange(parsePriceInput(depositRaw))) {
@@ -878,6 +893,15 @@ export function buildWizardSubmitValues(
 							state.skipsClosedDays
 								? true
 								: undefined,
+						// The cap rides only with open days — the server refuses it
+						// anywhere else.
+						maxSkips:
+							packageLengthValue !== undefined &&
+							state.packageUnit === "day" &&
+							state.skipsClosedDays &&
+							state.maxSkips.trim().length > 0
+								? maxSkipsFromDraft(state.maxSkips)
+								: undefined,
 						securityDeposit: (() => {
 							const dep = parsePriceInput(state.securityDeposit.trim());
 							return dep !== null && dep > 0
@@ -965,6 +989,7 @@ export function wizardHandoff(state: WizardState): {
 			packageUnit: state.packageUnit,
 			autoAccept: state.autoAccept,
 			skipsClosedDays: state.skipsClosedDays,
+			maxSkips: state.maxSkips,
 			securityDeposit: state.securityDeposit,
 			weekendPrice: state.weekendPrice,
 			weekendDays: state.weekendDays,
@@ -1009,6 +1034,7 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		packageUnit: draft.packageUnit ?? "month",
 		autoAccept: draft.autoAccept === true,
 		skipsClosedDays: draft.skipsClosedDays === true,
+		maxSkips: draft.maxSkips ?? "",
 		securityDeposit: draft.securityDeposit ?? "",
 		weekendPrice: draft.weekendPrice ?? "",
 		weekendDays: draft.weekendDays ?? [...DEFAULT_WEEKEND_DAYS],
@@ -2425,6 +2451,8 @@ export function ProductWizard({
 								packageLength={packageLengthNum}
 								skipsClosedDays={state.skipsClosedDays}
 								onChange={(next) => patch({ skipsClosedDays: next })}
+								maxSkips={state.maxSkips}
+								onMaxSkipsChange={(next) => patch({ maxSkips: next })}
 								schedule={storeSchedule}
 							/>
 						) : null}
@@ -3108,7 +3136,7 @@ export function ProductWizard({
 												? [
 														{
 															label: "Package",
-															value: `${state.packageLength.trim()} ${state.packageUnit}${state.packageLength.trim() === "1" ? "" : "s"}${state.packageUnit === "day" && state.skipsClosedDays ? " (open days only)" : ""}, flat price`,
+															value: `${state.packageLength.trim()} ${state.packageUnit}${state.packageLength.trim() === "1" ? "" : "s"}${state.packageUnit === "day" && state.skipsClosedDays ? ` (open days only${state.maxSkips.trim().length > 0 ? `, up to ${state.maxSkips.trim()} skips` : ""})` : ""}, flat price`,
 															step: 3,
 														},
 													]

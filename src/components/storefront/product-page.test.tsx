@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	GALLERY_DESKTOP_SIZES,
 	GALLERY_MOBILE_SIZES,
 	GALLERY_PRELOAD_SIZES,
+	OpenDaysPlanNote,
 	PageGallery,
 } from "./product-page";
 
@@ -70,5 +71,17 @@ describe("PageGallery — LCP preload contract (z8r3fdegb5)", () => {
 		// fetch a 45vw hero it never shows, which is the waste this contract
 		// exists to remove. It still paints from the same preload on desktop.
 		expect(desktop.querySelector("img")?.getAttribute("loading")).toBe("lazy");
+	});
+});
+
+describe("OpenDaysPlanNote (z8r3fdh3ay)", () => {
+	it("states the rule and the skip promise, with the cap when set", () => {
+		const { rerender } = render(<OpenDaysPlanNote storeName="Sue Chef" />);
+		expect(
+			screen.getByText(/Counts only the days Sue Chef is open/),
+		).toBeTruthy();
+		expect(screen.getByText(/add a day to the end\.$/)).toBeTruthy();
+		rerender(<OpenDaysPlanNote storeName="Sue Chef" maxSkips={3} />);
+		expect(screen.getByText(/\(up to 3 skips per package\)/)).toBeTruthy();
 	});
 });

@@ -10,6 +10,7 @@ import {
 	ENDING_SOON_DAYS,
 	matchesAnyBookingPeriod,
 	matchesBookingPeriod,
+	packageDaysLeft,
 	type PeriodOrder,
 } from "./bookingPeriod";
 import { DAY_MS, todayMytMidnight } from "./fulfilmentDate";
@@ -210,5 +211,55 @@ describe("currentBookingLine — which booking the customer card shows", () => {
 			currentBookingLine([{ status: "confirmed" } as never], NOW),
 		).toBeNull();
 		expect(currentBookingLine([packaged(-1, 5, "cancelled")], NOW)).toBeNull();
+	});
+});
+
+describe("skips on the period line + packageDaysLeft (z8r3fdh3ay)", () => {
+	const plan = (extra: Partial<PeriodOrder> = {}): PeriodOrder & {
+		bookingPackaged: true;
+	} => ({
+		status: "confirmed",
+		bookingCheckIn: day(-1),
+		bookingCheckOut: day(5),
+		bookingPackaged: true,
+		...extra,
+	});
+
+	it("the desk line counts the customer's skips", () => {
+		expect(describeBookingPeriod(plan(), NOW)).toBe("Active · 4 days left");
+		expect(
+			describeBookingPeriod(
+				plan({
+					bookingSkippedDays: [day(2)],
+					bookingCustomerSkips: [day(2)],
+				}),
+				NOW,
+			),
+		).toBe("Active · 3 open days left · 1 skip");
+		expect(
+			describeBookingPeriod(
+				plan({
+					bookingSkippedDays: [day(1), day(2)],
+					bookingCustomerSkips: [day(1), day(2)],
+				}),
+				NOW,
+			),
+		).toBe("Active · 2 open days left · 2 skips");
+		// A cancelled plan has no line, so no count either.
+		expect(
+			describeBookingPeriod(
+				plan({ status: "cancelled", bookingCustomerSkips: [day(2)] }),
+				NOW,
+			),
+		).toBeNull();
+	});
+
+	it("days left includes today and drops skipped days", () => {
+		expect(packageDaysLeft(plan(), NOW)).toBe(5);
+		expect(packageDaysLeft(plan({ bookingSkippedDays: [day(0), day(3)] }), NOW)).toBe(3);
+		// Today is the last day → 1; the check-out morning → null (ended).
+		expect(packageDaysLeft(plan({ bookingCheckOut: day(1) }), NOW)).toBe(1);
+		expect(packageDaysLeft(plan({ bookingCheckOut: day(0) }), NOW)).toBeNull();
+		expect(packageDaysLeft(plan({ bookingCheckIn: day(1) }), NOW)).toBeNull();
 	});
 });

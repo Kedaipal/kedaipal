@@ -43,6 +43,7 @@ import { convexErrorMessage } from "../lib/format";
 import type { UnsavedState } from "../lib/product-form-dirty";
 import { draftPreviewOverlay } from "../lib/product-preview";
 import { type ProductStatus, productStatus } from "../lib/product-status";
+import { capacityDraftFromListing } from "../lib/product-summary";
 import {
 	isProductSpotlightKey,
 	type ProductSpotlightKey,
@@ -379,7 +380,7 @@ function EditProductRoute() {
 					hidden: product.hidden,
 					kind: product.kind,
 					capacityPerNight: product.booking
-						? String(product.booking.capacityPerNight)
+						? capacityDraftFromListing(product.booking.capacityPerNight)
 						: undefined,
 					securityDeposit: product.booking?.securityDeposit
 						? (product.booking.securityDeposit / 100).toFixed(2)
@@ -393,6 +394,7 @@ function EditProductRoute() {
 					packageUnit: product.booking?.packageUnit,
 					autoAccept: product.booking?.autoAccept === true,
 					skipsClosedDays: product.booking?.skipsClosedDays === true,
+					maxSkips: product.booking?.maxSkips?.toString() ?? "",
 					weekendPrice: product.booking?.weekendPrice
 						? (product.booking.weekendPrice / 100).toFixed(2)
 						: undefined,

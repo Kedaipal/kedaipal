@@ -908,7 +908,12 @@ export function BookingCheckoutForm({
 				{availability.closureRule === "skipped" ? (
 					<p className="text-xs text-muted-foreground">
 						This package counts only the days {storeName} is open — closed days
-						(hatched) are skipped, so it ends later.
+						(hatched) are skipped, so it ends later. Can&apos;t make a day? Ask{" "}
+						{storeName} — they can skip it and add a day to the end
+						{availability.maxSkips !== undefined
+							? ` (up to ${availability.maxSkips} skip${availability.maxSkips === 1 ? "" : "s"} per package)`
+							: ""}
+						.
 					</p>
 				) : availability.closureRule === "absorbed" &&
 					(availability.closedWeekdays.length > 0 ||

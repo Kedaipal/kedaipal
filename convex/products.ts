@@ -55,6 +55,7 @@ import {
 	sanitizeCapacityPerNight,
 	sanitizePackageLength,
 	sanitizeSecurityDeposit,
+	sanitizeMaxSkips,
 	sanitizeSkipsClosedDays,
 	sanitizeWeekendRate,
 	type PackageUnit,
@@ -1249,6 +1250,9 @@ export const create = mutation({
 				// "Only days you're open" (z8r3fdhpm7) — a DAY package that skips
 				// the store's closed days. Refused on any other shape.
 				skipsClosedDays: v.optional(v.boolean()),
+				// "Up to N skips per package" (z8r3fdh3ay) — open-days packages
+				// only. Unset / 0 = no limit.
+				maxSkips: v.optional(v.number()),
 			}),
 		),
 		variants: v.array(variantInputValidator),
@@ -1296,6 +1300,7 @@ export const create = mutation({
 					weekendPrice?: number;
 					weekendDays?: number[];
 					skipsClosedDays?: true;
+					maxSkips?: number;
 			  }
 			| undefined;
 		if (kind === "booking") {
@@ -1305,6 +1310,10 @@ export const create = mutation({
 				const packageLength = sanitizePackageLength(
 					args.booking.packageLength,
 					args.booking.packageUnit,
+				);
+				const skipsClosedDays = sanitizeSkipsClosedDays(
+					args.booking.skipsClosedDays,
+					{ packageLength, packageUnit: args.booking.packageUnit },
 				);
 				booking = {
 					// Unset capacity = unlimited (S7), not a missing value.
@@ -1317,10 +1326,8 @@ export const create = mutation({
 					packageLength,
 					packageUnit: args.booking.packageUnit,
 					autoAccept: args.booking.autoAccept === true ? true : undefined,
-					skipsClosedDays: sanitizeSkipsClosedDays(
-						args.booking.skipsClosedDays,
-						{ packageLength, packageUnit: args.booking.packageUnit },
-					),
+					skipsClosedDays,
+					maxSkips: sanitizeMaxSkips(args.booking.maxSkips, { skipsClosedDays }),
 					// Free-range only — a package refuses the pair (S13).
 					...sanitizeWeekendRate(
 						args.booking.weekendPrice,
@@ -1697,6 +1704,9 @@ export const update = mutation({
 				// "Only days you're open" (z8r3fdhpm7) — a DAY package that skips
 				// the store's closed days. Refused on any other shape.
 				skipsClosedDays: v.optional(v.boolean()),
+				// "Up to N skips per package" (z8r3fdh3ay) — open-days packages
+				// only. Unset / 0 = no limit.
+				maxSkips: v.optional(v.number()),
 			}),
 		),
 	},
@@ -1770,6 +1780,10 @@ export const update = mutation({
 					fields.booking.packageLength,
 					fields.booking.packageUnit,
 				);
+				const skipsClosedDays = sanitizeSkipsClosedDays(
+					fields.booking.skipsClosedDays,
+					{ packageLength, packageUnit: fields.booking.packageUnit },
+				);
 				updates.booking = {
 					capacityPerNight: sanitizeCapacityPerNight(
 						fields.booking.capacityPerNight,
@@ -1780,10 +1794,8 @@ export const update = mutation({
 					packageLength,
 					packageUnit: fields.booking.packageUnit,
 					autoAccept: fields.booking.autoAccept === true ? true : undefined,
-					skipsClosedDays: sanitizeSkipsClosedDays(
-						fields.booking.skipsClosedDays,
-						{ packageLength, packageUnit: fields.booking.packageUnit },
-					),
+					skipsClosedDays,
+					maxSkips: sanitizeMaxSkips(fields.booking.maxSkips, { skipsClosedDays }),
 					// Free-range only — a package refuses the pair (S13).
 					...sanitizeWeekendRate(
 						fields.booking.weekendPrice,
