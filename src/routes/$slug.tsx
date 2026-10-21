@@ -35,12 +35,24 @@ import {
 	proxiedImageUrl,
 } from "../lib/image-proxy";
 import { jsonLdScript } from "../lib/json-ld";
+import { seoDescription } from "../lib/seo-text";
 import { ssrRead } from "../lib/ssr-read";
 
 interface StorefrontLoaderData {
 	storeName: string;
 	slug: string;
 	checkoutPhone: string | undefined;
+	/** The SELLER's number for the Store JSON-LD — `checkoutPhone` is the
+	 * shared Kedaipal WABA, so publishing it would give every store the same
+	 * `telephone` and let Google merge them into one business. */
+	waPhone: string | undefined;
+	/** Public locality + country for the Store's `address` (Google requires
+	 * one for a LocalBusiness rich result). The owner-only business address
+	 * is never used here — it is often a home address. */
+	storeArea: string | undefined;
+	country: string;
+	currency: string;
+	logoUrl: string | undefined;
 	locale: Locale;
 	// SEO meta/OG/JSON-LD description. Prefers the seller's own store description
 	// (single-lined) and falls back to a generated blurb.
@@ -58,6 +70,9 @@ interface StorefrontLoaderData {
 	// Closed dates (z8r3fdhpm7) — the JSON-LD's holiday hours
 	// (specialOpeningHoursSpecification). Undefined = none.
 	closedDates: ClosedDateRange[] | undefined;
+	/** The sitemap's rule (z8r3fdh2ye): a store the sitemap leaves out is
+	 * also `noindex`, or excluding it would leave the page indexable anyway. */
+	indexable: boolean;
 }
 
 export const Route = createFileRoute("/$slug")({
@@ -117,9 +132,7 @@ export const Route = createFileRoute("/$slug")({
 		// The seller's own description is the stronger trust/SEO signal — prefer it
 		// for meta tags, collapsing newlines to a single line. Fall back to the
 		// generated blurb when unset.
-		const sellerDescription = retailer.storeDescription
-			?.replace(/\s+/g, " ")
-			.trim();
+		const sellerDescription = seoDescription(retailer.storeDescription);
 		const description =
 			sellerDescription ||
 			`Shop ${retailer.storeName} on Kedaipal — browse the catalog and place your order on WhatsApp.`;
@@ -128,6 +141,13 @@ export const Route = createFileRoute("/$slug")({
 			storeName: retailer.storeName,
 			slug: retailer.slug,
 			checkoutPhone: retailer.checkoutPhone,
+			waPhone: retailer.waPhone,
+			storeArea: retailer.storeArea,
+			country: retailer.country,
+			currency: retailer.currency,
+			logoUrl: retailer.logoUrl
+				? absoluteProxiedImageUrl(retailer.logoUrl, SITE_URL)
+				: undefined,
 			locale: retailer.locale ?? "en",
 			description,
 			canonicalUrl: `${SITE_URL}/${retailer.slug}`,
@@ -137,6 +157,7 @@ export const Route = createFileRoute("/$slug")({
 			coverImageUrl: retailer.coverImageUrl ?? undefined,
 			openingHours: retailer.openingHours,
 			closedDates: retailer.closedDates,
+			indexable: retailer.indexable ?? true,
 		};
 	},
 	head: ({ loaderData }) => {
@@ -149,10 +170,15 @@ export const Route = createFileRoute("/$slug")({
 			canonicalUrl,
 			ogImageUrl,
 			coverImageUrl,
-			checkoutPhone,
+			waPhone,
+			storeArea,
+			country,
+			currency,
+			logoUrl,
 			locale,
 			openingHours,
 			closedDates,
+			indexable,
 		} = loaderData;
 		const title = `${storeName} — Order on WhatsApp | Kedaipal`;
 		const ogLocale = OG_LOCALE[locale];
@@ -160,7 +186,12 @@ export const Route = createFileRoute("/$slug")({
 		const meta = [
 			{ title },
 			{ name: "description", content: description },
-			{ name: "robots", content: "index, follow" },
+			// A cancelled or empty store still serves 200, so the sitemap rule
+			// is repeated here as `noindex` — same answer, same source.
+			{
+				name: "robots",
+				content: indexable ? "index, follow" : "noindex, follow",
+			},
 			// Open Graph
 			{ property: "og:type", content: "website" },
 			{ property: "og:site_name", content: "Kedaipal" },
@@ -179,6 +210,7 @@ export const Route = createFileRoute("/$slug")({
 		if (ogImageUrl) {
 			meta.push(
 				{ property: "og:image", content: ogImageUrl },
+				{ property: "og:image:alt", content: storeName },
 				{ name: "twitter:image", content: ogImageUrl },
 			);
 		}
@@ -186,11 +218,21 @@ export const Route = createFileRoute("/$slug")({
 		const jsonLd = {
 			"@context": "https://schema.org",
 			"@type": "Store",
+			"@id": `${canonicalUrl}#store`,
 			name: storeName,
 			url: canonicalUrl,
 			description,
 			...(ogImageUrl ? { image: ogImageUrl } : {}),
-			...(checkoutPhone ? { telephone: `+${checkoutPhone}` } : {}),
+			...(logoUrl ? { logo: logoUrl } : {}),
+			// The seller's own number — never the shared checkout number, which
+			// is the same on every store (storefront SEO audit, 21 Oct 2026).
+			...(waPhone ? { telephone: `+${waPhone}` } : {}),
+			address: {
+				"@type": "PostalAddress",
+				...(storeArea ? { addressLocality: storeArea } : {}),
+				addressCountry: country,
+			},
+			currenciesAccepted: currency,
 			// Configured hours only — the 24/7 default claims nothing rather
 			// than asserting "always open" (86eyp5rav).
 			...(openingHours

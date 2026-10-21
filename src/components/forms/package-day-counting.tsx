@@ -30,6 +30,8 @@ import {
 	describeNights,
 	formatNight,
 } from "../../lib/booking-dates";
+import { maxSkipsDraftIssue } from "../../lib/product-summary";
+import { Input } from "../ui/input";
 import { ModeButton } from "../ui/mode-button";
 
 /** How far ahead the example looks for a start whose term skips something —
@@ -79,12 +81,19 @@ export function PackageDayCounting({
 	packageLength,
 	skipsClosedDays,
 	onChange,
+	maxSkips,
+	onMaxSkipsChange,
 	schedule,
 }: {
 	/** The package's length in days, already validated (> 0). */
 	packageLength: number;
 	skipsClosedDays: boolean;
 	onChange: (next: boolean) => void;
+	/** "Up to N skips per package" as typed (z8r3fdh3ay); blank = no limit.
+	 * Asked only under "Only days you're open" — the one shape a skip means
+	 * something for. */
+	maxSkips: string;
+	onMaxSkipsChange: (next: string) => void;
 	/** The store's schedule. Absent = unknown: the line stays generic rather
 	 * than claiming the store is open every day. */
 	schedule: StoreSchedule | undefined;
@@ -151,6 +160,59 @@ export function PackageDayCounting({
 				) : (
 					`Runs ${span} in a row from the start date. Days you're closed after it still count, and buyers are told about any closed dates inside their package — it just can't start on a day you're closed.`
 				)}
+			</p>
+			{skipsClosedDays ? (
+				<SkipsAllowance value={maxSkips} onChange={onMaxSkipsChange} />
+			) : null}
+		</div>
+	);
+}
+
+/**
+ * "Skip a day" is discovered HERE (z8r3fdh3ay): the seller learns the action
+ * exists on the order page, and sets the optional cap buyers are shown. The
+ * action itself always exists on an open-days plan; this only limits it.
+ */
+function SkipsAllowance({
+	value,
+	onChange,
+}: {
+	value: string;
+	onChange: (next: string) => void;
+}) {
+	const issue = maxSkipsDraftIssue(value);
+	const capped = issue === null && value.trim().length > 0;
+	return (
+		<div className="flex flex-col gap-1.5 rounded-xl border border-border p-3">
+			<label htmlFor="booking-max-skips" className="text-sm font-medium">
+				Skips per package{" "}
+				<span className="font-normal text-muted-foreground">(optional)</span>
+			</label>
+			<div className="flex items-center gap-2">
+				<Input
+					id="booking-max-skips"
+					inputMode="numeric"
+					placeholder="No limit"
+					value={value}
+					onChange={(e) => onChange(e.target.value)}
+					variant="field"
+					isError={issue !== null}
+					className="w-28"
+				/>
+				<span className="text-sm text-muted-foreground">per package</span>
+			</div>
+			{issue !== null ? (
+				<p className="text-xs text-destructive" data-form-error>
+					{issue}
+				</p>
+			) : null}
+			<p className="text-xs leading-relaxed text-muted-foreground">
+				When a customer misses a day, open their order and tap{" "}
+				<span className="font-medium text-foreground">Skip a day</span> — their
+				last day moves to the next day you&apos;re open.{" "}
+				{capped
+					? `Buyers see "up to ${value.trim()} skips per package".`
+					: "Leave blank for no limit."}
 			</p>
 		</div>
 	);

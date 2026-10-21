@@ -206,6 +206,34 @@ describe("BookingCheckoutForm — WhatsApp number", async () => {
 		expect(echo.getAttribute("data-clarity-mask")).toBe("true");
 	});
 
+	it("an INSTANT-book listing never promises an approval it won't have", () => {
+		// Confirmed on submit — "the approval" / "the decision" told the buyer
+		// to wait for a step that doesn't exist, beside a "Book now" button.
+		state.product = { ...PRODUCT, booking: { autoAccept: true } };
+		renderForm("SG");
+		expect(
+			screen.getByText(
+				"The confirmation and payment details for this booking land in this WhatsApp.",
+			),
+		).toBeTruthy();
+		typePhone("9123 4567");
+		expect(
+			screen.getByText(/We'll WhatsApp your confirmation to .*9123 4567/),
+		).toBeTruthy();
+		expect(screen.queryByText(/approval|decision/i)).toBeNull();
+	});
+
+	it("an instant-book listing says so in Malay too", () => {
+		state.product = { ...PRODUCT, booking: { autoAccept: true } };
+		renderForm("MY", "ms");
+		expect(
+			screen.getByText(
+				"Pengesahan dan butiran bayaran untuk tempahan ini dihantar ke WhatsApp anda.",
+			),
+		).toBeTruthy();
+		expect(screen.queryByText(/Kelulusan/)).toBeNull();
+	});
+
 	it("sends the picked country with the number", async () => {
 		state.request.mockResolvedValue({ trackingToken: "tok_abc" });
 		renderForm("MY");
