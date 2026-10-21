@@ -37,9 +37,9 @@ canonical block pasted into every directory is this file's values, verbatim.
 | `/` | `Organization` (with `sameAs`, `contactPoint`, `legalName`, `foundingDate`, `address`), `SoftwareApplication` + `AggregateOffer`, `FAQPage`, `VideoObject` | `src/routes/index.tsx` |
 | `/pricing` | `SoftwareApplication` with one `Offer` per listed tier × billing cycle, in the visitor's resolved currency | `src/lib/pricing-jsonld.ts` |
 | `/stores` | `ItemList` of stores (and the focused showcase) | `src/routes/stores.tsx` |
-| `/$slug` | `Store` | `src/routes/$slug.tsx` |
-| `/$slug/c/$categorySlug` | `BreadcrumbList` (Store › Category) | `src/lib/breadcrumbs.ts` |
-| `/$slug/p/$productSlug` | `Product` + `Offer`/`AggregateOffer`, `BreadcrumbList` (Store › Category › Product) | `src/lib/breadcrumbs.ts` |
+| `/$slug` | `Store` (`@id`, `logo`, `address` from the public `storeArea` + country, `currenciesAccepted`, the SELLER's `telephone`, opening and holiday hours) | `src/routes/$slug.tsx` |
+| `/$slug/c/$categorySlug` | `BreadcrumbList` (Store › Category), `ItemList` of the category's product URLs | `src/lib/breadcrumbs.ts`, the route |
+| `/$slug/p/$productSlug` | `Product` (`brand` = the store, `sku`, up to five `image`s) + `Offer`/`AggregateOffer` (`seller`, `itemCondition`, a live promo's price and `priceValidUntil`), `BreadcrumbList` (Store › Category › Product). **Quote-only products carry no Product block** — Google requires offers, review or rating, and a negotiated price has none | `src/lib/breadcrumbs.ts`, the route |
 
 Rules that hold across all of them:
 
@@ -59,6 +59,18 @@ Rules that hold across all of them:
   (`categories.primaryPublicForProduct`): the seller's first assignment, skipping
   hidden or archived categories whose page 404s. No category → a two-level
   trail, never a null item.
+- **The Store's `telephone` is the seller's `waPhone`, never `checkoutPhone`.**
+  `checkoutPhone` is the shared Kedaipal WABA — the same number on every
+  store — and publishing it would let Google merge every storefront into one
+  business entity (storefront audit, 21 Oct 2026).
+- **Seller text reaches a snippet through `seoDescription`**
+  (`src/lib/seo-text.ts`): markdown stripped, whitespace collapsed, cut at a
+  word boundary at 155 chars. Product descriptions are uncapped markdown and
+  category blurbs run to 280, both of which were reaching
+  `<meta name="description">` verbatim.
+- **The product canonical is the STORED slug**, not the URL parameter — the
+  query lower-cases its input, so `/p/Choc-Cake` answers 200 and must
+  canonicalise to the real URL rather than mint a duplicate.
 - **Every `<script type="application/ld+json">` goes through `jsonLdScript`**
   (`src/lib/json-ld.ts`) — seller text is escaped so a store name can't close
   the tag. `json-ld.test.ts` lists the routes that carry JSON-LD; add a route
@@ -83,8 +95,10 @@ order from it:
 
 **The sitemap and the page agree by construction:** a store the sitemap
 leaves out renders `noindex, follow` from the same rule (`retailers.indexable`
-on the by-slug payload). Excluding it from the sitemap alone would leave it
-indexable through any inbound link.
+on the by-slug payload) — on the store home AND on its category and product
+pages. Excluding it from the sitemap alone would leave it indexable through
+any inbound link. A category whose visible products filter to zero is
+`noindex` too (a thin page whatever the store's standing).
 
 `lastmod` for a store is the newest of the store's last write and its newest
 product write (`storefrontLastmod`); for a product or category, that row's
@@ -128,6 +142,20 @@ price to go stale. English only, one document per URL (the FAQ JSON-LD rule).
 
 `/llms-full.txt` is deliberately absent: it earns its place when there is
 content beyond the landing page (the parked `/learn` ticket).
+
+## Known gap: the storefront body is client-rendered
+
+The three storefront routes server-render only `<head>` (meta + JSON-LD);
+the body is a skeleton until the client's Convex subscription fills it, and
+the product page additionally waits on the cart hydrating. A crawler that
+runs no JavaScript (GPTBot, ClaudeBot, PerplexityBot, most Bing fetches) sees
+the structured data and nothing else; Googlebot sees content only if its
+renderer completes the WebSocket. The `ItemList` on category pages and the
+sitemap are the mitigations today. Closing it is
+[ClickUp `86eydh4vd`](https://app.clickup.com/t/86eydh4vd) (per-request
+`QueryClient`, loaders that seed the client cache) — the double-fetch ticket
+and the SSR-body gap are the same change. Check with Search Console → URL
+inspection → "View crawled page" on one store, one category, one product.
 
 ## Measurement
 

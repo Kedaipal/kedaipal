@@ -3003,7 +3003,7 @@ export const getPublicBySlug = query({
 			)
 			.unique();
 		// Fallback for rows the slug backfill hasn't stamped yet: match on the
-		// slug derived from the name. Bounded by the 50-product cap. A HIT on a
+		// slug derived from the name. Bounded by the per-retailer product cap. A HIT on a
 		// migrated catalog never reaches here (the index arm answers first); a
 		// MISS — an unknown or probed slug — always does, which is the same
 		// bounded scan `list` already runs on every storefront page load.
