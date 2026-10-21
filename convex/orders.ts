@@ -50,7 +50,11 @@ import {
 	resolveCreditGate,
 } from "./creditLock";
 import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
-import { promoUnitsRequested, tallyPromoUnits } from "./lib/promoTally";
+import {
+	promoUnitsRequested,
+	releasePromoUnits,
+	tallyPromoUnits,
+} from "./lib/promoTally";
 import {
 	assertPlanFeature,
 	assertSubscriptionActive,
@@ -6781,6 +6785,10 @@ export const declineMockupItem = mutation({
 				delta: total - order.total,
 			});
 		await voidStaleGatewayRequest(ctx, order, total);
+		// The only path that drops a line WITHOUT cancelling the order, so the
+		// only one that has to hand that line's flash units back itself (the
+		// cancel above does it through `recordOrderCancelled`).
+		await releasePromoUnits(ctx, order, dropped, now);
 		await ctx.db.patch(order._id, {
 			items: kept,
 			subtotal,
