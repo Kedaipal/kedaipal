@@ -182,13 +182,15 @@ card that produces a **prefilled onboarding link**:
    prefill is packed into one URL-safe base64url token by `src/lib/onboarding-link.ts`,
    so it survives the Clerk auth redirect intact; separate query params get mangled)
    and sends it via WhatsApp/email.
-3. The client opens it → **signs up** for a new account. Because `via=admin`,
-   `onboarding.tsx` routes signed-out invitees to sign-**up**, not sign-in — a new
-   client has no account to sign into yet (routing them to sign-in dead-ends with
-   "couldn't find account"). The prefill survives account creation because the
-   invite URL is handed to Clerk as the post-signup redirect, and the `/sign-up`
-   route uses `fallbackRedirectUrl` (not a hard `forceRedirectUrl`) so that redirect
-   wins → onboarding shows an "**Kedaipal set this up for you**" banner with the
+3. The client opens it → **signs in or creates their login**, one door either way.
+   `onboarding.tsx` sends every signed-out visitor, invitees included, to `/sign-in`,
+   which runs Clerk's sign-in-or-up flow (`withSignUp`, [`z8r3fdwdvq`](https://app.clickup.com/t/z8r3fdwdvq)):
+   a new address carries on into creating a login, and an address that already has
+   one just signs in. (Invitees used to go straight to sign-**up**, because plain
+   sign-in dead-ended on a new address. That swapped one dead end for another: an
+   invite to an address that already had a login hit "email already taken".) The
+   prefill survives because the invite URL is handed to Clerk as the redirect for
+   **both** legs (`signInForceRedirectUrl` + `signUpForceRedirectUrl`) → onboarding shows an "**Kedaipal set this up for you**" banner with the
    fields prefilled (incl. a WhatsApp field, only shown in `via=admin` mode) → taps
    **Create store**. The store is created under **their** account.
 4. The store now appears in the Issue-invoice picker → admin issues their invoice

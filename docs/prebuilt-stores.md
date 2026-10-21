@@ -86,7 +86,8 @@ the one reader of the placeholder; nothing else tests the prefix by hand.
 4. **Send the invitation** from the same Manage menu → **Handover email → Send
    invitation** (`retailers.sendHandoverInvite`). The row reads "Handover —
    invite them" in amber until it has gone. The email carries an ordinary
-   sign-in link and no token, so it is safe to forward and useless on its own —
+   sign-in link (which creates the login for a first-timer) and no token, so it
+   is safe to forward and useless on its own —
    pasting the link by hand still works if you prefer.
 
 The directory carries an **Unclaimed** chip, placed straight after **Past due**:
@@ -146,6 +147,40 @@ address, never by holding a URL, so the email contains an ordinary `/app`
 sign-in link. A forwarded invite gets the next person a sign-in page and nothing
 else — the property a magic link would destroy. `handoverEmailCopy.test.ts`
 fails on any token-shaped URL.
+
+**That sign-in page creates a login for an address it doesn't know**
+([`z8r3fdwdvq`](https://app.clickup.com/t/z8r3fdwdvq)). The recipient is
+usually new to Kedaipal, and email-code sign-in refuses an unknown address
+outright ("Couldn't find your account"), which left a brand-new vendor stuck on
+the first screen of their own handover. `/sign-in` runs Clerk's sign-in-or-up flow
+(`<SignIn withSignUp>`), so the unknown address carries on into creating a login.
+That only works because `ClerkProvider` (`src/routes/__root.tsx`) sets
+`signInUrl="/sign-in"`: without it, every `RedirectToSignIn` (the `/app` gate
+this email's link goes through) falls back to Clerk's hosted Account Portal,
+which never sees `withSignUp`. The first cut of this fix missed that and passed
+only because testing came in through the landing nav's "Sign in". Driving the
+gate signed-out found it, and `sign-in.test.tsx` now pins the provider. From there,
+the `/app` gate sends both legs back to `/app`, which routes a storeless
+login to `/onboarding`'s claim screen. The email says so in every locale, on
+its own line right above the button ("New to Kedaipal? The button below creates
+your login — there's no separate sign-up").
+
+**The email's layout, in reading order:** who it's for → the sign-in address in
+a green key card (the one thing they must get right, never mid-sentence; the
+billing emails' Pay-now green) → what they get → what it costs → "new here?"
+next to the button it names → the button → the "weren't expecting this?" line
+as fine print *under* the button (`wrapHtml`'s optional `afterCta`), so
+reassurance never stands between the reader and the action.
+`handoverEmailCopy.test.ts` pins that order.
+
+The same fall-through means no
+other way a new person reaches sign-in without choosing it **dead-ends** any more:
+a bookmarked `/app`, the landing nav's "Sign in", the admin's prefilled
+onboarding link, an order-alert email opened from a `notifyEmail` inbox that
+has no login. "No longer dead-ends" is all it promises, though. That alert inbox
+gets a fresh login and lands on `/onboarding`'s "create your store", **not** on
+the order: no store is waiting for that address, and reaching a store's orders
+needs a team invite.
 
 **It names nothing but the store's name.** The recipient has consented to
 nothing yet, so the email must not ship them a catalogue, a buyer's details or a
