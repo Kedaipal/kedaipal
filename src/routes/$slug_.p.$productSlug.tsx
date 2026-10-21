@@ -7,6 +7,7 @@ import {
 	redirect,
 } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
+import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import {
 	GALLERY_PRELOAD_SIZES,
 	ProductPageView,
@@ -22,6 +23,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
+import { breadcrumbListJsonLd, productCrumbs } from "../lib/breadcrumbs";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import {
 	absoluteProxiedImageUrl,
@@ -29,6 +31,7 @@ import {
 	proxiedImageUrl,
 } from "../lib/image-proxy";
 import { jsonLdScript } from "../lib/json-ld";
+import { seoDescription } from "../lib/seo-text";
 import { ssrRead } from "../lib/ssr-read";
 import { hasStartingPrice } from "../lib/variant";
 
@@ -37,8 +40,17 @@ interface ProductLoaderData {
 	slug: string;
 	productName: string;
 	productSlug: string;
+	/** First visible category, for the breadcrumb; null → Store › Product. */
+	primaryCategory: { name: string; slug: string } | null;
 	description: string;
 	canonicalUrl: string;
+	indexable: boolean;
+	locale: Locale;
+	sku: string | undefined;
+	variantCount: number;
+	imageUrls: string[];
+	promoPriceFrom: number | undefined;
+	promoEndsAt: number | undefined;
 	ogImageUrl: string | undefined;
 	// Offer facts for the Product JSON-LD, frozen at load time. Prices in minor
 	// units; 0/0 + quote-only means "no offers block" (price is negotiated).
@@ -108,18 +120,47 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			throw notFound();
 		}
 
-		const productDescription = product.description?.replace(/\s+/g, " ").trim();
+		// The breadcrumb's middle crumb (z8r3fdh2z3). A transient failure here
+		// shortens the trail to Store › Product; it never fails the page.
+		const categoryRead = await ssrRead(() =>
+			client.query(api.categories.primaryPublicForProduct, {
+				retailerId: retailer._id,
+				productId: product._id,
+			}),
+		);
+		const primaryCategory = categoryRead.ok ? categoryRead.value : null;
+
+		const productDescription = seoDescription(product.description);
 		const description =
 			productDescription ||
 			`Order ${product.name} from ${retailer.storeName} on WhatsApp via Kedaipal.`;
 
+		// The STORED slug, not the URL parameter: the query lower-cases its
+		// input, so `/p/Choc-Cake` answers 200 and must canonicalise to the
+		// real URL rather than mint a duplicate.
+		const productSlug = product.slug;
+		const promoLive = product.promoState?.phase === "live";
 		return {
 			storeName: retailer.storeName,
 			slug: retailer.slug,
 			productName: product.name,
-			productSlug: params.productSlug,
+			productSlug,
+			primaryCategory,
 			description,
-			canonicalUrl: `${SITE_URL}/${retailer.slug}/p/${params.productSlug}`,
+			canonicalUrl: `${SITE_URL}/${retailer.slug}/p/${productSlug}`,
+			indexable: retailer.indexable ?? true,
+			locale: retailer.locale ?? "en",
+			sku: product.sku,
+			variantCount: product.variantCount,
+			// Every photo for the Product's `image` (Google shows up to several
+			// in rich results); the OG card still takes the first.
+			imageUrls: product.imageUrls
+				.slice(0, 5)
+				.map((url) => absoluteProxiedImageUrl(url, SITE_URL)),
+			// A live promo paints the sale price on the page, so the schema must
+			// say the same price (Google flags a mismatch) and when it ends.
+			promoPriceFrom: promoLive ? product.promoPriceFrom : undefined,
+			promoEndsAt: promoLive ? product.promoState?.endsAt : undefined,
 			// Social cards + JSON-LD go through the image proxy too: link unfurlers
 			// are known to skip oversized images outright, and a 4 MB cover is
 			// exactly the kind of thing they drop — so this is a correctness fix for
@@ -149,9 +190,18 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			return storeUnavailableHead(loaderData.storeName);
 		const {
 			storeName,
+			slug,
 			productName,
+			primaryCategory,
 			description,
 			canonicalUrl,
+			indexable,
+			locale,
+			sku,
+			variantCount,
+			imageUrls,
+			promoPriceFrom,
+			promoEndsAt,
 			ogImageUrl,
 			priceFrom,
 			priceTo,
@@ -162,13 +212,18 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			firstImageUrl,
 		} = loaderData;
 		const title = `${productName} — ${storeName} | Kedaipal`;
+		const storeUrl = `${SITE_URL}/${slug}`;
 
 		const meta = [
 			{ title },
 			{ name: "description", content: description },
-			{ name: "robots", content: "index, follow" },
-			{ property: "og:type", content: "website" },
+			{
+				name: "robots",
+				content: indexable ? "index, follow" : "noindex, follow",
+			},
+			{ property: "og:type", content: "product" },
 			{ property: "og:site_name", content: "Kedaipal" },
+			{ property: "og:locale", content: OG_LOCALE[locale] },
 			{ property: "og:title", content: title },
 			{ property: "og:description", content: description },
 			{ property: "og:url", content: canonicalUrl },
@@ -182,6 +237,7 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 		if (ogImageUrl) {
 			meta.push(
 				{ property: "og:image", content: ogImageUrl },
+				{ property: "og:image:alt", content: productName },
 				{ name: "twitter:image", content: ogImageUrl },
 			);
 		}
@@ -195,36 +251,51 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 		const availability = inStock
 			? "https://schema.org/InStock"
 			: "https://schema.org/OutOfStock";
-		const jsonLd = {
-			"@context": "https://schema.org",
-			"@type": "Product",
-			name: productName,
-			description,
+		// Shared by both offer shapes: who sells it, in what condition, and —
+		// during a live promo — until when the price holds.
+		const offerCommon = {
+			priceCurrency: currency,
+			availability,
 			url: canonicalUrl,
-			...(ogImageUrl ? { image: ogImageUrl } : {}),
-			...(quoteOnly
-				? {}
-				: priceFrom === priceTo && !startingPrice
-					? {
-							offers: {
-								"@type": "Offer",
-								price: toMajor(priceFrom),
-								priceCurrency: currency,
-								availability,
-								url: canonicalUrl,
-							},
-						}
-					: {
-							offers: {
-								"@type": "AggregateOffer",
-								lowPrice: toMajor(priceFrom),
-								...(priceTo > priceFrom ? { highPrice: toMajor(priceTo) } : {}),
-								priceCurrency: currency,
-								availability,
-								url: canonicalUrl,
-							},
-						}),
+			itemCondition: "https://schema.org/NewCondition",
+			seller: { "@type": "Store", name: storeName, url: storeUrl },
+			...(promoEndsAt
+				? { priceValidUntil: new Date(promoEndsAt).toISOString().slice(0, 10) }
+				: {}),
 		};
+		// A live promo is what the page paints, so it is what the schema says:
+		// a single-price product on sale is one Offer at the sale price (the
+		// literal reading of the page), not a range up to the old price.
+		const lowPrice = promoPriceFrom ?? priceFrom;
+		const offers =
+			priceFrom === priceTo && !startingPrice
+				? { "@type": "Offer", price: toMajor(lowPrice), ...offerCommon }
+				: {
+						"@type": "AggregateOffer",
+						lowPrice: toMajor(lowPrice),
+						...(priceTo > lowPrice ? { highPrice: toMajor(priceTo) } : {}),
+						// A live product whose variants are all inactive still has a
+						// price; Google warns on a non-positive count.
+						offerCount: Math.max(1, variantCount),
+						...offerCommon,
+					};
+		// Quote-only: Google requires offers, review or aggregateRating on a
+		// Product, and a negotiated price has none — so no Product block at
+		// all, rather than one Search Console reports as an error. The
+		// breadcrumb still carries the page.
+		const productJsonLd = quoteOnly
+			? null
+			: {
+					"@context": "https://schema.org",
+					"@type": "Product",
+					name: productName,
+					description,
+					url: canonicalUrl,
+					...(imageUrls.length > 0 ? { image: imageUrls } : {}),
+					...(sku ? { sku } : {}),
+					brand: { "@type": "Brand", name: storeName },
+					offers,
+				};
 
 		return {
 			meta,
@@ -252,7 +323,22 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 						]
 					: []),
 			],
-			scripts: [jsonLdScript(jsonLd)],
+			scripts: [
+				...(productJsonLd ? [jsonLdScript(productJsonLd)] : []),
+				// Store › Category › Product (z8r3fdh2z3).
+				jsonLdScript(
+					breadcrumbListJsonLd(
+						productCrumbs({
+							siteUrl: SITE_URL,
+							storeName,
+							storeSlug: slug,
+							category: primaryCategory,
+							productName,
+							productUrl: canonicalUrl,
+						}),
+					),
+				),
+			],
 		};
 	},
 	notFoundComponent: ProductNotFound,

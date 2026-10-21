@@ -3088,7 +3088,13 @@ export function ProductWizard({
 								{allMto ? (
 									<span className="self-start rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-950/50 dark:text-amber-400">
 										{isBooking
-											? "Booking — request to book"
+											? // The storefront's own door words (`product-page.tsx`):
+												// an instant-book listing has no request step, so the
+												// preview must not promise one beside "Confirmed
+												// instantly".
+												state.autoAccept
+												? "Booking — book now"
+												: "Booking — request to book"
 											: madeToOrder
 												? "Made to order"
 												: "Made fresh"}

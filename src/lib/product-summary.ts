@@ -163,17 +163,7 @@ export function describeProduct(
 					: `${length}-${unit} package`,
 			);
 		}
-		// Blank capacity = unlimited (S7); saying "1 spot/night" there would be
-		// a different product from the one the seller configured. A package is
-		// counted AT A TIME, not per night — the words the capacity field and
-		// the wizard review already use for it.
-		parts.push(
-			cap.length === 0
-				? "Unlimited spots"
-				: isPackage
-					? `${cap} at a time`
-					: `${cap} spot${cap === "1" ? "" : "s"}/night`,
-		);
+		parts.push(bookingCapacityLabel(cap, isPackage));
 		// The ONE span author, so this strip, the storefront card and the price
 		// field say "RM 150/month" alike. "Per package" is the wording that
 		// helper's own docblock retired: it made the reader open the listing to
@@ -323,6 +313,27 @@ function skipsCapSuffix(draft: string | undefined): string {
 	const trimmed = draft?.trim() ?? "";
 	if (trimmed.length === 0 || maxSkipsDraftIssue(trimmed) !== null) return "";
 	return `, up to ${trimmed} skip${trimmed === "1" ? "" : "s"}`;
+}
+
+/**
+ * A booking listing's capacity in words — the one author, shared by the
+ * summary strip and the products list.
+ *
+ * Blank / unset = unlimited (S7); saying "1 spot/night" there would be a
+ * different product from the one the seller configured. A package is counted
+ * AT A TIME, not per night — the words the capacity field and the wizard
+ * review already use for it. Takes the edit form's draft string or the stored
+ * number alike.
+ */
+export function bookingCapacityLabel(
+	capacity: string | number | undefined,
+	isPackage: boolean,
+): string {
+	const cap = String(capacity ?? "").trim();
+	if (cap.length === 0) return "Unlimited spots";
+	return isPackage
+		? `${cap} at a time`
+		: `${cap} spot${cap === "1" ? "" : "s"}/night`;
 }
 
 /**

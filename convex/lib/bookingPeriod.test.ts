@@ -4,6 +4,7 @@
  * depends on when the suite runs.
  */
 import { describe, expect, it } from "vitest";
+import type { Doc } from "../_generated/dataModel";
 import {
 	currentBookingLine,
 	describeBookingPeriod,
@@ -14,6 +15,7 @@ import {
 	type PeriodOrder,
 } from "./bookingPeriod";
 import { DAY_MS, todayMytMidnight } from "./fulfilmentDate";
+import { redactGatedOrder } from "./orderGate";
 
 const NOW = Date.UTC(2026, 8, 15, 6, 30); // mid-morning, mid-month
 const today = todayMytMidnight(NOW);
@@ -122,6 +124,24 @@ describe("describeBookingPeriod — the reception-desk line", () => {
 		const pkg = { ...order(day(-2), day(3)), bookingPackaged: true };
 		expect(describeBookingPeriod(stay, NOW)).toBe("Active · 3 days left");
 		expect(describeBookingPeriod(pkg, NOW)).toBe("Active · 2 days left");
+	});
+
+	it("a GATED open-days package says the same — the shut days survive redaction", () => {
+		// The inbox renders this chip from the REDACTED row. Before the shut days
+		// joined the gate's allowlist it read "Active · 6 days left" here.
+		const doc = {
+			shortId: "ORD-7002",
+			status: "confirmed",
+			deliveryMethod: "booking",
+			bookingCheckIn: day(-2),
+			bookingCheckOut: day(7),
+			bookingPackaged: true,
+			bookingSkippedDays: [day(-1), day(2), day(3), day(5)],
+			customer: { name: "Siti" },
+			items: [],
+		} as unknown as Doc<"orders">;
+		const gated = redactGatedOrder(doc, { gated: true, creditsToUnlock: 1 });
+		expect(describeBookingPeriod(gated, NOW)).toBe("Active · 3 open days left");
 	});
 
 	it("an OPEN-DAYS package counts the days the member can still come (z8r3fdhpm7)", () => {

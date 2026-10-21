@@ -105,8 +105,10 @@ describe("JSON-LD gate", () => {
 			.sort();
 		expect(users).toEqual([
 			"routes/$slug.tsx",
+			"routes/$slug_.c.$categorySlug.tsx",
 			"routes/$slug_.p.$productSlug.tsx",
 			"routes/index.tsx",
+			"routes/pricing.tsx",
 			"routes/stores.tsx",
 		]);
 	});

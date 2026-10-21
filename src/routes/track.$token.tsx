@@ -95,6 +95,8 @@ import {
 } from "../lib/orderStatus";
 import { ssrRead } from "../lib/ssr-read";
 import { TONE_PANEL, type Tone } from "../lib/tone";
+import { confirmationSentBody } from "../lib/track-confirmation-copy";
+import { trackFirstBeatLabel } from "../lib/track-first-beat";
 import { createWaAutoOpen, isWhatsAppWebview } from "../lib/wa-auto-open";
 import { buildOrderWaMessage, waOrderUrl } from "../lib/wa-order-message";
 
@@ -669,16 +671,17 @@ function TrackingRoute() {
 	}> = [
 		{
 			key: "pending",
-			// A booking's first beat is the request, not "Order Received" — reuse
-			// the swept status label so a seller's locale flows through.
-			// An RSVP on an event that approves each guest (`z8r3fdkjek`) shares
-			// the request's first beat — judged by status, not by kind.
-			label:
-				isBooking ||
-				order.status === "booking_requested" ||
-				order.bookingResolution !== undefined
-					? statusConfig.booking_requested.label
-					: statusConfig.pending.label,
+			// Request → "Awaiting Approval"; a booking past it → "Booking
+			// Received" (an instant booking never waited); else "Order
+			// Received". The rules and their reasons: `trackFirstBeatLabel`.
+			label: trackFirstBeatLabel({
+				isBooking,
+				status: order.status,
+				bookingResolution: order.bookingResolution,
+				locale: stageLocale,
+				requestedLabel: statusConfig.booking_requested.label,
+				pendingLabel: statusConfig.pending.label,
+			}),
 			icon: statusConfig.pending.icon,
 			isDone: true, // any order on this page has at least been received
 			isCurrent: currentPos === 0,
@@ -2158,17 +2161,7 @@ function ConfirmationSentCard({
 				</div>
 			</div>
 			<p className="text-sm text-muted-foreground">
-				{ms
-					? free
-						? "Tak perlu hantar apa-apa dan tiada bayaran diperlukan. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini. Simpan pautan ini."
-						: paymentsPaused
-							? "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini, dan cara membayar akan muncul di sini sebaik sahaja kedai menerima bayaran. Simpan pautan ini."
-							: "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
-					: free
-						? "Nothing to send and nothing to pay. That's the only message we'll send you — your latest status and your receipt live here. Keep this link."
-						: paymentsPaused
-							? "Nothing to send. That's the only message we'll send you — your latest status and your receipt live here, and how to pay appears here once the store is taking payments. Keep this link."
-							: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
+				{confirmationSentBody({ ms, free, paymentsPaused })}
 			</p>
 			<Button asChild variant="outline" className="h-11 w-full">
 				<a

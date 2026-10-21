@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
-import { isStoreOffline, offlineStoreIds } from "./storeAvailability";
+import { isStoreOffline } from "./storeAvailability";
+import { indexableStores } from "./storefrontIndex";
 import {
 	formatFulfilmentDate,
 	isMytMidnight,
@@ -3014,7 +3015,7 @@ export const getPublicBySlug = query({
 			)
 			.unique();
 		// Fallback for rows the slug backfill hasn't stamped yet: match on the
-		// slug derived from the name. Bounded by the 50-product cap. A HIT on a
+		// slug derived from the name. Bounded by the per-retailer product cap. A HIT on a
 		// migrated catalog never reaches here (the index arm answers first); a
 		// MISS — an unknown or probed slug — always does, which is the same
 		// bounded scan `list` already runs on every storefront page load.
@@ -3125,37 +3126,22 @@ export const listForSitemap = query({
 	): Promise<
 		Array<{ storeSlug: string; productSlug: string; updatedAt: number }>
 	> => {
-		const offline = await offlineStoreIds(ctx);
-		const retailers = (await ctx.db.query("retailers").collect()).filter(
-			// An offline store's product pages are the "unavailable" screen.
-			(r) => !offline.has(r._id),
-		);
+		// Same store rule as `retailers.listSlugsForSitemap` (z8r3fdh2ye): a
+		// product page of a store the sitemap doesn't list is not listed either.
+		// `products` is already the storefront-visible set (no hidden, no
+		// finished event). `updatedAt` is the product's last write.
 		const out: Array<{
 			storeSlug: string;
 			productSlug: string;
 			updatedAt: number;
 		}> = [];
-		for (const retailer of retailers) {
-			const rows = await ctx.db
-				.query("products")
-				.withIndex("by_retailer_active", (q) =>
-					q.eq("retailerId", retailer._id).eq("active", true),
-				)
-				.filter((q) =>
-					q.and(
-						q.neq(q.field("hidden"), true),
-						q.neq(q.field("hiddenByCategory"), true),
-					),
-				)
-				.collect();
-			for (const row of rows) {
+		for (const { retailer, products } of await indexableStores(ctx)) {
+			for (const row of products) {
 				if (row.slug === undefined) continue;
-				// Never hand a crawler a finished event's URL — the page 404s.
-				if (hiddenFromStorefront(row)) continue;
 				out.push({
 					storeSlug: retailer.slug,
 					productSlug: row.slug,
-					updatedAt: row._creationTime,
+					updatedAt: row.updatedAt,
 				});
 			}
 		}

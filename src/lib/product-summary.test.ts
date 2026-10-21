@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	bookingCapacityLabel,
 	capacityDraftFromListing,
 	describeProduct,
 	isSecurityDepositInRange,
@@ -584,5 +585,19 @@ describe("capacityDraftFromListing", () => {
 	it("unlimited seeds a BLANK field, never the string 'undefined'", () => {
 		expect(capacityDraftFromListing(undefined)).toBe("");
 		expect(capacityDraftFromListing(5)).toBe("5");
+	});
+});
+
+describe("bookingCapacityLabel — one author for a booking's capacity words", () => {
+	it("blank or unset is unlimited, never '1 spot'", () => {
+		expect(bookingCapacityLabel(undefined, true)).toBe("Unlimited spots");
+		expect(bookingCapacityLabel("", false)).toBe("Unlimited spots");
+		expect(bookingCapacityLabel("  ", false)).toBe("Unlimited spots");
+	});
+	it("a package counts at a time; a stay counts per night", () => {
+		expect(bookingCapacityLabel(1, true)).toBe("1 at a time");
+		expect(bookingCapacityLabel(20, true)).toBe("20 at a time");
+		expect(bookingCapacityLabel(1, false)).toBe("1 spot/night");
+		expect(bookingCapacityLabel("5", false)).toBe("5 spots/night");
 	});
 });

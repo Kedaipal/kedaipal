@@ -46,8 +46,10 @@ export interface BulkSelectRowProps {
 	trailing?: React.ReactNode;
 	/** Screen-reader noun for what is being counted. */
 	unit?: string;
-	/** `touch` = a 44px row, for a full-screen list on a phone (the promotion
-	 * product picker). The default stays compact for dialogs and menus. */
+	/** `touch` = a 44px row at EVERY width, for a full-screen list (the
+	 * promotion product picker). The default is 44px below `lg` — the house
+	 * touch target, since these panels are tapped on phones — and a compact
+	 * 36px on desktop, matching `FilterOptionRow` row for row. */
 	size?: "default" | "touch";
 }
 
@@ -65,8 +67,8 @@ export function BulkSelectRow({
 	return (
 		<label
 			className={cn(
-				"flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-muted has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/50",
-				size === "touch" && "min-h-11",
+				"flex min-h-11 lg:min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-muted has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/50",
+				size === "touch" && "lg:min-h-11",
 				tone === "master" && "bg-muted/50 hover:bg-muted",
 			)}
 		>

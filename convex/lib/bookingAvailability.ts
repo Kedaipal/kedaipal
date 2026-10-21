@@ -107,6 +107,20 @@ export function countedDays(
 }
 
 /**
+ * The last day a booking can be USED (S7) — the one place the exclusive
+ * check-out is turned into a day a person reads.
+ *
+ * A fixed-length PACKAGE is a validity window: its last usable day is the
+ * night before the exclusive check-out, so a 1 Sep → 1 Oct month reads
+ * "– 30 Sep". Printing 1 Oct would promise the buyer a day they don't have. A
+ * free-range STAY keeps its check-out, because the check-out morning is a day
+ * the guest is still on site.
+ */
+export function bookingLastDay(checkOut: number, isPackage: boolean): number {
+	return isPackage ? checkOut - DAY_MS : checkOut;
+}
+
+/**
  * The unbroken runs of days a booking actually USES, as `[start,
  * endExclusive)` spans. One span for every booking except an open-days package
  * (z8r3fdhpm7), which is cut at each shut day it stepped over — Sat 3, then

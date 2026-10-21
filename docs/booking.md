@@ -954,6 +954,29 @@ author for both the impact count and the write.
 - **The product page ignored `autoAccept`** — an instant-book listing still
   advertised "Seller confirms within 24 hours". The checkout form had always
   read it; the product page hadn't.
+- **Three more places still promised an approval on an instant-book listing**
+  (found in the booking-columns Chrome test, 21 Oct): the wizard review chip
+  ("Booking — request to book" beside "Confirmed instantly"), the checkout's
+  page heading ("Request to book" above a "Book now" button), and both WhatsApp
+  hints under the number ("The approval and payment ask…", "We'll WhatsApp the
+  decision…"). The chip and hints now read `autoAccept` ("book now",
+  "confirmation"); the heading is the neutral "Your booking", because the route
+  doesn't load the listing — the form's own button says which kind it is.
+- **The track timeline's first step said "Awaiting Approval" on every
+  booking**, done-ticked, including instant books that never waited. A booking
+  past its request now reads **"Booking Received"** (`BOOKING_RECEIVED_LABEL`,
+  mirrored in both `orderStatus.ts` files; the rule lives in
+  `src/lib/track-first-beat.ts`). Still-waiting and declined/expired requests
+  keep the request label — that wait was real. The order doesn't record
+  instant-vs-approved, and "Received" is true of both, so no schema field.
+- **The products list said "In stock" under a booking listing**, which has
+  capacity, not stock. It now reads "Booking · 1 at a time" / "5 spots/night" /
+  "Unlimited spots" through `bookingCapacityLabel` — the one author the
+  summary strip already used.
+- **The track page's "Confirmation sent" card opened "Nothing to send."** — a
+  status-sounding fragment that, on a booking, read as "nothing was booked". The
+  English now says "You don't need to message the store." (the Malay always
+  said it plainly). Copy lives in `src/lib/track-confirmation-copy.ts`.
 - **The wizard review's photo box is a button** back to the details step. Every
   other line on that screen has an Edit affordance, and the photo is the thing a
   seller most wants to fix from a preview.
