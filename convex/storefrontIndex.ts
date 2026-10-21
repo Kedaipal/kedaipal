@@ -1,8 +1,9 @@
 // The DB side of the storefront index rule (z8r3fdh2ye). The rule itself is
 // pure, in `convex/lib/storefrontIndex.ts`; this file gathers its facts. Two
-// entry points: one store (the storefront's `robots` meta) and every store
-// (the sitemaps), which reads the availability and subscription tables once
-// each instead of per store. See docs/seo.md.
+// entry points: one store (the storefront's `robots` meta — on the hottest
+// public query, so it stops at the FIRST visible product) and every store
+// (the sitemaps, which need the full set and read the availability table
+// once instead of per store). See docs/seo.md.
 //
 // Scale note: the sitemap walk is a full read of `retailers` plus one indexed
 // products read per store — fine under ~1k retailers (we are under 100). Past
@@ -31,12 +32,34 @@ export async function visibleProducts(
 			q.eq("retailerId", retailerId).eq("active", true),
 		)
 		.collect();
-	return rows.filter(
-		(p) =>
-			p.hidden !== true &&
-			p.hiddenByCategory !== true &&
-			!hiddenFromStorefront(p),
+	return rows.filter(isVisible);
+}
+
+function isVisible(p: Doc<"products">): boolean {
+	return (
+		p.hidden !== true && p.hiddenByCategory !== true && !hiddenFromStorefront(p)
 	);
+}
+
+/**
+ * "Has at least one visible product" without reading them all — this sits on
+ * `getRetailerBySlug`, which every storefront, category and product load
+ * runs (SSR and client), so it walks the index and returns on the first hit:
+ * ~1 document in the common case instead of the store's whole catalogue
+ * (PR #400 review).
+ */
+export async function hasVisibleProduct(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+): Promise<boolean> {
+	for await (const p of ctx.db
+		.query("products")
+		.withIndex("by_retailer_active", (q) =>
+			q.eq("retailerId", retailerId).eq("active", true),
+		)) {
+		if (isVisible(p)) return true;
+	}
+	return false;
 }
 
 export interface IndexableStore {
@@ -84,11 +107,10 @@ export async function isStorefrontIndexable(
 ): Promise<boolean> {
 	if (isUnclaimed(retailer) || offline) return false;
 	const subscription = await loadSubscription(ctx, retailer._id);
-	const products = await visibleProducts(ctx, retailer._id);
 	return storefrontIndexable({
 		unclaimed: false,
 		offline: false,
 		subscriptionStatus: subscription?.status ?? null,
-		visibleProductCount: products.length,
+		visibleProductCount: (await hasVisibleProduct(ctx, retailer._id)) ? 1 : 0,
 	});
 }

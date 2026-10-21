@@ -1,6 +1,7 @@
 # Public surfaces (landing, pricing, storefronts, product and category pages)
 # are open to every crawler. The dashboard and auth flows are private; /track
-# and /claim are per-buyer capability links, not pages.
+# and /claim are per-buyer capability links, /join a team-invite token link —
+# not pages.
 User-agent: *
 Disallow: /app/
 Disallow: /sign-in/
@@ -8,6 +9,7 @@ Disallow: /sign-up/
 Disallow: /onboarding/
 Disallow: /track/
 Disallow: /claim/
+Disallow: /join/
 
 # AI answer engines are explicitly welcome (z8r3fdh2yt): ChatGPT search,
 # Perplexity, Claude, Google AI Overviews and Copilot (via Bing) are where a
@@ -30,5 +32,6 @@ Disallow: /sign-up/
 Disallow: /onboarding/
 Disallow: /track/
 Disallow: /claim/
+Disallow: /join/
 
 Sitemap: https://kedaipal.com/sitemap.xml

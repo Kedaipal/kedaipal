@@ -100,6 +100,12 @@ pages. Excluding it from the sitemap alone would leave it indexable through
 any inbound link. A category whose visible products filter to zero is
 `noindex` too (a thin page whatever the store's standing).
 
+One known edge: a category whose only members are finished events keeps a
+`productCount > 0` (the denormalised count), so `categories.listForSitemap`
+lists it while the page itself renders `noindex` because its visible products
+filter to zero. The page's answer is the right one; the sitemap entry is the
+counter's limitation, shared with the storefront rail, not a rule gap.
+
 `lastmod` for a store is the newest of the store's last write and its newest
 product write (`storefrontLastmod`); for a product or category, that row's
 `updatedAt`. Creation time never moves, and a `lastmod` that never moves
@@ -122,7 +128,8 @@ walk.
 ChatGPT-User, ClaudeBot, Claude-SearchBot, Claude-User, PerplexityBot,
 Perplexity-User, Google-Extended, Bingbot, Applebot-Extended) with `Allow: /`
 and the same private paths as `*`: `/app/`, `/sign-in/`, `/sign-up/`,
-`/onboarding/`, and the per-buyer capability links `/track/` and `/claim/`.
+`/onboarding/`, the per-buyer capability links `/track/` and `/claim/`, and the
+team-invite token link `/join/`.
 Explicit on purpose — a bot that finds no block for its own name falls back to
 `*`, but the explicit entry is what a policy audit reads. **Cloudflare's
 "Block AI bots" toggle outranks all of this**: if it is on, every one of those

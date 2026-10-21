@@ -3,6 +3,7 @@ import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
+import { hasVisibleProduct } from "./storefrontIndex";
 import type { Doc, Id } from "./_generated/dataModel";
 import schema from "./schema";
 
@@ -170,5 +171,26 @@ describe("storefront index rule — the sitemaps and the robots bit agree", () =
 		);
 		expect(row?.updatedAt).toBe(later);
 		expect(row?.updatedAt).not.toBe(created);
+	});
+
+	test("the single-store check finds a visible product past hidden ones, and none when all are hidden", async () => {
+		// `getRetailerBySlug` runs this on every storefront load, so it walks
+		// the index and stops at the first visible row (PR #400 review); the
+		// walk must still reach a visible product that sits BEHIND hidden ones.
+		const t = setup();
+		const { owner, retailerId } = await seedStore(t, "kuih-corner");
+		const first = await addProduct(t, retailerId, "Counter only");
+		await owner.mutation(api.products.update, {
+			productId: first,
+			hidden: true,
+		});
+		expect(await t.run((ctx) => hasVisibleProduct(ctx, retailerId))).toBe(
+			false,
+		);
+		await addProduct(t, retailerId, "Kuih Lapis");
+		expect(await t.run((ctx) => hasVisibleProduct(ctx, retailerId))).toBe(
+			true,
+		);
+		expect((await everywhere(t, "kuih-corner")).indexable).toBe(true);
 	});
 });

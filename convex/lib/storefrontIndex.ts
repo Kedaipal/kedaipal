@@ -1,7 +1,9 @@
 /**
  * Which storefronts search engines are told about (z8r3fdh2ye) — ONE rule,
- * read by the sitemap queries, the storefront's `robots` meta and the
- * directory, so the index and the sitemap can never disagree.
+ * read by the sitemap queries and the storefront's `robots` meta, so the
+ * index and the sitemap can never disagree. (`/stores` does NOT read it: the
+ * directory is a buyer surface with its own listing rules, and an empty
+ * store may legitimately show there while it is not worth indexing.)
  *
  * A storefront is indexable when a buyer can actually order from it:
  *   - it has an owner (an unclaimed pre-built store is nobody's shop yet),

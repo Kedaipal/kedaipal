@@ -58,6 +58,7 @@ import { trackEvent, trackSignupCta } from "../lib/ga-events";
 import { jsonLdScript } from "../lib/json-ld";
 import { resolveTierCta } from "../lib/pricing-cta";
 import { pricingJsonLd } from "../lib/pricing-jsonld";
+import { SITE_URL } from "../lib/site-identity";
 import type { SubscriptionView } from "../lib/subscription";
 import { cn } from "../lib/utils";
 import { m } from "../paraglide/messages";
@@ -72,7 +73,6 @@ const rm = (plan: ListedPlan) => PLAN_MONTHLY_PRICES.MYR[plan] / 100;
  * nothing tied it to the constants the cards render from.
  */
 const SEO_DESC = `Free until you sell. Starter RM${rm("starter")} or Pro RM${rm("pro")} a month — ${PLAN_CREDIT_GRANT.starter} or ${PLAN_CREDIT_GRANT.pro} orders included — and Enterprise priced for your volume. No per-message fees. S$ pricing for Singapore.`;
-const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/pricing`;
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
 

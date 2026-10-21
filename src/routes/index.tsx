@@ -15,10 +15,10 @@ import {
 	LEGAL_ENTITY,
 	ORG_DESCRIPTION,
 	SAME_AS,
+	SITE_URL,
 	SUPPORT_EMAIL,
 } from "../lib/site-identity";
 
-const SITE_URL = "https://kedaipal.com";
 /**
  * The landing demo. `uploadDate` is the date the clip was cut, NOT "today" —
  * a VideoObject whose date moves on every deploy is exactly the signal Google

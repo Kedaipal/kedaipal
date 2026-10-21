@@ -263,16 +263,20 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 				? { priceValidUntil: new Date(promoEndsAt).toISOString().slice(0, 10) }
 				: {}),
 		};
-		// A live promo is what the page paints, so it is what the schema says.
+		// A live promo is what the page paints, so it is what the schema says:
+		// a single-price product on sale is one Offer at the sale price (the
+		// literal reading of the page), not a range up to the old price.
 		const lowPrice = promoPriceFrom ?? priceFrom;
 		const offers =
-			priceFrom === priceTo && !startingPrice && promoPriceFrom === undefined
-				? { "@type": "Offer", price: toMajor(priceFrom), ...offerCommon }
+			priceFrom === priceTo && !startingPrice
+				? { "@type": "Offer", price: toMajor(lowPrice), ...offerCommon }
 				: {
 						"@type": "AggregateOffer",
 						lowPrice: toMajor(lowPrice),
 						...(priceTo > lowPrice ? { highPrice: toMajor(priceTo) } : {}),
-						offerCount: variantCount,
+						// A live product whose variants are all inactive still has a
+						// price; Google warns on a non-positive count.
+						offerCount: Math.max(1, variantCount),
 						...offerCommon,
 					};
 		// Quote-only: Google requires offers, review or aggregateRating on a
