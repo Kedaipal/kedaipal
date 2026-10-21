@@ -12,15 +12,19 @@ import { DispatchHub } from "./dispatch-hub";
 const state = vi.hoisted(() => ({
 	lalamove: undefined as unknown,
 	delyva: undefined as unknown,
+	easyparcel: undefined as unknown,
 }));
 
-// The hub only switches between the two cards — their internals are covered
-// by their own suites, so stub them to labelled markers.
+// The hub only switches between the cards — their internals are covered by
+// their own suites, so stub them to labelled markers.
 vi.mock("./book-delivery-card", () => ({
 	BookDeliveryCard: () => <div>LALAMOVE-CARD</div>,
 }));
 vi.mock("./delyva-dispatch-card", () => ({
 	DelyvaDispatchCard: () => <div>DELYVA-CARD</div>,
+}));
+vi.mock("./easyparcel-dispatch-card", () => ({
+	EasyparcelDispatchCard: () => <div>EASYPARCEL-CARD</div>,
 }));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
@@ -28,10 +32,14 @@ vi.mock("@convex-dev/react-query", () => ({
 vi.mock("@tanstack/react-query", async () => {
 	const { getFunctionName: name } = await import("convex/server");
 	return {
-		useQuery: (opts: { fn: never }) =>
-			name(opts.fn) === getFunctionName(api.lalamove.getDeliveryJob)
-				? { data: state.lalamove }
-				: { data: state.delyva },
+		useQuery: (opts: { fn: never }) => {
+			const fn = name(opts.fn);
+			if (fn === getFunctionName(api.lalamove.getDeliveryJob))
+				return { data: state.lalamove };
+			if (fn === getFunctionName(api.easyparcel.getDispatchState))
+				return { data: state.easyparcel };
+			return { data: state.delyva };
+		},
 	};
 });
 
@@ -62,10 +70,23 @@ const delyva = (over: Record<string, unknown> = {}) => ({
 	weightIssue: null,
 	...over,
 });
+const easyparcel = (over: Record<string, unknown> = {}) => ({
+	job: null,
+	blockReason: null,
+	bookingEnabled: true,
+	isDemo: false,
+	computedWeightKg: 1,
+	weightIssue: null,
+	...over,
+});
 
 beforeEach(() => {
 	state.lalamove = lalamove();
 	state.delyva = delyva();
+	// The default fixture is a TWO-provider store (MY-shaped: Lalamove +
+	// Delyva), so the suite's original scenarios keep their meaning; the
+	// three-provider cases opt in below.
+	state.easyparcel = undefined;
 	window.localStorage.clear();
 });
 afterEach(() => cleanup());
@@ -121,14 +142,49 @@ describe("when both providers are armed", () => {
 	});
 });
 
+describe("three providers armed (an SG store with riders + EasyParcel would be two; this is the registry ceiling)", () => {
+	it("offers a three-column tab strip and still ONE card", () => {
+		state.easyparcel = easyparcel();
+		const { container } = render(<DispatchHub order={order} />);
+		expect(
+			screen.getByRole("tab", { name: /easyparcel courier/i }),
+		).toBeTruthy();
+		expect(screen.getByRole("tablist").className).toContain("grid-cols-3");
+		const cards = ["LALAMOVE-CARD", "DELYVA-CARD", "EASYPARCEL-CARD"].filter(
+			(m) => container.textContent?.includes(m),
+		);
+		expect(cards).toHaveLength(1);
+	});
+
+	it("a live EASYPARCEL booking fronts its card regardless of preference", () => {
+		window.localStorage.setItem("kp:dispatch-provider", "lalamove");
+		state.easyparcel = easyparcel({ job: { status: "picked_up" } });
+		const { container } = render(<DispatchHub order={order} />);
+		expect(container.textContent).toContain("EASYPARCEL-CARD");
+	});
+
+	it("fronting another tab while EasyParcel holds the slot shows the one-booking notice", () => {
+		state.easyparcel = easyparcel({ job: { status: "assigning" } });
+		render(<DispatchHub order={order} />);
+		fireEvent.click(screen.getByRole("tab", { name: /delyva courier/i }));
+		expect(screen.getByText(/one booking at a time/i)).toBeTruthy();
+		expect(
+			screen.getByRole("button", {
+				name: /view the easyparcel courier booking/i,
+			}),
+		).toBeTruthy();
+	});
+});
+
 describe("a tab is only offered for a provider that renders", () => {
-	it("renders both components plainly — no tabs (each hides itself)", () => {
+	it("renders every component plainly — no tabs (each hides itself)", () => {
 		state.delyva = delyva({ bookingEnabled: false });
 		const { container } = render(<DispatchHub order={order} />);
 		expect(screen.queryByRole("tab", { name: /lalamove/i })).toBeNull();
-		// Both markers present: the hub delegates visibility to the cards.
+		// All markers present: the hub delegates visibility to the cards.
 		expect(container.textContent).toContain("LALAMOVE-CARD");
 		expect(container.textContent).toContain("DELYVA-CARD");
+		expect(container.textContent).toContain("EASYPARCEL-CARD");
 	});
 
 	it("a disabled provider with a lingering JOB still gets its tab", () => {

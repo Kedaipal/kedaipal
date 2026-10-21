@@ -33,6 +33,18 @@ crons.daily(
 	{},
 );
 
+// EasyParcel status poll (z8r3fdcje2): their legacy Individual API has no
+// webhook, so active easyparcel jobs are swept via EPParcelStatusBulk — one
+// bulk call per retailer with live shipments, applied idempotently. The
+// dispatch card's "Refresh status" covers the impatient path between runs.
+// See docs/delivery-easyparcel.md.
+crons.interval(
+	"sync easyparcel job statuses",
+	{ minutes: 30 },
+	internal.easyparcel.syncJobStatuses,
+	{},
+);
+
 // Counter Checkout housekeeping: flip unscanned sessions past their ~10min TTL
 // to `expired`. Reads already compute effective expiry, so this just keeps stale
 // rows out of active-session listings. See docs/counter-checkout.md.

@@ -688,6 +688,56 @@ export default defineSchema({
 				webhooksSubscribedAt: v.optional(v.number()),
 			}),
 		),
+		// EasyParcel parcel booking (z8r3fdcje2) — the SG parcel aggregator lane
+		// (J&T, SingPost, Qxpress, Ninja Van, Teleport…), ADDITIVE to Lalamove
+		// riders the way Delyva is for MY. BYO-ONLY like its siblings: the
+		// seller's own EasyParcel account and PREPAID wallet; Kedaipal never
+		// books or pays on their behalf. Connect is a single Individual API
+		// key: the easyparcel.connect ACTION validates it via
+		// EPCheckCreditBalance — against the production host first, then the
+		// demo host (EasyParcel's sandbox is a separate host, not a key
+		// prefix), which is how `isDemo` is resolved — and stores it already
+		// `enc.v1.`-encrypted. No webhook exists on this API; status is polled
+		// by the easyparcel-status cron. See docs/delivery-easyparcel.md.
+		easyparcel: v.optional(
+			v.object({
+				enabled: v.boolean(),
+				apiKey: v.optional(v.string()),
+				// Last 4 chars of the plaintext key, for the settings card.
+				apiKeyHint: v.optional(v.string()),
+				// Which HOST the key authenticated on at connect: demo bookings
+				// dispatch no courier and spend play money, so every surface
+				// that spends says so (the 86eypncfy posture). Unlike Delyva
+				// this is never unknown — connect cannot succeed without
+				// resolving it.
+				isDemo: v.optional(v.boolean()),
+				// Wallet snapshot from the last EPCheckCreditBalance (connect +
+				// card refresh). EasyParcel is PREPAID: a pay step on an empty
+				// wallet fails, so the card shows the balance before booking.
+				// Minor units; currency as EasyParcel reports it.
+				balanceMinor: v.optional(v.number()),
+				balanceCurrency: v.optional(v.string()),
+				balanceCheckedAt: v.optional(v.number()),
+				// Structured pickup address for bookings — its own field, not a
+				// parse of `businessAddress` (same reasoning as Delyva's). The
+				// SG shape: unit + address1 + 6-digit postcode (no state tier);
+				// city/state exist for the future MY lane. `name`/`contact` are
+				// NOT stored here: EPSubmitOrderBulk takes them per-order from
+				// the store name + seller WhatsApp number, one source of truth.
+				pickupAddress: v.optional(
+					v.object({
+						unit: v.optional(v.string()),
+						address1: v.string(),
+						address2: v.optional(v.string()),
+						city: v.optional(v.string()),
+						state: v.optional(v.string()),
+						postcode: v.string(),
+					}),
+				),
+				// First save that stored a full credential (settings card copy).
+				connectedAt: v.optional(v.number()),
+			}),
+		),
 		// Minimum days' notice the retailer needs before a fulfilment date. Drives
 		// the lower bound of the storefront date picker (earliest selectable day =
 		// today + this). Undefined → 0 (see DEFAULT_MIN_NOTICE_DAYS) so same-day is
@@ -2693,12 +2743,18 @@ export default defineSchema({
 		// Delyva only — the courier service actually booked ("DHL eCommerce",
 		// "Ninja Cold"), for the dispatch card + orders.courierName mirror.
 		serviceName: v.optional(v.string()),
-		// Delyva only — the consignment number (AWB) the buyer can track with.
-		// Arrives via the order.created webhook (or the post-process fetch) and
-		// is mirrored onto orders.courierName/trackingNo (86eyehvk4 fields) the
-		// moment it's known. Distinct from providerOrderId (Delyva's internal
-		// order id, which webhooks correlate on).
+		// Delyva + EasyParcel — the consignment number (AWB) the buyer can track
+		// with. Delyva: arrives via the order.created webhook (or the
+		// post-process fetch); EasyParcel: returned by EPPayOrderBulk. Mirrored
+		// onto orders.courierName/trackingNo (86eyehvk4 fields) the moment it's
+		// known. Distinct from providerOrderId (the provider's own order id,
+		// which webhooks/polling correlate on).
 		awb: v.optional(v.string()),
+		// EasyParcel only — the courier AWB label PDF (their `awb_id_link`),
+		// returned by EPPayOrderBulk. The first provider that hands us a real
+		// courier label (the deferred Delyva label work, docs/despatch-labels.md
+		// v2); the dispatch card links it beside Kedaipal's own despatch label.
+		labelUrl: v.optional(v.string()),
 		// Delyva only — the itemType this trip was booked as (PARCEL/CHILLED/
 		// FROZEN), frozen at dispatch for the audit trail.
 		itemType: v.optional(v.string()),
@@ -2748,7 +2804,11 @@ export default defineSchema({
 		// Provider-qualified since Delyva (86eyjpv6z): two providers' order ids
 		// are both opaque strings, so a bare providerOrderId index + .unique()
 		// would let a cross-provider collision throw in a webhook handler.
-		.index("by_provider_order", ["provider", "providerOrderId"]),
+		.index("by_provider_order", ["provider", "providerOrderId"])
+		// The EasyParcel status cron's read (z8r3fdcje2): that API has no
+		// webhook, so a poll sweeps the ACTIVE easyparcel jobs — one indexed
+		// query per active status, never a table scan.
+		.index("by_provider_status", ["provider", "status"]),
 
 	// --- Counter Checkout (in-person order spine, docs/counter-checkout.md) ----
 	// A seller-initiated, in-person checkout session. The seller opens Counter
