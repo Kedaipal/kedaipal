@@ -625,6 +625,21 @@ describe("an unclaimed store is reachable but never advertised", () => {
 				storeName: "Real Shop",
 				slug: "real-shop",
 			});
+		// A listable store has something to buy (z8r3fdh2ye); the point here
+		// is the claimed/unclaimed split, not the empty-store rule.
+		const realShop = await t
+			.withIdentity(STRANGER)
+			.query(api.retailers.getMyRetailer);
+		if (!realShop) throw new Error("seed failed");
+		await t.withIdentity(STRANGER).mutation(api.products.create, {
+			retailerId: realShop._id,
+			name: "Tent 2P",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			blockWhenOutOfStock: false,
+			variants: [{ optionValues: [], price: 1000, onHand: 5 }],
+		});
 		const slugs = (
 			await t.query(api.retailers.listSlugsForSitemap, {})
 		).map((s) => s.slug);
@@ -634,10 +649,24 @@ describe("an unclaimed store is reachable but never advertised", () => {
 
 	test("and it joins the sitemap once claimed", async () => {
 		const t = setup();
-		await buildStore(t, { slug: "unclaimed-shop", email: VENDOR.email });
+		const { retailerId } = await buildStore(t, {
+			slug: "unclaimed-shop",
+			email: VENDOR.email,
+		});
 		await t
 			.withIdentity(VENDOR)
 			.mutation(api.retailers.claimStore, { acceptedLegal: true });
+		// Claimed AND stocked — the sitemap lists stores a buyer can order from
+		// (z8r3fdh2ye), and the handover built the shell, not the catalogue.
+		await t.withIdentity(VENDOR).mutation(api.products.create, {
+			retailerId,
+			name: "Kuih Lapis",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			blockWhenOutOfStock: false,
+			variants: [{ optionValues: [], price: 1200, onHand: 20 }],
+		});
 		const slugs = (
 			await t.query(api.retailers.listSlugsForSitemap, {})
 		).map((s) => s.slug);

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+	bookingCapacityLabel,
+	capacityDraftFromListing,
 	describeProduct,
 	isSecurityDepositInRange,
+	maxSkipsDraftIssue,
+	maxSkipsFromDraft,
 	type SummaryInput,
 	securityDepositRangeMessage,
 	weekendRateConsequence,
@@ -541,5 +545,59 @@ describe("describeProduct — a live sale is in the summary (z8r3fdcw72)", () =>
 				"MYR",
 			),
 		).not.toContain("Sale");
+	});
+});
+
+describe("skips per package (z8r3fdh3ay)", () => {
+	it("blank is no limit; anything but a whole 1–99 is refused with the way out", () => {
+		expect(maxSkipsDraftIssue("")).toBeNull();
+		expect(maxSkipsDraftIssue(" 3 ")).toBeNull();
+		expect(maxSkipsDraftIssue("99")).toBeNull();
+		for (const bad of ["0", "100", "2.5", "-1", "two"]) {
+			expect(maxSkipsDraftIssue(bad)).toMatch(/leave it blank for no limit/);
+		}
+		expect(maxSkipsFromDraft("")).toBe(0);
+		expect(maxSkipsFromDraft(" 4")).toBe(4);
+	});
+
+	it("the strip names the cap on an open-days package", () => {
+		expect(
+			describeProduct(
+				{
+					options: [],
+					rows: [row({ price: "300" })],
+					customLine: null,
+					booking: {
+						capacityPerNight: "",
+						packageLength: "20",
+						packageUnit: "day",
+						skipsClosedDays: true,
+						maxSkips: "3",
+					},
+				},
+				"MYR",
+			),
+		).toContain("20-day package (open days only, up to 3 skips)");
+	});
+});
+
+describe("capacityDraftFromListing", () => {
+	it("unlimited seeds a BLANK field, never the string 'undefined'", () => {
+		expect(capacityDraftFromListing(undefined)).toBe("");
+		expect(capacityDraftFromListing(5)).toBe("5");
+	});
+});
+
+describe("bookingCapacityLabel — one author for a booking's capacity words", () => {
+	it("blank or unset is unlimited, never '1 spot'", () => {
+		expect(bookingCapacityLabel(undefined, true)).toBe("Unlimited spots");
+		expect(bookingCapacityLabel("", false)).toBe("Unlimited spots");
+		expect(bookingCapacityLabel("  ", false)).toBe("Unlimited spots");
+	});
+	it("a package counts at a time; a stay counts per night", () => {
+		expect(bookingCapacityLabel(1, true)).toBe("1 at a time");
+		expect(bookingCapacityLabel(20, true)).toBe("20 at a time");
+		expect(bookingCapacityLabel(1, false)).toBe("1 spot/night");
+		expect(bookingCapacityLabel("5", false)).toBe("5 spots/night");
 	});
 });

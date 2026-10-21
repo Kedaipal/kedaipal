@@ -80,6 +80,9 @@ const GATED_FUNCTIONS = [
 	"orders.updateStatus",
 	"orders.advanceToStage",
 	"bookings.approveBookingRequest",
+	// Skip a day (z8r3fdh3ay) — working the plan of a hidden order.
+	"bookings.skipPackageDay",
+	"bookings.unskipPackageDay",
 	// Taking payment by hand.
 	"orders.markPaymentReceived",
 	// Fulfilment work.

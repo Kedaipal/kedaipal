@@ -1244,6 +1244,7 @@ function OrdersRoute() {
 		bookingCheckOut?: number;
 		bookingPackaged?: boolean;
 		bookingSkippedDays?: number[];
+		bookingCustomerSkips?: number[];
 		status: string;
 	}): string | null => describeBookingPeriod(o);
 
@@ -1591,8 +1592,13 @@ function OrdersRoute() {
 				}
 				actions={inboxEnabled ? headerActions : undefined}
 			/>
-			<div className="flex items-center justify-between gap-3 lg:hidden">
-				<div className="min-w-0">
+			{/* WRAPS rather than squeezes: the five header actions need ~350px,
+			    which only just fits a 393px phone. The title used to be the part
+			    that gave way (`min-w-0`) — on a 375px iPhone the view switch sat
+			    on top of "Orders". Now the title keeps its width and the actions
+			    drop to their own line, still right-aligned, when they don't fit. */}
+			<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-3 lg:hidden">
+				<div className="shrink-0">
 					<h2 className="font-heading text-[22px] font-extrabold leading-tight tracking-tight">
 						Orders
 					</h2>
@@ -1600,7 +1606,7 @@ function OrdersRoute() {
 						{loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`}
 					</p>
 				</div>
-				<div className="flex shrink-0 items-center gap-2">
+				<div className="ml-auto flex shrink-0 items-center gap-2">
 					{inboxEnabled ? headerActions : null}
 				</div>
 			</div>
@@ -1764,7 +1770,13 @@ function OrdersRoute() {
 					    because it configures the TABLE, not the result set — the same
 					    reason the view switch moved up into the header. */}
 					<div className="flex items-center gap-2">
-						<FilterChipRow className="min-w-0 flex-1">
+						{/* The row bleeds past the page gutter so chips scroll edge to
+						    edge — but with the Columns pill beside it (table view) the
+						    right-hand bleed slid chips 20px UNDER the pill. Stop at
+						    the pill instead; the chips still scroll, cut cleanly. */}
+						<FilterChipRow
+							className={cn("min-w-0 flex-1", tableView && "mr-0 pr-0")}
+						>
 							{/* Waiting on credits LEADS the row (Credits T3.1), ahead of
 						    even the seller's own pins: it is the only chip here that is
 						    about money we are owed and orders the seller cannot open, so
