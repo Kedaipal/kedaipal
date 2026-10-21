@@ -83,6 +83,8 @@ import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
 import {
 	describeProduct,
 	isSecurityDepositInRange,
+	maxSkipsDraftIssue,
+	maxSkipsFromDraft,
 	securityDepositRangeMessage,
 	weekendRateConsequence,
 } from "../../lib/product-summary";
@@ -213,6 +215,8 @@ export interface ProductFormSubmitValues {
 		/** "Only days you're open" (z8r3fdhpm7) — sent only with a day
 		 * package; absent clears it. */
 		skipsClosedDays?: boolean;
+		/** "Up to N skips per package" (z8r3fdh3ay); 0 clears. */
+		maxSkips?: number;
 		/** Weekend per-night rate (sen; S13) + the nights it covers. 0 clears
 		 * (server normalizes); omitted whenever a package length is set. */
 		weekendPrice?: number;
@@ -302,6 +306,8 @@ export type ProductFormDraft = {
 	autoAccept?: boolean;
 	/** "Only days you're open" on a day package (z8r3fdhpm7). */
 	skipsClosedDays?: boolean;
+	/** "Skips per package" as typed (z8r3fdh3ay); blank = no limit. */
+	maxSkips?: string;
 	/** Booking security deposit (RM, as typed; blank/absent = none). Optional
 	 * so pre-S5 draft literals (tests, stored handoffs) stay valid. */
 	securityDeposit?: string;
@@ -372,6 +378,8 @@ interface ProductFormProps {
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
 		skipsClosedDays?: boolean;
+		/** "Skips per package" draft (z8r3fdh3ay); blank = no limit. */
+		maxSkips?: string;
 		/** Booking security deposit as a major-unit string draft ("100") — wizard
 		 * handoff + edit seed. Blank/undefined = none. */
 		securityDeposit?: string;
@@ -903,6 +911,7 @@ function ProductSummaryStrip({
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
 		skipsClosedDays?: boolean;
+		maxSkips?: string;
 		weekendPrice?: string;
 		weekendDays?: readonly number[];
 	} | null;
@@ -1076,6 +1085,11 @@ export function ProductForm({
 	// any other shape, so a hidden value never rides along.
 	const [skipsClosedDays, setSkipsClosedDays] = useState(
 		initialValues?.skipsClosedDays === true,
+	);
+	// "Skips per package" (z8r3fdh3ay) — sent only with "Only days you're
+	// open"; otherwise 0 clears it, so a hidden cap never rides along.
+	const [maxSkipsDraft, setMaxSkipsDraft] = useState(
+		initialValues?.maxSkips ?? "",
 	);
 	// Weekend rate (S13) — RM draft + the nights it covers. Defaults to Fri +
 	// Sat so a seller who only types the rate gets the campsite norm.
@@ -1261,7 +1275,11 @@ export function ProductForm({
 				return;
 			if (
 				isBooking &&
-				(!capacityValid || !depositValid || !packageValid || !weekendValid)
+				(!capacityValid ||
+					!depositValid ||
+					!packageValid ||
+					!weekendValid ||
+					!maxSkipsValid)
 			)
 				return;
 
@@ -1284,6 +1302,7 @@ export function ProductForm({
 								packageUnit,
 								autoAccept,
 								skipsClosedDays: countsOpenDays ? true : undefined,
+								maxSkips: countsOpenDays ? maxSkipsFromDraft(maxSkipsDraft) : 0,
 								// Sen; 0 = clear (the server normalizes 0 → unset).
 								securityDeposit:
 									depositParsed !== null && depositParsed > 0
@@ -1361,6 +1380,7 @@ export function ProductForm({
 			packageUnit,
 			autoAccept,
 			skipsClosedDays,
+			maxSkips: maxSkipsDraft,
 			weekendPrice: weekendDraft,
 			weekendDays,
 			categoryIds,
@@ -1518,6 +1538,10 @@ export function ProductForm({
 	const offersDayCounting =
 		packageUnit === "day" && packageLengthNum !== undefined;
 	const countsOpenDays = offersDayCounting && skipsClosedDays;
+	// Only judged while the field is on screen — a stale typo under a hidden
+	// field must not block the save (it's sent as 0, cleared).
+	const maxSkipsValid =
+		!countsOpenDays || maxSkipsDraftIssue(maxSkipsDraft) === null;
 
 	// Booking security deposit — blank = none; else inside the server's own
 	// sanitizeSecurityDeposit ceiling (`isSecurityDepositInRange`, shared with
@@ -1644,6 +1668,7 @@ export function ProductForm({
 											packageUnit,
 											autoAccept,
 											skipsClosedDays: countsOpenDays,
+											maxSkips: countsOpenDays ? maxSkipsDraft : undefined,
 											weekendPrice: weekendDraft,
 											weekendDays,
 										}
@@ -1802,6 +1827,8 @@ export function ProductForm({
 							packageLength={packageLengthNum}
 							skipsClosedDays={skipsClosedDays}
 							onChange={setSkipsClosedDays}
+							maxSkips={maxSkipsDraft}
+							onMaxSkipsChange={setMaxSkipsDraft}
 							schedule={storeSchedule}
 						/>
 					) : null}

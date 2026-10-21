@@ -119,6 +119,20 @@ const BASE_DEFAULTS: Record<Locale, Record<OrderStatus, string>> = {
 	},
 };
 
+/**
+ * The first beat of a booking that is PAST its request — an instant booking
+ * that never waited, or a request the seller approved. "Awaiting Approval" as
+ * a done step told an instant-book guest they had waited for something that
+ * never happened; "Received" is true of both, and the next beat ("Confirmed")
+ * already carries the approval. A booking still IN `booking_requested` keeps
+ * its status label — that wait is real.
+ */
+export const BOOKING_RECEIVED_LABEL: Record<Locale, string> = {
+	en: "Booking Received",
+	ms: "Tempahan Diterima",
+	zh: "已收到预订",
+};
+
 // Self-collect preset — only the two stages whose wording differs from delivery.
 // Everything else falls through to BASE_DEFAULTS.
 const SELF_COLLECT_DEFAULTS: Record<

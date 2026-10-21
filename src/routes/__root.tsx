@@ -59,6 +59,10 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 		links: [
 			{ rel: "stylesheet", href: appCss },
 			{ rel: "icon", type: "image/x-icon", href: "/favicon.ico" },
+			// The vector mark, padded (the Logo Kit bag mark with ~10% air on
+			// every side so it never touches the tab edge); modern browsers
+			// prefer it over the PNGs below and it stays crisp at any DPR.
+			{ rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
 			{
 				rel: "icon",
 				type: "image/png",

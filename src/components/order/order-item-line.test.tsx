@@ -73,7 +73,7 @@ describe("OrderItemLine", () => {
 		expect(detail.textContent).not.toContain("×");
 	});
 
-	it("an open-days package names the shut days it skipped, after its window (z8r3fdhpm7)", () => {
+	it("an open-days package names its skipped days as labelled rows under its window (z8r3fdhpm7, z8r3fdh3ay)", () => {
 		line({
 			quantity: 1,
 			unitPrice: 50000,
@@ -82,11 +82,18 @@ describe("OrderItemLine", () => {
 				checkIn: day(0),
 				checkOut: day(7),
 				packaged: true,
-				skippedDays: [day(1), day(4)],
+				skippedDays: [day(1), day(4), day(5)],
+				customerSkips: [day(5)],
 			},
 		});
+		// The window line carries the window only — one fact per row.
 		const detail = screen.getByText(/Valid/);
-		expect(detail.textContent).toMatch(/· skips .+, .+$/);
+		expect(detail.textContent).not.toMatch(/skip/i);
+		const rows = screen.getAllByRole("listitem").map((li) => li.textContent);
+		expect(rows.some((t) => /^Store closed: .+, .+$/.test(t ?? ""))).toBe(true);
+		expect(
+			rows.some((t) => /^Skipped on request: \S+ \d+ \S+$/.test(t ?? "")),
+		).toBe(true);
 	});
 
 	it("names the kind of night on a split stay, without repeating the label (S13)", () => {

@@ -31,6 +31,13 @@ const STATUS_LABEL: Record<TimelineEvent["status"], string> = {
 	cancelled: "Cancelled",
 };
 
+// Non-status events (z8r3fdh3ay) — the status didn't move, so titling the row
+// "Confirmed" again would read as a second confirmation.
+const ACTION_LABEL: Record<NonNullable<TimelineEvent["action"]>, string> = {
+	booking_day_skipped: "Day skipped",
+	booking_day_skip_undone: "Skip undone",
+};
+
 const COLLAPSED_COUNT = 5;
 
 export function ActivityCard({ orderId }: { orderId: Id<"orders"> }) {
@@ -65,7 +72,9 @@ export function ActivityCard({ orderId }: { orderId: Id<"orders"> }) {
 						</span>
 						<div className="min-w-0 flex-1">
 							<p className="text-sm font-medium leading-tight">
-								{event.stageLabel ?? STATUS_LABEL[event.status]}
+								{event.action
+									? ACTION_LABEL[event.action]
+									: (event.stageLabel ?? STATUS_LABEL[event.status])}
 							</p>
 							<p className="text-xs text-muted-foreground">
 								{formatOrderTimestamp(event.createdAt)}
