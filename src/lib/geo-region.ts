@@ -96,3 +96,24 @@ export const readVisitorRegion = createIsomorphicFn()
 		}
 	})
 	.client((): Country | null => null);
+
+/**
+ * The visitor's MARKET for `/stores` (z8r3fdwduz) — the edge's geo answer and
+ * nothing else. The marketplace shows a buyer their own market only, with no
+ * switch, so it deliberately ignores `REGION_COOKIE`: that cookie is a
+ * PRICING preference set on `/`, `/pricing` and `/cost`, and honouring it here
+ * would strand a Malaysian who once checked SG prices in the SG directory with
+ * no way back. `null` hands the decision to the client's time-zone fallback,
+ * same as `readVisitorRegion`.
+ */
+export const readVisitorMarket = createIsomorphicFn()
+	.server((): Country | null => {
+		try {
+			return detectCountryFromGeoHeader(
+				getRequest().headers.get("cf-ipcountry"),
+			);
+		} catch {
+			return null;
+		}
+	})
+	.client((): Country | null => null);
