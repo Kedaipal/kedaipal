@@ -80,9 +80,18 @@ export function planSkipBlocker(
 	}
 	const used = (plan.bookingCustomerSkips ?? []).length;
 	if (opts.maxSkips !== undefined && used >= opts.maxSkips) {
-		return `All ${opts.maxSkips} skip${opts.maxSkips === 1 ? "" : "s"} on this plan are used — the listing allows up to ${opts.maxSkips}`;
+		return `${allSkipsUsed(opts.maxSkips)} — the listing allows ${opts.maxSkips}`;
 	}
 	return null;
+}
+
+/** "Both skips on this plan are used" — the cap sentence, said like a person
+ * would at 1, 2 and many. Shared with the buyer's page so both sides read the
+ * same fact. */
+export function allSkipsUsed(maxSkips: number): string {
+	if (maxSkips === 1) return "The one skip on this plan is used";
+	if (maxSkips === 2) return "Both skips on this plan are used";
+	return `All ${maxSkips} skips on this plan are used`;
 }
 
 /**

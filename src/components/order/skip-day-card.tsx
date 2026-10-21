@@ -25,6 +25,7 @@ import {
 	mytEpochFromCalendarDate,
 } from "../../lib/booking-dates";
 import { convexErrorMessage } from "../../lib/format";
+import { CLOSED_HATCH } from "../storefront/booking-calendar";
 import { Button } from "../ui/button";
 import {
 	Calendar,
@@ -106,23 +107,19 @@ export function SkipDayCard({
 
 	return (
 		<div className="flex flex-col gap-2 border-t border-border pt-3">
-			<div className="flex items-start gap-3">
-				<div className="min-w-0 flex-1">
-					<p className="text-sm font-medium">
-						Customer skips
-						{allowance ? (
-							<span className="font-normal text-muted-foreground">
-								{" "}
-								· {allowance}
-							</span>
-						) : null}
-					</p>
-					<p className="text-xs leading-relaxed text-muted-foreground">
-						{skips.length === 0
-							? "Customer missing a day? Skip it here and the plan's last day moves to the next day you're open. No message is sent — their order page updates."
-							: "Each skip moved the last day to the next day you're open. Their order page shows every skip."}
-					</p>
-				</div>
+			{/* Title + action on one row; the explainer runs full width under
+			    them — beside the button it squeezed into a 9-line column on a
+			    phone (hands-on test). */}
+			<div className="flex items-center gap-3">
+				<p className="min-w-0 flex-1 text-sm font-medium">
+					Customer skips
+					{allowance ? (
+						<span className="font-normal text-muted-foreground">
+							{" "}
+							· {allowance}
+						</span>
+					) : null}
+				</p>
 				<Button
 					variant="outline"
 					size="sm"
@@ -134,6 +131,11 @@ export function SkipDayCard({
 					Skip a day
 				</Button>
 			</div>
+			<p className="text-xs leading-relaxed text-muted-foreground">
+				{skips.length === 0
+					? "Customer missing a day? Skip it here and the plan's last day moves to the next day you're open. No message is sent — their order page updates."
+					: "Each skip moved the last day to the next day you're open. Their order page shows every skip."}
+			</p>
 			{blocker !== null ? (
 				<p className="text-xs leading-relaxed text-muted-foreground">
 					{blocker}
@@ -168,7 +170,7 @@ export function SkipDayCard({
 									</Button>
 								) : (
 									<span className="text-[11px] text-muted-foreground">
-										Final
+										Earlier
 									</span>
 								)}
 							</li>
@@ -286,6 +288,12 @@ function SkipDayDialog({
 					modifiers={{
 						skipped: (date) =>
 							customerSkips.has(mytEpochFromCalendarDate(date)),
+						// The shut days inside the plan, hatched exactly as the
+						// buyer's calendar hatches them.
+						closed: (date) => {
+							const day = mytEpochFromCalendarDate(date);
+							return day >= checkIn && day < checkOut && isClosed(day);
+						},
 					}}
 					modifiersClassNames={{
 						selected:
@@ -293,12 +301,13 @@ function SkipDayDialog({
 						// On the BUTTON: a cell's text-decoration never reaches the
 						// inline-block button inside it (seen rendered, 21 Oct).
 						skipped: "[&>button]:line-through [&>button]:decoration-2",
+						closed: CLOSED_HATCH,
 					}}
 				/>
 				<p className="text-[11px] leading-snug text-muted-foreground">
 					Greyed out: days outside the plan ({formatNight(checkIn)} –{" "}
-					{formatNight(lastDay)}), days you're closed, and days already skipped
-					(struck through).
+					{formatNight(lastDay)}), days you're closed (hatched), and days
+					already skipped (struck through).
 				</p>
 				{preview && "error" in preview ? (
 					<p

@@ -73,7 +73,7 @@ describe("SkipDayCard", () => {
 		);
 		expect(screen.getByText(/2 of 3 used/)).toBeTruthy();
 		expect(screen.getAllByRole("button", { name: /Undo/ })).toHaveLength(1);
-		expect(screen.getByText("Final")).toBeTruthy();
+		expect(screen.getByText("Earlier")).toBeTruthy();
 	});
 
 	it("disables Skip a day WITH the reason at the cap", () => {
@@ -88,7 +88,7 @@ describe("SkipDayCard", () => {
 		);
 		const button = screen.getByRole("button", { name: /Skip a day/ });
 		expect((button as HTMLButtonElement).disabled).toBe(true);
-		expect(screen.getByText(/All 1 skip on this plan are used/)).toBeTruthy();
+		expect(screen.getByText(/The one skip on this plan is used/)).toBeTruthy();
 		// Undo frees one, so it stays available at the cap.
 		const undo = screen.getByRole("button", { name: /Undo/ });
 		expect((undo as HTMLButtonElement).disabled).toBe(false);

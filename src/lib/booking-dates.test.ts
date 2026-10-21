@@ -23,6 +23,7 @@ import {
 	packageStartsCoveringRange,
 	packageTerm,
 	type SelectionContext,
+	skippedDayRows,
 	weekendRateSuffix,
 } from "./booking-dates";
 
@@ -530,9 +531,7 @@ describe("order-page booking lines (z8r3fdhpm7)", () => {
 				},
 				fmt,
 			),
-		).toBe(
-			"Booking · 5 open days · Valid Wed 30 Sep – Tue 6 Oct · skips Thu 1 Oct, Sun 4 Oct",
-		);
+		).toBe("Booking · 5 open days · Valid Wed 30 Sep – Tue 6 Oct");
 	});
 
 	it("a stay stays in nights, check-in → check-out", () => {
@@ -571,8 +570,18 @@ describe("order-page booking lines (z8r3fdhpm7)", () => {
 				},
 				fmt,
 			),
-		).toBe(
-			"Booking · 3 open days · Valid Wed 30 Sep – Mon 5 Oct · skips Sat 3 Oct, Sun 4 Oct · Thu 1 Oct skipped on request",
-		);
+		).toBe("Booking · 3 open days · Valid Wed 30 Sep – Mon 5 Oct");
+		expect(skippedDayRows([D(1), D(3), D(4)], [D(1)])).toEqual([
+			{ kind: "closed", label: "Store closed", days: "Sat 3 Oct, Sun 4 Oct" },
+			{
+				kind: "requested",
+				label: "Skipped on request",
+				days: "Thu 1 Oct",
+			},
+		]);
+		expect(skippedDayRows(undefined, undefined)).toEqual([]);
+		expect(skippedDayRows([D(1)], [D(1)])).toEqual([
+			{ kind: "requested", label: "Skipped on request", days: "Thu 1 Oct" },
+		]);
 	});
 });

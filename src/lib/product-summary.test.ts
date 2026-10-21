@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	capacityDraftFromListing,
 	describeProduct,
 	isSecurityDepositInRange,
 	maxSkipsDraftIssue,
@@ -576,5 +577,12 @@ describe("skips per package (z8r3fdh3ay)", () => {
 				"MYR",
 			),
 		).toContain("20-day package (open days only, up to 3 skips)");
+	});
+});
+
+describe("capacityDraftFromListing", () => {
+	it("unlimited seeds a BLANK field, never the string 'undefined'", () => {
+		expect(capacityDraftFromListing(undefined)).toBe("");
+		expect(capacityDraftFromListing(5)).toBe("5");
 	});
 });

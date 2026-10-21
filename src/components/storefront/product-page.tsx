@@ -182,6 +182,15 @@ export function ProductPageView({
 									? ", and your booking is confirmed straight away."
 									: ", and nothing is paid until the seller approves your request."}
 							</p>
+							{/* Open-days plans (z8r3fdh3ay): the counting rule and the
+							    skip promise belong on the listing too — a buyer deciding
+							    on a 20-meal plan wants to know a missed day isn't lost. */}
+							{isPackage && product.booking?.skipsClosedDays === true ? (
+								<OpenDaysPlanNote
+									storeName={retailer.storeName}
+									maxSkips={product.booking.maxSkips}
+								/>
+							) : null}
 						</div>
 					) : isEvent ? (
 						<>
@@ -499,5 +508,29 @@ function ProductPromoBand({
 			label={teasing ? `${state.label} starts in` : `${state.label} ends in`}
 			icon={Zap}
 		/>
+	);
+}
+
+/**
+ * The open-days rule and the skip promise on the LISTING (z8r3fdh3ay) — a
+ * buyer deciding on a 20-meal plan wants to know before checkout that a
+ * missed day isn't lost. Same words as the checkout line.
+ */
+export function OpenDaysPlanNote({
+	storeName,
+	maxSkips,
+}: {
+	storeName: string;
+	maxSkips?: number;
+}) {
+	return (
+		<p className="rounded-xl border border-border bg-card px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+			Counts only the days {storeName} is open. Can&apos;t make a day? Ask{" "}
+			{storeName} — they can skip it and add a day to the end
+			{maxSkips !== undefined
+				? ` (up to ${maxSkips} skip${maxSkips === 1 ? "" : "s"} per package)`
+				: ""}
+			.
+		</p>
 	);
 }

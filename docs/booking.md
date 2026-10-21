@@ -1825,6 +1825,35 @@ clear / refusals), `bookingPeriod.test.ts`, `booking-dates.test.ts`,
 `PlanSkipsNote`. Guards mutation-checked: removing the cap, capacity,
 frozen-flag or latest-only check each turns a test red.
 
+### Hands-on test round (21 Oct, Zaki's Chrome)
+
+Driven end to end on the herb dev store: listing edit, buyer checkout, skip,
+cap, undo, inbox, `/track`, and two regressions (a stay and an every-day
+package, neither of which shows the control). The rules held. Found and fixed:
+
+- **`/track` promised a skip the store could no longer give.** At the cap it
+  still said "Can't make a day? … they can skip it". It now says "You've used
+  all N skips on this package".
+- **No unlimited booking listing could be saved from its edit page** (already
+  on staging, found here). The route seeded capacity with
+  `String(undefined)`: the number field showed blank, the form refused it as
+  invalid, and the summary strip read "undefined at a time". Every gym and
+  meal plan is unlimited. `capacityDraftFromListing` seeds a blank.
+- **The product page said nothing about skips.** `OpenDaysPlanNote` now states
+  the open-days rule and the skip promise (with the cap) before checkout.
+- On a phone the skip row's explainer was squeezed into a nine-line column
+  beside the button; it now runs full width. Closed days are hatched in the
+  dialog (the buyer calendar's `CLOSED_HATCH`, now shared). The cap sentence
+  reads like a person (`allSkipsUsed`: "Both skips…"). An older skip reads
+  "Earlier" rather than "Final", because undoing the latest makes it the
+  latest again.
+- **Skipped days read as labelled rows, not one sentence** (Zaki, same
+  session). The items line (both pages) and the seller's Fulfilment summary
+  appended "· skips … · … skipped on request" to the window, a wall of dates.
+  `skippedDayRows` → `SkippedDayRows` now puts "Store closed: …" and "Skipped
+  on request: …" each on its own bulleted row under the window.
+  `describeSkippedDays` stays for one-line surfaces.
+
 ### Deliberately NOT done
 
 - **A `Skipped days` CSV column.** The export has no booking-span columns at

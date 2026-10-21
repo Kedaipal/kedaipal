@@ -42,6 +42,7 @@ export function PlanSkipsNote({
 
 	const left = packageDaysLeft(order, now);
 	const ended = now >= checkOut;
+	const capReached = maxSkips !== undefined && skips.length >= maxSkips;
 	const store = storeName.trim() || (ms ? "kedai" : "the store");
 	const capText =
 		maxSkips === undefined
@@ -85,7 +86,15 @@ export function PlanSkipsNote({
 					</span>
 				</p>
 			) : null}
-			{ended ? null : (
+			{ended ? null : capReached ? (
+				// At the cap the "ask for a skip" line would be a false promise
+				// (found in the z8r3fdh3ay hands-on test) — say what's true.
+				<p className="text-muted-foreground">
+					{ms
+						? `Anda telah menggunakan semua ${maxSkips} langkauan bagi pakej ini.`
+						: `You've used all ${maxSkips} skip${maxSkips === 1 ? "" : "s"} on this package.`}
+				</p>
+			) : (
 				<p className="text-muted-foreground">
 					{ms
 						? `Tak dapat hadir sehari? Mesej ${store} — mereka boleh langkau hari itu dan tambah sehari di hujung pakej anda${capText}.`

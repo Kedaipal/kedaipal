@@ -75,6 +75,7 @@ import { DispatchHub } from "../components/order/dispatch-hub";
 import {
 	type OrderBookingSpan,
 	OrderItemLine,
+	SkippedDayRows,
 } from "../components/order/order-item-line";
 import { PaymentProofList } from "../components/order/payment-proof-list";
 import { PickupNotes } from "../components/order/pickup-notes";
@@ -1689,6 +1690,13 @@ function OrderDetailRoute() {
 										? "Collection"
 										: "Delivery"}
 						</p>
+						{isBooking && order.bookingPackaged === true ? (
+							<SkippedDayRows
+								skipped={order.bookingSkippedDays}
+								customerSkips={order.bookingCustomerSkips}
+								className="mt-1"
+							/>
+						) : null}
 					</div>
 					{/* Seller reschedule (86eyp5qd1) — renders only inside the
 					    reschedule window (pre-shipped, non-counter, not collected). */}

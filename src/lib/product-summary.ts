@@ -324,3 +324,15 @@ function skipsCapSuffix(draft: string | undefined): string {
 	if (trimmed.length === 0 || maxSkipsDraftIssue(trimmed) !== null) return "";
 	return `, up to ${trimmed} skip${trimmed === "1" ? "" : "s"}`;
 }
+
+/**
+ * A booking listing's capacity as the edit form's draft. UNSET means
+ * unlimited (S7) and seeds a BLANK field — `String(undefined)` seeded the
+ * literal "undefined", which the number input showed as empty while the
+ * form refused it as invalid, so no unlimited listing (every gym and meal
+ * plan) could be saved from its edit page, and the summary strip read
+ * "undefined at a time". Found in the z8r3fdh3ay hands-on test.
+ */
+export function capacityDraftFromListing(capacity: number | undefined): string {
+	return capacity === undefined ? "" : String(capacity);
+}

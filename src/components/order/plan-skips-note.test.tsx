@@ -100,3 +100,30 @@ describe("PlanSkipsNote", () => {
 		expect(screen.getByText("3 hari lagi, termasuk hari ini")).toBeTruthy();
 	});
 });
+
+describe("PlanSkipsNote — at the cap", () => {
+	it("never promises a skip the store can no longer give", () => {
+		render(
+			<PlanSkipsNote
+				order={plan({
+					bookingCheckOut: MON + 9 * DAY,
+					bookingSkippedDays: [
+						MON + DAY,
+						MON + 2 * DAY,
+						MON + 5 * DAY,
+						MON + 6 * DAY,
+					],
+					bookingCustomerSkips: [MON + DAY, MON + 2 * DAY],
+				})}
+				maxSkips={2}
+				storeName="Sue Chef"
+				ms={false}
+				now={WED_NOON}
+			/>,
+		);
+		expect(screen.queryByText(/Can't make a day/)).toBeNull();
+		expect(
+			screen.getByText("You've used all 2 skips on this package."),
+		).toBeTruthy();
+	});
+});

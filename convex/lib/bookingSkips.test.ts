@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
 	applyCustomerSkip,
+	allSkipsUsed,
 	closureSkippedDays,
 	isSkippablePlan,
 	latestCustomerSkip,
@@ -187,7 +188,7 @@ describe("planSkipBlocker", () => {
 		});
 		expect(planSkipBlocker(one, { now, maxSkips: 2 })).toBeNull();
 		expect(planSkipBlocker(one, { now, maxSkips: 1 })).toBe(
-			"All 1 skip on this plan are used — the listing allows up to 1",
+			"The one skip on this plan is used — the listing allows 1",
 		);
 	});
 });
@@ -223,5 +224,13 @@ describe("the calendar feed follows a skip", () => {
 			{ start: d(3), endExclusive: d(5) },
 			{ start: d(7), endExclusive: d(8) },
 		]);
+	});
+});
+
+describe("allSkipsUsed", () => {
+	test("reads like a person at 1, 2 and many", () => {
+		expect(allSkipsUsed(1)).toBe("The one skip on this plan is used");
+		expect(allSkipsUsed(2)).toBe("Both skips on this plan are used");
+		expect(allSkipsUsed(5)).toBe("All 5 skips on this plan are used");
 	});
 });

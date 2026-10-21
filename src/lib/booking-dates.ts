@@ -515,6 +515,48 @@ export function describeSkippedDays(
 }
 
 /**
+ * The skipped days as LABELLED ROWS — "Store closed: Sun 25 Oct, Tue 27 Oct"
+ * and "Skipped on request: Thu 22 Oct" — for the order surfaces that have room
+ * for a list (the items line, the seller's Fulfilment card). Appended to the
+ * window as one sentence they read as a wall of dates (Zaki, 21 Oct); one fact
+ * per row reads at a glance. Empty when nothing was skipped. Same split as
+ * `describeSkippedDays`, which stays for the one-line surfaces.
+ */
+export function skippedDayRows(
+	skipped: readonly number[] | undefined,
+	customerSkips?: readonly number[],
+): Array<{ kind: "closed" | "requested"; label: string; days: string }> {
+	const rows: Array<{
+		kind: "closed" | "requested";
+		label: string;
+		days: string;
+	}> = [];
+	const shut = closureSkippedDays({
+		bookingSkippedDays: skipped,
+		bookingCustomerSkips: customerSkips,
+	});
+	if (shut.length > 0) {
+		rows.push({
+			kind: "closed",
+			label: "Store closed",
+			days: describeNights(shut, formatNight, "day"),
+		});
+	}
+	if (customerSkips && customerSkips.length > 0) {
+		rows.push({
+			kind: "requested",
+			label: "Skipped on request",
+			days: describeNights(
+				[...customerSkips].sort((a, b) => a - b),
+				formatNight,
+				"day",
+			),
+		});
+	}
+	return rows;
+}
+
+/**
  * How long a placed booking is, counted the way it was sold — "4 open days"
  * for an open-days package (z8r3fdhpm7), "30 days" for any other package,
  * "2 nights" for a stay. `null` without dates.
@@ -613,10 +655,7 @@ export function bookingFulfilmentLine(
 		count,
 		describeBookingSpan(checkIn, checkOut, { isPackage, format }),
 	];
-	const skips = describeSkippedDays(
-		order.bookingSkippedDays,
-		order.bookingCustomerSkips,
-	);
-	if (skips) parts.push(skips);
+	// The skipped days are NOT appended: the page renders them as labelled
+	// rows under this line (`skippedDayRows`), one fact per row.
 	return parts.join(" · ");
 }

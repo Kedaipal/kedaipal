@@ -198,7 +198,7 @@ describe("skipPackageDay — the Mon–Fri meal plan", () => {
 				orderId: order._id,
 				day: mon + 4 * DAY_MS,
 			}),
-		).rejects.toThrow(/All 1 skip on this plan are used/);
+		).rejects.toThrow(/The one skip on this plan is used/);
 	});
 
 	test("undo reverses only the latest skip and writes its own event", async () => {
