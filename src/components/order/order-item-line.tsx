@@ -65,6 +65,7 @@ export function OrderItemLine({
 	imageUrl,
 	booking,
 	answers = [],
+	locale = "en",
 }: {
 	name: string;
 	variantLabel?: string;
@@ -81,6 +82,9 @@ export function OrderItemLine({
 	/** The buyer's answers to the product's questions (z8r3fdkjek), frozen
 	 * with the label they were asked under. Plain text — React escapes it. */
 	answers?: ReadonlyArray<{ label: string; answer: string }>;
+	/** The store's language for the skipped-day labels (the buyer's `/track`
+	 * passes it; the seller page is English). */
+	locale?: "en" | "ms";
 }) {
 	// A weekend/weekday line carries its kind in the frozen label; the
 	// sub-line says it, so the title row doesn't repeat it.
@@ -121,6 +125,7 @@ export function OrderItemLine({
 					<SkippedDayRows
 						skipped={booking.skippedDays}
 						customerSkips={booking.customerSkips}
+						locale={locale}
 						className="mt-1"
 					/>
 				) : null}
@@ -226,13 +231,15 @@ function ownNights(
 export function SkippedDayRows({
 	skipped,
 	customerSkips,
+	locale = "en",
 	className = "",
 }: {
 	skipped?: readonly number[];
 	customerSkips?: readonly number[];
+	locale?: "en" | "ms";
 	className?: string;
 }) {
-	const rows = skippedDayRows(skipped, customerSkips);
+	const rows = skippedDayRows(skipped, customerSkips, locale);
 	if (rows.length === 0) return null;
 	return (
 		<ul className={`flex flex-col gap-0.5 text-xs ${className}`}>

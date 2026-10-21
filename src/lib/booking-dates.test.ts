@@ -580,6 +580,10 @@ describe("order-page booking lines (z8r3fdhpm7)", () => {
 			},
 		]);
 		expect(skippedDayRows(undefined, undefined)).toEqual([]);
+		// The buyer's page speaks the store's language (PR #398 review).
+		expect(
+			skippedDayRows([D(1), D(3)], [D(1)], "ms").map((r) => r.label),
+		).toEqual(["Kedai tutup", "Dilangkau atas permintaan"]);
 		expect(skippedDayRows([D(1)], [D(1)])).toEqual([
 			{ kind: "requested", label: "Skipped on request", days: "Thu 1 Oct" },
 		]);

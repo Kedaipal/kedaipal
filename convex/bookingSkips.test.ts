@@ -293,6 +293,10 @@ describe("skipPackageDay — the Mon–Fri meal plan", () => {
 		const pass = await buyPlan(t, retailer._id, passId, mon, "0123456783");
 		expect(pass.bookingOpenDays).toBe(false);
 		expect(
+			(await t.query(api.orders.get, { token: pass.trackingToken }))
+				?.bookingSkippable,
+		).toBeUndefined();
+		expect(
 			await asOwner.query(api.bookings.skipPlan, { orderId: pass._id }),
 		).toBeNull();
 		await expect(
@@ -313,6 +317,11 @@ describe("skipPackageDay — the Mon–Fri meal plan", () => {
 		const mon = nextMonday();
 		const order = await buyPlan(t, retailer._id, productId, mon);
 		await t.run((ctx) => ctx.db.patch(order._id, { bookingOpenDays: undefined }));
+		// The buyer's read says so too, so /track isn't silent on it.
+		const buyerView = await t.query(api.orders.get, {
+			token: order.trackingToken,
+		});
+		expect(buyerView?.bookingSkippable).toBe(true);
 		const result = await asOwner.mutation(api.bookings.skipPackageDay, {
 			orderId: order._id,
 			day: mon,

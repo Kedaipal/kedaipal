@@ -2145,6 +2145,11 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	/** The listing's "up to N skips per package" (z8r3fdh3ay) — set only on
 	 * an open-days plan whose listing caps skips. Unset = no cap / no skips. */
 	bookingMaxSkips?: number;
+	/** This plan can be skipped (z8r3fdh3ay) — the SAME answer the mutations
+	 * use (`isSkippablePlan`, listing fallback for orders placed before the
+	 * frozen `bookingOpenDays`), so the buyer's page never stays silent on a
+	 * plan the seller can skip. Unset = no. */
+	bookingSkippable?: true;
 	// Booking capacity context (S3) — SELLER path only, for the approve card's
 	// "N of M sites already booked those nights" line. Never on the buyer/token
 	// path: per-night counts don't cross the public wire (locked).
@@ -2393,6 +2398,7 @@ export const get = query({
 		// read live. Only an open-days plan has one; one listing read, and
 		// only for a booking package.
 		let bookingMaxSkips: number | undefined;
+		let bookingSkippable: true | undefined;
 		if (
 			order.deliveryMethod === "booking" &&
 			order.bookingPackaged === true &&
@@ -2403,6 +2409,7 @@ export const get = query({
 				isSkippablePlan(order, closureRule(listing?.booking) === "skipped")
 			) {
 				bookingMaxSkips = listing?.booking?.maxSkips;
+				bookingSkippable = true;
 			}
 		}
 		return {
@@ -2411,6 +2418,7 @@ export const get = query({
 			collectionRider,
 			bookingContext,
 			bookingMaxSkips,
+			bookingSkippable,
 			// RSVP (`z8r3fdff9u`) — both sides need it: the seller's Reschedule
 			// disables with the reason instead of erroring on submit, and the
 			// buyer's tracking page says the date is the event's, not theirs.

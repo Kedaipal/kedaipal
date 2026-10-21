@@ -525,6 +525,7 @@ export function describeSkippedDays(
 export function skippedDayRows(
 	skipped: readonly number[] | undefined,
 	customerSkips?: readonly number[],
+	locale: "en" | "ms" = "en",
 ): Array<{ kind: "closed" | "requested"; label: string; days: string }> {
 	const rows: Array<{
 		kind: "closed" | "requested";
@@ -538,14 +539,15 @@ export function skippedDayRows(
 	if (shut.length > 0) {
 		rows.push({
 			kind: "closed",
-			label: "Store closed",
+			label: locale === "ms" ? "Kedai tutup" : "Store closed",
 			days: describeNights(shut, formatNight, "day"),
 		});
 	}
 	if (customerSkips && customerSkips.length > 0) {
 		rows.push({
 			kind: "requested",
-			label: "Skipped on request",
+			label:
+				locale === "ms" ? "Dilangkau atas permintaan" : "Skipped on request",
 			days: describeNights(
 				[...customerSkips].sort((a, b) => a - b),
 				formatNight,

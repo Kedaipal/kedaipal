@@ -1854,6 +1854,19 @@ package, neither of which shows the control). The rules held. Found and fixed:
   on request: …" each on its own bulleted row under the window.
   `describeSkippedDays` stays for one-line surfaces.
 
+### PR #398 review follow-up
+
+- **A plan bought before this PR was silent on `/track`.** The buyer note
+  keyed on the frozen `bookingOpenDays`, which older orders don't carry, so a
+  seller could skip a plan whose buyer was never told skipping exists.
+  `orders.get` now returns `bookingSkippable` from the same `isSkippablePlan`
+  the mutations use (listing fallback included), and the note trusts it.
+- The skipped-day row labels speak the store's language on `/track` ("Kedai
+  tutup" / "Dilangkau atas permintaan"). The "Valid … – …" window line above
+  them is still English: it's older and shared with other surfaces.
+- The approve card's `describeSkippedDays` call carries a comment on why it
+  omits customer skips (a request can't carry one).
+
 ### Deliberately NOT done
 
 - **A `Skipped days` CSV column.** The export has no booking-span columns at

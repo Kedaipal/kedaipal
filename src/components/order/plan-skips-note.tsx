@@ -16,6 +16,7 @@ import { describeNights, formatNight } from "../../lib/booking-dates";
 export function PlanSkipsNote({
 	order,
 	maxSkips,
+	skippable,
 	storeName,
 	ms,
 	now = Date.now(),
@@ -29,6 +30,10 @@ export function PlanSkipsNote({
 		bookingOpenDays?: boolean;
 	};
 	maxSkips?: number;
+	/** The server's `isSkippablePlan` answer (`orders.get` →
+	 * `bookingSkippable`). It covers plans bought before the frozen
+	 * `bookingOpenDays` existed, which the seller can skip too. */
+	skippable?: boolean;
 	storeName: string;
 	ms: boolean;
 	now?: number;
@@ -36,8 +41,11 @@ export function PlanSkipsNote({
 	const skips = [...(order.bookingCustomerSkips ?? [])].sort((a, b) => a - b);
 	const checkOut = order.bookingCheckOut;
 	if (order.status === "cancelled" || checkOut === undefined) return null;
-	// An older order has no frozen flag; a skip on it still proves it's one.
-	const isOpenDaysPlan = order.bookingOpenDays === true || skips.length > 0;
+	// The server's answer first — an older order has no frozen flag, and
+	// staying silent there hid a feature the seller can use on it (PR #398
+	// review). The flag and a logged skip are the fallbacks.
+	const isOpenDaysPlan =
+		skippable === true || order.bookingOpenDays === true || skips.length > 0;
 	if (!isOpenDaysPlan) return null;
 
 	const left = packageDaysLeft(order, now);

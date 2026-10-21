@@ -1491,6 +1491,7 @@ function TrackingRoute() {
 							<PlanSkipsNote
 								order={order}
 								maxSkips={order.bookingMaxSkips}
+								skippable={order.bookingSkippable === true}
 								storeName={order.storeName}
 								ms={ms}
 							/>
@@ -1839,6 +1840,7 @@ function TrackingRoute() {
 								imageUrl={itemImageUrls?.[i] ?? undefined}
 								booking={itemBookingSpan}
 								answers={item.answers}
+								locale={ms ? "ms" : "en"}
 							/>
 						);
 					})}

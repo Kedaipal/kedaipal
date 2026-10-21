@@ -127,3 +127,32 @@ describe("PlanSkipsNote — at the cap", () => {
 		).toBeTruthy();
 	});
 });
+
+describe("PlanSkipsNote — a plan bought before the frozen flag", () => {
+	it("still tells the buyer they can ask for a skip when the server says so", () => {
+		const legacy = plan({ bookingOpenDays: undefined });
+		const { container, rerender } = render(
+			<PlanSkipsNote
+				order={legacy}
+				storeName="Sue Chef"
+				ms={false}
+				now={WED_NOON}
+			/>,
+		);
+		// Nothing frozen and no skip yet: silent without the server's answer…
+		expect(container.innerHTML).toBe("");
+		rerender(
+			<PlanSkipsNote
+				order={legacy}
+				skippable
+				storeName="Sue Chef"
+				ms={false}
+				now={WED_NOON}
+			/>,
+		);
+		// …and told once the server confirms the seller can skip it.
+		expect(
+			screen.getByText(/Can't make a day\? Message Sue Chef/),
+		).toBeTruthy();
+	});
+});
