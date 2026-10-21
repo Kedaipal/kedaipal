@@ -58,7 +58,9 @@ export const Route = createFileRoute("/app/products/$productId")({
 	validateSearch: (
 		search: Record<string, unknown>,
 	): { spot?: ProductSpotlightKey } =>
-		isProductSpotlightKey(search.spot) ? { spot: search.spot } : {},
+		// Returned even when absent — an omitted key leaks its raw value
+		// (z8r3fdtk87, src/lib/search-params.ts).
+		({ spot: isProductSpotlightKey(search.spot) ? search.spot : undefined }),
 	component: EditProductRoute,
 });
 

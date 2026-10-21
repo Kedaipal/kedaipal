@@ -155,6 +155,7 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
+import { searchText } from "../lib/search-params";
 import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
@@ -188,6 +189,12 @@ type InboxSearch = {
 	 * here into `st` and returns `undefined`, so old bookmarks and deep links
 	 * keep working and the param drops out of the URL on the next tap. */
 	bucket?: OrderBucket[];
+	/** Legacy singular `?source=` and `?nopin=`, READ ONLY like `bucket`:
+	 * folded into `sources` / `pin` and returned `undefined`. Returning them
+	 * is what stops the raw value leaking through the router's merge
+	 * (z8r3fdtk87, src/lib/search-params.ts). */
+	source?: undefined;
+	nopin?: undefined;
 	q?: string;
 	pay?: PaymentStatus[];
 	method?: OrderPaymentMethod[];
@@ -425,21 +432,25 @@ export const Route = createFileRoute("/app/orders/")({
 		// link to a category that has since been renamed.
 		const cat = [
 			...new Set(
-				toList(search.cat).flatMap((x) =>
-					typeof x === "string" && x.length > 0 && x.length <= 120 ? [x] : [],
-				),
+				toList(search.cat).flatMap((raw) => {
+					// A category can be named "2024", which the URL parses as a number.
+					const x = searchText(raw);
+					return x !== undefined && x.length <= 120 ? [x] : [];
+				}),
 			),
 		];
-		const q =
-			typeof search.q === "string" && search.q.length > 0
-				? search.q
-				: undefined;
+		// An order number or phone is all digits, and `?q=60123…` parses as a
+		// NUMBER — `searchText` reads it back as the text (z8r3fdtk87).
+		const q = searchText(search.q);
 		return {
 			// Never written back: it folded into `st` above. Keeping it out of the
 			// returned object is what makes the old param disappear from the URL
 			// on the seller's next tap instead of lingering as a second source of
 			// truth for the same thing.
 			bucket: undefined,
+			// Folded into `sources` / `pin` below, same as `bucket`.
+			source: undefined,
+			nopin: undefined,
 			q,
 			pay: pay.length > 0 ? pay : undefined,
 			method: method.length > 0 ? method : undefined,

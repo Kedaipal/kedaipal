@@ -89,8 +89,10 @@ export const Route = createFileRoute("/app/products/")({
 	validateSearch: (
 		search: Record<string, unknown>,
 	): { spot?: ProductSpotlightKey; stock?: "out" } => ({
-		...(isProductSpotlightKey(search.spot) ? { spot: search.spot } : {}),
-		...(search.stock === "out" ? { stock: "out" as const } : {}),
+		// Every key returned — an omitted one leaks its raw value
+		// (z8r3fdtk87, src/lib/search-params.ts).
+		spot: isProductSpotlightKey(search.spot) ? search.spot : undefined,
+		stock: search.stock === "out" ? "out" : undefined,
 	}),
 	component: ProductsRoute,
 });
