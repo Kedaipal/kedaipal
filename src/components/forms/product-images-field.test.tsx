@@ -77,6 +77,18 @@ function deferred() {
 	return { promise, resolve };
 }
 
+/**
+ * The grid reports its state from a passive `useEffect`, which runs AFTER the
+ * tile's text is on screen. So "Didn't upload" being visible does not mean the
+ * parent has heard `failed` yet: asserting `states` straight after a
+ * `findByText` raced the effect and flaked under CI load (PR #404). Wait for
+ * the report itself. The two post-`unmount()` assertions stay synchronous on
+ * purpose, because unmount cleanup runs inside RTL's act and must have
+ * reported by the time it returns.
+ */
+const reported = (state: PhotoUploadState) =>
+	waitFor(() => expect(states.at(-1)).toEqual(state));
+
 beforeEach(() => {
 	uploadImage.mockReset();
 	states.length = 0;
@@ -94,12 +106,12 @@ describe("ProductImagesField — upload tiles", () => {
 		pick("a.jpg");
 
 		expect(await screen.findByText("Uploading…")).toBeTruthy();
-		expect(states.at(-1)).toEqual({ kind: "uploading" });
+		await reported({ kind: "uploading" });
 
 		await act(async () => upload.resolve(ok("s-a")));
 		await waitFor(() => expect(latest.map((i) => i.id)).toEqual(["s-a"]));
 		expect(screen.queryByText("Uploading…")).toBeNull();
-		expect(states.at(-1)).toEqual({ kind: "idle" });
+		await reported({ kind: "idle" });
 	});
 
 	it("a failed upload becomes 'Didn't upload' with Retry, says why, and Retry lands it", async () => {
@@ -113,7 +125,7 @@ describe("ProductImagesField — upload tiles", () => {
 		);
 		// Unsaved work the parent must guard — not idle, not uploading — and
 		// COUNTED, so its Save bar can say how many instead of "all saved".
-		expect(states.at(-1)).toEqual({ kind: "failed", count: 1 });
+		await reported({ kind: "failed", count: 1 });
 		expect(latest).toEqual([]);
 
 		uploadImage.mockResolvedValueOnce(ok("s-a"));
@@ -121,7 +133,7 @@ describe("ProductImagesField — upload tiles", () => {
 		await waitFor(() => expect(latest.map((i) => i.id)).toEqual(["s-a"]));
 		expect(screen.queryByText("Didn't upload")).toBeNull();
 		expect(screen.queryByRole("alert")).toBeNull();
-		expect(states.at(-1)).toEqual({ kind: "idle" });
+		await reported({ kind: "idle" });
 		expect(uploadImage).toHaveBeenCalledTimes(2);
 	});
 
@@ -136,7 +148,7 @@ describe("ProductImagesField — upload tiles", () => {
 		);
 		await waitFor(() => expect(screen.queryByText("Didn't upload")).toBeNull());
 		expect(latest).toEqual([]);
-		expect(states.at(-1)).toEqual({ kind: "idle" });
+		await reported({ kind: "idle" });
 	});
 
 	it("a file Retry can't fix is refused with its reason UNDER THE GRID — no dead Retry tile", async () => {
@@ -157,7 +169,7 @@ describe("ProductImagesField — upload tiles", () => {
 		);
 		expect(screen.queryByText("Didn't upload")).toBeNull();
 		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-		expect(states.at(-1)).toEqual({ kind: "idle" });
+		await reported({ kind: "idle" });
 
 		// The next pick clears it — a stale refusal beside a photo that then
 		// landed would read as if THAT photo were refused.
@@ -179,7 +191,7 @@ describe("ProductImagesField — upload tiles", () => {
 			expect(latest.map((i) => i.id)).toEqual(["s-a", "s-c"]),
 		);
 		expect(screen.getAllByText("Didn't upload")).toHaveLength(1);
-		expect(states.at(-1)).toEqual({ kind: "failed", count: 1 });
+		await reported({ kind: "failed", count: 1 });
 	});
 
 	it("unmounting with a failed tile tells the parent 'idle' and frees the preview — no parent left holding 'failed' for a grid that's gone (PR #392 review)", async () => {
@@ -187,7 +199,7 @@ describe("ProductImagesField — upload tiles", () => {
 		const { unmount } = render(<Harness />);
 		pick("a.jpg");
 		await screen.findByText("Didn't upload");
-		expect(states.at(-1)).toEqual({ kind: "failed", count: 1 });
+		await reported({ kind: "failed", count: 1 });
 
 		unmount();
 		expect(states.at(-1)).toEqual({ kind: "idle" });
@@ -199,7 +211,7 @@ describe("ProductImagesField — upload tiles", () => {
 		const { unmount } = render(<Harness />);
 		pick("a.jpg");
 		await screen.findByText("Uploading…");
-		expect(states.at(-1)).toEqual({ kind: "uploading" });
+		await reported({ kind: "uploading" });
 
 		unmount();
 		expect(states.at(-1)).toEqual({ kind: "idle" });
