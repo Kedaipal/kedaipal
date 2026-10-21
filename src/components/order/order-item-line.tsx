@@ -30,8 +30,8 @@ import {
 import {
 	describeBookingSpan,
 	describeNights,
-	describeSkippedDays,
 	formatNight,
+	skippedDayRows,
 } from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
 import { AppImage } from "../ui/app-image";
@@ -50,6 +50,9 @@ export type OrderBookingSpan = {
 	 * `orders.bookingSkippedDays`) — named after the window, so the buyer and
 	 * the seller both see why it ends when it does. */
 	skippedDays?: readonly number[];
+	/** The days the customer skipped (z8r3fdh3ay, `bookingCustomerSkips`) —
+	 * a subset of `skippedDays`, named as skips rather than closures. */
+	customerSkips?: readonly number[];
 };
 
 export function OrderItemLine({
@@ -62,6 +65,7 @@ export function OrderItemLine({
 	imageUrl,
 	booking,
 	answers = [],
+	locale = "en",
 }: {
 	name: string;
 	variantLabel?: string;
@@ -78,6 +82,9 @@ export function OrderItemLine({
 	/** The buyer's answers to the product's questions (z8r3fdkjek), frozen
 	 * with the label they were asked under. Plain text — React escapes it. */
 	answers?: ReadonlyArray<{ label: string; answer: string }>;
+	/** The store's language for the skipped-day labels (the buyer's `/track`
+	 * passes it; the seller page is English). */
+	locale?: "en" | "ms";
 }) {
 	// A weekend/weekday line carries its kind in the frozen label; the
 	// sub-line says it, so the title row doesn't repeat it.
@@ -114,6 +121,14 @@ export function OrderItemLine({
 							)
 						: `${quantity} × ${formatPrice(unitPrice, currency)}`}
 				</p>
+				{booking?.packaged ? (
+					<SkippedDayRows
+						skipped={booking.skippedDays}
+						customerSkips={booking.customerSkips}
+						locale={locale}
+						className="mt-1"
+					/>
+				) : null}
 				{hasAnswers ? (
 					// Each pair flows as ONE run of text, wrapping like a sentence.
 					// It was a flex row with a `shrink-0` label, so a long question
@@ -161,8 +176,8 @@ function bookingLineDetail(
 		// of one, so "3 × RM 450.00" is exactly the arithmetic — no need to store
 		// the package length on the order to say something true. A single package
 		// says only its window: "1 ×" is noise.
-		const skips = describeSkippedDays(booking.skippedDays);
-		const window = skips ? `${span} · ${skips}` : span;
+		// The skipped days render as their own rows below (`SkippedDayRows`).
+		const window = span;
 		return quantity > 1
 			? `${quantity} × ${formatPrice(unitPrice, currency)} · ${window}`
 			: window;
@@ -206,4 +221,40 @@ function ownNights(
 	// span (only reachable if a row were edited by hand) — fall back rather
 	// than print a line with no nights at all.
 	return own.length > 0 ? own : null;
+}
+
+/**
+ * A package's skipped days as labelled rows (z8r3fdh3ay) — "Store closed" and
+ * "Skipped on request" each on its own line, rather than one sentence of
+ * dates. Shared by this line (both pages) and the seller's Fulfilment card.
+ */
+export function SkippedDayRows({
+	skipped,
+	customerSkips,
+	locale = "en",
+	className = "",
+}: {
+	skipped?: readonly number[];
+	customerSkips?: readonly number[];
+	locale?: "en" | "ms";
+	className?: string;
+}) {
+	const rows = skippedDayRows(skipped, customerSkips, locale);
+	if (rows.length === 0) return null;
+	return (
+		<ul className={`flex flex-col gap-0.5 text-xs ${className}`}>
+			{rows.map((row) => (
+				<li key={row.kind} className="flex gap-1.5">
+					<span
+						aria-hidden
+						className={`mt-1.5 size-1.5 shrink-0 rounded-full ${row.kind === "requested" ? "bg-accent" : "bg-muted-foreground/50"}`}
+					/>
+					<span>
+						<span className="text-muted-foreground">{row.label}:</span>{" "}
+						<span className="font-medium text-foreground">{row.days}</span>
+					</span>
+				</li>
+			))}
+		</ul>
+	);
 }

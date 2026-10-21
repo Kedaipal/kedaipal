@@ -102,10 +102,12 @@ import { assertWithinOpeningHours } from "./lib/openingHours";
 import { orderDocumentTitle } from "./lib/orderDocument";
 import { matchesBookingPeriod } from "./lib/bookingPeriod";
 import {
+	closureRule,
 	countBookedPerNight,
 	holdsCapacity,
 	occupiesNight,
 } from "./lib/bookingAvailability";
+import { isSkippablePlan } from "./lib/bookingSkips";
 import {
 	collectMinQuantityShortfalls,
 	type MinRuleItem,
@@ -2144,6 +2146,14 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	 * reads "Fri 4 Dec · 2:00 PM to Sun 6 Dec" instead of only the check-in
 	 * day the order froze. Undefined for a one-day event or a normal order. */
 	eventEndDate?: number;
+	/** The listing's "up to N skips per package" (z8r3fdh3ay) — set only on
+	 * an open-days plan whose listing caps skips. Unset = no cap / no skips. */
+	bookingMaxSkips?: number;
+	/** This plan can be skipped (z8r3fdh3ay) — the SAME answer the mutations
+	 * use (`isSkippablePlan`, listing fallback for orders placed before the
+	 * frozen `bookingOpenDays`), so the buyer's page never stays silent on a
+	 * plan the seller can skip. Unset = no. */
+	bookingSkippable?: true;
 	// Booking capacity context (S3) — SELLER path only, for the approve card's
 	// "N of M sites already booked those nights" line. Never on the buyer/token
 	// path: per-night counts don't cross the public wire (locked).
@@ -2387,11 +2397,32 @@ export const get = query({
 				peakOtherBookings: peak,
 			};
 		}
+		// Skip a day (z8r3fdh3ay): the listing's "up to N skips" cap, for the
+		// buyer's plan card and the seller's page alike — a policy, so it is
+		// read live. Only an open-days plan has one; one listing read, and
+		// only for a booking package.
+		let bookingMaxSkips: number | undefined;
+		let bookingSkippable: true | undefined;
+		if (
+			order.deliveryMethod === "booking" &&
+			order.bookingPackaged === true &&
+			order.bookingProductId !== undefined
+		) {
+			const listing = await ctx.db.get(order.bookingProductId);
+			if (
+				isSkippablePlan(order, closureRule(listing?.booking) === "skipped")
+			) {
+				bookingMaxSkips = listing?.booking?.maxSkips;
+				bookingSkippable = true;
+			}
+		}
 		return {
 			...order,
 			podImageUrls,
 			collectionRider,
 			bookingContext,
+			bookingMaxSkips,
+			bookingSkippable,
 			// RSVP (`z8r3fdff9u`) — both sides need it: the seller's Reschedule
 			// disables with the reason instead of erroring on submit, and the
 			// buyer's tracking page says the date is the event's, not theirs.
@@ -3610,6 +3641,15 @@ function orderToCsvSource(o: Doc<"orders"> & { creditGated?: boolean }): CsvOrde
 		// export-vs-screen split `pickupSnapshot.locationType` already caused
 		// once on this exact projection. Pinned by a test.
 		eventRsvp: o.eventRsvp,
+		// The booking span the Booking columns read. All of it survives the
+		// credit gate's redaction (`forSeller`), so a gated booking's cells
+		// match a funded one's.
+		bookingCheckIn: o.bookingCheckIn,
+		bookingCheckOut: o.bookingCheckOut,
+		bookingPackaged: o.bookingPackaged,
+		bookingSkippedDays: o.bookingSkippedDays,
+		bookingCustomerSkips: o.bookingCustomerSkips,
+		bookingOpenDays: o.bookingOpenDays,
 		source: o.source,
 		attributionSource: o.attributionSource,
 		customer: o.customer,
@@ -3754,6 +3794,8 @@ export const getTimeline = query({
 			status: Doc<"orderEvents">["status"];
 			stageLabel?: string;
 			note?: string;
+			/** A non-status event (z8r3fdh3ay) — the row is titled by this. */
+			action?: Doc<"orderEvents">["action"];
 			createdAt: number;
 			/** Present only for seller-side events. */
 			actor?: { name: string; you: boolean; isOwner: boolean };
@@ -3794,6 +3836,7 @@ export const getTimeline = query({
 				status: e.status,
 				stageLabel: e.stageLabel,
 				note: e.note,
+				action: e.action,
 				createdAt: e.createdAt,
 				actor:
 					e.actorUserId === undefined

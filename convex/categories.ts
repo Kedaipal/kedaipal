@@ -15,6 +15,7 @@ import {
 	recomputeProductHiddenByCategory,
 } from "./lib/categoryCounts";
 import { rateLimiter } from "./lib/rateLimiter";
+import { MAX_PRODUCTS_PER_RETAILER } from "./lib/productCap";
 import { assertValidCategorySlug } from "./lib/slug";
 import { hiddenFromStorefront } from "./lib/productEvent";
 import { productWithVariants } from "./products";
@@ -24,6 +25,7 @@ import {
 	getAccess,
 } from "./subscriptions";
 import { isStoreOffline } from "./storeAvailability";
+import { indexableStores } from "./storefrontIndex";
 
 const NAME_MAX = 60;
 const DESCRIPTION_MAX = 280;
@@ -32,10 +34,11 @@ const DESCRIPTION_MAX = 280;
  * Archived memberships are preserved beyond this (they don't count). */
 export const MAX_CATEGORIES_PER_PRODUCT = 10;
 /** Hard ceiling on products enriched for one public category page. A category
- * can't hold more than the per-retailer product cap (50), so this never
- * truncates today — it's a defensive bound so the buyer page can't fan out
- * unboundedly if that cap ever rises. */
-const CATEGORY_PAGE_PRODUCT_LIMIT = 100;
+ * can't hold more than the per-retailer product cap, so this never truncates
+ * — it's a defensive bound so the buyer page can't fan out unboundedly. It
+ * was 100 against a cap that had risen to 200, and it bounded the junction
+ * read BEFORE the visibility filter, so archived members used up slots. */
+const CATEGORY_PAGE_PRODUCT_LIMIT = MAX_PRODUCTS_PER_RETAILER;
 
 // ---------------------------------------------------------------------------
 // Auth helpers — mirror the pattern in convex/pickupLocations.ts so each
@@ -842,5 +845,73 @@ export const recomputeAllCounts = internalMutation({
 			await recomputeCategoryCount(ctx, category._id);
 		}
 		return { recomputed: categories.length };
+	},
+});
+
+/**
+ * The category a product page's breadcrumb names (z8r3fdh2z3): the product's
+ * FIRST visible category, or null. "First" is the order the seller assigned
+ * them (`productCategories.createdAt`); a product can sit in up to ten, and a
+ * breadcrumb shows one trail. Hidden or archived categories are skipped —
+ * their page 404s, so the crumb must not link there.
+ */
+export const primaryPublicForProduct = query({
+	args: { retailerId: v.id("retailers"), productId: v.id("products") },
+	handler: async (
+		ctx,
+		{ retailerId, productId },
+	): Promise<{ name: string; slug: string } | null> => {
+		if (await isStoreOffline(ctx, retailerId)) return null;
+		const junctions = await ctx.db
+			.query("productCategories")
+			.withIndex("by_product", (q) => q.eq("productId", productId))
+			.collect();
+		for (const junction of [...junctions].sort(
+			(a, b) => a.createdAt - b.createdAt,
+		)) {
+			const category = await ctx.db.get(junction.categoryId);
+			if (!category || category.retailerId !== retailerId) continue;
+			if (!category.active || category.hidden === true) continue;
+			return { name: category.name, slug: category.slug };
+		}
+		return null;
+	},
+});
+
+/**
+ * Category pages for the sitemap (z8r3fdh2ye): every store the sitemap
+ * lists, every category its rail shows — the `listActivePublic` rule (active,
+ * not hidden, at least one visible product). `updatedAt` is the category's
+ * last write.
+ */
+export const listForSitemap = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<
+		Array<{ storeSlug: string; categorySlug: string; updatedAt: number }>
+	> => {
+		const out: Array<{
+			storeSlug: string;
+			categorySlug: string;
+			updatedAt: number;
+		}> = [];
+		for (const { retailer } of await indexableStores(ctx)) {
+			const rows = await ctx.db
+				.query("categories")
+				.withIndex("by_retailer_active", (q) =>
+					q.eq("retailerId", retailer._id).eq("active", true),
+				)
+				.collect();
+			for (const row of rows) {
+				if (row.hidden === true || (row.productCount ?? 0) === 0) continue;
+				out.push({
+					storeSlug: retailer.slug,
+					categorySlug: row.slug,
+					updatedAt: row.updatedAt,
+				});
+			}
+		}
+		return out;
 	},
 });

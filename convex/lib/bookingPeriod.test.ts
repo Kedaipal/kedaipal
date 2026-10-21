@@ -4,15 +4,18 @@
  * depends on when the suite runs.
  */
 import { describe, expect, it } from "vitest";
+import type { Doc } from "../_generated/dataModel";
 import {
 	currentBookingLine,
 	describeBookingPeriod,
 	ENDING_SOON_DAYS,
 	matchesAnyBookingPeriod,
 	matchesBookingPeriod,
+	packageDaysLeft,
 	type PeriodOrder,
 } from "./bookingPeriod";
 import { DAY_MS, todayMytMidnight } from "./fulfilmentDate";
+import { redactGatedOrder } from "./orderGate";
 
 const NOW = Date.UTC(2026, 8, 15, 6, 30); // mid-morning, mid-month
 const today = todayMytMidnight(NOW);
@@ -123,6 +126,24 @@ describe("describeBookingPeriod — the reception-desk line", () => {
 		expect(describeBookingPeriod(pkg, NOW)).toBe("Active · 2 days left");
 	});
 
+	it("a GATED open-days package says the same — the shut days survive redaction", () => {
+		// The inbox renders this chip from the REDACTED row. Before the shut days
+		// joined the gate's allowlist it read "Active · 6 days left" here.
+		const doc = {
+			shortId: "ORD-7002",
+			status: "confirmed",
+			deliveryMethod: "booking",
+			bookingCheckIn: day(-2),
+			bookingCheckOut: day(7),
+			bookingPackaged: true,
+			bookingSkippedDays: [day(-1), day(2), day(3), day(5)],
+			customer: { name: "Siti" },
+			items: [],
+		} as unknown as Doc<"orders">;
+		const gated = redactGatedOrder(doc, { gated: true, creditsToUnlock: 1 });
+		expect(describeBookingPeriod(gated, NOW)).toBe("Active · 3 open days left");
+	});
+
 	it("an OPEN-DAYS package counts the days the member can still come (z8r3fdhpm7)", () => {
 		// Started 2 days ago, last day in 6 — but three of those six are days the
 		// package skips, so three visits are left, not "6 days".
@@ -210,5 +231,55 @@ describe("currentBookingLine — which booking the customer card shows", () => {
 			currentBookingLine([{ status: "confirmed" } as never], NOW),
 		).toBeNull();
 		expect(currentBookingLine([packaged(-1, 5, "cancelled")], NOW)).toBeNull();
+	});
+});
+
+describe("skips on the period line + packageDaysLeft (z8r3fdh3ay)", () => {
+	const plan = (extra: Partial<PeriodOrder> = {}): PeriodOrder & {
+		bookingPackaged: true;
+	} => ({
+		status: "confirmed",
+		bookingCheckIn: day(-1),
+		bookingCheckOut: day(5),
+		bookingPackaged: true,
+		...extra,
+	});
+
+	it("the desk line counts the customer's skips", () => {
+		expect(describeBookingPeriod(plan(), NOW)).toBe("Active · 4 days left");
+		expect(
+			describeBookingPeriod(
+				plan({
+					bookingSkippedDays: [day(2)],
+					bookingCustomerSkips: [day(2)],
+				}),
+				NOW,
+			),
+		).toBe("Active · 3 open days left · 1 skip");
+		expect(
+			describeBookingPeriod(
+				plan({
+					bookingSkippedDays: [day(1), day(2)],
+					bookingCustomerSkips: [day(1), day(2)],
+				}),
+				NOW,
+			),
+		).toBe("Active · 2 open days left · 2 skips");
+		// A cancelled plan has no line, so no count either.
+		expect(
+			describeBookingPeriod(
+				plan({ status: "cancelled", bookingCustomerSkips: [day(2)] }),
+				NOW,
+			),
+		).toBeNull();
+	});
+
+	it("days left includes today and drops skipped days", () => {
+		expect(packageDaysLeft(plan(), NOW)).toBe(5);
+		expect(packageDaysLeft(plan({ bookingSkippedDays: [day(0), day(3)] }), NOW)).toBe(3);
+		// Today is the last day → 1; the check-out morning → null (ended).
+		expect(packageDaysLeft(plan({ bookingCheckOut: day(1) }), NOW)).toBe(1);
+		expect(packageDaysLeft(plan({ bookingCheckOut: day(0) }), NOW)).toBeNull();
+		expect(packageDaysLeft(plan({ bookingCheckIn: day(1) }), NOW)).toBeNull();
 	});
 });

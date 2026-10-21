@@ -75,6 +75,7 @@ import { DispatchHub } from "../components/order/dispatch-hub";
 import {
 	type OrderBookingSpan,
 	OrderItemLine,
+	SkippedDayRows,
 } from "../components/order/order-item-line";
 import { PaymentProofList } from "../components/order/payment-proof-list";
 import { PickupNotes } from "../components/order/pickup-notes";
@@ -91,6 +92,7 @@ import {
 	type ShipmentFields,
 	ShipmentTrackingCard,
 } from "../components/order/shipment-tracking";
+import { SkipDayCard } from "../components/order/skip-day-card";
 import { GatedOrderPage } from "../components/orders/gated-order-page";
 import {
 	DeliveryAddressDisplay,
@@ -376,6 +378,7 @@ function OrderDetailRoute() {
 					packaged: order.bookingPackaged === true,
 					weekendDays: order.bookingWeekendDays,
 					skippedDays: order.bookingSkippedDays,
+					customerSkips: order.bookingCustomerSkips,
 				}
 			: undefined;
 	const orderId = order?._id;
@@ -1687,6 +1690,13 @@ function OrderDetailRoute() {
 										? "Collection"
 										: "Delivery"}
 						</p>
+						{isBooking && order.bookingPackaged === true ? (
+							<SkippedDayRows
+								skipped={order.bookingSkippedDays}
+								customerSkips={order.bookingCustomerSkips}
+								className="mt-1"
+							/>
+						) : null}
 					</div>
 					{/* Seller reschedule (86eyp5qd1) — renders only inside the
 					    reschedule window (pre-shipped, non-counter, not collected). */}
@@ -1758,6 +1768,11 @@ function OrderDetailRoute() {
 							</span>
 						) : null}
 					</div>
+				) : null}
+				{/* Skip a day (z8r3fdh3ay) — right under the dates it changes.
+				    Renders nothing unless this is an open-days plan. */}
+				{isBooking && order.bookingPackaged === true ? (
+					<SkipDayCard order={order} lockedReason={workLockedReason} />
 				) : null}
 				{/* The moment was MOVED (z8r3fdff97 test round). The buyer's page
 				    says who changed it; this one says when, because the seller

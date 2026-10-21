@@ -703,9 +703,15 @@ export function BookingCheckoutForm({
 							id="booking-wa-phone-hint"
 							className="text-sm font-medium text-accent-emphasis"
 						>
-							{ms
-								? `Keputusan tempahan akan dihantar ke ${formatMobile(parsedPhone.digits)} — pastikan nombor ini betul.`
-								: `We'll WhatsApp the decision to ${formatMobile(parsedPhone.digits)} — check it's right.`}
+							{/* Instant book has no decision to wait for — it is
+							    confirmed on submit, so the line names what does come. */}
+							{instantBook
+								? ms
+									? `Pengesahan tempahan akan dihantar ke ${formatMobile(parsedPhone.digits)} — pastikan nombor ini betul.`
+									: `We'll WhatsApp your confirmation to ${formatMobile(parsedPhone.digits)} — check it's right.`
+								: ms
+									? `Keputusan tempahan akan dihantar ke ${formatMobile(parsedPhone.digits)} — pastikan nombor ini betul.`
+									: `We'll WhatsApp the decision to ${formatMobile(parsedPhone.digits)} — check it's right.`}
 						</span>
 					) : phoneRejection ? (
 						<>
@@ -729,9 +735,13 @@ export function BookingCheckoutForm({
 							id="booking-wa-phone-hint"
 							className="text-xs font-normal text-muted-foreground"
 						>
-							{ms
-								? "Kelulusan dan bayaran untuk tempahan ini dihantar ke WhatsApp anda."
-								: "The approval and payment ask for this booking land in this WhatsApp."}
+							{instantBook
+								? ms
+									? "Pengesahan dan butiran bayaran untuk tempahan ini dihantar ke WhatsApp anda."
+									: "The confirmation and payment details for this booking land in this WhatsApp."
+								: ms
+									? "Kelulusan dan bayaran untuk tempahan ini dihantar ke WhatsApp anda."
+									: "The approval and payment ask for this booking land in this WhatsApp."}
 						</span>
 					)}
 				</div>
@@ -908,7 +918,12 @@ export function BookingCheckoutForm({
 				{availability.closureRule === "skipped" ? (
 					<p className="text-xs text-muted-foreground">
 						This package counts only the days {storeName} is open — closed days
-						(hatched) are skipped, so it ends later.
+						(hatched) are skipped, so it ends later. Can&apos;t make a day? Ask{" "}
+						{storeName} — they can skip it and add a day to the end
+						{availability.maxSkips !== undefined
+							? ` (up to ${availability.maxSkips} skip${availability.maxSkips === 1 ? "" : "s"} per package)`
+							: ""}
+						.
 					</p>
 				) : availability.closureRule === "absorbed" &&
 					(availability.closedWeekdays.length > 0 ||
