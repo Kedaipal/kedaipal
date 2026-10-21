@@ -588,6 +588,13 @@ export function bookingDaysOf(o: CsvOrder): number | undefined {
  * skipped but hasn't been; undefined on every booking that can't be — a stay
  * or a fixed calendar package reading "0 skips" would suggest an option it
  * never had.
+ *
+ * "Can be skipped" reads the order's FROZEN `bookingOpenDays` only. The
+ * mutations' `isSkippablePlan` also falls back to the LISTING for orders
+ * placed before that flag existed; the registry is pure and reads no
+ * listing, so such an order reads blank until it is skipped (then its count
+ * shows). Deliberate: a product read per exported row to turn "" into "0"
+ * on legacy rows isn't worth it.
  */
 export function bookingSkipsOf(o: CsvOrder): number | undefined {
 	if (!bookingSpan(o)) return undefined;

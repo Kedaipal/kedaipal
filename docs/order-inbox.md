@@ -606,7 +606,9 @@ WhatsApp.
     (`bookingSkippedDays` holds every unused day, skips included). Reads `0` /
     "None" only on a plan that CAN be skipped (`bookingOpenDays`); blank on a
     stay or calendar package, where "0 skips" would suggest an option it never
-    had. A count, not "1 of 3": `maxSkips` lives on the listing, so a later
+    had. Orders placed before `bookingOpenDays` was frozen read blank until
+    their first skip — the skip mutations fall back to the listing
+    (`isSkippablePlan`), but the registry reads only the order. A count, not "1 of 3": `maxSkips` lives on the listing, so a later
     edit would rewrite an exported row.
 - **Drag the HEADERS to reorder** — @dnd-kit horizontal, with the header itself
   as the drag handle. No separate grip: the shared `useSortableSensors` starts a
