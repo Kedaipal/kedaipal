@@ -82,8 +82,8 @@ const copy: Record<Locale, (storeName: string) => Copy> = {
 		keyLabel: "Log masuk dengan",
 		keyNote: "Alamat inilah kuncinya — anda mesti guna yang ini.",
 		firstTimer: {
-			html: "<strong>Baru di Kedaipal?</strong> Butang di bawah mencipta log masuk anda — tiada pendaftaran berasingan.",
-			text: "Baru di Kedaipal? Pautan di bawah mencipta log masuk anda — tiada pendaftaran berasingan.",
+			html: "<strong>Baru di Kedaipal?</strong> Butang di bawah akan terus mendaftarkan akaun anda — tiada langkah daftar berasingan.",
+			text: "Baru di Kedaipal? Pautan di bawah akan terus mendaftarkan akaun anda — tiada langkah daftar berasingan.",
 		},
 		takeover: "Seluruh kedai menjadi milik anda pada log masuk pertama: produk, tetapan dan pautan kedai anda.",
 		free: "Tiada bayaran hari ini. Anda dapat 14 hari Pro bermula hari anda mengambil alih, dan boleh pilih pelan selepas itu.",

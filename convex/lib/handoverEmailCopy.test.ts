@@ -45,7 +45,7 @@ describe("handover invitation email", () => {
 		const r = renderHandoverInvite(locale, vars);
 		const firstTimer = {
 			en: ["New to Kedaipal?", "creates your login"],
-			ms: ["Baru di Kedaipal?", "mencipta log masuk anda"],
+			ms: ["Baru di Kedaipal?", "mendaftarkan akaun anda"],
 			zh: ["第一次用 Kedaipal？", "为您创建账号"],
 		}[locale];
 		for (const body of [r.html, r.text])
