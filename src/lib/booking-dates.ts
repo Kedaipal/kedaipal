@@ -9,6 +9,7 @@ import {
 	countedDays,
 	resolveOpenDaysTerm,
 } from "../../convex/lib/bookingAvailability";
+import { closureSkippedDays } from "../../convex/lib/bookingSkips";
 import {
 	addMytCalendarMonths,
 	DAY_MS,
@@ -483,16 +484,78 @@ export function describeBookingSpan(
 }
 
 /**
- * "Skips Thu 1 Oct, Sun 4 Oct" — the shut days an open-days package stepped
- * over (z8r3fdhpm7, frozen `orders.bookingSkippedDays`), or "" when none. The
- * one spelling on every order surface, so the receipt, the seller's page and
- * the buyer's page name them alike.
+ * "skips Thu 1 Oct, Sun 4 Oct" — the shut days an open-days package stepped
+ * over (z8r3fdhpm7, frozen `orders.bookingSkippedDays`) — then "Tue 7 Oct
+ * skipped on request" for the days the CUSTOMER skipped (z8r3fdh3ay,
+ * `bookingCustomerSkips`, which also sit in the first list). "" when neither.
+ * The one spelling on every order surface, so the receipt, the seller's page
+ * and the buyer's page name them alike — and "we were shut" never reads as
+ * "you skipped", or the other way round. Neutral "on request" because the
+ * same line serves both sides.
  */
 export function describeSkippedDays(
 	skipped: readonly number[] | undefined,
+	customerSkips?: readonly number[],
 ): string {
-	if (!skipped || skipped.length === 0) return "";
-	return `skips ${describeNights(skipped, formatNight, "day")}`;
+	const parts: string[] = [];
+	const shut = closureSkippedDays({
+		bookingSkippedDays: skipped,
+		bookingCustomerSkips: customerSkips,
+	});
+	if (shut.length > 0) {
+		parts.push(`skips ${describeNights(shut, formatNight, "day")}`);
+	}
+	if (customerSkips && customerSkips.length > 0) {
+		const sorted = [...customerSkips].sort((a, b) => a - b);
+		parts.push(
+			`${describeNights(sorted, formatNight, "day")} skipped on request`,
+		);
+	}
+	return parts.join(" · ");
+}
+
+/**
+ * The skipped days as LABELLED ROWS — "Store closed: Sun 25 Oct, Tue 27 Oct"
+ * and "Skipped on request: Thu 22 Oct" — for the order surfaces that have room
+ * for a list (the items line, the seller's Fulfilment card). Appended to the
+ * window as one sentence they read as a wall of dates (Zaki, 21 Oct); one fact
+ * per row reads at a glance. Empty when nothing was skipped. Same split as
+ * `describeSkippedDays`, which stays for the one-line surfaces.
+ */
+export function skippedDayRows(
+	skipped: readonly number[] | undefined,
+	customerSkips?: readonly number[],
+	locale: "en" | "ms" = "en",
+): Array<{ kind: "closed" | "requested"; label: string; days: string }> {
+	const rows: Array<{
+		kind: "closed" | "requested";
+		label: string;
+		days: string;
+	}> = [];
+	const shut = closureSkippedDays({
+		bookingSkippedDays: skipped,
+		bookingCustomerSkips: customerSkips,
+	});
+	if (shut.length > 0) {
+		rows.push({
+			kind: "closed",
+			label: locale === "ms" ? "Kedai tutup" : "Store closed",
+			days: describeNights(shut, formatNight, "day"),
+		});
+	}
+	if (customerSkips && customerSkips.length > 0) {
+		rows.push({
+			kind: "requested",
+			label:
+				locale === "ms" ? "Dilangkau atas permintaan" : "Skipped on request",
+			days: describeNights(
+				[...customerSkips].sort((a, b) => a - b),
+				formatNight,
+				"day",
+			),
+		});
+	}
+	return rows;
 }
 
 /**
@@ -579,6 +642,7 @@ export function bookingFulfilmentLine(
 		bookingCheckOut?: number;
 		bookingPackaged?: boolean;
 		bookingSkippedDays?: readonly number[];
+		bookingCustomerSkips?: readonly number[];
 	},
 	format: (epoch: number) => string,
 ): string {
@@ -593,7 +657,7 @@ export function bookingFulfilmentLine(
 		count,
 		describeBookingSpan(checkIn, checkOut, { isPackage, format }),
 	];
-	const skips = describeSkippedDays(order.bookingSkippedDays);
-	if (skips) parts.push(skips);
+	// The skipped days are NOT appended: the page renders them as labelled
+	// rows under this line (`skippedDayRows`), one fact per row.
 	return parts.join(" · ");
 }

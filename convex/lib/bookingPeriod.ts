@@ -77,6 +77,9 @@ export type PeriodOrder = {
 	/** The shut days an open-days package steps over (z8r3fdhpm7) — the
 	 * "days left" line counts only the days the member can still come. */
 	bookingSkippedDays?: readonly number[];
+	/** The days the customer skipped (z8r3fdh3ay) — the line counts them so
+	 * the desk sees "1 skip" without opening the order. */
+	bookingCustomerSkips?: readonly number[];
 	status: string;
 };
 
@@ -151,6 +154,19 @@ export function matchesAnyBookingPeriod(
 export function describeBookingPeriod(
 	order: PeriodOrder & { bookingPackaged?: boolean },
 	now: number = Date.now(),
+): string | null {
+	const line = periodLine(order, now);
+	// The customer's skips ride the line (z8r3fdh3ay) — "Active · 12 open days
+	// left · 1 skip" — so the inbox row and the customer card both say it.
+	// Cancelled / spanless orders have no line, so no count either.
+	const skips = (order.bookingCustomerSkips ?? []).length;
+	if (line === null || skips === 0) return line;
+	return `${line} · ${skips} skip${skips === 1 ? "" : "s"}`;
+}
+
+function periodLine(
+	order: PeriodOrder & { bookingPackaged?: boolean },
+	now: number,
 ): string | null {
 	const { bookingCheckIn: checkIn, bookingCheckOut: checkOut } = order;
 	if (checkIn === undefined || checkOut === undefined) return null;
@@ -231,4 +247,31 @@ export function currentBookingLine(
 		(a.bookingCheckOut ?? 0) >= (b.bookingCheckOut ?? 0) ? a : b,
 	);
 	return describeBookingPeriod(latest, now);
+}
+
+/**
+ * How many days an ACTIVE package still has, TODAY INCLUDED — the buyer's
+ * "3 days left" on a meal plan (z8r3fdh3ay), where today's dinner is still
+ * owed. Skipped days (shut, or skipped by the customer) don't count. Null when
+ * the plan hasn't started, has ended, or was cancelled — the card says
+ * nothing rather than a stale count. Today = the last day → 1.
+ *
+ * Distinct from `describeBookingPeriod`'s seller line, which counts the days
+ * AFTER today ("ends today" / "N days left") for a reception desk.
+ */
+export function packageDaysLeft(
+	order: PeriodOrder,
+	now: number = Date.now(),
+): number | null {
+	const { bookingCheckIn: checkIn, bookingCheckOut: checkOut } = order;
+	if (checkIn === undefined || checkOut === undefined) return null;
+	if (order.status === "cancelled") return null;
+	const today = todayMytMidnight(now);
+	if (today < checkIn || today >= checkOut) return null;
+	const shut = new Set(order.bookingSkippedDays ?? []);
+	let left = 0;
+	for (let day = today; day < checkOut; day += DAY_MS) {
+		if (!shut.has(day)) left += 1;
+	}
+	return left;
 }
