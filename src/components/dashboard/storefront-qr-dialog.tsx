@@ -201,6 +201,9 @@ function QrPanel({
 				<p className="text-sm font-semibold">{title}</p>
 				<p className="text-xs text-muted-foreground">{caption}</p>
 			</div>
+			{/* dark-ok. The quiet zone must stay white in both themes — scanners need
+			    the light/dark contrast, and this preview has to match the PNG the
+			    seller prints. */}
 			<div className="flex justify-center rounded-xl bg-white p-4 ring-1 ring-black/5">
 				<div ref={ref}>
 					<QRCode value={value} size={160} level="M" />

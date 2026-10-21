@@ -4,6 +4,7 @@ import type { FunctionReturnType } from "convex/server";
 import { useEffect, useRef } from "react";
 import type { api } from "../../../convex/_generated/api";
 import { AppImage } from "../ui/app-image";
+import { ThemeToggle } from "../ui/theme-toggle";
 import { TierPill } from "./tier-pill";
 
 type Retailer = NonNullable<
@@ -87,7 +88,9 @@ export function MobileHeader({ retailer, adminBadge }: MobileHeaderProps) {
 					</Link>
 				)}
 			</div>
-			<div className="shrink-0">
+			<div className="flex shrink-0 items-center gap-1">
+				{/* Quick flip; the three-way picker lives in Settings → App → Appearance. */}
+				<ThemeToggle variant="ghost" />
 				<UserButton />
 			</div>
 		</header>

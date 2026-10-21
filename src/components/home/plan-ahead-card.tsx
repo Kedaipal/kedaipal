@@ -125,7 +125,7 @@ export function PlanAheadCard({
 											// squircle is the shape; the radius is what makes it one.
 											"flex h-11 w-full items-center justify-center rounded-[12px] font-heading text-base font-extrabold tabular-nums transition-opacity hover:opacity-85",
 											peak
-												? "bg-foreground text-background"
+												? "bg-primary text-background dark:text-primary-foreground"
 												: tint === null
 													? "bg-muted text-muted-foreground"
 													: "text-foreground",

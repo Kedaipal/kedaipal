@@ -277,27 +277,33 @@ function AdminBillingOverview() {
 	const dueSoon =
 		invoices?.filter((inv) => inv.dueDate <= Date.now() + 7 * DAY_MS).length ??
 		0;
+	// Not TONE_PANEL: these tiles read `text-X-800` where the registry's panels
+	// read `text-X-700`, so adopting it would repaint blue + emerald in light
+	// mode. The registry is only free to take a surface it already matches.
 	const stats = [
 		{
 			label: "Pending",
 			value: invoices === undefined ? "..." : String(invoices.length),
 			helper: "Invoices to settle",
 			icon: <ReceiptText className="size-4" />,
-			className: "border-blue-200 bg-blue-50 text-blue-800",
+			className:
+				"border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200",
 		},
 		{
 			label: "Due soon",
 			value: invoices === undefined ? "..." : String(dueSoon),
 			helper: "Within 7 days",
 			icon: <CalendarClock className="size-4" />,
-			className: "border-amber-200 bg-amber-50 text-amber-800",
+			className:
+				"border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200",
 		},
 		{
 			label: "Outstanding",
 			value: invoices === undefined ? "..." : outstanding,
 			helper: "Pending total",
 			icon: <Banknote className="size-4" />,
-			className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+			className:
+				"border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200",
 		},
 		{
 			label: "Founding",
@@ -477,7 +483,8 @@ function topUpTile(revenue: TopUpRevenue | undefined) {
 					? "No packs paid yet this month"
 					: `${packs} pack${packs === 1 ? "" : "s"} · ${credits.toLocaleString("en")} credits`,
 		icon: <ShoppingBag className="size-4" />,
-		className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+		className:
+			"border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200",
 	};
 }
 
@@ -1408,7 +1415,7 @@ export function IssueInvoiceForm() {
 						</p>
 					) : null}
 					{foundingBill ? (
-						<p className="text-xs text-emerald-700">
+						<p className="text-xs text-emerald-700 dark:text-emerald-300">
 							{formatPrice(base, currency)} −{" "}
 							{formatPrice(base - total, currency)} founding discount
 						</p>
@@ -1443,7 +1450,9 @@ export function IssueInvoiceForm() {
 			    one is drafted. */}
 			{openBill ? (
 				replaceRefusal ? (
-					<p className="text-xs text-amber-700">{replaceRefusal}</p>
+					<p className="text-xs text-amber-700 dark:text-amber-400">
+						{replaceRefusal}
+					</p>
 				) : (
 					<p className="text-xs text-muted-foreground">
 						{openBill.invoiceNumber} is open for{" "}
@@ -1455,7 +1464,7 @@ export function IssueInvoiceForm() {
 				)
 			) : null}
 			{unclaimedStore ? (
-				<p className="text-xs text-amber-700">
+				<p className="text-xs text-amber-700 dark:text-amber-400">
 					Nobody owns this store yet, so there's nobody to bill — the server
 					refuses it and the daily renewal skips it.{" "}
 					{selected?.comped
@@ -1464,7 +1473,7 @@ export function IssueInvoiceForm() {
 				</p>
 			) : null}
 			{compedStore ? (
-				<p className="text-xs text-amber-700">
+				<p className="text-xs text-amber-700 dark:text-amber-400">
 					This store is on the house
 					{selected?.compLabel ? ` (${selected.compLabel})` : ""} — it can't be
 					billed. End the comp from Admin · Sellers first.
@@ -1779,6 +1788,10 @@ function PendingInvoices() {
 	);
 }
 
+// Not TONE_CHIP: `past_due` and `active` read `text-X-700` here where the
+// registry's chips read `text-X-800`, so routing this map through it would
+// restyle light mode. Only the amber + muted rows would have matched, and a
+// half-migrated map is the drift the registry exists to prevent.
 function foundingStatus(m: { status?: string; paid: boolean }): {
 	label: string;
 	className: string;

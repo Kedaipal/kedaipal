@@ -677,6 +677,8 @@ function CounterCheckoutActions({
 					</DialogHeader>
 					{storeQr?.waUrl ? (
 						<>
+							{/* dark-ok. bg-white is deliberately theme-invariant: the QR needs a light
+							    quiet zone to scan, and a dark plate breaks phone cameras. */}
 							<div className="mx-auto rounded-2xl border border-border bg-white p-4">
 								<QRCode value={storeQr.waUrl} size={220} />
 							</div>
@@ -752,7 +754,7 @@ function SessionRow({
 						</p>
 						{/* Buyer arrived via the printed store poster (walk-in scan). */}
 						{session.origin === "store_qr" ? (
-							<span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600">
+							<span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-500">
 								Walk-in scan
 							</span>
 						) : null}

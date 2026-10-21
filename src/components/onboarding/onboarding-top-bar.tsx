@@ -2,8 +2,8 @@ import { useClerk, useUser } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { LogOut } from "lucide-react";
 import { useState } from "react";
-import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
+import { Wordmark } from "../ui/wordmark";
 
 /**
  * The onboarding page's brand + account bar. Before this the page was bare —
@@ -33,13 +33,7 @@ export function OnboardingTopBar() {
 				aria-label="Kedaipal home"
 				className="flex min-h-11 shrink-0 items-center"
 			>
-				<AppImage
-					src="/logo-3.svg"
-					alt="Kedaipal"
-					aspect="h-6 w-auto"
-					fill={false}
-					priority
-				/>
+				<Wordmark aspect="h-6 w-auto" priority />
 			</Link>
 			<div className="flex min-w-0 items-center gap-1.5">
 				{email ? (
