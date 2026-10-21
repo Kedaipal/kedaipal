@@ -86,5 +86,6 @@ Forward-looking design docs. Confirm current status against [`CLAUDE.md`](../CLA
 |---|---|
 | [release-checklist.md](./release-checklist.md) | **Run this whenever `src/content/releases.ts` is touched.** Editing the release notes means a staging→main deploy is imminent: bump the version, then audit the diff for env vars, backfills, schema/index changes, crons, Meta templates and plan-gating moves, and write the findings — including "none" — into the release PR. |
 | [whats-new.md](./whats-new.md) | Seller-facing release notes: where entries live, how to write one, and the rules deciding who gets interrupted (notable-only modal, unset-means-caught-up, act-as safety). **Read before writing a release note.** |
+| [dark-mode.md](./dark-mode.md) | Light/dark across the app + storefront: where the preference lives and why it isn't in Convex or a cookie, the pre-paint script, which routes are themed, and the gate that fails the build on a raw palette colour with no `dark:` pair. **Read before adding UI that uses a colour.** |
 
 Before touching Convex code, read [`convex/_generated/ai/guidelines.md`](../convex/_generated/ai/guidelines.md) — it overrides general Convex knowledge. Tooling: Biome (lint/format), Vitest + `convex-test` (tests), TanStack Start + Tailwind (frontend, mobile-first).

@@ -271,7 +271,7 @@ export function PlanPickerCard({
 						aria-pressed={cycle === c}
 						className={`inline-flex h-9 items-center gap-1.5 rounded-lg px-3.5 text-sm font-medium transition-colors ${
 							cycle === c
-								? "bg-foreground text-background"
+								? "bg-primary text-background dark:text-primary-foreground"
 								: "text-muted-foreground hover:text-foreground"
 						}`}
 					>
@@ -349,7 +349,7 @@ export function PlanPickerCard({
 								aria-hidden
 								className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border ${
 									selected
-										? "border-foreground bg-foreground text-background"
+										? "border-primary bg-primary text-background dark:text-primary-foreground"
 										: "border-border"
 								}`}
 							>
@@ -373,7 +373,7 @@ export function PlanPickerCard({
 					type="button"
 					onClick={subscribeAuto}
 					disabled={busy || ownerOnly}
-					className="inline-flex h-11 w-fit items-center rounded-lg bg-foreground px-4 text-sm font-medium text-background disabled:opacity-60"
+					className="inline-flex h-11 w-fit items-center rounded-lg bg-primary px-4 text-sm font-medium text-background disabled:opacity-60"
 				>
 					{busy
 						? paused

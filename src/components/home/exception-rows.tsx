@@ -4,6 +4,7 @@ import { ChevronRight, Clock, PackageX } from "lucide-react";
 
 import { STALE_UNPAID_DAYS } from "../../../convex/lib/orderBuckets";
 import { staleUnpaidRow } from "../../lib/home-copy";
+import { TONE_CHIP } from "../../lib/tone";
 import { cn } from "../../lib/utils";
 
 /**
@@ -103,8 +104,11 @@ export function ExceptionRows({
 
 const TONE = {
 	amber: {
-		frame: "border-amber-200 bg-amber-50",
-		tile: "bg-amber-100 text-amber-800",
+		// Not TONE_PANEL.warn: that carries a text colour this frame never had,
+		// and adopting the registry must never repaint light. Dark half only.
+		frame:
+			"border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/50",
+		tile: TONE_CHIP.warn,
 	},
 	plain: {
 		frame: "border-border bg-card",

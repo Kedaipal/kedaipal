@@ -6,6 +6,7 @@ import {
 	poweredByHref,
 } from "../../../convex/lib/poweredBy";
 import { AppImage } from "../ui/app-image";
+import { ThemeToggle } from "../ui/theme-toggle";
 
 /**
  * "Powered by Kedaipal" buyer-facing footer badge (ticket 86ey8zh3r, on
@@ -90,6 +91,16 @@ export function StorefrontFooter({
 					</Link>
 				</div>
 			) : null}
+			{/* The buyer's theme control, deliberately down here: the page already
+			    matched their device on arrival, so this is an override, not a
+			    decision they owe us above the fold. Its own quiet row in the same
+			    language as "Discover more stores" — a bordered disc beside the
+			    Powered-by badge read as clutter (Zaki, 21 Oct 2026). This footer is
+			    on every buyer surface (z8r3fdcwd0), so the control rides it
+			    everywhere: one slot, found once, found everywhere. */}
+			<div className="mb-5 flex justify-center">
+				<ThemeToggle variant="text" />
+			</div>
 			<div className="flex justify-center">
 				<a
 					href={poweredByHref(surface, slug)}
@@ -101,11 +112,24 @@ export function StorefrontFooter({
 					<span className="rounded-full border border-[#B9D9CC] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#7BA394]">
 						Powered by
 					</span>
+					{/* Navy lockup in light, near-white in dark — swapped in CSS for the
+					    same SSR reason as the header mark. The dark asset is the same
+					    file with #0F172A → #F8FAFC; the mint emblem is untouched, so
+					    `dark:invert` was not an option (it would turn the mint
+					    magenta). */}
 					<AppImage
 						src="/poster/kedaipal-lockup.svg"
 						alt="Kedaipal"
 						aspect="h-5 w-auto"
 						fill={false}
+						className="dark:hidden"
+					/>
+					<AppImage
+						src="/poster/kedaipal-lockup-dark.svg"
+						alt=""
+						aspect="h-5 w-auto"
+						fill={false}
+						className="hidden dark:block"
 					/>
 				</a>
 			</div>

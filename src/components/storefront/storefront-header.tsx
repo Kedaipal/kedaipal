@@ -80,7 +80,12 @@ export function StoreLogoTile({
 				sizes="48px"
 				rounded="rounded-[14px]"
 				objectFit="contain"
-				className="border border-border bg-background"
+				// dark-ok: `bg-white`, not `bg-background` — this is one of the storefront's
+				// object-contain user images, so the mat SHOWS. Seller logos are routinely
+				// dark ink on transparent and would vanish into a dark mat; a white plate
+				// matches every other user-supplied contain image (track page, billing,
+				// order mockups).
+				className="border border-border bg-white"
 			/>
 		) : (
 			<span
@@ -101,7 +106,12 @@ export function StoreLogoTile({
 				sizes="32px"
 				rounded="rounded-[10px]"
 				objectFit="contain"
-				className="border border-border bg-background"
+				// dark-ok: `bg-white`, not `bg-background` — this is one of the storefront's
+				// object-contain user images, so the mat SHOWS. Seller logos are routinely
+				// dark ink on transparent and would vanish into a dark mat; a white plate
+				// matches every other user-supplied contain image (track page, billing,
+				// order mockups).
+				className="border border-border bg-white"
 			/>
 		) : (
 			<span
@@ -127,7 +137,12 @@ export function StoreLogoTile({
 			sizes="84px"
 			rounded="rounded-[18px] lg:rounded-[22px]"
 			objectFit="contain"
-			className={`bg-background ${islandFrame}`}
+			// dark-ok: `bg-white`, not `bg-background` — this is one of the storefront's
+			// object-contain user images, so the mat SHOWS. Seller logos are routinely
+			// dark ink on transparent and would vanish into a dark mat; a white plate
+			// matches every other user-supplied contain image (track page, billing,
+			// order mockups).
+			className={`bg-white ${islandFrame}`}
 		/>
 	) : (
 		<span
@@ -163,6 +178,8 @@ export function fulfilmentLabel(
 const COVER_ICON_BASE =
 	"flex size-11 items-center justify-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none";
 const COVER_ICON_FROSTED =
+	// dark-ok: these icons only ever sit on the cover PHOTO (a frosted navy disc
+	// over it); the no-cover band uses the outline variant with tokens.
 	"bg-primary/45 text-white ring-1 ring-white/25 backdrop-blur hover:bg-primary/60";
 const COVER_ICON_OUTLINE =
 	"border border-border bg-card text-foreground shadow-sm hover:bg-muted";

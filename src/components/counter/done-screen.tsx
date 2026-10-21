@@ -135,19 +135,19 @@ export function DoneScreen({
 				: "Order created";
 
 	return (
-		<div className="mx-auto flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm sm:p-6">
+		<div className="mx-auto flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm dark:border-emerald-900 dark:bg-emerald-950 sm:p-6">
 			<div className="flex items-start gap-4">
 				<span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white">
 					<CheckCircle2 className="size-7" />
 				</span>
 				<div className="min-w-0">
-					<p className="text-xs font-semibold uppercase tracking-widest text-emerald-700">
+					<p className="text-xs font-semibold uppercase tracking-widest text-emerald-700 dark:text-emerald-300">
 						Counter sale
 					</p>
-					<h2 className="mt-1 text-2xl font-bold text-emerald-950">
+					<h2 className="mt-1 text-2xl font-bold text-emerald-950 dark:text-emerald-100">
 						{heading}
 					</h2>
-					<p className="mt-1 text-sm text-emerald-800">
+					<p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">
 						<OrderLine
 							shortId={shortId}
 							isCompleted={isCompleted}
@@ -173,8 +173,8 @@ export function DoneScreen({
 			/>
 
 			{shortId ? (
-				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4">
-					<p className="text-sm font-semibold text-emerald-950">
+				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4 dark:border-emerald-900 dark:bg-emerald-900/40">
+					<p className="text-sm font-semibold text-emerald-950 dark:text-emerald-100">
 						{paymentReceived ? "Receipt" : "Invoice"}
 					</p>
 					<OrderDocumentActions
@@ -190,7 +190,7 @@ export function DoneScreen({
 			<div className="grid gap-2 sm:grid-cols-2">
 				{canComplete ? (
 					<div className="sm:col-span-2">
-						<p className="mb-2 text-xs text-emerald-800">
+						<p className="mb-2 text-xs text-emerald-800 dark:text-emerald-200">
 							Collecting later — mark it completed once it&rsquo;s handed over.
 						</p>
 						<Button
@@ -298,7 +298,11 @@ function WhatsAppOutcome({
 }) {
 	if (anonymous) {
 		return (
-			<Row icon={<MessageCircle className="size-4 text-emerald-700" />}>
+			<Row
+				icon={
+					<MessageCircle className="size-4 text-emerald-700 dark:text-emerald-300" />
+				}
+			>
 				Cash sale with no contact — nothing was sent. The{" "}
 				{stillToPay ? "invoice" : "receipt"} below is their only copy.
 			</Row>
@@ -317,13 +321,13 @@ function WhatsAppOutcome({
 		return (
 			<div
 				{...MASK_PII}
-				className="rounded-xl border border-amber-200 bg-amber-50 p-4"
+				className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50"
 			>
-				<p className="flex items-center gap-2 text-sm font-semibold text-amber-950">
-					<MessageCircle className="size-4 text-amber-700" />
+				<p className="flex items-center gap-2 text-sm font-semibold text-amber-950 dark:text-amber-100">
+					<MessageCircle className="size-4 text-amber-700 dark:text-amber-300" />
 					WhatsApp couldn&rsquo;t reach {buyer}
 				</p>
-				<p className="mt-1 text-sm text-amber-900">
+				<p className="mt-1 text-sm text-amber-900 dark:text-amber-200">
 					{ours
 						? "A WhatsApp problem on our side stopped the message — their number looks fine. "
 						: "That number may have a typo or no WhatsApp — check it with them. "}
@@ -344,7 +348,7 @@ function WhatsAppOutcome({
 							label="Copy link"
 							ariaLabel="Copy the buyer's order link"
 							successMessage="Order link copied"
-							className="h-11 rounded-xl border border-amber-300 bg-white px-4 text-sm text-amber-950 hover:bg-amber-100"
+							className="h-11 rounded-xl border border-amber-300 bg-white px-4 text-sm text-amber-950 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-100 dark:hover:bg-amber-900/60"
 						/>
 					</div>
 				) : null}
@@ -353,7 +357,11 @@ function WhatsAppOutcome({
 	}
 	if (pushStatus === "sent" || pushStatus === "recovered") {
 		return (
-			<Row icon={<CheckCircle2 className="size-4 text-emerald-700" />}>
+			<Row
+				icon={
+					<CheckCircle2 className="size-4 text-emerald-700 dark:text-emerald-300" />
+				}
+			>
 				<span {...MASK_PII}>{buyer}</span> has their order link on WhatsApp
 				{payTail}
 			</Row>
@@ -362,7 +370,9 @@ function WhatsAppOutcome({
 	// `sending` — and the instant before the order query resolves.
 	return (
 		<Row
-			icon={<Loader2 className="size-4 animate-spin text-emerald-700" />}
+			icon={
+				<Loader2 className="size-4 animate-spin text-emerald-700 dark:text-emerald-300" />
+			}
 			live
 		>
 			Sending <span {...MASK_PII}>{buyer}</span> their order link on WhatsApp…
@@ -381,7 +391,7 @@ function Row({
 }) {
 	return (
 		<p
-			className="flex items-start gap-2 text-sm text-emerald-900"
+			className="flex items-start gap-2 text-sm text-emerald-900 dark:text-emerald-100"
 			aria-live={live ? "polite" : undefined}
 		>
 			<span className="mt-0.5 shrink-0">{icon}</span>

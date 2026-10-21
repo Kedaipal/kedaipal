@@ -60,6 +60,8 @@ import { ctaPillClass, Eyebrow } from "./landing-ui";
  * cards), so they need contrast against both.
  */
 const OVERLAY_BTN =
+	// dark-ok: white glyph on a bg-black/45 scrim over the video frame — the
+	// axis is the footage behind it, not the theme.
 	"tap-target inline-flex size-11 items-center justify-center rounded-full border border-white/25 bg-black/45 text-white shadow-lg backdrop-blur transition-colors hover:bg-black/65 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/40";
 
 function subscribeToViewport(onChange: () => void): () => void {
@@ -255,7 +257,7 @@ export function VideoDemo() {
 						    so the box and the bytes agree; CSS owns the ratio so the box
 						    is reserved before hydration and the variant swap changes
 						    bytes, never geometry. */}
-						<div className="relative mx-auto overflow-hidden rounded-2xl border border-border/70 bg-primary shadow-2xl shadow-primary/20 max-md:portrait:max-w-[24rem] md:rounded-3xl">
+						<div className="relative mx-auto overflow-hidden rounded-2xl border border-border/70 bg-primary shadow-2xl shadow-primary/20 dark:bg-card dark:shadow-none max-md:portrait:max-w-[24rem] md:rounded-3xl">
 							<video
 								// Remount on cut change: a <video>'s <source> list is read once.
 								key={variant ?? "pending"}

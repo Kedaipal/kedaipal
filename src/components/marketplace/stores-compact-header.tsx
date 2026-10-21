@@ -7,6 +7,8 @@ import { cn } from "../../lib/utils";
 import { RegionToggle } from "../landing/landing-ui";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
+import { ThemeToggle } from "../ui/theme-toggle";
+import { Wordmark } from "../ui/wordmark";
 
 /**
  * /stores' compact header (z8r3fdr6mv): once the hero scrolls past, a
@@ -81,12 +83,9 @@ export function StoresCompactHeader({
 						aspect="h-7 w-auto lg:hidden"
 						fill={false}
 					/>
-					<AppImage
-						src="/logo-3.svg"
-						alt="Kedaipal"
-						aspect="hidden h-6 w-auto lg:block"
-						fill={false}
-					/>
+					<span className="hidden lg:block">
+						<Wordmark aspect="h-6 w-auto" />
+					</span>
 				</Link>
 
 				<form
@@ -154,6 +153,7 @@ export function StoresCompactHeader({
 						onChange={onRegion}
 						className="[&>button]:min-w-11 [&>button]:px-2.5 lg:[&>button]:min-w-16 lg:[&>button]:px-4"
 					/>
+					<ThemeToggle variant="ghost" />
 					<Button
 						asChild
 						className="tap-target hidden bg-primary px-4 font-bold text-primary-foreground hover:bg-primary/90 lg:inline-flex"
