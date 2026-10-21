@@ -280,7 +280,7 @@ export function SellerFlow() {
 							aria-hidden="true"
 							onPointerEnter={() => setHovered(true)}
 							onPointerLeave={() => setHovered(false)}
-							className="relative overflow-hidden rounded-[2rem] bg-primary p-5 pb-32 shadow-2xl shadow-primary/25 contain-inline-size sm:p-8 sm:pb-32 md:rounded-[2.5rem]"
+							className="relative overflow-hidden rounded-[2rem] bg-primary p-5 pb-32 shadow-2xl shadow-primary/25 contain-inline-size sm:p-8 sm:pb-32 md:rounded-[2.5rem] dark:bg-card dark:shadow-none dark:ring-1 dark:ring-white/10"
 						>
 							<div
 								aria-hidden

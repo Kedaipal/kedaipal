@@ -769,6 +769,7 @@ export function BillingTab({
 												src={instructions.qrUrl}
 												alt="DuitNow QR"
 												caption="Scan to pay (DuitNow)"
+												// dark-ok: a QR on a dark plate does not scan — the mat stays white in both themes.
 												wrapperClassName="w-40 overflow-hidden rounded-xl border border-border bg-white"
 												className="block aspect-square w-full object-contain"
 											/>
@@ -786,7 +787,7 @@ export function BillingTab({
 									)}
 									external
 									disabled={ownerOnly}
-									className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+									className="mt-4 inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-primary px-4 text-sm font-medium text-background dark:text-primary-foreground"
 								>
 									<ExternalLink className="size-4" />
 									I've paid — notify us
@@ -863,7 +864,7 @@ export function BillingTab({
 							)}
 							external
 							disabled={ownerOnly}
-							className="inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+							className="inline-flex h-10 w-fit items-center gap-1.5 rounded-lg bg-primary px-4 text-sm font-medium text-background dark:text-primary-foreground"
 						>
 							<ExternalLink className="size-4" />
 							Message us
@@ -1063,7 +1064,7 @@ export function BillingTab({
 						)}
 						target="_blank"
 						rel="noopener noreferrer"
-						className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-foreground px-4 text-sm font-medium text-background"
+						className="inline-flex h-11 w-fit items-center gap-1.5 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground"
 					>
 						<MessageCircle className="size-4" />
 						Contact support on WhatsApp
@@ -1161,7 +1162,7 @@ function FoundingRibbon({
 		? "text-muted-foreground"
 		: endingSoon
 			? "text-red-600 dark:text-red-400"
-			: "text-amber-600";
+			: "text-amber-600 dark:text-amber-400";
 	const titleTone = muted
 		? "text-foreground"
 		: endingSoon

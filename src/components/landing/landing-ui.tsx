@@ -369,6 +369,8 @@ export function RegionToggle({
  * render the identical chip.
  */
 export const logoPillClass =
+	// dark-ok: a white plate under third-party brand logos (payment methods,
+	// couriers) — the rasters need white behind them in both themes.
 	"inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-border bg-white shadow-sm transition-transform duration-200 hover:-translate-y-0.5";
 
 /**
@@ -451,7 +453,7 @@ export function Marquee({ items, className, separator = "✶" }: MarqueeProps) {
 	return (
 		<div
 			className={cn(
-				"relative flex overflow-hidden bg-primary py-3 text-primary-foreground",
+				"relative flex overflow-hidden bg-primary py-3 text-primary-foreground dark:border dark:border-accent/30 dark:bg-accent/12 dark:text-foreground",
 				className,
 			)}
 		>

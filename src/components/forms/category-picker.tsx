@@ -136,8 +136,11 @@ export function CategoryPicker({
 								>
 									<span
 										className={`flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+											// --accent goes LIGHTER in dark, where a hardcoded white
+											// tick fails contrast on it. --accent-foreground is pure
+											// white in light, so only the dark rendering moves.
 											isSelected
-												? "border-accent bg-accent text-white"
+												? "border-accent bg-accent text-accent-foreground"
 												: "border-input bg-background"
 										}`}
 									>

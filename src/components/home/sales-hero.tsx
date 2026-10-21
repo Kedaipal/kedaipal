@@ -24,10 +24,11 @@ import { cn } from "../../lib/utils";
  * first, and the whole redesign rests on money leading. The mint glow is
  * decoration; everything else here is a figure or a sentence about one.
  *
- * NOTE (dark mode): this card is `bg-foreground`, which inverts to a near-white
- * slab under the app's dark tokens. Dark mode is not shipped (Zaki, 12 Oct
- * 2026) and Home is built for light only — the hero's dark treatment is settled
- * when dark mode lands, rather than guessed at here. See docs/home.md.
+ * Dark mode (z8r3fdadub): `bg-foreground` would invert to a near-white slab, so
+ * in dark the card becomes the mint-tinted emphasis panel every other inverted
+ * surface uses (`dark:bg-accent/12` + a mint hairline) and every
+ * `text-background/NN` carries a `dark:text-foreground/NN` twin. Mint stays
+ * mint: it reads on the tinted panel as it did on navy. See docs/dark-mode.md.
  */
 export function SalesHero({
 	view,
@@ -96,7 +97,7 @@ export function SalesHero({
 		// full width, six quiet days start looking like a broken axis.
 		<section
 			className={cn(
-				"relative flex flex-col gap-[18px] overflow-hidden rounded-3xl bg-foreground p-5 text-background lg:flex-row lg:flex-wrap lg:gap-7 lg:p-6",
+				"relative flex flex-col gap-[18px] overflow-hidden rounded-3xl bg-foreground p-5 text-background dark:text-foreground lg:flex-row lg:flex-wrap lg:gap-7 lg:p-6 dark:border dark:border-accent/30 dark:bg-accent/12 dark:text-foreground",
 				className,
 			)}
 		>
@@ -112,7 +113,7 @@ export function SalesHero({
 						<span className="flex size-[26px] shrink-0 items-center justify-center rounded-lg bg-accent/25 text-accent">
 							<Wallet className="size-3.5" aria-hidden="true" />
 						</span>
-						<span className="text-[11px] font-bold uppercase tracking-[0.08em] text-background/70">
+						<span className="text-[11px] font-bold uppercase tracking-[0.08em] text-background/70 dark:text-foreground/70">
 							Revenue earned · {PERIOD_EYEBROW[period]}
 						</span>
 					</span>
@@ -129,7 +130,7 @@ export function SalesHero({
 									"inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold tabular-nums",
 									delta.up
 										? "bg-accent/20 text-accent"
-										: "bg-background/15 text-background/80",
+										: "bg-background/15 dark:bg-foreground/15 text-background/80 dark:text-foreground/80",
 								)}
 							>
 								{delta.up ? (
@@ -142,32 +143,36 @@ export function SalesHero({
 						) : null}
 					</div>
 					{compare ? (
-						<p className="text-[13px] text-background/75">{compare}</p>
+						<p className="text-[13px] text-background/75 dark:text-foreground/75">
+							{compare}
+						</p>
 					) : null}
 				</div>
 
 				<div className="flex flex-col gap-1.5">
 					<div className="flex items-baseline justify-between gap-3 text-[13px]">
-						<span className="text-background/75">
+						<span className="text-background/75 dark:text-foreground/75">
 							Collected{" "}
-							<strong className="font-bold text-background">
+							<strong className="font-bold text-background dark:text-foreground">
 								{formatPriceCompact(collected, currency)}
 							</strong>
 						</span>
 						<span className="font-bold tabular-nums">{collectedPct}%</span>
 					</div>
-					<div className="h-1.5 overflow-hidden rounded-full bg-background/20">
+					<div className="h-1.5 overflow-hidden rounded-full bg-background/20 dark:bg-foreground/20">
 						<div
 							className="h-full rounded-full bg-accent"
 							style={{ width: `${collectedPct}%` }}
 						/>
 					</div>
 					{notPaid ? (
-						<p className="text-[11px] text-background/60">{notPaid}</p>
+						<p className="text-[11px] text-background/60 dark:text-foreground/60">
+							{notPaid}
+						</p>
 					) : null}
 				</div>
 
-				<div className="mt-auto grid grid-cols-2 gap-3 border-t border-background/15 pt-3.5">
+				<div className="mt-auto grid grid-cols-2 gap-3 border-t border-background/15 dark:border-foreground/15 pt-3.5">
 					<Stat label="Orders" value={String(orderCount)} />
 					<Stat label="Avg order" value={formatPrice(aov, currency)} />
 				</div>
@@ -176,7 +181,7 @@ export function SalesHero({
 			{/* Chart */}
 			{bars.length > 1 ? (
 				<div className="relative flex min-w-0 flex-col gap-2 lg:flex-[2_1_300px]">
-					<div className="flex items-baseline justify-between gap-3 text-[11px] text-background/60">
+					<div className="flex items-baseline justify-between gap-3 text-[11px] text-background/60 dark:text-foreground/60">
 						<span>{chartTitle}</span>
 						{bestBarLabel ? <span>Best: {bestBarLabel}</span> : null}
 					</div>
@@ -189,7 +194,7 @@ export function SalesHero({
 							// axis with no bars at all. It only ever worked on desktop,
 							// where `lg:flex-row` stretches this column to the figures
 							// beside it and there is free space to grow into.
-							"flex h-[84px] shrink-0 items-end border-b border-background/20 lg:h-auto lg:min-h-[140px] lg:flex-1",
+							"flex h-[84px] shrink-0 items-end border-b border-background/20 dark:border-foreground/20 lg:h-auto lg:min-h-[140px] lg:flex-1",
 							dense ? "gap-[3px]" : "gap-1.5",
 						)}
 						role="img"
@@ -222,7 +227,7 @@ export function SalesHero({
 					    normally; pinned at the two ends. */}
 					<div
 						className={cn(
-							"relative flex h-4 text-[10px] text-background/60",
+							"relative flex h-4 text-[10px] text-background/60 dark:text-foreground/60",
 							dense ? "gap-[3px]" : "gap-1.5",
 						)}
 					>
@@ -273,7 +278,7 @@ export function SalesHero({
 function Stat({ label, value }: { label: string; value: string }) {
 	return (
 		<div className="flex min-w-0 flex-col gap-0.5">
-			<span className="text-[10px] font-bold uppercase tracking-[0.08em] text-background/55">
+			<span className="text-[10px] font-bold uppercase tracking-[0.08em] text-background/55 dark:text-foreground/55">
 				{label}
 			</span>
 			<span className="truncate font-heading text-lg font-extrabold tabular-nums">

@@ -140,6 +140,7 @@ function Thumb({ showcase }: { showcase: AdminShowcase }) {
 					className="opacity-80"
 				/>
 			) : null}
+			{/* dark-ok: white over the showcase photo, carried by its own text-shadow — the axis is the picture behind it, not the theme. */}
 			<span className="absolute inset-x-0 bottom-0 line-clamp-2 px-2.5 pb-2 font-heading text-[12px] font-black leading-[1.1] text-white [text-shadow:0_1px_2px_rgb(0_0_0/0.6)]">
 				{showcase.title}
 			</span>

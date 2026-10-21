@@ -24,6 +24,8 @@ import { SectionHeading } from "../components/storefront/section-heading";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
+import { ThemeToggle } from "../components/ui/theme-toggle";
+import { Wordmark } from "../components/ui/wordmark";
 import { useLandingRegion } from "../hooks/useLandingRegion";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { jsonLdScript } from "../lib/json-ld";
@@ -303,16 +305,11 @@ function MarketplacePage() {
 					<div className="mx-auto w-full max-w-6xl">
 						<header className="flex items-center justify-between gap-3 px-5 py-3.5 lg:px-8">
 							<Link to="/" aria-label="Kedaipal home">
-								<AppImage
-									src="/logo-3.svg"
-									alt="Kedaipal"
-									aspect="h-7 w-auto"
-									fill={false}
-									priority
-								/>
+								<Wordmark aspect="h-7 w-auto" priority />
 							</Link>
 							<div className="flex items-center gap-2.5">
 								<RegionToggle region={region} onChange={setRegion} />
+								<ThemeToggle variant="ghost" />
 								{/* One seller CTA up here — "learn" and "sign up" land on the
 							    same funnel, so two adjacent buttons would be noise; the
 							    footer's "For sellers" is the quiet path to the pitch. Navy,

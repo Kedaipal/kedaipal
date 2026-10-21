@@ -11,6 +11,7 @@ import { AppImage } from "#/components/ui/app-image";
 import { Button } from "#/components/ui/button";
 import { Field, FieldLabel } from "#/components/ui/field";
 import { Slider } from "#/components/ui/slider";
+import { Wordmark } from "#/components/ui/wordmark";
 import { useLandingRegion } from "#/hooks/useLandingRegion";
 import { useSupportWaNumber } from "#/hooks/useSupportWaNumber";
 import {
@@ -433,12 +434,18 @@ function ResultCard({ result, ratioLabel, currency }: ResultCardProps) {
 						: "border-white/10 text-cta-mesh-foreground/60",
 				)}
 			>
-				<AppImage
-					src={result.disqualified ? "/logo-3.svg" : "/logo-dark.svg"}
-					alt="Kedaipal"
-					aspect="h-5 w-auto"
-					fill={false}
-				/>
+				{result.disqualified ? (
+					// Light card → the themed wordmark (navy in light, light ink in dark).
+					<Wordmark aspect="h-5 w-auto" />
+				) : (
+					// bg-cta-mesh is deep navy in BOTH themes → the light-ink mark, always.
+					<AppImage
+						src="/logo-dark.svg"
+						alt="Kedaipal"
+						aspect="h-5 w-auto"
+						fill={false}
+					/>
+				)}
 				<span>kedaipal.com/cost</span>
 			</div>
 		</div>
@@ -464,12 +471,14 @@ function QualifiedBody({ result, ratioLabel, currency }: ResultCardProps) {
 					<dt className="text-cta-mesh-foreground/70">
 						{m.cost_missed_revenue()}
 					</dt>
+					{/* dark-ok: on bg-cta-mesh, which is deep navy in BOTH themes. */}
 					<dd className="font-bold tabular-nums text-red-300">
 						{money(result.missedRevenue, currency)}
 					</dd>
 				</div>
 				<div className="flex items-center justify-between gap-4 rounded-xl bg-white/[0.06] px-4 py-3">
 					<dt className="text-cta-mesh-foreground/70">{m.cost_chase_cost()}</dt>
+					{/* dark-ok: on bg-cta-mesh, which is deep navy in BOTH themes. */}
 					<dd className="font-bold tabular-nums text-red-300">
 						{money(result.chaseCost, currency)}
 					</dd>
