@@ -189,6 +189,32 @@ export function escapeHtml(s: string): string {
 		.replaceAll("'", "&#39;");
 }
 
+// ── Email layout rules (z8r3fdwfb7) ─────────────────────────────────────────
+// Every Kedaipal email is read on a phone first, so three rules hold for every
+// shell, and `emailLayout.test.ts` holds both shells to them:
+//
+// 1. A CARD IS FLUID. A table may keep a fixed `width="560"` attribute — that
+//    is what Outlook desktop (Word's renderer, which ignores max-width) caps
+//    on — but its style must also say `width:100%`, which every phone and
+//    webmail client obeys. A bare `width="560"` made each wrapHtml email 592px
+//    wide on a 375px phone: a sideways scroll on every order alert.
+// 2. A LONG WORD WRAPS. An email address, URL or account number is one
+//    unbreakable word; the card sets `overflow-wrap:anywhere` (inherited by
+//    everything inside) so it breaks instead of widening the card past the
+//    screen.
+// 3. A BUTTON IS A TAP TARGET. Every CTA comes from `ctaButton`, whose fixed
+//    20px line-height + 12px padding makes it exactly 44px tall whatever the
+//    font size — the same ≥44px rule the app holds itself to.
+
+/** The one CTA button. Pass the RAW url and label — both are escaped here. */
+export function ctaButton(
+	href: string,
+	label: string,
+	o: { background: string; fontSize?: number; fontWeight?: number; radius?: number } = { background: "#111827" },
+): string {
+	return `<a href="${escapeHtml(href)}" style="display:inline-block;background:${o.background};color:#ffffff;text-decoration:none;font-size:${o.fontSize ?? 14}px;line-height:20px;font-weight:${o.fontWeight ?? 600};padding:12px 20px;border-radius:${o.radius ?? 8}px;">${escapeHtml(label)}</a>`;
+}
+
 /** `afterCta`: optional fine print under the button — for reassurance that
  * must not sit between the reader and the action. */
 export function wrapHtml(headlineEmoji: string, headline: string, lines: string[], dashboardUrl: string, ctaLabel: string, afterCta?: string): string {
@@ -196,12 +222,12 @@ export function wrapHtml(headlineEmoji: string, headline: string, lines: string[
 	return `<!doctype html><html><body style="margin:0;padding:0;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;padding:24px 16px;">
 <tr><td align="center">
-<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="width:100%;max-width:560px;overflow-wrap:anywhere;word-break:break-word;background:#ffffff;border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;">
 <tr><td style="padding:24px;">
 ${logoHeader(16)}
 <h1 style="margin:0 0 16px 0;font-size:18px;color:#111827;">${headlineEmoji} ${escapeHtml(headline)}</h1>
 ${body}
-<p style="margin:24px 0 0 0;"><a href="${escapeHtml(dashboardUrl)}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:10px 16px;border-radius:8px;">${escapeHtml(ctaLabel)}</a></p>${afterCta ? `\n<p style="margin:16px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;">${afterCta}</p>` : ""}
+<p style="margin:24px 0 0 0;">${ctaButton(dashboardUrl, ctaLabel)}</p>${afterCta ? `\n<p style="margin:16px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;">${afterCta}</p>` : ""}
 </td></tr></table>
 <p style="margin:16px 0 0 0;font-size:12px;color:#9ca3af;">Sent by Kedaipal — your WhatsApp-first order hub.</p>
 </td></tr></table></body></html>`;

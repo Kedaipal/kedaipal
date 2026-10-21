@@ -71,10 +71,44 @@ Production rollout requires verifying the sender domain (`kedaipal.com` or chose
 When adding a new retailer-facing alert (e.g. `paymentClaimed` — see `payment-handshake-roadmap.md`):
 
 1. Add the new key to `RetailerEmailKey` in `convex/lib/emailCopy.ts`.
-2. Add EN + MS copy entries returning `{ subject, html, text }`. Reuse `wrapHtml` and `escapeHtml`.
+2. Add EN + MS copy entries returning `{ subject, html, text }`. Reuse `wrapHtml` and `escapeHtml`; a button is always `ctaButton` (see the layout rules below).
 3. Either reuse `notifyRetailerOrderAlert` (if the trigger is order-status-derived) or add a sibling action with the same skip-conditions / swallow-errors structure.
 4. Schedule via `ctx.scheduler.runAfter(0, internal.email.<action>, { ... })` from the originating mutation.
 5. Add a test in `email.test.ts` mirroring the existing structure (filter `fetchMock.resendCalls()` by URL).
+
+## Email layout rules — every email is read on a phone first (z8r3fdwfb7)
+
+Every Kedaipal email renders through one of two shells: `wrapHtml`
+(`convex/lib/emailCopy.ts`: order, team, credit, referral, handover,
+payment-thanks, auto-renew) or `wrapBillingHtml` (`convex/lib/billingEmailCopy.ts`:
+invoices, recovery, trial). Three rules hold for both, and for any template
+added next to them:
+
+1. **A card is fluid.** A table may keep a fixed `width="560"` attribute (that
+   is what Outlook desktop, which ignores `max-width`, caps on), but its style
+   must also say `width:100%`, which every phone and webmail client obeys.
+   Before this rule, every `wrapHtml` email was 592px wide on a 375px phone:
+   a sideways scroll on every order alert. The billing shell already did it
+   right; `wrapHtml` now copies it.
+2. **A long word wraps.** An email address, URL or account number is one
+   unbreakable word. The card sets `overflow-wrap:anywhere;word-break:break-word`
+   (inherited by everything inside) so it breaks instead of widening the card.
+3. **A button is a tap target.** Every CTA comes from `ctaButton(href, label,
+   { background, fontSize, fontWeight, radius })`: a fixed 20px line-height
+   and 12px padding make it exactly 44px tall at any font size, the same
+   ≥44px rule the app holds itself to. Pass the raw url and label, because
+   it escapes both.
+
+`convex/lib/emailLayout.test.ts` holds both shells to all three and scans
+every `convex/lib/*Copy.ts` module: a fixed-width table without
+`width:100%`, or a hand-written button-shaped `<a>`, fails the suite.
+
+**Looking at an email** (the shells are plain strings, so there is no dev
+server to open): render it to a file from a scratch vitest test, add
+`<meta charset="utf-8">` (Resend sends the charset as a header, but a local
+static server doesn't), serve the folder, and load it inside **375px-wide
+iframes**. The browser extension's window resize is often ignored, so check
+`document.documentElement.scrollWidth <= innerWidth` inside each frame.
 
 ## Known limitations
 
