@@ -134,7 +134,18 @@ function Providers({ children }: { children: React.ReactNode }) {
 			{isBuyerSurface ? (
 				<ConvexProvider client={convex}>{children}</ConvexProvider>
 			) : (
-				<ClerkProvider publishableKey={publishableKey} appearance={appearance}>
+				// signInUrl/signUpUrl point every Clerk redirect (RedirectToSignIn on
+				// the /app and /onboarding gates) at OUR pages. Without them Clerk
+				// falls back to its hosted Account Portal, which never sees
+				// `/sign-in`'s `withSignUp`. So the handover email's /app link
+				// dead-ended a brand-new vendor on the hosted page even after the
+				// fix (z8r3fdwdvq; caught driving the gate signed-out).
+				<ClerkProvider
+					publishableKey={publishableKey}
+					appearance={appearance}
+					signInUrl="/sign-in"
+					signUpUrl="/sign-up"
+				>
 					<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
 						{children}
 					</ConvexProviderWithClerk>
