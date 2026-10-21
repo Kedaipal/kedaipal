@@ -23,6 +23,11 @@ import { capsForPlan } from "./lib/plans";
 import { legacyClaimFromOrder } from "./lib/paymentClaims";
 import { isOrderPaymentMethod } from "./lib/paymentMethod";
 import {
+	ensurePromoRunCounter,
+	loadPromoRunUnits,
+	tallyPromoUnits,
+} from "./lib/promoTally";
+import {
 	synthesizeDefaultStages,
 	type StatusLabels,
 } from "./lib/orderStatus";
@@ -606,6 +611,84 @@ export const backfillPaymentClaims = internalMutation({
 			);
 		}
 		return { inserted, isDone: page.isDone };
+	},
+});
+
+/**
+ * Mint the flash-sale units counter (`promoRunUnits`, 86eyjv002) for every
+ * capped run that went live BEFORE the table existed — the MIGRATE step.
+ * Until a run has a row the catalogue falls back to tallying orders, which is
+ * correct but is the scan this ticket removed; the NARROW (deleting that
+ * fallback from `promoUnitsTaken`) waits on this having run on prod.
+ *
+ * Also a drift check, so it is safe to re-run at any time: a run that already
+ * has a row is recounted from the orders, and a row that disagrees is SET to
+ * the tally (the doors' authority) and reported. A clean run reports
+ * `drifted: 0` — anything else means a seam was missed and is a bug.
+ *
+ * Small pages: each capped product costs one order-window collect, and a bulk
+ * promotion puts many of them in one store. Batched + self-scheduling.
+ *
+ * Run: `npx convex run migrations:backfillPromoRunUnits`
+ */
+export const backfillPromoRunUnits = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (
+		ctx,
+		{ cursor },
+	): Promise<{
+		scanned: number;
+		minted: number;
+		drifted: number;
+		isDone: boolean;
+	}> => {
+		const now = Date.now();
+		const page = await ctx.db
+			.query("products")
+			.paginate({ numItems: 10, cursor: cursor ?? null });
+		let minted = 0;
+		let drifted = 0;
+		for (const product of page.page) {
+			const promo = product.promo;
+			if (promo?.unitCap === undefined) continue;
+			if (await ensurePromoRunCounter(ctx, product, now, "unknown")) {
+				minted++;
+				continue;
+			}
+			const row = await loadPromoRunUnits(ctx, product._id, promo.runId);
+			if (row === null) continue;
+			const tally = await tallyPromoUnits(ctx, {
+				retailerId: product.retailerId,
+				productId: product._id,
+				runId: promo.runId,
+				startsAt: promo.startsAt ?? 0,
+				endsAt: promo.endsAt,
+			});
+			if (row.units !== tally) {
+				drifted++;
+				console.warn("[promoRunUnits] counter drifted from the tally — reset", {
+					productId: product._id,
+					runId: promo.runId,
+					counter: row.units,
+					tally,
+				});
+				await ctx.db.patch(row._id, { units: tally, updatedAt: now });
+			}
+		}
+		console.log("[promoRunUnits] backfill page", {
+			scanned: page.page.length,
+			minted,
+			drifted,
+			isDone: page.isDone,
+		});
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillPromoRunUnits,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { scanned: page.page.length, minted, drifted, isDone: page.isDone };
 	},
 });
 

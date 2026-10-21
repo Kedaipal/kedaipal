@@ -34,6 +34,7 @@ import { logAdminAction, requireRetailerAccess } from "./lib/auth";
 import { featuresForPlan } from "./lib/plans";
 import { effectiveKind } from "./lib/productKind";
 import { promoPhase, sanitizePromo } from "./lib/promo";
+import { ensurePromoRunCounter } from "./lib/promoTally";
 import {
 	MAX_PROMOTION_PRICES,
 	MAX_PROMOTION_PRODUCTS,
@@ -251,6 +252,14 @@ async function applyMember(
 		return await clearMember(ctx, member, now);
 	}
 	await ctx.db.patch(product._id, { promo, updatedAt: now });
+	// Same counter rule as a single product's save (86eyjv002). A fresh run
+	// mints at 0 with no read, so a batch of members stays one cheap write each.
+	await ensurePromoRunCounter(
+		ctx,
+		{ ...product, promo },
+		now,
+		product.promo?.runId,
+	);
 	const prices = new Map(
 		member.prices.map((p) => [p.variantId as string, p.promoPrice]),
 	);
