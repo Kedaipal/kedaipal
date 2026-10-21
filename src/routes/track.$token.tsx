@@ -56,6 +56,7 @@ import {
 } from "../components/order/order-store-links";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { PickupNotes } from "../components/order/pickup-notes";
+import { PlanSkipsNote } from "../components/order/plan-skips-note";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { RescheduledNote } from "../components/order/rescheduled-note";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
@@ -534,6 +535,7 @@ function TrackingRoute() {
 					packaged: isBookingPackage,
 					weekendDays: order.bookingWeekendDays,
 					skippedDays: order.bookingSkippedDays,
+					customerSkips: order.bookingCustomerSkips,
 				}
 			: undefined;
 	const ms = order.retailerLocale === "ms";
@@ -1424,7 +1426,9 @@ function TrackingRoute() {
 			) : null}
 
 			{/* The stay itself — a booking's equivalent of the address/pickup blocks.
-			    Frozen at request (bookingCheckIn/Out never change after create). */}
+			    Frozen at request, except that a seller's "Skip a day" on an
+			    open-days plan moves the last day out (z8r3fdh3ay) — this page is
+			    live, so it shows the new one. */}
 			{isBooking &&
 			order.bookingCheckIn !== undefined &&
 			order.bookingCheckOut !== undefined ? (
@@ -1483,6 +1487,14 @@ function TrackingRoute() {
 							{bookingLengthLabel(order, ms ? "ms" : "en")} ·{" "}
 							{order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
 						</p>
+						{isBookingPackage ? (
+							<PlanSkipsNote
+								order={order}
+								maxSkips={order.bookingMaxSkips}
+								storeName={order.storeName}
+								ms={ms}
+							/>
+						) : null}
 					</div>
 				</section>
 			) : null}

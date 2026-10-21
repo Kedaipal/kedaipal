@@ -551,4 +551,28 @@ describe("order-page booking lines (z8r3fdhpm7)", () => {
 			"skips Thu 1 Oct, Sun 4 Oct +2 more days",
 		);
 	});
+
+	it("the customer's skips read as skips, never as closures (z8r3fdh3ay)", () => {
+		// Sun 4 + Sat 3 were shut; Thu 1 was the customer's.
+		expect(describeSkippedDays([D(1), D(3), D(4)], [D(1)])).toBe(
+			"skips Sat 3 Oct, Sun 4 Oct · Thu 1 Oct skipped on request",
+		);
+		expect(describeSkippedDays([D(2)], [D(2)])).toBe(
+			"Fri 2 Oct skipped on request",
+		);
+		expect(
+			bookingFulfilmentLine(
+				{
+					bookingCheckIn: D(0),
+					bookingCheckOut: D(6),
+					bookingPackaged: true,
+					bookingSkippedDays: [D(1), D(3), D(4)],
+					bookingCustomerSkips: [D(1)],
+				},
+				fmt,
+			),
+		).toBe(
+			"Booking · 3 open days · Valid Wed 30 Sep – Mon 5 Oct · skips Sat 3 Oct, Sun 4 Oct · Thu 1 Oct skipped on request",
+		);
+	});
 });

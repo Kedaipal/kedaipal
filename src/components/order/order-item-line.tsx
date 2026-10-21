@@ -50,6 +50,9 @@ export type OrderBookingSpan = {
 	 * `orders.bookingSkippedDays`) — named after the window, so the buyer and
 	 * the seller both see why it ends when it does. */
 	skippedDays?: readonly number[];
+	/** The days the customer skipped (z8r3fdh3ay, `bookingCustomerSkips`) —
+	 * a subset of `skippedDays`, named as skips rather than closures. */
+	customerSkips?: readonly number[];
 };
 
 export function OrderItemLine({
@@ -161,7 +164,10 @@ function bookingLineDetail(
 		// of one, so "3 × RM 450.00" is exactly the arithmetic — no need to store
 		// the package length on the order to say something true. A single package
 		// says only its window: "1 ×" is noise.
-		const skips = describeSkippedDays(booking.skippedDays);
+		const skips = describeSkippedDays(
+			booking.skippedDays,
+			booking.customerSkips,
+		);
 		const window = skips ? `${span} · ${skips}` : span;
 		return quantity > 1
 			? `${quantity} × ${formatPrice(unitPrice, currency)} · ${window}`

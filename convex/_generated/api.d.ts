@@ -52,6 +52,7 @@ import type * as lib_billingEmailCopy from "../lib/billingEmailCopy.js";
 import type * as lib_billingUrl from "../lib/billingUrl.js";
 import type * as lib_bookingAvailability from "../lib/bookingAvailability.js";
 import type * as lib_bookingPeriod from "../lib/bookingPeriod.js";
+import type * as lib_bookingSkips from "../lib/bookingSkips.js";
 import type * as lib_businessReport from "../lib/businessReport.js";
 import type * as lib_buyerPayments from "../lib/buyerPayments.js";
 import type * as lib_buyerPhone from "../lib/buyerPhone.js";
@@ -252,6 +253,7 @@ declare const fullApi: ApiFromModules<{
   "lib/billingUrl": typeof lib_billingUrl;
   "lib/bookingAvailability": typeof lib_bookingAvailability;
   "lib/bookingPeriod": typeof lib_bookingPeriod;
+  "lib/bookingSkips": typeof lib_bookingSkips;
   "lib/businessReport": typeof lib_businessReport;
   "lib/buyerPayments": typeof lib_buyerPayments;
   "lib/buyerPhone": typeof lib_buyerPhone;

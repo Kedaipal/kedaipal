@@ -1233,6 +1233,7 @@ function OrdersRoute() {
 		bookingCheckOut?: number;
 		bookingPackaged?: boolean;
 		bookingSkippedDays?: number[];
+		bookingCustomerSkips?: number[];
 		status: string;
 	}): string | null => describeBookingPeriod(o);
 

@@ -69,6 +69,8 @@ describe("PackageDayCounting", () => {
 		render(
 			<PackageDayCounting
 				packageLength={5}
+				maxSkips=""
+				onMaxSkipsChange={() => {}}
 				skipsClosedDays={false}
 				onChange={onChange}
 				schedule={{ openingHours: SUNDAYS_OFF }}
@@ -90,6 +92,8 @@ describe("PackageDayCounting", () => {
 		render(
 			<PackageDayCounting
 				packageLength={5}
+				maxSkips=""
+				onMaxSkipsChange={() => {}}
 				skipsClosedDays={false}
 				onChange={() => {}}
 				schedule={{ openingHours: SUNDAYS_OFF }}
@@ -106,6 +110,8 @@ describe("PackageDayCounting", () => {
 		render(
 			<PackageDayCounting
 				packageLength={5}
+				maxSkips=""
+				onMaxSkipsChange={() => {}}
 				skipsClosedDays
 				onChange={() => {}}
 				schedule={{ openingHours: SUNDAYS_OFF }}
@@ -123,6 +129,8 @@ describe("PackageDayCounting", () => {
 		render(
 			<PackageDayCounting
 				packageLength={5}
+				maxSkips=""
+				onMaxSkipsChange={() => {}}
 				skipsClosedDays
 				onChange={() => {}}
 				schedule={{}}
@@ -138,6 +146,8 @@ describe("PackageDayCounting", () => {
 		render(
 			<PackageDayCounting
 				packageLength={5}
+				maxSkips=""
+				onMaxSkipsChange={() => {}}
 				skipsClosedDays
 				onChange={() => {}}
 				schedule={undefined}

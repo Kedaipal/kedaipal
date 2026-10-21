@@ -391,6 +391,7 @@ function EditProductRoute() {
 					packageUnit: product.booking?.packageUnit,
 					autoAccept: product.booking?.autoAccept === true,
 					skipsClosedDays: product.booking?.skipsClosedDays === true,
+					maxSkips: product.booking?.maxSkips?.toString() ?? "",
 					weekendPrice: product.booking?.weekendPrice
 						? (product.booking.weekendPrice / 100).toFixed(2)
 						: undefined,
