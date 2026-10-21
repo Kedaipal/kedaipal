@@ -99,11 +99,18 @@ export function Sidebar({
 	const { setActAs } = useActAs();
 	const exitActAs = () => setActAs(undefined);
 
+	// 216px expanded (z8r3fdwc19; was 240). Every nav label is one short word,
+	// so the old width was mostly empty row. The binding constraint is the foot's
+	// meta line — "What's new" + dot beside the version pill — which needs 178px
+	// for a two-digit release (`2026.12.12`): 208px clipped it by a pixel, 216
+	// leaves ~6px. Store names truncate a little sooner; the full name is the
+	// storefront's job, not the rail's. Fixed, not resizable: a ten-link nav
+	// has two useful widths, and collapse already gives the second one.
 	return (
 		<aside
 			className={cn(
 				"sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-border bg-card lg:flex print:hidden",
-				collapsed ? "w-[68px]" : "w-60",
+				collapsed ? "w-[68px]" : "w-54",
 				motion,
 			)}
 			aria-label="Dashboard navigation"

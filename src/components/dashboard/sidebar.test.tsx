@@ -265,4 +265,22 @@ describe("a short window scrolls the link list; the chrome never squashes", () =
 		expect(openNav?.className).toContain("[scrollbar-width:thin]");
 		expect(openNav?.classList).toContain("scroll-shadow-y");
 	});
+
+	it("expands to 216px, not 240 — the foot's meta line is what sets the floor (z8r3fdwc19)", () => {
+		collapsed = false;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		const aside = container.querySelector("aside");
+		expect(aside?.classList).toContain("w-54");
+		expect(aside?.classList).not.toContain("w-60");
+		cleanup();
+		collapsed = true;
+		const rail = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		expect(rail.container.querySelector("aside")?.classList).toContain(
+			"w-[68px]",
+		);
+	});
 });

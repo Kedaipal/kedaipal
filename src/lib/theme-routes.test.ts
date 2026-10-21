@@ -20,9 +20,19 @@ const src = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
 
 /** Chrome that carries the toggle, and how a route file reveals it renders it. */
 const CHROME: ReadonlyArray<{ file: string; rendersAs: RegExp }> = [
+	// The buyer pages carry it in their HEADER, last in the icon row — the
+	// footer row it first shipped in read as stray chrome (z8r3fdwc19). The
+	// order and claim pages render their own header inline, so they show up
+	// as `ThemeToggle` in the route file itself.
 	{
-		file: "components/storefront/storefront-footer.tsx",
-		rendersAs: /StorefrontFooter/,
+		file: "components/storefront/storefront-header.tsx",
+		rendersAs: /<StorefrontHeader\b/,
+	},
+	{
+		// The product route renders ProductPageView, which renders the app bar
+		// (asserted below).
+		file: "components/storefront/storefront-app-bar.tsx",
+		rendersAs: /<StorefrontAppBar\b|<ProductPageView\b/,
 	},
 	{ file: "components/landing/nav.tsx", rendersAs: /<Nav\b|LandingPage/ },
 	{ file: "components/legal/legal-layout.tsx", rendersAs: /LegalLayout/ },
@@ -66,6 +76,14 @@ describe("the theme reaches every page", () => {
 	test("every piece of chrome that claims the toggle really carries it", () => {
 		for (const c of CHROME)
 			expect(src(c.file), c.file).toContain("ThemeToggle");
+		// ProductPageView carries it through the app bar it renders.
+		expect(src("components/storefront/product-page.tsx")).toMatch(
+			/<StorefrontAppBar\b/,
+		);
+		// The footer no longer does — one slot per page, and it's the header.
+		expect(src("components/storefront/storefront-footer.tsx")).not.toContain(
+			"ThemeToggle",
+		);
 		// The landing page composes Nav; index.tsx reveals itself as LandingPage.
 		expect(src("components/landing/landing-page.tsx")).toMatch(/<Nav\b/);
 		// The /app shell: its header and sidebar carry the toggle, so every
@@ -101,8 +119,9 @@ describe("the theme reaches every page", () => {
 				"These routes render no theme control, so a visitor who lands there has",
 				"no way to override the theme their device picked.",
 				"",
-				"Render chrome that carries it (StorefrontFooter, Nav, LegalLayout, the",
-				"/stores headers), place `<ThemeToggle />` in the page's own utility row,",
+				"Render chrome that carries it (StorefrontHeader, StorefrontAppBar, Nav,",
+				"LegalLayout, the /stores headers), place `<ThemeToggle />` in the page's",
+				"own header row,",
 				"or — for a widget / redirect page nobody dwells on — add the file to",
 				"NO_CONTROL with the reason.",
 			].join("\n"),
