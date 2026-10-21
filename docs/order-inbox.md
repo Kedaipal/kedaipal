@@ -981,7 +981,10 @@ and escalates for `pending` **or** unseen.
   `validateSearch`: `bucket`, `q`, `pay[]`, `method[]`, `munspec`, `from`, `to`,
   `mockup`, `fwin`, `sort`; all optional, defaults kept out of the URL — `sort`
   only stores the non-default `"due"`). Debounced search drives the query and
-  mirrors into `?q`. Bucket chips show counts (New highlighted). A **Sort control**
+  mirrors into `?q`. `q` and `cat` are read through `searchText`, so a pasted
+  `?q=60123456789` (which the URL parses as a number) still searches. Legacy
+  `source`/`nopin` are returned `undefined` like `bucket`, so no raw value
+  leaks past the validator (z8r3fdtk87, [url-search-params.md](./url-search-params.md)). Bucket chips show counts (New highlighted). A **Sort control**
   (a Popover on the search row: _Newest first_ / _Due date_) flips the list order
   client-side — see the Sort note above for why Newest is the default. Changing
   sort resets pagination to the first page (it's a view change). A **"Due" chip row** (Today / Tomorrow / This week, driving

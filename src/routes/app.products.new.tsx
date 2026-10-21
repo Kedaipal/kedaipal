@@ -45,8 +45,13 @@ export const Route = createFileRoute("/app/products/new")({
 	validateSearch: (
 		search: Record<string, unknown>,
 	): { form?: "full"; card?: KindCard } => {
-		if (search.form === "full") return { form: "full" };
-		return isKindCard(search.card) ? { card: search.card } : {};
+		// Both keys always returned — an omitted one leaks its raw value
+		// (z8r3fdtk87, src/lib/search-params.ts).
+		if (search.form === "full") return { form: "full", card: undefined };
+		return {
+			form: undefined,
+			card: isKindCard(search.card) ? search.card : undefined,
+		};
 	},
 	component: NewProductRoute,
 });
