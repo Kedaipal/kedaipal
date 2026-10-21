@@ -37,6 +37,8 @@ const GROUP_ORDER: OrderColumnGroup[] = [
 	"money",
 	"payment",
 	"fulfilment",
+	// Right after Fulfilment: a booking's span refines its fulfilment date.
+	"booking",
 ];
 
 export function OrderColumnPicker({

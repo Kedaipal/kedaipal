@@ -576,6 +576,29 @@ WhatsApp.
   while the key list changes on a toggle, and a separate key means a layout
   written by an older build still loads instead of failing a shape check and
   dropping the seller's arrangement.
+- **Booking span columns — Booking start · Booking last day · Booking days**
+  (group **Booking**, right after Fulfilment in the picker and right after
+  Fulfilment time in the export). Added as a SET: a booking's Fulfilment date is
+  only its first day, and a lone count with no span would be half a fact.
+  - *Start* is `bookingCheckIn`. *Last day* goes through `bookingLastDay`
+    (`convex/lib/bookingAvailability.ts`, the one author of the S7 rule — also
+    used by `describeBookingSpan` and `describeBookingPeriod`): a **package's**
+    last usable day is the night before its exclusive check-out, a **stay's** is
+    the check-out itself. Never a package's exclusive check-out — that is a day
+    the buyer doesn't have.
+  - *Days* is `countedDays`, so an open-days package counts only the days it
+    uses. The CSV cell is a bare number (it sums); the table reads `2 nights`
+    for a stay and `30 days` for a package, because the units differ.
+  - All three are blank on non-booking orders and sink in a sort. Opt-in, not
+    default-visible — offered to every store, the `Security deposit` precedent.
+  - **Gated (credit) rows**: Start and Last day print — `bookingCheckIn/Out/
+    Packaged` are on the `GATED_ORDER_FIELDS` allowlist. `bookingSkippedDays` is
+    not, so **Days blanks** rather than print the uncorrected span ("7" for a
+    member who bought 5 open days). Pinned by a test that runs the real
+    `redactGatedOrder`.
+  - **Pending:** a *Skips* column (count of `orders.bookingCustomerSkips`, the
+    buyer's own skipped days from `z8r3fdh3ay`) joins this group once that
+    branch is on staging.
 - **Drag the HEADERS to reorder** — @dnd-kit horizontal, with the header itself
   as the drag handle. No separate grip: the shared `useSortableSensors` starts a
   pointer drag only after 8px and a touch drag only after a 250ms hold, so a

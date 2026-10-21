@@ -13,6 +13,7 @@
 // in orderCsv.test.ts. See docs/invoices-receipts.md + docs/order-inbox.md.
 
 import { sourceLabel } from "./attribution";
+import { bookingLastDay, countedDays } from "./bookingAvailability";
 import { formatItemAnswers } from "./buyerQuestions";
 import { gatedNameCell } from "./credits";
 import { orderCustomerLabel } from "./customer";
@@ -280,6 +281,18 @@ export type CsvOrder = {
 	 * bookkeeping template keys on column names, so the header set stays fixed
 	 * (the same reasoning as `deliveryDirection` above). */
 	creditGated?: boolean;
+	/** The booking span (S1/S7), MYT-midnight epoch ms with an EXCLUSIVE
+	 * check-out — both on the credit gate's allowlist, so a gated booking keeps
+	 * its dates. Absent on every non-booking order, whose booking cells blank. */
+	bookingCheckIn?: number;
+	bookingCheckOut?: number;
+	/** Sold as a fixed-length package (S7) — decides whether the Last day cell
+	 * is the night before check-out or the check-out itself. */
+	bookingPackaged?: boolean;
+	/** Shut days an open-days package stepped over (z8r3fdhpm7) — the Days
+	 * cell subtracts them. NOT on the gate's allowlist, which is why Days blanks
+	 * on a gated row instead of printing the uncorrected span. */
+	bookingSkippedDays?: readonly number[];
 	customer: { name?: string; waPhone?: string };
 	items: Array<{
 		name: string;
@@ -389,6 +402,9 @@ export type OrderColumnKey =
 	| "createdAt"
 	| "fulfilmentDate"
 	| "fulfilmentTime"
+	| "bookingStart"
+	| "bookingLastDay"
+	| "bookingDays"
 	| "customer"
 	| "phone"
 	| "fulfilment"
@@ -433,6 +449,7 @@ export type OrderColumnGroup =
 	| "order"
 	| "customer"
 	| "fulfilment"
+	| "booking"
 	| "payment"
 	| "items"
 	| "money";
@@ -441,6 +458,7 @@ export const ORDER_COLUMN_GROUP_LABELS: Record<OrderColumnGroup, string> = {
 	order: "Order",
 	customer: "Customer",
 	fulfilment: "Fulfilment",
+	booking: "Booking",
 	payment: "Payment",
 	items: "Items",
 	money: "Money",
@@ -531,6 +549,38 @@ export function fulfilmentMomentSortKey(o: CsvOrder): number | undefined {
 		: o.fulfilmentDate + o.fulfilmentTimeMinutes * 60_000;
 }
 
+/** A booking order's span, or null for every other order — the one gate the
+ * three booking columns share, so they blank together. */
+function bookingSpan(
+	o: CsvOrder,
+): { checkIn: number; checkOut: number } | null {
+	if (o.bookingCheckIn === undefined || o.bookingCheckOut === undefined)
+		return null;
+	return { checkIn: o.bookingCheckIn, checkOut: o.bookingCheckOut };
+}
+
+/** The Booking last day cell's day (see `bookingLastDay`), or undefined. */
+export function bookingLastDayOf(o: CsvOrder): number | undefined {
+	const span = bookingSpan(o);
+	return span ? bookingLastDay(span.checkOut, o.bookingPackaged === true) : undefined;
+}
+
+/**
+ * How many days the booking uses — nights for a stay, counted days for a
+ * package, minus the shut days an open-days package stepped over
+ * (`countedDays`, the count every "N days" on an order reads).
+ *
+ * Undefined on a GATED row: `bookingSkippedDays` is redacted there, so the
+ * count would silently be the raw span — "7" for a member who bought 4 open
+ * days. A blank beside the Customer cell's "waiting on credits" is honest; a
+ * wrong number is not.
+ */
+export function bookingDaysOf(o: CsvOrder): number | undefined {
+	const span = bookingSpan(o);
+	if (!span || o.creditGated) return undefined;
+	return countedDays(span.checkIn, span.checkOut, o.bookingSkippedDays);
+}
+
 /**
  * Every column, in export order.
  *
@@ -591,6 +641,49 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 				: formatFulfilmentTime(o.fulfilmentTimeMinutes),
 		// "3:30 PM" would sort before "9:00 AM" as text.
 		sortKey: (o) => o.fulfilmentTimeMinutes,
+	},
+	// The booking span as a SET, beside the date it refines. Fulfilment date
+	// alone is a booking's first day, which says nothing about a 30-day package
+	// in week three; a lone count without the span would be half a fact. Blank
+	// on every non-booking order. Opt-in — most stores sell no bookings.
+	{
+		key: "bookingStart",
+		label: "Booking start",
+		group: "booking",
+		width: 124,
+		value: (o) => csvDate(bookingSpan(o)?.checkIn),
+		sortKey: (o) => bookingSpan(o)?.checkIn,
+	},
+	{
+		// A package's last USABLE day, a stay's check-out (`bookingLastDay`) —
+		// never a package's exclusive check-out, which is a day the buyer
+		// doesn't have.
+		key: "bookingLastDay",
+		label: "Booking last day",
+		group: "booking",
+		width: 136,
+		value: (o) => csvDate(bookingLastDayOf(o)),
+		sortKey: bookingLastDayOf,
+	},
+	{
+		key: "bookingDays",
+		label: "Booking days",
+		group: "booking",
+		numeric: true,
+		width: 120,
+		// A bare number in the CSV so a spreadsheet sums it; the table names the
+		// unit, because a stay counts NIGHTS and a package counts days.
+		value: (o) => {
+			const days = bookingDaysOf(o);
+			return days === undefined ? "" : String(days);
+		},
+		display: (o) => {
+			const days = bookingDaysOf(o);
+			if (days === undefined) return "";
+			const unit = o.bookingPackaged === true ? "day" : "night";
+			return `${days} ${unit}${days === 1 ? "" : "s"}`;
+		},
+		sortKey: bookingDaysOf,
 	},
 	{
 		key: "customer",
