@@ -6,6 +6,7 @@
 // rather than eyeballed.
 
 import {
+	bookingLastDay,
 	countedDays,
 	resolveOpenDaysTerm,
 } from "../../convex/lib/bookingAvailability";
@@ -479,7 +480,7 @@ export function describeBookingSpan(
 	opts: { isPackage: boolean; format: (epoch: number) => string },
 ): string {
 	return opts.isPackage
-		? `Valid ${opts.format(checkIn)} – ${opts.format(checkOut - DAY_MS)}`
+		? `Valid ${opts.format(checkIn)} – ${opts.format(bookingLastDay(checkOut, true))}`
 		: `${opts.format(checkIn)} → ${opts.format(checkOut)}`;
 }
 

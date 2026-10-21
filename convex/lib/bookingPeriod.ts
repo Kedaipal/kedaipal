@@ -18,6 +18,7 @@
 // Pure: `now` is injected (the `matchesFulfilmentWindow` posture), so the
 // boundaries are testable without freezing clocks.
 
+import { bookingLastDay } from "./bookingAvailability";
 import { DAY_MS, todayMytMidnight } from "./fulfilmentDate";
 
 /**
@@ -183,7 +184,7 @@ function periodLine(
 	}
 	// Active. A package's last usable day is the night before check-out; a
 	// stay's check-out morning is a day the guest is still there.
-	const lastDay = order.bookingPackaged === true ? checkOut - DAY_MS : checkOut;
+	const lastDay = bookingLastDay(checkOut, order.bookingPackaged === true);
 	const skipped = order.bookingSkippedDays ?? [];
 	if (skipped.length > 0) {
 		// An open-days package (z8r3fdhpm7): what's left is the days the member
