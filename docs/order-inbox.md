@@ -632,6 +632,12 @@ WhatsApp.
   `FilterOptionRow`): the panel opens with most columns on, so a tint would
   stripe two-thirds of the list without saying anything — unlike a filter, where
   a selected option is exceptional.
+  The panel is capped at Radix's measured
+  `--radix-popover-content-available-height`, with the column list as its one
+  flexible region. A fixed `52vh` on the list alone ignored the header above it
+  and the page banner, so on a 763px laptop window the panel ran 58px past the
+  viewport and its last rows — the Booking group, which sits last — could not be
+  scrolled to.
   The Columns panel is otherwise **show/hide only**, and turning a column on appends
   it to the right-hand end, where the seller can see what they added and drag it
   from there. `resolveOrderColumns` honours the caller's order, so the exported

@@ -164,6 +164,27 @@ describe("wizard — booking kind route", () => {
 		});
 	});
 
+	it("the review preview follows Instant book — never 'request to book' beside 'Confirmed instantly'", () => {
+		renderWizard({ onSubmit: vi.fn(async () => {}) });
+		pickBooking();
+		fireEvent.click(continueBtn());
+		fireEvent.change(screen.getByPlaceholderText(/riverside standard plot/i), {
+			target: { value: "Riverside Plot" },
+		});
+		fireEvent.click(continueBtn());
+		const price = document.querySelector('input[inputmode="decimal"]');
+		if (!price) throw new Error("price input missing");
+		fireEvent.change(price, { target: { value: "80" } });
+		fireEvent.click(
+			screen.getByRole("switch", { name: /confirm bookings instantly/i }),
+		);
+		fireEvent.click(continueBtn());
+
+		expect(screen.getByText("Confirmed instantly")).toBeTruthy();
+		expect(screen.getByText(/booking — book now/i)).toBeTruthy();
+		expect(screen.queryByText(/booking — request to book/i)).toBeNull();
+	});
+
 	it("refuses a junk capacity at the step that owns the input", () => {
 		renderWizard();
 		pickBooking();

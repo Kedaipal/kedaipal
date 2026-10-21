@@ -954,6 +954,14 @@ author for both the impact count and the write.
 - **The product page ignored `autoAccept`** — an instant-book listing still
   advertised "Seller confirms within 24 hours". The checkout form had always
   read it; the product page hadn't.
+- **Three more places still promised an approval on an instant-book listing**
+  (found in the booking-columns Chrome test, 21 Oct): the wizard review chip
+  ("Booking — request to book" beside "Confirmed instantly"), the checkout's
+  page heading ("Request to book" above a "Book now" button), and both WhatsApp
+  hints under the number ("The approval and payment ask…", "We'll WhatsApp the
+  decision…"). The chip and hints now read `autoAccept` ("book now",
+  "confirmation"); the heading is the neutral "Your booking", because the route
+  doesn't load the listing — the form's own button says which kind it is.
 - **The wizard review's photo box is a button** back to the details step. Every
   other line on that screen has an Edit affordance, and the photo is the thing a
   seller most wants to fix from a preview.

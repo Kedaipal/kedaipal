@@ -78,8 +78,17 @@ export function OrderColumnPicker({
 					</span>
 				</Button>
 			</PopoverTrigger>
-			<PopoverContent align="end" className="w-72 p-0">
-				<div className="flex items-start justify-between gap-2 border-b border-border px-3 py-2.5">
+			{/* Capped at Radix's MEASURED room below the trigger, with the list as
+			    the one flexible region. The old fixed `52vh` on the list ignored
+			    the header above it and the banner above the page, so on a laptop
+			    window the panel ran past the viewport and its last rows — the
+			    Booking group, which sits last — could not be scrolled to. */}
+			<PopoverContent
+				align="end"
+				data-testid="column-picker-panel"
+				className="flex max-h-(--radix-popover-content-available-height) w-72 flex-col p-0"
+			>
+				<div className="flex shrink-0 items-start justify-between gap-2 border-b border-border px-3 py-2.5">
 					<div className="min-w-0">
 						<p className="text-[13px] font-semibold">Columns</p>
 						<p className="text-[11.5px] leading-snug text-muted-foreground">
@@ -102,7 +111,7 @@ export function OrderColumnPicker({
 				    reads as the first row of the same hierarchy — all → group →
 				    column — instead of competing with Reset, which does a different
 				    job (defaults, including order and widths). */}
-				<div className="border-b border-border px-1.5 py-1">
+				<div className="shrink-0 border-b border-border px-1.5 py-1">
 					<BulkSelectRow
 						tone="master"
 						label="All columns"
@@ -120,7 +129,10 @@ export function OrderColumnPicker({
 					) : null}
 				</div>
 
-				<div className="max-h-[52vh] overflow-y-auto px-1.5 py-1">
+				<div
+					data-testid="column-picker-list"
+					className="max-h-[52vh] min-h-0 flex-1 overflow-y-auto px-1.5 py-1"
+				>
 					{GROUP_ORDER.map((group) => {
 						const cols = ORDER_COLUMNS.filter((c) => c.group === group);
 						if (cols.length === 0) return null;

@@ -660,11 +660,13 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 	// alone is a booking's first day, which says nothing about a 30-day package
 	// in week three; a lone count without the span would be half a fact. Blank
 	// on every non-booking order. Opt-in — most stores sell no bookings.
+	// Widths fit each full header beside its sort glyph (measured: ~42px of
+	// chrome), so none opens truncated.
 	{
 		key: "bookingStart",
 		label: "Booking start",
 		group: "booking",
-		width: 124,
+		width: 136,
 		value: (o) => csvDate(bookingSpan(o)?.checkIn),
 		sortKey: (o) => bookingSpan(o)?.checkIn,
 	},
@@ -675,7 +677,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		key: "bookingLastDay",
 		label: "Booking last day",
 		group: "booking",
-		width: 136,
+		width: 156,
 		value: (o) => csvDate(bookingLastDayOf(o)),
 		sortKey: bookingLastDayOf,
 	},
@@ -684,7 +686,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		label: "Booking days",
 		group: "booking",
 		numeric: true,
-		width: 120,
+		width: 132,
 		// A bare number in the CSV so a spreadsheet sums it; the table names the
 		// unit, because a stay counts NIGHTS and a package counts days.
 		value: (o) => {
@@ -706,7 +708,7 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		label: "Booking skips",
 		group: "booking",
 		numeric: true,
-		width: 124,
+		width: 140,
 		value: (o) => {
 			const skips = bookingSkipsOf(o);
 			return skips === undefined ? "" : String(skips);

@@ -256,8 +256,11 @@ function CheckoutRoute() {
 					backToProductSlug={booking}
 				/>
 				<div className="px-5 pt-4 lg:px-8 lg:pt-6">
+					{/* Neutral on purpose: this route doesn't load the listing, and
+					    an instant-book listing has no request step — the form's
+					    own button and copy say which kind this is. */}
 					<h1 className="font-heading text-xl font-extrabold tracking-tight">
-						Request to book
+						Your booking
 					</h1>
 					<div className="mt-4">
 						<BookingCheckoutForm
