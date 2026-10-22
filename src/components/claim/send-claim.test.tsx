@@ -223,9 +223,12 @@ describe("ClaimsPanel — a completed claim whose order waits on credits", () =>
 			}),
 		]);
 		const { container } = render(<ClaimsPanel onResume={vi.fn()} />);
+		// Leads with the wait, not "Completed" — the buyer's part is done,
+		// the seller's order isn't open yet.
 		expect(
-			screen.getByText(/Completed · ORD-W8T1 · Waiting on 1 credit/),
+			screen.getByText(/^Buyer finished · Waiting on 1 credit · ORD-W8T1/),
 		).toBeTruthy();
+		expect(screen.queryByText(/Completed/)).toBeNull();
 		expect(container.querySelector(".bg-emerald-50")).toBeNull();
 	});
 

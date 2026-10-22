@@ -597,7 +597,7 @@ seller surfaces say so instead of reading as a finished sale:
 
 - **The claims panel row:** `listClaims` carries `orderCreditsToUnlock` (set
   only on a gated order, from the same `forSeller` redaction the row already
-  ran) — "Completed · ORD-X · Waiting on 1 credit", with a lock in place of the
+  ran) — "Buyer finished · Waiting on 1 credit · ORD-X", with a lock in place of the
   success tick.
 - **The session's done screen:** reading the order's `creditGated`, it shows
   "Waiting on N credits" and the way back, and leaves out the receipt and the

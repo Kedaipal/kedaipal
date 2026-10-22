@@ -190,14 +190,13 @@ export function ClaimsPanel({
 							</p>
 							<p className="text-xs text-muted-foreground">
 								{claim.status === "completed"
-									? `Completed${claim.orderShortId ? ` · ${claim.orderShortId}` : ""}${
-											// Completed after the credits ran out: the order is
-											// waiting, so the row says so instead of reading as a
-											// finished sale the seller then can't open.
-											claim.orderCreditsToUnlock !== undefined
-												? ` · ${orderGatedLine(claim.orderCreditsToUnlock)}`
-												: ""
-										}`
+									? // Completed after the credits ran out: the BUYER's part
+										// is done, but the order is waiting, so the row leads with
+										// the wait — "Completed" is the word the eye lands on, and
+										// it would read as a sale the seller can open (#408 review).
+										claim.orderCreditsToUnlock !== undefined
+										? `Buyer finished · ${orderGatedLine(claim.orderCreditsToUnlock)}${claim.orderShortId ? ` · ${claim.orderShortId}` : ""}`
+										: `Completed${claim.orderShortId ? ` · ${claim.orderShortId}` : ""}`
 									: claim.status === "expired"
 										? "Expired · nothing charged"
 										: "Cancelled"}
