@@ -33,8 +33,6 @@ function renderBar(props: { visible: boolean; docked?: boolean }) {
 				chip="all"
 				chips={CHIPS}
 				onChip={() => {}}
-				region="MY"
-				onRegion={() => {}}
 				maxLength={80}
 				placeholder="Stores or booths…"
 			/>
@@ -91,5 +89,15 @@ describe("StoresCompactHeader — a takeover on the directory, the header on a b
 		expect(root.className).not.toContain("-translate-y-full");
 		const cta = screen.getByRole("link", { name: "Open your store" });
 		expect(cta.tabIndex).toBe(0);
+	});
+
+	it("carries no market switch — /stores shows the buyer's own market only", async () => {
+		// z8r3fdwduz: the market comes from the edge's geo answer, Shopee-style.
+		renderBar({ visible: true });
+		await bar();
+		expect(screen.queryByRole("group", { name: /region/i })).toBeNull();
+		for (const name of ["MY", "SG", "Malaysia", "Singapore"]) {
+			expect(screen.queryByRole("button", { name })).toBeNull();
+		}
 	});
 });

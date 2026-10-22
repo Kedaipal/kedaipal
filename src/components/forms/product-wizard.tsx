@@ -64,6 +64,8 @@ import { asPackageUnit } from "../../lib/package-unit";
 import type { UnsavedState } from "../../lib/product-form-dirty";
 import {
 	isSecurityDepositInRange,
+	maxSkipsDraftIssue,
+	maxSkipsFromDraft,
 	securityDepositRangeMessage,
 	weekendRateConsequence,
 } from "../../lib/product-summary";
@@ -103,7 +105,12 @@ import {
 	type ProductFormInitialValues,
 	type ProductFormSubmitValues,
 } from "./product-form";
-import { type ProductImage, ProductImagesField } from "./product-images-field";
+import {
+	failedPhotosLabel,
+	type PhotoUploadState,
+	type ProductImage,
+	ProductImagesField,
+} from "./product-images-field";
 import {
 	EMPTY_PROMO_DRAFT,
 	type PromoDraft,
@@ -192,6 +199,9 @@ export type WizardState = {
 	/** Booking kind, DAY package only — "Only days you're open" (z8r3fdhpm7):
 	 * the term skips the store's closed days. Sent only for a day package. */
 	skipsClosedDays: boolean;
+	/** Booking kind, open-days package only — "Skips per package" as typed
+	 * (z8r3fdh3ay); blank = no limit. Sent only with skipsClosedDays. */
+	maxSkips: string;
 	/** Booking kind only — refundable security deposit (RM, as typed; blank =
 	 * none). Collected with the payment, returned after check-out (S5). */
 	securityDeposit: string;
@@ -251,6 +261,7 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		packageUnit: "month",
 		autoAccept: false,
 		skipsClosedDays: false,
+		maxSkips: "",
 		securityDeposit: "",
 		weekendPrice: "",
 		weekendDays: [...DEFAULT_WEEKEND_DAYS],
@@ -590,6 +601,15 @@ export function wizardStepIssues(
 				});
 			}
 		}
+		// "Skips per package" (z8r3fdh3ay) — judged only while it's on screen
+		// (an open-days day package); the field shows the sentence itself.
+		const maxSkipsIssue =
+			pkgRaw.length > 0 && state.packageUnit === "day" && state.skipsClosedDays
+				? maxSkipsDraftIssue(state.maxSkips)
+				: null;
+		if (maxSkipsIssue !== null) {
+			issues.push({ field: "maxSkips", message: maxSkipsIssue });
+		}
 		const depositRaw = state.securityDeposit.trim();
 		if (depositRaw.length > 0) {
 			if (!isSecurityDepositInRange(parsePriceInput(depositRaw))) {
@@ -873,6 +893,15 @@ export function buildWizardSubmitValues(
 							state.skipsClosedDays
 								? true
 								: undefined,
+						// The cap rides only with open days — the server refuses it
+						// anywhere else.
+						maxSkips:
+							packageLengthValue !== undefined &&
+							state.packageUnit === "day" &&
+							state.skipsClosedDays &&
+							state.maxSkips.trim().length > 0
+								? maxSkipsFromDraft(state.maxSkips)
+								: undefined,
 						securityDeposit: (() => {
 							const dep = parsePriceInput(state.securityDeposit.trim());
 							return dep !== null && dep > 0
@@ -960,6 +989,7 @@ export function wizardHandoff(state: WizardState): {
 			packageUnit: state.packageUnit,
 			autoAccept: state.autoAccept,
 			skipsClosedDays: state.skipsClosedDays,
+			maxSkips: state.maxSkips,
 			securityDeposit: state.securityDeposit,
 			weekendPrice: state.weekendPrice,
 			weekendDays: state.weekendDays,
@@ -1004,6 +1034,7 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		packageUnit: draft.packageUnit ?? "month",
 		autoAccept: draft.autoAccept === true,
 		skipsClosedDays: draft.skipsClosedDays === true,
+		maxSkips: draft.maxSkips ?? "",
 		securityDeposit: draft.securityDeposit ?? "",
 		weekendPrice: draft.weekendPrice ?? "",
 		weekendDays: draft.weekendDays ?? [...DEFAULT_WEEKEND_DAYS],
@@ -1253,7 +1284,11 @@ export function ProductWizard({
 		revealRef.current?.scrollIntoView({ block: "nearest" });
 		setReveal(null);
 	}, [reveal]);
-	const [uploading, setUploading] = useState(false);
+	const [photoUploads, setPhotoUploads] = useState<PhotoUploadState>({
+		kind: "idle",
+	});
+	const uploading = photoUploads.kind === "uploading";
+	const photosFailed = photoUploads.kind === "failed" ? photoUploads.count : 0;
 	const [submitting, setSubmitting] = useState(false);
 	// The one destructive answer the wizard ever asks for — a type switch that
 	// drops typed prices, or leaving an unsaved draft. One piece of state, so
@@ -1708,9 +1743,11 @@ export function ProductWizard({
 		state.minQuantity.trim().length > 0 ||
 		state.minNoticeDays.trim().length > 0;
 
+	// A photo that didn't upload is still on screen waiting for Retry — leaving
+	// would lose it, so it counts as unsaved work (z8r3fdtk85).
 	const unsaved: UnsavedState = uploading
 		? "uploading"
-		: isDirty
+		: isDirty || photosFailed > 0
 			? "changes"
 			: "none";
 	useEffect(() => {
@@ -1966,8 +2003,28 @@ export function ProductWizard({
 				<button
 					type="button"
 					onClick={goBack}
-					aria-label={stepPos === 0 ? "Back to products" : "Previous step"}
-					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+					// Back unmounts the photo grid: an upload in flight would land
+					// with no tile to show it, a failed one would be dropped without
+					// a word. Held with the reason until the photos settle — the
+					// same reason Continue carries (PR #392 review).
+					disabled={uploading || photosFailed > 0}
+					aria-label={
+						uploading
+							? "Back — wait for the photo to finish uploading"
+							: photosFailed > 0
+								? `Back — ${failedPhotosLabel(photosFailed)}, retry or remove it first`
+								: stepPos === 0
+									? "Back to products"
+									: "Previous step"
+					}
+					title={
+						uploading
+							? "Wait for the photo to finish uploading"
+							: photosFailed > 0
+								? `${failedPhotosLabel(photosFailed)} — retry or remove it first`
+								: undefined
+					}
+					className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
 				>
 					<ChevronLeft className="size-5" />
 				</button>
@@ -2165,8 +2222,7 @@ export function ProductWizard({
 						<ProductImagesField
 							images={state.images}
 							onChange={(images) => patch({ images })}
-							onUploadingChange={setUploading}
-							onError={setServerError}
+							onUploadStateChange={setPhotoUploads}
 						/>
 						{showDescription ? (
 							<label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -2395,6 +2451,8 @@ export function ProductWizard({
 								packageLength={packageLengthNum}
 								skipsClosedDays={state.skipsClosedDays}
 								onChange={(next) => patch({ skipsClosedDays: next })}
+								maxSkips={state.maxSkips}
+								onMaxSkipsChange={(next) => patch({ maxSkips: next })}
 								schedule={storeSchedule}
 							/>
 						) : null}
@@ -3030,7 +3088,13 @@ export function ProductWizard({
 								{allMto ? (
 									<span className="self-start rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-950/50 dark:text-amber-400">
 										{isBooking
-											? "Booking — request to book"
+											? // The storefront's own door words (`product-page.tsx`):
+												// an instant-book listing has no request step, so the
+												// preview must not promise one beside "Confirmed
+												// instantly".
+												state.autoAccept
+												? "Booking — book now"
+												: "Booking — request to book"
 											: madeToOrder
 												? "Made to order"
 												: "Made fresh"}
@@ -3078,7 +3142,7 @@ export function ProductWizard({
 												? [
 														{
 															label: "Package",
-															value: `${state.packageLength.trim()} ${state.packageUnit}${state.packageLength.trim() === "1" ? "" : "s"}${state.packageUnit === "day" && state.skipsClosedDays ? " (open days only)" : ""}, flat price`,
+															value: `${state.packageLength.trim()} ${state.packageUnit}${state.packageLength.trim() === "1" ? "" : "s"}${state.packageUnit === "day" && state.skipsClosedDays ? ` (open days only${state.maxSkips.trim().length > 0 ? `, up to ${state.maxSkips.trim()} skips` : ""})` : ""}, flat price`,
 															step: 3,
 														},
 													]
@@ -3655,10 +3719,17 @@ export function ProductWizard({
 					<Button
 						type="button"
 						onClick={goNext}
-						disabled={!structurallyAnswered || uploading}
+						// A photo in "Didn't upload" would be left behind on this step
+						// and the product created without it — held, with the reason,
+						// until the seller retries or removes it (z8r3fdtk85).
+						disabled={!structurallyAnswered || uploading || photosFailed > 0}
 						className="h-12 w-full shadow-lg shadow-accent/20 lg:shadow-none"
 					>
-						{uploading ? "Uploading…" : "Continue"}
+						{uploading
+							? "Uploading…"
+							: photosFailed > 0
+								? failedPhotosLabel(photosFailed)
+								: "Continue"}
 					</Button>
 				) : (
 					<Button

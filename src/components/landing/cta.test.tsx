@@ -85,7 +85,7 @@ afterEach(() => {
 
 describe("hero — demo first", () => {
 	it("makes the WhatsApp demo the accent pill and Start free a text link", () => {
-		render(<Hero />);
+		render(<Hero invite={null} />);
 		const pill = demo()[0];
 		expect(pill.className).toContain("bg-accent");
 		expect(pill.textContent).toContain(m.book_demo_cta_long());
@@ -95,13 +95,13 @@ describe("hero — demo first", () => {
 	});
 
 	it("carries the flat-fee badge and the guarantee under the CTAs", () => {
-		const { container } = render(<Hero />);
+		const { container } = render(<Hero invite={null} />);
 		expect(container.textContent).toContain(m.commission_badge());
 		expect(container.textContent).toContain(m.guarantee_line());
 	});
 
 	it("fires demo_cta with its placement, and the sign-up link its own", () => {
-		render(<Hero />);
+		render(<Hero invite={null} />);
 		fireEvent.click(demo()[0]);
 		expect(trackDemoCta).toHaveBeenCalledWith("hero");
 		fireEvent.click(signUp()[0]);
@@ -110,7 +110,7 @@ describe("hero — demo first", () => {
 
 	it("shows a signed-in seller only the dashboard door", () => {
 		authState.isSignedIn = true;
-		render(<Hero />);
+		render(<Hero invite={null} />);
 		expect(links(/^\/app$/)).toHaveLength(1);
 		expect(demo()).toHaveLength(0);
 		expect(signUp()).toHaveLength(0);

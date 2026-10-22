@@ -39,11 +39,11 @@ export function WhiteGloveCard({ slug }: { slug: string }) {
 				type="button"
 				onClick={() => markScheduled({})}
 				aria-label="Dismiss"
-				className="absolute right-2 top-2 flex size-8 items-center justify-center rounded-full text-amber-700/70 hover:bg-amber-100 dark:hover:bg-amber-900"
+				className="absolute right-2 top-2 flex size-8 items-center justify-center rounded-full text-amber-700/70 hover:bg-amber-100 dark:text-amber-300/70 dark:hover:bg-amber-900"
 			>
 				<X className="size-4" />
 			</button>
-			<Award className="size-6 shrink-0 text-amber-600" />
+			<Award className="size-6 shrink-0 text-amber-600 dark:text-amber-400" />
 			<div className="flex min-w-0 flex-col gap-2">
 				<div>
 					<p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
@@ -59,7 +59,7 @@ export function WhiteGloveCard({ slug }: { slug: string }) {
 					target="_blank"
 					rel="noopener noreferrer"
 					onClick={() => markScheduled({})}
-					className="inline-flex h-9 w-fit items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+					className="inline-flex h-9 w-fit items-center rounded-lg bg-primary px-3.5 text-sm font-medium text-background dark:text-primary-foreground"
 				>
 					Schedule your call
 				</a>

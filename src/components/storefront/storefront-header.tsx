@@ -5,6 +5,7 @@ import type { OpeningHours } from "../../../convex/lib/openingHours";
 import { shareLink } from "../../lib/share";
 import { buildStoreChatLink } from "../../lib/store-chat";
 import { AppImage } from "../ui/app-image";
+import { ThemeToggle } from "../ui/theme-toggle";
 import { FoundingMemberBadge } from "./founding-member-badge";
 import { hasHoursLine, OpeningHoursLine } from "./opening-hours-line";
 
@@ -80,7 +81,12 @@ export function StoreLogoTile({
 				sizes="48px"
 				rounded="rounded-[14px]"
 				objectFit="contain"
-				className="border border-border bg-background"
+				// dark-ok: `bg-white`, not `bg-background` — this is one of the storefront's
+				// object-contain user images, so the mat SHOWS. Seller logos are routinely
+				// dark ink on transparent and would vanish into a dark mat; a white plate
+				// matches every other user-supplied contain image (track page, billing,
+				// order mockups).
+				className="border border-border bg-white"
 			/>
 		) : (
 			<span
@@ -101,7 +107,12 @@ export function StoreLogoTile({
 				sizes="32px"
 				rounded="rounded-[10px]"
 				objectFit="contain"
-				className="border border-border bg-background"
+				// dark-ok: `bg-white`, not `bg-background` — this is one of the storefront's
+				// object-contain user images, so the mat SHOWS. Seller logos are routinely
+				// dark ink on transparent and would vanish into a dark mat; a white plate
+				// matches every other user-supplied contain image (track page, billing,
+				// order mockups).
+				className="border border-border bg-white"
 			/>
 		) : (
 			<span
@@ -127,7 +138,12 @@ export function StoreLogoTile({
 			sizes="84px"
 			rounded="rounded-[18px] lg:rounded-[22px]"
 			objectFit="contain"
-			className={`bg-background ${islandFrame}`}
+			// dark-ok: `bg-white`, not `bg-background` — this is one of the storefront's
+			// object-contain user images, so the mat SHOWS. Seller logos are routinely
+			// dark ink on transparent and would vanish into a dark mat; a white plate
+			// matches every other user-supplied contain image (track page, billing,
+			// order mockups).
+			className={`bg-white ${islandFrame}`}
 		/>
 	) : (
 		<span
@@ -163,6 +179,8 @@ export function fulfilmentLabel(
 const COVER_ICON_BASE =
 	"flex size-11 items-center justify-center rounded-full transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none";
 const COVER_ICON_FROSTED =
+	// dark-ok: these icons only ever sit on the cover PHOTO (a frosted navy disc
+	// over it); the no-cover band uses the outline variant with tokens.
 	"bg-primary/45 text-white ring-1 ring-white/25 backdrop-blur hover:bg-primary/60";
 const COVER_ICON_OUTLINE =
 	"border border-border bg-card text-foreground shadow-sm hover:bg-muted";
@@ -189,7 +207,9 @@ const ISLAND_ACTION =
  * left the hero in the same pass: the footer already carries "Powered by".
  *
  * Everything here is static markup from the payload — no client state — so
- * SSR paints the island and the cover icons on the first byte.
+ * SSR paints the island and the cover icons on the first byte. The theme flip
+ * is the one exception, and it is SSR-safe too: both glyphs render and CSS
+ * picks one (see ThemeToggle).
  */
 export function StorefrontHeader({
 	retailer,
@@ -250,34 +270,36 @@ export function StorefrontHeader({
 						className="absolute inset-0 opacity-15 [background-image:radial-gradient(var(--color-accent)_1px,transparent_1px)] [background-size:18px_18px]"
 					/>
 				)}
-				{/* Mobile actions: WhatsApp then Share, right-aligned at the
-				    cover's top-right. Desktop carries them labelled inside the
-				    island instead, so the cover stays clean there. */}
-				{chatHref || share ? (
-					<div className="absolute inset-x-4 top-3.5 flex items-center justify-end gap-2 lg:hidden">
-						{chatHref ? (
-							<a
-								href={chatHref}
-								target="_blank"
-								rel="noopener"
-								aria-label={chatLabel}
-								className={iconClass}
-							>
-								<MessageCircle className="size-5" aria-hidden />
-							</a>
-						) : null}
-						{share ? (
-							<button
-								type="button"
-								onClick={share}
-								aria-label="Share this store"
-								className={iconClass}
-							>
-								<Share2 className="size-5" aria-hidden />
-							</button>
-						) : null}
-					</div>
-				) : null}
+				{/* The cover's top-right icon row. Mobile: WhatsApp, Share, then the
+				    theme flip. Desktop carries WhatsApp and Share labelled inside the
+				    island instead, so only the theme flip stays up here — it is chrome
+				    for the PAGE, not an action about the store, so it never moves into
+				    the island. Last in the row at every width, the way it is last in
+				    every buyer header (z8r3fdwc19). */}
+				<div className="absolute inset-x-4 top-3.5 flex items-center justify-end gap-2 lg:inset-x-8 lg:top-5">
+					{chatHref ? (
+						<a
+							href={chatHref}
+							target="_blank"
+							rel="noopener"
+							aria-label={chatLabel}
+							className={`${iconClass} lg:hidden`}
+						>
+							<MessageCircle className="size-5" aria-hidden />
+						</a>
+					) : null}
+					{share ? (
+						<button
+							type="button"
+							onClick={share}
+							aria-label="Share this store"
+							className={`${iconClass} lg:hidden`}
+						>
+							<Share2 className="size-5" aria-hidden />
+						</button>
+					) : null}
+					<ThemeToggle variant="ghost" className={iconClass} />
+				</div>
 			</div>
 
 			{/* The island: overlaps the band by 72px (88px on lg), inset 16px

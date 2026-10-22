@@ -85,6 +85,7 @@ import { hoursSummary, noticeSummary } from "../../lib/fulfilment-glance";
 import { deriveMapsUrl } from "../../lib/google-address";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
+import { TONE_CHIP } from "../../lib/tone";
 import { cn } from "../../lib/utils";
 import { ProBadge } from "../app/pro-gate";
 import {
@@ -2040,7 +2041,9 @@ function LocationRowBody({
 						</p>
 						<PickupKindBadge kind={location.locationType ?? "self_collect"} />
 						{location.fee && location.fee > 0 ? (
-							<span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+							<span
+								className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${TONE_CHIP.warn}`}
+							>
 								+ {formatPrice(location.fee, currency)} fee
 							</span>
 						) : null}

@@ -2,6 +2,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
+import type { ReferralInvite } from "../../../convex/referrals";
 import { m } from "../../paraglide/messages";
 import { HeroStage } from "./hero-stage";
 import {
@@ -12,6 +13,7 @@ import {
 	Marquee,
 	StartFreeLink,
 } from "./landing-ui";
+import { ReferralInvitePill } from "./referral-invite-pill";
 
 /**
  * Hero (landing v2, z8r3fdegej): the locked 8 Sep 2026 tagline, one line,
@@ -54,7 +56,19 @@ function getMarqueeItems(): string[] {
 		.filter(Boolean);
 }
 
-export function Hero() {
+/**
+ * A REFERRED visitor (z8r3fdetf5) arrives with one more fact than anyone
+ * else — who invited them and the bonus they get when they start — so for
+ * them that fact takes the badge slot above the headline instead of the
+ * flat-fee badge. One slot, never two pills stacked: the no-commission line
+ * still meets them on `/pricing`, where the price decision is made.
+ * `undefined` holds the slot while the invite resolves; `null` = the badge.
+ */
+export function Hero({
+	invite,
+}: {
+	invite: ReferralInvite | null | undefined;
+}) {
 	const { isSignedIn } = useAuth();
 	const shouldReduceMotion = useReducedMotion();
 
@@ -67,8 +81,15 @@ export function Hero() {
 					animate={shouldReduceMotion ? undefined : "visible"}
 					variants={staggerContainer}
 				>
-					<motion.div variants={revealUp}>
-						<CommissionBadge />
+					<motion.div
+						variants={revealUp}
+						className="flex max-w-full justify-center"
+					>
+						{invite !== null ? (
+							<ReferralInvitePill invite={invite} />
+						) : (
+							<CommissionBadge />
+						)}
 					</motion.div>
 					{/* The tagline is two sentences; the design sets the first on its own
 					    line and the highlighted second across two. A hard break, not a

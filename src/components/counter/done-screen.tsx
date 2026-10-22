@@ -17,18 +17,34 @@
 //    share or copy — the previous screen said "we sent the buyer one WhatsApp"
 //    before anything had been sent at all, which is how a silently rejected
 //    message (no 24h window) went unnoticed for weeks.
+//
+// 3. A sale can arrive here WAITING ON CREDITS (z8r3fdwbbb). The counter's own
+//    sales can't — it refuses to ring one up without a credit in hand — but a
+//    claim link sent while the store had credit still completes for the buyer
+//    after the balance hits zero, and the session's done screen is this one.
+//    Such an order is redacted, and every action below it would be refused, so
+//    the screen says what it is waiting for and offers the way back instead of
+//    "Sale complete" over an order the seller can't open.
 
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { CheckCircle2, Loader2, MessageCircle, Share2 } from "lucide-react";
+import {
+	CheckCircle2,
+	Loader2,
+	Lock,
+	MessageCircle,
+	Share2,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { formatFulfilmentDate } from "../../../convex/lib/fulfilmentDate";
+import { useCreditGate } from "../../hooks/useCreditGate";
 import { MASK_PII } from "../../lib/analytics-privacy";
+import { lockCta, orderGatedLine } from "../../lib/credits-ui";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { shareLink } from "../../lib/share";
 import { storefrontOrigin } from "../../lib/storefront-url";
@@ -79,6 +95,9 @@ export function DoneScreen({
 		convexQuery(api.orders.get, shortId ? { shortId } : "skip"),
 	).data;
 	const updateStatus = useMutation(api.orders.updateStatus);
+	const gate = useCreditGate();
+	// The server's own verdict on the redacted row (see rule 3 above).
+	const gated = order?.creditGated === true;
 	const [completing, setCompleting] = useState(false);
 	// Local echo for the one case the query can't answer: a reopened session
 	// with no shortId, closed out from this screen.
@@ -104,6 +123,7 @@ export function DoneScreen({
 	// whose order can't be read offers nothing it can't vouch for. RSVPs
 	// complete at the event, never here.
 	const canComplete =
+		!gated &&
 		status === "confirmed" &&
 		!completedHere &&
 		!eventRsvp &&
@@ -128,26 +148,77 @@ export function DoneScreen({
 	const unknown = shortId === undefined;
 	const heading = unknown
 		? "Checkout saved"
-		: isCompleted
-			? "Sale complete"
-			: eventRsvp
-				? "RSVP saved"
-				: "Order created";
+		: gated
+			? orderGatedLine(order?.creditsToUnlock ?? 1)
+			: isCompleted
+				? "Sale complete"
+				: eventRsvp
+					? "RSVP saved"
+					: "Order created";
+
+	// Waiting on credits: a neutral card, not the success one — nothing here is
+	// done yet. Only the two things that still work: back to the list, and the
+	// order page, which explains itself (`GatedOrderPage`). The receipt and the
+	// one-tap close are left out because the server refuses both for a gated
+	// order, and the WhatsApp outcome because the redaction withholds it.
+	if (gated && shortId) {
+		const cta = lockCta(gate.route);
+		return (
+			<div className="mx-auto flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6">
+				<div className="flex items-start gap-4">
+					<span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+						<Lock className="size-6" aria-hidden />
+					</span>
+					<div className="min-w-0">
+						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+							Counter sale
+						</p>
+						<h2 className="mt-1 text-2xl font-bold">{heading}</h2>
+						<p className="mt-1 text-sm text-muted-foreground">
+							Order <span className="font-mono">{shortId}</span> is in — the
+							buyer finished it — but it came after{" "}
+							{gate.canAct ? "your" : "the store's"} credits ran out, so its
+							details stay closed until{" "}
+							{gate.canAct ? "credits land" : "the owner adds credits"}. Orders
+							waiting on credits open oldest first.
+						</p>
+					</div>
+				</div>
+				<div className="grid gap-2 sm:grid-cols-2">
+					{gate.canAct ? (
+						<Button asChild className="h-11 sm:col-span-2">
+							<Link to="/app/settings" search={cta.search}>
+								{cta.label}
+							</Link>
+						</Button>
+					) : null}
+					<Button onClick={onBackToList} variant="outline" className="h-11">
+						Back to checkouts
+					</Button>
+					<Button asChild variant="outline" className="h-11">
+						<Link to="/app/orders/$shortId" params={{ shortId }}>
+							View order
+						</Link>
+					</Button>
+				</div>
+			</div>
+		);
+	}
 
 	return (
-		<div className="mx-auto flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm sm:p-6">
+		<div className="mx-auto flex w-full max-w-2xl flex-col gap-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm dark:border-emerald-900 dark:bg-emerald-950 sm:p-6">
 			<div className="flex items-start gap-4">
 				<span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white">
 					<CheckCircle2 className="size-7" />
 				</span>
 				<div className="min-w-0">
-					<p className="text-xs font-semibold uppercase tracking-widest text-emerald-700">
+					<p className="text-xs font-semibold uppercase tracking-widest text-emerald-700 dark:text-emerald-300">
 						Counter sale
 					</p>
-					<h2 className="mt-1 text-2xl font-bold text-emerald-950">
+					<h2 className="mt-1 text-2xl font-bold text-emerald-950 dark:text-emerald-100">
 						{heading}
 					</h2>
-					<p className="mt-1 text-sm text-emerald-800">
+					<p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">
 						<OrderLine
 							shortId={shortId}
 							isCompleted={isCompleted}
@@ -173,8 +244,8 @@ export function DoneScreen({
 			/>
 
 			{shortId ? (
-				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4">
-					<p className="text-sm font-semibold text-emerald-950">
+				<div className="rounded-xl border border-emerald-200 bg-white/70 p-4 dark:border-emerald-900 dark:bg-emerald-900/40">
+					<p className="text-sm font-semibold text-emerald-950 dark:text-emerald-100">
 						{paymentReceived ? "Receipt" : "Invoice"}
 					</p>
 					<OrderDocumentActions
@@ -190,7 +261,7 @@ export function DoneScreen({
 			<div className="grid gap-2 sm:grid-cols-2">
 				{canComplete ? (
 					<div className="sm:col-span-2">
-						<p className="mb-2 text-xs text-emerald-800">
+						<p className="mb-2 text-xs text-emerald-800 dark:text-emerald-200">
 							Collecting later — mark it completed once it&rsquo;s handed over.
 						</p>
 						<Button
@@ -298,7 +369,11 @@ function WhatsAppOutcome({
 }) {
 	if (anonymous) {
 		return (
-			<Row icon={<MessageCircle className="size-4 text-emerald-700" />}>
+			<Row
+				icon={
+					<MessageCircle className="size-4 text-emerald-700 dark:text-emerald-300" />
+				}
+			>
 				Cash sale with no contact — nothing was sent. The{" "}
 				{stillToPay ? "invoice" : "receipt"} below is their only copy.
 			</Row>
@@ -317,13 +392,13 @@ function WhatsAppOutcome({
 		return (
 			<div
 				{...MASK_PII}
-				className="rounded-xl border border-amber-200 bg-amber-50 p-4"
+				className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50"
 			>
-				<p className="flex items-center gap-2 text-sm font-semibold text-amber-950">
-					<MessageCircle className="size-4 text-amber-700" />
+				<p className="flex items-center gap-2 text-sm font-semibold text-amber-950 dark:text-amber-100">
+					<MessageCircle className="size-4 text-amber-700 dark:text-amber-300" />
 					WhatsApp couldn&rsquo;t reach {buyer}
 				</p>
-				<p className="mt-1 text-sm text-amber-900">
+				<p className="mt-1 text-sm text-amber-900 dark:text-amber-200">
 					{ours
 						? "A WhatsApp problem on our side stopped the message — their number looks fine. "
 						: "That number may have a typo or no WhatsApp — check it with them. "}
@@ -344,7 +419,7 @@ function WhatsAppOutcome({
 							label="Copy link"
 							ariaLabel="Copy the buyer's order link"
 							successMessage="Order link copied"
-							className="h-11 rounded-xl border border-amber-300 bg-white px-4 text-sm text-amber-950 hover:bg-amber-100"
+							className="h-11 rounded-xl border border-amber-300 bg-white px-4 text-sm text-amber-950 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-100 dark:hover:bg-amber-900/60"
 						/>
 					</div>
 				) : null}
@@ -353,7 +428,11 @@ function WhatsAppOutcome({
 	}
 	if (pushStatus === "sent" || pushStatus === "recovered") {
 		return (
-			<Row icon={<CheckCircle2 className="size-4 text-emerald-700" />}>
+			<Row
+				icon={
+					<CheckCircle2 className="size-4 text-emerald-700 dark:text-emerald-300" />
+				}
+			>
 				<span {...MASK_PII}>{buyer}</span> has their order link on WhatsApp
 				{payTail}
 			</Row>
@@ -362,7 +441,9 @@ function WhatsAppOutcome({
 	// `sending` — and the instant before the order query resolves.
 	return (
 		<Row
-			icon={<Loader2 className="size-4 animate-spin text-emerald-700" />}
+			icon={
+				<Loader2 className="size-4 animate-spin text-emerald-700 dark:text-emerald-300" />
+			}
 			live
 		>
 			Sending <span {...MASK_PII}>{buyer}</span> their order link on WhatsApp…
@@ -381,7 +462,7 @@ function Row({
 }) {
 	return (
 		<p
-			className="flex items-start gap-2 text-sm text-emerald-900"
+			className="flex items-start gap-2 text-sm text-emerald-900 dark:text-emerald-100"
 			aria-live={live ? "polite" : undefined}
 		>
 			<span className="mt-0.5 shrink-0">{icon}</span>

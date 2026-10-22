@@ -25,8 +25,11 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
+import { breadcrumbListJsonLd, categoryCrumbs } from "../lib/breadcrumbs";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { absoluteProxiedImageUrl } from "../lib/image-proxy";
+import { jsonLdScript } from "../lib/json-ld";
+import { seoDescription } from "../lib/seo-text";
 import { ssrRead } from "../lib/ssr-read";
 
 interface CategoryLoaderData {
@@ -36,6 +39,8 @@ interface CategoryLoaderData {
 	categorySlug: string;
 	description: string;
 	canonicalUrl: string;
+	indexable: boolean;
+	productSlugs: string[];
 	ogImageUrl: string | undefined;
 	locale: Locale;
 }
@@ -92,9 +97,7 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			throw notFound();
 		}
 
-		const categoryDescription = page.category.description
-			?.replace(/\s+/g, " ")
-			.trim();
+		const categoryDescription = seoDescription(page.category.description);
 		const description =
 			categoryDescription ||
 			`Browse ${page.category.name} from ${retailer.storeName} on Kedaipal and order on WhatsApp.`;
@@ -106,6 +109,12 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			categorySlug: page.category.slug,
 			description,
 			canonicalUrl: `${SITE_URL}/${retailer.slug}/c/${page.category.slug}`,
+			// The sitemap's rule, repeated as `noindex` (see $slug.tsx) — and an
+			// empty category is a thin page whatever the store's standing.
+			indexable: (retailer.indexable ?? true) && page.products.length > 0,
+			// Product URLs for the ItemList: what a crawler that runs no JS can
+			// still discover from this page.
+			productSlugs: page.products.map((p) => p.slug),
 			// Share-image precedence: the category's own image → store cover → logo.
 			// Proxied like every other social card — see $slug.tsx for why.
 			ogImageUrl: ((): string | undefined => {
@@ -125,9 +134,13 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			return storeUnavailableHead(loaderData.storeName);
 		const {
 			storeName,
+			slug,
 			categoryName,
+			categorySlug,
 			description,
 			canonicalUrl,
+			indexable,
+			productSlugs,
 			ogImageUrl,
 			locale,
 		} = loaderData;
@@ -136,7 +149,10 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 		const meta = [
 			{ title },
 			{ name: "description", content: description },
-			{ name: "robots", content: "index, follow" },
+			{
+				name: "robots",
+				content: indexable ? "index, follow" : "noindex, follow",
+			},
 			{ property: "og:type", content: "website" },
 			{ property: "og:site_name", content: "Kedaipal" },
 			{ property: "og:locale", content: OG_LOCALE[locale] },
@@ -153,15 +169,47 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 		if (ogImageUrl) {
 			meta.push(
 				{ property: "og:image", content: ogImageUrl },
+				{ property: "og:image:alt", content: `${categoryName} — ${storeName}` },
 				{ name: "twitter:image", content: ogImageUrl },
 			);
 		}
+		const store = `${SITE_URL}/${slug}`;
 		return {
 			meta,
 			// No cover preload here (z8r3fdegb5): the compact app bar carries no
 			// cover image, so the page's LCP element is a product photo — the old
 			// hint made every category deep link download a banner it never shows.
 			links: [{ rel: "canonical", href: canonicalUrl }],
+			// Store › Category, so the result reads as a trail, not a URL path
+			// (z8r3fdh2z3).
+			scripts: [
+				jsonLdScript(
+					breadcrumbListJsonLd(
+						categoryCrumbs({
+							siteUrl: SITE_URL,
+							storeName,
+							storeSlug: slug,
+							categoryName,
+							categorySlug,
+						}),
+					),
+				),
+				// The category's products as an ItemList of URLs: the body is
+				// client-rendered, so this is how a crawler that runs no JS learns
+				// the product pages exist from here (storefront SEO audit).
+				jsonLdScript({
+					"@context": "https://schema.org",
+					"@type": "ItemList",
+					name: categoryName,
+					url: canonicalUrl,
+					numberOfItems: productSlugs.length,
+					itemListElement: productSlugs.map((productSlug, i) => ({
+						"@type": "ListItem",
+						position: i + 1,
+						url: `${store}/p/${productSlug}`,
+					})),
+				}),
+			],
 		};
 	},
 	notFoundComponent: CategoryNotFound,

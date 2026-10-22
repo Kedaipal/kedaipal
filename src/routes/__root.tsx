@@ -10,14 +10,19 @@ import {
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { ConvexProvider } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
+import { useMemo } from "react";
 import { Toaster } from "sonner";
 import type { Country } from "../../convex/lib/country";
 import { useClarity } from "../hooks/useClarity";
 import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
+import { useTheme, useThemeSync } from "../hooks/useTheme";
 import { isBuyerRouteId } from "../lib/buyer-routes";
+import { clerkAppearance } from "../lib/clerk-appearance";
 import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
-import { readVisitorRegion } from "../lib/geo-region";
+import { readVisitorMarket, readVisitorRegion } from "../lib/geo-region";
+import { readReferralSlugOnServer } from "../lib/referral-cookie";
+import { THEME_INIT_SCRIPT } from "../lib/theme";
 import { getLocale } from "../paraglide/runtime";
 import appCss from "../styles.css?url";
 
@@ -32,7 +37,22 @@ export const Route = createRootRoute({
 	 * is a header lookup — no I/O — so authenticated `/app` renders that never
 	 * use it are not measurably slower for carrying it.
 	 */
-	loader: (): { region: Country | null } => ({ region: readVisitorRegion() }),
+	loader: (): {
+		region: Country | null;
+		market: Country | null;
+		referralSlug: string | null;
+	} => ({
+		region: readVisitorRegion(),
+		// `/stores`' market (z8r3fdwduz): geo-IP ONLY. Unlike `region` it never
+		// reads the pricing toggle's cookie — the directory has no switch, so a
+		// stored pricing pick must not decide which market a buyer browses.
+		market: readVisitorMarket(),
+		// The referral the visitor arrived with (z8r3fdetf5), when they hold
+		// the cookie — so the landing reserves the invite's place in the first
+		// paint rather than pushing the hero down when it resolves. A cookie
+		// read, no I/O, same cost posture as the region above.
+		referralSlug: readReferralSlugOnServer(),
+	}),
 	head: () => ({
 		meta: [
 			{ charSet: "utf-8" },
@@ -48,6 +68,10 @@ export const Route = createRootRoute({
 		links: [
 			{ rel: "stylesheet", href: appCss },
 			{ rel: "icon", type: "image/x-icon", href: "/favicon.ico" },
+			// The vector mark, padded (the Logo Kit bag mark with ~10% air on
+			// every side so it never touches the tab edge); modern browsers
+			// prefer it over the PNGs below and it stays crisp at any DPR.
+			{ rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
 			{
 				rel: "icon",
 				type: "image/png",
@@ -87,6 +111,13 @@ function Providers({ children }: { children: React.ReactNode }) {
 	// subtree; that crossing is rare (storefront → landing) and a clean remount
 	// is exactly what a provider swap needs.
 	const isBuyerSurface = useMatches().some((m) => isBuyerRouteId(m.routeId));
+	// Clerk paints its own widgets from its own palette; hand it ours in dark.
+	// Memoised on the theme: `Providers` re-renders on every route match, and a
+	// fresh appearance object each time is a prop change Clerk has to diff —
+	// harmless today, but one line keeps a restyle on navigation impossible
+	// (PR #241 review).
+	const { resolved } = useTheme();
+	const appearance = useMemo(() => clerkAppearance(resolved), [resolved]);
 	const publishableKey = clientEnv.VITE_CLERK_PUBLISHABLE_KEY;
 	if (!publishableKey || !clientEnv.VITE_CONVEX_URL) {
 		return <SetupNotice />;
@@ -103,7 +134,18 @@ function Providers({ children }: { children: React.ReactNode }) {
 			{isBuyerSurface ? (
 				<ConvexProvider client={convex}>{children}</ConvexProvider>
 			) : (
-				<ClerkProvider publishableKey={publishableKey}>
+				// signInUrl/signUpUrl point every Clerk redirect (RedirectToSignIn on
+				// the /app and /onboarding gates) at OUR pages. Without them Clerk
+				// falls back to its hosted Account Portal, which never sees
+				// `/sign-in`'s `withSignUp`. So the handover email's /app link
+				// dead-ended a brand-new vendor on the hosted page even after the
+				// fix (z8r3fdwdvq; caught driving the gate signed-out).
+				<ClerkProvider
+					publishableKey={publishableKey}
+					appearance={appearance}
+					signInUrl="/sign-in"
+					signUpUrl="/sign-up"
+				>
 					<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
 						{children}
 					</ConvexProviderWithClerk>
@@ -142,14 +184,26 @@ function SetupNotice() {
 function RootDocument({ children }: { children: React.ReactNode }) {
 	useGoogleAnalytics();
 	useClarity();
+	// `resolved` is handed to sonner, which renders its own surfaces outside our
+	// token tree and would otherwise be light-on-light in dark mode.
+	const { resolved } = useThemeSync();
 	return (
 		<html lang={getLocale()} suppressHydrationWarning>
 			<head>
+				{/* Sets the .dark class BEFORE first paint — without it every
+				    dark-mode visitor gets a white flash while React hydrates. On
+				    every page: the theme applies to the whole site. Sits above
+				    <HeadContent /> so it doesn't queue behind the stylesheet link.
+				    See lib/theme.ts. */}
+				<script
+					// biome-ignore lint/security/noDangerouslySetInnerHtml: static build-time constant, no interpolated input
+					dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }}
+				/>
 				<HeadContent />
 			</head>
 			<body className="min-h-dvh bg-background font-sans text-foreground antialiased">
 				<Providers>{children}</Providers>
-				<Toaster richColors position="top-right" />
+				<Toaster richColors position="top-right" theme={resolved} />
 				<TanStackDevtools
 					config={{ position: "bottom-right" }}
 					plugins={[

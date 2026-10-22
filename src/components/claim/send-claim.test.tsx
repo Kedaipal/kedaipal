@@ -23,6 +23,11 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("../../hooks/useActAs", () => ({
 	useActAsRetailerId: () => undefined,
 }));
+// The counter is open in these tests — its closed states are pinned in
+// claim-actions.test.tsx and the counter page tests.
+vi.mock("../../hooks/useCounterClosed", () => ({
+	useCounterClosedReason: () => null,
+}));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const NOW = 1_756_000_000_000;
@@ -202,5 +207,36 @@ describe("ClaimsPanel — resend guard", () => {
 		mockClaims([]);
 		const { container } = render(<ClaimsPanel onResume={vi.fn()} />);
 		expect(container.firstChild).toBeNull();
+	});
+});
+
+// z8r3fdwbbb review: the one remaining way a counter-originated sale can wait
+// on credits is a link that completes after the balance hit zero. Its row must
+// say so, not read as a finished sale the seller then can't open.
+describe("ClaimsPanel — a completed claim whose order waits on credits", () => {
+	test("names the wait, and drops the success tick", () => {
+		mockClaims([
+			claim({
+				status: "completed",
+				orderShortId: "ORD-W8T1",
+				orderCreditsToUnlock: 1,
+			}),
+		]);
+		const { container } = render(<ClaimsPanel onResume={vi.fn()} />);
+		// Leads with the wait, not "Completed" — the buyer's part is done,
+		// the seller's order isn't open yet.
+		expect(
+			screen.getByText(/^Buyer finished · Waiting on 1 credit · ORD-W8T1/),
+		).toBeTruthy();
+		expect(screen.queryByText(/Completed/)).toBeNull();
+		expect(container.querySelector(".bg-emerald-50")).toBeNull();
+	});
+
+	test("a funded completed claim still reads as a plain success", () => {
+		mockClaims([claim({ status: "completed", orderShortId: "ORD-OK11" })]);
+		const { container } = render(<ClaimsPanel onResume={vi.fn()} />);
+		expect(screen.getByText(/Completed · ORD-OK11/)).toBeTruthy();
+		expect(screen.queryByText(/Waiting on \d+ credit/)).toBeNull();
+		expect(container.querySelector(".bg-emerald-50")).toBeTruthy();
 	});
 });

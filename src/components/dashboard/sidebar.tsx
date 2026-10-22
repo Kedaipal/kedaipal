@@ -33,6 +33,7 @@ import { hasFeature } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
+import { ThemeToggle } from "../ui/theme-toggle";
 import { AppVersionRow } from "./app-version-row";
 import { TierPill } from "./tier-pill";
 import { WhatsNewNavItem } from "./whats-new";
@@ -98,11 +99,18 @@ export function Sidebar({
 	const { setActAs } = useActAs();
 	const exitActAs = () => setActAs(undefined);
 
+	// 216px expanded (z8r3fdwc19; was 240). Every nav label is one short word,
+	// so the old width was mostly empty row. The binding constraint is the foot's
+	// meta line — "What's new" + dot beside the version pill — which needs 178px
+	// for a two-digit release (`2026.12.12`): 208px clipped it by a pixel, 216
+	// leaves ~6px. Store names truncate a little sooner; the full name is the
+	// storefront's job, not the rail's. Fixed, not resizable: a ten-link nav
+	// has two useful widths, and collapse already gives the second one.
 	return (
 		<aside
 			className={cn(
 				"sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-border bg-card lg:flex print:hidden",
-				collapsed ? "w-[68px]" : "w-60",
+				collapsed ? "w-[68px]" : "w-54",
 				motion,
 			)}
 			aria-label="Dashboard navigation"
@@ -397,6 +405,32 @@ export function Sidebar({
 						strokeWidth={2.5}
 					/>
 				</button>
+				{/* Quick theme flip, the same control the mobile header carries —
+				    icon only, like every other theme control in the app (z8r3fdwc19;
+				    the "Dark mode" word beside it was dropped). The three-way picker
+				    (match device) stays in Settings → App → Appearance.
+
+				    It has TWO homes, cross-faded like the What's-new row below, with
+				    the hidden one `inert`:
+				    - expanded: the right end of the profile row. A lone icon on a row
+				      of its own reads as an unlabelled nav item; beside the profile
+				      is where a utility control belongs (ClickUp, Linear).
+				    - collapsed: its own row above the avatar, because the 68px rail
+				      has no room beside it.
+				    ONE ICON COLUMN in the collapsed form: every glyph in the rail
+				    centres 26px in. The 44px disc would centre its glyph 8px further
+				    right under the row's padding (it shipped that way once — Zaki,
+				    21 Oct 2026), so `-ml-2` pulls it back onto the column. */}
+				<div
+					inert={!collapsed}
+					className={cn(
+						"flex items-center overflow-hidden rounded-lg pr-2 pl-3",
+						collapsed ? "max-h-14 py-1 opacity-100" : "max-h-0 py-0 opacity-0",
+						motion,
+					)}
+				>
+					<ThemeToggle variant="ghost" className="-ml-2" />
+				</div>
 				<div
 					className={cn(
 						"flex items-center gap-2 rounded-lg py-2 pr-2",
@@ -409,7 +443,7 @@ export function Sidebar({
 						<div
 							aria-hidden={collapsed || undefined}
 							className={cn(
-								"flex min-w-0 flex-col overflow-hidden",
+								"flex min-w-0 flex-1 flex-col overflow-hidden",
 								collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
 								motion,
 							)}
@@ -424,6 +458,25 @@ export function Sidebar({
 							) : null}
 						</div>
 					) : null}
+					{/* The expanded home. `-my-2` keeps the row at the avatar's
+					    height, and `-mr-4` lands the glyph's right edge on the version
+					    pill's below — one right-hand edge for the foot — while giving
+					    the name every pixel it can; `p-0.5` inside the clip
+					    leaves room for the disc's focus ring. */}
+					<div
+						inert={collapsed}
+						className={cn(
+							"-my-2 ml-auto shrink-0 overflow-hidden",
+							// Collapsed, the margin and padding go too: at zero width they
+							// would still push the rail 20px wider than its 68px.
+							collapsed
+								? "mr-0 max-w-0 p-0 opacity-0"
+								: "-mr-4 max-w-12 p-0.5 opacity-100",
+							motion,
+						)}
+					>
+						<ThemeToggle variant="ghost" />
+					</div>
 				</div>
 				{/* One meta line, not three stacked rows: "what changed" on the
 				    left, "what am I running" on the right — the two questions this
@@ -435,7 +488,10 @@ export function Sidebar({
 				    the rest of the rail instead of snapping at the end. Whichever
 				    form is hidden is `inert` — never a second, invisible button. */}
 				<div className="flex items-center justify-between px-2 py-0.5">
-					<div className="grid">
+					{/* `items-center`: both forms share one cell and the icon form is the
+					    taller, so without it the text form sat at the cell's top edge
+					    while the version pill sat on the row's centre line. */}
+					<div className="grid items-center">
 						<div
 							inert={collapsed}
 							className={cn(

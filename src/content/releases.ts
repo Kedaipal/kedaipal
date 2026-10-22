@@ -181,6 +181,85 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.10.5",
+		date: "2026-10-22",
+		// Not notable: nothing MOVED and no number a seller relies on changed.
+		// Dark mode is opt-in behind an icon already in the sidebar; the Refer
+		// card and the counter's closed banner announce themselves where the
+		// seller already is; a plan skip is explained on the listing form the
+		// day it is needed. A dot reaches them. Owner's call — v2026.09.4 was
+		// authored false and flipped.
+		notable: false,
+		entries: [
+			{
+				kind: "feature",
+				title: { en: "Dark mode, on every page" },
+				body: {
+					en: "Tap the sun-and-moon in your sidebar (top bar on a phone) and the whole app dims into dark — orders, products, settings, the storefront your buyers see, even the sign-in page. Tap again and it brightens back; the change fades in rather than flipping. Settings → App → Appearance has the full choice: Light, Dark, or Match device, which follows your phone's own day-and-night setting. It's remembered per device, so your phone can be dark at night while the shop laptop stays light. Buyers get the same switch in your storefront's header. On every plan.",
+				},
+				href: "/app/settings?tab=appearance",
+				hrefLabel: { en: "Choose your look" },
+				icon: "settings",
+			},
+			{
+				kind: "feature",
+				title: { en: "Refer a kedai, and you both get credits" },
+				body: {
+					en: "Know another seller drowning in WhatsApp orders? Home now ends with a Refer a kedai card carrying your own link — copy it, or send it straight on WhatsApp. When they sign up through it and pay their first invoice, they get 60 bonus credits on Pro (30 on Starter), and so do you: the same amount, landing in your balance the moment their payment clears. The card counts who's signed up and who's paid. It appears once your own plan is paid, and pauses while your plan is on hold.",
+				},
+				href: spotlightHref("refer"),
+				hrefLabel: { en: "Share your link" },
+				icon: "users",
+			},
+			{
+				kind: "feature",
+				title: { en: "Skip a day on a meal plan or any open-days package" },
+				body: {
+					en: "Sell a 5-day or 20-day plan counted in the days you're open? When a customer misses a day, open their order and tap Skip a day: their last day moves to the next day you're open, their order page shows every skip, and no message is sent. Tap Undo if it was a slip. Each package listing has a new Skips per package field — leave it blank for no limit, or set one and buyers see \"up to N skips per package\" before they book. On every plan.",
+				},
+				// No link: Skip a day reaches the seller on the next plan order
+				// they open, and the field sits inside that package's listing.
+				icon: "calendar",
+			},
+			{
+				kind: "feature",
+				title: { en: "Booking columns in Orders" },
+				body: {
+					en: "Orders gains four booking columns, off until you want them, under Columns: Booking start, Booking last day, Booking days and Booking skips. Switch them on and a plan's whole span reads across the row, skipped days counted out — and they come along in the CSV export. While we were there, every row in the Filters and Columns panels grew to a proper thumb-sized target, and on a narrow phone the Orders header actions wrap instead of covering the title. On every plan.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Open Orders" },
+				icon: "table",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "The counter stops at zero credits, so a walk-in sale is never lost",
+				},
+				body: {
+					en: "Every order uses one credit, and the counter used to ring up sales even at zero — the sale then waited unseen until credits arrived, with the buyer standing right there. Now, at zero, the counter says so where you're about to ring up: what's closed, how many credits reopen it, and that your storefront keeps taking orders. Your last credit still rings up a sale, and a claim link already sent still completes. Top up and the counter opens again at once. On every plan.",
+				},
+				href: spotlightHref("credit_balance"),
+				hrefLabel: { en: "See your credits" },
+				icon: "wallet",
+			},
+			{
+				kind: "fix",
+				title: { en: "A photo that didn't upload says so, with Retry" },
+				body: {
+					en: "A product photo stuck on a weak connection used to spin forever and hold the whole form with it. Every upload now has a deadline: a photo that doesn't make it shows Didn't upload with Retry and Remove right on its tile, and Save waits until you've dealt with it rather than saving a product with a hole in it.",
+				},
+			},
+			{
+				kind: "fix",
+				title: { en: "Every email fits your phone" },
+				body: {
+					en: "Order alerts, team invites and credit notices ran a touch too wide for a phone, so they scrolled sideways and the buttons were small. They now fit the screen edge to edge, long email addresses wrap, and every button is thumb-sized.",
+				},
+			},
+		],
+	},
+	{
 		version: "2026.10.4",
 		date: "2026-10-16",
 		// Not notable: a hotfix for one failure. The seller it hit sees her

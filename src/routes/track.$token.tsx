@@ -56,6 +56,7 @@ import {
 } from "../components/order/order-store-links";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { PickupNotes } from "../components/order/pickup-notes";
+import { PlanSkipsNote } from "../components/order/plan-skips-note";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { RescheduledNote } from "../components/order/rescheduled-note";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
@@ -68,6 +69,7 @@ import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
 import { LinkifiedText } from "../components/ui/linkified-text";
 import { Skeleton } from "../components/ui/skeleton";
+import { ThemeToggle } from "../components/ui/theme-toggle";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { bookingLengthLabel } from "../lib/booking-dates";
 import { getConvexHttpClient } from "../lib/convex-server";
@@ -93,6 +95,9 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { ssrRead } from "../lib/ssr-read";
+import { TONE_PANEL, type Tone } from "../lib/tone";
+import { confirmationSentBody } from "../lib/track-confirmation-copy";
+import { trackFirstBeatLabel } from "../lib/track-first-beat";
 import { createWaAutoOpen, isWhatsAppWebview } from "../lib/wa-auto-open";
 import { buildOrderWaMessage, waOrderUrl } from "../lib/wa-order-message";
 
@@ -101,7 +106,14 @@ type PaymentStatus = "unpaid" | "claimed" | "received";
 type PaymentCfg = {
 	label: string;
 	icon: ReactNode;
-	tone: string;
+	/**
+	 * A key into the shared registry, not classes. The panel's own colours used
+	 * to live here as a fourth hand-copy of `border-X-200 bg-X-50 text-X-700`,
+	 * which is how this card ended up a light plate on a dark page while the
+	 * seller's identical chip was fine. The meaning→tone call stays local; both
+	 * themes' values come from `lib/tone.ts`.
+	 */
+	tone: Tone;
 };
 
 function getPaymentConfig(status: PaymentStatus): PaymentCfg {
@@ -110,19 +122,19 @@ function getPaymentConfig(status: PaymentStatus): PaymentCfg {
 			return {
 				label: "Payment Confirmed",
 				icon: <BadgeCheck className="size-5" />,
-				tone: "border-emerald-200 bg-emerald-50 text-emerald-700",
+				tone: "success",
 			};
 		case "claimed":
 			return {
 				label: "Payment Submitted",
 				icon: <Hourglass className="size-5" />,
-				tone: "border-blue-200 bg-blue-50 text-blue-700",
+				tone: "info",
 			};
 		default:
 			return {
 				label: "Payment Unpaid",
 				icon: <HandCoins className="size-5" />,
-				tone: "border-amber-200 bg-amber-50 text-amber-800",
+				tone: "warn",
 			};
 	}
 }
@@ -182,7 +194,11 @@ function gatewayIssueCopy(
  * shows, so a buyer reads one number whether the payment landed or stalled. */
 function GatewayIssueReference({ paymentId }: { paymentId: string }) {
 	return (
-		<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5">
+		// The plate is a LIFT off whatever tinted card it sits on, not a white
+		// surface — so in dark it lifts the other way (white/10 over the dark
+		// panel). Left as `bg-white/60` it would be a bright slab carrying the
+		// panel's light text.
+		<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5 dark:border-white/10 dark:bg-white/10">
 			<div className="flex items-center justify-between gap-2">
 				<p className="text-[10px] font-medium uppercase tracking-wider opacity-70">
 					Payment ref
@@ -256,6 +272,12 @@ type StatusCfg = { label: string; icon: ReactNode; color: string };
 // Icons + colors are fixed per canonical status; only the text is retailer-
 // customizable. Labels resolve at render time (override → method preset → base
 // default) so a relabel is retroactive across all in-flight orders.
+//
+// The marks stay at the 500 step in BOTH themes rather than moving to a
+// `TONE_ACCENT` pair: a mid-tone glyph reads on a white card and on a dark one,
+// which is why `dark-mode-coverage.test.ts` exempts 500-level marks outright.
+// Darkening them to 700 would repaint the buyer's most prominent glyph to fix
+// nothing.
 function getStatusConfig(
 	method: DeliveryMethod,
 	labels: StatusLabels | undefined,
@@ -516,6 +538,7 @@ function TrackingRoute() {
 					packaged: isBookingPackage,
 					weekendDays: order.bookingWeekendDays,
 					skippedDays: order.bookingSkippedDays,
+					customerSkips: order.bookingCustomerSkips,
 				}
 			: undefined;
 	const ms = order.retailerLocale === "ms";
@@ -649,16 +672,17 @@ function TrackingRoute() {
 	}> = [
 		{
 			key: "pending",
-			// A booking's first beat is the request, not "Order Received" — reuse
-			// the swept status label so a seller's locale flows through.
-			// An RSVP on an event that approves each guest (`z8r3fdkjek`) shares
-			// the request's first beat — judged by status, not by kind.
-			label:
-				isBooking ||
-				order.status === "booking_requested" ||
-				order.bookingResolution !== undefined
-					? statusConfig.booking_requested.label
-					: statusConfig.pending.label,
+			// Request → "Awaiting Approval"; a booking past it → "Booking
+			// Received" (an instant booking never waited); else "Order
+			// Received". The rules and their reasons: `trackFirstBeatLabel`.
+			label: trackFirstBeatLabel({
+				isBooking,
+				status: order.status,
+				bookingResolution: order.bookingResolution,
+				locale: stageLocale,
+				requestedLabel: statusConfig.booking_requested.label,
+				pendingLabel: statusConfig.pending.label,
+			}),
 			icon: statusConfig.pending.icon,
 			isDone: true, // any order on this page has at least been received
 			isCurrent: currentPos === 0,
@@ -706,8 +730,23 @@ function TrackingRoute() {
 			    page as far as the buyer is concerned (same as the storefront, where
 			    the store brand leads); Kedaipal's own mark is the powered-by badge
 			    at the foot of the page, so the platform isn't named twice. It links
-			    back into the store (z8r3fducgw): one tap to keep shopping. */}
-			<OrderStoreEyebrow storeName={order.storeName} slug={storeSlug} ms={ms} />
+			    back into the store (z8r3fducgw): one tap to keep shopping. The
+			    theme flip shares its row, at the right edge like every buyer
+			    header (z8r3fdwc19); `-my-3.5` centres the 44px disc on the 16px
+			    eyebrow line without pushing the heading down, and `-mr-3` puts
+			    the glyph on the column's right edge. */}
+			<div className="flex items-center justify-between gap-2">
+				{/* `min-w-0`: a long store name truncates instead of pushing the
+				    toggle off the right edge. */}
+				<div className="flex min-w-0">
+					<OrderStoreEyebrow
+						storeName={order.storeName}
+						slug={storeSlug}
+						ms={ms}
+					/>
+				</div>
+				<ThemeToggle variant="ghost" className="-my-3.5 -mr-3" />
+			</div>
 			<h1 className="mt-3 font-mono text-2xl font-bold tracking-tight">
 				#{order.shortId}
 			</h1>
@@ -943,7 +982,7 @@ function TrackingRoute() {
 			order.status !== "booking_requested" &&
 			!isFreeOrder(order) ? (
 				<section
-					className={`mt-4 flex flex-col gap-3 rounded-2xl border p-4 ${paymentConfig.tone}`}
+					className={`mt-4 flex flex-col gap-3 rounded-2xl border p-4 ${TONE_PANEL[paymentConfig.tone]}`}
 				>
 					<div className="flex items-center gap-3">
 						{paymentConfig.icon}
@@ -983,7 +1022,8 @@ function TrackingRoute() {
 								</p>
 							) : null}
 							{order.gatewayPaymentId ? (
-								<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5">
+								// Same lift-not-white plate as `GatewayIssueReference`.
+								<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5 dark:border-white/10 dark:bg-white/10">
 									{/* Copy sits beside the LABEL, not the value, so the id gets
 									    the chip's full width — a 36-char HitPay reference then
 									    renders complete at 375px instead of truncating, and a
@@ -1182,11 +1222,15 @@ function TrackingRoute() {
 							order.currency,
 						);
 						return (
-							<section className="mt-4 flex flex-col gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
+							// Deliberately NOT `TONE_PANEL.warn`: this card carries a heavier
+							// border than the payment card's warn state because it interrupts
+							// rather than informs, so it keeps its own amber and only gains
+							// the dark pairs.
+							<section className="mt-4 flex flex-col gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
 								<div className="flex items-center gap-3">
-									<HandCoins className="size-5 shrink-0 text-amber-600" />
+									<HandCoins className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
 									<div className="min-w-0 flex-1">
-										<p className="text-xs font-semibold uppercase tracking-widest text-amber-700">
+										<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
 											Payment
 										</p>
 										<p className="font-semibold">{copy.heading}</p>
@@ -1401,7 +1445,9 @@ function TrackingRoute() {
 			) : null}
 
 			{/* The stay itself — a booking's equivalent of the address/pickup blocks.
-			    Frozen at request (bookingCheckIn/Out never change after create). */}
+			    Frozen at request, except that a seller's "Skip a day" on an
+			    open-days plan moves the last day out (z8r3fdh3ay) — this page is
+			    live, so it shows the new one. */}
 			{isBooking &&
 			order.bookingCheckIn !== undefined &&
 			order.bookingCheckOut !== undefined ? (
@@ -1460,6 +1506,15 @@ function TrackingRoute() {
 							{bookingLengthLabel(order, ms ? "ms" : "en")} ·{" "}
 							{order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
 						</p>
+						{isBookingPackage ? (
+							<PlanSkipsNote
+								order={order}
+								maxSkips={order.bookingMaxSkips}
+								skippable={order.bookingSkippable === true}
+								storeName={order.storeName}
+								ms={ms}
+							/>
+						) : null}
 					</div>
 				</section>
 			) : null}
@@ -1804,6 +1859,7 @@ function TrackingRoute() {
 								imageUrl={itemImageUrls?.[i] ?? undefined}
 								booking={itemBookingSpan}
 								answers={item.answers}
+								locale={ms ? "ms" : "en"}
 							/>
 						);
 					})}
@@ -2120,17 +2176,7 @@ function ConfirmationSentCard({
 				</div>
 			</div>
 			<p className="text-sm text-muted-foreground">
-				{ms
-					? free
-						? "Tak perlu hantar apa-apa dan tiada bayaran diperlukan. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini. Simpan pautan ini."
-						: paymentsPaused
-							? "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini, dan cara membayar akan muncul di sini sebaik sahaja kedai menerima bayaran. Simpan pautan ini."
-							: "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
-					: free
-						? "Nothing to send and nothing to pay. That's the only message we'll send you — your latest status and your receipt live here. Keep this link."
-						: paymentsPaused
-							? "Nothing to send. That's the only message we'll send you — your latest status and your receipt live here, and how to pay appears here once the store is taking payments. Keep this link."
-							: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
+				{confirmationSentBody({ ms, free, paymentsPaused })}
 			</p>
 			<Button asChild variant="outline" className="h-11 w-full">
 				<a
@@ -2545,6 +2591,9 @@ function MockupReview({
 						src={mockupUrls[0]}
 						alt="Your mockup"
 						caption="Your mockup"
+						// dark-ok: the mat stays white in BOTH themes. A mockup is a
+						// user-supplied image — routinely dark ink on transparent — so a
+						// dark mat would swallow the artwork or frame it in a seam.
 						wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
 						className="block max-h-72 w-full object-contain"
 						// Order-owned blob (orderBlobs.ts) — erased on hard delete.
@@ -2560,6 +2609,7 @@ function MockupReview({
 								caption={`Your mockup ${i + 1}`}
 								// Order-owned blob — erased on hard delete.
 								sensitive
+								// dark-ok: same theme-invariant mat as the single-mockup case.
 								wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
 								className="block aspect-square w-full object-cover"
 							/>
@@ -2599,7 +2649,7 @@ function MockupReview({
 				</p>
 			) : null}
 			{status === "approved" ? (
-				<p className="text-sm text-emerald-700">
+				<p className="text-sm text-emerald-700 dark:text-emerald-300">
 					Approved — the seller will start making your order.
 				</p>
 			) : null}

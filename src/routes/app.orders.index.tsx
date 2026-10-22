@@ -155,6 +155,7 @@ import {
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
+import { searchText } from "../lib/search-params";
 import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
@@ -188,6 +189,12 @@ type InboxSearch = {
 	 * here into `st` and returns `undefined`, so old bookmarks and deep links
 	 * keep working and the param drops out of the URL on the next tap. */
 	bucket?: OrderBucket[];
+	/** Legacy singular `?source=` and `?nopin=`, READ ONLY like `bucket`:
+	 * folded into `sources` / `pin` and returned `undefined`. Returning them
+	 * is what stops the raw value leaking through the router's merge
+	 * (z8r3fdtk87, src/lib/search-params.ts). */
+	source?: undefined;
+	nopin?: undefined;
 	q?: string;
 	pay?: PaymentStatus[];
 	method?: OrderPaymentMethod[];
@@ -425,21 +432,25 @@ export const Route = createFileRoute("/app/orders/")({
 		// link to a category that has since been renamed.
 		const cat = [
 			...new Set(
-				toList(search.cat).flatMap((x) =>
-					typeof x === "string" && x.length > 0 && x.length <= 120 ? [x] : [],
-				),
+				toList(search.cat).flatMap((raw) => {
+					// A category can be named "2024", which the URL parses as a number.
+					const x = searchText(raw);
+					return x !== undefined && x.length <= 120 ? [x] : [];
+				}),
 			),
 		];
-		const q =
-			typeof search.q === "string" && search.q.length > 0
-				? search.q
-				: undefined;
+		// An order number or phone is all digits, and `?q=60123…` parses as a
+		// NUMBER — `searchText` reads it back as the text (z8r3fdtk87).
+		const q = searchText(search.q);
 		return {
 			// Never written back: it folded into `st` above. Keeping it out of the
 			// returned object is what makes the old param disappear from the URL
 			// on the seller's next tap instead of lingering as a second source of
 			// truth for the same thing.
 			bucket: undefined,
+			// Folded into `sources` / `pin` below, same as `bucket`.
+			source: undefined,
+			nopin: undefined,
 			q,
 			pay: pay.length > 0 ? pay : undefined,
 			method: method.length > 0 ? method : undefined,
@@ -1233,6 +1244,7 @@ function OrdersRoute() {
 		bookingCheckOut?: number;
 		bookingPackaged?: boolean;
 		bookingSkippedDays?: number[];
+		bookingCustomerSkips?: number[];
 		status: string;
 	}): string | null => describeBookingPeriod(o);
 
@@ -1580,8 +1592,13 @@ function OrdersRoute() {
 				}
 				actions={inboxEnabled ? headerActions : undefined}
 			/>
-			<div className="flex items-center justify-between gap-3 lg:hidden">
-				<div className="min-w-0">
+			{/* WRAPS rather than squeezes: the five header actions need ~350px,
+			    which only just fits a 393px phone. The title used to be the part
+			    that gave way (`min-w-0`) — on a 375px iPhone the view switch sat
+			    on top of "Orders". Now the title keeps its width and the actions
+			    drop to their own line, still right-aligned, when they don't fit. */}
+			<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-3 lg:hidden">
+				<div className="shrink-0">
 					<h2 className="font-heading text-[22px] font-extrabold leading-tight tracking-tight">
 						Orders
 					</h2>
@@ -1589,7 +1606,7 @@ function OrdersRoute() {
 						{loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`}
 					</p>
 				</div>
-				<div className="flex shrink-0 items-center gap-2">
+				<div className="ml-auto flex shrink-0 items-center gap-2">
 					{inboxEnabled ? headerActions : null}
 				</div>
 			</div>
@@ -1753,7 +1770,13 @@ function OrdersRoute() {
 					    because it configures the TABLE, not the result set — the same
 					    reason the view switch moved up into the header. */}
 					<div className="flex items-center gap-2">
-						<FilterChipRow className="min-w-0 flex-1">
+						{/* The row bleeds past the page gutter so chips scroll edge to
+						    edge — but with the Columns pill beside it (table view) the
+						    right-hand bleed slid chips 20px UNDER the pill. Stop at
+						    the pill instead; the chips still scroll, cut cleanly. */}
+						<FilterChipRow
+							className={cn("min-w-0 flex-1", tableView && "mr-0 pr-0")}
+						>
 							{/* Waiting on credits LEADS the row (Credits T3.1), ahead of
 						    even the seller's own pins: it is the only chip here that is
 						    about money we are owed and orders the seller cannot open, so
@@ -1881,7 +1904,7 @@ function OrdersRoute() {
 							}),
 						})
 					}
-					className="flex items-center gap-2.5 rounded-2xl bg-foreground px-4 py-3 text-left text-background transition-opacity hover:opacity-95"
+					className="flex items-center gap-2.5 rounded-2xl bg-foreground dark:border dark:border-accent/30 dark:bg-accent/12 px-4 py-3 text-left text-background dark:text-foreground transition-opacity hover:opacity-95"
 				>
 					<CalendarDays
 						className="size-5 shrink-0 text-accent"

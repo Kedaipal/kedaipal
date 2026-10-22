@@ -10,6 +10,11 @@ vi.mock("convex/react", () => ({
 	useMutation: (fn: { toString: () => string }) =>
 		String(fn).includes("cancel") ? cancelClaim : resendClaim,
 }));
+// The counter is open in these tests — its closed states are pinned in
+// claim-actions.test.tsx and the counter page tests.
+vi.mock("../../hooks/useCounterClosed", () => ({
+	useCounterClosedReason: () => null,
+}));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("../../../convex/_generated/api", () => ({
 	api: {

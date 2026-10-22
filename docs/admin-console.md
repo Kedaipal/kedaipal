@@ -31,7 +31,11 @@ login or screen-share, neither of which scales.
    renews** worded per state — *Renews 14 Oct*, *Trial ends 28 Sep*, *Invoice due*,
    *Was due 3 Sep · 19 days overdue*, *Comp off 1 Sep · 21 days locked*, *Hold
    renews*, *Ended*, *No expiry* (comped), *— · Never billed* (admin) — amber inside
-   a week, red once past. Admin-gated server-side by `requireAdmin` and hidden
+   a week, red once past. In the **renewing window** — period end passed, the
+   cron's renewal (or hold) invoice pending, seller kept on through its 14-day
+   grace — an active or held row reads *Invoice due 31 Oct · in 11 days*, the
+   bill's date, not the lapsed period end (`z8r3fdw12q`); a pending bill while
+   the period still runs (early plan change) leaves *Renews …* as is. Admin-gated server-side by `requireAdmin` and hidden
    client-side behind `billing.amIAdmin`.
    - **Shape:** a table at `lg+` (`useIsDesktop`, a JS gate so a phone never
      carries 500 rows of hidden table DOM), cards below it — both render the
@@ -50,7 +54,11 @@ login or screen-share, neither of which scales.
      credits" crosses every status bucket), Newest store, Name A–Z. Filter, sort and search ride the URL
      (`?status=past_due&sort=expiry&q=…`, validated by `validateSearch`) so a
      filtered view is a link; defaults are omitted so the plain route stays
-     `/app/admin/sellers`.
+     `/app/admin/sellers`. A pasted `?q=9981` parses as a number: the
+     validator reads it back as text (`searchText`) and returns every key, so
+     the URL's raw value can't reach the page. It used to crash the page
+     ([`z8r3fdtk87`](https://app.clickup.com/t/z8r3fdtk87),
+     [url-search-params.md](./url-search-params.md)).
    - **Detail sheet:** the store's name opens a read-only `Sheet side="right"`
      (a drawer beside the table at `sm+`, a bottom sheet on a phone —
      `src/components/admin/seller-sheet.tsx`) with every fact and its own copy

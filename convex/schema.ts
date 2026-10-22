@@ -1261,6 +1261,11 @@ export default defineSchema({
 				// stored-and-ignored). Unset = every day in a row (every existing
 				// listing). See closureRule / resolveOpenDaysTerm.
 				skipsClosedDays: v.optional(v.boolean()),
+				// "Up to N skips per package" (z8r3fdh3ay) — caps the seller's
+				// "Skip a day" on an open-days package. Only with skipsClosedDays
+				// (refused otherwise). Unset = no limit; 0 normalizes to unset.
+				// Read LIVE at skip time: it is a policy, not a term of the sale.
+				maxSkips: v.optional(v.number()),
 				// "Instant book" (S7 — the spec's named follow-up): set = a request
 				// lands `confirmed` with the payment ask firing straight away,
 				// skipping `booking_requested`. Unset = request-to-book.
@@ -1821,7 +1826,26 @@ export default defineSchema({
 		// WHICH days inside it weren't counted, so the receipt and order pages
 		// keep naming them after the store edits its hours or closures. Unset
 		// when nothing was skipped (and on every other booking shape).
+		//
+		// Since z8r3fdh3ay it holds EVERY unused day inside the span — the shut
+		// days AND the days the customer skipped (below) — so capacity, the
+		// grid, the calendar feed and every "N days" count stay right without
+		// a second field to union. Kept sorted, deduped.
 		bookingSkippedDays: v.optional(v.array(v.number())),
+		// The days the CUSTOMER skipped (z8r3fdh3ay) — a subset of
+		// `bookingSkippedDays`, in the order the seller logged them, so the
+		// last entry is the one "Undo" reverses. Each skip moved
+		// `bookingCheckOut` out by one open day; check-in, price and quantity
+		// never move. What it adds over `bookingSkippedDays` is the WHY: a
+		// customer skip is labelled as one, counts against the listing's
+		// `maxSkips`, and can be undone. Unset = never skipped.
+		bookingCustomerSkips: v.optional(v.array(v.number())),
+		// Frozen at create: this package counts OPEN days (`closureRule`
+		// "skipped", z8r3fdhpm7), so the seller can skip a day of it. Frozen
+		// because a later listing edit must not take "Skip a day" off a plan
+		// that was sold as days of service. Absent on orders from before
+		// z8r3fdh3ay — those fall back to the listing.
+		bookingOpenDays: v.optional(v.boolean()),
 		// HOW a request left `booking_requested` when it didn't get approved —
 		// "declined" (seller said no, reason below) or "expired" (the 24 h window
 		// lapsed). Both land the order in `cancelled`; this marker is what lets
@@ -2531,6 +2555,16 @@ export default defineSchema({
 		// and for admin act-as writes (an admin is not a teammate; adminAuditLog
 		// already traces those).
 		actorUserId: v.optional(v.string()),
+		// A NON-status event (z8r3fdh3ay) — something happened to the order
+		// without its status moving. The timeline titles the row by this
+		// instead of the status; `note` carries the human detail. Unset = an
+		// ordinary status event (every row before it).
+		action: v.optional(
+			v.union(
+				v.literal("booking_day_skipped"),
+				v.literal("booking_day_skip_undone"),
+			),
+		),
 		createdAt: v.number(),
 	}).index("by_order", ["orderId"]),
 
@@ -3721,6 +3755,53 @@ export default defineSchema({
 		// Admin → Billing's top-up revenue tile: this month's PAID purchases in
 		// one bounded range (Credits T3 × T5).
 		.index("by_status_paid", ["status", "paidAt"]),
+
+	// ── Seller referrals (z8r3fdetf5, docs/referrals.md) ──────────────────────
+	// One row per REFEREE: the store that signed up through another store's
+	// `/referral/<slug>` link, and the store that referred it. Written only when
+	// the referrer could refer at that moment (`referrerStanding` in
+	// lib/referral.ts — an active plan, or comped) — so a row is a promise the
+	// referee was shown, and the reward (credits for both sides when the
+	// referee's first plan invoice is paid) keys off THIS row, never off the
+	// `retailers.signupSource` analytics tag. Its own table rather than fields
+	// on `retailers`: the dashboard card counts a referrer's rows by index, and
+	// new fields on `retailers` poison the shared dev deployment.
+	//
+	// `referrerId` can dangle — a referrer deleted after the signup leaves the
+	// referee's row (and their reward) standing, like an invoice's refs.
+	referrals: defineTable({
+		refereeId: v.id("retailers"),
+		referrerId: v.id("retailers"),
+		// How it was recorded: the link at signup, or an admin putting right a
+		// referral the link didn't capture (closed tab, off-link intro).
+		via: v.union(v.literal("link"), v.literal("admin")),
+		// "system" for the link; the admin's Clerk subject otherwise.
+		recordedBy: v.string(),
+		createdAt: v.number(),
+		// The reward (T2, 86ey82hke) — stamped ONCE, in the same transaction as
+		// the credits, when the referee's first plan invoice is paid. Set =
+		// done: the stamp is the idempotency guard, so a second settle path
+		// (webhook + manual mark-paid) can never pay twice.
+		rewardedAt: v.optional(v.number()),
+		// Credits each side received. `referrerCredits` is absent when the
+		// referrer got nothing — `referrerOutcome` says why.
+		refereeCredits: v.optional(v.number()),
+		referrerCredits: v.optional(v.number()),
+		// `granted`; `unmetered` (a comped or Kedaipal-owned referrer — already
+		// unlimited, so nothing to give); `deleted` (the referrer store is
+		// gone); `self` (the referee shares the referrer's email or WhatsApp
+		// number — one person, two stores, so the referrer half is withheld).
+		referrerOutcome: v.optional(
+			v.union(
+				v.literal("granted"),
+				v.literal("unmetered"),
+				v.literal("deleted"),
+				v.literal("self"),
+			),
+		),
+	})
+		.index("by_referee", ["refereeId"])
+		.index("by_referrer_created", ["referrerId", "createdAt"]),
 
 	// Per-period invoice. Admin marks it paid out-of-band (DuitNow / bank). The
 	// founding pending invoice carries a `dueDate` that drives the active→past_due

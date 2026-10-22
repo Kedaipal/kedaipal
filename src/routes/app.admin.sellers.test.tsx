@@ -90,7 +90,11 @@ vi.mock("convex/react", () => ({
 
 import { SellerCard } from "../components/admin/seller-card";
 import { formatShortDate } from "../lib/format";
-import { AdminSellersContent, type SellersSearch } from "./app.admin.sellers";
+import {
+	AdminSellersContent,
+	Route,
+	type SellersSearch,
+} from "./app.admin.sellers";
 
 const startActAsSpy = () =>
 	mutationSpies.get(getFunctionName(api.admin.startActAsSession));
@@ -115,6 +119,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		comped: false,
 		createdAt: at(-20),
 		unclaimed: false,
+		referralEditable: true,
 		purging: false,
 		marketplace: { internal: false },
 		country: "MY",
@@ -345,6 +350,55 @@ describe("directory — chips, sort, search", () => {
 		fireEvent.change(box, { target: { value: "+60 19-876" } });
 		expect(screen.getByRole("row", { name: /Waa Daa Fish/ })).toBeTruthy();
 		expect(screen.getAllByRole("row")).toHaveLength(2);
+	});
+
+	// z8r3fdtk87: a hand-typed or shared `?q=9981` reaches validateSearch as
+	// the NUMBER 9981 (TanStack JSON-parses the URL), and a key the validator
+	// left out leaked that number to `q.trim()` — "Something went wrong". The
+	// router-merge half is pinned in src/lib/search-params.test.tsx and swept
+	// for every route in search-params-sweep.test.ts.
+	it("a numeric ?q= from a pasted link is read as text, and junk closes every key", () => {
+		const validate = (
+			Route as unknown as {
+				validateSearch: (s: Record<string, unknown>) => SellersSearch;
+			}
+		).validateSearch;
+		expect(validate({ q: 9981 })).toEqual({ q: "9981" });
+		const junk = validate({ q: [1], status: 7, sort: true });
+		expect(junk).toEqual({});
+		for (const key of ["q", "status", "sort"]) {
+			expect(Object.hasOwn(junk, key)).toBe(true);
+		}
+	});
+
+	it("an all-digit query finds the slug, the name and the phone that carry it", () => {
+		const yuzu = seller({
+			_id: "r_yuzu" as AdminSellerRow["_id"],
+			storeName: "Yuzu Bakes",
+			slug: "9981yuzu",
+		});
+		const named = seller({
+			_id: "r_named" as AdminSellerRow["_id"],
+			storeName: "Kedai 9981",
+			slug: "kedai-lama",
+		});
+		const phoned = seller({
+			_id: "r_phoned" as AdminSellerRow["_id"],
+			storeName: "Pak Ali Satay",
+			slug: "pak-ali",
+			notifyWaPhone: "60129981234",
+		});
+		queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
+			sellers: [...ROWS, yuzu, named, phoned],
+			capped: false,
+		});
+		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), true);
+		render(<Harness initial={{ q: "9981" }} />);
+		// Header row + the three matches; nothing else carries 9981.
+		expect(screen.getAllByRole("row")).toHaveLength(4);
+		for (const name of [/Yuzu Bakes/, /Kedai 9981/, /Pak Ali Satay/]) {
+			expect(screen.getByRole("row", { name })).toBeTruthy();
+		}
 	});
 
 	it("no matches names the filter that is hiding the rest and clears it in one tap", () => {

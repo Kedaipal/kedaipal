@@ -7,6 +7,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, Check, Minus, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { type Country, DEFAULT_COUNTRY } from "../../convex/lib/country";
 import {
 	type AnnualQuote,
 	annualQuote,
@@ -43,16 +44,21 @@ import {
 } from "../components/landing/landing-ui";
 import { MoneyMathRow } from "../components/landing/money-math";
 import { Nav } from "../components/landing/nav";
+import { ReferralInvitePill } from "../components/landing/referral-invite-pill";
 import { Button } from "../components/ui/button";
 import { useLandingRegion } from "../hooks/useLandingRegion";
 import { useMarketingLanding } from "../hooks/useMarketingLanding";
+import { useReferralInvite } from "../hooks/useReferralInvite";
 import { useSupportWaNumber } from "../hooks/useSupportWaNumber";
 import {
 	enterpriseFromOrdersLabel,
 	enterpriseTalkUrl,
 } from "../lib/enterprise-contact";
 import { trackEvent, trackSignupCta } from "../lib/ga-events";
+import { jsonLdScript } from "../lib/json-ld";
 import { resolveTierCta } from "../lib/pricing-cta";
+import { pricingJsonLd } from "../lib/pricing-jsonld";
+import { SITE_URL } from "../lib/site-identity";
 import type { SubscriptionView } from "../lib/subscription";
 import { cn } from "../lib/utils";
 import { m } from "../paraglide/messages";
@@ -67,7 +73,6 @@ const rm = (plan: ListedPlan) => PLAN_MONTHLY_PRICES.MYR[plan] / 100;
  * nothing tied it to the constants the cards render from.
  */
 const SEO_DESC = `Free until you sell. Starter RM${rm("starter")} or Pro RM${rm("pro")} a month — ${PLAN_CREDIT_GRANT.starter} or ${PLAN_CREDIT_GRANT.pro} orders included — and Enterprise priced for your volume. No per-message fees. S$ pricing for Singapore.`;
-const SITE_URL = "https://kedaipal.com";
 const PAGE_URL = `${SITE_URL}/pricing`;
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
 
@@ -85,8 +90,31 @@ const CURRENCY_SYMBOL: Record<BillingCurrency, string> = {
 // 9 Aug 2026).
 const SHOW_ANNUAL_TOGGLE = true;
 
+/** The root loader's region, read off the match list the way
+ * `useServerRegion` reads it off router state; `DEFAULT_COUNTRY` where the
+ * header gave no answer (local dev, a client-side re-run). */
+function serverRegion(
+	matches: ReadonlyArray<{ loaderData?: unknown }>,
+): Country {
+	const data = matches[0]?.loaderData as { region?: unknown } | undefined;
+	return data?.region === "SG" ? "SG" : DEFAULT_COUNTRY;
+}
+
 export const Route = createFileRoute("/pricing")({
-	head: () => ({
+	// The Offers' currency follows the region the ROOT loader resolved — the
+	// same answer `useLandingRegion` seeds the cards from — so the schema
+	// price is the price the visitor sees (Google flags a mismatch). A
+	// visitor's later toggle re-renders the cards, not the head; the SSR'd
+	// pair is what a crawler reads, and a crawler never toggles.
+	head: ({ matches }) => ({
+		scripts: [
+			jsonLdScript(
+				pricingJsonLd({
+					siteUrl: SITE_URL,
+					currency: BILLING_CURRENCY_FOR_COUNTRY[serverRegion(matches)],
+				}),
+			),
+		],
 		meta: [
 			{ title: SEO_TITLE },
 			{ name: "description", content: SEO_DESC },
@@ -830,6 +858,7 @@ function PricingPage() {
 	useEffect(() => {
 		trackEvent("view_pricing");
 	}, []);
+	const invite = useReferralInvite();
 	const [cycle, setCycle] = useState<Cycle>("monthly");
 	const { isLoaded, isSignedIn } = useAuth();
 	// Only signed-in sellers need their plan; skip the query for visitors. A
@@ -864,10 +893,18 @@ function PricingPage() {
 			<section className="bg-hero-mesh">
 				<div className="relative mx-auto max-w-4xl px-5 pb-16 pt-28 text-center md:px-8 md:pb-24 md:pt-40">
 					<FadeIn>
-						<Sticker tone="outline" rotate={-1.5}>
-							<Sparkles className="size-3" />
-							{m.pricing_badge()}
-						</Sticker>
+						{/* A referred visitor (z8r3fdetf5) sees their invite where the
+						    badge sits — the price they're reading is the one their
+						    bonus credits ride on. Everyone else keeps the badge. The
+						    flat-fee line below stays for both. */}
+						{invite !== null ? (
+							<ReferralInvitePill invite={invite} />
+						) : (
+							<Sticker tone="outline" rotate={-1.5}>
+								<Sparkles className="size-3" />
+								{m.pricing_badge()}
+							</Sticker>
+						)}
 						<div className="mt-4 flex justify-center">
 							<CommissionBadge />
 						</div>

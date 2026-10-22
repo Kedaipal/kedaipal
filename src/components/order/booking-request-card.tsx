@@ -117,6 +117,9 @@ export function BookingRequestCard({
 	// the order summary under it said the true thing (z8r3fdhpm7).
 	const isPackage = order.bookingPackaged === true;
 	const length = bookingLengthLabel(order);
+	// No customer-skips argument on purpose: a REQUEST can't carry a skip
+	// (skipPackageDay refuses booking_requested). An order surface that can
+	// must pass `bookingCustomerSkips`, or a skip reads as "store closed".
 	const skips = describeSkippedDays(order.bookingSkippedDays);
 	// The 24 h promise, counted from the request — red once it's about to lapse
 	// (the expiry cron releases the hold at zero).

@@ -171,20 +171,26 @@ export function billingPastDueTemplateName(): string | undefined {
  * wrong. Re-editing an APPROVED template re-triggers review, so submit once,
  * with the wording below, which matches `creditEmailCopy.ts` word for word.
  * The PARAM SHAPES above are unchanged, so nothing in this file moves.
+ * (z8r3fdwbbb added the counter clause: the counter is the one door that
+ * stops at zero, so "new orders keep arriving" had to become ONLINE orders.)
  *
  * `credits_low_utility`
- *  en: {{1}} — {{2}} left on Kedaipal. New orders keep arriving; once you run
- *      out you won't be able to open the new ones until credits land.
- *  ms: {{1}} — tinggal {{2}} di Kedaipal. Pesanan baharu terus masuk; sebaik
- *      kredit habis anda tidak boleh membukanya sehingga kredit masuk.
+ *  en: {{1}} — {{2}} left on Kedaipal. Online orders keep arriving; once you
+ *      run out you won't be able to open the new ones, and the counter can't
+ *      ring up a walk-in sale, until credits land.
+ *  ms: {{1}} — tinggal {{2}} di Kedaipal. Pesanan online terus masuk; sebaik
+ *      kredit habis anda tidak boleh membukanya, dan kaunter tidak boleh
+ *      merekod jualan pelanggan walk-in, sehingga kredit masuk.
  *
  * `credits_locked_utility`
  *  en: {{1}} — you're at {{2}}, so new orders are waiting on credits. They
- *      open oldest first once credits land. Your other orders, your products
- *      and your settings carry on, and cancelling always works.
+ *      open oldest first once credits land, and the counter reopens then too.
+ *      Your other orders, your products and your settings carry on, and
+ *      cancelling always works.
  *  ms: {{1}} — baki anda {{2}}, jadi pesanan baharu menunggu kredit. Ia dibuka
- *      yang paling lama dahulu sebaik kredit masuk. Pesanan lain, produk dan
- *      tetapan anda tidak terjejas, dan pembatalan sentiasa boleh.
+ *      yang paling lama dahulu sebaik kredit masuk, dan kaunter dibuka semula
+ *      ketika itu. Pesanan lain, produk dan tetapan anda tidak terjejas, dan
+ *      pembatalan sentiasa boleh.
  *
  * `credits_unlocked_utility`
  *  en: {{1}} — credits added, {{2}} left. The orders that were waiting are
@@ -194,6 +200,24 @@ export function billingPastDueTemplateName(): string | undefined {
  */
 export function creditsLowTemplateName(): string | undefined {
 	const name = process.env.WHATSAPP_CREDITS_LOW_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/**
+ * Referral rewards (86ey82hke): the WhatsApp half of "your bonus credits
+ * landed", one template per side. Env-gated like every seller template —
+ * absent until Meta approves it, and the email carries the news meanwhile.
+ * Params: {{1}} store name, {{2}} credits, {{3}} the other store's name;
+ * button URL https://kedaipal.com/app/settings?tab={{1}} ("billing").
+ */
+export function referralReferrerTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_REFERRAL_REFERRER_TEMPLATE;
+	return name && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+/** See referralReferrerTemplateName — the referee's "bonus landed". */
+export function referralRefereeTemplateName(): string | undefined {
+	const name = process.env.WHATSAPP_REFERRAL_REFEREE_TEMPLATE;
 	return name && name.trim().length > 0 ? name.trim() : undefined;
 }
 

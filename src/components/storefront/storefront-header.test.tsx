@@ -35,6 +35,8 @@ const coverChat = () =>
 	screen.queryByRole("link", { name: /^Ask Dapur Nadia on WhatsApp$/ });
 const coverShare = () =>
 	screen.queryByRole("button", { name: "Share this store" });
+const coverTheme = () =>
+	screen.queryByRole("button", { name: /^Switch to (dark|light) mode$/ });
 const rowChat = () => screen.queryByRole("link", { name: "Ask on WhatsApp" });
 const rowShare = () => screen.queryByRole("button", { name: "Share store" });
 
@@ -107,7 +109,38 @@ describe("StorefrontHeader — cover icons and the labelled row", () => {
 		expect(
 			chat.compareDocumentPosition(share) & Node.DOCUMENT_POSITION_FOLLOWING,
 		).toBeTruthy();
-		expect(chat.parentElement?.className).toContain("lg:hidden");
+		expect(chat.className).toContain("lg:hidden");
+		expect(share.className).toContain("lg:hidden");
+	});
+
+	it("the theme flip is the LAST cover icon, wears the same skin, and stays at every width (z8r3fdwc19)", () => {
+		render(
+			<StorefrontHeader
+				retailer={{ ...retailer, coverImageUrl: "https://img/cover.jpg" }}
+				slug="dapur-nadia"
+			/>,
+		);
+		const theme = coverTheme() as HTMLButtonElement;
+		const share = coverShare() as HTMLButtonElement;
+		expect(theme.parentElement).toBe(share.parentElement);
+		expect(
+			share.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		// Frosted on a photo, like its neighbours — and NOT lg:hidden: on
+		// desktop it is the one icon left on the cover.
+		expect(theme.className).toContain("backdrop-blur");
+		expect(theme.className).not.toContain("lg:hidden");
+		expect(theme.parentElement?.className).not.toContain("lg:hidden");
+		// Icon only: the name is the aria-label, no visible words.
+		expect(theme.textContent).toBe("");
+	});
+
+	it("the theme flip goes outline on the no-cover band, and renders with nothing else to show", () => {
+		render(<StorefrontHeader retailer={{ storeName: "Lekor Mr Ganu" }} />);
+		// No slug (no Share) and no WhatsApp: the row still carries the flip.
+		expect(coverShare()).toBeNull();
+		expect(coverChat()).toBeNull();
+		expect(coverTheme()?.className).toContain("border-border");
 	});
 
 	it("desktop: the labelled row lives inside the island and is hidden below lg", () => {

@@ -17,7 +17,11 @@ import {
 	isEventPassed,
 } from "../../../convex/lib/productEvent";
 import { weekendDaysLabel } from "../../../convex/lib/productKind";
-import { formatDraftPrice, parsePriceInput } from "../../lib/format";
+import {
+	formatDraftPrice,
+	formatDraftPriceRange,
+	parsePriceInput,
+} from "../../lib/format";
 import type { BuyerQuestionsDraft } from "./buyer-questions-card";
 import { type EventDraft, eventSubmitValue } from "./event-fields";
 import { type PromoDraft, promoSubmitValue } from "./promo-fields";
@@ -217,6 +221,102 @@ export function customOrdersAnswer(
 				? `from ${formatDraftPrice(price, currency)}`
 				: "price on quote"
 		}`,
+	);
+}
+
+/**
+ * The collapsed line of the per-choice list on the edit page (z8r3fdwnyk) —
+ * "12 choices · RM 12–28 · 2 off". Not a question row (the list is the
+ * product, not an optional capability) but the same rule: the line is STATE,
+ * so a seller who never opens the list still knows what is in it.
+ *
+ * Price range and "needs a price" count only lines a buyer can buy — the
+ * save checks prices only on an active row (`buildSubmitVariants`), so an
+ * off line with a blank price is not a problem and must not read as one.
+ */
+export function choicesAnswer(
+	rows: readonly { price: string; active: boolean }[],
+	currency: string,
+): Answer {
+	const parts = [plural(rows.length, "choice")];
+	const active = rows.filter((r) => r.active);
+	const prices = active
+		.map((r) => parsePriceInput(r.price.trim()))
+		.filter((p): p is number => p !== null);
+	if (prices.length > 0) {
+		parts.push(
+			formatDraftPriceRange(Math.min(...prices), Math.max(...prices), currency),
+		);
+	}
+	const offCount = rows.length - active.length;
+	if (offCount > 0) parts.push(`${offCount} off sale`);
+	const unpriced = active.length - prices.length;
+	if (unpriced > 0) {
+		parts.push(
+			`${unpriced} ${unpriced === 1 ? "needs a price" : "need a price"}`,
+		);
+		return warn(parts.join(" · "));
+	}
+	return off(parts.join(" · "));
+}
+
+/** What Advanced holds per choice, in the order a seller scans it: SKUs,
+ * parcel weights (only where they live in Advanced — weight mode promotes
+ * them out), lines off sale. Empty when none of it is set. */
+function choiceDetailParts(
+	rows: readonly { sku: string; parcelWeightG: string; active: boolean }[],
+	weightMode: boolean,
+): string[] {
+	const parts: string[] = [];
+	const skus = rows.filter((r) => r.sku.trim().length > 0).length;
+	if (skus > 0) parts.push(plural(skus, "SKU"));
+	if (!weightMode) {
+		const weights = rows.filter(
+			(r) => r.parcelWeightG.trim().length > 0,
+		).length;
+		if (weights > 0) parts.push(plural(weights, "parcel weight"));
+	}
+	const offCount = rows.filter((r) => !r.active).length;
+	if (offCount > 0) parts.push(`${offCount} off sale`);
+	return parts;
+}
+
+/**
+ * Advanced's header line on the edit page (z8r3fdwnyk), where Advanced starts
+ * CLOSED: "Second choice: Colour · 3 SKUs · 56 parcel weights". It used to
+ * force itself open whenever it held anything, so a seller never missed the
+ * config — this line is how that promise survives the collapse. `null` when
+ * nothing inside is set, so the caller falls back to listing what COULD be.
+ */
+export function advancedAnswer({
+	options,
+	rows,
+	weightMode,
+}: {
+	options: readonly { name: string }[];
+	rows: readonly { sku: string; parcelWeightG: string; active: boolean }[];
+	weightMode: boolean;
+}): string | null {
+	const parts: string[] = [];
+	const second = options[1];
+	if (second) parts.push(`Second choice: ${second.name.trim() || "unnamed"}`);
+	parts.push(...choiceDetailParts(rows, weightMode));
+	return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/** The collapsed line of Advanced's per-choice details — "56 choices · 3 SKUs
+ * · 56 parcel weights", or "nothing set yet" so a closed list never reads as
+ * if it were empty. */
+export function choiceDetailsAnswer(
+	rows: readonly { sku: string; parcelWeightG: string; active: boolean }[],
+	weightMode: boolean,
+): Answer {
+	const parts = choiceDetailParts(rows, weightMode);
+	return off(
+		[
+			plural(rows.length, "choice"),
+			...(parts.length > 0 ? parts : ["nothing set yet"]),
+		].join(" · "),
 	);
 }
 

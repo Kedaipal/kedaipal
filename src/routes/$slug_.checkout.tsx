@@ -32,6 +32,7 @@ import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient } from "../lib/convex-server";
 import type { PromoState } from "../lib/promo";
+import { searchText } from "../lib/search-params";
 import { ssrRead } from "../lib/ssr-read";
 
 interface CheckoutLoaderData {
@@ -70,13 +71,21 @@ export const Route = createFileRoute("/$slug_/checkout")({
 	validateSearch: (
 		search: Record<string, unknown>,
 	): { booking?: string; rsvp?: string; voucher?: string } => {
-		if (typeof search.booking === "string" && search.booking.length > 0)
-			return { booking: search.booking };
-		if (typeof search.rsvp === "string" && search.rsvp.length > 0)
-			return { rsvp: search.rsvp };
-		return typeof search.voucher === "string" && search.voucher.length > 0
-			? { voucher: search.voucher }
-			: {};
+		// All three keys are always returned: TanStack merges this over the raw
+		// search, so returning `{ booking }` alone used to leak a raw `rsvp` and
+		// `voucher` through and break the "booking wins" rule above
+		// (z8r3fdtk87, src/lib/search-params.ts).
+		const booking =
+			typeof search.booking === "string" && search.booking.length > 0
+				? search.booking
+				: undefined;
+		const rsvp =
+			!booking && typeof search.rsvp === "string" && search.rsvp.length > 0
+				? search.rsvp
+				: undefined;
+		// A code can be all digits (`?voucher=2024` parses as a number).
+		const voucher = !booking && !rsvp ? searchText(search.voucher) : undefined;
+		return { booking, rsvp, voucher };
 	},
 	loader: async ({
 		params,
@@ -247,8 +256,11 @@ function CheckoutRoute() {
 					backToProductSlug={booking}
 				/>
 				<div className="px-5 pt-4 lg:px-8 lg:pt-6">
+					{/* Neutral on purpose: this route doesn't load the listing, and
+					    an instant-book listing has no request step — the form's
+					    own button and copy say which kind this is. */}
 					<h1 className="font-heading text-xl font-extrabold tracking-tight">
-						Request to book
+						Your booking
 					</h1>
 					<div className="mt-4">
 						<BookingCheckoutForm

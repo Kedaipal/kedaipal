@@ -154,6 +154,12 @@ export function OpeningHoursLine({
 			(headsUp.label ? ` · ${headsUp.label}` : "")
 		: null;
 
+	// Hoisted for the same reason as coverPillClass below: the reason has to
+	// sit directly on the colour, which biome won't allow inside the ternary.
+	const coverDotClass =
+		// dark-ok: a dimmed dot over the cover photo's scrim — white is right in
+		// both themes, because the ground is the photo, not the theme.
+		"bg-white/60";
 	// The live open/closed signal — mint when open, dimmed when shut. It
 	// replaced the Clock glyph in the polish pass (z8r3fdegb5): a state dot
 	// says more than a static icon in the same 6px.
@@ -164,13 +170,19 @@ export function OpeningHoursLine({
 				status.open
 					? "bg-accent"
 					: onCover
-						? "bg-white/60"
+						? coverDotClass
 						: "bg-muted-foreground/60"
 			}`}
 		/>
 	);
+	// Hoisted so the reason can sit directly on the colour: inside the ternary
+	// biome moves the comment behind the `?`, where the coverage scan cannot see it.
+	const coverPillClass =
+		// dark-ok: over the cover photo's scrim, so white is right in both themes —
+		// the axis is the photo, not the theme. Without a cover it uses tokens.
+		"flex items-center gap-1.5 rounded-full border border-white/25 bg-white/15 px-2.5 py-1 text-xs font-medium text-white backdrop-blur transition-colors hover:bg-white/25";
 	const pillClass = onCover
-		? "flex items-center gap-1.5 rounded-full border border-white/25 bg-white/15 px-2.5 py-1 text-xs font-medium text-white backdrop-blur transition-colors hover:bg-white/25"
+		? coverPillClass
 		: "flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted";
 
 	// The island's lead word carries the state colour ("Open now" mint,

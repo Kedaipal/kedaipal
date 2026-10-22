@@ -428,9 +428,50 @@
 	.animate-kp-marquee-slow,
 	.animate-kp-marquee-slow-reverse,
 	.animate-kp-highlight-sweep,
-	.animate-kp-spotlight {
+	.animate-kp-spotlight,
+	html[data-theme-transition] .kp-theme-glyph {
 		animation: none;
 	}
+}
+
+/* =============================================
+   Theme change — the lights dim, they don't cut
+   =============================================
+   `lib/theme.ts` runs the class flip inside a view transition and stamps the
+   direction on <html> for its duration (docs/dark-mode.md, "The fade"). The
+   browser's own crossfade is 250ms — a softened cut, not a feeling. Going
+   dark is a dimmer turned down: a symmetric ease over half a second. Coming
+   back is brighter sooner and settles slower, the way eyes adjust to a lamp
+   coming on. Old and new share one curve so their opacities always sum to 1
+   under the pair's plus-lighter blend — no dip in the middle.
+   Reduced motion never arrives here: theme.ts commits without a transition. */
+html[data-theme-transition="to-dark"]::view-transition-old(root),
+html[data-theme-transition="to-dark"]::view-transition-new(root) {
+	animation-duration: 520ms;
+	animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+}
+html[data-theme-transition="to-light"]::view-transition-old(root),
+html[data-theme-transition="to-light"]::view-transition-new(root) {
+	animation-duration: 680ms;
+	animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* The toggle's incoming glyph (sun or moon) turns into place under the fade.
+   The glyphs are CSS-picked (`dark:hidden` / `hidden dark:block`), so the
+   incoming one is freshly rendered at the flip and its animation starts
+   there; gated on the attribute so a page load never replays it. */
+@keyframes kp-theme-glyph-in {
+	from {
+		opacity: 0;
+		transform: rotate(-90deg) scale(0.5);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+html[data-theme-transition] .kp-theme-glyph {
+	animation: kp-theme-glyph-in 560ms cubic-bezier(0.2, 0, 0, 1) both;
 }
 
 /* Highlighter swipe behind accent words — mint */
@@ -480,6 +521,18 @@
 	background-size: 200px 200px, auto, auto;
 	background-repeat: repeat, no-repeat, no-repeat;
 	background-color: hsl(0 0% 100%);
+}
+
+/* The same mesh on the dark ground: the page colour instead of white, the mint
+   glow a touch stronger (it has to read against navy), the navy hint dropped
+   (navy on navy is nothing). `@utility` has no dark half, so a plain rule. */
+.dark .bg-hero-mesh {
+	background-image:
+		url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E"),
+		radial-gradient(ellipse 80% 55% at 50% -5%, hsl(160 84% 39% / 0.16), transparent);
+	background-size: 200px 200px, auto;
+	background-repeat: repeat, no-repeat;
+	background-color: hsl(222 47% 6%);
 }
 
 /* =============================================
@@ -838,8 +891,11 @@
 	   forced to fail on one side or to change colour halfway through a word,
 	   which looks exactly as bad as it sounds. So: one light ink, one ramp,
 	   everywhere — the SHAPE carries the tear, not the brightness. */
-	--countdown-paper: hsl(222 47% 11%);
-	--countdown-cut: hsl(217 33% 22%);
+	/* Paper at --segment's lightness, not --primary's: at 11% the band read
+	   BLACK, and black is not a Kedaipal colour (Zaki, 20 Oct 2026 — the same
+	   call Arif made for the pill toggles). The cut keeps its ~11-point lift. */
+	--countdown-paper: hsl(222 47% 22%);
+	--countdown-cut: hsl(217 33% 33%);
 	--countdown-ink: hsl(210 40% 98%);
 	--countdown-ok: hsl(158 64% 52%);
 	--countdown-low: hsl(43 96% 56%);
@@ -908,6 +964,18 @@
 	   colour, and a toggle's current value is a state, not an action. */
 	--segment: hsl(222 47% 34%);
 	--segment-foreground: hsl(210 40% 98%);
+
+	/* The countdown on a DARK page. The light-page pair (paper 22%, opening
+	   33%) was tuned for a navy band on white, where the opening is a gentle
+	   lift and both halves still sit below the page. On a 6% page the same
+	   pair inverts the reading: the 33% opening becomes the brightest surface
+	   on screen and the "cut paper" reads as a bright slab (Zaki, 21 Oct 2026,
+	   on the checkout band). Here the paper is a card-level band and the
+	   opening is a VOID — the page showing through the cut — a step DARKER
+	   than the paper, the same ~7-point distance the light pair keeps. The
+	   ink is one light colour on both grounds either way. */
+	--countdown-paper: hsl(222 47% 15%);
+	--countdown-cut: hsl(222 47% 7%);
 
 	--secondary: hsl(217 33% 17%);
 	--secondary-foreground: hsl(210 40% 98%);

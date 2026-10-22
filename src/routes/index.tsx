@@ -1,46 +1,24 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PLAN_MONTHLY_PRICES } from "../../convex/lib/plans";
-import { FAQ_MESSAGES, Faq } from "../components/landing/faq";
-import { FinalCta } from "../components/landing/final-cta";
-import { FitCheck } from "../components/landing/fit-check";
-import { Footer } from "../components/landing/footer";
-import { Hero } from "../components/landing/hero";
-import { Nav } from "../components/landing/nav";
-import { PaymentMethods } from "../components/landing/payment-methods";
-import { PricingTeaser } from "../components/landing/pricing-teaser";
-import { SellerFlow } from "../components/landing/seller-flow";
-import { VideoDemo } from "../components/landing/video-demo";
-import { WaDock } from "../components/landing/wa-dock";
-import { LandingRegionProvider } from "../hooks/useLandingRegion";
-import { useMarketingLanding } from "../hooks/useMarketingLanding";
+import { FAQ_MESSAGES } from "../components/landing/faq";
+import { LandingPage } from "../components/landing/landing-page";
+import { useReferralInvite } from "../hooks/useReferralInvite";
 import { DEMO_DURATION_ISO, DEMO_VIDEO } from "../lib/demo-video";
 import { jsonLdScript } from "../lib/json-ld";
 import { faqJsonLd } from "../lib/landing-faq";
+import { SEO_DESC, SEO_TITLE } from "../lib/landing-seo";
+import {
+	AREA_SERVED,
+	AVAILABLE_LANGUAGES,
+	FOUNDING_DATE,
+	LEGAL_COUNTRY,
+	LEGAL_ENTITY,
+	ORG_DESCRIPTION,
+	SAME_AS,
+	SITE_URL,
+	SUPPORT_EMAIL,
+} from "../lib/site-identity";
 
-/**
- * "Home sellers" was the pre-Jul-2026 ICP. The feature-grounded cohort is a
- * behaviour, not a venue — multi-outlet stalls, central kitchens and service
- * shops all match it and none of them sell from home. Keep this and the
- * Organization description below on the pattern, never on a venue or vertical.
- */
-const SEO_TITLE =
-	"Kedaipal — WhatsApp Order Hub for Sellers in Malaysia & Singapore";
-/**
- * Mirrors the hero: the locked 8 Sep 2026 tagline, then the promise. Kept
- * under 155 chars — Google truncates around 155-160, so the structural
- * differentiator ("no Meta setup") must sit inside the cut; a 173-char draft
- * put it at char 159 and `landing-seo.test.ts` now measures it. The regions
- * live in SEO_TITLE and the Organization description, not here — "for
- * Malaysia & Singapore" was the 20 chars that pushed the differentiator out.
- * "Free until your first order" is the start-when-you-sell framing (pricing
- * reset, 30 Aug), and still true under the 30 Sep trial model. This line never
- * names a trial length; the page states it once, in the FAQ answer, as "14
- * days or 200 orders" from the first order — the two bounds together
- * (landing-redesign.test.ts).
- */
-const SEO_DESC =
-	"Sell on WhatsApp. Never lose an order or a payment. Orders, payments and couriers on one screen. Free until your first order, no Meta setup.";
-const SITE_URL = "https://kedaipal.com";
 /**
  * The landing demo. `uploadDate` is the date the clip was cut, NOT "today" —
  * a VideoObject whose date moves on every deploy is exactly the signal Google
@@ -78,10 +56,23 @@ const jsonLd = [
 		"@context": "https://schema.org",
 		"@type": "Organization",
 		name: "Kedaipal",
+		legalName: LEGAL_ENTITY,
 		url: SITE_URL,
 		logo: LOGO_URL,
-		description:
-			"B2B SaaS order hub for sellers in Malaysia and Singapore who take orders, deposits and bookings in WhatsApp — meat suppliers, central kitchens, bakers, service shops and apparel drops. Real storefront, real order pipeline, courier booking from the order, no Meta setup needed.",
+		description: ORG_DESCRIPTION,
+		// Entity resolution (z8r3fdh2z3): the profiles the footer links and the
+		// support address, declared so an engine can tie kedaipal.com to them.
+		// Read from `site-identity.ts`, the same constant the footer renders.
+		sameAs: SAME_AS,
+		foundingDate: FOUNDING_DATE,
+		address: { "@type": "PostalAddress", addressCountry: LEGAL_COUNTRY },
+		contactPoint: {
+			"@type": "ContactPoint",
+			contactType: "customer support",
+			email: SUPPORT_EMAIL,
+			areaServed: AREA_SERVED,
+			availableLanguage: AVAILABLE_LANGUAGES,
+		},
 	},
 	{
 		"@context": "https://schema.org",
@@ -143,7 +134,7 @@ export const Route = createFileRoute("/")({
 			{
 				property: "og:image:alt",
 				content:
-					"Kedaipal — Sell on WhatsApp. Never lose an order or a payment.",
+					"Kedaipal — Stop losing orders buried in WhatsApp chat. Storefront + order pipeline for sellers on WhatsApp.",
 			},
 			{ property: "og:locale", content: "en_MY" },
 			{ name: "twitter:card", content: "summary_large_image" },
@@ -158,32 +149,11 @@ export const Route = createFileRoute("/")({
 });
 
 /**
- * Landing v2 (z8r3fdegej, 12 Sep 2026) trimmed fourteen sections to eight:
- * the promise, the product moving, the proof, the three things the target
- * tier is sold on, the price, the objections, the close. The 19 Oct 2026
- * showcase pass (z8r3fdtpub) folded the Payment Handshake and Delivery
- * sections into ONE seller-flow walkthrough — the order landing, paid,
- * shipped, on the real UI — because the page's ask is a demo and its job is
- * to show the product moving, not to describe it. See docs/landing-v2.md.
+ * The landing page. A visitor holding a referral (z8r3fdetf5 — they opened a
+ * `/referral/<slug>` link in the last 30 days) sees the referrer's invite at
+ * the top of the hero; everyone else sees the page unchanged.
  */
 function Landing() {
-	// GA4 funnel entry (z8r3fdd1v0): capture ?src= + fire land_marketing.
-	useMarketingLanding();
-	return (
-		<LandingRegionProvider>
-			<main className="min-h-dvh bg-background text-foreground">
-				<Nav />
-				<Hero />
-				<VideoDemo />
-				<SellerFlow />
-				<PaymentMethods />
-				<FitCheck />
-				<PricingTeaser />
-				<Faq />
-				<FinalCta />
-				<Footer />
-				<WaDock />
-			</main>
-		</LandingRegionProvider>
-	);
+	const invite = useReferralInvite();
+	return <LandingPage invite={invite} />;
 }

@@ -49,6 +49,7 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		comped: false,
 		createdAt: 0,
 		unclaimed: false,
+		referralEditable: true,
 		purging: false,
 		marketplace: { internal: false },
 		country: "MY",

@@ -19,6 +19,17 @@ function SignInPage() {
 				// /app; only an explicit redirect_url can steer elsewhere — the
 				// same posture sign-up has carried since the admin-invite flow.
 				fallbackRedirectUrl="/app"
+				// Sign-in-or-up (z8r3fdwdvq): an address with no account carries on
+				// into creating one instead of dead-ending on "Couldn't find your
+				// account". New people reach this page without choosing to — the
+				// handover email's /app link, an alert email's order link, the
+				// landing nav's "Sign in" — and email-code sign-in can't recover
+				// from a wrong door. The continued sign-up honours the same
+				// redirect_url; without one it lands on /onboarding like any
+				// self-signup, which is also where a waiting pre-built store is
+				// claimed.
+				withSignUp
+				signUpFallbackRedirectUrl="/onboarding"
 			/>
 		</main>
 	);

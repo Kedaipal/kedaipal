@@ -5,6 +5,7 @@ import { useConvex, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
 	CalendarClock,
+	CalendarDays,
 	ChevronRight,
 	Download,
 	EyeOff,
@@ -26,6 +27,7 @@ import {
 	productCapState,
 } from "../../convex/lib/productCap";
 import { formatEventBadge, isEventPassed } from "../../convex/lib/productEvent";
+import { effectiveKind } from "../../convex/lib/productKind";
 import { NeedsAccessNote } from "../components/app/owner-only-note";
 import { ProBadge } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
@@ -58,6 +60,7 @@ import {
 	type ExportableProduct,
 } from "../lib/product-export";
 import { PRODUCT_SPOTLIGHT } from "../lib/product-spotlight";
+import { bookingCapacityLabel } from "../lib/product-summary";
 import { reorderByIds } from "../lib/reorder";
 import {
 	isProductSpotlightKey,
@@ -89,8 +92,10 @@ export const Route = createFileRoute("/app/products/")({
 	validateSearch: (
 		search: Record<string, unknown>,
 	): { spot?: ProductSpotlightKey; stock?: "out" } => ({
-		...(isProductSpotlightKey(search.spot) ? { spot: search.spot } : {}),
-		...(search.stock === "out" ? { stock: "out" as const } : {}),
+		// Every key returned — an omitted one leaks its raw value
+		// (z8r3fdtk87, src/lib/search-params.ts).
+		spot: isProductSpotlightKey(search.spot) ? search.spot : undefined,
+		stock: search.stock === "out" ? "out" : undefined,
 	}),
 	component: ProductsRoute,
 });
@@ -770,6 +775,20 @@ function ProductCard({
 								{formatEventBadge(p.event)}
 							</span>
 						</span>
+					) : effectiveKind(p.kind) === "booking" ? (
+						// A booking has no stock — it has capacity. "In stock" under
+						// a campsite or a meal plan named a thing the seller never
+						// set up; this names the thing they did.
+						<span className="inline-flex max-w-full items-center gap-1 text-accent-emphasis">
+							<CalendarDays className="size-3 shrink-0" aria-hidden />
+							<span className="truncate">
+								Booking ·{" "}
+								{bookingCapacityLabel(
+									p.booking?.capacityPerNight,
+									(p.booking?.packageLength ?? 0) > 0,
+								)}
+							</span>
+						</span>
 					) : outOfStock ? (
 						<span className="text-red-600 dark:text-red-400">Sold out</span>
 					) : lowStock ? (
@@ -791,7 +810,7 @@ function ProductCard({
 					<span
 						className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
 							p.promoState.endsAt !== undefined
-								? "bg-foreground text-background"
+								? "bg-primary text-background dark:text-primary-foreground"
 								: "bg-accent/15 text-accent-emphasis"
 						}`}
 					>

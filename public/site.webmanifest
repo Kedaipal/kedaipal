@@ -1,11 +1,11 @@
 {
-  "name": "Kedaipal — Order Hub for Small Retailers",
+  "name": "Kedaipal — WhatsApp Order Hub",
   "short_name": "Kedaipal",
-  "description": "Turn WhatsApp into your order hub. Launch your storefront, manage orders, and track inventory — 14-day free trial, no credit card.",
+  "description": "Sell on WhatsApp. Never lose an order or a payment. Orders, payments and couriers on one screen. Free until your first order, no Meta setup.",
   "start_url": "/",
   "display": "standalone",
   "theme_color": "#0F172A",
-  "background_color": "#0F172A",
+  "background_color": "#FFFFFF",
   "icons": [
     {
       "src": "/android-chrome-192x192.png",

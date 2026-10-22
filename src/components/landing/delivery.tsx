@@ -115,6 +115,7 @@ function CourierChip({
 				</span>
 			)}
 			{showName ? (
+				// dark-ok: ink on the white brand plate (logoPillClass), both themes.
 				<span className="text-sm font-bold text-slate-800">{courier.name}</span>
 			) : null}
 			{courier.group === "cold" ? (

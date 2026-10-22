@@ -4,7 +4,7 @@ import {
 	takesBuyerOrders,
 	takesCounterOrders,
 } from "./lib/storeAvailability";
-import { offlineStoreIds, storeAvailabilityOf } from "./storeAvailability";
+import { storeAvailabilityOf } from "./storeAvailability";
 
 // One customisable key survives the one-message-per-order cut (86eyd63r8):
 // `confirm`, the write-in reply for a buyer who messages their ORD- reference
@@ -241,6 +241,7 @@ import { sanitizeAttributionSource } from "./lib/attribution";
 import { isChoosablePickupPoint } from "./lib/pickupChoice";
 import { sanitizeUnitLine, UNIT_LINE_MAX_LENGTH } from "./lib/address";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
+import { referralSourceTag } from "./lib/referral";
 import { isValidGaClientId } from "./lib/ga4";
 import { sendEmail } from "./lib/email";
 import { renderHandoverInvite } from "./lib/handoverEmailCopy";
@@ -280,6 +281,8 @@ import {
 	voidPendingInvoiceOnHandover,
 } from "./subscriptions";
 import { detachAutoRenewForRetailer } from "./subscriptionPayments";
+import { isStorefrontIndexable } from "./storefrontIndex";
+import { indexableStores } from "./storefrontIndex";
 import {
 	type ClaimRefusal,
 	isUnclaimed,
@@ -313,6 +316,7 @@ import {
 import { TEMPLATE_MAX_LENGTH } from "./lib/whatsappCopy";
 import { type CreditGateState, resolveCreditGate } from "./creditLock";
 import { ensureCreditAccount } from "./credits";
+import { insertReferral, resolveSignupReferrer } from "./referrals";
 import {
 	assertSupportedCurrency,
 	DEFAULT_CURRENCY,
@@ -879,6 +883,10 @@ type RetailerPublic = {
 	// lands in your WhatsApp" instead of the wa.me handoff. Public-safe (a
 	// deployment-level flag, not seller data); only the by-slug payload sets it.
 	confirmPushEnabled?: boolean;
+	/** Whether search engines are told about this storefront (z8r3fdh2ye) —
+	 * the sitemap rule, so the page's `robots` meta can't disagree with the
+	 * sitemap. Only the by-slug payload sets it. */
+	indexable?: boolean;
 	// Collection-service store (86eyg0n8e): the rider collects FROM the buyer's
 	// address and brings the order TO the seller (Bearcamp gear-wash). Flips
 	// checkout copy ("Collection address — where should we collect from?") and
@@ -1412,6 +1420,7 @@ export const getRetailerBySlug = query({
 					acceptsVouchers: await storeShowsVoucherEntry(ctx, active._id),
 					marketplaceUnlisted: active.marketplaceUnlistedAt !== undefined,
 					storefrontChatEnabled: active.storefrontChatDisabledAt === undefined,
+					indexable: await isStorefrontIndexable(ctx, active, false),
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
 					// reply after the shopper commits to an order.
@@ -1674,6 +1683,12 @@ export const createRetailer = mutation({
 		// signupSource. A hint: resolved to a store id here, dropped when it
 		// names no store.
 		signupReferrerSlug: v.optional(v.string()),
+		// The `/referral/<slug>` link the seller arrived through (z8r3fdetf5),
+		// read from the 30-day referral cookie rather than the session — a
+		// referee who taps the link today and signs up tomorrow keeps the
+		// reward they were shown. A hint like the two above: resolved here, and
+		// recorded only when the store behind it can refer right now.
+		referralSlug: v.optional(v.string()),
 		// GA4 client id from the seller's `_ga` cookie (z8r3fdd1v1), so the
 		// server-side key events stitch to their client-side funnel. A hint like
 		// signupSource: validated here (wire format only), dropped otherwise.
@@ -1743,7 +1758,7 @@ export const createRetailer = mutation({
 
 		// Absent/blank → undefined (untagged), present-but-garbage → "other" —
 		// identical semantics to orders.attributionSource.
-		const signupSource = sanitizeAttributionSource(args.signupSource);
+		const taggedSource = sanitizeAttributionSource(args.signupSource);
 		// Wire-format check only — a malformed value is dropped (unlike
 		// signupSource's "other" bucket: a garbage client id has no signal value).
 		const gaClientId =
@@ -1761,7 +1776,16 @@ export const createRetailer = mutation({
 					.withIndex("by_slug", (q) => q.eq("slug", referrerSlug))
 					.first()
 			: null;
-		const signupReferrerId = referrer?._id;
+		// A referral (z8r3fdetf5) — resolved BEFORE the insert so the new
+		// store's own slug can never answer. It is the explicit "this store
+		// sent me" relationship, so it outranks a badge referrer as the
+		// attribution, and lends its tag to a session that carried none (the
+		// referee who comes back days later by typing kedaipal.com).
+		const referral = await resolveSignupReferrer(ctx, args.referralSlug);
+		const signupReferrerId = referral?._id ?? referrer?._id;
+		const signupSource =
+			taggedSource ??
+			(referral ? referralSourceTag(referral.slug) : undefined);
 
 		const now = Date.now();
 		// Consent is implied: the onboarding UI gates submission on a required,
@@ -1812,6 +1836,15 @@ export const createRetailer = mutation({
 		// Open the credit account with the trial allowance (Credits, 86eye2ccu),
 		// so the balance exists from day one rather than at the first order.
 		await ensureCreditAccount(ctx, retailerId, now);
+		if (referral) {
+			await insertReferral(ctx, {
+				refereeId: retailerId,
+				referrerId: referral._id,
+				via: "link",
+				recordedBy: "system",
+				now,
+			});
+		}
 
 		return { slug };
 	},
@@ -3951,21 +3984,13 @@ export const backfillPaymentMethods = internalMutation({
 export const listSlugsForSitemap = query({
 	args: {},
 	handler: async (ctx): Promise<Array<{ slug: string; updatedAt: number }>> => {
-		const rows = await ctx.db.query("retailers").collect();
-		const offline = await offlineStoreIds(ctx);
-		return (
-			rows
-				// Taken offline by Kedaipal (z8r3fdudf7): the page is a noindex
-				// "unavailable" screen — never hand it to a crawler.
-				.filter((r) => !offline.has(r._id))
-				// A pre-built store's storefront works by direct link — that is how
-				// an admin shows the vendor their shop before handover — but it is
-				// nobody's shop yet, so it must not be submitted to search engines.
-				// Indexing a URL whose store may never be claimed (or may be renamed
-				// at handover) spends the slug's ranking on a page that could vanish.
-				.filter((r) => !isUnclaimed(r))
-				.map((r) => ({ slug: r.slug, updatedAt: r._creationTime }))
-		);
+		// One rule for what a crawler may see (z8r3fdh2ye): claimed, online,
+		// not cancelled, at least one visible product — `convex/lib/storefrontIndex.ts`.
+		// `updatedAt` is the newest store or product write, not creation time.
+		return (await indexableStores(ctx)).map(({ retailer, lastmod }) => ({
+			slug: retailer.slug,
+			updatedAt: lastmod,
+		}));
 	},
 });
 

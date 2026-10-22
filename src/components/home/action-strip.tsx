@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import { Banknote, Bell, CalendarCheck } from "lucide-react";
 import { formatPrice } from "../../lib/format";
 import { heroAmount } from "../../lib/home-copy";
+import { TONE_ACCENT, TONE_CHIP } from "../../lib/tone";
 import { cn } from "../../lib/utils";
 import { Skeleton } from "../ui/skeleton";
 
@@ -116,13 +117,15 @@ export function ActionStrip({
 }
 
 const TONE_TILE = {
-	amber: "bg-amber-100 text-amber-800",
+	// The registry's light half is exactly what shipped here, so adopting it
+	// repaints nothing in light and brings the dark pair along (z8r3fdadub).
+	amber: TONE_CHIP.warn,
 	accent: "bg-accent/15 text-accent-emphasis",
 	plain: "bg-muted text-muted-foreground",
 } as const;
 
 const TONE_VALUE = {
-	amber: "text-amber-700",
+	amber: TONE_ACCENT.warn,
 	accent: "text-foreground",
 	plain: "text-foreground",
 } as const;

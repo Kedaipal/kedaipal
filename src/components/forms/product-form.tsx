@@ -3,6 +3,7 @@ import { useStore } from "@tanstack/react-form";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
+	AlertCircle,
 	BadgeCheck,
 	CalendarClock,
 	CalendarDays,
@@ -82,6 +83,8 @@ import { PRODUCT_WEIGHT_MAX } from "../../lib/product-import";
 import {
 	describeProduct,
 	isSecurityDepositInRange,
+	maxSkipsDraftIssue,
+	maxSkipsFromDraft,
 	securityDepositRangeMessage,
 	weekendRateConsequence,
 } from "../../lib/product-summary";
@@ -161,7 +164,9 @@ import {
 	whereAnswer,
 } from "./product-answers";
 import {
+	failedPhotosLabel,
 	MAX_IMAGES,
+	type PhotoUploadState,
 	type ProductImage,
 	ProductImagesField,
 } from "./product-images-field";
@@ -210,6 +215,8 @@ export interface ProductFormSubmitValues {
 		/** "Only days you're open" (z8r3fdhpm7) — sent only with a day
 		 * package; absent clears it. */
 		skipsClosedDays?: boolean;
+		/** "Up to N skips per package" (z8r3fdh3ay); 0 clears. */
+		maxSkips?: number;
 		/** Weekend per-night rate (sen; S13) + the nights it covers. 0 clears
 		 * (server normalizes); omitted whenever a package length is set. */
 		weekendPrice?: number;
@@ -299,6 +306,8 @@ export type ProductFormDraft = {
 	autoAccept?: boolean;
 	/** "Only days you're open" on a day package (z8r3fdhpm7). */
 	skipsClosedDays?: boolean;
+	/** "Skips per package" as typed (z8r3fdh3ay); blank = no limit. */
+	maxSkips?: string;
 	/** Booking security deposit (RM, as typed; blank/absent = none). Optional
 	 * so pre-S5 draft literals (tests, stored handoffs) stay valid. */
 	securityDeposit?: string;
@@ -369,6 +378,8 @@ interface ProductFormProps {
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
 		skipsClosedDays?: boolean;
+		/** "Skips per package" draft (z8r3fdh3ay); blank = no limit. */
+		maxSkips?: string;
 		/** Booking security deposit as a major-unit string draft ("100") — wizard
 		 * handoff + edit seed. Blank/undefined = none. */
 		securityDeposit?: string;
@@ -900,6 +911,7 @@ function ProductSummaryStrip({
 		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
 		skipsClosedDays?: boolean;
+		maxSkips?: string;
 		weekendPrice?: string;
 		weekendDays?: readonly number[];
 	} | null;
@@ -1035,7 +1047,11 @@ export function ProductForm({
 			url: initialValues?.imageUrls?.[i] ?? "",
 		})),
 	);
-	const [uploading, setUploading] = useState(false);
+	const [photoUploads, setPhotoUploads] = useState<PhotoUploadState>({
+		kind: "idle",
+	});
+	const uploading = photoUploads.kind === "uploading";
+	const photosFailed = photoUploads.kind === "failed" ? photoUploads.count : 0;
 	const [serverError, setServerError] = useState<string | null>(null);
 	// The credit lock's typed refusal, when that's what the save hit — its way
 	// back renders under the sentence (Credits T3).
@@ -1069,6 +1085,11 @@ export function ProductForm({
 	// any other shape, so a hidden value never rides along.
 	const [skipsClosedDays, setSkipsClosedDays] = useState(
 		initialValues?.skipsClosedDays === true,
+	);
+	// "Skips per package" (z8r3fdh3ay) — sent only with "Only days you're
+	// open"; otherwise 0 clears it, so a hidden cap never rides along.
+	const [maxSkipsDraft, setMaxSkipsDraft] = useState(
+		initialValues?.maxSkips ?? "",
 	);
 	// Weekend rate (S13) — RM draft + the nights it covers. Defaults to Fri +
 	// Sat so a seller who only types the rate gets the campsite norm.
@@ -1254,7 +1275,11 @@ export function ProductForm({
 				return;
 			if (
 				isBooking &&
-				(!capacityValid || !depositValid || !packageValid || !weekendValid)
+				(!capacityValid ||
+					!depositValid ||
+					!packageValid ||
+					!weekendValid ||
+					!maxSkipsValid)
 			)
 				return;
 
@@ -1277,6 +1302,7 @@ export function ProductForm({
 								packageUnit,
 								autoAccept,
 								skipsClosedDays: countsOpenDays ? true : undefined,
+								maxSkips: countsOpenDays ? maxSkipsFromDraft(maxSkipsDraft) : 0,
 								// Sen; 0 = clear (the server normalizes 0 → unset).
 								securityDeposit:
 									depositParsed !== null && depositParsed > 0
@@ -1354,6 +1380,7 @@ export function ProductForm({
 			packageUnit,
 			autoAccept,
 			skipsClosedDays,
+			maxSkips: maxSkipsDraft,
 			weekendPrice: weekendDraft,
 			weekendDays,
 			categoryIds,
@@ -1448,9 +1475,11 @@ export function ProductForm({
 		changeImages(next);
 	}
 
+	// A photo that didn't upload is still on screen waiting for Retry — leaving
+	// would lose it, so it counts as unsaved work (z8r3fdtk85).
 	const unsaved: UnsavedState = uploading
 		? "uploading"
-		: dirty
+		: dirty || photosFailed > 0
 			? "changes"
 			: "none";
 	useEffect(() => {
@@ -1509,6 +1538,10 @@ export function ProductForm({
 	const offersDayCounting =
 		packageUnit === "day" && packageLengthNum !== undefined;
 	const countsOpenDays = offersDayCounting && skipsClosedDays;
+	// Only judged while the field is on screen — a stale typo under a hidden
+	// field must not block the save (it's sent as 0, cleared).
+	const maxSkipsValid =
+		!countsOpenDays || maxSkipsDraftIssue(maxSkipsDraft) === null;
 
 	// Booking security deposit — blank = none; else inside the server's own
 	// sanitizeSecurityDeposit ceiling (`isSecurityDepositInRange`, shared with
@@ -1635,6 +1668,7 @@ export function ProductForm({
 											packageUnit,
 											autoAccept,
 											skipsClosedDays: countsOpenDays,
+											maxSkips: countsOpenDays ? maxSkipsDraft : undefined,
 											weekendPrice: weekendDraft,
 											weekendDays,
 										}
@@ -1716,8 +1750,7 @@ export function ProductForm({
 				<ProductImagesField
 					images={images}
 					onChange={changeImages}
-					onUploadingChange={setUploading}
-					onError={setServerError}
+					onUploadStateChange={setPhotoUploads}
 					autosaveStatus={autosaveOn ? photoAutosave.status : undefined}
 				/>
 			</ProductStepCard>
@@ -1794,6 +1827,8 @@ export function ProductForm({
 							packageLength={packageLengthNum}
 							skipsClosedDays={skipsClosedDays}
 							onChange={setSkipsClosedDays}
+							maxSkips={maxSkipsDraft}
+							onMaxSkipsChange={setMaxSkipsDraft}
 							schedule={storeSchedule}
 						/>
 					) : null}
@@ -1882,6 +1917,7 @@ export function ProductForm({
 						productName={liveStock ? form.state.values.name : undefined}
 						stockLocked={saveLock !== undefined}
 						capabilitiesOutside
+						collapseChoices={isEdit}
 					/>
 
 					<Link
@@ -2574,6 +2610,10 @@ export function ProductForm({
 					// nothing. It flips back to Save the moment any field moves, and
 					// photos that just autosaved leave it reading "saved".
 					const nothingToSave = isEdit && !dirty && !isSubmitting;
+					// Photos sitting in "Didn't upload" are not saved and Save can't
+					// send them (Retry on the tile can) — so the bar says THAT, not
+					// "All changes saved" (z8r3fdtk85 /test-code blocker).
+					const photosHeld = photosFailed > 0 && !isSubmitting;
 					return (
 						<div className="sticky bottom-20 z-10 flex gap-2 lg:static">
 							{stickyAction}
@@ -2584,19 +2624,22 @@ export function ProductForm({
 									isSubmitting ||
 									uploading ||
 									saveLock !== undefined ||
-									nothingToSave
+									nothingToSave ||
+									photosHeld
 								}
 								className={cn(
 									"h-12 flex-1 shadow-lg shadow-accent/20 lg:shadow-none",
 									// The resting state of every edit page, so it is not
 									// drawn as a half-transparent disabled button: on a phone
 									// the bar is sticky, and the form showed through it.
-									nothingToSave &&
+									(nothingToSave || photosHeld) &&
 										!saveLock &&
 										"bg-muted text-muted-foreground shadow-none disabled:opacity-100",
 								)}
 							>
-								{nothingToSave && !saveLock ? (
+								{photosHeld && !saveLock ? (
+									<AlertCircle className="size-4" />
+								) : nothingToSave && !saveLock ? (
 									<CheckCircle2 className="size-4" />
 								) : (
 									<Save className="size-4" />
@@ -2605,9 +2648,11 @@ export function ProductForm({
 									? "Saving…"
 									: saveLock
 										? `${submitLabel} — ${saveLock.label}`
-										: nothingToSave
-											? "All changes saved"
-											: submitLabel}
+										: photosHeld
+											? failedPhotosLabel(photosFailed)
+											: nothingToSave
+												? "All changes saved"
+												: submitLabel}
 							</Button>
 						</div>
 					);

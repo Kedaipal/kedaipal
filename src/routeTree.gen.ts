@@ -15,6 +15,7 @@ import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as CostRouteImport } from './routes/cost'
 import { Route as AppRouteImport } from './routes/app'
 import { Route as AcceptableUseRouteImport } from './routes/acceptable-use'
@@ -24,6 +25,7 @@ import { Route as AppIndexRouteImport } from './routes/app.index'
 import { Route as TrackTokenRouteImport } from './routes/track.$token'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
+import { Route as ReferralSlugRouteImport } from './routes/referral.$slug'
 import { Route as JoinTokenRouteImport } from './routes/join.$token'
 import { Route as ClaimTokenRouteImport } from './routes/claim.$token'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
@@ -87,6 +89,11 @@ const OnboardingRoute = OnboardingRouteImport.update({
   path: '/onboarding',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LlmsDottxtRoute = LlmsDottxtRouteImport.update({
+  id: '/llms.txt',
+  path: '/llms.txt',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CostRoute = CostRouteImport.update({
   id: '/cost',
   path: '/cost',
@@ -130,6 +137,11 @@ const SignUpSplatRoute = SignUpSplatRouteImport.update({
 const SignInSplatRoute = SignInSplatRouteImport.update({
   id: '/sign-in/$',
   path: '/sign-in/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReferralSlugRoute = ReferralSlugRouteImport.update({
+  id: '/referral/$slug',
+  path: '/referral/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
 const JoinTokenRoute = JoinTokenRouteImport.update({
@@ -304,6 +316,7 @@ export interface FileRoutesByFullPath {
   '/acceptable-use': typeof AcceptableUseRoute
   '/app': typeof AppRouteWithChildren
   '/cost': typeof CostRoute
+  '/llms.txt': typeof LlmsDottxtRoute
   '/onboarding': typeof OnboardingRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
@@ -318,6 +331,7 @@ export interface FileRoutesByFullPath {
   '/app/settings': typeof AppSettingsRoute
   '/claim/$token': typeof ClaimTokenRoute
   '/join/$token': typeof JoinTokenRoute
+  '/referral/$slug': typeof ReferralSlugRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$token': typeof TrackTokenRoute
@@ -352,6 +366,7 @@ export interface FileRoutesByTo {
   '/$slug': typeof SlugRoute
   '/acceptable-use': typeof AcceptableUseRoute
   '/cost': typeof CostRoute
+  '/llms.txt': typeof LlmsDottxtRoute
   '/onboarding': typeof OnboardingRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
@@ -366,6 +381,7 @@ export interface FileRoutesByTo {
   '/app/settings': typeof AppSettingsRoute
   '/claim/$token': typeof ClaimTokenRoute
   '/join/$token': typeof JoinTokenRoute
+  '/referral/$slug': typeof ReferralSlugRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$token': typeof TrackTokenRoute
@@ -402,6 +418,7 @@ export interface FileRoutesById {
   '/acceptable-use': typeof AcceptableUseRoute
   '/app': typeof AppRouteWithChildren
   '/cost': typeof CostRoute
+  '/llms.txt': typeof LlmsDottxtRoute
   '/onboarding': typeof OnboardingRoute
   '/pricing': typeof PricingRoute
   '/privacy': typeof PrivacyRoute
@@ -416,6 +433,7 @@ export interface FileRoutesById {
   '/app/settings': typeof AppSettingsRoute
   '/claim/$token': typeof ClaimTokenRoute
   '/join/$token': typeof JoinTokenRoute
+  '/referral/$slug': typeof ReferralSlugRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/track/$token': typeof TrackTokenRoute
@@ -453,6 +471,7 @@ export interface FileRouteTypes {
     | '/acceptable-use'
     | '/app'
     | '/cost'
+    | '/llms.txt'
     | '/onboarding'
     | '/pricing'
     | '/privacy'
@@ -467,6 +486,7 @@ export interface FileRouteTypes {
     | '/app/settings'
     | '/claim/$token'
     | '/join/$token'
+    | '/referral/$slug'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/track/$token'
@@ -501,6 +521,7 @@ export interface FileRouteTypes {
     | '/$slug'
     | '/acceptable-use'
     | '/cost'
+    | '/llms.txt'
     | '/onboarding'
     | '/pricing'
     | '/privacy'
@@ -515,6 +536,7 @@ export interface FileRouteTypes {
     | '/app/settings'
     | '/claim/$token'
     | '/join/$token'
+    | '/referral/$slug'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/track/$token'
@@ -550,6 +572,7 @@ export interface FileRouteTypes {
     | '/acceptable-use'
     | '/app'
     | '/cost'
+    | '/llms.txt'
     | '/onboarding'
     | '/pricing'
     | '/privacy'
@@ -564,6 +587,7 @@ export interface FileRouteTypes {
     | '/app/settings'
     | '/claim/$token'
     | '/join/$token'
+    | '/referral/$slug'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/track/$token'
@@ -600,6 +624,7 @@ export interface RootRouteChildren {
   AcceptableUseRoute: typeof AcceptableUseRoute
   AppRoute: typeof AppRouteWithChildren
   CostRoute: typeof CostRoute
+  LlmsDottxtRoute: typeof LlmsDottxtRoute
   OnboardingRoute: typeof OnboardingRoute
   PricingRoute: typeof PricingRoute
   PrivacyRoute: typeof PrivacyRoute
@@ -609,6 +634,7 @@ export interface RootRouteChildren {
   SlugCheckoutRoute: typeof SlugCheckoutRoute
   ClaimTokenRoute: typeof ClaimTokenRoute
   JoinTokenRoute: typeof JoinTokenRoute
+  ReferralSlugRoute: typeof ReferralSlugRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
   TrackTokenRoute: typeof TrackTokenRoute
@@ -658,6 +684,13 @@ declare module '@tanstack/react-router' {
       path: '/onboarding'
       fullPath: '/onboarding'
       preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/llms.txt': {
+      id: '/llms.txt'
+      path: '/llms.txt'
+      fullPath: '/llms.txt'
+      preLoaderRoute: typeof LlmsDottxtRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/cost': {
@@ -721,6 +754,13 @@ declare module '@tanstack/react-router' {
       path: '/sign-in/$'
       fullPath: '/sign-in/$'
       preLoaderRoute: typeof SignInSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/referral/$slug': {
+      id: '/referral/$slug'
+      path: '/referral/$slug'
+      fullPath: '/referral/$slug'
+      preLoaderRoute: typeof ReferralSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/join/$token': {
@@ -1020,6 +1060,7 @@ const rootRouteChildren: RootRouteChildren = {
   AcceptableUseRoute: AcceptableUseRoute,
   AppRoute: AppRouteWithChildren,
   CostRoute: CostRoute,
+  LlmsDottxtRoute: LlmsDottxtRoute,
   OnboardingRoute: OnboardingRoute,
   PricingRoute: PricingRoute,
   PrivacyRoute: PrivacyRoute,
@@ -1029,6 +1070,7 @@ const rootRouteChildren: RootRouteChildren = {
   SlugCheckoutRoute: SlugCheckoutRoute,
   ClaimTokenRoute: ClaimTokenRoute,
   JoinTokenRoute: JoinTokenRoute,
+  ReferralSlugRoute: ReferralSlugRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
   TrackTokenRoute: TrackTokenRoute,

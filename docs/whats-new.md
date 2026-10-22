@@ -128,6 +128,16 @@ worse than no entry at all. Keep them apart.
    | Delyva connect | `spotlightHref("delyva")` | `/app/settings?tab=integrations` |
    | Annual billing | `spotlightHref("annual_billing")` | `/app/settings?tab=billing` |
 
+   **A section on Home — same ring, no tab.** A registry row with
+   `page: "home"` renders `/app?spot=<key>`; Home validates the key against
+   its own and scrolls to the section once it has mounted (the Refer card
+   renders only after its query answers). Added for Refer a kedai, the last
+   section on Home — the one place a note landing at the top would miss.
+
+   | feature | ✅ | ❌ |
+   | --- | --- | --- |
+   | Refer a kedai | `spotlightHref("refer")` | `/app` |
+
    **A card on a product's form — two hops, same ring.** Some features live
    on ONE product's edit form rather than a settings tab (the weekend rate on
    a stay listing). A note can't know which product, so a registry row with

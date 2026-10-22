@@ -278,9 +278,17 @@ export function creditActivityLabel(row: ActivityRow): string {
 	switch (row.type) {
 		case "grant":
 			if (row.reason === "trial") return "Free trial orders";
+			// Referral (86ey82hke): both land when the REFEREE pays its first
+			// invoice — "started their plan", never "started selling". The
+			// other store's name rides `refLabel`.
 			if (row.reason === "referral_referrer")
-				return "Referral reward — a store you referred started selling";
-			if (row.reason === "referral_referee") return "Referral bonus";
+				return row.refLabel
+					? `Referral reward — ${row.refLabel} started their plan`
+					: "Referral reward — a store you referred started their plan";
+			if (row.reason === "referral_referee")
+				return row.refLabel
+					? `Referral bonus — referred by ${row.refLabel}`
+					: "Referral bonus";
 			return `${monthName(row.periodKey)} credits from your plan`;
 		case "purchase":
 			return row.refLabel ? `Bought ${row.refLabel}` : "Bought a credit pack";

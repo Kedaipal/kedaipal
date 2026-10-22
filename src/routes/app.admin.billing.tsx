@@ -57,6 +57,10 @@ import {
 import { contractTemplatesFrom } from "../components/admin/enterprise-contract-form";
 import { EnterpriseContractSheet } from "../components/admin/enterprise-contract-sheet";
 import { GatewayIssuesCard } from "../components/admin/gateway-issues-card";
+import {
+	StatTileGrid,
+	type StatTileProps,
+} from "../components/admin/stat-tile";
 import { PageHeader } from "../components/dashboard/page-header";
 import { InvoiceDownloadButton } from "../components/settings/invoice-download-button";
 import { AppImage } from "../components/ui/app-image";
@@ -82,9 +86,10 @@ import {
 	formatPrice,
 	formatShortDate,
 } from "../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { IMAGE_ACCEPT } from "../lib/image-upload";
 import { buildOnboardingInviteLink } from "../lib/onboarding-link";
 import { slugify, validateStoreName } from "../lib/slug";
+import { uploadImage } from "../lib/storage-upload";
 import { PLAN_LABEL } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/admin/billing")({
@@ -264,70 +269,67 @@ function AdminBillingOverview() {
 			(pendingByCurrency.get(inv.currency) ?? 0) + inv.total,
 		);
 	}
+	// One amount per currency — the tile keeps each whole and wraps at the "+".
 	const outstanding =
 		pendingByCurrency.size === 0
-			? formatPrice(0, "MYR")
+			? [formatPrice(0, "MYR")]
 			: [...pendingByCurrency.entries()]
 					.sort(([a], [b]) =>
 						a === "MYR" ? -1 : b === "MYR" ? 1 : a.localeCompare(b),
 					)
-					.map(([currency, sum]) => formatPrice(sum, currency))
-					.join(" + ");
+					.map(([currency, sum]) => formatPrice(sum, currency));
 	const dueSoon =
 		invoices?.filter((inv) => inv.dueDate <= Date.now() + 7 * DAY_MS).length ??
 		0;
-	const stats = [
+	const stats: StatTileProps[] = [
 		{
 			label: "Pending",
 			value: invoices === undefined ? "..." : String(invoices.length),
 			helper: "Invoices to settle",
 			icon: <ReceiptText className="size-4" />,
-			className: "border-blue-200 bg-blue-50 text-blue-800",
+			tone: "info",
 		},
 		{
 			label: "Due soon",
 			value: invoices === undefined ? "..." : String(dueSoon),
 			helper: "Within 7 days",
 			icon: <CalendarClock className="size-4" />,
-			className: "border-amber-200 bg-amber-50 text-amber-800",
+			tone: "warn",
 		},
 		{
 			label: "Outstanding",
 			value: invoices === undefined ? "..." : outstanding,
 			helper: "Pending total",
 			icon: <Banknote className="size-4" />,
-			className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+			// Purple ("in flight"), not green: this is money sellers still OWE, and
+			// green on this page means money in (Top-ups). Not blue either — that
+			// would read as a copy of the Pending tile beside it — and not amber,
+			// which is Due soon's "act now".
+			tone: "progress",
 		},
 		{
 			label: "Founding",
 			value: spotsRemaining === undefined ? "..." : `${spotsRemaining}/10`,
 			helper: "Spots left",
 			icon: <ListChecks className="size-4" />,
-			className: "border-border bg-muted/50 text-foreground",
+			tone: "neutral",
 		},
 	];
 
 	return (
-		<div className="flex flex-col gap-2">
-			<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-				{stats.map((stat) => (
-					<div
-						key={stat.label}
-						className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${stat.className}`}
-					>
-						<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/70">
-							{stat.icon}
-						</div>
-						<div className="min-w-0">
-							<p className="text-xs font-medium opacity-75">{stat.label}</p>
-							<p className="truncate font-mono text-lg font-bold leading-tight">
-								{stat.value}
-							</p>
-							<p className="truncate text-[11px] opacity-70">{stat.helper}</p>
-						</div>
-					</div>
-				))}
-			</div>
+		<div className="flex flex-col gap-4">
+			<section
+				aria-labelledby="billing-invoice-stats"
+				className="flex flex-col gap-2"
+			>
+				<h2
+					id="billing-invoice-stats"
+					className="text-xs font-medium text-muted-foreground"
+				>
+					Subscription invoices
+				</h2>
+				<StatTileGrid tiles={stats} />
+			</section>
 			<CreditTotals />
 		</div>
 	);
@@ -347,7 +349,7 @@ export function CreditTotals() {
 		convexQuery(api.creditPurchases.adminTopUpRevenue, {}),
 	).data;
 	const stores = (n: number) => `${n} store${n === 1 ? "" : "s"}`;
-	const tiles = [
+	const tiles: StatTileProps[] = [
 		{
 			label: "Unused bought credits",
 			value:
@@ -361,7 +363,7 @@ export function CreditTotals() {
 						? "No store holds any yet"
 						: `Across ${stores(totals.storesWithPurchased)} — service still owed`,
 			icon: <Coins className="size-4" />,
-			className: "border-border bg-muted/50 text-foreground",
+			tone: "neutral",
 		},
 		{
 			label: "Orders owed",
@@ -374,38 +376,23 @@ export function CreditTotals() {
 						? "No store is below zero"
 						: `${stores(totals.storesOwing)} below zero — the next grant or pack settles it`,
 			icon: <TrendingDown className="size-4" />,
-			className:
-				totals !== undefined && totals.ordersOwed > 0
-					? "border-destructive/30 bg-destructive/10 text-destructive"
-					: "border-border bg-muted/50 text-foreground",
+			tone:
+				totals !== undefined && totals.ordersOwed > 0 ? "danger" : "neutral",
 		},
 		topUpTile(revenue),
 	];
 	return (
-		<section aria-label="Credits" className="flex flex-col gap-2">
-			<div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-				{tiles.map((tile) => (
-					<div
-						key={tile.label}
-						className={`flex items-center gap-3 rounded-2xl border px-3 py-3 ${tile.className}`}
-					>
-						<div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-background/70">
-							{tile.icon}
-						</div>
-						<div className="min-w-0">
-							<p className="text-xs font-medium opacity-75">{tile.label}</p>
-							<p className="truncate font-mono text-lg font-bold leading-tight">
-								{tile.value}
-							</p>
-							{/* Wraps: the helper IS the explanation — cut off, it
-							    read "across 0 stores · service still …". */}
-							<p className="text-[11px] leading-snug text-pretty opacity-70">
-								{tile.helper}
-							</p>
-						</div>
-					</div>
-				))}
-			</div>
+		<section
+			aria-labelledby="billing-credit-stats"
+			className="flex flex-col gap-2"
+		>
+			<h2
+				id="billing-credit-stats"
+				className="text-xs font-medium text-muted-foreground"
+			>
+				Credits
+			</h2>
+			<StatTileGrid tiles={tiles} />
 			{totals?.truncated ? (
 				<p className="text-[11px] text-muted-foreground">
 					Counted over the first {totals.accounts.toLocaleString("en")} credit
@@ -440,7 +427,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 /** The top-up revenue tile: paid packs this calendar month, per currency —
  * summed per currency like Outstanding, never flattened into one number. */
-function topUpTile(revenue: TopUpRevenue | undefined) {
+function topUpTile(revenue: TopUpRevenue | undefined): StatTileProps {
 	const month =
 		revenue === undefined
 			? null
@@ -466,9 +453,7 @@ function topUpTile(revenue: TopUpRevenue | undefined) {
 				: paid.length === 0
 					? formatPrice(0, "MYR")
 					: // MYR first — the server builds the record in that order.
-						paid
-							.map(([currency, b]) => formatPrice(b.amountMinor, currency))
-							.join(" + "),
+						paid.map(([currency, b]) => formatPrice(b.amountMinor, currency)),
 		helper:
 			revenue === undefined
 				? "Credit packs paid this month"
@@ -476,7 +461,7 @@ function topUpTile(revenue: TopUpRevenue | undefined) {
 					? "No packs paid yet this month"
 					: `${packs} pack${packs === 1 ? "" : "s"} · ${credits.toLocaleString("en")} credits`,
 		icon: <ShoppingBag className="size-4" />,
-		className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+		tone: "success",
 	};
 }
 
@@ -1407,7 +1392,7 @@ export function IssueInvoiceForm() {
 						</p>
 					) : null}
 					{foundingBill ? (
-						<p className="text-xs text-emerald-700">
+						<p className="text-xs text-emerald-700 dark:text-emerald-300">
 							{formatPrice(base, currency)} −{" "}
 							{formatPrice(base - total, currency)} founding discount
 						</p>
@@ -1442,7 +1427,9 @@ export function IssueInvoiceForm() {
 			    one is drafted. */}
 			{openBill ? (
 				replaceRefusal ? (
-					<p className="text-xs text-amber-700">{replaceRefusal}</p>
+					<p className="text-xs text-amber-700 dark:text-amber-400">
+						{replaceRefusal}
+					</p>
 				) : (
 					<p className="text-xs text-muted-foreground">
 						{openBill.invoiceNumber} is open for{" "}
@@ -1454,7 +1441,7 @@ export function IssueInvoiceForm() {
 				)
 			) : null}
 			{unclaimedStore ? (
-				<p className="text-xs text-amber-700">
+				<p className="text-xs text-amber-700 dark:text-amber-400">
 					Nobody owns this store yet, so there's nobody to bill — the server
 					refuses it and the daily renewal skips it.{" "}
 					{selected?.comped
@@ -1463,7 +1450,7 @@ export function IssueInvoiceForm() {
 				</p>
 			) : null}
 			{compedStore ? (
-				<p className="text-xs text-amber-700">
+				<p className="text-xs text-amber-700 dark:text-amber-400">
 					This store is on the house
 					{selected?.compLabel ? ` (${selected.compLabel})` : ""} — it can't be
 					billed. End the comp from Admin · Sellers first.
@@ -1778,6 +1765,10 @@ function PendingInvoices() {
 	);
 }
 
+// Not TONE_CHIP: `past_due` and `active` read `text-X-700` here where the
+// registry's chips read `text-X-800`, so routing this map through it would
+// restyle light mode. Only the amber + muted rows would have matched, and a
+// half-migrated map is the drift the registry exists to prevent.
 function foundingStatus(m: { status?: string; paid: boolean }): {
 	label: string;
 	className: string;
@@ -2158,19 +2149,12 @@ function PaymentConfigForm() {
 		if (!file) return;
 		setUploading(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () => generateQrUploadUrl({}));
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const url = await generateQrUploadUrl({});
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
+			const { storageId } = upload;
 			await update({ qrImageStorageId: storageId });
 			toast.success("QR updated");
 		} catch (err) {

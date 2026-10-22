@@ -384,8 +384,11 @@ describe("landing — one order through the page", () => {
  * so a merge that resurrects an import is the only way they could come back.
  */
 describe("landing v2 — the walkthrough replaces Handshake and Delivery", () => {
+	// The section list lives in the shared LandingPage component, not the
+	// route: `/` and a referral link's `/referral/<slug>` render the same
+	// page (z8r3fdetf5), so there is ONE list to pin.
 	const route = readFileSync(
-		new URL("../routes/index.tsx", import.meta.url),
+		new URL("../components/landing/landing-page.tsx", import.meta.url),
 		"utf8",
 	);
 	it("mounts SellerFlow and none of the retired sections", () => {

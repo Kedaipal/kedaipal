@@ -75,6 +75,7 @@ import { DispatchHub } from "../components/order/dispatch-hub";
 import {
 	type OrderBookingSpan,
 	OrderItemLine,
+	SkippedDayRows,
 } from "../components/order/order-item-line";
 import { PaymentProofList } from "../components/order/payment-proof-list";
 import { PickupNotes } from "../components/order/pickup-notes";
@@ -91,6 +92,7 @@ import {
 	type ShipmentFields,
 	ShipmentTrackingCard,
 } from "../components/order/shipment-tracking";
+import { SkipDayCard } from "../components/order/skip-day-card";
 import { GatedOrderPage } from "../components/orders/gated-order-page";
 import {
 	DeliveryAddressDisplay,
@@ -129,7 +131,7 @@ import {
 	parsePriceInput,
 } from "../lib/format";
 import { deriveMapsUrl } from "../lib/google-address";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { IMAGE_ACCEPT, type PreparedImage } from "../lib/image-upload";
 import { buildNotifyManagerMessage } from "../lib/notify-manager-message";
 import { withLineKeys } from "../lib/order-card-items";
 import {
@@ -141,7 +143,9 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { suppressNextOrderConfirmedToast } from "../lib/orderToastSuppression";
+import { prepareImage, uploadPrepared } from "../lib/storage-upload";
 import { isCrmLocked, isOrderInboxLocked } from "../lib/subscription";
+import { TONE_CHIP, type Tone } from "../lib/tone";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/orders/$shortId")({
@@ -374,6 +378,7 @@ function OrderDetailRoute() {
 					packaged: order.bookingPackaged === true,
 					weekendDays: order.bookingWeekendDays,
 					skippedDays: order.bookingSkippedDays,
+					customerSkips: order.bookingCustomerSkips,
 				}
 			: undefined;
 	const orderId = order?._id;
@@ -981,7 +986,10 @@ function OrderDetailRoute() {
 												collectionPending
 											}
 											title={work.readOnly ? work.reason : undefined}
-											className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-foreground text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55"
+											// `text-background` (#fff), not `text-primary-foreground`
+											// (hsl(210 40% 98%)) — the two are not the same colour in
+											// light, and this is the value the button shipped on.
+											className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-[15px] font-bold text-background transition-opacity hover:opacity-95 disabled:opacity-55 dark:text-primary-foreground"
 										>
 											{pending === nextStage.id ? (
 												"Updating…"
@@ -1200,19 +1208,22 @@ function OrderDetailRoute() {
 			) : null}
 
 			{/* Shopper's note + optional custom-line reference photo — front-and-centre
-			    so it isn't missed when fulfilling. Plain text, escaped by React. */}
+			    so it isn't missed when fulfilling. Plain text, escaped by React.
+			    Deliberately NOT `TONE_PANEL.warn`: the heavier amber-300 border and
+			    the full-strength plate are what make it the loudest block on the
+			    page, so it keeps its own colours and only gains the dark pairs. */}
 			{order.customerNote || order.customerImageStorageId ? (
 				<section
 					{...MASK_PII}
-					className="flex gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4"
+					className="flex gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950"
 				>
-					<StickyNote className="size-5 shrink-0 text-amber-600" />
+					<StickyNote className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
 					<div className="min-w-0 flex-1">
-						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700">
+						<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
 							{order.customerNote ? "Note from customer" : "From customer"}
 						</p>
 						{order.customerNote ? (
-							<p className="mt-1 whitespace-pre-line break-words text-sm text-amber-950">
+							<p className="mt-1 whitespace-pre-line break-words text-sm text-amber-950 dark:text-amber-100">
 								{order.customerNote}
 							</p>
 						) : null}
@@ -1224,11 +1235,14 @@ function OrderDetailRoute() {
 									caption="Customer reference photo"
 									// Buyer-supplied, order-owned — erased on hard delete.
 									sensitive
-									wrapperClassName="mt-2 block w-fit overflow-hidden rounded-xl border border-amber-300 bg-white"
+									// dark-ok on `bg-white`: object-contain leaves the mat visible
+									// around a buyer's photo, and buyers routinely send screenshots
+									// or receipts on a white ground — a dark mat would fringe them.
+									wrapperClassName="mt-2 block w-fit overflow-hidden rounded-xl border border-amber-300 bg-white dark:border-amber-800"
 									className="block max-h-56 w-auto object-contain"
 								/>
 							) : (
-								<div className="mt-2 h-24 w-32 animate-pulse rounded-xl bg-amber-200/50" />
+								<div className="mt-2 h-24 w-32 animate-pulse rounded-xl bg-amber-200/50 dark:bg-amber-900/50" />
 							)
 						) : null}
 					</div>
@@ -1328,7 +1342,7 @@ function OrderDetailRoute() {
 			!isFreeOrder(order) ? (
 				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<div className="flex items-center gap-2">
-						<HandCoins className="size-4 text-amber-600" />
+						<HandCoins className="size-4 text-amber-600 dark:text-amber-400" />
 						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 							Payment
 						</p>
@@ -1477,7 +1491,10 @@ function OrderDetailRoute() {
 				</section>
 			) : null}
 
-			{/* Received → read-only confirmation. */}
+			{/* Received → read-only confirmation. Deliberately NOT `TONE_PANEL.success`:
+			    the buyer's twin of this card sits alone on its page and can afford the
+			    /70 plate, while this one is one of a stack of seller cards and shipped
+			    a step quieter at /60 — so it keeps its own values and gains dark pairs. */}
 			{paymentStatus === "received" ? (
 				<section className="flex flex-col gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-800 dark:bg-emerald-950/40">
 					<div className="flex items-center gap-3">
@@ -1541,7 +1558,7 @@ function OrderDetailRoute() {
 				{(() => {
 					const avatarRow = (
 						<>
-							<span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-foreground font-heading text-[15px] font-extrabold text-background">
+							<span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-foreground dark:bg-accent/15 font-heading text-[15px] font-extrabold text-background dark:text-accent-emphasis">
 								{order.customer.name ? (
 									initials(order.customer.name)
 								) : (
@@ -1673,6 +1690,13 @@ function OrderDetailRoute() {
 										? "Collection"
 										: "Delivery"}
 						</p>
+						{isBooking && order.bookingPackaged === true ? (
+							<SkippedDayRows
+								skipped={order.bookingSkippedDays}
+								customerSkips={order.bookingCustomerSkips}
+								className="mt-1"
+							/>
+						) : null}
 					</div>
 					{/* Seller reschedule (86eyp5qd1) — renders only inside the
 					    reschedule window (pre-shipped, non-counter, not collected). */}
@@ -1744,6 +1768,11 @@ function OrderDetailRoute() {
 							</span>
 						) : null}
 					</div>
+				) : null}
+				{/* Skip a day (z8r3fdh3ay) — right under the dates it changes.
+				    Renders nothing unless this is an open-days plan. */}
+				{isBooking && order.bookingPackaged === true ? (
+					<SkipDayCard order={order} lockedReason={workLockedReason} />
 				) : null}
 				{/* The moment was MOVED (z8r3fdff97 test round). The buyer's page
 				    says who changed it; this one says when, because the seller
@@ -2609,9 +2638,9 @@ function MockupCard({
 			// mirror of an unreadable payment proof — they're asked to approve a
 			// design that renders as a broken box — so nothing is uploaded until
 			// every file has been proven decodable. See lib/image-upload.ts.
-			const prepared: { blob: Blob; contentType: string }[] = [];
+			const prepared: PreparedImage[] = [];
 			for (const file of Array.from(files)) {
-				const result = await prepareImageUpload(file);
+				const result = await prepareImage(file);
 				if (!result.ok) {
 					toast.error(result.message);
 					setUploading(false);
@@ -2622,15 +2651,12 @@ function MockupCard({
 			// Upload each selected image, then send them together as the mockup set
 			// (replacing any previous one). Sequential keeps it simple + ordered.
 			for (const item of prepared) {
-				const url = await generateUploadUrl({ orderId: order._id });
-				const res = await fetch(url, {
-					method: "POST",
-					headers: { "Content-Type": item.contentType },
-					body: item.blob,
-				});
-				if (!res.ok) throw new Error("Upload failed");
-				const { storageId } = (await res.json()) as { storageId: string };
-				storageIds.push(storageId);
+				const uploaded = await uploadPrepared(item, () =>
+					generateUploadUrl({ orderId: order._id }),
+				);
+				// Into the catch below, which discards what already went up.
+				if (!uploaded.ok) throw new Error(uploaded.message);
+				storageIds.push(uploaded.storageId);
 			}
 			await submitMockup({
 				orderId: order._id,
@@ -2710,13 +2736,15 @@ function MockupCard({
 				).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
 			: "";
 
-	const badge = waived
-		? { label: "Proceeding — no approval", cls: "bg-muted text-foreground" }
+	// Mockup approval keeps its own meaning→tone mapping; the classes come from
+	// the shared registry so the pill stays readable in both themes.
+	const badge: { label: string; tone: Tone } = waived
+		? { label: "Proceeding — no approval", tone: "neutral" }
 		: status === "approved"
-			? { label: "Approved by buyer", cls: "bg-emerald-50 text-emerald-700" }
+			? { label: "Approved by buyer", tone: "success" }
 			: status === "submitted"
-				? { label: "Awaiting buyer", cls: "bg-blue-50 text-blue-700" }
-				: { label: "Mockup needed", cls: "bg-amber-50 text-amber-800" };
+				? { label: "Awaiting buyer", tone: "info" }
+				: { label: "Mockup needed", tone: "warn" };
 
 	return (
 		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
@@ -2725,7 +2753,7 @@ function MockupCard({
 					Mockup approval
 				</p>
 				<span
-					className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.cls}`}
+					className={`rounded-full px-2 py-0.5 text-xs font-medium ${TONE_CHIP[badge.tone]}`}
 				>
 					{badge.label}
 				</span>
@@ -2735,7 +2763,7 @@ function MockupCard({
 				// MASK_PII: the note is the buyer's own free text.
 				<div
 					{...MASK_PII}
-					className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900"
+					className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200"
 				>
 					<span className="font-medium">Buyer requested changes:</span>{" "}
 					{order.mockupChangeNote}
@@ -2752,6 +2780,9 @@ function MockupCard({
 							href={url}
 							target="_blank"
 							rel="noopener noreferrer"
+							// dark-ok: a single mockup renders object-contain, so this mat is
+							// the ground the seller's own artwork is judged against — mockups
+							// are drawn for paper and a dark mat misreads their edges.
 							className="block overflow-hidden rounded-xl border border-border bg-white"
 						>
 							<AppImage
@@ -2782,7 +2813,7 @@ function MockupCard({
 				</p>
 			) : null}
 			{status === "approved" ? (
-				<p className="flex items-center gap-1.5 text-sm text-emerald-700">
+				<p className="flex items-center gap-1.5 text-sm text-emerald-700 dark:text-emerald-300">
 					<CheckCircle2 className="size-4" /> Approved — you can pack this
 					order.
 				</p>
