@@ -1917,7 +1917,6 @@ export function ProductForm({
 						productName={liveStock ? form.state.values.name : undefined}
 						stockLocked={saveLock !== undefined}
 						capabilitiesOutside
-						collapseChoices={isEdit}
 					/>
 
 					<Link

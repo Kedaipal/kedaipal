@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
-import {
-	act,
-	cleanup,
-	fireEvent,
-	render,
-	screen,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // default vitest environment is edge-runtime.)
 vi.mock("convex/react", () => ({ useMutation: () => vi.fn() }));
 
-import { DISCLOSURE_PANEL_ATTR, REVEAL_EVENT } from "../ui/question-row";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
 import {
 	isMadeToOrderOnly,
@@ -26,22 +19,9 @@ import {
 afterEach(cleanup);
 
 /** Controlled wrapper so toggles reflect back into state during the test. */
-function Harness({
-	initial,
-	collapseChoices,
-}: {
-	initial: VariantEditorState;
-	collapseChoices?: boolean;
-}) {
+function Harness({ initial }: { initial: VariantEditorState }) {
 	const [state, setState] = useState(initial);
-	return (
-		<VariantEditor
-			value={state}
-			onChange={setState}
-			currency="MYR"
-			collapseChoices={collapseChoices}
-		/>
-	);
+	return <VariantEditor value={state} onChange={setState} currency="MYR" />;
 }
 
 const singleVariant: VariantEditorState = {
@@ -676,178 +656,5 @@ describe("stock left the product save (86eypn8ye)", () => {
 		expect(screen.getByText("7")).toBeTruthy();
 		expect(screen.getAllByRole("button", { name: "Adjust" })).toHaveLength(1);
 		expect(screen.getAllByLabelText("Stock on hand").length).toBeGreaterThan(0);
-	});
-});
-
-describe("VariantEditor — the choice list collapses on edit (z8r3fdwnyk)", () => {
-	const header = () =>
-		screen.getByRole("button", { name: /the choices & prices/i });
-	const panel = () =>
-		document.querySelector<HTMLElement>(`[${DISCLOSURE_PANEL_ATTR}]`);
-	const priceInputs = () =>
-		Array.from(document.querySelectorAll<HTMLInputElement>("input")).filter(
-			(i) => i.placeholder === "0.00",
-		);
-
-	it("is closed by default, with the list's state on the header line", () => {
-		render(<Harness initial={withOptions} collapseChoices />);
-		expect(header().getAttribute("aria-expanded")).toBe("false");
-		expect(panel()?.hidden).toBe(true);
-		// The rows stay mounted (a half-typed price survives a collapse).
-		expect(priceInputs()).toHaveLength(2);
-		expect(document.querySelector("[data-choices-answer]")?.textContent).toBe(
-			"2 choices · RM\u00a010",
-		);
-	});
-
-	it("the header toggles the list both ways", () => {
-		render(<Harness initial={withOptions} collapseChoices />);
-		fireEvent.click(header());
-		expect(header().getAttribute("aria-expanded")).toBe("true");
-		expect(panel()?.hidden).toBe(false);
-		fireEvent.click(header());
-		expect(panel()?.hidden).toBe(true);
-	});
-
-	it("a long open list can be closed from its foot, not only from its header", () => {
-		const many: VariantEditorState = {
-			...withOptions,
-			options: [{ name: "Size", values: ["S", "M", "L", "XL"] }],
-			rows: ["S", "M", "L", "XL"].map((v) => ({
-				...withOptions.rows[0],
-				optionValues: [v],
-			})),
-		};
-		render(<Harness initial={many} collapseChoices />);
-		fireEvent.click(header());
-		fireEvent.click(screen.getByRole("button", { name: "Hide the 4 choices" }));
-		expect(panel()?.hidden).toBe(true);
-		expect(header().getAttribute("aria-expanded")).toBe("false");
-	});
-
-	it("stays a plain, always-open list on create (no collapseChoices)", () => {
-		render(<Harness initial={withOptions} />);
-		expect(
-			screen.queryByRole("button", { name: /the choices & prices/i }),
-		).toBeNull();
-		expect(panel()).toBeNull();
-		expect(screen.getByText("The choices & prices")).toBeTruthy();
-	});
-
-	it("opens itself when the seller adds a choice — its new row has no price yet", () => {
-		render(<Harness initial={withOptions} collapseChoices />);
-		const add = screen.getByPlaceholderText("Add value");
-		fireEvent.change(add, { target: { value: "L" } });
-		fireEvent.click(screen.getByRole("button", { name: "Add value" }));
-		expect(panel()?.hidden).toBe(false);
-		expect(priceInputs()).toHaveLength(3);
-	});
-
-	it("opens itself when a refused save points at a choice's price", () => {
-		render(
-			<VariantEditor
-				value={withOptions}
-				onChange={() => {}}
-				currency="MYR"
-				collapseChoices
-				issues={[
-					{
-						where: "row",
-						index: 1,
-						field: "price",
-						message: "Enter a price (e.g. 120 or 120.50).",
-					},
-				]}
-			/>,
-		);
-		expect(panel()?.hidden).toBe(false);
-	});
-
-	it("answers focus-error's reveal event, like a question row", () => {
-		render(<Harness initial={withOptions} collapseChoices />);
-		const el = panel();
-		expect(el?.hidden).toBe(true);
-		act(() => {
-			el?.dispatchEvent(new CustomEvent(REVEAL_EVENT));
-		});
-		expect(panel()?.hidden).toBe(false);
-	});
-
-	describe("Advanced on edit (z8r3fdwnyk test-code F1)", () => {
-		const loaded: VariantEditorState = {
-			options: [
-				{ name: "Size", values: ["S", "M"] },
-				{ name: "Colour", values: ["Red", "Blue"] },
-			],
-			rows: ["S", "M"].flatMap((sz) =>
-				["Red", "Blue"].map((c, ci) => ({
-					...withOptions.rows[0],
-					optionValues: [sz, c],
-					sku: sz === "S" && ci === 0 ? "TEE-S-R" : "",
-					parcelWeightG: "500",
-				})),
-			),
-			customLine: null,
-		};
-		const advHeader = () => screen.getByRole("button", { name: /^advanced/i });
-		const panels = () =>
-			Array.from(
-				document.querySelectorAll<HTMLElement>(`[${DISCLOSURE_PANEL_ATTR}]`),
-			);
-
-		it("starts closed even when it holds config, and says what it holds", () => {
-			render(<Harness initial={loaded} collapseChoices />);
-			expect(advHeader().getAttribute("aria-expanded")).toBe("false");
-			expect(
-				document.querySelector("[data-advanced-answer]")?.textContent,
-			).toBe("Second choice: Colour · 1 SKU · 4 parcel weights");
-		});
-
-		it("without collapseChoices it still forces itself open (wizard / create)", () => {
-			render(<Harness initial={loaded} />);
-			expect(advHeader().getAttribute("aria-expanded")).toBe("true");
-		});
-
-		it("opened, its per-choice details are folded too, behind their own line", () => {
-			render(<Harness initial={loaded} collapseChoices />);
-			fireEvent.click(advHeader());
-			const details = screen.getByRole("button", {
-				name: /per-choice details/i,
-			});
-			expect(details.getAttribute("aria-expanded")).toBe("false");
-			expect(details.textContent).toContain(
-				"4 choices · 1 SKU · 4 parcel weights",
-			);
-			// Second panel = the details list; its SKU inputs stay mounted.
-			expect(panels()[1]?.hidden).toBe(true);
-			expect(screen.getByLabelText("SKU for S / Red")).toBeTruthy();
-			fireEvent.click(details);
-			expect(panels()[1]?.hidden).toBe(false);
-		});
-
-		it("a refused parcel weight opens Advanced AND its details", () => {
-			render(
-				<VariantEditor
-					value={loaded}
-					onChange={() => {}}
-					currency="MYR"
-					collapseChoices
-					issues={[
-						{
-							where: "row",
-							index: 2,
-							field: "weight",
-							message: "Whole grams only (e.g. 500 for half a kilo).",
-						},
-					]}
-				/>,
-			);
-			expect(advHeader().getAttribute("aria-expanded")).toBe("true");
-			expect(
-				screen
-					.getByRole("button", { name: /per-choice details/i })
-					.getAttribute("aria-expanded"),
-			).toBe("true");
-		});
 	});
 });

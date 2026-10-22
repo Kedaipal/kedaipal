@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { EMPTY_EVENT_DRAFT } from "./event-fields";
 import {
-	advancedAnswer,
 	bookingNoticeAnswer,
 	buyerQuestionsAnswer,
-	choiceDetailsAnswer,
-	choicesAnswer,
 	customOrdersAnswer,
 	depositAnswer,
 	eventAnswer,
@@ -470,104 +467,5 @@ describe("booking answers", () => {
 			"None · same-day requests allowed",
 		);
 		expect(bookingNoticeAnswer(2).text).toBe("2 days");
-	});
-});
-
-describe("choicesAnswer — the collapsed choice list (z8r3fdwnyk)", () => {
-	const r = (price: string, active = true) => ({ price, active });
-
-	it("counts the choices and spans their prices", () => {
-		expect(choicesAnswer([r("12"), r("28"), r("18.50")], "MYR")).toEqual({
-			text: `3 choices · ${RM("12")}–28`,
-			tone: "off",
-		});
-	});
-
-	it("one price reads as one price, and a single choice is singular", () => {
-		expect(choicesAnswer([r("10")], "MYR").text).toBe(`1 choice · ${RM("10")}`);
-	});
-
-	it("names off lines and leaves them out of the range", () => {
-		expect(choicesAnswer([r("10"), r("99", false)], "MYR").text).toBe(
-			`2 choices · ${RM("10")} · 1 off sale`,
-		);
-	});
-
-	it("warns when a line a buyer can buy has no price", () => {
-		expect(choicesAnswer([r("10"), r(""), r("")], "MYR")).toEqual({
-			text: `3 choices · ${RM("10")} · 2 need a price`,
-			tone: "warn",
-		});
-		expect(choicesAnswer([r("")], "MYR").text).toBe(
-			"1 choice · 1 needs a price",
-		);
-	});
-
-	it("an off line with a blank price is not a problem — the save skips it", () => {
-		expect(choicesAnswer([r("10"), r("", false)], "MYR").tone).toBe("off");
-	});
-
-	it("spells the store's own symbol", () => {
-		expect(choicesAnswer([r("5"), r("8")], "SGD").text).toBe(
-			"2 choices · S$\u00a05–8",
-		);
-	});
-});
-
-describe("advancedAnswer / choiceDetailsAnswer — Advanced says what it holds (z8r3fdwnyk)", () => {
-	const r = (sku = "", parcelWeightG = "", active = true) => ({
-		sku,
-		parcelWeightG,
-		active,
-	});
-
-	it("null when nothing inside is set — the caller lists what could be", () => {
-		expect(
-			advancedAnswer({
-				options: [{ name: "Size" }],
-				rows: [r(), r()],
-				weightMode: false,
-			}),
-		).toBeNull();
-	});
-
-	it("names the second choice, then SKUs, weights and off-sale lines", () => {
-		expect(
-			advancedAnswer({
-				options: [{ name: "Size" }, { name: " Colour " }],
-				rows: [r("A", "500"), r("", "500", false), r()],
-				weightMode: false,
-			}),
-		).toBe("Second choice: Colour · 1 SKU · 2 parcel weights · 1 off sale");
-	});
-
-	it("an unnamed second choice still shows it exists", () => {
-		expect(
-			advancedAnswer({
-				options: [{ name: "Size" }, { name: "" }],
-				rows: [],
-				weightMode: false,
-			}),
-		).toBe("Second choice: unnamed");
-	});
-
-	it("weight mode leaves weights out — they live outside Advanced there", () => {
-		expect(
-			advancedAnswer({
-				options: [{ name: "Size" }],
-				rows: [r("", "500")],
-				weightMode: true,
-			}),
-		).toBeNull();
-		expect(choiceDetailsAnswer([r("", "500")], true).text).toBe(
-			"1 choice · nothing set yet",
-		);
-	});
-
-	it("the details line counts the choices and what is set on them", () => {
-		expect(choiceDetailsAnswer([r("A", "1"), r("B")], false)).toEqual({
-			text: "2 choices · 2 SKUs · 1 parcel weight",
-			tone: "off",
-		});
 	});
 });
