@@ -266,6 +266,24 @@ alone is an FAQ accordion; with its answer it is state.
 - **Open core cards:** Product basics → Photos → **Pricing & choices** (a
   booking: **Pricing & capacity** — package length, open-days counting, price,
   capacity: what DEFINES the stay).
+- **The per-choice list folds on edit** ([`z8r3fdwnyk`](https://app.clickup.com/t/z8r3fdwnyk),
+  Zaki 22 Oct). Pricing & choices stays an open card, but its **"The choices &
+  prices"** list — one ~120px card per choice — sits behind a one-line header
+  whose answer is the list's state: "12 choices · RM 12–28 · 2 off", amber
+  "· 1 needs a price" when a line a buyer can buy has none (`choicesAnswer`,
+  same file as the row answers; off lines count only as "off", because the
+  save never prices them). A product with 20 sizes used to push every question
+  group thousands of pixels down. What stays visible: the product type and the
+  "They choose by" axis with its value chips — short, and they say what the
+  product IS. Same disclosure rules as a question row: **closed every visit**,
+  the rows stay mounted while hidden, and it **opens itself** when a refused
+  save points at a choice's price/stock (issue effect + focus-error's
+  `REVEAL_EVENT`) and when the seller adds a value (its new row has no price —
+  it must never land behind a closed list). An open list of more than three
+  ends in **"Hide the N choices"**, which closes it from where the seller
+  finished and brings the header back into view. **Edit only** (`collapseChoices`
+  on `VariantEditor`): on create, and in the wizard, the seller is authoring
+  the grid and has to see every row to price it.
 - **Question groups, by meaning** (`src/components/ui/question-row.tsx`):
 
   | Group | Physical / food / service / event | Booking |

@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	act,
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+} from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // default vitest environment is edge-runtime.)
 vi.mock("convex/react", () => ({ useMutation: () => vi.fn() }));
 
+import { DISCLOSURE_PANEL_ATTR, REVEAL_EVENT } from "../ui/question-row";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
 import {
 	isMadeToOrderOnly,
@@ -19,9 +26,22 @@ import {
 afterEach(cleanup);
 
 /** Controlled wrapper so toggles reflect back into state during the test. */
-function Harness({ initial }: { initial: VariantEditorState }) {
+function Harness({
+	initial,
+	collapseChoices,
+}: {
+	initial: VariantEditorState;
+	collapseChoices?: boolean;
+}) {
 	const [state, setState] = useState(initial);
-	return <VariantEditor value={state} onChange={setState} currency="MYR" />;
+	return (
+		<VariantEditor
+			value={state}
+			onChange={setState}
+			currency="MYR"
+			collapseChoices={collapseChoices}
+		/>
+	);
 }
 
 const singleVariant: VariantEditorState = {
@@ -656,5 +676,100 @@ describe("stock left the product save (86eypn8ye)", () => {
 		expect(screen.getByText("7")).toBeTruthy();
 		expect(screen.getAllByRole("button", { name: "Adjust" })).toHaveLength(1);
 		expect(screen.getAllByLabelText("Stock on hand").length).toBeGreaterThan(0);
+	});
+});
+
+describe("VariantEditor — the choice list collapses on edit (z8r3fdwnyk)", () => {
+	const header = () =>
+		screen.getByRole("button", { name: /the choices & prices/i });
+	const panel = () =>
+		document.querySelector<HTMLElement>(`[${DISCLOSURE_PANEL_ATTR}]`);
+	const priceInputs = () =>
+		Array.from(document.querySelectorAll<HTMLInputElement>("input")).filter(
+			(i) => i.placeholder === "0.00",
+		);
+
+	it("is closed by default, with the list's state on the header line", () => {
+		render(<Harness initial={withOptions} collapseChoices />);
+		expect(header().getAttribute("aria-expanded")).toBe("false");
+		expect(panel()?.hidden).toBe(true);
+		// The rows stay mounted (a half-typed price survives a collapse).
+		expect(priceInputs()).toHaveLength(2);
+		expect(document.querySelector("[data-choices-answer]")?.textContent).toBe(
+			"2 choices · RM\u00a010",
+		);
+	});
+
+	it("the header toggles the list both ways", () => {
+		render(<Harness initial={withOptions} collapseChoices />);
+		fireEvent.click(header());
+		expect(header().getAttribute("aria-expanded")).toBe("true");
+		expect(panel()?.hidden).toBe(false);
+		fireEvent.click(header());
+		expect(panel()?.hidden).toBe(true);
+	});
+
+	it("a long open list can be closed from its foot, not only from its header", () => {
+		const many: VariantEditorState = {
+			...withOptions,
+			options: [{ name: "Size", values: ["S", "M", "L", "XL"] }],
+			rows: ["S", "M", "L", "XL"].map((v) => ({
+				...withOptions.rows[0],
+				optionValues: [v],
+			})),
+		};
+		render(<Harness initial={many} collapseChoices />);
+		fireEvent.click(header());
+		fireEvent.click(screen.getByRole("button", { name: "Hide the 4 choices" }));
+		expect(panel()?.hidden).toBe(true);
+		expect(header().getAttribute("aria-expanded")).toBe("false");
+	});
+
+	it("stays a plain, always-open list on create (no collapseChoices)", () => {
+		render(<Harness initial={withOptions} />);
+		expect(
+			screen.queryByRole("button", { name: /the choices & prices/i }),
+		).toBeNull();
+		expect(panel()).toBeNull();
+		expect(screen.getByText("The choices & prices")).toBeTruthy();
+	});
+
+	it("opens itself when the seller adds a choice — its new row has no price yet", () => {
+		render(<Harness initial={withOptions} collapseChoices />);
+		const add = screen.getByPlaceholderText("Add value");
+		fireEvent.change(add, { target: { value: "L" } });
+		fireEvent.click(screen.getByRole("button", { name: "Add value" }));
+		expect(panel()?.hidden).toBe(false);
+		expect(priceInputs()).toHaveLength(3);
+	});
+
+	it("opens itself when a refused save points at a choice's price", () => {
+		render(
+			<VariantEditor
+				value={withOptions}
+				onChange={() => {}}
+				currency="MYR"
+				collapseChoices
+				issues={[
+					{
+						where: "row",
+						index: 1,
+						field: "price",
+						message: "Enter a price (e.g. 120 or 120.50).",
+					},
+				]}
+			/>,
+		);
+		expect(panel()?.hidden).toBe(false);
+	});
+
+	it("answers focus-error's reveal event, like a question row", () => {
+		render(<Harness initial={withOptions} collapseChoices />);
+		const el = panel();
+		expect(el?.hidden).toBe(true);
+		act(() => {
+			el?.dispatchEvent(new CustomEvent(REVEAL_EVENT));
+		});
+		expect(panel()?.hidden).toBe(false);
 	});
 });

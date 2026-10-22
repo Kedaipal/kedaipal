@@ -17,7 +17,11 @@ import {
 	isEventPassed,
 } from "../../../convex/lib/productEvent";
 import { weekendDaysLabel } from "../../../convex/lib/productKind";
-import { formatDraftPrice, parsePriceInput } from "../../lib/format";
+import {
+	formatDraftPrice,
+	formatDraftPriceRange,
+	parsePriceInput,
+} from "../../lib/format";
 import type { BuyerQuestionsDraft } from "./buyer-questions-card";
 import { type EventDraft, eventSubmitValue } from "./event-fields";
 import { type PromoDraft, promoSubmitValue } from "./promo-fields";
@@ -218,6 +222,42 @@ export function customOrdersAnswer(
 				: "price on quote"
 		}`,
 	);
+}
+
+/**
+ * The collapsed line of the per-choice list on the edit page (z8r3fdwnyk) —
+ * "12 choices · RM 12–28 · 2 off". Not a question row (the list is the
+ * product, not an optional capability) but the same rule: the line is STATE,
+ * so a seller who never opens the list still knows what is in it.
+ *
+ * Price range and "needs a price" count only lines a buyer can buy — the
+ * save checks prices only on an active row (`buildSubmitVariants`), so an
+ * off line with a blank price is not a problem and must not read as one.
+ */
+export function choicesAnswer(
+	rows: readonly { price: string; active: boolean }[],
+	currency: string,
+): Answer {
+	const parts = [plural(rows.length, "choice")];
+	const active = rows.filter((r) => r.active);
+	const prices = active
+		.map((r) => parsePriceInput(r.price.trim()))
+		.filter((p): p is number => p !== null);
+	if (prices.length > 0) {
+		parts.push(
+			formatDraftPriceRange(Math.min(...prices), Math.max(...prices), currency),
+		);
+	}
+	const offCount = rows.length - active.length;
+	if (offCount > 0) parts.push(`${offCount} off`);
+	const unpriced = active.length - prices.length;
+	if (unpriced > 0) {
+		parts.push(
+			`${unpriced} ${unpriced === 1 ? "needs a price" : "need a price"}`,
+		);
+		return warn(parts.join(" · "));
+	}
+	return off(parts.join(" · "));
 }
 
 /** All / none / SOME — a mixed product must never read as "No". */

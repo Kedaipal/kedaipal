@@ -3,6 +3,7 @@ import { EMPTY_EVENT_DRAFT } from "./event-fields";
 import {
 	bookingNoticeAnswer,
 	buyerQuestionsAnswer,
+	choicesAnswer,
 	customOrdersAnswer,
 	depositAnswer,
 	eventAnswer,
@@ -467,5 +468,46 @@ describe("booking answers", () => {
 			"None · same-day requests allowed",
 		);
 		expect(bookingNoticeAnswer(2).text).toBe("2 days");
+	});
+});
+
+describe("choicesAnswer — the collapsed choice list (z8r3fdwnyk)", () => {
+	const r = (price: string, active = true) => ({ price, active });
+
+	it("counts the choices and spans their prices", () => {
+		expect(choicesAnswer([r("12"), r("28"), r("18.50")], "MYR")).toEqual({
+			text: `3 choices · ${RM("12")}–28`,
+			tone: "off",
+		});
+	});
+
+	it("one price reads as one price, and a single choice is singular", () => {
+		expect(choicesAnswer([r("10")], "MYR").text).toBe(`1 choice · ${RM("10")}`);
+	});
+
+	it("names off lines and leaves them out of the range", () => {
+		expect(choicesAnswer([r("10"), r("99", false)], "MYR").text).toBe(
+			`2 choices · ${RM("10")} · 1 off`,
+		);
+	});
+
+	it("warns when a line a buyer can buy has no price", () => {
+		expect(choicesAnswer([r("10"), r(""), r("")], "MYR")).toEqual({
+			text: `3 choices · ${RM("10")} · 2 need a price`,
+			tone: "warn",
+		});
+		expect(choicesAnswer([r("")], "MYR").text).toBe(
+			"1 choice · 1 needs a price",
+		);
+	});
+
+	it("an off line with a blank price is not a problem — the save skips it", () => {
+		expect(choicesAnswer([r("10"), r("", false)], "MYR").tone).toBe("off");
+	});
+
+	it("spells the store's own symbol", () => {
+		expect(choicesAnswer([r("5"), r("8")], "SGD").text).toBe(
+			"2 choices · S$\u00a05–8",
+		);
 	});
 });

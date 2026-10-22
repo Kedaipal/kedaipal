@@ -12,6 +12,7 @@ import {
 import {
 	type MutableRefObject,
 	useEffect,
+	useId,
 	useMemo,
 	useRef,
 	useState,
@@ -45,7 +46,9 @@ import { StockAdjustDialog, type StockLine } from "../product/stock-adjust";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { DISCLOSURE_PANEL_ATTR, REVEAL_EVENT } from "../ui/question-row";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
+import { choicesAnswer } from "./product-answers";
 
 export type VariantRow = {
 	optionValues: string[];
@@ -158,6 +161,12 @@ interface VariantEditorProps {
 	 * describes the CHOICES: a second axis, per-choice SKU/photo/on-off and
 	 * parcel weight. The wizard leaves this off and keeps both in Advanced. */
 	capabilitiesOutside?: boolean;
+	/** Fold the per-choice list behind a one-line summary, closed on every
+	 * visit (z8r3fdwnyk). The edit form sets it: a saved product with 20
+	 * sizes would otherwise push every other section thousands of pixels
+	 * down. Create and the wizard leave it off — a seller authoring the grid
+	 * has to see each new row to price it. */
+	collapseChoices?: boolean;
 }
 
 /**
@@ -670,6 +679,7 @@ export function VariantEditor({
 	productName = "This product",
 	stockLocked = false,
 	capabilitiesOutside = false,
+	collapseChoices = false,
 }: VariantEditorProps) {
 	const { options, rows, customLine } = value;
 	// Every price label wears the store's symbol ("RM", "S$") — `currency` is
@@ -767,6 +777,35 @@ export function VariantEditor({
 	// (kept deliberately — see rebuildRows), so per-choice UI must wait for the
 	// grid to actually exist rather than render a phantom blank-labelled row.
 	const gridReady = variantCount > 0;
+
+	// The per-choice list's disclosure (collapseChoices). Closed on every visit
+	// — the summary line says what is inside — and it opens itself whenever
+	// hiding it would hide something the seller must act on: a refused save
+	// pointing at a choice (the issue effect below, plus focus-error's
+	// REVEAL_EVENT for a first error the seller is taken to), and a freshly
+	// added value, whose new row has a blank price.
+	const [choicesOpen, setChoicesOpen] = useState(!collapseChoices);
+	const choicesSummary = choicesAnswer(rows, currency);
+	const choicesPanelId = useId();
+	const choicesPanelRef = useRef<HTMLDivElement>(null);
+	const choicesHeaderRef = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		if (
+			issues.some(
+				(i) =>
+					i.where === "row" && (i.field === "price" || i.field === "stock"),
+			)
+		) {
+			setChoicesOpen(true);
+		}
+	}, [issues]);
+	useEffect(() => {
+		const panel = choicesPanelRef.current;
+		if (!collapseChoices || !gridReady || !panel) return;
+		const reveal = () => setChoicesOpen(true);
+		panel.addEventListener(REVEAL_EVENT, reveal);
+		return () => panel.removeEventListener(REVEAL_EVENT, reveal);
+	}, [collapseChoices, gridReady]);
 
 	function setOptions(nextOptions: OptionAxis[]) {
 		update({ options: nextOptions, rows: rebuildRows(nextOptions, rows) });
@@ -905,6 +944,8 @@ export function VariantEditor({
 	) {
 		const axis = options[axisIndex];
 		if (!axis) return;
+		// Seeding an empty axis makes new, unpriced rows — show them.
+		if (axis.values.length === 0) setChoicesOpen(true);
 		// Rename to the preset; seed its starter values only when the axis is
 		// still empty (never clobber values the seller already typed).
 		setOptions(
@@ -951,6 +992,9 @@ export function VariantEditor({
 			),
 		);
 		setValueDrafts((d) => d.map((v, i) => (i === axisIndex ? "" : v)));
+		// The new value's rows arrive with a blank price — never behind a
+		// closed list, where the seller can't see what they just made.
+		setChoicesOpen(true);
 	}
 
 	function removeValue(axisIndex: number, value: string) {
@@ -1388,136 +1432,204 @@ export function VariantEditor({
 					{/* The choices & their prices. */}
 					{gridReady ? (
 						<div className="flex flex-col gap-2">
-							<span className="text-sm font-medium">The choices & prices</span>
-							{rows.length > 3 ? (
-								<div className="flex items-center gap-2">
-									<Input
-										inputMode="decimal"
-										placeholder="Fill all prices"
-										className="h-9 text-xs"
-										onChange={(e) => bulkFill("price", e.target.value)}
-										onBlur={(e) =>
-											bulkFill("price", normalizePriceInput(e.target.value))
-										}
+							{collapseChoices ? (
+								<button
+									ref={choicesHeaderRef}
+									type="button"
+									aria-expanded={choicesOpen}
+									aria-controls={choicesPanelId}
+									onClick={() => setChoicesOpen((v) => !v)}
+									className="flex min-h-14 w-full items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+								>
+									<span className="flex min-w-0 flex-1 flex-col">
+										<span className="text-sm font-medium">
+											The choices & prices
+										</span>
+										<span
+											data-choices-answer
+											className={cn(
+												"mt-0.5 line-clamp-2 text-xs leading-snug",
+												choicesSummary.tone === "warn"
+													? "font-medium text-amber-700 dark:text-amber-400"
+													: "text-muted-foreground",
+											)}
+										>
+											{choicesSummary.text}
+										</span>
+									</span>
+									<ChevronDown
+										aria-hidden="true"
+										className={cn(
+											"size-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
+											choicesOpen && "rotate-180",
+										)}
 									/>
-									{/* Only offered while at least one tracked row is NEW. On a
+								</button>
+							) : (
+								<span className="text-sm font-medium">
+									The choices & prices
+								</span>
+							)}
+							{/* Mounted while closed (`hidden`), like a question row: a
+							    half-typed price survives a collapse, and focus-error can
+							    find an invalid field inside and ask the list to open. */}
+							<div
+								ref={choicesPanelRef}
+								id={choicesPanelId}
+								hidden={collapseChoices && !choicesOpen}
+								{...(collapseChoices ? { [DISCLOSURE_PANEL_ATTR]: "" } : {})}
+								className="flex flex-col gap-2"
+							>
+								{rows.length > 3 ? (
+									<div className="flex items-center gap-2">
+										<Input
+											inputMode="decimal"
+											placeholder="Fill all prices"
+											className="h-9 text-xs"
+											onChange={(e) => bulkFill("price", e.target.value)}
+											onBlur={(e) =>
+												bulkFill("price", normalizePriceInput(e.target.value))
+											}
+										/>
+										{/* Only offered while at least one tracked row is NEW. On a
 									    saved product every stock cell is read-only, so a bulk fill
 									    would type into nothing — an input that silently does
 									    nothing is worse than no input. Its absence is explained
 									    below rather than left as a control that quietly went
 									    missing. */}
-									{(allTrack ||
-										(!allMto && rows.some((r) => r.blockWhenOutOfStock))) &&
-									rows.some(
-										(r) =>
-											r.blockWhenOutOfStock &&
-											!findLiveStock(liveStock, r.optionValues),
-									) ? (
-										<Input
-											inputMode="numeric"
-											placeholder="Fill all stock"
-											className="h-9 text-xs"
-											onChange={(e) =>
-												bulkFill("stock", sanitizeIntInput(e.target.value))
-											}
-										/>
-									) : null}
-								</div>
-							) : null}
-							{/* The bulk stock fill is gone on a saved product, and a control
-							    that silently disappears reads as a bug. Say where stock went
-							    — the seller is looking at the row that used to hold it. */}
-							{rows.some(
-								(r) =>
-									r.blockWhenOutOfStock &&
-									findLiveStock(liveStock, r.optionValues),
-							) ? (
-								<p className="text-xs leading-relaxed text-muted-foreground">
-									Stock now has its own control — use{" "}
-									<span className="font-medium text-foreground">Adjust</span> on
-									a choice to add what you made or take off what you sold. It
-									saves on its own, so a save here can never undo a sale.
-								</p>
-							) : null}
-							<ul className="flex flex-col gap-2">
-								{rows.map((row, i) => (
-									<li
-										key={variantLabel(row.optionValues)}
-										className={cn(
-											"flex flex-col gap-2 rounded-xl border border-border p-3",
-											!row.active && "opacity-60",
-										)}
-									>
-										<div className="flex items-center gap-2">
-											<span className="min-w-0 flex-1 truncate text-sm font-medium">
-												{variantLabel(row.optionValues)}
-											</span>
-											{!row.active ? (
-												<span className="shrink-0 text-[11px] font-semibold text-muted-foreground">
-													Off — hidden from buyers
-												</span>
-											) : null}
-										</div>
-										<div className="grid grid-cols-2 gap-2">
-											<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-												Price ({moneySymbol})
-												<PriceInput
-													value={row.price}
-													onChange={(v) => setRow(i, { price: v })}
-													invalid={!!issueFor("row", i, "price")}
-												/>
-												<IssueText message={issueFor("row", i, "price")} />
-											</label>
-											{row.blockWhenOutOfStock
-												? (() => {
-														const live = findLiveStock(
-															liveStock,
-															row.optionValues,
-														);
-														if (live)
-															return (
-																<div className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-																	<span>In stock</span>
-																	<LiveStockCell
-																		onHand={live.onHand}
-																		locked={stockLocked}
-																		onAdjust={() =>
-																			setAdjusting({
-																				variantId: live.variantId,
-																				label: variantLabel(row.optionValues),
-																				onHand: live.onHand,
-																			})
-																		}
-																	/>
-																</div>
-															);
-														return (
-															<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-																In stock now
-																<StockInput
-																	value={row.stock}
-																	onChange={(v) => setRow(i, { stock: v })}
-																	className="h-11"
-																	stepper
-																	invalid={!!issueFor("row", i, "stock")}
-																/>
-																<IssueText
-																	message={issueFor("row", i, "stock")}
-																/>
-															</label>
-														);
-													})()
-												: null}
-										</div>
-										{varyFulfilment ? (
-											<FulfilmentToggle
-												value={row.blockWhenOutOfStock}
-												onChange={(v) => setRow(i, { blockWhenOutOfStock: v })}
+										{(allTrack ||
+											(!allMto && rows.some((r) => r.blockWhenOutOfStock))) &&
+										rows.some(
+											(r) =>
+												r.blockWhenOutOfStock &&
+												!findLiveStock(liveStock, r.optionValues),
+										) ? (
+											<Input
+												inputMode="numeric"
+												placeholder="Fill all stock"
+												className="h-9 text-xs"
+												onChange={(e) =>
+													bulkFill("stock", sanitizeIntInput(e.target.value))
+												}
 											/>
 										) : null}
-									</li>
-								))}
-							</ul>
+									</div>
+								) : null}
+								{/* The bulk stock fill is gone on a saved product, and a control
+							    that silently disappears reads as a bug. Say where stock went
+							    — the seller is looking at the row that used to hold it. */}
+								{rows.some(
+									(r) =>
+										r.blockWhenOutOfStock &&
+										findLiveStock(liveStock, r.optionValues),
+								) ? (
+									<p className="text-xs leading-relaxed text-muted-foreground">
+										Stock now has its own control — use{" "}
+										<span className="font-medium text-foreground">Adjust</span>{" "}
+										on a choice to add what you made or take off what you sold.
+										It saves on its own, so a save here can never undo a sale.
+									</p>
+								) : null}
+								<ul className="flex flex-col gap-2">
+									{rows.map((row, i) => (
+										<li
+											key={variantLabel(row.optionValues)}
+											className={cn(
+												"flex flex-col gap-2 rounded-xl border border-border p-3",
+												!row.active && "opacity-60",
+											)}
+										>
+											<div className="flex items-center gap-2">
+												<span className="min-w-0 flex-1 truncate text-sm font-medium">
+													{variantLabel(row.optionValues)}
+												</span>
+												{!row.active ? (
+													<span className="shrink-0 text-[11px] font-semibold text-muted-foreground">
+														Off — hidden from buyers
+													</span>
+												) : null}
+											</div>
+											<div className="grid grid-cols-2 gap-2">
+												<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+													Price ({moneySymbol})
+													<PriceInput
+														value={row.price}
+														onChange={(v) => setRow(i, { price: v })}
+														invalid={!!issueFor("row", i, "price")}
+													/>
+													<IssueText message={issueFor("row", i, "price")} />
+												</label>
+												{row.blockWhenOutOfStock
+													? (() => {
+															const live = findLiveStock(
+																liveStock,
+																row.optionValues,
+															);
+															if (live)
+																return (
+																	<div className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+																		<span>In stock</span>
+																		<LiveStockCell
+																			onHand={live.onHand}
+																			locked={stockLocked}
+																			onAdjust={() =>
+																				setAdjusting({
+																					variantId: live.variantId,
+																					label: variantLabel(row.optionValues),
+																					onHand: live.onHand,
+																				})
+																			}
+																		/>
+																	</div>
+																);
+															return (
+																<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+																	In stock now
+																	<StockInput
+																		value={row.stock}
+																		onChange={(v) => setRow(i, { stock: v })}
+																		className="h-11"
+																		stepper
+																		invalid={!!issueFor("row", i, "stock")}
+																	/>
+																	<IssueText
+																		message={issueFor("row", i, "stock")}
+																	/>
+																</label>
+															);
+														})()
+													: null}
+											</div>
+											{varyFulfilment ? (
+												<FulfilmentToggle
+													value={row.blockWhenOutOfStock}
+													onChange={(v) =>
+														setRow(i, { blockWhenOutOfStock: v })
+													}
+												/>
+											) : null}
+										</li>
+									))}
+								</ul>
+								{/* A long open list ends here, a screen or more below its
+								    header — close it from where the seller finished, and
+								    land them back on the header rather than mid-page. */}
+								{collapseChoices && rows.length > 3 ? (
+									<button
+										type="button"
+										onClick={() => {
+											setChoicesOpen(false);
+											choicesHeaderRef.current?.scrollIntoView?.({
+												block: "nearest",
+											});
+										}}
+										className="flex min-h-11 items-center justify-center gap-1.5 self-center rounded-full px-4 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+									>
+										<ChevronUp className="size-4" aria-hidden />
+										Hide the {rows.length} choices
+									</button>
+								) : null}
+							</div>
 						</div>
 					) : null}
 				</>
