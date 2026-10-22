@@ -592,6 +592,17 @@ already out when the balance hits zero completes for the buyer, and that order
 waits on credits like any other below-zero order. See
 [`credits.md`](./credits.md#the-counter-needs-a-credit-in-hand-z8r3fdwbbb).
 
+That is the **one remaining way a counter-originated sale can wait**, so both
+seller surfaces say so instead of reading as a finished sale:
+
+- **The claims panel row:** `listClaims` carries `orderCreditsToUnlock` (set
+  only on a gated order, from the same `forSeller` redaction the row already
+  ran) — "Completed · ORD-X · Waiting on 1 credit", with a lock in place of the
+  success tick.
+- **The session's done screen:** reading the order's `creditGated`, it shows
+  "Waiting on N credits" and the way back, and leaves out the receipt and the
+  one-tap close — the server refuses both for a gated order.
+
 ## WhatsApp send
 
 Every buyer- or seller-authored string entering `bodyParams` goes through

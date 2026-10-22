@@ -545,6 +545,13 @@ export interface ClaimListRow {
 		| "unavailable";
 	/** Completed claims: the order it became (link target for the seller). */
 	orderShortId?: string;
+	/** Set only when that order is WAITING ON CREDITS — how many open it.
+	 * A link sent while the store had credit can still complete after the
+	 * balance hit zero (`commit` never refuses the buyer), and that order is
+	 * born gated: the one remaining way a counter-originated sale can wait.
+	 * The row must say so rather than read "Completed" over an order the
+	 * seller can't open (z8r3fdwbbb review). */
+	orderCreditsToUnlock?: number;
 	createdAt: number;
 }
 
@@ -613,11 +620,13 @@ export const listClaims = query({
 		for (const claim of [...open, ...settled]) {
 			let orderShortId: string | undefined;
 			let orderTotal: number | undefined;
+			let orderCreditsToUnlock: number | undefined;
 			if (claim.orderId) {
 				const raw = await ctx.db.get(claim.orderId);
 				const order = raw ? forSeller(gate, raw) : null;
 				orderShortId = order?.shortId;
 				orderTotal = order?.total;
+				if (order?.creditGated) orderCreditsToUnlock = order.creditsToUnlock;
 			}
 			const itemsTotal = claimItemsTotal(claim.lines);
 			// See `ClaimListRow.total` for why completed reads the order and
@@ -650,6 +659,7 @@ export const listClaims = query({
 				lastSentAt: claim.lastSentAt,
 				lastSendOutcome: claim.lastSendOutcome,
 				orderShortId,
+				orderCreditsToUnlock,
 				createdAt: claim.createdAt,
 			});
 		}
