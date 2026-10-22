@@ -86,8 +86,11 @@ export const Route = createFileRoute("/app/")({
 		// clean — but it round-trips, so a refresh keeps the seller's window.
 		...(search.p === undefined ? {} : { p: parseHomePeriod(search.p) }),
 		// A What's-new note's deep link to one Home section (src/lib/spotlight.ts).
-		// Same posture as Settings: a key from another page is dropped, not rung.
-		...(isHomeSpotlightKey(search.spot) ? { spot: search.spot } : {}),
+		// Same posture as Settings: a key from another page is dropped, not
+		// rung — and the key is RETURNED, `undefined` when absent, or its raw
+		// value leaks through TanStack's merge (z8r3fdtk87,
+		// src/lib/search-params-sweep.test.ts).
+		spot: isHomeSpotlightKey(search.spot) ? search.spot : undefined,
 	}),
 });
 
