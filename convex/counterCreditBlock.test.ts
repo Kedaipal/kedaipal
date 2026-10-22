@@ -395,6 +395,41 @@ describe("claim links: the seller's send is refused, the buyer's finish never is
 			deliveryAddress: MY_ADDRESS,
 		});
 		expect(await totalOf(t, s.retailerId)).toBe(-1);
+
+		// …and the seller's claims list says it is WAITING, not just
+		// "completed" — the one remaining way a counter-originated sale can be
+		// gated, so the row must not read as a sale they can open.
+		const rows = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.orderClaims.listClaims, {});
+		const done = rows.find((r) => r.status === "completed");
+		expect(done?.orderShortId).toMatch(/^ORD-/);
+		expect(done?.orderCreditsToUnlock).toBe(1);
+	});
+
+	test("a link completed while funded carries no wait", async () => {
+		const t = setup();
+		const s = await store(t);
+		await setBalance(t, s.retailerId, 5);
+		const sessionId = await boundSession(t);
+		const { token } = await t
+			.withIdentity({ subject: OWNER })
+			.mutation(api.orderClaims.sendClaim, {
+				sessionId,
+				items: [{ variantId: s.variantId, quantity: 1 }],
+				windowMinutes: 15,
+			});
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+		const rows = await t
+			.withIdentity({ subject: OWNER })
+			.query(api.orderClaims.listClaims, {});
+		const done = rows.find((r) => r.status === "completed");
+		expect(done?.orderShortId).toMatch(/^ORD-/);
+		expect(done?.orderCreditsToUnlock).toBeUndefined();
 	});
 });
 

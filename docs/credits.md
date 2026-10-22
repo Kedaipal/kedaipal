@@ -1182,7 +1182,9 @@ store-QR check-in, and finishing a claim link the seller already sent.
   completes the link, but the seller is the one sending it. A link already out
   when the balance hits zero still completes for the buyer (and that order is
   gated like any other below-zero order — the one remaining way a
-  counter-originated order can wait).
+  counter-originated order can wait). Its claims-panel row and done screen say "Waiting on N
+  credits" rather than "Completed" — see
+  [`claim-links.md`](./claim-links.md#sending-needs-a-credit-in-hand-finishing-never-does-z8r3fdwbbb).
 - **Not** `startSessionFromStoreQr` (the buyer's check-in) or `orderClaims.commit`.
 
 `creditLockCoverage.test.ts` holds both lists: the five seller writes must carry
