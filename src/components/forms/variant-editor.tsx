@@ -785,11 +785,15 @@ function MockupApprovalToggle({
 	);
 }
 
+/** One shared empty list, so a host that passes no `issues` doesn't hand the
+ * issue effects a new array — and a re-run — on every render. */
+const EMPTY_ISSUES: VariantIssue[] = [];
+
 export function VariantEditor({
 	value,
 	onChange,
 	currency,
-	issues = [],
+	issues = EMPTY_ISSUES,
 	weightMode = false,
 	liveStock,
 	productName = "This product",
