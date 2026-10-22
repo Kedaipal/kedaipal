@@ -70,6 +70,7 @@ import type * as lib_country from "../lib/country.js";
 import type * as lib_countrySetup from "../lib/countrySetup.js";
 import type * as lib_courierBooking from "../lib/courierBooking.js";
 import type * as lib_courierContact from "../lib/courierContact.js";
+import type * as lib_courierProviders from "../lib/courierProviders.js";
 import type * as lib_courierWallet from "../lib/courierWallet.js";
 import type * as lib_couriers from "../lib/couriers.js";
 import type * as lib_credentialCrypto from "../lib/credentialCrypto.js";
@@ -273,6 +274,7 @@ declare const fullApi: ApiFromModules<{
   "lib/countrySetup": typeof lib_countrySetup;
   "lib/courierBooking": typeof lib_courierBooking;
   "lib/courierContact": typeof lib_courierContact;
+  "lib/courierProviders": typeof lib_courierProviders;
   "lib/courierWallet": typeof lib_courierWallet;
   "lib/couriers": typeof lib_couriers;
   "lib/credentialCrypto": typeof lib_credentialCrypto;

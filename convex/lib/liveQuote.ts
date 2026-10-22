@@ -22,7 +22,9 @@
  * testable without a network or a database. Fetching lives in the action.
  */
 
-export type LiveQuoteProvider = "lalamove" | "delyva";
+import type { CourierProviderId } from "./courierProviders";
+
+export type LiveQuoteProvider = CourierProviderId;
 
 /** One provider's answer. Failure kinds are deliberately provider-neutral:
  * the buyer-facing copy keys off the resolved outcome, never off which API

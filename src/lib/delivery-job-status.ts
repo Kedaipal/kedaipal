@@ -1,3 +1,4 @@
+import type { CourierProviderId } from "../../convex/lib/courierProviders";
 import type { DeliveryJobStatus } from "../../convex/lib/deliveryJobs";
 
 /**
@@ -12,7 +13,7 @@ import type { DeliveryJobStatus } from "../../convex/lib/deliveryJobs";
  */
 export function jobStatusLabel(
 	status: DeliveryJobStatus,
-	opts: { provider: "lalamove" | "delyva"; collection: boolean },
+	opts: { provider: CourierProviderId; collection: boolean },
 ): string {
 	const { provider, collection } = opts;
 	switch (status) {
