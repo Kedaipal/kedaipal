@@ -44,7 +44,15 @@ function AppLayout() {
 		<ActAsProvider>
 			<Show
 				when="signed-in"
-				fallback={<RedirectToSignIn signInForceRedirectUrl="/app" />}
+				// Both legs back to /app: sign-in falls through to sign-up for an
+				// unknown address (z8r3fdwdvq), and a fresh login with no store is
+				// routed on from here (claim, team invite, or onboarding).
+				fallback={
+					<RedirectToSignIn
+						signInForceRedirectUrl="/app"
+						signUpForceRedirectUrl="/app"
+					/>
+				}
 			>
 				<AppShell />
 			</Show>
@@ -213,6 +221,8 @@ function AppShell() {
 								<SubscriptionBanner
 									subscription={retailer.subscription}
 									slug={retailer.slug}
+									// The Counter carries its own credit banner (z8r3fdwbbb).
+									yieldCredits={location.pathname === "/app/checkout"}
 								/>
 							)}
 						</div>

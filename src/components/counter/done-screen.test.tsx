@@ -14,6 +14,7 @@ vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
 const state = vi.hoisted(() => ({
 	updateStatus: vi.fn(async () => undefined),
 	shareLink: vi.fn(async () => undefined),
+	canAct: true,
 }));
 vi.mock("convex/react", () => ({
 	useMutation: () => state.updateStatus,
@@ -27,10 +28,15 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("../../lib/share", () => ({ shareLink: state.shareLink }));
+// The gate's words + way back; the per-row verdict comes from the order itself.
+vi.mock("../../hooks/useCreditGate", () => ({
+	useCreditGate: () => ({ route: "topup", canAct: state.canAct }),
+}));
 
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
+	state.canAct = true;
 });
 
 type Order = {
@@ -42,6 +48,8 @@ type Order = {
 	confirmationPushStatus?: string;
 	confirmationPushFailureKind?: string;
 	fulfilmentDate?: number;
+	creditGated?: true;
+	creditsToUnlock?: number;
 };
 
 function order(overrides: Partial<Order> = {}): Order {
@@ -207,5 +215,50 @@ describe("DoneScreen — a sale that is NOT handed over yet stays open", () => {
 		expect(
 			screen.queryByRole("button", { name: /Mark as completed/ }),
 		).toBeNull();
+	});
+});
+
+/**
+ * z8r3fdwbbb: a claim link sent while the store had credit can complete after
+ * the balance hit zero, and the session's done screen is this one. The order
+ * is redacted and every action under it would be refused — so the screen must
+ * not read "Sale complete" over an order the seller can't open.
+ */
+describe("DoneScreen — an order waiting on credits", () => {
+	const waiting = () =>
+		order({
+			status: "confirmed",
+			creditGated: true,
+			creditsToUnlock: 2,
+			trackingToken: undefined,
+			confirmationPushStatus: undefined,
+		});
+
+	it("says what it is waiting for, with the way back — never 'Sale complete'", () => {
+		renderDone(waiting(), { completed: false });
+		expect(
+			screen.getByRole("heading", { name: "Waiting on 2 credits" }),
+		).toBeTruthy();
+		expect(screen.queryByText(/Sale complete/)).toBeNull();
+		expect(
+			screen.getByText(/its details stay closed until credits land/),
+		).toBeTruthy();
+		expect(screen.getByRole("link", { name: "Top up credits" })).toBeTruthy();
+		expect(screen.getByRole("link", { name: "View order" })).toBeTruthy();
+	});
+
+	it("offers nothing the server would refuse — no receipt, no one-tap close", () => {
+		renderDone(waiting(), { completed: false });
+		expect(
+			screen.queryByRole("button", { name: /Mark as completed/ }),
+		).toBeNull();
+		expect(screen.queryByText(/^(Receipt|Invoice)$/)).toBeNull();
+	});
+
+	it("a teammate who can't buy credits is pointed at the owner, with no buy button", () => {
+		state.canAct = false;
+		renderDone(waiting(), { completed: false });
+		expect(screen.getByText(/until the owner adds credits/)).toBeTruthy();
+		expect(screen.queryByRole("link", { name: "Top up credits" })).toBeNull();
 	});
 });
