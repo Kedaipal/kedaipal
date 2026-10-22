@@ -380,6 +380,13 @@ describe("the shipped RELEASES content", () => {
 					`${e.href}: "${spot}" is not a spotlight key`,
 				).toBe(true);
 				const target = SPOTLIGHT_ANCHOR[spot as SpotlightKey];
+				if (target.page === "home") {
+					expect(path, `${e.href}: a Home spotlight lands on Home`).toBe(
+						"/app",
+					);
+					expect(params.get("tab")).toBeNull();
+					continue;
+				}
 				if (target.page === "product") {
 					// The products LIST is the first hop — never a guessed id.
 					expect(path, `${e.href}: a product spotlight lands on the list`).toBe(

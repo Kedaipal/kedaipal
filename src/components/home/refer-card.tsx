@@ -7,6 +7,12 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { referralShareMessage } from "../../../convex/lib/referral";
 import type { MyReferralCard } from "../../../convex/referrals";
+import {
+	type FixHighlight,
+	highlightRingClass,
+} from "../../lib/country-setup-copy";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
+import { cn } from "../../lib/utils";
 import { WhatsAppIcon } from "../dashboard/brand-icons";
 import { Button } from "../ui/button";
 
@@ -26,8 +32,20 @@ import { Button } from "../ui/button";
  *    why and the way back — a link that silently stopped counting would be
  *    the hidden behaviour CLAUDE.md forbids;
  *  - a TRIAL store: nothing — a store refers once its plan is paid.
+ *
+ * `highlight` is the What's-new deep link's ring (`?spot=refer`,
+ * src/lib/spotlight.ts): the section carries the registry anchor so Home can
+ * scroll to it, and the card takes the mint ring. The ring class is applied
+ * only when asked for — at rest `highlightRingClass` answers `border-input`,
+ * which is not this card's border.
  */
-export function ReferCard({ retailerId }: { retailerId: Id<"retailers"> }) {
+export function ReferCard({
+	retailerId,
+	highlight,
+}: {
+	retailerId: Id<"retailers">;
+	highlight?: FixHighlight;
+}) {
 	const card = useQuery(convexQuery(api.referrals.myCard, { retailerId })).data;
 	// Nothing while loading — not a skeleton: a trial store never shows this
 	// card, so a placeholder would promise a section that then vanishes. It is
@@ -36,10 +54,10 @@ export function ReferCard({ retailerId }: { retailerId: Id<"retailers"> }) {
 	const { standing } = card;
 	if (!standing.canRefer) {
 		if (standing.reason === "paused" || standing.reason === "lapsed")
-			return <PausedReferCard reason={standing.reason} />;
+			return <PausedReferCard reason={standing.reason} highlight={highlight} />;
 		return null;
 	}
-	return <LiveReferCard card={card} earns={card.earns} />;
+	return <LiveReferCard card={card} earns={card.earns} highlight={highlight} />;
 }
 
 function Heading({ id }: { id?: string }) {
@@ -59,9 +77,11 @@ function Heading({ id }: { id?: string }) {
 function LiveReferCard({
 	card,
 	earns,
+	highlight,
 }: {
 	card: MyReferralCard;
 	earns: boolean;
+	highlight?: FixHighlight;
 }) {
 	const [copied, setCopied] = useState(false);
 	const waUrl = `https://wa.me/?text=${encodeURIComponent(referralShareMessage(card.link))}`;
@@ -77,9 +97,18 @@ function LiveReferCard({
 	}
 
 	return (
-		<section className="flex flex-col gap-3" aria-labelledby="refer-heading">
+		<section
+			id={SPOTLIGHT_ANCHOR.refer.anchor}
+			className="flex flex-col gap-3 scroll-mt-4"
+			aria-labelledby="refer-heading"
+		>
 			<Heading id="refer-heading" />
-			<div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-4">
+			<div
+				className={cn(
+					"flex flex-col gap-4 rounded-2xl border border-border bg-card p-4",
+					highlight ? highlightRingClass(highlight) : undefined,
+				)}
+			>
 				{/* One number for both sides, sized by the tier the kawan starts on
 				    (Zaki, 20 Oct 2026) — so the sentence says it once: "and so do
 				    you". A comped store's sentence stops at the kawan. */}
@@ -178,11 +207,25 @@ function Stat({ label, value }: { label: string; value: string }) {
 	);
 }
 
-function PausedReferCard({ reason }: { reason: "paused" | "lapsed" }) {
+function PausedReferCard({
+	reason,
+	highlight,
+}: {
+	reason: "paused" | "lapsed";
+	highlight?: FixHighlight;
+}) {
 	return (
-		<section className="flex flex-col gap-3">
+		<section
+			id={SPOTLIGHT_ANCHOR.refer.anchor}
+			className="flex flex-col gap-3 scroll-mt-4"
+		>
 			<Heading />
-			<div className="flex items-start gap-3 rounded-2xl border border-border bg-card p-4">
+			<div
+				className={cn(
+					"flex items-start gap-3 rounded-2xl border border-border bg-card p-4",
+					highlight ? highlightRingClass(highlight) : undefined,
+				)}
+			>
 				<PauseCircle
 					className="mt-0.5 size-5 shrink-0 text-muted-foreground"
 					aria-hidden="true"

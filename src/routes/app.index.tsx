@@ -13,7 +13,7 @@ import {
 	Sparkles,
 	Store,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Country } from "../../convex/lib/country";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
@@ -46,8 +46,14 @@ import { Button } from "../components/ui/button";
 import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { usePermission } from "../hooks/usePermission";
+import { revealAnchorWhenMounted } from "../lib/country-setup-copy";
 import { creditPlacement, creditTone } from "../lib/credits-ui";
 import { type HomePeriod, parseHomePeriod } from "../lib/home-copy";
+import {
+	type HomeSpotlightKey,
+	isHomeSpotlightKey,
+	SPOTLIGHT_ANCHOR,
+} from "../lib/spotlight";
 import { storefrontUrl as buildStorefrontUrl } from "../lib/storefront-url";
 import { subscribeStepCopy } from "../lib/subscribe-step";
 import { freePeriodState, hasSubscribed } from "../lib/subscription";
@@ -73,10 +79,16 @@ import { freePeriodState, hasSubscribed } from "../lib/subscription";
  */
 export const Route = createFileRoute("/app/")({
 	component: DashboardHome,
-	validateSearch: (search: Record<string, unknown>): { p?: HomePeriod } =>
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { p?: HomePeriod; spot?: HomeSpotlightKey } => ({
 		// Only pinned when it differs from the default, so the common URL stays
 		// clean — but it round-trips, so a refresh keeps the seller's window.
-		search.p === undefined ? {} : { p: parseHomePeriod(search.p) },
+		...(search.p === undefined ? {} : { p: parseHomePeriod(search.p) }),
+		// A What's-new note's deep link to one Home section (src/lib/spotlight.ts).
+		// Same posture as Settings: a key from another page is dropped, not rung.
+		...(isHomeSpotlightKey(search.spot) ? { spot: search.spot } : {}),
+	}),
 });
 
 // Named per store country (z8r3fdbmc9) — DuitNow is a Malaysian rail; an SG
@@ -103,6 +115,14 @@ function DashboardHome() {
 	const navigate = useNavigate({ from: "/app" });
 	const search = Route.useSearch();
 	const period: HomePeriod = parseHomePeriod(search.p);
+	// Deep link to one section: scroll to it once it is on the page and ring
+	// its card in the brand mint — the Refer card mounts only after its query
+	// answers, so wait for IT, not a frame (the Settings route's rule).
+	const spot = search.spot;
+	useEffect(() => {
+		if (!spot) return;
+		return revealAnchorWhenMounted(SPOTLIGHT_ANCHOR[spot].anchor);
+	}, [spot]);
 
 	const products = useQuery(
 		convexQuery(
@@ -532,7 +552,10 @@ function DashboardHome() {
 			{/* Referring another SELLER (z8r3fdfp97) — its own section, not part
 			    of "Your store" (that card shares the store with buyers), and
 			    last because it is never urgent. Renders nothing on a trial. */}
-			<ReferCard retailerId={retailer._id} />
+			<ReferCard
+				retailerId={retailer._id}
+				highlight={spot === "refer" ? "spotlight" : undefined}
+			/>
 
 			<StorefrontQrDialog
 				open={qrOpen}
