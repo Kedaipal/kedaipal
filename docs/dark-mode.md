@@ -62,14 +62,14 @@ Two decisions worth knowing:
 
 A theme change is a **fade, not a cut**. The first cut flipped the class and the browser repainted everything in the next frame — white to navy between two frames, which reads as a glitch rather than a choice (Zaki, 22 Oct 2026: "feels like a flip"). Now the page **dims down** into dark and **brightens up** into light, the way a room does on a dimmer, and the toggle's incoming glyph turns into place under it.
 
-**How.** `lib/theme.ts` runs the class flip inside `document.startViewTransition()`. The browser snapshots the page as it stands, runs the commit, then crossfades the old snapshot into the live new page: one composited fade over the whole viewport, so photos, borders, shadows and text all travel together. `styles.css` shapes it per direction, which `theme.ts` stamps on `<html>` as `data-theme-transition="to-dark" | "to-light"` for the fade's life:
+**How.** `lib/theme.ts` runs the class flip inside `document.startViewTransition()`. The browser snapshots the page as it stands, runs the commit, then crossfades the old snapshot into the live new page: one composited fade over the whole viewport, so photos, borders, shadows and text all travel together. `styles.css` shapes it per direction, which `theme.ts` stamps on `<html>` as `data-theme-transition="to-dark" | "to-light"` from the moment the old snapshot is taken until the fade ends:
 
 | Direction | Duration | Curve | Why |
 | --- | --- | --- | --- |
 | to dark | 520 ms | symmetric ease-in-out | a dimmer turned down |
 | to light | 680 ms | ease-out (`0.2, 0, 0, 1`) | brighter sooner, settles slower — eyes adjusting to a lamp |
 
-Old and new share one curve so their opacities always sum to 1 under the pair's plus-lighter blend; there is no dip in the middle. The glyph (`.kp-theme-glyph`) is CSS-picked, so the incoming one is freshly rendered at the flip and its 560 ms rotate-in starts there. Gating it on the attribute is what stops a page load replaying it.
+Old and new share one curve so their opacities always sum to 1 under the pair's plus-lighter blend; there is no dip in the middle. The glyph (`.kp-theme-glyph`) is CSS-picked, so the incoming one is freshly rendered at the flip and its 560 ms rotate-in starts there. Gating it on the attribute is what stops a page load replaying it — and the stamp goes on **inside** the transition callback, after the old snapshot is taken: stamped before it, the *outgoing* glyph was captured at the keyframe's first frame (opacity 0) and vanished at the start of the fade instead of crossfading out (PR #409 review). The transition's pseudo-elements are built after the callback, so the per-direction durations still see the stamp.
 
 **Rejected:** `transition: background-color, color` on every element. Each element tweens on its own clock, images and gradients do not tween at all (they pop while the page around them fades), it overrides every component's own `transition` mid-gesture, and it costs a style recalculation on every node. The snapshot costs one.
 

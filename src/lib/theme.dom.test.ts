@@ -294,7 +294,9 @@ describe("the fade", () => {
 		expect(isDark()).toBe(false);
 		expect(notified).toEqual([]);
 		expect(getThemeSnapshot().resolved).toBe("light");
-		expect(attr()).toBe("to-dark");
+		// Not even the direction stamp: the glyph keyframe keys on it, and a
+		// stamp before the snapshot captures the OUTGOING glyph at opacity 0.
+		expect(attr()).toBeNull();
 
 		vt.capture();
 
@@ -317,8 +319,8 @@ describe("the fade", () => {
 
 		setThemePreference("light");
 
-		expect(attr()).toBe("to-light");
 		vt.capture();
+		expect(attr()).toBe("to-light");
 		expect(isDark()).toBe(false);
 		await vt.finish();
 		expect(attr()).toBeNull();
@@ -367,9 +369,9 @@ describe("the fade", () => {
 		media.fireChange(true);
 
 		expect(vt.calls).toBe(1);
-		expect(attr()).toBe("to-dark");
 		expect(isDark()).toBe(false);
 		vt.capture();
+		expect(attr()).toBe("to-dark");
 		expect(isDark()).toBe(true);
 	});
 
@@ -383,8 +385,8 @@ describe("the fade", () => {
 			}),
 		);
 		expect(vt.calls).toBe(1);
-		expect(attr()).toBe("to-dark");
 		vt.capture();
+		expect(attr()).toBe("to-dark");
 		expect(isDark()).toBe(true);
 		expect(getThemeSnapshot().preference).toBe("dark");
 	});
@@ -399,13 +401,13 @@ describe("the fade", () => {
 		// first transition (its `finished` settles) and starts the second.
 		setThemePreference("light");
 		expect(vt.calls).toBe(2);
+		vt.capture(1);
 		expect(attr()).toBe("to-light");
 
 		await vt.finish(0);
 		// The FIRST fade's cleanup must not strip the SECOND fade's direction.
 		expect(attr()).toBe("to-light");
 
-		vt.capture(1);
 		await vt.finish(1);
 		expect(attr()).toBeNull();
 		expect(isDark()).toBe(false);

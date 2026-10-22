@@ -130,8 +130,9 @@ export function applyResolvedTheme(resolved: ResolvedTheme): void {
  * and it costs a style recalculation on every node. The snapshot costs one.
  *
  * The direction rides <html> as `data-theme-transition="to-dark" | "to-light"`
- * for the life of the fade; `styles.css` picks the duration and curve per
- * direction from it, and the toggle's glyph animates in under it.
+ * from the moment the old snapshot is taken until the fade ends; `styles.css`
+ * picks the duration and curve per direction from it, and the toggle's
+ * incoming glyph animates in under it.
  *
  * WHEN IT DOESN'T: `prefers-reduced-motion` (a cut is the accessible answer);
  * a browser without the API (a cut, exactly as before — nothing is lost); a
@@ -187,20 +188,25 @@ function commitWithFade(next: ResolvedTheme, commit: () => void): void {
 
 	const root = document.documentElement;
 	const seq = ++fadeSeq;
-	root.setAttribute(
-		THEME_TRANSITION_ATTR,
-		next === "dark" ? "to-dark" : "to-light",
-	);
+	const direction = next === "dark" ? "to-dark" : "to-light";
 	const clear = () => {
 		if (seq === fadeSeq) root.removeAttribute(THEME_TRANSITION_ATTR);
+	};
+	// The stamp goes on INSIDE the callback, after the "old" snapshot is taken:
+	// the glyph keyframe keys on it, and stamped earlier the outgoing glyph is
+	// captured at the keyframe's first frame (opacity 0) and vanishes instead
+	// of crossfading out. The transition's pseudo-elements are built after the
+	// callback, so the per-direction durations still see it (PR #409 review).
+	const update = () => {
+		root.setAttribute(THEME_TRANSITION_ATTR, direction);
+		commit();
 	};
 
 	let transition: ViewTransition;
 	try {
-		transition = start.call(document, commit);
+		transition = start.call(document, update);
 	} catch {
 		// The browser refused the transition — the change still has to land.
-		clear();
 		commit();
 		return;
 	}
