@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import {
 	type MutableRefObject,
+	type ReactNode,
 	useEffect,
 	useId,
 	useMemo,
@@ -48,7 +49,12 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { DISCLOSURE_PANEL_ATTR, REVEAL_EVENT } from "../ui/question-row";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
-import { choicesAnswer } from "./product-answers";
+import {
+	type Answer,
+	advancedAnswer,
+	choiceDetailsAnswer,
+	choicesAnswer,
+} from "./product-answers";
 
 export type VariantRow = {
 	optionValues: string[];
@@ -229,6 +235,116 @@ function IssueText({ message }: { message: string | undefined }) {
 		<span role="alert" className="text-xs font-normal text-destructive">
 			{message}
 		</span>
+	);
+}
+
+/**
+ * A per-choice list folded behind a one-line summary (z8r3fdwnyk) — the price
+ * list and Advanced's per-choice details are the two parts of the editor that
+ * grow with the variant count, so on the edit page both fold the same way:
+ * one idea, one control.
+ *
+ * Controlled, because the editor decides when a list must open (a new value,
+ * a refused save). The rules a question row owns hold here too: the panel
+ * stays MOUNTED while closed (`hidden`), so a half-typed value survives and
+ * focus-error can find an invalid field in it and send {@link REVEAL_EVENT};
+ * a long open list ends in "Hide the N choices", closing it from where the
+ * seller finished and bringing the header back into view.
+ *
+ * `collapse` off renders a plain heading over an always-open list — create
+ * and the wizard, where the seller is authoring the grid.
+ */
+function ChoiceListDisclosure({
+	title,
+	summary,
+	count,
+	collapse,
+	open,
+	onOpenChange,
+	children,
+}: {
+	title: string;
+	summary: Answer;
+	count: number;
+	collapse: boolean;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	children: ReactNode;
+}) {
+	const panelId = useId();
+	const panelRef = useRef<HTMLDivElement>(null);
+	const headerRef = useRef<HTMLButtonElement>(null);
+	// Read through a ref so the listener is bound once per mount, not per render.
+	const onOpenChangeRef = useRef(onOpenChange);
+	onOpenChangeRef.current = onOpenChange;
+	useEffect(() => {
+		const panel = panelRef.current;
+		if (!collapse || !panel) return;
+		const reveal = () => onOpenChangeRef.current(true);
+		panel.addEventListener(REVEAL_EVENT, reveal);
+		return () => panel.removeEventListener(REVEAL_EVENT, reveal);
+	}, [collapse]);
+
+	return (
+		<div className="flex flex-col gap-2">
+			{collapse ? (
+				<button
+					ref={headerRef}
+					type="button"
+					aria-expanded={open}
+					aria-controls={panelId}
+					onClick={() => onOpenChange(!open)}
+					// scroll-mt clears the sticky header when "Hide" brings it back.
+					className="flex min-h-14 w-full scroll-mt-24 items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+				>
+					<span className="flex min-w-0 flex-1 flex-col">
+						<span className="text-sm font-medium">{title}</span>
+						<span
+							data-choices-answer
+							className={cn(
+								"mt-0.5 line-clamp-2 text-xs leading-snug",
+								summary.tone === "warn"
+									? "font-medium text-amber-700 dark:text-amber-400"
+									: "text-muted-foreground",
+							)}
+						>
+							{summary.text}
+						</span>
+					</span>
+					<ChevronDown
+						aria-hidden="true"
+						className={cn(
+							"size-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
+							open && "rotate-180",
+						)}
+					/>
+				</button>
+			) : (
+				<span className="text-sm font-medium">{title}</span>
+			)}
+			<div
+				ref={panelRef}
+				id={panelId}
+				hidden={collapse && !open}
+				{...(collapse ? { [DISCLOSURE_PANEL_ATTR]: "" } : {})}
+				className="flex flex-col gap-2"
+			>
+				{children}
+				{collapse && count > 3 ? (
+					<button
+						type="button"
+						onClick={() => {
+							onOpenChange(false);
+							headerRef.current?.scrollIntoView?.({ block: "start" });
+						}}
+						className="flex min-h-11 items-center justify-center gap-1.5 self-center rounded-full px-4 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+					>
+						<ChevronUp className="size-4" aria-hidden />
+						Hide the {count} choices
+					</button>
+				) : null}
+			</div>
+		</div>
 	);
 }
 
@@ -724,17 +840,31 @@ export function VariantEditor({
 	// case), forced open when it holds pre-existing config or a submit issue
 	// points inside it. Parcel weight counts only when it LIVES here (weight
 	// mode promotes it to its own block outside).
+	//
+	// EXCEPT on the edit page (collapseChoices, z8r3fdwnyk): there the
+	// "pre-existing config" rule opened Advanced on nearly every real product
+	// (one parcel weight was enough) and its per-choice details repeated every
+	// variant again — 56 of them pushed the question groups 8,000px down. So
+	// it starts closed and its header line states what is inside instead
+	// (`advancedAnswer`): the config is still never invisible, it is just
+	// said rather than spread open. A submit issue still opens it.
 	const [advOpen, setAdvOpen] = useState(
 		() =>
-			(!capabilitiesOutside && (customLine !== null || someProof)) ||
-			options.length > 1 ||
-			rows.some(
-				(r) =>
-					r.sku.trim().length > 0 ||
-					!r.active ||
-					(!weightMode && r.parcelWeightG.trim().length > 0),
-			),
+			!collapseChoices &&
+			((!capabilitiesOutside && (customLine !== null || someProof)) ||
+				options.length > 1 ||
+				rows.some(
+					(r) =>
+						r.sku.trim().length > 0 ||
+						!r.active ||
+						(!weightMode && r.parcelWeightG.trim().length > 0),
+				)),
 	);
+	// Advanced's per-choice details fold the same way as the price list on
+	// edit — opening Advanced to rename the second choice must not unroll
+	// every variant again. A refused parcel weight opens it (weight lives
+	// here outside weight mode); focus-error's reveal covers the rest.
+	const [detailsOpen, setDetailsOpen] = useState(!collapseChoices);
 	useEffect(() => {
 		if (
 			issues.some(
@@ -745,6 +875,12 @@ export function VariantEditor({
 			)
 		) {
 			setAdvOpen(true);
+		}
+		if (
+			!weightMode &&
+			issues.some((i) => i.where === "row" && i.field === "weight")
+		) {
+			setDetailsOpen(true);
 		}
 	}, [issues, weightMode, capabilitiesOutside]);
 
@@ -786,9 +922,6 @@ export function VariantEditor({
 	// added value, whose new row has a blank price.
 	const [choicesOpen, setChoicesOpen] = useState(!collapseChoices);
 	const choicesSummary = choicesAnswer(rows, currency);
-	const choicesPanelId = useId();
-	const choicesPanelRef = useRef<HTMLDivElement>(null);
-	const choicesHeaderRef = useRef<HTMLButtonElement>(null);
 	useEffect(() => {
 		if (
 			issues.some(
@@ -799,13 +932,6 @@ export function VariantEditor({
 			setChoicesOpen(true);
 		}
 	}, [issues]);
-	useEffect(() => {
-		const panel = choicesPanelRef.current;
-		if (!collapseChoices || !gridReady || !panel) return;
-		const reveal = () => setChoicesOpen(true);
-		panel.addEventListener(REVEAL_EVENT, reveal);
-		return () => panel.removeEventListener(REVEAL_EVENT, reveal);
-	}, [collapseChoices, gridReady]);
 
 	function setOptions(nextOptions: OptionAxis[]) {
 		update({ options: nextOptions, rows: rebuildRows(nextOptions, rows) });
@@ -1222,6 +1348,11 @@ export function VariantEditor({
 	// Made-to-order has already answered both of the first two — approval is what
 	// the type IS, and a bespoke line on a bespoke product is the same offer
 	// twice — so neither is listed or rendered below.
+	// On edit, Advanced starts closed, so its line says what is set inside
+	// rather than what could be — falling back to the menu when nothing is.
+	const advancedState = collapseChoices
+		? advancedAnswer({ options, rows, weightMode })
+		: null;
 	const advancedTeaser = capabilitiesOutside
 		? hasOptions
 			? "A second choice · per-choice SKUs, photos & on/off"
@@ -1431,206 +1562,144 @@ export function VariantEditor({
 
 					{/* The choices & their prices. */}
 					{gridReady ? (
-						<div className="flex flex-col gap-2">
-							{collapseChoices ? (
-								<button
-									ref={choicesHeaderRef}
-									type="button"
-									aria-expanded={choicesOpen}
-									aria-controls={choicesPanelId}
-									onClick={() => setChoicesOpen((v) => !v)}
-									className="flex min-h-14 w-full items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-								>
-									<span className="flex min-w-0 flex-1 flex-col">
-										<span className="text-sm font-medium">
-											The choices & prices
-										</span>
-										<span
-											data-choices-answer
-											className={cn(
-												"mt-0.5 line-clamp-2 text-xs leading-snug",
-												choicesSummary.tone === "warn"
-													? "font-medium text-amber-700 dark:text-amber-400"
-													: "text-muted-foreground",
-											)}
-										>
-											{choicesSummary.text}
-										</span>
-									</span>
-									<ChevronDown
-										aria-hidden="true"
-										className={cn(
-											"size-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
-											choicesOpen && "rotate-180",
-										)}
+						<ChoiceListDisclosure
+							title="The choices & prices"
+							summary={choicesSummary}
+							count={rows.length}
+							collapse={collapseChoices}
+							open={choicesOpen}
+							onOpenChange={setChoicesOpen}
+						>
+							{rows.length > 3 ? (
+								<div className="flex items-center gap-2">
+									<Input
+										inputMode="decimal"
+										placeholder="Fill all prices"
+										className="h-9 text-xs"
+										onChange={(e) => bulkFill("price", e.target.value)}
+										onBlur={(e) =>
+											bulkFill("price", normalizePriceInput(e.target.value))
+										}
 									/>
-								</button>
-							) : (
-								<span className="text-sm font-medium">
-									The choices & prices
-								</span>
-							)}
-							{/* Mounted while closed (`hidden`), like a question row: a
-							    half-typed price survives a collapse, and focus-error can
-							    find an invalid field inside and ask the list to open. */}
-							<div
-								ref={choicesPanelRef}
-								id={choicesPanelId}
-								hidden={collapseChoices && !choicesOpen}
-								{...(collapseChoices ? { [DISCLOSURE_PANEL_ATTR]: "" } : {})}
-								className="flex flex-col gap-2"
-							>
-								{rows.length > 3 ? (
-									<div className="flex items-center gap-2">
-										<Input
-											inputMode="decimal"
-											placeholder="Fill all prices"
-											className="h-9 text-xs"
-											onChange={(e) => bulkFill("price", e.target.value)}
-											onBlur={(e) =>
-												bulkFill("price", normalizePriceInput(e.target.value))
-											}
-										/>
-										{/* Only offered while at least one tracked row is NEW. On a
+									{/* Only offered while at least one tracked row is NEW. On a
 									    saved product every stock cell is read-only, so a bulk fill
 									    would type into nothing — an input that silently does
 									    nothing is worse than no input. Its absence is explained
 									    below rather than left as a control that quietly went
 									    missing. */}
-										{(allTrack ||
-											(!allMto && rows.some((r) => r.blockWhenOutOfStock))) &&
-										rows.some(
-											(r) =>
-												r.blockWhenOutOfStock &&
-												!findLiveStock(liveStock, r.optionValues),
-										) ? (
-											<Input
-												inputMode="numeric"
-												placeholder="Fill all stock"
-												className="h-9 text-xs"
-												onChange={(e) =>
-													bulkFill("stock", sanitizeIntInput(e.target.value))
-												}
-											/>
-										) : null}
-									</div>
-								) : null}
-								{/* The bulk stock fill is gone on a saved product, and a control
+									{(allTrack ||
+										(!allMto && rows.some((r) => r.blockWhenOutOfStock))) &&
+									rows.some(
+										(r) =>
+											r.blockWhenOutOfStock &&
+											!findLiveStock(liveStock, r.optionValues),
+									) ? (
+										<Input
+											inputMode="numeric"
+											placeholder="Fill all stock"
+											className="h-9 text-xs"
+											onChange={(e) =>
+												bulkFill("stock", sanitizeIntInput(e.target.value))
+											}
+										/>
+									) : null}
+								</div>
+							) : null}
+							{/* The bulk stock fill is gone on a saved product, and a control
 							    that silently disappears reads as a bug. Say where stock went
 							    — the seller is looking at the row that used to hold it. */}
-								{rows.some(
-									(r) =>
-										r.blockWhenOutOfStock &&
-										findLiveStock(liveStock, r.optionValues),
-								) ? (
-									<p className="text-xs leading-relaxed text-muted-foreground">
-										Stock now has its own control — use{" "}
-										<span className="font-medium text-foreground">Adjust</span>{" "}
-										on a choice to add what you made or take off what you sold.
-										It saves on its own, so a save here can never undo a sale.
-									</p>
-								) : null}
-								<ul className="flex flex-col gap-2">
-									{rows.map((row, i) => (
-										<li
-											key={variantLabel(row.optionValues)}
-											className={cn(
-												"flex flex-col gap-2 rounded-xl border border-border p-3",
-												!row.active && "opacity-60",
-											)}
-										>
-											<div className="flex items-center gap-2">
-												<span className="min-w-0 flex-1 truncate text-sm font-medium">
-													{variantLabel(row.optionValues)}
-												</span>
-												{!row.active ? (
-													<span className="shrink-0 text-[11px] font-semibold text-muted-foreground">
-														Off — hidden from buyers
-													</span>
-												) : null}
-											</div>
-											<div className="grid grid-cols-2 gap-2">
-												<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-													Price ({moneySymbol})
-													<PriceInput
-														value={row.price}
-														onChange={(v) => setRow(i, { price: v })}
-														invalid={!!issueFor("row", i, "price")}
-													/>
-													<IssueText message={issueFor("row", i, "price")} />
-												</label>
-												{row.blockWhenOutOfStock
-													? (() => {
-															const live = findLiveStock(
-																liveStock,
-																row.optionValues,
-															);
-															if (live)
-																return (
-																	<div className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-																		<span>In stock</span>
-																		<LiveStockCell
-																			onHand={live.onHand}
-																			locked={stockLocked}
-																			onAdjust={() =>
-																				setAdjusting({
-																					variantId: live.variantId,
-																					label: variantLabel(row.optionValues),
-																					onHand: live.onHand,
-																				})
-																			}
-																		/>
-																	</div>
-																);
-															return (
-																<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-																	In stock now
-																	<StockInput
-																		value={row.stock}
-																		onChange={(v) => setRow(i, { stock: v })}
-																		className="h-11"
-																		stepper
-																		invalid={!!issueFor("row", i, "stock")}
-																	/>
-																	<IssueText
-																		message={issueFor("row", i, "stock")}
-																	/>
-																</label>
-															);
-														})()
-													: null}
-											</div>
-											{varyFulfilment ? (
-												<FulfilmentToggle
-													value={row.blockWhenOutOfStock}
-													onChange={(v) =>
-														setRow(i, { blockWhenOutOfStock: v })
-													}
-												/>
-											) : null}
-										</li>
-									))}
-								</ul>
-								{/* A long open list ends here, a screen or more below its
-								    header — close it from where the seller finished, and
-								    land them back on the header rather than mid-page. */}
-								{collapseChoices && rows.length > 3 ? (
-									<button
-										type="button"
-										onClick={() => {
-											setChoicesOpen(false);
-											choicesHeaderRef.current?.scrollIntoView?.({
-												block: "nearest",
-											});
-										}}
-										className="flex min-h-11 items-center justify-center gap-1.5 self-center rounded-full px-4 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+							{rows.some(
+								(r) =>
+									r.blockWhenOutOfStock &&
+									findLiveStock(liveStock, r.optionValues),
+							) ? (
+								<p className="text-xs leading-relaxed text-muted-foreground">
+									Stock now has its own control — use{" "}
+									<span className="font-medium text-foreground">Adjust</span> on
+									a choice to add what you made or take off what you sold. It
+									saves on its own, so a save here can never undo a sale.
+								</p>
+							) : null}
+							<ul className="flex flex-col gap-2">
+								{rows.map((row, i) => (
+									<li
+										key={variantLabel(row.optionValues)}
+										className={cn(
+											"flex flex-col gap-2 rounded-xl border border-border p-3",
+											!row.active && "opacity-60",
+										)}
 									>
-										<ChevronUp className="size-4" aria-hidden />
-										Hide the {rows.length} choices
-									</button>
-								) : null}
-							</div>
-						</div>
+										<div className="flex items-center gap-2">
+											<span className="min-w-0 flex-1 truncate text-sm font-medium">
+												{variantLabel(row.optionValues)}
+											</span>
+											{!row.active ? (
+												<span className="shrink-0 text-[11px] font-semibold text-muted-foreground">
+													Off — hidden from buyers
+												</span>
+											) : null}
+										</div>
+										<div className="grid grid-cols-2 gap-2">
+											<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+												Price ({moneySymbol})
+												<PriceInput
+													value={row.price}
+													onChange={(v) => setRow(i, { price: v })}
+													invalid={!!issueFor("row", i, "price")}
+												/>
+												<IssueText message={issueFor("row", i, "price")} />
+											</label>
+											{row.blockWhenOutOfStock
+												? (() => {
+														const live = findLiveStock(
+															liveStock,
+															row.optionValues,
+														);
+														if (live)
+															return (
+																<div className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+																	<span>In stock</span>
+																	<LiveStockCell
+																		onHand={live.onHand}
+																		locked={stockLocked}
+																		onAdjust={() =>
+																			setAdjusting({
+																				variantId: live.variantId,
+																				label: variantLabel(row.optionValues),
+																				onHand: live.onHand,
+																			})
+																		}
+																	/>
+																</div>
+															);
+														return (
+															<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+																In stock now
+																<StockInput
+																	value={row.stock}
+																	onChange={(v) => setRow(i, { stock: v })}
+																	className="h-11"
+																	stepper
+																	invalid={!!issueFor("row", i, "stock")}
+																/>
+																<IssueText
+																	message={issueFor("row", i, "stock")}
+																/>
+															</label>
+														);
+													})()
+												: null}
+										</div>
+										{varyFulfilment ? (
+											<FulfilmentToggle
+												value={row.blockWhenOutOfStock}
+												onChange={(v) => setRow(i, { blockWhenOutOfStock: v })}
+											/>
+										) : null}
+									</li>
+								))}
+							</ul>
+						</ChoiceListDisclosure>
 					) : null}
 				</>
 			)}
@@ -1732,8 +1801,11 @@ export function VariantEditor({
 					>
 						<span className="flex min-w-0 flex-col">
 							<span className="text-sm font-semibold">Advanced</span>
-							<span className="truncate text-xs text-muted-foreground">
-								{advancedTeaser}
+							<span
+								data-advanced-answer
+								className="line-clamp-2 text-xs text-muted-foreground"
+							>
+								{advancedState ?? advancedTeaser}
 							</span>
 						</span>
 						{advOpen ? (
@@ -1839,10 +1911,14 @@ export function VariantEditor({
 							{/* Per-choice details: SKU, photo, on/off sale, per-choice
 						    approval. Single-item mode gets just the SKU. */}
 							{hasOptions && gridReady ? (
-								<div className="flex flex-col gap-2">
-									<span className="text-sm font-medium">
-										Per-choice details
-									</span>
+								<ChoiceListDisclosure
+									title="Per-choice details"
+									summary={choiceDetailsAnswer(rows, weightMode)}
+									count={rows.length}
+									collapse={collapseChoices}
+									open={detailsOpen}
+									onOpenChange={setDetailsOpen}
+								>
 									<ul className="flex flex-col gap-2">
 										{rows.map((row, i) => (
 											<li
@@ -1902,7 +1978,7 @@ export function VariantEditor({
 											</li>
 										))}
 									</ul>
-								</div>
+								</ChoiceListDisclosure>
 							) : null}
 							{!hasOptions ? (
 								<label className="flex flex-col gap-1 text-sm font-medium">

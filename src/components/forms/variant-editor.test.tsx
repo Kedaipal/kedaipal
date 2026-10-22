@@ -772,4 +772,82 @@ describe("VariantEditor — the choice list collapses on edit (z8r3fdwnyk)", () 
 		});
 		expect(panel()?.hidden).toBe(false);
 	});
+
+	describe("Advanced on edit (z8r3fdwnyk test-code F1)", () => {
+		const loaded: VariantEditorState = {
+			options: [
+				{ name: "Size", values: ["S", "M"] },
+				{ name: "Colour", values: ["Red", "Blue"] },
+			],
+			rows: ["S", "M"].flatMap((sz) =>
+				["Red", "Blue"].map((c, ci) => ({
+					...withOptions.rows[0],
+					optionValues: [sz, c],
+					sku: sz === "S" && ci === 0 ? "TEE-S-R" : "",
+					parcelWeightG: "500",
+				})),
+			),
+			customLine: null,
+		};
+		const advHeader = () => screen.getByRole("button", { name: /^advanced/i });
+		const panels = () =>
+			Array.from(
+				document.querySelectorAll<HTMLElement>(`[${DISCLOSURE_PANEL_ATTR}]`),
+			);
+
+		it("starts closed even when it holds config, and says what it holds", () => {
+			render(<Harness initial={loaded} collapseChoices />);
+			expect(advHeader().getAttribute("aria-expanded")).toBe("false");
+			expect(
+				document.querySelector("[data-advanced-answer]")?.textContent,
+			).toBe("Second choice: Colour · 1 SKU · 4 parcel weights");
+		});
+
+		it("without collapseChoices it still forces itself open (wizard / create)", () => {
+			render(<Harness initial={loaded} />);
+			expect(advHeader().getAttribute("aria-expanded")).toBe("true");
+		});
+
+		it("opened, its per-choice details are folded too, behind their own line", () => {
+			render(<Harness initial={loaded} collapseChoices />);
+			fireEvent.click(advHeader());
+			const details = screen.getByRole("button", {
+				name: /per-choice details/i,
+			});
+			expect(details.getAttribute("aria-expanded")).toBe("false");
+			expect(details.textContent).toContain(
+				"4 choices · 1 SKU · 4 parcel weights",
+			);
+			// Second panel = the details list; its SKU inputs stay mounted.
+			expect(panels()[1]?.hidden).toBe(true);
+			expect(screen.getByLabelText("SKU for S / Red")).toBeTruthy();
+			fireEvent.click(details);
+			expect(panels()[1]?.hidden).toBe(false);
+		});
+
+		it("a refused parcel weight opens Advanced AND its details", () => {
+			render(
+				<VariantEditor
+					value={loaded}
+					onChange={() => {}}
+					currency="MYR"
+					collapseChoices
+					issues={[
+						{
+							where: "row",
+							index: 2,
+							field: "weight",
+							message: "Whole grams only (e.g. 500 for half a kilo).",
+						},
+					]}
+				/>,
+			);
+			expect(advHeader().getAttribute("aria-expanded")).toBe("true");
+			expect(
+				screen
+					.getByRole("button", { name: /per-choice details/i })
+					.getAttribute("aria-expanded"),
+			).toBe("true");
+		});
+	});
 });
