@@ -15,17 +15,22 @@ import {
 	subscribeTheme,
 	THEME_INIT_SCRIPT,
 	THEME_STORAGE_KEY,
+	THEME_TRANSITION_ATTR,
 	type ThemePreference,
 } from "./theme";
 
 /** jsdom ships no matchMedia. Returns the listener set so a test can fire an
  *  OS-level change the way the browser would. */
-function stubMatchMedia(prefersDark: boolean) {
+function stubMatchMedia(prefersDark: boolean, reducedMotion = false) {
 	const listeners = new Set<() => void>();
 	Object.defineProperty(window, "matchMedia", {
 		configurable: true,
 		value: (query: string) => ({
-			matches: query.includes("dark") ? prefersDark : false,
+			matches: query.includes("dark")
+				? prefersDark
+				: query.includes("reduced-motion")
+					? reducedMotion
+					: false,
 			media: query,
 			addEventListener: (_: string, cb: () => void) => listeners.add(cb),
 			removeEventListener: (_: string, cb: () => void) => listeners.delete(cb),
@@ -39,11 +44,45 @@ function stubMatchMedia(prefersDark: boolean) {
 	};
 }
 
+/**
+ * jsdom has no View Transitions API, so every other test in this file runs
+ * the no-API path (a cut). This stub plays the browser: it holds the update
+ * callback until the test says the "old" snapshot is taken, and holds
+ * `finished` until the test says the fade is over.
+ */
+function stubViewTransitions() {
+	const pending: { update: () => void; finish: () => void }[] = [];
+	document.startViewTransition = ((update: () => void) => {
+		let finish = () => {};
+		const finished = new Promise<undefined>((resolve) => {
+			finish = () => resolve(undefined);
+		});
+		pending.push({ update, finish });
+		return { finished };
+	}) as unknown as typeof document.startViewTransition;
+	return {
+		get calls() {
+			return pending.length;
+		},
+		/** The browser has its snapshot and runs the update callback. */
+		capture: (i = pending.length - 1) => pending[i]?.update(),
+		/** The crossfade has played out. */
+		finish: async (i = pending.length - 1) => {
+			pending[i]?.finish();
+			await Promise.resolve();
+			await Promise.resolve();
+		},
+	};
+}
+
 beforeEach(() => {
 	window.localStorage.clear();
 	document.documentElement.className = "";
 	document.documentElement.style.colorScheme = "";
 	stubMatchMedia(false);
+	// jsdom has no View Transitions API; a test that stubbed one must not
+	// leak it into the next.
+	Reflect.deleteProperty(document, "startViewTransition");
 	__resetThemeStoreForTests();
 });
 
@@ -229,6 +268,157 @@ describe("cross-tab sync", () => {
 			}),
 		);
 		expect(document.documentElement.classList.contains("dark")).toBe(false);
+	});
+});
+
+describe("the fade", () => {
+	const attr = () =>
+		document.documentElement.getAttribute(THEME_TRANSITION_ATTR);
+	const isDark = () => document.documentElement.classList.contains("dark");
+
+	test("a toggle leaves the page as it was until the browser has its snapshot, then lands", async () => {
+		const vt = stubViewTransitions();
+		const notified: string[] = [];
+		subscribeTheme(() => notified.push(getThemeSnapshot().resolved));
+
+		setThemePreference("dark");
+
+		// The preference is saved at once — another tab may need it — but
+		// NOTHING on this page has moved yet: not the class, not the store.
+		// The store is the one that matters: the root shell re-applies the DOM
+		// on every store change, and a change emitted before the snapshot
+		// would flip the page ahead of the fade. Move `refresh` out of the
+		// callback in theme.ts and the `notified` line below goes red.
+		expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+		expect(vt.calls).toBe(1);
+		expect(isDark()).toBe(false);
+		expect(notified).toEqual([]);
+		expect(getThemeSnapshot().resolved).toBe("light");
+		expect(attr()).toBe("to-dark");
+
+		vt.capture();
+
+		expect(isDark()).toBe(true);
+		expect(document.documentElement.style.colorScheme).toBe("dark");
+		expect(notified).toEqual(["dark"]);
+		expect(attr()).toBe("to-dark");
+
+		await vt.finish();
+
+		expect(attr()).toBeNull();
+		expect(isDark()).toBe(true);
+	});
+
+	test("coming back fades the other way", async () => {
+		const vt = stubViewTransitions();
+		setThemePreference("dark");
+		vt.capture();
+		await vt.finish();
+
+		setThemePreference("light");
+
+		expect(attr()).toBe("to-light");
+		vt.capture();
+		expect(isDark()).toBe(false);
+		await vt.finish();
+		expect(attr()).toBeNull();
+	});
+
+	test("reduced motion is a cut — no transition, no direction stamp", () => {
+		stubMatchMedia(false, true);
+		__resetThemeStoreForTests();
+		const vt = stubViewTransitions();
+
+		setThemePreference("dark");
+
+		expect(vt.calls).toBe(0);
+		expect(isDark()).toBe(true);
+		expect(attr()).toBeNull();
+	});
+
+	test("a change that lands on the theme already on screen does not fade", () => {
+		const vt = stubViewTransitions();
+		setThemePreference("light");
+		expect(vt.calls).toBe(0); // light → light: the default resolved light
+
+		// "Match device" on a light device: same picture, so no fade — a blank
+		// one would still block the page for its length.
+		setThemePreference("system");
+		expect(vt.calls).toBe(0);
+		expect(getThemeSnapshot().preference).toBe("system");
+		expect(isDark()).toBe(false);
+	});
+
+	test("a browser without the API cuts, exactly as before", () => {
+		// No stub: jsdom's bare document.
+		setThemePreference("dark");
+		expect(isDark()).toBe(true);
+		expect(attr()).toBeNull();
+	});
+
+	test("the OS flipping fades too", () => {
+		const media = stubMatchMedia(false);
+		__resetThemeStoreForTests();
+		const vt = stubViewTransitions();
+		subscribeTheme(() => {});
+		setThemePreference("system");
+		expect(vt.calls).toBe(0);
+
+		media.fireChange(true);
+
+		expect(vt.calls).toBe(1);
+		expect(attr()).toBe("to-dark");
+		expect(isDark()).toBe(false);
+		vt.capture();
+		expect(isDark()).toBe(true);
+	});
+
+	test("another tab's choice fades here too", () => {
+		const vt = stubViewTransitions();
+		subscribeTheme(() => {});
+		window.dispatchEvent(
+			new StorageEvent("storage", {
+				key: THEME_STORAGE_KEY,
+				newValue: "dark",
+			}),
+		);
+		expect(vt.calls).toBe(1);
+		expect(attr()).toBe("to-dark");
+		vt.capture();
+		expect(isDark()).toBe(true);
+		expect(getThemeSnapshot().preference).toBe("dark");
+	});
+
+	test("a second toggle mid-fade keeps the direction of the fade that is running", async () => {
+		const vt = stubViewTransitions();
+		setThemePreference("dark");
+		vt.capture(0);
+		expect(attr()).toBe("to-dark");
+
+		// Tapped again before the first fade finished. The browser skips the
+		// first transition (its `finished` settles) and starts the second.
+		setThemePreference("light");
+		expect(vt.calls).toBe(2);
+		expect(attr()).toBe("to-light");
+
+		await vt.finish(0);
+		// The FIRST fade's cleanup must not strip the SECOND fade's direction.
+		expect(attr()).toBe("to-light");
+
+		vt.capture(1);
+		await vt.finish(1);
+		expect(attr()).toBeNull();
+		expect(isDark()).toBe(false);
+	});
+
+	test("the browser refusing the transition still lands the change", () => {
+		document.startViewTransition = () => {
+			throw new Error("InvalidStateError");
+		};
+		setThemePreference("dark");
+		expect(isDark()).toBe(true);
+		expect(getThemeSnapshot().resolved).toBe("dark");
+		expect(attr()).toBeNull();
 	});
 });
 

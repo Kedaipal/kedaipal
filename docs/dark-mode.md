@@ -30,6 +30,7 @@ Both write the same key, because they are the same browser on the same device. T
 | React bindings (`useTheme`, `useThemeScope`) | [`src/hooks/useTheme.ts`](../src/hooks/useTheme.ts) |
 | Seller UI | [`src/components/settings/appearance-tab.tsx`](../src/components/settings/appearance-tab.tsx) |
 | Buyer UI | [`src/components/ui/theme-toggle.tsx`](../src/components/ui/theme-toggle.tsx) |
+| The fade's shape | `src/styles.css`, "Theme change" section |
 | Status/notice colours | [`src/lib/tone.ts`](../src/lib/tone.ts) |
 | The gate | [`src/lib/dark-mode-coverage.test.ts`](../src/lib/dark-mode-coverage.test.ts) |
 
@@ -56,6 +57,30 @@ Two decisions worth knowing:
 - **A raw `<script>` in the shell, not `head({ scripts })`.** TanStack's supported head-scripts API re-appends and re-runs the script after hydration, which is wrong for a one-shot. The raw tag in `RootDocument` has no such effect, and `suppressHydrationWarning` was already on `<html>` — it covers extra attributes, which is exactly what the script adds.
 - **No Content-Security-Policy exists in this repo today.** The day one is added, this inline script needs a hash or a nonce (`script-src 'sha256-…'` over the exact `THEME_INIT_SCRIPT` text, or a per-request nonce threaded through the shell) or every visitor gets the white flash back — silently, since the script fails closed. Named here so it is not rediscovered (PR #241 review).
 - **`useThemeSync` re-applies in a layout effect — from the STORE, never from the rendered value.** During hydration React renders from the server snapshot ("light") and only then re-renders from the store; the effect fires in between. The first cut wrote the rendered value, which stripped `.dark` off a page the script had already darkened and put it back a second later — a white flash on every full load, caught in the 21 Oct hands-on test. The effect now writes `getThemeSnapshot().resolved`, and `useTheme.test.tsx` hydrates a darkened document under a `MutationObserver` to assert it never passes through light. The DOM write is idempotent, so this is free on the happy path.
+
+### The fade
+
+A theme change is a **fade, not a cut**. The first cut flipped the class and the browser repainted everything in the next frame — white to navy between two frames, which reads as a glitch rather than a choice (Zaki, 22 Oct 2026: "feels like a flip"). Now the page **dims down** into dark and **brightens up** into light, the way a room does on a dimmer, and the toggle's incoming glyph turns into place under it.
+
+**How.** `lib/theme.ts` runs the class flip inside `document.startViewTransition()`. The browser snapshots the page as it stands, runs the commit, then crossfades the old snapshot into the live new page: one composited fade over the whole viewport, so photos, borders, shadows and text all travel together. `styles.css` shapes it per direction, which `theme.ts` stamps on `<html>` as `data-theme-transition="to-dark" | "to-light"` for the fade's life:
+
+| Direction | Duration | Curve | Why |
+| --- | --- | --- | --- |
+| to dark | 520 ms | symmetric ease-in-out | a dimmer turned down |
+| to light | 680 ms | ease-out (`0.2, 0, 0, 1`) | brighter sooner, settles slower — eyes adjusting to a lamp |
+
+Old and new share one curve so their opacities always sum to 1 under the pair's plus-lighter blend; there is no dip in the middle. The glyph (`.kp-theme-glyph`) is CSS-picked, so the incoming one is freshly rendered at the flip and its 560 ms rotate-in starts there. Gating it on the attribute is what stops a page load replaying it.
+
+**Rejected:** `transition: background-color, color` on every element. Each element tweens on its own clock, images and gradients do not tween at all (they pop while the page around them fades), it overrides every component's own `transition` mid-gesture, and it costs a style recalculation on every node. The snapshot costs one.
+
+**When it is a cut instead.** Each of these commits synchronously, with no direction stamp: `prefers-reduced-motion: reduce` (a cut is the accessible answer); a browser without the API (Firefox before 144 — exactly what shipped before, nothing lost); a change that resolves to the theme already on screen (choosing "Match device" on a light device, re-tapping the same preference — a blank fade would still block input for its length); a hidden tab, which the browser skips itself. The OS flipping at sunset and another tab's choice **do** fade, through the same `commitPreference`.
+
+**Two ordering traps, both pinned in `theme.dom.test.ts`:**
+
+- **The store updates INSIDE the transition callback, never before it.** `useThemeSync` re-applies the DOM in a layout effect on every store change. Emitted before the snapshot, that effect flips the class before the browser has captured "old", and the fade crossfades dark into dark — invisible. Inside the callback, React's sync re-render lands before the "new" capture and the effect's write is the idempotent no-op it was built to be.
+- **`setThemePreference` hydrates the store before writing storage.** "Fade or cut" compares against the theme on screen; a first read of storage taken after the write mistakes the value just saved for the one being shown and skips the fade. The test caught this on the first run.
+
+A second tap mid-fade is fine: the browser skips the running transition and starts the new one, and a sequence guard stops the first fade's cleanup from stripping the second fade's direction.
 
 ### Inverted surfaces — the softened recipe
 

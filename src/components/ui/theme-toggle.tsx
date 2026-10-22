@@ -21,6 +21,11 @@ import { cn } from "../../lib/utils";
  * for anywhere else. The buyer footer once carried a labelled "Dark mode" row
  * above the Powered-by badge; it read as stray chrome there and moved up into
  * each page's header (z8r3fdwc19).
+ *
+ * The tap is a FADE, not a cut (`lib/theme.ts`, "the fade"): the page dims or
+ * brightens over the whole viewport, and the incoming glyph turns into place
+ * under it (`.kp-theme-glyph` in `styles.css`, live only while <html> carries
+ * `data-theme-transition`, so a page load never replays it).
  */
 export function ThemeToggle({
 	className,
@@ -50,8 +55,14 @@ export function ThemeToggle({
 			    then, so branching on it here would paint a Moon on an
 			    already-dark page for a frame. The label can use `resolved` safely:
 			    nothing reads it until hydration, and no click is possible before. */}
-			<Moon className="size-4.5 dark:hidden" aria-hidden="true" />
-			<Sun className="hidden size-4.5 dark:block" aria-hidden="true" />
+			<Moon
+				className="kp-theme-glyph size-4.5 dark:hidden"
+				aria-hidden="true"
+			/>
+			<Sun
+				className="kp-theme-glyph hidden size-4.5 dark:block"
+				aria-hidden="true"
+			/>
 		</button>
 	);
 }

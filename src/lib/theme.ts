@@ -108,6 +108,105 @@ export function applyResolvedTheme(resolved: ResolvedTheme): void {
 	root.style.colorScheme = resolved;
 }
 
+// --- the fade -------------------------------------------------------------
+
+/**
+ * A theme change is a FADE, not a cut.
+ *
+ * The first cut flipped the class and the browser repainted every pixel in the
+ * next frame: a white page became a navy one between two frames, which reads
+ * as a glitch rather than a choice (Zaki, 22 Oct 2026 — "feels like a flip").
+ * The page now dims down into dark and brightens up into light, the way a room
+ * does when the dimmer turns.
+ *
+ * HOW: the View Transitions API. The browser snapshots the page as it stands,
+ * runs `commit` (the class flip and the store update), then crossfades the old
+ * snapshot into the live new page — ONE composited fade over the whole
+ * viewport, so a photo, a border, a shadow and a line of text all travel
+ * together. The obvious alternative, `transition: background-color, color` on
+ * every element, was rejected: each element tweens on its own clock (images,
+ * shadows and gradients don't tween at all, so they pop while the page around
+ * them fades), it overrides the `transition` of every component mid-gesture,
+ * and it costs a style recalculation on every node. The snapshot costs one.
+ *
+ * The direction rides <html> as `data-theme-transition="to-dark" | "to-light"`
+ * for the life of the fade; `styles.css` picks the duration and curve per
+ * direction from it, and the toggle's glyph animates in under it.
+ *
+ * WHEN IT DOESN'T: `prefers-reduced-motion` (a cut is the accessible answer);
+ * a browser without the API (a cut, exactly as before — nothing is lost); a
+ * change that resolves to the theme already on screen (nothing to fade, and a
+ * blank fade would still block input for its length); a hidden tab (the
+ * browser skips it itself). In every one of those the commit runs at once.
+ *
+ * ORDER MATTERS: the store is updated INSIDE the commit, not before it. The
+ * root shell's `useThemeSync` re-applies the DOM in a layout effect whenever
+ * the store changes; emitted before the snapshot, that effect would flip the
+ * class before the browser captured "old", and the fade would crossfade dark
+ * into dark — invisible. Emitted inside the callback, React's sync re-render
+ * lands before the "new" capture and the effect's write is the idempotent
+ * no-op it was built to be. `theme.dom.test.ts` pins this with a stub.
+ */
+export const THEME_TRANSITION_ATTR = "data-theme-transition";
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+
+function prefersReducedMotion(): boolean {
+	if (typeof window === "undefined" || !window.matchMedia) return false;
+	try {
+		return window.matchMedia(REDUCED_MOTION_QUERY).matches;
+	} catch {
+		return false;
+	}
+}
+
+/** A toggle mid-fade starts a second fade; the browser skips the first, and
+ *  its cleanup must not strip the direction the second one is running under. */
+let fadeSeq = 0;
+
+/**
+ * Carries `commit` to the screen as a fade from the theme on screen to `next`,
+ * or runs it at once when a fade is impossible or would show nothing.
+ */
+function commitWithFade(next: ResolvedTheme, commit: () => void): void {
+	if (typeof document === "undefined") {
+		commit();
+		return;
+	}
+	// Typed as always-present by lib.dom; Firefox before 144 has no such method.
+	const start = document.startViewTransition as
+		| typeof document.startViewTransition
+		| undefined;
+	if (
+		typeof start !== "function" ||
+		next === getThemeSnapshot().resolved ||
+		prefersReducedMotion()
+	) {
+		commit();
+		return;
+	}
+
+	const root = document.documentElement;
+	const seq = ++fadeSeq;
+	root.setAttribute(
+		THEME_TRANSITION_ATTR,
+		next === "dark" ? "to-dark" : "to-light",
+	);
+	const clear = () => {
+		if (seq === fadeSeq) root.removeAttribute(THEME_TRANSITION_ATTR);
+	};
+
+	let transition: ViewTransition;
+	try {
+		transition = start.call(document, commit);
+	} catch {
+		// The browser refused the transition — the change still has to land.
+		clear();
+		commit();
+		return;
+	}
+	transition.finished.then(clear, clear);
+}
+
 // --- external store -------------------------------------------------------
 
 type ThemeSnapshot = {
@@ -174,20 +273,28 @@ export function subscribeTheme(listener: () => void): () => void {
 
 let mediaQuery: MediaQueryList | null = null;
 
+/** The one way a preference reaches the store and the document. */
+function commitPreference(preference: ThemePreference): void {
+	const next = resolveTheme(preference);
+	commitWithFade(next, () => {
+		refresh(preference);
+		applyResolvedTheme(next);
+	});
+}
+
 function onSystemChange(): void {
 	// Only "system" tracks the OS; an explicit choice must not be overridden.
 	if (snapshot.preference !== "system") return;
-	refresh("system");
-	applyResolvedTheme(resolveTheme("system"));
+	commitPreference("system");
 }
 
 function onStorage(event: StorageEvent): void {
 	if (event.key !== THEME_STORAGE_KEY) return;
-	const preference = isThemePreference(event.newValue)
-		? event.newValue
-		: DEFAULT_THEME_PREFERENCE;
-	refresh(preference);
-	applyResolvedTheme(resolveTheme(preference));
+	commitPreference(
+		isThemePreference(event.newValue)
+			? event.newValue
+			: DEFAULT_THEME_PREFERENCE,
+	);
 }
 
 function attachGlobalListeners(): void {
@@ -222,13 +329,16 @@ export function getServerThemeSnapshot(): ThemeSnapshot {
 }
 
 export function setThemePreference(preference: ThemePreference): void {
-	refresh(preference);
-	applyResolvedTheme(resolveTheme(preference));
+	// Read storage BEFORE writing it: "fade or cut" compares against the theme
+	// on screen, and a first read taken after the write would mistake the
+	// value just saved for the one being shown (pinned in theme.dom.test.ts).
+	hydrateOnce();
 	try {
 		window.localStorage.setItem(THEME_STORAGE_KEY, preference);
 	} catch {
 		// Storage unavailable — the choice still applies for this page's life.
 	}
+	commitPreference(preference);
 }
 
 /** Test-only: drop cached state so each case starts from a clean store. */
@@ -237,6 +347,10 @@ export function __resetThemeStoreForTests(): void {
 	listeners.clear();
 	snapshot = SERVER_SNAPSHOT;
 	hydrated = false;
+	fadeSeq = 0;
+	if (typeof document !== "undefined") {
+		document.documentElement.removeAttribute(THEME_TRANSITION_ATTR);
+	}
 }
 
 // --- pre-paint script -----------------------------------------------------
