@@ -290,3 +290,29 @@ describe("live pricing: vendors choose providers, the last bidder is guarded", (
 		).toBe(true);
 	});
 });
+
+describe("arming Delyva waits for parcel weights on a live store (23 Oct 2026)", () => {
+	it("the toggle is disabled with the count and the one page that fixes it", () => {
+		state.delyva = delyva({ bookingHeldForWeights: 3 });
+		const { container } = render(section({ chargeMode: "live" }));
+		const courier = screen.getByRole("switch", { name: /delyva courier/i });
+		expect(courier.hasAttribute("disabled")).toBe(true);
+		expect(container.textContent).toContain(
+			"Couriers price by weight, and 3 of your products have no parcel weight",
+		);
+		// The router stub renders `to` as-is — assert the destination, not the role.
+		expect(screen.getByText(/set parcel weights/i).getAttribute("to")).toBe(
+			"/app/products/weights",
+		);
+	});
+
+	it("without the hold the toggle arms as before", () => {
+		state.delyva = delyva();
+		render(section({ chargeMode: "live" }));
+		expect(
+			screen
+				.getByRole("switch", { name: /delyva courier/i })
+				.hasAttribute("disabled"),
+		).toBe(false);
+	});
+});

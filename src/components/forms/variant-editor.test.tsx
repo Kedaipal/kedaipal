@@ -851,3 +851,70 @@ describe("VariantEditor — the choice list collapses on edit (z8r3fdwnyk)", () 
 		});
 	});
 });
+
+describe("VariantEditor — parcel weight where pricing depends on it (23 Oct 2026)", () => {
+	it("a courier store promotes the weight, marks it required, and says the floor — never 'can't be priced'", () => {
+		const { container } = render(
+			<VariantEditor
+				value={singleVariant}
+				onChange={() => {}}
+				currency="MYR"
+				weightPricing="courier"
+			/>,
+		);
+		expect(container.textContent).toContain("Parcel weight");
+		expect(container.textContent).toContain("(required)");
+		expect(container.textContent).toContain("Your couriers price by weight");
+		expect(container.textContent).toContain("1 kg parcel");
+		expect(container.textContent).not.toContain("can't be priced");
+		const input = screen.getByLabelText(/parcel weight in grams/i);
+		expect(input.getAttribute("aria-required")).toBe("true");
+	});
+
+	it("a rate-card store says the order can't be priced, and never mentions a floor", () => {
+		const { container } = render(
+			<VariantEditor
+				value={singleVariant}
+				onChange={() => {}}
+				currency="MYR"
+				weightPricing="rate_card"
+			/>,
+		);
+		expect(container.textContent).toContain(
+			"Your rate card prices delivery by weight",
+		);
+		expect(container.textContent).toContain("can't be priced");
+		expect(container.textContent).not.toContain("1 kg");
+	});
+
+	it("an off-sale row is not required — it can't be ordered", () => {
+		render(
+			<VariantEditor
+				value={{
+					...singleVariant,
+					rows: [{ ...singleVariant.rows[0], active: false }],
+				}}
+				onChange={() => {}}
+				currency="MYR"
+				weightPricing="courier"
+			/>,
+		);
+		expect(
+			screen
+				.getByLabelText(/parcel weight in grams/i)
+				.getAttribute("aria-required"),
+		).toBeNull();
+	});
+
+	it("a store that doesn't price by weight keeps the weight optional, inside Advanced", () => {
+		const { container } = render(
+			<VariantEditor
+				value={singleVariant}
+				onChange={() => {}}
+				currency="MYR"
+			/>,
+		);
+		expect(container.textContent).not.toContain("(required)");
+		expect(container.textContent).not.toContain("price by weight");
+	});
+});

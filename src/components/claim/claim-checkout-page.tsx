@@ -66,6 +66,7 @@ import {
 	type TimeMove,
 	timeMovedCopy,
 } from "../../lib/fulfilment-time-issue";
+import { liveQuoteAddressHint } from "../../lib/live-quote-copy";
 import { overseasCourierNote } from "../../lib/overseas-courier-note";
 import { claimFormSchemaFor } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
@@ -924,12 +925,14 @@ export function ClaimCheckoutPage({
 												}
 												collectsFromCustomer={collectsFromCustomer}
 											/>
-											{isLiveMode ? (
+											{rawQuote?.kind === "live" ? (
 												<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-													{collectsFromCustomer
-														? "Collection is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion"
-														: "Delivery is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion"}
-													{selfCollectAvailable ? " — pick up instead" : ""}.
+													{liveQuoteAddressHint({
+														collectsFromCustomer,
+														riders: rawQuote.riders,
+														couriers: rawQuote.couriers,
+														selfCollectAvailable,
+													})}
 												</p>
 											) : null}
 											{overseasNote ? (

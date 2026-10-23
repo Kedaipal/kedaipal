@@ -213,13 +213,23 @@ describe("cart weight is summed from the variants, never trusted from the client
 		expect(c?.cartWeightKg).toBeCloseTo(1.2);
 	});
 
-	test("an unweighed product yields no weight — never a silent under-weigh", async () => {
+	test("an unweighed product is quoted at the one-kilo floor — never refused, never zero (Mandos, 23 Oct)", async () => {
 		const t = setup();
 		const id = await seedStore(t, { delyva: true });
 		const variantId = await seedVariant(t, id, 0);
 		const c = await t.query(internal.liveQuote.getLiveQuoteContext, {
 			retailerId: id,
 			items: [{ variantId, quantity: 1 }],
+		});
+		expect(c?.cartWeightKg).toBe(1);
+	});
+
+	test("no cart at all is still unpriceable — the floor fills a gap, not an absence", async () => {
+		const t = setup();
+		const id = await seedStore(t, { delyva: true });
+		const c = await t.query(internal.liveQuote.getLiveQuoteContext, {
+			retailerId: id,
+			items: [],
 		});
 		expect(c?.cartWeightKg).toBeNull();
 	});
@@ -239,7 +249,8 @@ describe("cart weight is summed from the variants, never trusted from the client
 			retailerId: id,
 			items: [{ variantId: foreign, quantity: 1 }],
 		});
-		expect(c?.cartWeightKg).toBeNull();
+		// The floor, not the other store's 5 kg.
+		expect(c?.cartWeightKg).toBe(1);
 	});
 });
 

@@ -48,6 +48,7 @@ vi.setConfig({ testTimeout: 20_000 });
 
 const UPDATE_SETTINGS = getFunctionName(api.retailers.updateSettings);
 const MISSING_WEIGHTS = getFunctionName(api.products.missingParcelWeights);
+const DELYVA_SETTINGS = getFunctionName(api.delyva.getSettings);
 
 type Props = Parameters<typeof DeliveryPricing>[0];
 type Booking = NonNullable<Props["deliveryBooking"]>;
@@ -68,21 +69,39 @@ function booking(over: Partial<Booking> = {}): Booking {
 
 let updateSettings: ReturnType<typeof vi.fn>;
 let missingWeights:
-	| { count: number; named: { productId: string; name: string }[] }
+	| {
+			count: number;
+			choiceCount: number;
+			named: { productId: string; name: string }[];
+	  }
 	| undefined;
+let delyvaSettings: { connected: boolean; enabled: boolean } | undefined;
+/** Every args value the readiness query was asked with — `"skip"` included,
+ * so a test can prove the fetch never happened, not just that nothing
+ * rendered. */
+let missingWeightsArgs: unknown[];
 
 beforeEach(() => {
 	updateSettings = vi.fn().mockResolvedValue({ ok: true });
 	missingWeights = undefined;
+	delyvaSettings = undefined;
+	missingWeightsArgs = [];
 	vi.mocked(useQuery).mockImplementation(((opts: {
 		__fn: FunctionReference<"query">;
-	}) => ({
-		data:
-			getFunctionName(opts.__fn) === MISSING_WEIGHTS
-				? missingWeights
-				: undefined,
-		isPending: false,
-	})) as never);
+		args?: unknown;
+	}) => {
+		const name = getFunctionName(opts.__fn);
+		if (name === MISSING_WEIGHTS) missingWeightsArgs.push(opts.args);
+		return {
+			data:
+				name === MISSING_WEIGHTS
+					? missingWeights
+					: name === DELYVA_SETTINGS
+						? delyvaSettings
+						: undefined,
+			isPending: false,
+		};
+	}) as never);
 	vi.mocked(useMutation).mockImplementation(((
 		ref: FunctionReference<"mutation">,
 	) =>
@@ -227,6 +246,7 @@ describe("weight & zone readiness (4A)", () => {
 	it("names the products checkout would refuse, and how many more", () => {
 		missingWeights = {
 			count: 7,
+			choiceCount: 9,
 			named: [
 				{ productId: "p1", name: "Brownies" },
 				{ productId: "p2", name: "Kuih lapis" },
@@ -239,7 +259,7 @@ describe("weight & zone readiness (4A)", () => {
 	});
 
 	it("says nothing when every product is weighed", () => {
-		missingWeights = { count: 0, named: [] };
+		missingWeights = { count: 0, choiceCount: 0, named: [] };
 		const { container } = renderPricing({ config: weight as never });
 		expect(container.textContent).not.toMatch(/(has|have) no parcel weight/);
 	});
@@ -381,6 +401,45 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 		fireEvent.click(mode(/live courier price/i));
 		expect(container.textContent).toContain("Default vehicle");
 	});
+
+	// Mandos (prod, 23 Oct): every tee stored at 0 g, Delyva declined to bid,
+	// checkout refused — and the seller had no way to see why, because the
+	// readiness list only showed for the weight-zone mode.
+	describe("unweighed products on a live store (Mandos, 23 Oct)", () => {
+		it("names them on the live card when Delyva is armed, with the one-kilo rule", () => {
+			delyvaSettings = { connected: true, enabled: true };
+			missingWeights = {
+				count: 3,
+				choiceCount: 4,
+				named: [{ productId: "p1", name: "Oversized Tee" }],
+			};
+			const { container } = renderLive({
+				config: { mode: "live", onUnquotable: "block" },
+			});
+			expect(container.textContent).toContain(
+				"3 products have no parcel weight",
+			);
+			expect(container.textContent).toContain(
+				"quote those orders as a 1 kg parcel",
+			);
+			expect(screen.getByRole("link", { name: "Oversized Tee" })).toBeTruthy();
+			// And the rule is stated where the mode is explained, not only
+			// once something is already wrong.
+			expect(container.textContent).toContain("quoted as a 1 kg parcel");
+		});
+
+		it("never fetches, never shows, when no courier prices by weight", () => {
+			delyvaSettings = { connected: true, enabled: false };
+			missingWeights = { count: 3, choiceCount: 3, named: [] };
+			const { container } = renderLive({
+				config: { mode: "live", onUnquotable: "block" },
+			});
+			expect(container.textContent).not.toMatch(/no parcel weight/);
+			expect(container.textContent).not.toContain("1 kg parcel");
+			expect(missingWeightsArgs.length).toBeGreaterThan(0);
+			expect(missingWeightsArgs.every((a) => a === "skip")).toBe(true);
+		});
+	});
 });
 
 describe("live-mode saves respect the toggles (Zaki, 6 Sep)", () => {
@@ -416,5 +475,76 @@ describe("live-mode saves respect the toggles (Zaki, 6 Sep)", () => {
 		expect(container.textContent).toContain(
 			"Turn on at least one service under Courier booking",
 		);
+	});
+});
+
+describe("arming weight pricing waits for the catalogue (23 Oct 2026)", () => {
+	const weight = {
+		mode: "weight" as const,
+		zones: [],
+		onUnzoned: "arrange" as const,
+	};
+	const unweighed = {
+		count: 2,
+		choiceCount: 5,
+		named: [{ productId: "p1", name: "Brownies" }],
+	};
+
+	it("the readiness notice links the bulk fill with the choice count", () => {
+		missingWeights = unweighed;
+		renderPricing({ config: weight as never });
+		const fix = screen.getByRole("link", { name: /set parcel weights/i });
+		expect(fix.getAttribute("href")).toBe("/app/products/weights");
+		expect(fix.textContent).toContain("5 choices");
+	});
+
+	it("moving onto the rate card is disabled-with-reason while products are unweighed", () => {
+		missingWeights = unweighed;
+		const { container } = renderPricing({ config: { mode: "flat", fee: 500 } });
+		fireEvent.click(mode(/By weight & zone/));
+		const save = screen.getByRole("button", { name: /save delivery pricing/i });
+		expect(save.hasAttribute("disabled")).toBe(true);
+		expect(container.textContent).toContain(
+			"Saving is off until every product has a parcel weight — 2 still need one.",
+		);
+	});
+
+	it("a store already on the rate card keeps saving — only the switch is gated", () => {
+		missingWeights = unweighed;
+		renderPricing({ config: weight as never });
+		expect(
+			screen
+				.getByRole("button", { name: /save delivery pricing/i })
+				.hasAttribute("disabled"),
+		).toBe(false);
+	});
+
+	it("moving onto live pricing with Delyva armed is gated the same way; riders alone are not", () => {
+		delyvaSettings = { connected: true, enabled: true };
+		missingWeights = unweighed;
+		renderPricing({
+			config: { mode: "flat", fee: 500 },
+			businessAddress: HQ,
+			deliveryBooking: booking(),
+		});
+		fireEvent.click(mode(/live courier price/i));
+		expect(
+			screen
+				.getByRole("button", { name: /save live pricing/i })
+				.hasAttribute("disabled"),
+		).toBe(true);
+		cleanup();
+		delyvaSettings = { connected: true, enabled: false };
+		renderPricing({
+			config: { mode: "flat", fee: 500 },
+			businessAddress: HQ,
+			deliveryBooking: booking(),
+		});
+		fireEvent.click(mode(/live courier price/i));
+		expect(
+			screen
+				.getByRole("button", { name: /save live pricing/i })
+				.hasAttribute("disabled"),
+		).toBe(false);
 	});
 });

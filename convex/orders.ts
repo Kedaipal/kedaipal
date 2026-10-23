@@ -392,6 +392,8 @@ export function resolveDeliveryForOrder(
 				quoteProvider: quote.quoteProvider,
 				quoteServiceName: quote.quoteServiceName,
 				quotesConsidered: quote.quotesConsidered,
+				weightFloored: quote.weightFloored,
+				unweighedLines: quote.unweighedLines,
 			},
 			pending: false,
 		};
@@ -447,6 +449,8 @@ export async function loadCheckoutDeliveryQuote(
 		serviceName: row.serviceName,
 		considered: row.considered,
 		quotedAt: row.quotedAt,
+		weightFloored: row.weightFloored,
+		unweighedLines: row.unweighedLines,
 	};
 }
 

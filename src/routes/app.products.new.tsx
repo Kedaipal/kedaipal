@@ -230,6 +230,7 @@ function NewProductRoute() {
 					promoLocked={promoLocked}
 					currency={retailer.currency}
 					defaultKind={retailer.storeType}
+					weightPricing={retailer.weightPricing ?? null}
 					storeSchedule={{
 						openingHours: retailer.openingHours,
 						closedDates: retailer.closedDates,
@@ -285,7 +286,7 @@ function NewProductRoute() {
 				draftRef={formDraftRef}
 				currency={retailer.currency}
 				submitLabel="Create product"
-				weightMode={retailer.deliveryConfig?.mode === "weight"}
+				weightPricing={retailer.weightPricing ?? null}
 				storeSchedule={{
 					openingHours: retailer.openingHours,
 					closedDates: retailer.closedDates,

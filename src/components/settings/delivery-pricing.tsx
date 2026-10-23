@@ -18,13 +18,7 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import {
-	FlaskConical,
-	MapPin,
-	Plus,
-	Trash2,
-	TriangleAlert,
-} from "lucide-react";
+import { FlaskConical, MapPin, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -39,6 +33,7 @@ import {
 	deliveryModeAllowed,
 	riderBookingAllowed,
 } from "../../../convex/lib/delivery";
+import { formatFloorKg } from "../../../convex/lib/weightPricing";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { usePermission } from "../../hooks/usePermission";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
@@ -59,6 +54,7 @@ import { hasFeature, type SubscriptionView } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
 import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
+import { MissingWeightsNotice } from "../products/missing-weights-notice";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
@@ -489,13 +485,17 @@ export function DeliveryPricing({
 	const radiusEditable = mode === "radius" && canUseRadius;
 	const lalamoveLocked = !canUseLalamove;
 
-	// The readiness check (4A) — only while weight is the mode, and only for a
-	// reader who may see product names.
+	// The readiness check (4A) — while weight is the mode, or while a live
+	// store has a courier that prices by weight (Delyva quotes an unweighed
+	// item at the one-kilo floor — the seller must be told WHICH products,
+	// where they chose that courier). Only for a reader who may see product
+	// names.
 	const productsPerm = usePermission("products");
+	const weightMatters = mode === "weight" || (liveModeSelected && delyvaArmed);
 	const missingWeights = useQuery(
 		convexQuery(
 			api.products.missingParcelWeights,
-			mode === "weight" && productsPerm.canRead ? { retailerId } : "skip",
+			weightMatters && productsPerm.canRead ? { retailerId } : "skip",
 		),
 	).data;
 
@@ -696,8 +696,20 @@ export function DeliveryPricing({
 		}
 	}
 
+	// Arming weight pricing (23 Oct 2026): moving the charge ONTO the rate
+	// card, or onto live pricing with Delyva armed, starts pricing every order
+	// by parcel weight — the server refuses it while buyable choices are
+	// unweighed, so the button says so BEFORE the tap (disabled-with-reason)
+	// and the readiness notice above it names the products and the fix. A
+	// store already on that mode keeps saving; the notice points at the fix.
+	const armingByWeight =
+		(mode === "weight" && config?.mode !== "weight") ||
+		(liveModeSelected && delyvaArmed && config?.mode !== "live");
+	const weightsBlockSave =
+		armingByWeight && missingWeights !== undefined && missingWeights.count > 0;
 	const saveDisabled =
 		saving ||
+		weightsBlockSave ||
 		(mode === "radius" && radiusLocked && config?.mode === "radius") ||
 		(liveModeSelected && lalamoveLocked && storedLiveMode);
 
@@ -717,6 +729,19 @@ export function DeliveryPricing({
 			>
 				{liveModeSelected ? "Save live pricing" : "Save delivery pricing"}
 			</Button>
+			{weightsBlockSave && missingWeights ? (
+				<p className="text-xs text-muted-foreground">
+					Saving is off until every product has a parcel weight —{" "}
+					{missingWeights.count} still{" "}
+					{missingWeights.count === 1 ? "needs" : "need"} one.{" "}
+					<Link
+						to="/app/products/weights"
+						className="font-semibold text-foreground underline underline-offset-2"
+					>
+						Set parcel weights
+					</Link>
+				</p>
+			) : null}
 		</div>
 	);
 
@@ -961,41 +986,12 @@ export function DeliveryPricing({
 			</>
 		);
 	} else if (mode === "weight") {
-		const readiness =
-			missingWeights && missingWeights.count > 0 ? (
-				<div className="flex flex-col gap-1.5 rounded-xl border border-amber-300 bg-amber-100 px-3 py-2.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
-					<p className="flex items-start gap-2 font-semibold">
-						<TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-						{missingWeights.count} product
-						{missingWeights.count === 1 ? " has" : "s have"} no parcel weight —
-						those orders can&apos;t be priced.
-					</p>
-					<ul className="flex flex-wrap gap-x-3 gap-y-1 pl-5.5">
-						{missingWeights.named.map((p) => (
-							<li key={p.productId}>
-								<Link
-									to="/app/products/$productId"
-									params={{ productId: p.productId }}
-									className="font-medium underline underline-offset-2"
-								>
-									{p.name}
-								</Link>
-							</li>
-						))}
-						{missingWeights.count > missingWeights.named.length ? (
-							<li>
-								<Link
-									to="/app/products"
-									className="font-medium underline underline-offset-2"
-								>
-									+{missingWeights.count - missingWeights.named.length} more in
-									Products
-								</Link>
-							</li>
-						) : null}
-					</ul>
-				</div>
-			) : null;
+		const readiness = (
+			<MissingWeightsNotice
+				missingWeights={missingWeights}
+				reason="rate_card"
+			/>
+		);
 
 		config_ = (
 			<>
@@ -1244,6 +1240,12 @@ export function DeliveryPricing({
 							and switch it on under Courier booking below.
 						</p>
 					) : null}
+					{delyvaArmed ? (
+						<MissingWeightsNotice
+							missingWeights={missingWeights}
+							reason="courier"
+						/>
+					) : null}
 					{(lalamoveArmed && deliveryBooking?.env === "sandbox") ||
 					(delyvaArmed && delyvaSettings?.isDemo) ? (
 						<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
@@ -1286,6 +1288,11 @@ export function DeliveryPricing({
 								lalamoveArmed && delyvaArmed
 									? "Both couriers quote and the buyer pays the higher — book the cheaper one and the difference is yours"
 									: "Switch both couriers on and the buyer pays the higher quote — book the cheaper one",
+								...(delyvaArmed
+									? [
+											`Couriers price by weight — an item with no parcel weight is quoted as a ${formatFloorKg()} parcel, so add weights in Products if yours are heavier`,
+										]
+									: []),
 								"Your own courier accounts and wallets — Kedaipal never pays for you",
 							]}
 						/>

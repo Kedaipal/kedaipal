@@ -430,10 +430,10 @@ function EditProductRoute() {
 						customPrompt: vr.customPrompt,
 					})),
 				}}
-				// Weight/zone-priced store (86eyeea1n): parcel weight is promoted to
-				// a first-class field in the editor — a weightless item strands that
-				// store's checkout on "missing weights".
-				weightMode={retailer.deliveryConfig?.mode === "weight"}
+				// A store that prices delivery by weight (its rate card, or a live
+				// courier — `weightPricingOf`): parcel weight is promoted to a
+				// first-class, required field in the editor.
+				weightPricing={retailer.weightPricing ?? null}
 				storeSchedule={{
 					openingHours: retailer.openingHours,
 					closedDates: retailer.closedDates,

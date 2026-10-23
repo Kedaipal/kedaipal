@@ -94,11 +94,26 @@ export function useLiveDeliveryQuote({
 	labelRef.current = getAddressLabel;
 	const partsRef = useRef(getAddressParts);
 	partsRef.current = getAddressParts;
-	// Read at fire time too: adding a cart line shouldn't re-quote on its own
-	// (the pin hasn't moved), but the quote that DOES fire must price the cart
-	// as it stands.
+	// Read at fire time so the quote that fires prices the cart as it stands.
 	const itemsRef = useRef(items);
 	itemsRef.current = items;
+	// A provider-aware quote is BOUND to the cart it priced (Delyva bids on
+	// the summed weight, and `sameQuotedLines` refuses the row against any
+	// other cart at order create), so a quantity change at checkout must
+	// re-quote — otherwise the buyer sees a stale fee and then a refusal
+	// (Zaki, 23 Oct 2026). Order within the cart is presentation, so the key
+	// is a sorted multiset. A rider-only (single-provider) quote ignores the
+	// cart and never re-fires for it.
+	const linesKey = providerAware
+		? items
+				.map((i) => `${i.variantId}:${i.quantity}`)
+				.sort()
+				.join("|")
+		: "";
+	// Cart edits are debounced LONGER than a pin pick: a buyer tapping + three
+	// times should spend one quote, not three — each call draws on the
+	// store's per-minute quote bucket (`lalamoveQuote`, 10/min, burst 4).
+	const lastRef = useRef<{ pin: string; lines: string } | null>(null);
 
 	const hasCoords = latitude !== undefined && longitude !== undefined;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: fires per picked pin / chosen day; the action identity is stable and the label is read fresh inside the timeout.
@@ -110,43 +125,52 @@ export function useLiveDeliveryQuote({
 		}
 		const mySeq = ++seq.current;
 		setQuote({ state: "loading" });
-		const timer = setTimeout(() => {
-			const parts = partsRef.current?.() ?? {};
-			const request = providerAware
-				? quoteLive({
-						retailerId,
-						latitude,
-						longitude,
-						address: labelRef.current(),
-						city: parts.city,
-						state: parts.state,
-						postcode: parts.postcode,
-						items: itemsRef.current,
-						fulfilmentDate,
-						fulfilmentTimeMinutes,
+		const pin = `${latitude},${longitude},${fulfilmentDate},${fulfilmentTimeMinutes}`;
+		const linesOnly =
+			lastRef.current !== null &&
+			lastRef.current.pin === pin &&
+			lastRef.current.lines !== linesKey;
+		lastRef.current = { pin, lines: linesKey };
+		const timer = setTimeout(
+			() => {
+				const parts = partsRef.current?.() ?? {};
+				const request = providerAware
+					? quoteLive({
+							retailerId,
+							latitude,
+							longitude,
+							address: labelRef.current(),
+							city: parts.city,
+							state: parts.state,
+							postcode: parts.postcode,
+							items: itemsRef.current,
+							fulfilmentDate,
+							fulfilmentTimeMinutes,
+						})
+					: quoteLalamove({
+							retailerId,
+							latitude,
+							longitude,
+							address: labelRef.current(),
+							fulfilmentDate,
+							fulfilmentTimeMinutes,
+						});
+				request
+					.then((result) => {
+						if (seq.current !== mySeq) return; // superseded by a newer pick
+						setQuote(
+							result.status === "quoted"
+								? { state: "quoted", quoteId: result.quoteId, fee: result.fee }
+								: { state: result.status },
+						);
 					})
-				: quoteLalamove({
-						retailerId,
-						latitude,
-						longitude,
-						address: labelRef.current(),
-						fulfilmentDate,
-						fulfilmentTimeMinutes,
+					.catch(() => {
+						if (seq.current !== mySeq) return;
+						setQuote({ state: "unavailable" });
 					});
-			request
-				.then((result) => {
-					if (seq.current !== mySeq) return; // superseded by a newer pick
-					setQuote(
-						result.status === "quoted"
-							? { state: "quoted", quoteId: result.quoteId, fee: result.fee }
-							: { state: result.status },
-					);
-				})
-				.catch(() => {
-					if (seq.current !== mySeq) return;
-					setQuote({ state: "unavailable" });
-				});
-		}, 400);
+			},
+			linesOnly ? 900 : 400,
+		);
 		return () => clearTimeout(timer);
 	}, [
 		enabled,
@@ -157,6 +181,7 @@ export function useLiveDeliveryQuote({
 		longitude,
 		fulfilmentDate,
 		fulfilmentTimeMinutes,
+		linesKey,
 	]);
 
 	return quote;

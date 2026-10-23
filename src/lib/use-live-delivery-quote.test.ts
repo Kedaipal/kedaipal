@@ -101,6 +101,64 @@ describe("what the provider-aware action is told", () => {
 		]);
 	});
 
+	it("a quantity change re-quotes a provider-aware store with the new cart, debounced longer than a pin pick", async () => {
+		const { rerender } = renderHook(
+			(props: Parameters<typeof useLiveDeliveryQuote>[0]) =>
+				useLiveDeliveryQuote(props),
+			{ initialProps: args({ providerAware: true }) },
+		);
+		await vi.advanceTimersByTimeAsync(500);
+		expect(calls.live).toHaveBeenCalledTimes(1);
+		rerender(
+			args({
+				providerAware: true,
+				items: [{ variantId: "variant_1", quantity: 5 }],
+			}),
+		);
+		// Still the one call inside the pin-pick window…
+		await vi.advanceTimersByTimeAsync(500);
+		expect(calls.live).toHaveBeenCalledTimes(1);
+		// …and the re-quote lands after the longer cart window, with 5.
+		await vi.advanceTimersByTimeAsync(500);
+		expect(calls.live).toHaveBeenCalledTimes(2);
+		expect(calls.live.mock.calls[1][0].items).toEqual([
+			{ variantId: "variant_1", quantity: 5 },
+		]);
+	});
+
+	it("the same cart in another order is the same cart — no re-quote", async () => {
+		const two = [
+			{ variantId: "a" as Id<"productVariants">, quantity: 1 },
+			{ variantId: "b" as Id<"productVariants">, quantity: 2 },
+		];
+		const { rerender } = renderHook(
+			(props: Parameters<typeof useLiveDeliveryQuote>[0]) =>
+				useLiveDeliveryQuote(props),
+			{ initialProps: args({ providerAware: true, items: two }) },
+		);
+		await vi.advanceTimersByTimeAsync(500);
+		rerender(args({ providerAware: true, items: [two[1], two[0]] }));
+		await vi.advanceTimersByTimeAsync(1500);
+		expect(calls.live).toHaveBeenCalledTimes(1);
+	});
+
+	it("a rider-only store ignores the cart, so a quantity change never re-fires", async () => {
+		const { rerender } = renderHook(
+			(props: Parameters<typeof useLiveDeliveryQuote>[0]) =>
+				useLiveDeliveryQuote(props),
+			{ initialProps: args({ providerAware: false }) },
+		);
+		await vi.advanceTimersByTimeAsync(500);
+		rerender(
+			args({
+				providerAware: false,
+				items: [{ variantId: "variant_1", quantity: 9 }],
+			}),
+		);
+		await vi.advanceTimersByTimeAsync(1500);
+		expect(calls.lalamove).toHaveBeenCalledTimes(1);
+	});
+
 	it("never sends the extra fields to the single-provider action", async () => {
 		renderHook(() => useLiveDeliveryQuote(args({ providerAware: false })));
 		await vi.advanceTimersByTimeAsync(500);

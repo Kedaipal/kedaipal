@@ -181,6 +181,28 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.10.6",
+		date: "2026-10-23",
+		// Not notable: a hotfix for one failure. The store it hit sees delivery
+		// checkout work again on the next buyer; everyone else sees a new
+		// warning only if they have unweighed products on a courier store. A
+		// dot is enough.
+		notable: false,
+		entries: [
+			{
+				kind: "fix",
+				title: {
+					en: "Courier-priced checkout works for products with no parcel weight",
+				},
+				body: {
+					en: "If your delivery is priced live by a courier like Delyva and a product had no parcel weight, buyers were refused at checkout with “pricing isn't working for this store”. Now an item with no weight is quoted as a 1 kg parcel, so the order goes through at the courier's real 1 kg rate. If your parcels are heavier than that, the difference is yours when you book — so Settings → Fulfilment → Pricing now lists every product still missing a weight, with a link to each. Add the weight on the product's Advanced section and the quote uses the real figure.",
+				},
+				href: "/app/settings?tab=fulfilment",
+				hrefLabel: { en: "Check your products" },
+			},
+		],
+	},
+	{
 		version: "2026.10.5",
 		date: "2026-10-22",
 		// Not notable: nothing MOVED and no number a seller relies on changed.

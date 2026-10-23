@@ -7,6 +7,9 @@ import {
 	sameQuotedLines,
 	chooseLiveQuote,
 	isColdItemType,
+	LIVE_QUOTE_WEIGHT_FLOOR_G,
+	liveQuoteWeightFacts,
+	liveQuoteWeightKg,
 	type ProviderQuote,
 } from "./liveQuote";
 
@@ -249,6 +252,104 @@ describe("cart item type (store default until per-item flags land)", () => {
 		expect(isColdItemType("CHILLED")).toBe(true);
 		expect(isColdItemType("FROZEN")).toBe(true);
 		expect(isColdItemType("PARCEL")).toBe(false);
+	});
+});
+
+describe("liveQuoteWeightKg — an unweighed item never blocks the quote (Mandos, 23 Oct)", () => {
+	// Before: one product stored at 0 g meant Delyva didn't bid, and on a
+	// store whose rider couldn't reach the address the buyer was refused
+	// with "pricing isn't working for this store". The weight field is
+	// optional, so blank is a normal state — the courier is asked to price a
+	// one-kilo parcel and the seller is told, not the buyer.
+	test("a fully weighed cart sums weight × quantity, with no floor", () => {
+		expect(
+			liveQuoteWeightKg([
+				{ parcelWeightG: 400, quantity: 3 },
+				{ parcelWeightG: 250, quantity: 1 },
+			]),
+		).toBeCloseTo(1.45);
+		// Under a kilo stays under a kilo: the seller answered, we don't
+		// second-guess it.
+		expect(liveQuoteWeightKg([{ parcelWeightG: 300, quantity: 1 }])).toBe(
+			0.3,
+		);
+	});
+
+	test("an unweighed item is quoted at the one-kilo floor", () => {
+		expect(liveQuoteWeightKg([{ parcelWeightG: 0, quantity: 1 }])).toBe(
+			LIVE_QUOTE_WEIGHT_FLOOR_G / 1000,
+		);
+		// Three of them are still one parcel at the floor — counting each as a
+		// kilo would overcharge the buyer for a rule they never saw.
+		expect(liveQuoteWeightKg([{ parcelWeightG: 0, quantity: 3 }])).toBe(1);
+	});
+
+	test("a custom line counts as unweighed, not as zero", () => {
+		expect(
+			liveQuoteWeightKg([{ parcelWeightG: 0, quantity: 1, isCustom: true }]),
+		).toBe(1);
+	});
+
+	test("a weighed cart with one unweighed line keeps its sum — floored, never zeroed", () => {
+		// Heavier than the floor already: the known weight stands, the unknown
+		// line adds nothing (the seller absorbs the drift at dispatch).
+		expect(
+			liveQuoteWeightKg([
+				{ parcelWeightG: 2500, quantity: 1 },
+				{ parcelWeightG: 0, quantity: 1 },
+			]),
+		).toBe(2.5);
+		// Lighter than the floor: the floor lifts it.
+		expect(
+			liveQuoteWeightKg([
+				{ parcelWeightG: 300, quantity: 1 },
+				{ parcelWeightG: 0, quantity: 1 },
+			]),
+		).toBe(1);
+	});
+
+	test("an empty cart is no cart — still unpriceable", () => {
+		expect(liveQuoteWeightKg([])).toBeNull();
+	});
+});
+
+describe("liveQuoteWeightFacts — the stamp the order carries (23 Oct 2026)", () => {
+	test("a floored cart says so, and counts the lines a product weight would have priced", () => {
+		expect(
+			liveQuoteWeightFacts([
+				{ parcelWeightG: 0, quantity: 2 },
+				{ parcelWeightG: 300, quantity: 1 },
+				{ parcelWeightG: 0, quantity: 1 },
+			]),
+		).toEqual({ kg: 1, floored: true, unweighedLines: 2 });
+	});
+
+	test("a custom line floors the quote but is not something the seller can weigh", () => {
+		expect(
+			liveQuoteWeightFacts([
+				{ parcelWeightG: 0, quantity: 1, isCustom: true },
+				{ parcelWeightG: 200, quantity: 1 },
+			]),
+		).toEqual({ kg: 1, floored: true, unweighedLines: 0 });
+	});
+
+	test("an unweighed line in a cart already over a kilo is unweighed but NOT floored — the sum stood", () => {
+		expect(
+			liveQuoteWeightFacts([
+				{ parcelWeightG: 0, quantity: 1 },
+				{ parcelWeightG: 1500, quantity: 1 },
+			]),
+		).toEqual({ kg: 1.5, floored: false, unweighedLines: 1 });
+	});
+
+	test("a fully weighed light cart keeps its sum and is not floored", () => {
+		expect(
+			liveQuoteWeightFacts([{ parcelWeightG: 250, quantity: 2 }]),
+		).toEqual({ kg: 0.5, floored: false, unweighedLines: 0 });
+	});
+
+	test("an empty cart has no facts", () => {
+		expect(liveQuoteWeightFacts([])).toBeNull();
 	});
 });
 

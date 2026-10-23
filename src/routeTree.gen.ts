@@ -41,6 +41,7 @@ import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
 import { Route as AppCustomersIndexRouteImport } from './routes/app.customers.index'
 import { Route as AppSettingsDeliveryPricingRouteImport } from './routes/app.settings_.delivery-pricing'
 import { Route as AppPromotionsNewRouteImport } from './routes/app.promotions.new'
+import { Route as AppProductsWeightsRouteImport } from './routes/app.products.weights'
 import { Route as AppProductsNewRouteImport } from './routes/app.products.new'
 import { Route as AppProductsImportRouteImport } from './routes/app.products.import'
 import { Route as AppProductsCategoriesRouteImport } from './routes/app.products.categories'
@@ -220,6 +221,11 @@ const AppPromotionsNewRoute = AppPromotionsNewRouteImport.update({
   path: '/promotions/new',
   getParentRoute: () => AppRoute,
 } as any)
+const AppProductsWeightsRoute = AppProductsWeightsRouteImport.update({
+  id: '/products/weights',
+  path: '/products/weights',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppProductsNewRoute = AppProductsNewRouteImport.update({
   id: '/products/new',
   path: '/products/new',
@@ -348,6 +354,7 @@ export interface FileRoutesByFullPath {
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/products/weights': typeof AppProductsWeightsRoute
   '/app/promotions/new': typeof AppPromotionsNewRoute
   '/app/settings/delivery-pricing': typeof AppSettingsDeliveryPricingRoute
   '/app/customers/': typeof AppCustomersIndexRoute
@@ -398,6 +405,7 @@ export interface FileRoutesByTo {
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/products/weights': typeof AppProductsWeightsRoute
   '/app/promotions/new': typeof AppPromotionsNewRoute
   '/app/settings/delivery-pricing': typeof AppSettingsDeliveryPricingRoute
   '/app/customers': typeof AppCustomersIndexRoute
@@ -450,6 +458,7 @@ export interface FileRoutesById {
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/products/weights': typeof AppProductsWeightsRoute
   '/app/promotions/new': typeof AppPromotionsNewRoute
   '/app/settings_/delivery-pricing': typeof AppSettingsDeliveryPricingRoute
   '/app/customers/': typeof AppCustomersIndexRoute
@@ -503,6 +512,7 @@ export interface FileRouteTypes {
     | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/products/weights'
     | '/app/promotions/new'
     | '/app/settings/delivery-pricing'
     | '/app/customers/'
@@ -553,6 +563,7 @@ export interface FileRouteTypes {
     | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/products/weights'
     | '/app/promotions/new'
     | '/app/settings/delivery-pricing'
     | '/app/customers'
@@ -604,6 +615,7 @@ export interface FileRouteTypes {
     | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/products/weights'
     | '/app/promotions/new'
     | '/app/settings_/delivery-pricing'
     | '/app/customers/'
@@ -868,6 +880,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPromotionsNewRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/products/weights': {
+      id: '/app/products/weights'
+      path: '/products/weights'
+      fullPath: '/app/products/weights'
+      preLoaderRoute: typeof AppProductsWeightsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/products/new': {
       id: '/app/products/new'
       path: '/products/new'
@@ -1007,6 +1026,7 @@ interface AppRouteChildren {
   AppProductsCategoriesRoute: typeof AppProductsCategoriesRoute
   AppProductsImportRoute: typeof AppProductsImportRoute
   AppProductsNewRoute: typeof AppProductsNewRoute
+  AppProductsWeightsRoute: typeof AppProductsWeightsRoute
   AppPromotionsNewRoute: typeof AppPromotionsNewRoute
   AppSettingsDeliveryPricingRoute: typeof AppSettingsDeliveryPricingRoute
   AppCustomersIndexRoute: typeof AppCustomersIndexRoute
@@ -1038,6 +1058,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppProductsCategoriesRoute: AppProductsCategoriesRoute,
   AppProductsImportRoute: AppProductsImportRoute,
   AppProductsNewRoute: AppProductsNewRoute,
+  AppProductsWeightsRoute: AppProductsWeightsRoute,
   AppPromotionsNewRoute: AppPromotionsNewRoute,
   AppSettingsDeliveryPricingRoute: AppSettingsDeliveryPricingRoute,
   AppCustomersIndexRoute: AppCustomersIndexRoute,

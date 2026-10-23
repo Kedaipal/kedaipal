@@ -73,6 +73,10 @@ import {
 } from "../components/order/booking-request-card";
 import { DispatchHub } from "../components/order/dispatch-hub";
 import {
+	FloorPricedNote,
+	pricedAtFloor,
+} from "../components/order/floor-priced-note";
+import {
 	type OrderBookingSpan,
 	OrderItemLine,
 	SkippedDayRows,
@@ -1873,6 +1877,14 @@ function OrderDetailRoute() {
 						<span className="tabular-nums">
 							{formatPrice(order.deliveryFee, order.currency)}
 						</span>
+					</div>
+				) : null}
+				{/* The courier priced the one-kilo floor, not the parcel (23 Oct
+				    2026): said HERE, under the fee it explains, so the seller
+				    learns it before booking — not from a blank weight field. */}
+				{pricedAtFloor(order.deliverySnapshot) ? (
+					<div className="px-3">
+						<FloorPricedNote snapshot={order.deliverySnapshot} />
 					</div>
 				) : null}
 				{deliveryFeePending ? (
