@@ -2028,6 +2028,14 @@ export default defineSchema({
 						}),
 					),
 				),
+				// The courier was asked to price the one-kilo FLOOR rather than the
+				// cart's real weight (`liveQuoteWeightFacts`), and how many lines a
+				// product weight would have priced. Lets the seller's order page say
+				// "priced at the 1 kg floor — 2 items had no weight" and point at
+				// the fix, instead of a fee that silently under-collects. Widen-only
+				// (23 Oct 2026); absent = not floored or minted before the stamp.
+				weightFloored: v.optional(v.boolean()),
+				unweighedLines: v.optional(v.number()),
 			}),
 		),
 		// Order-level mirror of `deliverySnapshot.fee` (minor units) for cheap
@@ -2651,6 +2659,12 @@ export default defineSchema({
 		latitude: v.number(),
 		longitude: v.number(),
 		quotedAt: v.number(),
+		// The cart was quoted at the one-kilo floor (`liveQuoteWeightFacts`) and
+		// how many of its lines had no product weight — copied onto the order's
+		// deliverySnapshot at create. Absent = not floored (or a row minted
+		// before the stamp; rows live a day, so this narrows itself).
+		weightFloored: v.optional(v.boolean()),
+		unweighedLines: v.optional(v.number()),
 	}).index("by_retailer", ["retailerId"]),
 
 	// One rider booking (dispatch) against an order. The ledger row of record:

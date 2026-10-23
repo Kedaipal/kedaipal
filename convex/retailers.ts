@@ -295,7 +295,9 @@ import {
 	riderBookingAllowed,
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
-import { storeBooksCouriers } from "./lib/courierBooking";
+import { delyvaBookingArmed, storeBooksCouriers } from "./lib/courierBooking";
+import { assertCatalogueWeighed } from "./lib/parcelWeights";
+import { type WeightPricing, weightPricingOf } from "./lib/weightPricing";
 import { isEncrypted } from "./lib/credentialCrypto";
 import {
 	ackableKeys,
@@ -952,6 +954,14 @@ type RetailerPublic = {
 	// Lalamove booking summary (86eyb5hrf) — OWNER-only like the two fields
 	// above, and secret-free (see DeliveryBookingSummary).
 	deliveryBooking?: DeliveryBookingSummary;
+	// WHY this store's delivery charge depends on parcel weight (23 Oct 2026,
+	// `weightPricingOf`): the seller's rate card, or a live courier that
+	// quotes by weight. Unset = it doesn't. One enum derived server-side from
+	// owner-only config (the mode + whether Delyva is armed, which rides on
+	// its credentials), so the product form, the wizard and the Products list
+	// never re-derive it from pieces they can't all see. Only the owner read
+	// sets it; it is harmless but pointless on the storefront payload.
+	weightPricing?: WeightPricing;
 	// HitPay connection summary (86eyb6z3a) — OWNER-only and secret-free like
 	// deliveryBooking. Buyers learn "gateway available" per-order through
 	// orders.getPaymentMethods, never from a retailer payload.
@@ -1214,6 +1224,7 @@ async function buildRetailerPublic(
 		businessAddress: row.businessAddress,
 		businessIdentity: row.businessIdentity,
 		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
+		weightPricing: weightPricingOf(row) ?? undefined,
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		openingHours: row.openingHours,
@@ -3050,6 +3061,25 @@ export const updateSettings = mutation({
 				// decided with Arif 11 Aug). sanitizeDeliveryConfig above already
 				// guarantees ≥1 zone with ≥1 state + ≥1 band, so a stored weight
 				// config can never be dead weight.
+				// Arming weight pricing (23 Oct 2026): switching the charge onto the
+				// weight rate card, or onto live pricing while Delyva is armed,
+				// starts pricing every order by parcel weight — so it refuses
+				// while buyable choices are unweighed, naming the count and the
+				// page that fixes it. Only the SWITCH is gated: a store already on
+				// that mode keeps saving (its policies, its zones) and is pointed
+				// at the fix by the readiness notice instead.
+				const storedMode = (retailer.deliveryConfig as DeliveryConfig | undefined)
+					?.mode;
+				if (clean.mode === "weight" && storedMode !== "weight") {
+					await assertCatalogueWeighed(ctx, retailer._id, "rate_card");
+				}
+				if (
+					clean.mode === "live" &&
+					storedMode !== "live" &&
+					delyvaBookingArmed(retailer)
+				) {
+					await assertCatalogueWeighed(ctx, retailer._id, "courier");
+				}
 				if (clean.mode === "lalamove") {
 					// Live-quote pricing rides the booking config (credentials +
 					// vehicle + origin) — require booking enabled in the effective

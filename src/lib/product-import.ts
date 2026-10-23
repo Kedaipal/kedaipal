@@ -22,6 +22,7 @@ import {
 import {
 	MAX_OPTION_AXES,
 	MAX_VARIANTS_PER_PRODUCT,
+	PARCEL_WEIGHT_MAX_G,
 } from "../../convex/lib/variant";
 import { cartesian, variantLabel } from "./variant";
 
@@ -264,7 +265,7 @@ export function findDuplicateSkus(
 // these used to be hand-mirrored numbers and the mirrors drifted.
 export { MAX_OPTION_AXES, MAX_VARIANTS_PER_PRODUCT };
 export const PRODUCT_HANDLE_MAX_LENGTH = 80;
-export const PRODUCT_WEIGHT_MAX = 1_000_000; // 1000kg, sanity bound
+export const PRODUCT_WEIGHT_MAX = PARCEL_WEIGHT_MAX_G;
 
 // Columns 1–11 keep their names and positions forever — a seller's sheet keys
 // on them. `prep_minutes` and `pickup_note` (z8r3fdff97) are APPENDED, the

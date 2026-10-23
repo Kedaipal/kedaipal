@@ -18,13 +18,7 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import {
-	FlaskConical,
-	MapPin,
-	Plus,
-	Trash2,
-	TriangleAlert,
-} from "lucide-react";
+import { FlaskConical, MapPin, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -39,7 +33,7 @@ import {
 	deliveryModeAllowed,
 	riderBookingAllowed,
 } from "../../../convex/lib/delivery";
-import { LIVE_QUOTE_WEIGHT_FLOOR_G } from "../../../convex/lib/liveQuote";
+import { formatFloorKg } from "../../../convex/lib/weightPricing";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { usePermission } from "../../hooks/usePermission";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
@@ -60,6 +54,7 @@ import { hasFeature, type SubscriptionView } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
 import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
+import { MissingWeightsNotice } from "../products/missing-weights-notice";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
@@ -357,69 +352,6 @@ function ProviderPricingRow({
 }
 
 /** A pick-one policy, as rows — the same chooser as the modes above it. */
-/** "1 kg" — the live-quote floor, spelt once for every line of copy. */
-function formatFloorKg(): string {
-	return `${LIVE_QUOTE_WEIGHT_FLOOR_G / 1000} kg`;
-}
-
-/**
- * The readiness list (4A): which products checkout can't weigh. One control
- * for both places it matters — the weight-zone rate card, where an unweighed
- * item strands the order, and the live courier card, where the courier is
- * asked to price a one-kilo parcel instead. The CONSEQUENCE is the only line
- * that differs, so it is the only thing the caller writes.
- */
-function MissingWeightsNotice({
-	missingWeights,
-	consequence,
-}: {
-	missingWeights:
-		| {
-				count: number;
-				named: Array<{ productId: Id<"products">; name: string }>;
-		  }
-		| undefined;
-	consequence: string;
-}) {
-	if (!missingWeights || missingWeights.count === 0) return null;
-	return (
-		<div className="flex flex-col gap-1.5 rounded-xl border border-amber-300 bg-amber-100 px-3 py-2.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
-			<p className="flex items-start gap-2 font-semibold">
-				<TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-				<span>
-					{missingWeights.count} product
-					{missingWeights.count === 1 ? " has" : "s have"} no parcel weight —{" "}
-					{consequence}
-				</span>
-			</p>
-			<ul className="flex flex-wrap gap-x-3 gap-y-1 pl-5.5">
-				{missingWeights.named.map((p) => (
-					<li key={p.productId}>
-						<Link
-							to="/app/products/$productId"
-							params={{ productId: p.productId }}
-							className="font-medium underline underline-offset-2"
-						>
-							{p.name}
-						</Link>
-					</li>
-				))}
-				{missingWeights.count > missingWeights.named.length ? (
-					<li>
-						<Link
-							to="/app/products"
-							className="font-medium underline underline-offset-2"
-						>
-							+{missingWeights.count - missingWeights.named.length} more in
-							Products
-						</Link>
-					</li>
-				) : null}
-			</ul>
-		</div>
-	);
-}
-
 function PolicyChoice({
 	label,
 	value,
@@ -764,8 +696,20 @@ export function DeliveryPricing({
 		}
 	}
 
+	// Arming weight pricing (23 Oct 2026): moving the charge ONTO the rate
+	// card, or onto live pricing with Delyva armed, starts pricing every order
+	// by parcel weight — the server refuses it while buyable choices are
+	// unweighed, so the button says so BEFORE the tap (disabled-with-reason)
+	// and the readiness notice above it names the products and the fix. A
+	// store already on that mode keeps saving; the notice points at the fix.
+	const armingByWeight =
+		(mode === "weight" && config?.mode !== "weight") ||
+		(liveModeSelected && delyvaArmed && config?.mode !== "live");
+	const weightsBlockSave =
+		armingByWeight && missingWeights !== undefined && missingWeights.count > 0;
 	const saveDisabled =
 		saving ||
+		weightsBlockSave ||
 		(mode === "radius" && radiusLocked && config?.mode === "radius") ||
 		(liveModeSelected && lalamoveLocked && storedLiveMode);
 
@@ -785,6 +729,19 @@ export function DeliveryPricing({
 			>
 				{liveModeSelected ? "Save live pricing" : "Save delivery pricing"}
 			</Button>
+			{weightsBlockSave && missingWeights ? (
+				<p className="text-xs text-muted-foreground">
+					Saving is off until every product has a parcel weight —{" "}
+					{missingWeights.count} still{" "}
+					{missingWeights.count === 1 ? "needs" : "need"} one.{" "}
+					<Link
+						to="/app/products/weights"
+						className="font-semibold text-foreground underline underline-offset-2"
+					>
+						Set parcel weights
+					</Link>
+				</p>
+			) : null}
 		</div>
 	);
 
@@ -1032,7 +989,7 @@ export function DeliveryPricing({
 		const readiness = (
 			<MissingWeightsNotice
 				missingWeights={missingWeights}
-				consequence="those orders can't be priced."
+				reason="rate_card"
 			/>
 		);
 
@@ -1286,7 +1243,7 @@ export function DeliveryPricing({
 					{delyvaArmed ? (
 						<MissingWeightsNotice
 							missingWeights={missingWeights}
-							consequence={`couriers quote those orders as a ${formatFloorKg()} parcel, and a heavier one costs you the difference when you book.`}
+							reason="courier"
 						/>
 					) : null}
 					{(lalamoveArmed && deliveryBooking?.env === "sandbox") ||

@@ -101,6 +101,12 @@ export function CourierBookingSection({
 	const delyvaArmed = delyvaConnected && delyva?.enabled === true;
 	const lalamoveIsLastBidder = livePricing && lalamoveArmed && !delyvaArmed;
 	const delyvaIsLastBidder = livePricing && delyvaArmed && !lalamoveArmed;
+	// Switching Delyva on would make this live store price every order by
+	// parcel weight (23 Oct 2026); the server refuses while buyable choices
+	// are unweighed, and the summary carries that count so the toggle says
+	// so BEFORE the tap — disabled-with-reason, with the one page that fixes
+	// it. Undefined whenever the flip would be accepted.
+	const delyvaHeldForWeights = delyva?.bookingHeldForWeights;
 
 	async function run(fn: () => Promise<unknown>, message: string) {
 		setBusy(true);
@@ -225,6 +231,18 @@ export function CourierBookingSection({
 										Manage account
 									</Link>
 								</>
+							) : delyvaHeldForWeights ? (
+								<>
+									Couriers price by weight, and {delyvaHeldForWeights} of your
+									products {delyvaHeldForWeights === 1 ? "has" : "have"} no
+									parcel weight — switch this on once they do.{" "}
+									<Link
+										to="/app/products/weights"
+										className="font-medium text-accent hover:underline"
+									>
+										Set parcel weights
+									</Link>
+								</>
 							) : delyvaConnected ? (
 								<>
 									Nationwide + cold-chain parcels (J&amp;T, DHL, Ninja…). Pick
@@ -259,6 +277,7 @@ export function CourierBookingSection({
 							busy ||
 							delyvaIsLastBidder ||
 							!delyvaConnected ||
+							delyvaHeldForWeights !== undefined ||
 							(!canUse && delyva?.enabled !== true)
 						}
 						label="Delyva courier booking"

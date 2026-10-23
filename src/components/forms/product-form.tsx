@@ -64,6 +64,10 @@ import {
 	MAX_VARIANTS_PER_PRODUCT,
 	overCapMessage,
 } from "../../../convex/lib/variant";
+import {
+	WEIGHT_REQUIRED_COPY,
+	type WeightPricing,
+} from "../../../convex/lib/weightPricing";
 import { usePhotoAutosave } from "../../hooks/usePhotoAutosave";
 import { bookingSpanCounted, bookingSpanNoun } from "../../lib/booking-dates";
 import {
@@ -448,9 +452,11 @@ interface ProductFormProps {
 	currency: string;
 	submitLabel: string;
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
-	/** The store prices delivery by weight/zone (86eyeea1n) — promotes the
-	 * variant parcel-weight inputs out of Advanced (see VariantEditor). */
-	weightMode?: boolean;
+	/** WHY the store prices delivery by weight (`retailers.weightPricing`,
+	 * 23 Oct 2026): promotes the variant parcel-weight inputs out of Advanced
+	 * and makes them required on every buyable choice of a PHYSICAL product
+	 * (see VariantEditor + buildSubmitVariants). Null/unset = optional. */
+	weightPricing?: WeightPricing | null;
 	/** The store's opening hours + closed dates (z8r3fdhpm7) — the "How are
 	 * the days counted?" example is built from them. */
 	storeSchedule?: StoreSchedule;
@@ -666,6 +672,13 @@ export function collectOptionIssues(
 export function buildSubmitVariants(
 	rows: VariantRow[],
 	customLine: CustomLineDraft | null,
+	opts: {
+		/** The store prices delivery by weight (23 Oct 2026): a buyable
+		 * (active, non-custom) row saved with no weight is refused, with the
+		 * reason's own sentence. The caller passes it only for a PHYSICAL
+		 * product — a service or booking has no parcel. */
+		weightRequired?: WeightPricing | null;
+	} = {},
 ): { issues: VariantIssue[] } | { variants: SubmitVariant[] } {
 	const issues: VariantIssue[] = [];
 	const variants: SubmitVariant[] = [];
@@ -696,6 +709,21 @@ export function buildSubmitVariants(
 				message: INT_RE.test(weightStr)
 					? "That's heavier than 1,000 kg — check the number (grams)."
 					: "Whole grams only (e.g. 500 for half a kilo).",
+			});
+		}
+		// Required where pricing depends on it: blank and an explicit 0 are both
+		// "unweighed" (`lacksParcelWeight`), so both refuse on a buyable row.
+		if (
+			row.active &&
+			opts.weightRequired &&
+			weightOk &&
+			(weightStr.length === 0 || Number.parseInt(weightStr, 10) === 0)
+		) {
+			issues.push({
+				where: "row",
+				index,
+				field: "weight",
+				message: WEIGHT_REQUIRED_COPY[opts.weightRequired].issue,
 			});
 		}
 		if (row.active) {
@@ -1008,7 +1036,7 @@ export function ProductForm({
 	currency,
 	submitLabel,
 	onSubmit,
-	weightMode = false,
+	weightPricing = null,
 	storeSchedule,
 	offerSelfCollect = true,
 	liveStock,
@@ -1140,6 +1168,11 @@ export function ProductForm({
 			eventDraftFrom(initialValues?.event) ??
 			EMPTY_EVENT_DRAFT,
 	);
+	// Parcel weight is required only of goods that SHIP: a service or booking
+	// has no parcel, and an event RSVP is fulfilled at the venue (never a
+	// delivery cart) — judged by the fulfilment moment, never by kind alone.
+	const weightRequired: WeightPricing | null =
+		kind === "physical" && !eventDraft.on ? weightPricing : null;
 	const [promoDraft, setPromoDraft] = useState<PromoDraft>(
 		() =>
 			initialValues?.promoDraft ??
@@ -1236,7 +1269,11 @@ export function ProductForm({
 			// A made-to-order product reconciles to an EMPTY matrix — its custom
 			// line is the whole offer, and `buildSubmitVariants` emits that line
 			// as the product's only variant.
-			const built = buildSubmitVariants(reconciled.rows, editor.customLine);
+			const built = buildSubmitVariants(reconciled.rows, editor.customLine, {
+				// A service or booking has no parcel, and an event RSVP is met at
+				// the venue — only goods that ship are weighed.
+				weightRequired: weightRequired,
+			});
 			// Over the cap, the blank rows the widening just generated are not what
 			// the seller must fix — the axis is. Reporting them alongside would
 			// bury the real blocker under dozens of price errors, the same reason
@@ -1912,7 +1949,7 @@ export function ProductForm({
 						onChange={setEditor}
 						currency={currency}
 						issues={editorIssues}
-						weightMode={weightMode}
+						weightPricing={weightRequired}
 						liveStock={liveStock}
 						productName={liveStock ? form.state.values.name : undefined}
 						stockLocked={saveLock !== undefined}

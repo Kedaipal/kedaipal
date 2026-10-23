@@ -17,6 +17,10 @@ import { query } from "./_generated/server";
 import { MY_STATES } from "./lib/address";
 import { DEFAULT_COUNTRY } from "./lib/country";
 import {
+	delyvaBidsAtCheckout,
+	lalamoveBookingArmed,
+} from "./lib/courierBooking";
+import {
 	type CartWeightItem,
 	type DeliveryConfig,
 	type DeliveryQuoteReason,
@@ -51,7 +55,12 @@ export type PublicDeliveryQuote =
 	// `lalamove.quoteForCheckout` (mode "lalamove", pre-migration). The client
 	// can't infer it — both modes look identical from here — and calling the
 	// wrong one would price a store by rules it hasn't been moved to yet.
-	| { kind: "live"; providerAware: boolean };
+	// `riders` / `couriers`: WHICH kinds of provider can bid, so the address
+	// helper can say "by rider or courier" and drop "outside the rider's
+	// coverage can't be delivered" when a courier reaches the whole country
+	// (the /test-code pass on PR #415 caught the lie on a Delyva store). One
+	// bit each, derived from owner-only config that never crosses here.
+	| { kind: "live"; providerAware: boolean; riders: boolean; couriers: boolean };
 
 export const quote = query({
 	args: {
@@ -99,9 +108,13 @@ export const quote = query({
 			retailer.deliveryConfig?.mode === "lalamove" ||
 			retailer.deliveryConfig?.mode === "live"
 		) {
+			const providerAware = retailer.deliveryConfig.mode === "live";
 			return {
 				kind: "live",
-				providerAware: retailer.deliveryConfig.mode === "live",
+				providerAware,
+				// The legacy single-provider mode is riders by definition.
+				riders: providerAware ? lalamoveBookingArmed(retailer) : true,
+				couriers: providerAware && delyvaBidsAtCheckout(retailer),
 			};
 		}
 		const destination =

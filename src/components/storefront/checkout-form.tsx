@@ -94,6 +94,7 @@ import {
 	type TimeMove,
 	timeMovedCopy,
 } from "../../lib/fulfilment-time-issue";
+import { liveQuoteAddressHint } from "../../lib/live-quote-copy";
 import { composeCustomerNote } from "../../lib/order-note";
 import { overseasCourierNote } from "../../lib/overseas-courier-note";
 import {
@@ -2063,12 +2064,14 @@ export function CheckoutPage({
 											    pickup point is owner-only data (never in the public
 											    payload), and Lalamove's coverage is a city zone, not
 											    a radius we could quote. */}
-											{isLiveMode ? (
+											{rawQuote?.kind === "live" ? (
 												<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-													{collectsFromCustomer
-														? "Collection is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be collected from"
-														: "Delivery is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be delivered"}
-													{selfCollectAvailable ? " — pick up instead" : ""}.
+													{liveQuoteAddressHint({
+														collectsFromCustomer,
+														riders: rawQuote.riders,
+														couriers: rawQuote.couriers,
+														selfCollectAvailable,
+													})}
 												</p>
 											) : null}
 											{/* Overseas WhatsApp number at a courier-booking store

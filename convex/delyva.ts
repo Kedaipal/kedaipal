@@ -51,6 +51,10 @@ import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { isColdItemType } from "./lib/liveQuote";
 import { DEFAULT_COUNTRY, type Country } from "./lib/country";
 import { delyvaBookingArmed } from "./lib/courierBooking";
+import {
+	assertCatalogueWeighed,
+	collectUnweighedChoices,
+} from "./lib/parcelWeights";
 import { toDomesticContactPhone } from "./lib/courierContact";
 import {
 	type CartWeightItem,
@@ -233,13 +237,23 @@ export const storeConnection = internalMutation({
 	},
 	handler: async (ctx, args) => {
 		const retailer = await ctx.db.get(args.retailerId);
-		if (!retailer) return;
+		if (!retailer) return { bookingHeldForWeights: 0 };
 		const prev = retailer.delyva as DelyvaConfig | undefined;
+		// Connecting on a LIVE-pricing store would arm a courier that quotes by
+		// weight (23 Oct 2026). While buyable choices are unweighed the key is
+		// stored but booking stays OFF — the same refusal the toggle gives, said
+		// in the connect result so the card can point at the fix — because
+		// flipping it on silently is exactly how Mandos came to under-collect.
+		const unweighed =
+			(retailer.deliveryConfig as { mode?: string } | undefined)?.mode === "live"
+				? (await collectUnweighedChoices(ctx, args.retailerId)).length
+				: 0;
 		await ctx.db.patch(args.retailerId, {
 			delyva: {
 				// A fresh key connects ENABLED — connecting is the enable gesture
 				// (one less switch to discover); updateSettings can pause later.
-				enabled: true,
+				// Unless the weights hold above applies, in which case it waits.
+				enabled: unweighed === 0,
 				apiKey: args.apiKey,
 				apiSecret: args.apiSecret,
 				apiKeyHint: args.apiKeyHint,
@@ -258,6 +272,7 @@ export const storeConnection = internalMutation({
 			},
 			updatedAt: Date.now(),
 		});
+		return { bookingHeldForWeights: unweighed };
 	},
 });
 
@@ -319,6 +334,12 @@ export const connect = action({
 				accountName?: string;
 				webhooksSubscribed: boolean;
 				isDemo?: boolean;
+				/** Set when the key was stored but booking stayed OFF: the store
+				 * prices live and this many products have no parcel weight, so
+				 * arming the courier waited (23 Oct 2026). The card says so and
+				 * links the fix; the Courier-booking toggle carries the same
+				 * reason. */
+				bookingHeldForWeights?: number;
 		  }
 	> => {
 		const context = await ctx.runQuery(internal.delyva.getConnectContext, {
@@ -462,7 +483,7 @@ export const connect = action({
 			};
 		}
 
-		await ctx.runMutation(internal.delyva.storeConnection, {
+		const stored = await ctx.runMutation(internal.delyva.storeConnection, {
 			retailerId: context.retailerId,
 			apiKey: await encryptSecret(apiKey),
 			apiSecret: apiSecret ? await encryptSecret(apiSecret) : undefined,
@@ -497,7 +518,13 @@ export const connect = action({
 				});
 			}
 		}
-		return { ok: true, accountName, webhooksSubscribed, isDemo };
+		return {
+			ok: true,
+			accountName,
+			webhooksSubscribed,
+			isDemo,
+			bookingHeldForWeights: stored?.bookingHeldForWeights || undefined,
+		};
 	},
 });
 
@@ -774,6 +801,16 @@ export const updateSettings = mutation({
 			// this needs to hold. Disabling stays free.
 			await assertPlanFeature(ctx, access.retailer._id, "delivery");
 		}
+		if (args.enabled === true && !prev.enabled) {
+			// Arming Delyva on a live-pricing store starts quoting every order by
+			// parcel weight (23 Oct 2026) — refused while buyable choices are
+			// unweighed, with the count and the page that fixes it. Only the
+			// OFF→ON flip is gated; a paused store keeps editing its address.
+			const mode = (access.retailer.deliveryConfig as { mode?: string } | undefined)
+				?.mode;
+			if (mode === "live")
+				await assertCatalogueWeighed(ctx, access.retailer._id, "courier");
+		}
 		const pickupAddress =
 			args.pickupAddress === undefined
 				? prev.pickupAddress
@@ -850,6 +887,12 @@ export type DelyvaSummary = {
 	connectedAt?: number;
 	webhooksSubscribed: boolean;
 	countryAllowed: boolean;
+	/** Booking is OFF and switching it on would be refused: the store prices
+	 * live and this many products have no parcel weight (23 Oct 2026). The
+	 * Courier-booking toggle greys out with this reason and the Integrations
+	 * card says it, both from this one server answer — neither re-derives
+	 * the mode. Undefined whenever the toggle would be accepted. */
+	bookingHeldForWeights?: number;
 };
 
 /** The zeroed summary a member without the integrations grant reads — no
@@ -891,9 +934,17 @@ export const getSettings = query({
 		}
 		const config = access.retailer.delyva as DelyvaConfig | undefined;
 		const connected = resolveDelyvaCredentials(config) !== null;
+		const held =
+			connected &&
+			config?.enabled !== true &&
+			(access.retailer.deliveryConfig as { mode?: string } | undefined)?.mode ===
+				"live"
+				? (await collectUnweighedChoices(ctx, access.retailer._id)).length
+				: 0;
 		return {
 			connected,
 			enabled: config?.enabled === true,
+			bookingHeldForWeights: held > 0 ? held : undefined,
 			apiKeyHint: config?.apiKeyHint,
 			accountName: config?.accountName,
 			isDemo: config?.isDemo,

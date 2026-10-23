@@ -165,7 +165,22 @@ they know the real packed weight best. The *checkout* quote for such a cart
 was priced at the one-kilo floor (23 Oct 2026, see
 [`delivery-live-pricing.md`](./delivery-live-pricing.md)), so this is also
 where a heavier-than-a-kilo parcel's under-collection becomes visible — the
-card shows "buyer paid X" beside every service price.
+card shows "buyer paid X" beside every service price, and when the order's
+snapshot carries the floor stamp (`weightFloored`) the card says so above the
+weight box: "Priced at the 1 kg floor — N items had no weight."
+
+**Arming is gated on the catalogue** (23 Oct 2026): on a live-pricing store,
+`updateSettings({ enabled: true })` refuses while any buyable choice has no
+parcel weight (`assertCatalogueWeighed`, `convex/lib/parcelWeights.ts`), and
+`getSettings` reports the count as `bookingHeldForWeights` so the
+Courier-booking toggle greys out with the reason and a link to Products →
+Parcel weights. `storeConnection` (the connect action's save) likewise
+stores the key but keeps `enabled: false` on such a store, returning
+`bookingHeldForWeights` so the Integrations card and the connect toast say
+why booking stayed off. Disabling is never gated, and a store that is
+already armed keeps editing its address and parcel type — only the OFF→ON
+flip is the gate. See
+[`delivery-live-pricing.md`](./delivery-live-pricing.md#parcel-weight-is-required-where-pricing-depends-on-it-23-oct-2026).
 
 **Wire shapes were probed live** against a demo account (27 Aug 2026), not
 assumed: the waypoint address rides *inside* `contact` (a top-level

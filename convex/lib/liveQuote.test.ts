@@ -8,6 +8,7 @@ import {
 	chooseLiveQuote,
 	isColdItemType,
 	LIVE_QUOTE_WEIGHT_FLOOR_G,
+	liveQuoteWeightFacts,
 	liveQuoteWeightKg,
 	type ProviderQuote,
 } from "./liveQuote";
@@ -309,6 +310,46 @@ describe("liveQuoteWeightKg — an unweighed item never blocks the quote (Mandos
 
 	test("an empty cart is no cart — still unpriceable", () => {
 		expect(liveQuoteWeightKg([])).toBeNull();
+	});
+});
+
+describe("liveQuoteWeightFacts — the stamp the order carries (23 Oct 2026)", () => {
+	test("a floored cart says so, and counts the lines a product weight would have priced", () => {
+		expect(
+			liveQuoteWeightFacts([
+				{ parcelWeightG: 0, quantity: 2 },
+				{ parcelWeightG: 300, quantity: 1 },
+				{ parcelWeightG: 0, quantity: 1 },
+			]),
+		).toEqual({ kg: 1, floored: true, unweighedLines: 2 });
+	});
+
+	test("a custom line floors the quote but is not something the seller can weigh", () => {
+		expect(
+			liveQuoteWeightFacts([
+				{ parcelWeightG: 0, quantity: 1, isCustom: true },
+				{ parcelWeightG: 200, quantity: 1 },
+			]),
+		).toEqual({ kg: 1, floored: true, unweighedLines: 0 });
+	});
+
+	test("an unweighed line in a cart already over a kilo is unweighed but NOT floored — the sum stood", () => {
+		expect(
+			liveQuoteWeightFacts([
+				{ parcelWeightG: 0, quantity: 1 },
+				{ parcelWeightG: 1500, quantity: 1 },
+			]),
+		).toEqual({ kg: 1.5, floored: false, unweighedLines: 1 });
+	});
+
+	test("a fully weighed light cart keeps its sum and is not floored", () => {
+		expect(
+			liveQuoteWeightFacts([{ parcelWeightG: 250, quantity: 2 }]),
+		).toEqual({ kg: 0.5, floored: false, unweighedLines: 0 });
+	});
+
+	test("an empty cart has no facts", () => {
+		expect(liveQuoteWeightFacts([])).toBeNull();
 	});
 });
 

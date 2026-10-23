@@ -37,6 +37,7 @@ import {
 	type StockLine,
 	StockSheet,
 } from "../components/product/stock-adjust";
+import { MissingWeightsNotice } from "../components/products/missing-weights-notice";
 import { ProductSpotlightBanner } from "../components/products/product-spotlight-banner";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -296,6 +297,20 @@ function ProductsRoute() {
 	// create/reorder/export affordances that the server will refuse.
 	const productsPerm = usePermission("products");
 	const canExportProducts = usePermission("exports").canRead;
+	// Which products a weight-priced checkout can't weigh (23 Oct 2026) —
+	// fetched only on a store whose delivery charge depends on it, for a
+	// reader who may see product names. The list is where a seller fixing
+	// their catalogue looks, so the readiness notice lives here too, with the
+	// same one tap to the bulk fill the Settings page offers.
+	const weightPricing = retailer?.weightPricing ?? null;
+	const missingWeights = useQuery(
+		convexQuery(
+			api.products.missingParcelWeights,
+			retailer && weightPricing && productsPerm.canRead
+				? { retailerId: retailer._id }
+				: "skip",
+		),
+	).data;
 	// Every reason the catalogue can't change right now, in one shape: the
 	// store lapsed (view-only), it ran out of credits (Credits T3), or this
 	// teammate holds view on products. One author for each sentence, shared
@@ -495,6 +510,13 @@ function ProductsRoute() {
 			    teammate with view on products. Each renders nothing otherwise. */}
 			<ViewOnlyNote />
 			<NeedsAccessNote area="products" />
+
+			{weightPricing ? (
+				<MissingWeightsNotice
+					missingWeights={missingWeights}
+					reason={weightPricing}
+				/>
+			) : null}
 
 			{spot && products !== undefined ? (
 				<ProductSpotlightBanner

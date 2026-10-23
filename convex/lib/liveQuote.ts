@@ -154,18 +154,46 @@ export const LIVE_QUOTE_WEIGHT_FLOOR_G = 1000;
  * required on every buyer surface precisely so this never happens).
  */
 export function liveQuoteWeightKg(items: CartWeightItem[]): number | null {
+	return liveQuoteWeightFacts(items)?.kg ?? null;
+}
+
+/**
+ * What the courier was asked to price, with the audit trail the ORDER needs:
+ * whether the floor fired and how many lines had no weight. Recorded on the
+ * quote row and frozen onto the order's delivery snapshot, so the seller's
+ * order page can say "priced at the 1 kg floor — 2 items had no weight"
+ * instead of showing a fee with no hint of why it may under-collect.
+ *
+ * `unweighedLines` counts NON-custom lines only: a custom line's weight is
+ * unknowable by design, so it floors the quote (`floored`) without being
+ * something the seller can go and set.
+ */
+export function liveQuoteWeightFacts(items: CartWeightItem[]): {
+	kg: number;
+	/** The cart was quoted at `LIVE_QUOTE_WEIGHT_FLOOR_G` rather than its sum. */
+	floored: boolean;
+	/** Cart lines a product weight would have priced. */
+	unweighedLines: number;
+} | null {
 	if (items.length === 0) return null;
 	let grams = 0;
-	let unweighed = false;
+	let gap = false;
+	let unweighedLines = 0;
 	for (const item of items) {
-		if (lacksParcelWeight(item) || item.isCustom) {
-			unweighed = true;
+		if (item.isCustom) {
+			gap = true;
+			continue;
+		}
+		if (lacksParcelWeight(item)) {
+			gap = true;
+			unweighedLines += 1;
 			continue;
 		}
 		grams += Math.round(item.parcelWeightG) * Math.max(0, item.quantity);
 	}
-	if (unweighed) grams = Math.max(grams, LIVE_QUOTE_WEIGHT_FLOOR_G);
-	return grams / 1000;
+	const floored = gap && grams < LIVE_QUOTE_WEIGHT_FLOOR_G;
+	if (gap) grams = Math.max(grams, LIVE_QUOTE_WEIGHT_FLOOR_G);
+	return { kg: grams / 1000, floored, unweighedLines };
 }
 
 /**
