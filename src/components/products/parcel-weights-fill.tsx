@@ -343,9 +343,11 @@ export function ParcelWeightsFill({
 				})}
 			</ul>
 
-			{/* Sticky save — the same bar the product form uses, so a long list
-			    never scrolls the button away on a phone. Says what it will do. */}
-			<div className="sticky bottom-20 z-10 flex flex-col gap-2 rounded-2xl border border-border bg-background p-3 shadow-lg lg:static lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none">
+			{/* Sticky save at EVERY width — a 93-row catalogue scrolls the button
+			    away on a desktop too (found on the /test-code pass, where the save
+			    sat at the foot of 93 rows). Above the bottom nav on a phone, a
+			    plate off the page edge on a desktop. Says what it will do. */}
+			<div className="sticky bottom-20 z-10 flex flex-col gap-2 rounded-2xl border border-border bg-background p-3 shadow-lg lg:bottom-4">
 				{error ? (
 					<p
 						role="alert"
@@ -359,7 +361,7 @@ export function ParcelWeightsFill({
 					onClick={() => void save()}
 					disabled={readOnly || saving || ready.length === 0 || bad.length > 0}
 					isLoading={saving}
-					className="h-12 w-full lg:w-auto lg:self-start"
+					className="h-12 w-full lg:w-auto"
 				>
 					<Save className="size-4" />
 					{readOnly
@@ -422,7 +424,7 @@ function ProductFill({
 				disabled={disabled || !value || blank === 0}
 				onClick={() => onFill(value)}
 			>
-				Fill all {blank > 0 ? blank : ""}
+				{blank > 0 ? `Fill all ${blank}` : "All filled"}
 			</Button>
 		</div>
 	);

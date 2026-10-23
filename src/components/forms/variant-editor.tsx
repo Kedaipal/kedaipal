@@ -981,7 +981,11 @@ export function VariantEditor({
 						placeholder="500"
 						value={row.parcelWeightG}
 						onChange={(e) => setRow(i, { parcelWeightG: e.target.value })}
-						className="h-9 w-24"
+						// Promoted (weight mode) it is a first-class field and wears
+						// the 44px `field` variant like every other; inside Advanced
+						// it stays the compact per-choice control of its row.
+						variant={weightMode ? "field" : undefined}
+						className={weightMode ? "w-28 text-right" : "h-9 w-24"}
 						aria-invalid={issue ? true : undefined}
 						// Required on a buyable choice wherever pricing depends on it
 						// (the save refuses a blank); an off-sale row can't be ordered.

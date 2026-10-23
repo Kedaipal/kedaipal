@@ -142,7 +142,10 @@ never one step late. The owner read exposes it as `retailers.weightPricing`
   readiness notice counts with, so the two can never disagree about a row.
   It is reached from the readiness notice (one shared `MissingWeightsNotice`
   on the Settings pricing card AND the Products list), the floor note on an
-  order, and the arming gates.
+  order, the arming gates — and permanently from the Products header's bulk
+  menu ("Parcel weights", beside Import/Export), because the notice vanishes
+  once every product is weighed and the page must stay reachable (Zaki,
+  /test-code round).
 - **Arming weight pricing waits for the catalogue.** Switching Delyva's
   Courier-booking toggle on in live mode, moving the delivery charge onto the
   rate card, or onto live pricing while Delyva is armed, is **refused**

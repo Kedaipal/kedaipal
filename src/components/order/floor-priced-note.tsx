@@ -24,11 +24,14 @@ export function pricedAtFloor(
 /** The sentence, one author for the order page and the dispatch card. */
 export function floorPricedLine(snapshot: Snapshot): string {
 	const n = snapshot.unweighedLines ?? 0;
+	// "then": the weight may well be set by the time the seller reads this
+	// (the dispatch box beside it prefills from today's product weights), and
+	// the note is about the moment the buyer was priced.
 	const items =
 		n === 0
 			? "a custom item has no fixed weight"
-			: `${n} item${n === 1 ? " had" : "s had"} no weight`;
-	return `Priced at the ${formatFloorKg()} floor — ${items}. A heavier parcel costs you the difference when you book.`;
+			: `${n} item${n === 1 ? " had" : "s had"} no weight then`;
+	return `Priced at the ${formatFloorKg()} floor at checkout — ${items}. A heavier parcel costs you the difference when you book.`;
 }
 
 /**

@@ -39,10 +39,10 @@ describe("pricedAtFloor", () => {
 describe("floorPricedLine", () => {
 	it("counts the items a product weight would have priced, and blames the seller's side", () => {
 		expect(floorPricedLine(floored)).toBe(
-			"Priced at the 1 kg floor — 2 items had no weight. A heavier parcel costs you the difference when you book.",
+			"Priced at the 1 kg floor at checkout — 2 items had no weight then. A heavier parcel costs you the difference when you book.",
 		);
 		expect(floorPricedLine({ ...floored, unweighedLines: 1 })).toContain(
-			"1 item had no weight",
+			"1 item had no weight then",
 		);
 	});
 

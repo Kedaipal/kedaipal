@@ -11,6 +11,7 @@ import {
 	EyeOff,
 	FileSpreadsheet,
 	FolderOpen,
+	Scale,
 	Search,
 	Tag,
 	Upload,
@@ -127,7 +128,9 @@ function BulkIoMenu({
 					size="icon"
 					className="size-11 shrink-0 rounded-xl"
 					aria-label={
-						exporting ? "Exporting products…" : "Import or export products"
+						exporting
+							? "Exporting products…"
+							: "Import, export or set parcel weights"
 					}
 				>
 					{/* Spreadsheet glyph, not arrows — an up/down icon reads as "sort"
@@ -144,6 +147,20 @@ function BulkIoMenu({
 					>
 						<Download className="size-4 text-muted-foreground" aria-hidden />
 						Import products
+					</Link>
+					{/* The bulk weight fill's PERMANENT door (23 Oct 2026). The amber
+					    readiness notice above the list links it while products are
+					    unweighed and vanishes once they aren't — this entry is how
+					    the page stays reachable after that, and before a store
+					    starts pricing by weight at all. A catalogue-wide edit, so it
+					    lives with the other catalogue-wide actions. */}
+					<Link
+						to="/app/products/weights"
+						onClick={() => setOpen(false)}
+						className="flex h-10 items-center gap-2 rounded-md px-3 text-sm transition-colors hover:bg-muted"
+					>
+						<Scale className="size-4 text-muted-foreground" aria-hidden />
+						Parcel weights
 					</Link>
 					{canExport ? (
 						<>
