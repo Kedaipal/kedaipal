@@ -48,6 +48,7 @@ vi.setConfig({ testTimeout: 20_000 });
 
 const UPDATE_SETTINGS = getFunctionName(api.retailers.updateSettings);
 const MISSING_WEIGHTS = getFunctionName(api.products.missingParcelWeights);
+const DELYVA_SETTINGS = getFunctionName(api.delyva.getSettings);
 
 type Props = Parameters<typeof DeliveryPricing>[0];
 type Booking = NonNullable<Props["deliveryBooking"]>;
@@ -70,19 +71,33 @@ let updateSettings: ReturnType<typeof vi.fn>;
 let missingWeights:
 	| { count: number; named: { productId: string; name: string }[] }
 	| undefined;
+let delyvaSettings: { connected: boolean; enabled: boolean } | undefined;
+/** Every args value the readiness query was asked with — `"skip"` included,
+ * so a test can prove the fetch never happened, not just that nothing
+ * rendered. */
+let missingWeightsArgs: unknown[];
 
 beforeEach(() => {
 	updateSettings = vi.fn().mockResolvedValue({ ok: true });
 	missingWeights = undefined;
+	delyvaSettings = undefined;
+	missingWeightsArgs = [];
 	vi.mocked(useQuery).mockImplementation(((opts: {
 		__fn: FunctionReference<"query">;
-	}) => ({
-		data:
-			getFunctionName(opts.__fn) === MISSING_WEIGHTS
-				? missingWeights
-				: undefined,
-		isPending: false,
-	})) as never);
+		args?: unknown;
+	}) => {
+		const name = getFunctionName(opts.__fn);
+		if (name === MISSING_WEIGHTS) missingWeightsArgs.push(opts.args);
+		return {
+			data:
+				name === MISSING_WEIGHTS
+					? missingWeights
+					: name === DELYVA_SETTINGS
+						? delyvaSettings
+						: undefined,
+			isPending: false,
+		};
+	}) as never);
 	vi.mocked(useMutation).mockImplementation(((
 		ref: FunctionReference<"mutation">,
 	) =>
@@ -380,6 +395,44 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 		const { container } = renderLive();
 		fireEvent.click(mode(/live courier price/i));
 		expect(container.textContent).toContain("Default vehicle");
+	});
+
+	// Mandos (prod, 23 Oct): every tee stored at 0 g, Delyva declined to bid,
+	// checkout refused — and the seller had no way to see why, because the
+	// readiness list only showed for the weight-zone mode.
+	describe("unweighed products on a live store (Mandos, 23 Oct)", () => {
+		it("names them on the live card when Delyva is armed, with the one-kilo rule", () => {
+			delyvaSettings = { connected: true, enabled: true };
+			missingWeights = {
+				count: 3,
+				named: [{ productId: "p1", name: "Oversized Tee" }],
+			};
+			const { container } = renderLive({
+				config: { mode: "live", onUnquotable: "block" },
+			});
+			expect(container.textContent).toContain(
+				"3 products have no parcel weight",
+			);
+			expect(container.textContent).toContain(
+				"quote those orders as a 1 kg parcel",
+			);
+			expect(screen.getByRole("link", { name: "Oversized Tee" })).toBeTruthy();
+			// And the rule is stated where the mode is explained, not only
+			// once something is already wrong.
+			expect(container.textContent).toContain("quoted as a 1 kg parcel");
+		});
+
+		it("never fetches, never shows, when no courier prices by weight", () => {
+			delyvaSettings = { connected: true, enabled: false };
+			missingWeights = { count: 3, named: [] };
+			const { container } = renderLive({
+				config: { mode: "live", onUnquotable: "block" },
+			});
+			expect(container.textContent).not.toMatch(/no parcel weight/);
+			expect(container.textContent).not.toContain("1 kg parcel");
+			expect(missingWeightsArgs.length).toBeGreaterThan(0);
+			expect(missingWeightsArgs.every((a) => a === "skip")).toBe(true);
+		});
 	});
 });
 

@@ -70,9 +70,37 @@ ever silently priced as ambient. When per-item flags land, only
 `cartItemType()` changes.
 
 **Cart weight is summed from the VARIANTS**, never accepted from the client —
-a tampered weight would otherwise buy a cheaper courier band. No usable weight
-(an unweighed product, a custom line) means Delyva simply doesn't bid, and
-that is reported as a store-side gap, never as something the buyer can fix.
+a tampered weight would otherwise buy a cheaper courier band. **An item with
+no usable weight (an unweighed product, a custom line) is quoted at a one-kilo
+floor** (`liveQuoteWeightKg`, `LIVE_QUOTE_WEIGHT_FLOOR_G` in
+`convex/lib/liveQuote.ts`): weighed lines sum, unweighed lines add nothing,
+and a cart holding one is never quoted under 1 kg. A fully weighed cart keeps
+its real sum even under a kilo. Only an EMPTY cart stays unpriceable (the
+"every surface supplies the cart" guard below).
+
+Until 23 Oct 2026 an unweighed line meant Delyva "simply didn't bid", and
+that was reported as a store-side gap. On a store whose rider can't reach the
+address — or, as on Mandos (prod: every tee stored at 0 g, Delyva the only
+courier, no self-collect) on every address — the whole checkout refused with
+"pricing isn't working for this store", and the seller never saw why: the
+readiness list that names unweighed products only showed for the weight-zone
+mode. Parcel weight is an optional product field, so blank is a normal state,
+not a misconfiguration to punish the buyer for. **Why a floor and not a
+per-item guess:** nearly every Malaysian parcel service bills its first
+kilogram flat, so a light unweighed cart (tees, kuih) is priced exactly right
+and a heavier one is under-quoted — the seller who left the weight blank
+absorbs the next band when they book, never the buyer; counting each unweighed
+item as a kilo would overcharge a buyer of three tees for a rule they never
+saw. **Rejected:** fee-pending ("arrange"), which is what the weight-zone mode
+does for a missing weight — in live mode it would put the payment chase back
+on the seller, the pain this product exists to remove. The seller is told in
+three places: the live-pricing card's readiness list (now shown whenever
+Delyva is armed, naming the products and the one-kilo rule), the "How live
+pricing works" bullet, and the dispatch dialog, which already asks for the
+packed weight before any booking. **Follow-up (its own ticket):** make the
+weight *required where pricing depends on it* — on the product form for a
+live + Delyva store, with a bulk weight fill — so the floor is a backstop
+for custom lines and legacy rows, not the normal path.
 
 ## Country posture
 

@@ -161,7 +161,11 @@ and there is no quotation id — order create re-prices. So:
 summariser the weight-zone pricing uses. When the cart is unweighable (a
 custom line, or missing product weights) the dialog asks the seller to type
 the packed weight (`weightKgOverride`); the seller can always override, since
-they know the real packed weight best.
+they know the real packed weight best. The *checkout* quote for such a cart
+was priced at the one-kilo floor (23 Oct 2026, see
+[`delivery-live-pricing.md`](./delivery-live-pricing.md)), so this is also
+where a heavier-than-a-kilo parcel's under-collection becomes visible — the
+card shows "buyer paid X" beside every service price.
 
 **Wire shapes were probed live** against a demo account (27 Aug 2026), not
 assumed: the waypoint address rides *inside* `contact` (a top-level
