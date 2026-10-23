@@ -254,6 +254,17 @@ and skip it.
 
 ## Checkout
 
+**A cart edit re-quotes.** A provider-aware quote is bound to the cart it
+priced (`sameQuotedLines`), so `useLiveDeliveryQuote` re-fires when the
+cart's line multiset changes — a quantity bump changes the weight Delyva
+bids on, and without a re-quote the buyer saw a stale fee and then a refusal
+at order create. Cart edits are debounced at 900 ms (a pin pick is 400 ms)
+so tapping + three times spends one quote from the store's `lalamoveQuote`
+bucket (10/min, burst 4). A rider-only store never re-fires for the cart.
+Weight units: the cart is summed in grams and sent to Delyva as
+`weight: { unit: "kg", value }` (`convex/lib/delyva.ts`, `roundKg`); Lalamove
+is never sent a weight — riders price by vehicle and distance.
+
 **The address helper names who prices it.** `delivery.quote`'s `live` result
 carries `riders` / `couriers` — which kinds of provider can bid
 (`lalamoveBookingArmed`, `delyvaBidsAtCheckout` in
