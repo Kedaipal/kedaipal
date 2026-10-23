@@ -1008,9 +1008,11 @@ export const MISSING_WEIGHT_NAMED_MAX = 5;
 /**
  * The weight & zone readiness check (86eye9xd4, 4A): live, active, physical
  * products with at least one live non-custom choice that has no parcel
- * weight. Checkout refuses (or holds for WhatsApp) any cart holding one, so
- * the delivery-pricing page names them up front instead of leaving the seller
- * to find out from a stranded order.
+ * weight. Weight-zone checkout refuses (or holds for WhatsApp) any cart
+ * holding one, and a live courier quotes it at the one-kilo floor
+ * (`liveQuoteWeightKg`), so the delivery-pricing page names them up front
+ * instead of leaving the seller to find out from a stranded order or an
+ * under-collected courier bill.
  *
  * Bounded by the product cap (z8r3fdjmf4q): one indexed variant read per
  * active product. Custom choices never count — their weight is unknowable by

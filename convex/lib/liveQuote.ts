@@ -22,6 +22,8 @@
  * testable without a network or a database. Fetching lives in the action.
  */
 
+import { type CartWeightItem, lacksParcelWeight } from "./delivery";
+
 export type LiveQuoteProvider = "lalamove" | "delyva";
 
 /** One provider's answer. Failure kinds are deliberately provider-neutral:
@@ -111,6 +113,59 @@ export function cartItemType(storeDefault: string | undefined): string {
 
 export function isColdItemType(itemType: string): boolean {
 	return itemType === "CHILLED" || itemType === "FROZEN";
+}
+
+/**
+ * The parcel weight a courier is asked to price when the cart holds an item
+ * with NO parcel weight: one kilogram, in grams.
+ *
+ * Until 23 Oct 2026 an unweighed line meant Delyva "simply didn't bid", and
+ * on a store whose rider can't reach the address that was the whole
+ * checkout: Mandos (prod, every tee stored at 0 g) refused every delivery
+ * order with "pricing isn't working for this store" — a seller-side gap the
+ * BUYER paid for with a dead end, found only when a customer complained.
+ * Parcel weight is an optional product field, so blank is a normal state,
+ * not a misconfiguration to punish the buyer for.
+ *
+ * Why a floor and not a per-item guess: nearly every Malaysian parcel
+ * service bills its first kilogram flat, so a light unweighed cart (tees,
+ * kuih) is priced exactly right, and a heavier one is UNDER-quoted — the
+ * seller who left the weight blank absorbs the next band when they book,
+ * never the buyer. Counting each unweighed item as a kilo would instead
+ * overcharge a buyer three tees for a rule they never saw. The seller is
+ * told in three places: the delivery-pricing readiness list names the
+ * products, the dispatch dialog asks for the packed weight before any
+ * booking, and the product form's weight field stays optional.
+ */
+export const LIVE_QUOTE_WEIGHT_FLOOR_G = 1000;
+
+/**
+ * Cart weight for a live courier quote, in kilograms.
+ *
+ * Weighed lines sum (weight × quantity). A line with no usable weight — an
+ * unweighed variant, a custom line, a variant that isn't this store's — adds
+ * nothing, and a cart holding one is never quoted under
+ * `LIVE_QUOTE_WEIGHT_FLOOR_G`. A fully weighed cart keeps its real sum, even
+ * under a kilo: the floor exists for the gap, not to re-price what the
+ * seller already answered.
+ *
+ * `null` only for an EMPTY list: a surface that supplied no cart can't be
+ * priced, and that stays a store-side refusal (PR #253 made `items`
+ * required on every buyer surface precisely so this never happens).
+ */
+export function liveQuoteWeightKg(items: CartWeightItem[]): number | null {
+	if (items.length === 0) return null;
+	let grams = 0;
+	let unweighed = false;
+	for (const item of items) {
+		if (lacksParcelWeight(item) || item.isCustom) {
+			unweighed = true;
+			continue;
+		}
+		grams += Math.round(item.parcelWeightG) * Math.max(0, item.quantity);
+	}
+	if (unweighed) grams = Math.max(grams, LIVE_QUOTE_WEIGHT_FLOOR_G);
+	return grams / 1000;
 }
 
 /**

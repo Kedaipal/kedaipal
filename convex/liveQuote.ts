@@ -24,11 +24,7 @@ import {
 	fetchDelyvaCheckoutQuote,
 } from "./delyva";
 import { fetchLalamoveQuote } from "./lalamove";
-import {
-	type CartWeightItem,
-	type DeliveryConfig,
-	summarizeCartWeight,
-} from "./lib/delivery";
+import type { CartWeightItem, DeliveryConfig } from "./lib/delivery";
 import {
 	type DelyvaItemType,
 	resolveDelyvaCredentials,
@@ -37,6 +33,7 @@ import {
 	cartItemType,
 	chooseLiveQuote,
 	isColdItemType,
+	liveQuoteWeightKg,
 	type ProviderQuote,
 } from "./lib/liveQuote";
 import { rateLimiter } from "./lib/rateLimiter";
@@ -93,8 +90,8 @@ export const getLiveQuoteContext = internalQuery({
 			const weightItems: CartWeightItem[] = await Promise.all(
 				lines.map(async (line): Promise<CartWeightItem> => {
 					const variant = await ctx.db.get(line.variantId);
-					// Missing/foreign variant → weightless line → the summary says
-					// "missing_weights" rather than silently under-weighing.
+					// Missing/foreign variant → weightless line → quoted at the
+					// floor (liveQuoteWeightKg), never at a borrowed weight.
 					if (!variant || variant.retailerId !== args.retailerId) {
 						return { parcelWeightG: 0, quantity: line.quantity };
 					}
@@ -105,8 +102,7 @@ export const getLiveQuoteContext = internalQuery({
 					};
 				}),
 			);
-			const summary = summarizeCartWeight(weightItems);
-			if (summary.kind === "ok") cartWeightKg = summary.grams / 1000;
+			cartWeightKg = liveQuoteWeightKg(weightItems);
 		}
 
 		return {
