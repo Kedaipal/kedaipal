@@ -35,6 +35,29 @@ export type LiveDeliveryQuoteState =
 	| { state: "no_cold_service" }
 	| { state: "unavailable" };
 
+/**
+ * What the checkout should treat as the store's delivery answer while the
+ * reactive `delivery.quote` re-runs (25 Oct 2026).
+ *
+ * That query takes the cart and subtotal as arguments, so every quantity tap
+ * is a NEW query whose result is empty until it lands. For that moment the
+ * checkout forgot the store was live-priced: the ticket dropped its delivery
+ * line, the total fell by the fee, and the live quote reset — found driving
+ * a quantity stepper on a Delyva store. The caller reads with
+ * `placeholderData: keepPreviousData`; this keeps the held answer ONLY when it
+ * says "live", because a live answer doesn't depend on the cart or the
+ * address (the action prices those). Any other kind is a fee FOR the old
+ * cart or address, so it is dropped exactly as before — a stale flat or
+ * distance fee must never show beside a new address.
+ */
+export function heldDeliveryAnswer<T extends { kind: string }>(read: {
+	data: T | undefined;
+	isPlaceholderData: boolean;
+}): T | undefined {
+	if (!read.isPlaceholderData) return read.data;
+	return read.data?.kind === "live" ? read.data : undefined;
+}
+
 export function useLiveDeliveryQuote({
 	enabled,
 	providerAware,

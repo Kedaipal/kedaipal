@@ -261,6 +261,14 @@ bids on, and without a re-quote the buyer saw a stale fee and then a refusal
 at order create. Cart edits are debounced at 900 ms (a pin pick is 400 ms)
 so tapping + three times spends one quote from the store's `lalamoveQuote`
 bucket (10/min, burst 4). A rider-only store never re-fires for the cart.
+The checkout also holds the store's "live" answer across the edit
+(`heldDeliveryAnswer` with `placeholderData: keepPreviousData`): the
+reactive `delivery.quote` takes the cart as an argument, so each tap used to
+blank it for a beat — the delivery line vanished, the total dropped and the
+live quote reset. A held FEE (flat, distance) is still dropped, so a fee for
+an old address never shows. Measured on the dev sandbox (Alor Setar, Delyva
+only): 1 kg RM 4.75, 10 kg RM 9.50, 25 kg RM 53.77 on DHL once the cart
+outgrew Instant Delivery — and a burst of 17 taps spent one quote.
 Weight units: the cart is summed in grams and sent to Delyva as
 `weight: { unit: "kg", value }` (`convex/lib/delyva.ts`, `roundKg`); Lalamove
 is never sent a weight — riders price by vehicle and distance.

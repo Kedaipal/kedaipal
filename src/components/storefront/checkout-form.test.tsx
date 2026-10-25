@@ -43,6 +43,9 @@ vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
 vi.mock("@tanstack/react-query", () => ({
+	// The delivery read holds a live answer across cart edits
+	// (`heldDeliveryAnswer`); the mock never re-keys, so identity is enough.
+	keepPreviousData: (previous: unknown) => previous,
 	useQuery: ({
 		fn,
 		args,

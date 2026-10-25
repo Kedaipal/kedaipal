@@ -1,6 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useStore } from "@tanstack/react-form";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { Package, ShoppingBag, Truck } from "lucide-react";
@@ -107,7 +107,10 @@ import {
 	type CheckoutAddressValues,
 	checkoutFormSchemaFor,
 } from "../../lib/schemas";
-import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
+import {
+	heldDeliveryAnswer,
+	useLiveDeliveryQuote,
+} from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { CopyText, DayWindowsInline } from "../hours/hours-text";
@@ -1065,8 +1068,11 @@ export function CheckoutPage({
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
-	const deliveryQuote: PublicDeliveryQuote | undefined = useQuery(
-		convexQuery(
+	// Held across a cart edit when the answer is "live" — see
+	// `heldDeliveryAnswer`: without it every quantity tap blanked the
+	// delivery line and reset the live quote for a beat.
+	const deliveryQuoteRead = useQuery({
+		...convexQuery(
 			api.delivery.quote,
 			deliveryAvailable && watchedMethod === "delivery"
 				? {
@@ -1086,7 +1092,10 @@ export function CheckoutPage({
 					}
 				: "skip",
 		),
-	).data;
+		placeholderData: keepPreviousData,
+	});
+	const deliveryQuote: PublicDeliveryQuote | undefined =
+		heldDeliveryAnswer(deliveryQuoteRead);
 	const rawQuote = watchedMethod === "delivery" ? deliveryQuote : undefined;
 
 	// --- Live Lalamove quote (86eyb5hrf) ------------------------------------

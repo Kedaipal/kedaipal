@@ -7,7 +7,10 @@ import { getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { useLiveDeliveryQuote } from "./use-live-delivery-quote";
+import {
+	heldDeliveryAnswer,
+	useLiveDeliveryQuote,
+} from "./use-live-delivery-quote";
 
 const calls = vi.hoisted(() => ({
 	lalamove: vi.fn(),
@@ -208,5 +211,46 @@ describe("every surface must supply the cart (PR #253 review, HIGH)", () => {
 		// the args() fixture above fails to compile if it regresses to
 		// optional-and-omitted at any call site in this file.
 		expect(args().items.length).toBeGreaterThan(0);
+	});
+});
+
+describe("heldDeliveryAnswer — the checkout keeps knowing it is live across a cart edit", () => {
+	it("a settled answer passes through, whatever its kind", () => {
+		expect(
+			heldDeliveryAnswer({
+				data: { kind: "fee", fee: 800 },
+				isPlaceholderData: false,
+			}),
+		).toEqual({ kind: "fee", fee: 800 });
+	});
+
+	it("a held LIVE answer is kept — it doesn't depend on the cart", () => {
+		const live = {
+			kind: "live",
+			providerAware: true,
+			riders: true,
+			couriers: true,
+		};
+		expect(heldDeliveryAnswer({ data: live, isPlaceholderData: true })).toBe(
+			live,
+		);
+	});
+
+	it("a held FEE is dropped — it was priced for the old cart or address", () => {
+		expect(
+			heldDeliveryAnswer({
+				data: { kind: "fee", fee: 800 },
+				isPlaceholderData: true,
+			}),
+		).toBeUndefined();
+		expect(
+			heldDeliveryAnswer({ data: { kind: "free" }, isPlaceholderData: true }),
+		).toBeUndefined();
+	});
+
+	it("nothing yet is nothing", () => {
+		expect(
+			heldDeliveryAnswer({ data: undefined, isPlaceholderData: false }),
+		).toBeUndefined();
 	});
 });

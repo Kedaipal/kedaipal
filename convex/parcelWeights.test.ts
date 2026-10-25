@@ -157,6 +157,10 @@ describe("products.unweighedChoices — the bulk fill's list", () => {
 		await seedProduct(t, asUser, retailerId, "Wash", [{ grams: 0 }], {
 			kind: "service",
 		});
+		// A calendar booking has nothing to deliver.
+		await seedProduct(t, asUser, retailerId, "Campsite", [{ grams: 0 }], {
+			kind: "booking",
+		});
 		// An event RSVP is fulfilled at the venue — never a delivery cart.
 		const festival = await seedProduct(t, asUser, retailerId, "Festival", [
 			{ grams: 0 },
@@ -429,6 +433,36 @@ describe("switching the delivery charge onto weight pricing (retailers.updateSet
 				deliveryConfig: weightConfig,
 			}),
 		).rejects.toThrow(/a rate card prices every order by weight/);
+	});
+
+	test("a catalogue of only bookings, services and events arms the rate card freely — none of them ships", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedRetailer(t, "user_pw_rc_kinds", {
+			mode: "flat",
+		});
+		await seedProduct(t, asUser, retailerId, "Campsite", [{ grams: 0 }], {
+			kind: "booking",
+		});
+		await seedProduct(t, asUser, retailerId, "Tent wash", [{ grams: 0 }], {
+			kind: "service",
+		});
+		const festival = await seedProduct(t, asUser, retailerId, "Festival", [
+			{ grams: 0 },
+		]);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(festival.productId, {
+				event: { date: Date.UTC(2026, 11, 1) - 8 * 3600 * 1000 },
+			});
+		});
+		expect(
+			await asUser.query(api.products.missingParcelWeights, { retailerId }),
+		).toMatchObject({ count: 0, choiceCount: 0 });
+		await asUser.mutation(api.retailers.updateSettings, {
+			deliveryConfig: weightConfig,
+		});
+		expect(
+			(await asUser.query(api.retailers.getMyRetailer))?.deliveryConfig,
+		).toMatchObject({ mode: "weight" });
 	});
 
 	test("a store already on the rate card keeps saving its zones", async () => {
