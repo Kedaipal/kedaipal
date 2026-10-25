@@ -252,7 +252,12 @@ export type DeliveryQuoteReason =
 	 * courier carries one. The ADDRESS is fine — distinct from out_of_range so
 	 * the copy never sends the buyer editing something that isn't the problem,
 	 * and riders are never substituted (no temperature guarantee). */
-	| "no_cold_service";
+	| "no_cold_service"
+	/** Live pricing (25 Oct 2026): the cart is heavier than any rider vehicle
+	 * Lalamove publishes a load for, and no courier priced it. The address is
+	 * fine — the ORDER is too big for a rider — so the copy points at pickup
+	 * or the store, never at the address. */
+	| "too_heavy";
 
 /**
  * The STORED pending reason is narrower than the resolver's union: a
@@ -263,8 +268,11 @@ export type DeliveryQuoteReason =
  */
 export function storablePendingReason(
 	reason: DeliveryQuoteReason | undefined,
-): Exclude<DeliveryQuoteReason, "no_cold_service"> | undefined {
-	return reason === "no_cold_service" ? undefined : reason;
+): Exclude<DeliveryQuoteReason, "no_cold_service" | "too_heavy"> | undefined {
+	// Both refuse checkout; neither may become "seller will confirm".
+	return reason === "no_cold_service" || reason === "too_heavy"
+		? undefined
+		: reason;
 }
 
 /**

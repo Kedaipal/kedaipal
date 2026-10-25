@@ -13,6 +13,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireRetailerAccess, resolveMyRetailer } from "./lib/auth";
 import {
+	type ActionCtx,
 	action,
 	internalAction,
 	internalMutation,
@@ -38,6 +39,7 @@ import {
 	parsePodImages,
 	parseQuotationResponse,
 	decryptLalamoveCredentials,
+	lalamoveMarketForCountry,
 	resolveDispatchSchedule,
 	resolveLalamoveCredentials,
 	classifyBookingFailure,
@@ -49,7 +51,15 @@ import { priorityFeeWire, TIP_OPTIONS } from "./lib/lalamoveTip";
 import { formatBusinessAddress } from "./lib/address";
 import { DEFAULT_COUNTRY } from "./lib/country";
 import { lalamoveBookingArmed } from "./lib/courierBooking";
-import { riderBookingAllowed } from "./lib/delivery";
+import { type CartWeightItem, riderBookingAllowed } from "./lib/delivery";
+import {
+	chooseRiderVehicle,
+	loadOf,
+	parseVehicleLoads,
+	VEHICLE_LOADS_TTL_MS,
+	type VehicleLoad,
+} from "./lib/lalamoveVehicle";
+import { liveQuoteWeightKg } from "./lib/liveQuote";
 import { rateLimiter } from "./lib/rateLimiter";
 import { composeFulfilmentMoment } from "./lib/fulfilmentDate";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
@@ -118,6 +128,9 @@ export type LalamoveQuoteContext = {
 	 * where the flag is simply ignored). */
 	providerAware: boolean;
 	deliveryDirection: "standard" | "collection";
+	/** The STAMPED Lalamove world (86eypncfy) — keys the vehicle-load cache.
+	 * Never `credentials.env`, which is inferred from ciphertext. */
+	env?: "sandbox" | "production";
 };
 
 export const getQuoteContext = internalQuery({
@@ -152,7 +165,185 @@ export const getQuoteContext = internalQuery({
 			providerAware: retailer.deliveryConfig?.mode === "live",
 			deliveryDirection:
 				retailer.deliveryBooking?.deliveryDirection ?? "standard",
+			env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
 		};
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Vehicle loads (25 Oct 2026) — which vehicle can carry the cart
+// ---------------------------------------------------------------------------
+
+export const getVehicleLoads = internalQuery({
+	args: {
+		market: v.union(v.literal("MY"), v.literal("SG")),
+		env: v.union(v.literal("sandbox"), v.literal("production")),
+	},
+	handler: async (
+		ctx,
+		{ market, env },
+	): Promise<{ loads: VehicleLoad[]; fetchedAt: number } | null> => {
+		const row = await ctx.db
+			.query("lalamoveVehicleLoads")
+			.withIndex("by_market_env", (q) => q.eq("market", market).eq("env", env))
+			.unique();
+		return row ? { loads: row.loads, fetchedAt: row.fetchedAt } : null;
+	},
+});
+
+export const saveVehicleLoads = internalMutation({
+	args: {
+		market: v.union(v.literal("MY"), v.literal("SG")),
+		env: v.union(v.literal("sandbox"), v.literal("production")),
+		loads: v.array(v.object({ key: v.string(), loadKg: v.number() })),
+	},
+	handler: async (ctx, { market, env, loads }): Promise<void> => {
+		const row = await ctx.db
+			.query("lalamoveVehicleLoads")
+			.withIndex("by_market_env", (q) => q.eq("market", market).eq("env", env))
+			.unique();
+		const fetchedAt = Date.now();
+		if (row) await ctx.db.patch(row._id, { loads, fetchedAt });
+		else await ctx.db.insert("lalamoveVehicleLoads", { market, env, loads, fetchedAt });
+	},
+});
+
+/** The store's key pair + where it books — enough to read `/v3/cities`. */
+export const getVehicleLoadContext = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		booking: { apiKey?: string; apiSecret?: string };
+		country: string | undefined;
+		env?: "sandbox" | "production";
+	} | null> => {
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer?.deliveryBooking) return null;
+		const booking = retailer.deliveryBooking as BookingConfig;
+		return {
+			booking: { apiKey: booking.apiKey, apiSecret: booking.apiSecret },
+			country: retailer.country,
+			env: booking.env,
+		};
+	},
+});
+
+/** `GET /v3/cities` → the market's loads, stored. Null on any failure —
+ * callers fail OPEN (quote the seller's vehicle) rather than refuse. */
+async function fetchAndStoreVehicleLoads(
+	ctx: ActionCtx,
+	credentials: LalamoveCredentials,
+	env: "sandbox" | "production",
+): Promise<VehicleLoad[] | null> {
+	try {
+		const loads = parseVehicleLoads(
+			await callLalamove(credentials, "GET", "/v3/cities"),
+		);
+		if (loads.length === 0) return null;
+		await ctx.runMutation(internal.lalamove.saveVehicleLoads, {
+			market: credentials.market,
+			env,
+			loads,
+		});
+		return loads;
+	} catch (err) {
+		console.warn("[lalamove] vehicle loads fetch failed", {
+			market: credentials.market,
+			message: err instanceof Error ? err.message : String(err),
+		});
+		return null;
+	}
+}
+
+/** Background refresh of a market's loads, scheduled when the cache is
+ * stale. Also the operator's probe: `npx convex run
+ * lalamove:refreshVehicleLoads '{"retailerId":"…"}'` prints what Lalamove
+ * publishes for that store's market. */
+export const refreshVehicleLoads = internalAction({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<VehicleLoad[] | null> => {
+		const context = await ctx.runQuery(internal.lalamove.getVehicleLoadContext, {
+			retailerId,
+		});
+		if (!context) return null;
+		const credentials = resolveLalamoveCredentials(
+			context.booking,
+			context.country,
+		);
+		if (!credentials) return null;
+		return fetchAndStoreVehicleLoads(
+			ctx,
+			credentials,
+			context.env ?? "production",
+		);
+	},
+});
+
+/**
+ * The market's vehicle loads, cheaply: the cached row when there is one (a
+ * stale one is still used, and refreshed in the background so nobody waits
+ * on it). With no row at all, `inlineFetch` decides: the checkout fetches
+ * once inline (the first time a market is ever quoted, so the very first
+ * heavy cart is still priced right), dispatch only schedules the fetch — a
+ * money flow shouldn't grow an extra network call, and by dispatch time the
+ * checkout has almost always filled the cache. Null = unknown, and every
+ * caller fails open on unknown.
+ */
+export async function vehicleLoadsFor(
+	ctx: ActionCtx,
+	args: {
+		retailerId: Id<"retailers">;
+		credentials: LalamoveCredentials;
+		env: "sandbox" | "production" | undefined;
+		inlineFetch: boolean;
+	},
+): Promise<VehicleLoad[] | null> {
+	const env = args.env ?? "production";
+	const cached = await ctx.runQuery(internal.lalamove.getVehicleLoads, {
+		market: args.credentials.market,
+		env,
+	});
+	if (cached && Date.now() - cached.fetchedAt <= VEHICLE_LOADS_TTL_MS)
+		return cached.loads;
+	if (cached || !args.inlineFetch) {
+		await ctx.scheduler.runAfter(0, internal.lalamove.refreshVehicleLoads, {
+			retailerId: args.retailerId,
+		});
+		return cached?.loads ?? null;
+	}
+	return fetchAndStoreVehicleLoads(ctx, args.credentials, env);
+}
+
+/**
+ * The store's market's vehicle loads, for the delivery-pricing card's
+ * "Lalamove's limits" (25 Oct 2026). A catalogue fact Lalamove publishes —
+ * no order, buyer or credential data — so a fulfilment reader may see it.
+ * Null until the market has been quoted once (the card then says the rule
+ * without numbers).
+ */
+export const vehicleLoads = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ loads: VehicleLoad[] } | null> => {
+		const { retailer } = await requireRetailerAccess(ctx, retailerId, {
+			area: "fulfilment",
+			level: "read",
+		});
+		const booking = retailer.deliveryBooking as BookingConfig | undefined;
+		if (!booking) return null;
+		const row = await ctx.db
+			.query("lalamoveVehicleLoads")
+			.withIndex("by_market_env", (q) =>
+				q
+					.eq("market", lalamoveMarketForCountry(retailer.country))
+					.eq("env", booking.env ?? "production"),
+			)
+			.unique();
+		return row ? { loads: row.loads } : null;
 	},
 });
 
@@ -275,6 +466,9 @@ export const quoteForCheckout = action({
 			fulfilmentDate: args.fulfilmentDate,
 			fulfilmentTimeMinutes: args.fulfilmentTimeMinutes,
 		});
+		// No cart reaches this legacy action, so "too heavy" can't arise — the
+		// narrowing keeps its public contract exactly as it was.
+		if (quote.status === "too_heavy") return { status: "unavailable" };
 		if (quote.status !== "quoted") return { status: quote.status };
 		const quoteId: Id<"deliveryQuotes"> = await ctx.runMutation(
 			internal.lalamove.saveCheckoutQuote,
@@ -303,7 +497,9 @@ export type LalamoveCheckoutQuote =
 			quotationId: string;
 			vehicleType: string;
 	  }
-	| { status: "out_of_range" | "store_unavailable" | "unavailable" };
+	| {
+			status: "out_of_range" | "store_unavailable" | "too_heavy" | "unavailable";
+	  };
 
 /**
  * Fetch a live Lalamove price WITHOUT recording it (z8r3fdbvdy).
@@ -324,8 +520,24 @@ export async function fetchLalamoveQuote(args: {
 	address: string;
 	fulfilmentDate?: number;
 	fulfilmentTimeMinutes?: number;
+	/** The cart's weight (kg, floored for unweighed lines — see
+	 * `liveQuoteWeightKg`) and the market's vehicle loads. Both optional:
+	 * the legacy single-provider action has no cart, and either missing
+	 * quotes the seller's vehicle exactly as before (fail open). */
+	cartKg?: number | null;
+	loads?: readonly VehicleLoad[] | null;
 }): Promise<LalamoveCheckoutQuote> {
 	const { context } = args;
+	// Lalamove prices by vehicle and never refuses an overweight trip, so the
+	// cart chooses the vehicle: the seller's setting, or the smallest bigger
+	// one that can carry it (25 Oct 2026, `chooseRiderVehicle`).
+	const choice = chooseRiderVehicle({
+		preferred: context.vehicleType,
+		cartKg: args.cartKg,
+		loads: args.loads ?? null,
+	});
+	if (choice.kind === "too_heavy") return { status: "too_heavy" };
+	const vehicleType: string = choice.vehicle;
 	const credentials = resolveLalamoveCredentials(
 		context.booking,
 		context.country,
@@ -370,7 +582,7 @@ export async function fetchLalamoveQuote(args: {
 				"POST",
 				"/v3/quotations",
 				buildQuotationBody({
-					serviceType: context.vehicleType,
+					serviceType: vehicleType,
 					market: credentials.market,
 					scheduleAt,
 					// Collection service quotes the trip the rider will actually
@@ -390,7 +602,9 @@ export async function fetchLalamoveQuote(args: {
 				fee: parsed.priceTotal,
 				currency: parsed.currency,
 				quotationId: parsed.quotationId,
-				vehicleType: context.vehicleType,
+				// The vehicle actually priced — frozen onto the order's snapshot,
+				// so dispatch and the seller can see a car was quoted.
+				vehicleType,
 			};
 		} catch (err) {
 			// Three buyer stories, three copies — and only ONE is retryable.
@@ -998,12 +1212,35 @@ type DispatchContext =
 			 * yet; callers must treat that as "unknown", never as production. */
 			env?: "sandbox" | "production";
 			credentials: LalamoveCredentials;
+			/** The order's parcel weight, kg (unweighed lines at the one-kilo
+			 * floor) — chooses the default vehicle with the market's loads. */
+			cartKg: number | null;
 	  };
 
 /**
  * Shared eligibility + payload assembly for one booking attempt (used by the
  * dispatch context read below).
  */
+/** The order's parcel weight for choosing a vehicle — the same floor rule
+ * the checkout quote used (`liveQuoteWeightKg`), so dispatch defaults to the
+ * vehicle the buyer was priced on. */
+async function orderCartKg(
+	ctx: QueryCtx,
+	order: Doc<"orders">,
+): Promise<number | null> {
+	const items: CartWeightItem[] = await Promise.all(
+		order.items.map(async (item): Promise<CartWeightItem> => {
+			const variant = item.variantId ? await ctx.db.get(item.variantId) : null;
+			return {
+				parcelWeightG: variant?.parcelWeightG ?? 0,
+				quantity: item.quantity,
+				isCustom: variant?.isCustom === true,
+			};
+		}),
+	);
+	return liveQuoteWeightKg(items);
+}
+
 async function dispatchContextForOrder(
 	ctx: QueryCtx,
 	order: Doc<"orders">,
@@ -1107,6 +1344,7 @@ async function dispatchContextForOrder(
 		env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
 		vehicleType:
 			(retailer.deliveryBooking as BookingConfig).vehicleType ?? "MOTORCYCLE",
+		cartKg: await orderCartKg(ctx, order),
 		deliveryDirection: collection ? "collection" : "standard",
 		requestedMoment:
 			order.fulfilmentDate !== undefined &&
@@ -1229,6 +1467,18 @@ export const prepareBooking = action({
 				fee: number;
 				buyerPaidFee: number;
 				vehicleType: string;
+				/** Why the default vehicle isn't the seller's setting, or that no
+				 * rider vehicle can carry the order (25 Oct 2026) — the dialog
+				 * says so beside the vehicle switch. Undefined = the setting fits. */
+				vehicleAdvice?:
+					| {
+							kind: "escalated";
+							from: string;
+							to: string;
+							cartKg: number;
+							fromLoadKg?: number;
+					  }
+					| { kind: "too_heavy"; cartKg: number; maxKg: number };
 				buyerContactFallback: boolean;
 				/** The market the booking is made in (the store's country) — lets
 				 * the confirm dialog name it when `buyerContactFallback` is set,
@@ -1264,7 +1514,45 @@ export const prepareBooking = action({
 			shortId,
 		});
 		if (!context.ok) return context;
-		const vehicleType = vehicleOverride ?? context.vehicleType;
+		// Default to the vehicle that can carry THIS order (25 Oct 2026): the
+		// checkout priced it on that one, and a motorcycle booked for a 25 kg
+		// order is a rider who arrives and leaves. The seller's switch still
+		// wins — they may be splitting the parcel or know better.
+		const loads = await vehicleLoadsFor(ctx, {
+			retailerId: context.retailerId,
+			credentials: context.credentials,
+			env: context.env,
+			inlineFetch: false,
+		});
+		const choice = chooseRiderVehicle({
+			preferred: context.vehicleType,
+			cartKg: context.cartKg,
+			loads,
+		});
+		const defaultVehicle =
+			choice.kind === "fits" ? choice.vehicle : ("CAR" as const);
+		const vehicleAdvice:
+			| {
+					kind: "escalated";
+					from: string;
+					to: string;
+					cartKg: number;
+					fromLoadKg?: number;
+			  }
+			| { kind: "too_heavy"; cartKg: number; maxKg: number }
+			| undefined =
+			choice.kind === "too_heavy"
+				? { kind: "too_heavy", cartKg: choice.cartKg, maxKg: choice.maxKg }
+				: choice.escalatedFrom && choice.cartKg !== undefined
+					? {
+							kind: "escalated",
+							from: choice.escalatedFrom,
+							to: choice.vehicle,
+							cartKg: choice.cartKg,
+							fromLoadKg: loadOf(loads, choice.escalatedFrom),
+						}
+					: undefined;
+		const vehicleType = vehicleOverride ?? defaultVehicle;
 		// The buyer's ask is the DEFAULT; past or imminent books now — the
 		// same pure rule the checkout quote used to price the fee. A seller
 		// override (86eyp5qd1) rides the same clamps; only an explicit pick
@@ -1307,6 +1595,7 @@ export const prepareBooking = action({
 				fee: parsed.priceTotal,
 				buyerPaidFee: context.buyerPaidFee,
 				vehicleType,
+				vehicleAdvice,
 				buyerContactFallback: context.buyerContactFallback,
 				market: context.credentials.market,
 				scheduledFor,

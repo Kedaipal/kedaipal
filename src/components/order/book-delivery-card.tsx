@@ -28,6 +28,7 @@ import {
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import type { LalamoveMarket } from "../../../convex/lib/lalamove";
+import { formatKg, vehicleWord } from "../../../convex/lib/lalamoveVehicle";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatCountdown } from "../../lib/countdown";
 import {
@@ -72,6 +73,17 @@ type QuoteState = {
 	fee: number;
 	buyerPaidFee: number;
 	vehicleType: string;
+	/** Why the default vehicle isn't the store's setting, or that no rider
+	 * vehicle can carry the order (25 Oct 2026, `prepareBooking`). */
+	vehicleAdvice?:
+		| {
+				kind: "escalated";
+				from: string;
+				to: string;
+				cartKg: number;
+				fromLoadKg?: number;
+		  }
+		| { kind: "too_heavy"; cartKg: number; maxKg: number };
 	buyerContactFallback: boolean;
 	/** The store's Lalamove market — the country the `buyerContactFallback`
 	 * notice names (z8r3fdh274). */
@@ -1197,6 +1209,14 @@ export function BookDeliveryCard({
 									</button>
 								))}
 							</div>
+							{/* Why this vehicle (25 Oct 2026): Lalamove prices by vehicle
+							    and never refuses an overweight trip, so the default is
+							    the one that can carry THIS order — and the seller is told
+							    when that isn't their setting, or when nothing fits. */}
+							<VehicleAdviceLine
+								advice={quote.vehicleAdvice}
+								quotedVehicle={quote.vehicleType}
+							/>
 							<div className="flex items-center justify-between">
 								<span className="text-muted-foreground">
 									Rider ({quote.vehicleType === "CAR" ? "Car" : "Motorcycle"})
@@ -1384,5 +1404,52 @@ function JobStatusPill({
 		>
 			{jobStatusLabel(status, { provider: "lalamove", collection })}
 		</span>
+	);
+}
+
+/**
+ * The dispatch card's vehicle reason (25 Oct 2026). Silent when the store's
+ * setting carries the order. Muted when a bigger vehicle was picked for it;
+ * amber when the seller has switched back to one the order is too heavy
+ * for, or when no rider vehicle can carry it at all.
+ */
+export function VehicleAdviceLine({
+	advice,
+	quotedVehicle,
+}: {
+	advice: QuoteState["vehicleAdvice"];
+	quotedVehicle: string;
+}) {
+	if (!advice) return null;
+	const amber =
+		"rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200";
+	if (advice.kind === "too_heavy") {
+		return (
+			<p className={amber}>
+				This order weighs {formatKg(advice.cartKg)} — over a car&apos;s{" "}
+				{formatKg(advice.maxKg)}, so no rider vehicle here can carry it. Book a
+				van in the Lalamove app, or arrange your own courier and add the
+				tracking number below.
+			</p>
+		);
+	}
+	const fromLimit =
+		advice.fromLoadKg !== undefined
+			? ` ${formatKg(advice.fromLoadKg)}`
+			: " limit";
+	const fromWord = vehicleWord(advice.from).toLowerCase();
+	if (quotedVehicle === advice.from) {
+		return (
+			<p className={amber}>
+				This order weighs {formatKg(advice.cartKg)} — over a {fromWord}&apos;s
+				{fromLimit}. The rider may refuse it at pickup.
+			</p>
+		);
+	}
+	return (
+		<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+			{vehicleWord(advice.to)} picked — this order weighs{" "}
+			{formatKg(advice.cartKg)}, over a {fromWord}&apos;s{fromLimit}.
+		</p>
 	);
 }

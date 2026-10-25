@@ -413,3 +413,54 @@ describe("sameQuotedLines — a quote is bound to the cart it priced", () => {
 		).toBe(true);
 	});
 })
+
+describe("too heavy for a rider (25 Oct 2026)", () => {
+	test("a courier that priced it wins — the rider's refusal costs the buyer nothing", () => {
+		expect(
+			chooseLiveQuote({
+				quotes: [
+					{ provider: "lalamove", status: "too_heavy" },
+					{ provider: "delyva", status: "quoted", fee: 5377, currency: "MYR" },
+				],
+				storeCurrency: "MYR",
+				cold: false,
+			}),
+		).toMatchObject({ kind: "quoted", provider: "delyva", fee: 5377 });
+	});
+
+	test("alone, it is the reason the buyer sees", () => {
+		expect(
+			chooseLiveQuote({
+				quotes: [{ provider: "lalamove", status: "too_heavy" }],
+				storeCurrency: "MYR",
+				cold: false,
+			}),
+		).toEqual({ kind: "unquotable", reason: "too_heavy" });
+	});
+
+	test("beside a coverage refusal it still wins — the address may be fine, the ORDER is too big", () => {
+		expect(
+			chooseLiveQuote({
+				quotes: [
+					{ provider: "lalamove", status: "too_heavy" },
+					{ provider: "delyva", status: "out_of_range" },
+				],
+				storeCurrency: "MYR",
+				cold: false,
+			}),
+		).toEqual({ kind: "unquotable", reason: "too_heavy" });
+	});
+
+	test("a cold cart's missing cold courier still outranks it — riders never carry cold", () => {
+		expect(
+			chooseLiveQuote({
+				quotes: [
+					{ provider: "lalamove", status: "too_heavy" },
+					{ provider: "delyva", status: "no_cold_service" },
+				],
+				storeCurrency: "MYR",
+				cold: true,
+			}),
+		).toEqual({ kind: "unquotable", reason: "no_cold_service" });
+	});
+});

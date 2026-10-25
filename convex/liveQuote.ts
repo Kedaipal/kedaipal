@@ -23,7 +23,8 @@ import {
 	type DelyvaCheckoutContext,
 	fetchDelyvaCheckoutQuote,
 } from "./delyva";
-import { fetchLalamoveQuote } from "./lalamove";
+import { fetchLalamoveQuote, vehicleLoadsFor } from "./lalamove";
+import { resolveLalamoveCredentials } from "./lib/lalamove";
 import type { CartWeightItem, DeliveryConfig } from "./lib/delivery";
 import {
 	type DelyvaItemType,
@@ -193,6 +194,7 @@ export const quoteForCheckout = action({
 		| { status: "quoted"; quoteId: Id<"deliveryQuotes">; fee: number }
 		| { status: "out_of_range" }
 		| { status: "no_cold_service" }
+		| { status: "too_heavy" }
 		| { status: "store_unavailable" }
 		| { status: "unavailable" }
 	> => {
@@ -216,6 +218,22 @@ export const quoteForCheckout = action({
 					retailerId: args.retailerId,
 				})
 			: null;
+		// The rider is quoted the vehicle that can carry the cart (25 Oct
+		// 2026): Lalamove's own per-market loads, cached; unknown = the seller's
+		// vehicle, as before. Read before the parallel fetch — usually a cache
+		// hit, an inline `/v3/cities` call only the first time a market quotes.
+		const lalamoveCredentials = lalamoveContext
+			? resolveLalamoveCredentials(lalamoveContext.booking, lalamoveContext.country)
+			: null;
+		const vehicleLoads =
+			lalamoveContext && lalamoveCredentials
+				? await vehicleLoadsFor(ctx, {
+						retailerId: args.retailerId,
+						credentials: lalamoveCredentials,
+						env: lalamoveContext.env,
+						inlineFetch: true,
+					})
+				: null;
 
 		// Both providers at once: two sequential round-trips to third parties
 		// would show up as checkout latency the buyer feels.
@@ -229,6 +247,8 @@ export const quoteForCheckout = action({
 						address: args.address,
 						fulfilmentDate: args.fulfilmentDate,
 						fulfilmentTimeMinutes: args.fulfilmentTimeMinutes,
+						cartKg: context.cartWeightKg,
+						loads: vehicleLoads,
 					})
 				: null,
 			context.delyva && args.postcode

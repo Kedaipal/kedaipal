@@ -1171,6 +1171,10 @@ export function CheckoutPage({
 			// "too far", which would send the buyer editing a good address.
 			case "no_cold_service":
 				return { kind: "blocked", reason: "no_cold_service" };
+			// Too heavy for any rider vehicle and no courier priced it — the
+			// order is the problem, never the address.
+			case "too_heavy":
+				return { kind: "blocked", reason: "too_heavy" };
 			case "unavailable":
 				return { kind: "blocked", reason: "unquotable" };
 			default:
@@ -1203,7 +1207,8 @@ export function CheckoutPage({
 			quoteForDelivery.reason === "unquotable" ||
 			quoteForDelivery.reason === "out_of_range" ||
 			quoteForDelivery.reason === "store_unavailable" ||
-			quoteForDelivery.reason === "no_cold_service");
+			quoteForDelivery.reason === "no_cold_service" ||
+			quoteForDelivery.reason === "too_heavy");
 	const allowManualAddressEntry =
 		rawQuote !== undefined && !(!hasCoords && pinRequiredBlock);
 
@@ -1344,6 +1349,15 @@ export function CheckoutPage({
 			case "missing_weights":
 			case "custom_item":
 				return `Your ${feeNounShort} can't be worked out for this order — see your order summary`;
+			// The address is fine for these three — the default below used to
+			// say "We can't deliver to this address" for all of them, under a
+			// summary that said otherwise (found driving a 41 kg cart).
+			case "too_heavy":
+				return "This order is too heavy for a rider — see your order summary";
+			case "no_cold_service":
+				return "Chilled or frozen delivery isn't available right now — see your order summary";
+			case "store_unavailable":
+				return `${collectsFromCustomer ? "Collection" : "Delivery"} pricing isn't working for this store — see your order summary`;
 			default:
 				return collectsFromCustomer
 					? "We can't collect from this address — see your order summary"
@@ -1634,6 +1648,19 @@ export function CheckoutPage({
 												? " Pickup is still available, or message"
 												: " Message"
 										} ${storeName} to arrange delivery.`;
+									case "too_heavy":
+										// Heavier than any rider vehicle carries, and no courier
+										// bid. The address is fine — say what IS the problem and
+										// the two ways through it.
+										return `This order is too heavy for a ${
+											collectsFromCustomer ? "collection" : "delivery"
+										} rider.${
+											selfCollectAvailable
+												? " Choose pickup, or message"
+												: " Message"
+										} ${storeName} to arrange ${
+											collectsFromCustomer ? "collection" : "delivery"
+										}.`;
 									case "store_unavailable":
 										// Seller-side breakage — not the buyer's fault, not
 										// fixable by retrying. Give them the two real ways out.

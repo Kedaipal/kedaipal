@@ -939,6 +939,68 @@ Rejected: pointer-move scroll-vs-tap discrimination (it would guard a gesture
 that can't happen, per the scroll-lock above) and hold-to-confirm (friction on
 every seller's happy path for an accident the arm delay already covers).
 
+## Heavy carts — the vehicle that can carry it (25 Oct 2026)
+
+**The gap.** Lalamove prices by VEHICLE and distance, never by weight. The
+quotation's optional `item.weight` exists only in Thailand, Vietnam and Hong
+Kong, and Lalamove has no "overweight" refusal — so a store whose rider
+setting is Motorcycle was quoted a motorcycle for a 25 kg cart, a trip the
+rider can't make. The seller found out at pickup and absorbed the car's
+price when they rebooked. Found auditing PR #416's weight units.
+
+**The limits are Lalamove's own.** `GET /v3/cities` (market-scoped) lists
+every service with `load: { value, unit }`. `parseVehicleLoads`
+(`convex/lib/lalamoveVehicle.ts`) keeps the SMALLEST load per vehicle across
+the market's cities — the store's city isn't known in Lalamove's terms, and
+quoting a car for a cart the motorcycle could take costs the buyer a little
+while the reverse strands the order. Measured on the MY sandbox, 25 Oct
+2026: MOTORCYCLE 10 kg, CAR 40 kg (also 4X4 250, VAN 500, LARGEVAN 750,
+TRUCK330 1000, TRUCK550 2500). Third-party guides disagreed (motorcycle 8–10
+kg, car 20–40 kg), which is why nothing is hardcoded.
+
+**The cache.** `lalamoveVehicleLoads` — one row per `(market, env)`, a list
+of `{ key, loadKg }` pairs. `vehicleLoadsFor` reads it; a row older than a
+day is still used and refreshed in the background (`refreshVehicleLoads`,
+scheduled). With no row at all the CHECKOUT fetches inline (the first heavy
+cart in a market is still priced right); DISPATCH only schedules the fetch,
+so a booking never grows an extra network call. Probe it:
+
+```
+npx convex run lalamove:refreshVehicleLoads '{"retailerId":"…"}'
+```
+
+**The rule** — `chooseRiderVehicle`: start at the seller's vehicle, only ever
+go UP the ladder we surface (Motorcycle → Car), take the first whose load
+carries the cart. Over the car's load → `too_heavy`: no rider bids. Fails
+OPEN on anything unknown (no cart weight, no loads, a vehicle with no
+published load) — the rule stops a motorcycle being quoted 25 kg, it never
+refuses an order on missing data. An unweighed cart is priced at the
+one-kilo floor (`liveQuoteWeightKg`), so it never escalates.
+
+- **Checkout** (`liveQuote.quoteForCheckout` → `fetchLalamoveQuote`): the
+  cart's weight picks the vehicle; the quote row and the order's snapshot
+  record the vehicle actually priced. `too_heavy` joins the provider-neutral
+  refusals; if a courier priced the cart it wins, and alone it reaches the
+  buyer as "This order is too heavy for a delivery rider — choose pickup, or
+  message the store" (storefront, claim and address-edit surfaces). It
+  outranks a coverage refusal: the address may be fine, the ORDER is too big.
+  The legacy single-provider action has no cart and is unchanged.
+- **Dispatch** (`prepareBooking`): defaults to the same vehicle from the
+  order's weight, and returns `vehicleAdvice` — the card says "Car picked —
+  this order weighs 25 kg, over a motorcycle's 10 kg", warns amber if the
+  seller switches back ("The rider may refuse it at pickup"), and over a
+  car's load says no rider vehicle here fits (book a van in the Lalamove app,
+  or arrange a courier). The seller's switch still wins.
+- **Settings**: "Lalamove's limits — good to know" on the live-pricing card
+  states the rule with this market's numbers (`lalamove.vehicleLoads`), or
+  the rule alone before the market has been quoted.
+
+**Rejected:** sending `item.weight` (not offered in MY/SG); hardcoding the
+limits (they disagreed and Lalamove changes them); refusing every cart over
+the SELLER's vehicle (a car exists and the dispatch card already lets the
+seller book one — refusing would lose the sale); escalating past Car to
+vans (not a vehicle the seller can see or book from the order).
+
 ## Markets — how Singapore gets riders (z8r3fdch3r)
 
 **Lalamove serves Singapore.** Its REST API is segmented by a `Market` header

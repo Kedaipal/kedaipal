@@ -2683,6 +2683,21 @@ export default defineSchema({
 	// event to a store, whose own secret then verifies it. Own table rather
 	// than fields on `retailers`: a balance moves on every booking, and a
 	// retailer patch re-runs every open storefront tab.
+	// Lalamove's carrying limit per vehicle, per market and environment, read
+	// from `GET /v3/cities` (25 Oct 2026, `convex/lib/lalamoveVehicle.ts`).
+	// Lalamove prices by vehicle and never refuses an overweight trip, so the
+	// rider quote picks the smallest vehicle that can carry the cart from
+	// these. A market-level catalogue fact (no seller data), refreshed in the
+	// background once a day; `loads` is a list of pairs, never an object keyed
+	// by the vehicle name. Own table, not a retailer field: every store in a
+	// market shares one row.
+	lalamoveVehicleLoads: defineTable({
+		market: v.union(v.literal("MY"), v.literal("SG")),
+		env: v.union(v.literal("sandbox"), v.literal("production")),
+		loads: v.array(v.object({ key: v.string(), loadKg: v.number() })),
+		fetchedAt: v.number(),
+	}).index("by_market_env", ["market", "env"]),
+
 	courierWallets: defineTable({
 		retailerId: v.id("retailers"),
 		provider: v.literal("lalamove"),
