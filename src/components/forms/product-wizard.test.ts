@@ -1197,3 +1197,70 @@ describe("the Promotion block in the wizard (z8r3fdcw72)", () => {
 		expect(built.promo?.payWithinMinutes).toBeUndefined();
 	});
 });
+
+describe("the Price step asks for a parcel weight where pricing depends on it (23 Oct 2026)", () => {
+	it("maps a required weight to the row's own weight field on step 3", () => {
+		const issues = wizardStepIssues(browniesState(), 3, {
+			weightRequired: "courier",
+		});
+		expect(issues.map((i) => i.field).sort()).toEqual([
+			"weight:Large",
+			"weight:Medium",
+			"weight:Small",
+		]);
+		expect(issues[0].message).toContain("quoted as a 1 kg parcel");
+	});
+
+	it("a weighed grid passes the step", () => {
+		const s = browniesState();
+		const weighed: WizardState = {
+			...s,
+			editor: {
+				...s.editor,
+				rows: s.editor.rows.map((r) => ({ ...r, parcelWeightG: "300" })),
+			},
+		};
+		expect(wizardStepIssues(weighed, 3, { weightRequired: "courier" })).toEqual(
+			[],
+		);
+	});
+
+	it("an event RSVP is met at the venue, so it is never asked for one either", () => {
+		const s = browniesState();
+		const event: WizardState = {
+			...s,
+			kindCard: "event",
+			event: { ...s.event, on: true, date: "2026-12-01" },
+		};
+		expect(
+			wizardStepIssues(event, 3, { weightRequired: "courier" }).filter((i) =>
+				i.field.startsWith("weight:"),
+			),
+		).toEqual([]);
+	});
+
+	it("a service has no parcel, so the same store never asks for one", () => {
+		const service: WizardState = { ...browniesState(), kindCard: "service" };
+		expect(
+			wizardStepIssues(service, 3, { weightRequired: "courier" }).filter((i) =>
+				i.field.startsWith("weight:"),
+			),
+		).toEqual([]);
+	});
+
+	it("a store that doesn't price by weight never asks", () => {
+		expect(
+			wizardStepIssues(browniesState(), 3).filter((i) =>
+				i.field.startsWith("weight:"),
+			),
+		).toEqual([]);
+	});
+
+	it("a restored draft on such a store opens at the Price step until weighed", () => {
+		// Every other step of the brownies draft is answered, so the first
+		// unanswered one is the weight.
+		expect(
+			wizardInitialStep(browniesState(), { weightRequired: "rate_card" }),
+		).toBe(3);
+	});
+});

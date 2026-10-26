@@ -198,6 +198,14 @@ export function DelyvaCard({
 					"This is a Delyva DEMO account — bookings are simulated and no courier is dispatched.",
 				);
 			}
+			if (result.bookingHeldForWeights) {
+				// The key is stored; booking waited because this live store would
+				// start pricing by weight with unweighed products. The card's
+				// "Booking is off" line below carries the same reason and link.
+				toast.warning(
+					`Booking stays off until ${result.bookingHeldForWeights} product${result.bookingHeldForWeights === 1 ? " has" : "s have"} a parcel weight — see the note on this card.`,
+				);
+			}
 			if (!result.webhooksSubscribed) {
 				// Bookings still work; only automatic status updates are missing, so
 				// this is a warning with a retry, never a failed connect.
@@ -571,8 +579,22 @@ export function DelyvaCard({
 						<p className="text-xs text-muted-foreground">
 							{settings.enabled
 								? "Booking is on — you'll see Delyva on your delivery orders."
-								: "Booking is currently off."}{" "}
-							Manage it under{" "}
+								: settings.bookingHeldForWeights
+									? `Booking is off until ${settings.bookingHeldForWeights} product${settings.bookingHeldForWeights === 1 ? " has" : "s have"} a parcel weight — couriers price by weight.`
+									: "Booking is currently off."}{" "}
+							{settings.bookingHeldForWeights ? (
+								<>
+									<Link
+										to="/app/products/weights"
+										className="font-medium text-accent-emphasis hover:underline"
+									>
+										Set parcel weights
+									</Link>
+									, then switch it on under{" "}
+								</>
+							) : (
+								<>Manage it under </>
+							)}
 							<Link
 								to="/app/settings/delivery-pricing"
 								className="font-medium text-accent-emphasis hover:underline"

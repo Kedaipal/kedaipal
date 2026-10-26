@@ -187,6 +187,10 @@ export const saveCheckoutQuote = internalMutation({
 		),
 		latitude: v.number(),
 		longitude: v.number(),
+		// The one-kilo floor stamp (`liveQuoteWeightFacts`) — Delyva-won
+		// provider-aware quotes only; a rider quote never carries it.
+		weightFloored: v.optional(v.boolean()),
+		unweighedLines: v.optional(v.number()),
 	},
 	handler: async (ctx, args): Promise<Id<"deliveryQuotes">> => {
 		return await ctx.db.insert("deliveryQuotes", {

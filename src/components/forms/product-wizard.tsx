@@ -45,6 +45,10 @@ import {
 	overCapMessage,
 } from "../../../convex/lib/variant";
 import {
+	WEIGHT_REQUIRED_COPY,
+	type WeightPricing,
+} from "../../../convex/lib/weightPricing";
+import {
 	bookingPriceSuffix,
 	bookingSpanCounted,
 	bookingSpanNoun,
@@ -57,6 +61,7 @@ import {
 	formatDraftPriceRange,
 	normalizePriceInput,
 	parsePriceInput,
+	sanitizeIntInput,
 } from "../../lib/format";
 import type { KindCard } from "../../lib/kind-card";
 import { NOTE_LINK_HINT } from "../../lib/linkify";
@@ -504,6 +509,10 @@ export function wizardStepIssues(
 		 * symbol ("S$ 10,000"). Only the on-screen callers need it — a caller
 		 * that just counts issues can leave it off. */
 		currency?: string;
+		/** The store prices delivery by weight (23 Oct 2026): step 3 asks for
+		 * a parcel weight on every buyable choice of a physical product, with
+		 * the full form's own sentence (`buildSubmitVariants`). */
+		weightRequired?: WeightPricing | null;
 	} = {},
 ): WizardIssue[] {
 	const issues: WizardIssue[] = [];
@@ -708,12 +717,27 @@ export function wizardStepIssues(
 		}
 	}
 	if (step === 3 && !madeToOrder && gridReady) {
-		const built = buildSubmitVariants(rows, null);
+		const built = buildSubmitVariants(rows, null, {
+			// Only goods that SHIP are weighed — a service or booking has no
+			// parcel, and an event RSVP is met at the venue.
+			weightRequired:
+				wizardKind(state) === "physical" && !state.event.on
+					? (opts.weightRequired ?? null)
+					: null,
+		});
 		if ("issues" in built) {
 			for (const issue of built.issues) {
 				if (issue.where === "row" && issue.field === "price") {
 					issues.push({
 						field: `price:${rowKey(rows[issue.index])}`,
+						message: issue.message,
+					});
+				}
+				// A required (or malformed) parcel weight lives on this step too,
+				// under the price it travels with.
+				if (issue.where === "row" && issue.field === "weight") {
+					issues.push({
+						field: `weight:${rowKey(rows[issue.index])}`,
 						message: issue.message,
 					});
 				}
@@ -1068,7 +1092,11 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
  */
 export function wizardInitialStep(
 	state: WizardState,
-	opts: { requireEventVenue?: boolean; noEventVenue?: boolean } = {},
+	opts: {
+		requireEventVenue?: boolean;
+		noEventVenue?: boolean;
+		weightRequired?: WeightPricing | null;
+	} = {},
 ): number {
 	const steps = wizardSteps(
 		effectiveShape(state),
@@ -1200,9 +1228,16 @@ export function ProductWizard({
 	storeSchedule,
 	saveLock,
 	onUnsavedChange,
+	weightPricing = null,
 }: {
 	/** Owning retailer — feeds the review step's category picker. */
 	retailerId: Id<"retailers">;
+	/** WHY the store prices delivery by weight (`retailers.weightPricing`,
+	 * 23 Oct 2026) — the Price step then asks for a parcel weight on every
+	 * choice of a physical product, required, with the reason's own sentence.
+	 * Null/unset = not asked here (it stays optional inside the full form's
+	 * Advanced). */
+	weightPricing?: WeightPricing | null;
 	/** Set while this seller can't create products right now (view-only, out
 	 * of credits, or a teammate with view on products) — see ProductForm's
 	 * `saveLock`. Every step still works, so the draft is ready to publish the
@@ -1246,7 +1281,9 @@ export function ProductWizard({
 	storeSchedule?: StoreSchedule;
 }) {
 	const [step, setStep] = useState(() =>
-		initialState ? wizardInitialStep(initialState) : 0,
+		initialState
+			? wizardInitialStep(initialState, { weightRequired: weightPricing })
+			: 0,
 	);
 	// Derived once, at mount — a lazy initialiser, not an effect, so the first
 	// paint already shows the linked card (or the refusal) with no flicker.
@@ -1795,6 +1832,7 @@ export function ProductWizard({
 			requireEventVenue,
 			noEventVenue,
 			currency,
+			weightRequired: weightPricing,
 		});
 		if (found.length > 0) {
 			setIssues(found);
@@ -1825,6 +1863,16 @@ export function ProductWizard({
 		patchEditor({ rows: rows.map((r) => ({ ...r, price: v })) });
 	}
 
+	// Parcel weight is asked on the Price step only where pricing depends on
+	// it, and only of goods — a service or booking has no parcel.
+	const weightRequired: WeightPricing | null =
+		kind === "physical" && !state.event.on ? weightPricing : null;
+	function fillAllWeights(v: string) {
+		patchEditor({
+			rows: rows.map((r) => ({ ...r, parcelWeightG: sanitizeIntInput(v) })),
+		});
+	}
+
 	async function publish() {
 		// Belt-and-braces: re-validate every step before submitting (review-step
 		// edits jump around, so a hole could otherwise slip through). Walks the
@@ -1834,6 +1882,7 @@ export function ProductWizard({
 				requireEventVenue,
 				noEventVenue,
 				currency,
+				weightRequired: weightPricing,
 			});
 			if (found.length > 0) {
 				setIssues(found);
@@ -2705,19 +2754,47 @@ export function ProductWizard({
 								</label>
 							</>
 						) : null}
+						{/* Parcel weight, asked HERE where pricing depends on it (23 Oct
+						    2026): on a store whose couriers or rate card price by
+						    weight, a product published without one is quoted at the
+						    one-kilo floor or can't be priced at all — so the wizard
+						    says why once, then asks beside every price. */}
+						{weightRequired && !madeToOrder ? (
+							<p className="-mt-2 text-sm text-muted-foreground">
+								<span className="font-medium text-foreground">
+									{WEIGHT_REQUIRED_COPY[weightRequired].cause}
+								</span>{" "}
+								— so each {showAxes ? "choice" : "item"} needs its parcel weight
+								in grams.
+							</p>
+						) : null}
 						{!madeToOrder && rows.length > 1 ? (
-							<label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-								Same price for all
-								<Input
-									inputMode="decimal"
-									placeholder="0.00"
-									className="h-9 w-24"
-									onChange={(e) => fillAllPrices(e.target.value)}
-									onBlur={(e) =>
-										fillAllPrices(normalizePriceInput(e.target.value))
-									}
-								/>
-							</label>
+							<div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+								<label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+									Same price for all
+									<Input
+										inputMode="decimal"
+										placeholder="0.00"
+										className="h-9 w-24"
+										onChange={(e) => fillAllPrices(e.target.value)}
+										onBlur={(e) =>
+											fillAllPrices(normalizePriceInput(e.target.value))
+										}
+									/>
+								</label>
+								{weightRequired ? (
+									<label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+										Same weight for all
+										<Input
+											inputMode="numeric"
+											placeholder="500"
+											className="h-9 w-24"
+											onChange={(e) => fillAllWeights(e.target.value)}
+										/>
+										g
+									</label>
+								) : null}
+							</div>
 						) : null}
 						<div className="flex flex-col gap-3">
 							{rows.map((row, i) => {
@@ -2749,6 +2826,39 @@ export function ProductWizard({
 												invalid={!!issueFor(`price:${key}`)}
 											/>
 										</div>
+										{/* The price's refusal sits under the price, before the weight
+										    row — not after it, where it would read as the weight's. */}
+										<IssueText message={issueFor(`price:${key}`)} />
+										{weightRequired && !madeToOrder ? (
+											<div className="flex items-center justify-end gap-3">
+												<label
+													htmlFor={`wizard-weight-${i}`}
+													className="text-xs text-muted-foreground"
+												>
+													Parcel weight
+												</label>
+												<Input
+													id={`wizard-weight-${i}`}
+													variant="field"
+													inputMode="numeric"
+													placeholder="500"
+													value={row.parcelWeightG}
+													onChange={(e) =>
+														setRow(i, {
+															parcelWeightG: sanitizeIntInput(e.target.value),
+														})
+													}
+													isError={!!issueFor(`weight:${key}`)}
+													aria-required={row.active ? true : undefined}
+													aria-label={`Parcel weight in grams for ${key || "this item"}`}
+													className="w-28 text-right"
+												/>
+												<span className="w-4 text-sm text-muted-foreground">
+													g
+												</span>
+											</div>
+										) : null}
+										<IssueText message={issueFor(`weight:${key}`)} />
 										{showRowDetails ? (
 											<div className="flex flex-wrap items-center gap-3 rounded-lg bg-muted/40 p-2">
 												<VariantImageCell
@@ -2805,7 +2915,6 @@ export function ProductWizard({
 												<IssueText message={issueFor(`sku:${key}`)} />
 											</div>
 										) : null}
-										<IssueText message={issueFor(`price:${key}`)} />
 									</div>
 								);
 							})}

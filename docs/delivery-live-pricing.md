@@ -97,10 +97,99 @@ on the seller, the pain this product exists to remove. The seller is told in
 three places: the live-pricing card's readiness list (now shown whenever
 Delyva is armed, naming the products and the one-kilo rule), the "How live
 pricing works" bullet, and the dispatch dialog, which already asks for the
-packed weight before any booking. **Follow-up (its own ticket):** make the
-weight *required where pricing depends on it* — on the product form for a
-live + Delyva store, with a bulk weight fill — so the floor is a backstop
-for custom lines and legacy rows, not the normal path.
+packed weight before any booking. **The floor is the backstop, not the
+path** — the section below makes the weight required wherever pricing
+depends on it.
+
+## Parcel weight is required where pricing depends on it (23 Oct 2026)
+
+**The rule has one author:** `weightPricingOf(retailer)` in
+[`convex/lib/weightPricing.ts`](../convex/lib/weightPricing.ts) answers *why*
+a store's delivery charge depends on parcel weight — `"rate_card"` (the
+weight-zone mode) or `"courier"` (live pricing with Delyva armed, the
+Mandos shape) — or `null`. Riders price by distance, so a live store with
+Lalamove alone does not price by weight. "Armed" is `delyvaBookingArmed`
+(credentials + the Courier-booking toggle + country), deliberately a hair
+wider than the bidding condition, which also needs a pickup address: a
+seller half-way through Delyva setup is asked for weights one step early,
+never one step late. The owner read exposes it as `retailers.weightPricing`
+(one enum, never the keys), and every surface below reads that:
+
+- **The product form and the wizard require it.** On such a store the
+  parcel-weight inputs are promoted out of Advanced (as the rate card already
+  did), marked *(required)*, and `buildSubmitVariants` refuses an active,
+  non-custom row with a blank or `0` weight with an issue addressed to that
+  row's input — the wizard's Price step asks beside every price (with a
+  "Same weight for all" fill) and maps the same issue to `weight:<row>`. The
+  copy is keyed by the reason (`WEIGHT_REQUIRED_COPY`): the rate-card store
+  is told the item *can't be priced*, the courier store that it is *quoted as
+  a 1 kg parcel until weighed* — never the other way round. Custom lines and
+  off-sale choices are exempt (unknowable, unorderable); services and
+  bookings have no parcel, and an event RSVP is met at the venue (judged by
+  the fulfilment moment, never by kind). The server stays permissive here — the floor and
+  the rate card's "arrange" rule are the backstop for imports, the MCP server
+  and legacy rows.
+- **The bulk fill fixes an existing catalogue in minutes.** Products →
+  Parcel weights (`/app/products/weights`,
+  [`parcel-weights-fill.tsx`](../src/components/products/parcel-weights-fill.tsx))
+  lists every unweighed buyable choice product by product with a box each, a
+  "Fill every empty box" control (it never overwrites a typed weight) and a
+  per-product fill, and saves through `products.setParcelWeights` — bounded
+  to `PARCEL_WEIGHTS_BATCH_MAX` rows a call (the page batches), every row
+  checked against the store (a foreign id refuses the whole batch), a list of
+  ids and grams rather than anything keyed by a name. The list is
+  `products.unweighedChoices`, the same walk (`collectUnweighedChoices`) the
+  readiness notice counts with, so the two can never disagree about a row.
+  It is reached from the readiness notice (one shared `MissingWeightsNotice`
+  on the Settings pricing card AND the Products list), the floor note on an
+  order, the arming gates — and permanently from the Products header's bulk
+  menu ("Parcel weights", beside Import/Export), because the notice vanishes
+  once every product is weighed and the page must stay reachable (Zaki,
+  /test-code round).
+- **Arming weight pricing waits for the catalogue.** Switching Delyva's
+  Courier-booking toggle on in live mode, moving the delivery charge onto the
+  rate card, or onto live pricing while Delyva is armed, is **refused**
+  server-side (`assertCatalogueWeighed`) while any buyable choice is
+  unweighed — "N products have no parcel weight — couriers price every order
+  by weight. Set them under Products → Parcel weights first." — and the
+  controls say so *before* the tap: the toggle greys out with the count and
+  the link (`delyva.getSettings.bookingHeldForWeights`), the pricing card's
+  Save greys out with the same line. Connecting Delyva on a live store stores
+  the key but holds booking OFF (`bookingHeldForWeights` on the connect
+  result; the Integrations card says so) — unless booking was already ON:
+  **Replace key** on an armed store keeps it armed, because a rotation is
+  maintenance, not arming, and turning booking off would silently stop
+  Delyva quoting at checkout (PR #416 review). **Only the switch is gated** — a
+  store already pricing by weight keeps working on the floor / the "arrange"
+  rule and keeps saving its other settings, so a legacy store (Mandos) never
+  loses a buyer; the notice and the fill are how it rectifies itself.
+  **Rejected:** warn-only — a warning beside a working switch is the state
+  Mandos was in; and gating admin act-as differently — the gate protects the
+  seller's money, and an admin pre-building a store has no products yet.
+- **The order says when the courier priced without a weight.**
+  `liveQuoteWeightFacts` reports `floored` and `unweighedLines` (non-custom
+  lines a product weight would have priced); `weightGapStamp` puts them on a
+  Delyva-won quote's `deliveryQuotes` row (`weightFloored`, `unweighedLines`,
+  widen-only) and `orders.create` carries them onto `deliverySnapshot`.
+  `unweighedLines` is stamped whenever there are any, **not only when the
+  floor fired** (PR #416 review): a cart with 1.5 kg of weighed items and
+  five unweighed tees is quoted at 1.5 kg, so the tees under-collect exactly
+  as a floored cart does. The seller's order page shows the line under the
+  delivery fee, and the Delyva dispatch card repeats it above the weight box,
+  one author in
+  [`weight-gap-note.tsx`](../src/components/order/weight-gap-note.tsx):
+  - floored: "Priced at the 1 kg floor at checkout — N items had no weight
+    then." (or "a custom item has no fixed weight", with no link);
+  - not floored: "N items had no weight at checkout and were priced without
+    it."
+
+  Both end "A heavier parcel costs you the difference when you book." and
+  link the bulk fill when there's a weight to set. A rider-won quote never
+  carries the stamp (riders don't weigh). Buyer surfaces are unchanged: the
+  buyer paid what they were quoted and owes nothing more. **Known limit:** a
+  custom line in a cart already over a kilo is priced at nothing and isn't
+  flagged — its weight is unknowable by design, and flagging it would need
+  a new snapshot field.
 
 ## Country posture
 
@@ -180,6 +269,36 @@ coordinate check. Legacy rows carry no lines (rider prices ignore the cart)
 and skip it.
 
 ## Checkout
+
+**A cart edit re-quotes.** A provider-aware quote is bound to the cart it
+priced (`sameQuotedLines`), so `useLiveDeliveryQuote` re-fires when the
+cart's line multiset changes — a quantity bump changes the weight Delyva
+bids on, and without a re-quote the buyer saw a stale fee and then a refusal
+at order create. Cart edits are debounced at 900 ms (a pin pick is 400 ms)
+so tapping + three times spends one quote from the store's `lalamoveQuote`
+bucket (10/min, burst 4). A rider-only store never re-fires for the cart.
+The checkout also holds the store's "live" answer across the edit
+(`heldDeliveryAnswer` with `placeholderData: keepPreviousData`): the
+reactive `delivery.quote` takes the cart as an argument, so each tap used to
+blank it for a beat — the delivery line vanished, the total dropped and the
+live quote reset. A held FEE (flat, distance) is still dropped, so a fee for
+an old address never shows. Measured on the dev sandbox (Alor Setar, Delyva
+only): 1 kg RM 4.75, 10 kg RM 9.50, 25 kg RM 53.77 on DHL once the cart
+outgrew Instant Delivery — and a burst of 17 taps spent one quote.
+Weight units: the cart is summed in grams and sent to Delyva as
+`weight: { unit: "kg", value }` (`convex/lib/delyva.ts`, `roundKg`); Lalamove
+is never sent a weight — riders price by vehicle and distance.
+
+**The address helper names who prices it.** `delivery.quote`'s `live` result
+carries `riders` / `couriers` — which kinds of provider can bid
+(`lalamoveBookingArmed`, `delyvaBidsAtCheckout` in
+`convex/lib/courierBooking.ts`, the latter being exactly the condition
+`getLiveQuoteContext` arms Delyva on). `liveQuoteAddressHint`
+(`src/lib/live-quote-copy.ts`, one author for the storefront and the claim
+checkout) then says "by rider", "by courier" or "by rider or courier", and
+drops "addresses outside the rider's coverage can't be delivered" the moment
+a courier can bid — it had been saying that on a Delyva store that priced an
+Alor Setar address no rider could reach (`/test-code` on PR #415).
 
 **The store's mode decides which action prices it**, handed to the client on
 the reactive `delivery.quote` result as `providerAware` — never inferred.

@@ -300,6 +300,10 @@ export type DeliveryQuote =
 			quotationId?: string;
 			vehicleType?: string;
 			quotedAt?: number;
+			/** The courier priced the one-kilo floor, not the cart's weight, and
+			 * how many lines had no product weight (`liveQuoteWeightFacts`). */
+			weightFloored?: boolean;
+			unweighedLines?: number;
 	  }
 	| { kind: "pending"; reason: DeliveryQuoteReason }
 	| { kind: "blocked"; reason: DeliveryQuoteReason };
@@ -326,6 +330,9 @@ export type LiveProviderQuote = {
 		currency: string;
 	}>;
 	quotedAt: number;
+	/** Stamped on a Delyva-won quote priced at the one-kilo floor. */
+	weightFloored?: boolean;
+	unweighedLines?: number;
 };
 
 /** One cart line's weight facts (weight mode). `parcelWeightG` is the
@@ -465,6 +472,8 @@ export function resolveDeliveryQuote(args: {
 				quoteProvider: liveQuote.provider,
 				quoteServiceName: liveQuote.serviceName,
 				quotesConsidered: liveQuote.considered,
+				weightFloored: liveQuote.weightFloored,
+				unweighedLines: liveQuote.unweighedLines,
 			};
 		}
 		// No live quote → ALWAYS refuse (27 Jul, Zaki — `onUnquotable` ignored):

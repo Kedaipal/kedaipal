@@ -29,12 +29,14 @@ import {
 	type DelyvaItemType,
 	resolveDelyvaCredentials,
 } from "./lib/delyva";
+import { delyvaBidsAtCheckout } from "./lib/courierBooking";
 import {
 	cartItemType,
 	chooseLiveQuote,
 	isColdItemType,
-	liveQuoteWeightKg,
+	liveQuoteWeightFacts,
 	type ProviderQuote,
+	weightGapStamp,
 } from "./lib/liveQuote";
 import { rateLimiter } from "./lib/rateLimiter";
 
@@ -70,6 +72,11 @@ export const getLiveQuoteContext = internalQuery({
 		lalamoveArmed: boolean;
 		delyva: (DelyvaCheckoutContext & { armed: true }) | null;
 		cartWeightKg: number | null;
+		/** The cart was priced at the one-kilo floor, and how many of its
+		 * lines a product weight would have priced — stamped on the quote row
+		 * so the order can say so (`liveQuoteWeightFacts`). */
+		weightFloored: boolean;
+		unweighedLines: number;
 	} | null> => {
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) return null;
@@ -85,6 +92,8 @@ export const getLiveQuoteContext = internalQuery({
 		const itemType = cartItemType(delyvaConfig?.defaultItemType) as DelyvaItemType;
 
 		let cartWeightKg: number | null = null;
+		let weightFloored = false;
+		let unweighedLines = 0;
 		if (args.items?.length) {
 			const lines = args.items.slice(0, MAX_QUOTE_ITEMS);
 			const weightItems: CartWeightItem[] = await Promise.all(
@@ -102,7 +111,10 @@ export const getLiveQuoteContext = internalQuery({
 					};
 				}),
 			);
-			cartWeightKg = liveQuoteWeightKg(weightItems);
+			const facts = liveQuoteWeightFacts(weightItems);
+			cartWeightKg = facts?.kg ?? null;
+			weightFloored = facts?.floored ?? false;
+			unweighedLines = facts?.unweighedLines ?? 0;
 		}
 
 		return {
@@ -113,17 +125,19 @@ export const getLiveQuoteContext = internalQuery({
 			// pair the dispatch surfaces use, so checkout can't quote a provider
 			// dispatch would refuse.
 			lalamoveArmed: retailer.deliveryBooking?.enabled === true,
+			// Armed, country-allowed AND holding the pickup address an
+			// instantQuote needs (a 400 without it) — `delyvaBidsAtCheckout`,
+			// the same predicate the public `delivery.quote` tells the checkout
+			// copy with, so "by rider or courier" can never disagree with who
+			// actually bids. The customerId is part of "credentials".
 			delyva:
 				delyvaCredentials &&
-				delyvaConfig?.enabled === true &&
-				delyvaConfig.pickupAddress &&
-				// Stored optional, but an instantQuote without it is a 400 — an
-				// account half-way through connecting simply doesn't bid.
-				delyvaConfig.customerId !== undefined
+				delyvaConfig?.pickupAddress &&
+				delyvaBidsAtCheckout(retailer)
 					? {
 							armed: true,
 							credentials: delyvaCredentials,
-							customerId: delyvaConfig.customerId,
+							customerId: delyvaCredentials.customerId,
 							origin: {
 								address1: delyvaConfig.pickupAddress.address1,
 								address2: delyvaConfig.pickupAddress.address2,
@@ -136,6 +150,8 @@ export const getLiveQuoteContext = internalQuery({
 						}
 					: null,
 			cartWeightKg,
+			weightFloored,
+			unweighedLines,
 		};
 	},
 });
@@ -259,6 +275,13 @@ export const quoteForCheckout = action({
 				lines: args.items,
 				latitude: args.latitude,
 				longitude: args.longitude,
+				// What the courier priced without: the floor, and any line with
+				// no weight even when the floor didn't fire (`weightGapStamp`).
+				...weightGapStamp({
+					provider: outcome.provider,
+					weightFloored: context.weightFloored,
+					unweighedLines: context.unweighedLines,
+				}),
 			},
 		);
 		return { status: "quoted", quoteId, fee: outcome.fee };
