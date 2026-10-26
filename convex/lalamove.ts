@@ -86,8 +86,17 @@ async function callLalamove(
 	method: "GET" | "POST" | "DELETE" | "PATCH",
 	path: string,
 	body?: { data: Record<string, unknown> },
+	/** Abort the request after this long. Only the vehicle-loads read sets
+	 * it: it runs serially before a buyer's quote, so a hanging endpoint
+	 * must fail open in seconds. Every other call is unchanged. */
+	opts?: { timeoutMs?: number },
 ): Promise<unknown> {
 	const live = await decryptLalamoveCredentials(credentials);
+	const abort =
+		opts?.timeoutMs !== undefined ? new AbortController() : undefined;
+	const timer = abort
+		? setTimeout(() => abort.abort(), opts?.timeoutMs)
+		: undefined;
 	const bodyStr = body ? JSON.stringify(body) : "";
 	const headers = await buildLalamoveHeaders({
 		credentials: live,
@@ -97,14 +106,19 @@ async function callLalamove(
 		timestamp: Date.now(),
 		requestId: crypto.randomUUID(),
 	});
-	const res = await fetch(`${LALAMOVE_BASE_URL[live.env]}${path}`, {
-		method,
-		headers,
-		...(body ? { body: bodyStr } : {}),
-	});
-	const text = await res.text();
-	if (!res.ok) throw new LalamoveApiError(res.status, text);
-	return text ? JSON.parse(text) : {};
+	try {
+		const res = await fetch(`${LALAMOVE_BASE_URL[live.env]}${path}`, {
+			method,
+			headers,
+			...(body ? { body: bodyStr } : {}),
+			...(abort ? { signal: abort.signal } : {}),
+		});
+		const text = await res.text();
+		if (!res.ok) throw new LalamoveApiError(res.status, text);
+		return text ? JSON.parse(text) : {};
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -203,10 +217,67 @@ export const saveVehicleLoads = internalMutation({
 			.withIndex("by_market_env", (q) => q.eq("market", market).eq("env", env))
 			.unique();
 		const fetchedAt = Date.now();
-		if (row) await ctx.db.patch(row._id, { loads, fetchedAt });
+		if (row)
+			await ctx.db.patch(row._id, {
+				loads,
+				fetchedAt,
+				refreshScheduledAt: undefined,
+			});
 		else await ctx.db.insert("lalamoveVehicleLoads", { market, env, loads, fetchedAt });
 	},
 });
+
+/** How long one scheduled refresh of a stale row stands before another may
+ * be scheduled (PR #418 review). */
+export const VEHICLE_LOADS_REFRESH_GAP_MS = 5 * 60 * 1000;
+
+/**
+ * May this caller schedule a refresh of the market's loads? True at most once
+ * per `VEHICLE_LOADS_REFRESH_GAP_MS` for a row that exists (the stamp is the
+ * claim, in the same transaction as the read, so concurrent quotes can't both
+ * win). With no row there is nothing to stamp: dispatch on a cold market is
+ * rare, because the checkout fetches inline and fills it.
+ */
+export const claimVehicleLoadsRefresh = internalMutation({
+	args: {
+		market: v.union(v.literal("MY"), v.literal("SG")),
+		env: v.union(v.literal("sandbox"), v.literal("production")),
+	},
+	handler: async (ctx, { market, env }): Promise<boolean> => {
+		const row = await ctx.db
+			.query("lalamoveVehicleLoads")
+			.withIndex("by_market_env", (q) => q.eq("market", market).eq("env", env))
+			.unique();
+		if (!row) return true;
+		const now = Date.now();
+		if (
+			row.refreshScheduledAt !== undefined &&
+			now - row.refreshScheduledAt < VEHICLE_LOADS_REFRESH_GAP_MS
+		)
+			return false;
+		await ctx.db.patch(row._id, { refreshScheduledAt: now });
+		return true;
+	},
+});
+
+/**
+ * Which row of the shared cache this store reads and writes (PR #418 review).
+ * The stamped env when there is one (86eypncfy); otherwise the env of the
+ * DECRYPTED key — exactly how `callLalamove` picks the host — and never a
+ * default to production. An unstamped sandbox-key store fetches from the
+ * sandbox host, so defaulting would write sandbox limits into the row every
+ * real store in the market reads.
+ */
+async function vehicleLoadsEnv(
+	credentials: LalamoveCredentials,
+	stamped: "sandbox" | "production" | undefined,
+): Promise<"sandbox" | "production"> {
+	return stamped ?? (await decryptLalamoveCredentials(credentials)).env;
+}
+
+/** Bounded so a hanging `/v3/cities` fails open (seller's vehicle) within
+ * seconds instead of holding the buyer's checkout (PR #418 review). */
+const VEHICLE_LOADS_TIMEOUT_MS = 4000;
 
 /** The store's key pair + where it books — enough to read `/v3/cities`. */
 export const getVehicleLoadContext = internalQuery({
@@ -239,7 +310,9 @@ async function fetchAndStoreVehicleLoads(
 ): Promise<VehicleLoad[] | null> {
 	try {
 		const loads = parseVehicleLoads(
-			await callLalamove(credentials, "GET", "/v3/cities"),
+			await callLalamove(credentials, "GET", "/v3/cities", undefined, {
+				timeoutMs: VEHICLE_LOADS_TIMEOUT_MS,
+			}),
 		);
 		if (loads.length === 0) return null;
 		await ctx.runMutation(internal.lalamove.saveVehicleLoads, {
@@ -276,7 +349,7 @@ export const refreshVehicleLoads = internalAction({
 		return fetchAndStoreVehicleLoads(
 			ctx,
 			credentials,
-			context.env ?? "production",
+			await vehicleLoadsEnv(credentials, context.env),
 		);
 	},
 });
@@ -300,17 +373,25 @@ export async function vehicleLoadsFor(
 		inlineFetch: boolean;
 	},
 ): Promise<VehicleLoad[] | null> {
-	const env = args.env ?? "production";
+	const env = await vehicleLoadsEnv(args.credentials, args.env);
+	const market = args.credentials.market;
 	const cached = await ctx.runQuery(internal.lalamove.getVehicleLoads, {
-		market: args.credentials.market,
+		market,
 		env,
 	});
 	if (cached && Date.now() - cached.fetchedAt <= VEHICLE_LOADS_TTL_MS)
 		return cached.loads;
 	if (cached || !args.inlineFetch) {
-		await ctx.scheduler.runAfter(0, internal.lalamove.refreshVehicleLoads, {
-			retailerId: args.retailerId,
-		});
+		// One refresh per market per few minutes, not one per checkout.
+		if (
+			await ctx.runMutation(internal.lalamove.claimVehicleLoadsRefresh, {
+				market,
+				env,
+			})
+		)
+			await ctx.scheduler.runAfter(0, internal.lalamove.refreshVehicleLoads, {
+				retailerId: args.retailerId,
+			});
 		return cached?.loads ?? null;
 	}
 	return fetchAndStoreVehicleLoads(ctx, args.credentials, env);
@@ -334,13 +415,17 @@ export const vehicleLoads = query({
 			level: "read",
 		});
 		const booking = retailer.deliveryBooking as BookingConfig | undefined;
-		if (!booking) return null;
+		// An unstamped store's world is unknown here (a query can't decrypt the
+		// key), and unknown is never production (86eypncfy, PR #418 review):
+		// null, and the card states the rule without numbers.
+		const env = booking?.env;
+		if (!booking || !env) return null;
 		const row = await ctx.db
 			.query("lalamoveVehicleLoads")
 			.withIndex("by_market_env", (q) =>
 				q
 					.eq("market", lalamoveMarketForCountry(retailer.country))
-					.eq("env", booking.env ?? "production"),
+					.eq("env", env),
 			)
 			.unique();
 		return row ? { loads: row.loads } : null;
@@ -1228,6 +1313,10 @@ async function orderCartKg(
 	ctx: QueryCtx,
 	order: Doc<"orders">,
 ): Promise<number | null> {
+	// Every line, where the checkout weighed at most `MAX_QUOTE_ITEMS` (100):
+	// the same thing, because `orders.create` caps an order at
+	// `MAX_ITEMS_PER_ORDER`, also 100 — no order carries a line the checkout
+	// didn't weigh.
 	const items: CartWeightItem[] = await Promise.all(
 		order.items.map(async (item): Promise<CartWeightItem> => {
 			const variant = item.variantId ? await ctx.db.get(item.variantId) : null;

@@ -43,11 +43,19 @@ afterEach(() => {
 
 /** A live-priced store with Lalamove riders armed (MOTORCYCLE) and one 1 kg
  * product; Delyva deliberately absent so the rider is the only bidder. */
-async function seedStore(t: ReturnType<typeof setup>) {
-	const asUser = t.withIdentity({ subject: USER });
+async function seedStore(
+	t: ReturnType<typeof setup>,
+	opts: {
+		/** The stamped Lalamove world; `null` = never stamped (86eypncfy). */
+		env?: "sandbox" | "production" | null;
+		user?: string;
+	} = {},
+) {
+	const user = opts.user ?? USER;
+	const asUser = t.withIdentity({ subject: user });
 	await asUser.mutation(api.retailers.createRetailer, {
 		storeName: "Beras Borong",
-		slug: "beras-borong-heavy",
+		slug: `beras-borong-${user.replace(/[^a-z0-9]/g, "")}`,
 	});
 	const retailer = await asUser.query(api.retailers.getMyRetailer);
 	if (!retailer) throw new Error("seed failed");
@@ -62,7 +70,7 @@ async function seedStore(t: ReturnType<typeof setup>) {
 				vehicleType: "MOTORCYCLE",
 				apiKey: "pk_test_heavy",
 				apiSecret: "sk_test_heavy",
-				env: "sandbox",
+				...(opts.env === null ? {} : { env: opts.env ?? "sandbox" }),
 			},
 		});
 	});
@@ -86,12 +94,17 @@ async function seedStore(t: ReturnType<typeof setup>) {
 	return { asUser, retailerId: retailer._id as Id<"retailers">, productId, variantId };
 }
 
-async function cacheLoads(t: ReturnType<typeof setup>, fetchedAt = Date.now()) {
+async function cacheLoads(
+	t: ReturnType<typeof setup>,
+	fetchedAt = Date.now(),
+	env: "sandbox" | "production" = "sandbox",
+	loads = MY_LOADS,
+) {
 	await t.run(async (ctx) => {
 		await ctx.db.insert("lalamoveVehicleLoads", {
 			market: "MY",
-			env: "sandbox",
-			loads: MY_LOADS,
+			env,
+			loads,
 			fetchedAt,
 		});
 	});
@@ -99,14 +112,23 @@ async function cacheLoads(t: ReturnType<typeof setup>, fetchedAt = Date.now()) {
 
 /** Routes Lalamove calls: `/v3/cities` answers the MY catalogue (or fails),
  * `/v3/quotations` records the vehicle it was asked for. */
-function stubLalamove(opts: { citiesFail?: boolean } = {}) {
+function stubLalamove(opts: { citiesFail?: boolean; citiesHang?: boolean } = {}) {
 	const quotedVehicles: string[] = [];
 	const paths: string[] = [];
+	const hosts: string[] = [];
 	const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
 		const path = new URL(url).pathname;
 		paths.push(path);
+		hosts.push(new URL(url).host);
 		if (path === "/v3/cities") {
 			if (opts.citiesFail) return new Response("boom", { status: 500 });
+			if (opts.citiesHang)
+				// Never answers — only the caller's abort signal ends it.
+				return new Promise<Response>((_, reject) => {
+					init?.signal?.addEventListener("abort", () =>
+						reject(new Error("aborted")),
+					);
+				});
 			return new Response(
 				JSON.stringify({
 					data: [
@@ -140,7 +162,7 @@ function stubLalamove(opts: { citiesFail?: boolean } = {}) {
 		);
 	});
 	vi.stubGlobal("fetch", fetchMock);
-	return { quotedVehicles, paths };
+	return { quotedVehicles, paths, hosts };
 }
 
 function quote(
@@ -349,4 +371,125 @@ describe("lalamove.vehicleLoads — what the pricing card reads", () => {
 			stranger.query(api.lalamove.vehicleLoads, { retailerId }),
 		).rejects.toThrow();
 	});
+});
+
+/** The cache is shared by every store in a market, so which row a store
+ * reads and writes must be its REAL Lalamove world (PR #418 review). An
+ * unstamped env is unknown, never production (86eypncfy). */
+describe("an unstamped store never touches the production row", () => {
+	const SANDBOX_HOST = "rest.sandbox.lalamove.com";
+	/** A production row whose motorcycle would carry 25 kg — if anything reads
+	 * it by mistake, 25 kg goes on a motorcycle and the test sees it. */
+	const PROD_LOADS = [
+		{ key: "CAR", loadKg: 400 },
+		{ key: "MOTORCYCLE", loadKg: 300 },
+	];
+
+	async function rows(t: ReturnType<typeof setup>) {
+		return t.run(async (ctx) => ctx.db.query("lalamoveVehicleLoads").collect());
+	}
+
+	test("a pk_test_ store with no env stamp fetches the sandbox host and writes the SANDBOX row", async () => {
+		const t = setup();
+		const { retailerId, variantId } = await seedStore(t, { env: null });
+		const lm = stubLalamove();
+		await quote(t, retailerId, variantId, 25);
+		expect(lm.hosts[0]).toBe(SANDBOX_HOST);
+		expect((await rows(t)).map((r) => r.env)).toEqual(["sandbox"]);
+	});
+
+	test("it reads the sandbox row, never a production row beside it", async () => {
+		const t = setup();
+		const { retailerId, variantId } = await seedStore(t, { env: null });
+		await cacheLoads(t, Date.now(), "sandbox");
+		await cacheLoads(t, Date.now(), "production", PROD_LOADS);
+		const lm = stubLalamove();
+		await quote(t, retailerId, variantId, 25);
+		// Sandbox limits: 25 kg is over a motorcycle's 10 kg.
+		expect(lm.quotedVehicles).toEqual(["CAR"]);
+		expect(lm.paths).not.toContain("/v3/cities");
+	});
+
+	test("the background refresh writes the sandbox row too", async () => {
+		const t = setup();
+		const { retailerId } = await seedStore(t, { env: null });
+		stubLalamove();
+		await t.action(internal.lalamove.refreshVehicleLoads, { retailerId });
+		expect((await rows(t)).map((r) => r.env)).toEqual(["sandbox"]);
+	});
+
+	test("the pricing card's query answers null for an unstamped store — the rule without numbers", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedStore(t, { env: null });
+		await cacheLoads(t, Date.now(), "sandbox");
+		await cacheLoads(t, Date.now(), "production", PROD_LOADS);
+		expect(await asUser.query(api.lalamove.vehicleLoads, { retailerId })).toBeNull();
+	});
+});
+
+describe("a stale row schedules one refresh, not one per checkout", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
+	async function scheduledRefreshes(t: ReturnType<typeof setup>) {
+		return t.run(async (ctx) =>
+			(await ctx.db.system.query("_scheduled_functions").collect()).filter(
+				(f) => f.name.includes("refreshVehicleLoads"),
+			),
+		);
+	}
+
+	test("three quotes on a stale row schedule ONE refresh, and still price from the stale row", async () => {
+		const t = setup();
+		const { retailerId, variantId } = await seedStore(t);
+		await cacheLoads(t, Date.now() - 2 * DAY);
+		const lm = stubLalamove();
+		for (let i = 0; i < 3; i++) await quote(t, retailerId, variantId, 25);
+		expect(lm.quotedVehicles).toEqual(["CAR", "CAR", "CAR"]);
+		expect(lm.paths).not.toContain("/v3/cities");
+		expect(await scheduledRefreshes(t)).toHaveLength(1);
+	});
+
+	test("the claim reopens once the gap has passed, and a successful refresh clears it", async () => {
+		const t = setup();
+		await cacheLoads(t, Date.now() - 2 * DAY);
+		const claim = () =>
+			t.mutation(internal.lalamove.claimVehicleLoadsRefresh, {
+				market: "MY",
+				env: "sandbox",
+			});
+		expect(await claim()).toBe(true);
+		expect(await claim()).toBe(false);
+		await t.run(async (ctx) => {
+			const row = await ctx.db.query("lalamoveVehicleLoads").first();
+			if (row)
+				await ctx.db.patch(row._id, {
+					refreshScheduledAt: Date.now() - 6 * 60 * 1000,
+				});
+		});
+		expect(await claim()).toBe(true);
+		await t.mutation(internal.lalamove.saveVehicleLoads, {
+			market: "MY",
+			env: "sandbox",
+			loads: MY_LOADS,
+		});
+		const row = await t.run(async (ctx) =>
+			ctx.db.query("lalamoveVehicleLoads").first(),
+		);
+		expect(row?.refreshScheduledAt).toBeUndefined();
+	});
+});
+
+describe("a hanging /v3/cities can't hold the buyer", () => {
+	test("the inline fetch gives up within seconds and the seller's vehicle is quoted", async () => {
+		const t = setup();
+		const { retailerId, variantId } = await seedStore(t);
+		const lm = stubLalamove({ citiesHang: true });
+		const started = Date.now();
+		expect(await quote(t, retailerId, variantId, 25)).toMatchObject({
+			status: "quoted",
+		});
+		expect(Date.now() - started).toBeLessThan(8000);
+		// Unknown loads fail open: the seller's motorcycle, as before.
+		expect(lm.quotedVehicles).toEqual(["MOTORCYCLE"]);
+	}, 15_000);
 });

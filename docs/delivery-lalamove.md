@@ -963,7 +963,32 @@ of `{ key, loadKg }` pairs. `vehicleLoadsFor` reads it; a row older than a
 day is still used and refreshed in the background (`refreshVehicleLoads`,
 scheduled). With no row at all the CHECKOUT fetches inline (the first heavy
 cart in a market is still priced right); DISPATCH only schedules the fetch,
-so a booking never grows an extra network call. Probe it:
+so a booking never grows an extra network call.
+
+- **Which row a store uses** (PR #418 review): the stamped
+  `deliveryBooking.env`, or for an unstamped store the env of its
+  DECRYPTED key, exactly how `callLalamove` picks the host
+  (`vehicleLoadsEnv`). Never a default to production: an unstamped
+  sandbox-key store fetches from the sandbox host, and the row it would
+  have written is the one every real store in the market reads. The
+  pricing card's query can't decrypt, so an unstamped store gets `null`
+  there (the card states the rule without numbers). This holds whatever a
+  backfill stamped; the code follows the 86eypncfy rule on its own.
+- **One refresh per market per 5 minutes.** A stale row is read by every
+  quote and dispatch, so `claimVehicleLoadsRefresh` stamps
+  `refreshScheduledAt` in the same transaction as the read and only the
+  winner schedules `refreshVehicleLoads`. A failing `/v3/cities` then
+  retries at that pace, not once per checkout; a successful save clears the
+  stamp.
+- **The inline fetch is bounded.** It runs before the parallel provider
+  quotes, so `callLalamove` aborts this one call after 4 s
+  (`VEHICLE_LOADS_TIMEOUT_MS`) and the quote fails open on the seller's
+  vehicle. Every other Lalamove call is unchanged.
+- **Line cap:** checkout weighs at most `MAX_QUOTE_ITEMS` (100) lines and
+  dispatch weighs every line; they agree because `orders.create` caps an
+  order at `MAX_ITEMS_PER_ORDER`, also 100.
+
+Probe it:
 
 ```
 npx convex run lalamove:refreshVehicleLoads '{"retailerId":"…"}'
