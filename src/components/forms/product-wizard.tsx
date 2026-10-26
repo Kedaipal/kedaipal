@@ -81,6 +81,7 @@ import { CreditLockCta, SaveLockNote } from "../credits/credit-lock-cta";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
+import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
@@ -2464,13 +2465,14 @@ export function ProductWizard({
 									isError={!!issueFor("packageLength")}
 									className="w-32"
 								/>
-								<select
+								<Select
 									aria-label="Package length unit"
 									value={state.packageUnit}
 									onChange={(e) =>
 										patch({ packageUnit: asPackageUnit(e.target.value) })
 									}
-									className="h-11 rounded-xl border border-input bg-background px-2 text-sm font-normal"
+									variant="field"
+									className="w-32"
 								>
 									<option value="month">months</option>
 									{/* "nights" and "days" are the SAME span — a 2-night stay and
@@ -2479,7 +2481,7 @@ export function ProductWizard({
 									    3D2N deal is two nights), a gym or class by the day. */}
 									<option value="night">nights</option>
 									<option value="day">days</option>
-								</select>
+								</Select>
 							</span>
 							<IssueText message={issueFor("packageLength")} />
 							<span className="text-xs font-normal text-muted-foreground">

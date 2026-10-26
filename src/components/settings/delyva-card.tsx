@@ -43,6 +43,7 @@ import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
 import { ModeButton } from "../ui/mode-button";
+import { Select } from "../ui/select";
 import {
 	Glance,
 	SectionLabel,
@@ -877,16 +878,13 @@ function PickupAddressFields({
 			    fields. A dropdown with one option is not a choice, so there
 			    isn't one. */}
 			{country === "SG" ? null : (
-				<select
+				<Select
 					aria-label="State"
 					value={draft.state}
 					disabled={disabled}
 					onChange={(e) => onChange({ state: e.target.value })}
-					className={`min-h-11 w-full rounded-xl border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
-						error !== null && !draft.state.trim()
-							? "border-destructive"
-							: "border-input"
-					}`}
+					variant="field"
+					isError={error !== null && !draft.state.trim()}
 				>
 					<option value="">Select state…</option>
 					{MY_STATES.map((state) => (
@@ -894,7 +892,7 @@ function PickupAddressFields({
 							{state}
 						</option>
 					))}
-				</select>
+				</Select>
 			)}
 			{error ? (
 				<p className="text-xs font-medium text-destructive">{error}</p>

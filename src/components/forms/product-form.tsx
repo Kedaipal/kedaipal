@@ -109,6 +109,7 @@ import {
 	QuestionRow,
 	type QuestionTone,
 } from "../ui/question-row";
+import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import {
@@ -1831,17 +1832,18 @@ export function ProductForm({
 								isError={!packageValid}
 								className="w-32"
 							/>
-							<select
+							<Select
 								aria-label="Package length unit"
 								value={packageUnit}
 								onChange={(e) => setPackageUnit(asPackageUnit(e.target.value))}
-								className="h-11 rounded-xl border border-input bg-background px-2 text-sm"
+								variant="field"
+								className="w-32"
 							>
 								<option value="month">months</option>
 								{/* Same span as days; the word is the seller's trade. */}
 								<option value="night">nights</option>
 								<option value="day">days</option>
-							</select>
+							</Select>
 						</div>
 						{!packageValid ? (
 							<p className="text-xs text-destructive">
