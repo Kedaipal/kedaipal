@@ -244,7 +244,14 @@ export const storeConnection = internalMutation({
 		// stored but booking stays OFF — the same refusal the toggle gives, said
 		// in the connect result so the card can point at the fix — because
 		// flipping it on silently is exactly how Mandos came to under-collect.
+		//
+		// Only the off→on move is gated. Replacing the key on a store whose
+		// booking is already ON is maintenance, not an arming gesture: it keeps
+		// booking on, or a key rotation would silently stop Delyva quoting at
+		// checkout (PR #416 review).
+		const alreadyArmed = prev?.enabled === true;
 		const unweighed =
+			!alreadyArmed &&
 			(retailer.deliveryConfig as { mode?: string } | undefined)?.mode === "live"
 				? (await collectUnweighedChoices(ctx, args.retailerId)).length
 				: 0;
@@ -253,7 +260,7 @@ export const storeConnection = internalMutation({
 				// A fresh key connects ENABLED — connecting is the enable gesture
 				// (one less switch to discover); updateSettings can pause later.
 				// Unless the weights hold above applies, in which case it waits.
-				enabled: unweighed === 0,
+				enabled: alreadyArmed || unweighed === 0,
 				apiKey: args.apiKey,
 				apiSecret: args.apiSecret,
 				apiKeyHint: args.apiKeyHint,

@@ -45,7 +45,7 @@ import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { CopyButton } from "../ui/copy-button";
 import { Input } from "../ui/input";
-import { floorPricedLine, pricedAtFloor } from "./floor-priced-note";
+import { pricedWithoutWeight, weightGapLine } from "./weight-gap-note";
 
 const ITEM_TYPES: ReadonlyArray<{ value: DelyvaItemType; label: string }> = [
 	{ value: "PARCEL", label: "Parcel" },
@@ -392,12 +392,14 @@ export function DelyvaDispatchCard({
 					    one number that changes the price, so it is editable here rather
 					    than hidden behind a re-quote. */}
 					<div className="flex flex-col gap-1.5">
-						{/* The buyer paid the one-kilo floor: the seller must know it
-						    BEFORE they pick a service, where "buyer paid" sits beside
-						    every price — the one place the under-collection shows. */}
-						{pricedAtFloor(order.deliverySnapshot) ? (
+						{/* The buyer was priced without part of the weight (the
+						    one-kilo floor, or lines with no weight in a heavier cart):
+						    the seller must know it BEFORE they pick a service, where
+						    "buyer paid" sits beside every price — the one place the
+						    under-collection shows. */}
+						{pricedWithoutWeight(order.deliverySnapshot) ? (
 							<p className="rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-								{floorPricedLine(order.deliverySnapshot)}
+								{weightGapLine(order.deliverySnapshot)}
 							</p>
 						) : null}
 						<div className="flex items-center justify-between gap-2">

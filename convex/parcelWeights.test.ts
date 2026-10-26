@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { PARCEL_WEIGHTS_BATCH_MAX } from "./lib/weightPricing";
@@ -406,6 +406,49 @@ describe("arming a courier on a live store (delyva.updateSettings)", () => {
 			true,
 		);
 	});
+
+	test("replacing the key on a store whose booking is ON keeps it on — a rotation is maintenance, not arming (PR #416 review)", async () => {
+		// A Mandos-like store: live pricing, Delyva booking on, an unweighed
+		// product. Re-keying used to write `enabled: false` and silently stop
+		// Delyva quoting at checkout.
+		const t = setup();
+		const { asUser, retailerId } = await seedRetailer(t, "user_pw_rekey_on", {
+			mode: "live",
+			delyva: true,
+		});
+		await seedProduct(t, asUser, retailerId, "Tee", [{ grams: 0 }]);
+		const stored = await t.mutation(internal.delyva.storeConnection, {
+			retailerId,
+			apiKey: "dx-new-key",
+			apiKeyHint: "-key",
+			customerId: 1,
+		});
+		// Nothing was held, so the card shows no hold toast.
+		expect(stored).toEqual({ bookingHeldForWeights: 0 });
+		const r = await t.run(async (ctx) => ctx.db.get(retailerId));
+		expect(r?.delyva?.enabled).toBe(true);
+		expect(r?.delyva?.apiKey).toBe("dx-new-key");
+	});
+
+	test("re-keying a PAUSED store with unweighed products is still an arming move — it stays off", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedRetailer(t, "user_pw_rekey_off", {
+			mode: "live",
+			delyva: { enabled: false },
+		});
+		await seedProduct(t, asUser, retailerId, "Tee", [{ grams: 0 }]);
+		expect(
+			await t.mutation(internal.delyva.storeConnection, {
+				retailerId,
+				apiKey: "dx-new-key",
+				apiKeyHint: "-key",
+				customerId: 1,
+			}),
+		).toEqual({ bookingHeldForWeights: 1 });
+		expect(
+			(await t.run(async (ctx) => ctx.db.get(retailerId)))?.delyva?.enabled,
+		).toBe(false);
+	});
 });
 
 describe("switching the delivery charge onto weight pricing (retailers.updateSettings)", () => {
@@ -590,6 +633,102 @@ describe("the one-kilo floor reaches the order (deliveryQuotes → deliverySnaps
 		);
 		expect(order?.deliverySnapshot?.weightFloored).toBeUndefined();
 		expect(order?.deliverySnapshot?.unweighedLines).toBeUndefined();
+	});
+});
+
+describe("a heavier cart with unweighed lines is stamped too — the checkout action (PR #416 review)", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	/** Delyva answers one J&T service at RM 9.50 and records the weight it
+	 * was asked to price. */
+	function stubDelyva() {
+		const weights: number[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init?: RequestInit) => {
+				if (new URL(url).pathname.endsWith("/service/instantQuote")) {
+					const body = JSON.parse(String(init?.body ?? "{}"));
+					weights.push(body?.weight?.value);
+					return new Response(
+						JSON.stringify({
+							data: {
+								services: [
+									{
+										service: { code: "jnt", name: "J&T Express" },
+										price: { amount: "9.50", currency: "MYR" },
+									},
+								],
+							},
+						}),
+						{ status: 200 },
+					);
+				}
+				return new Response("{}", { status: 404 });
+			}),
+		);
+		return weights;
+	}
+
+	const destination = {
+		latitude: 3.15,
+		longitude: 101.7,
+		address: "12 Jln Mawar 3, 47301 Petaling Jaya",
+		city: "Petaling Jaya",
+		state: "Selangor",
+		postcode: "47301",
+	};
+
+	test("1.5 kg weighed + 5 unweighed tees: priced at 1.5 kg, NOT floored, and the row says 5 lines had no weight", async () => {
+		const t = setup();
+		const weights = stubDelyva();
+		const { asUser, retailerId } = await seedRetailer(t, "user_pw_heavy_gap", {
+			mode: "live",
+			delyva: true,
+		});
+		const jar = await seedProduct(t, asUser, retailerId, "Jar", [{ grams: 1500 }]);
+		const tee = await seedProduct(t, asUser, retailerId, "Tee", [
+			{ value: "S", grams: 0 },
+			{ value: "M", grams: 0 },
+			{ value: "L", grams: 0 },
+			{ value: "XL", grams: 0 },
+			{ value: "XXL", grams: 0 },
+		]);
+		const result = await t.action(api.liveQuote.quoteForCheckout, {
+			retailerId,
+			...destination,
+			items: [
+				{ variantId: jar.variantIds[0], quantity: 1 },
+				...tee.variantIds.map((variantId) => ({ variantId, quantity: 1 })),
+			],
+		});
+		expect(result).toMatchObject({ status: "quoted", fee: 950 });
+		expect(weights).toEqual([1.5]);
+		const row = await t.run(async (ctx) =>
+			(await ctx.db.query("deliveryQuotes").collect()).at(-1),
+		);
+		expect(row?.weightFloored).toBeUndefined();
+		expect(row?.unweighedLines).toBe(5);
+	});
+
+	test("a fully weighed cart over a kilo carries no stamp", async () => {
+		const t = setup();
+		stubDelyva();
+		const { asUser, retailerId } = await seedRetailer(t, "user_pw_heavy_full", {
+			mode: "live",
+			delyva: true,
+		});
+		const jar = await seedProduct(t, asUser, retailerId, "Jar", [{ grams: 1500 }]);
+		await t.action(api.liveQuote.quoteForCheckout, {
+			retailerId,
+			...destination,
+			items: [{ variantId: jar.variantIds[0], quantity: 1 }],
+		});
+		const row = await t.run(async (ctx) =>
+			(await ctx.db.query("deliveryQuotes").collect()).at(-1),
+		);
+		expect(row?.provider).toBe("delyva");
+		expect(row?.weightFloored).toBeUndefined();
+		expect(row?.unweighedLines).toBeUndefined();
 	});
 });
 

@@ -205,6 +205,33 @@ export function liveQuoteWeightFacts(items: CartWeightItem[]): {
 }
 
 /**
+ * What a won quote records about weight it could not see (PR #416 review).
+ * Only a courier prices by weight, so a rider's price records nothing.
+ *
+ * Two different gaps, both worth telling the seller:
+ * - `weightFloored`: the cart was priced at the one-kilo floor;
+ * - `unweighedLines`: lines a product weight would have priced. Recorded
+ *   whenever there are any, NOT only when the floor fired — a 1.5 kg cart
+ *   with five unweighed tees was priced at 1.5 kg, under-collecting exactly
+ *   as much as a floored one, and used to leave no note.
+ */
+export function weightGapStamp(args: {
+	provider: LiveQuoteProvider;
+	weightFloored: boolean;
+	unweighedLines: number;
+}): { weightFloored?: true; unweighedLines?: number } {
+	if (args.provider !== "delyva") return {};
+	const lines =
+		args.weightFloored || args.unweighedLines > 0
+			? args.unweighedLines
+			: undefined;
+	return {
+		...(args.weightFloored ? { weightFloored: true as const } : {}),
+		...(lines !== undefined ? { unweighedLines: lines } : {}),
+	};
+}
+
+/**
  * Apply the rule to whatever the providers answered.
  *
  * `storeCurrency` is the currency the buyer will actually be charged in.

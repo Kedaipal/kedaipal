@@ -156,24 +156,40 @@ never one step late. The owner read exposes it as `retailers.weightPricing`
   the link (`delyva.getSettings.bookingHeldForWeights`), the pricing card's
   Save greys out with the same line. Connecting Delyva on a live store stores
   the key but holds booking OFF (`bookingHeldForWeights` on the connect
-  result; the Integrations card says so). **Only the switch is gated** — a
+  result; the Integrations card says so) — unless booking was already ON:
+  **Replace key** on an armed store keeps it armed, because a rotation is
+  maintenance, not arming, and turning booking off would silently stop
+  Delyva quoting at checkout (PR #416 review). **Only the switch is gated** — a
   store already pricing by weight keeps working on the floor / the "arrange"
   rule and keeps saving its other settings, so a legacy store (Mandos) never
   loses a buyer; the notice and the fill are how it rectifies itself.
   **Rejected:** warn-only — a warning beside a working switch is the state
   Mandos was in; and gating admin act-as differently — the gate protects the
   seller's money, and an admin pre-building a store has no products yet.
-- **The order says when the floor fired.** `liveQuoteWeightFacts` reports
-  `floored` and `unweighedLines` (non-custom lines a product weight would
-  have priced); a Delyva-won quote stamps them on its `deliveryQuotes` row
-  (`weightFloored`, `unweighedLines`, widen-only) and `orders.create` carries
-  them onto `deliverySnapshot`. The seller's order page shows "Priced at the
-  1 kg floor — N items had no weight. A heavier parcel costs you the
-  difference when you book." under the delivery fee, and the Delyva dispatch
-  card repeats it above the weight box — one author,
-  [`floor-priced-note.tsx`](../src/components/order/floor-priced-note.tsx).
-  A rider-won quote never carries the stamp (riders don't weigh). Buyer
-  surfaces are unchanged: the buyer paid the floor and owes nothing more.
+- **The order says when the courier priced without a weight.**
+  `liveQuoteWeightFacts` reports `floored` and `unweighedLines` (non-custom
+  lines a product weight would have priced); `weightGapStamp` puts them on a
+  Delyva-won quote's `deliveryQuotes` row (`weightFloored`, `unweighedLines`,
+  widen-only) and `orders.create` carries them onto `deliverySnapshot`.
+  `unweighedLines` is stamped whenever there are any, **not only when the
+  floor fired** (PR #416 review): a cart with 1.5 kg of weighed items and
+  five unweighed tees is quoted at 1.5 kg, so the tees under-collect exactly
+  as a floored cart does. The seller's order page shows the line under the
+  delivery fee, and the Delyva dispatch card repeats it above the weight box,
+  one author in
+  [`weight-gap-note.tsx`](../src/components/order/weight-gap-note.tsx):
+  - floored: "Priced at the 1 kg floor at checkout — N items had no weight
+    then." (or "a custom item has no fixed weight", with no link);
+  - not floored: "N items had no weight at checkout and were priced without
+    it."
+
+  Both end "A heavier parcel costs you the difference when you book." and
+  link the bulk fill when there's a weight to set. A rider-won quote never
+  carries the stamp (riders don't weigh). Buyer surfaces are unchanged: the
+  buyer paid what they were quoted and owes nothing more. **Known limit:** a
+  custom line in a cart already over a kilo is priced at nothing and isn't
+  flagged — its weight is unknowable by design, and flagging it would need
+  a new snapshot field.
 
 ## Country posture
 
