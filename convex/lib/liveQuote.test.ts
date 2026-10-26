@@ -11,6 +11,7 @@ import {
 	liveQuoteWeightFacts,
 	liveQuoteWeightKg,
 	type ProviderQuote,
+	weightGapStamp,
 } from "./liveQuote";
 
 const rider = (fee: number, currency = "MYR"): ProviderQuote => ({
@@ -310,6 +311,44 @@ describe("liveQuoteWeightKg — an unweighed item never blocks the quote (Mandos
 
 	test("an empty cart is no cart — still unpriceable", () => {
 		expect(liveQuoteWeightKg([])).toBeNull();
+	});
+});
+
+describe("weightGapStamp — what a won quote records about weight it couldn't see", () => {
+	test("PR #416 review: 1.5 kg weighed + 5 unweighed tees is NOT floored, and is still stamped", () => {
+		const facts = liveQuoteWeightFacts([
+			{ parcelWeightG: 1500, quantity: 1 },
+			{ parcelWeightG: 0, quantity: 5 },
+		]);
+		expect(facts).toEqual({ kg: 1.5, floored: false, unweighedLines: 1 });
+		expect(
+			weightGapStamp({
+				provider: "delyva",
+				weightFloored: false,
+				unweighedLines: 5,
+			}),
+		).toEqual({ unweighedLines: 5 });
+	});
+
+	test("a floored cart stamps both, a custom-only floor stamps the floor with zero lines", () => {
+		expect(
+			weightGapStamp({ provider: "delyva", weightFloored: true, unweighedLines: 2 }),
+		).toEqual({ weightFloored: true, unweighedLines: 2 });
+		expect(
+			weightGapStamp({ provider: "delyva", weightFloored: true, unweighedLines: 0 }),
+		).toEqual({ weightFloored: true, unweighedLines: 0 });
+	});
+
+	test("a fully weighed cart stamps nothing", () => {
+		expect(
+			weightGapStamp({ provider: "delyva", weightFloored: false, unweighedLines: 0 }),
+		).toEqual({});
+	});
+
+	test("a rider's price never used the weight, so it never carries a stamp", () => {
+		expect(
+			weightGapStamp({ provider: "lalamove", weightFloored: true, unweighedLines: 3 }),
+		).toEqual({});
 	});
 });
 

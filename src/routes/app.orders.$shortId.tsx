@@ -73,10 +73,6 @@ import {
 } from "../components/order/booking-request-card";
 import { DispatchHub } from "../components/order/dispatch-hub";
 import {
-	FloorPricedNote,
-	pricedAtFloor,
-} from "../components/order/floor-priced-note";
-import {
 	type OrderBookingSpan,
 	OrderItemLine,
 	SkippedDayRows,
@@ -97,6 +93,10 @@ import {
 	ShipmentTrackingCard,
 } from "../components/order/shipment-tracking";
 import { SkipDayCard } from "../components/order/skip-day-card";
+import {
+	pricedWithoutWeight,
+	WeightGapNote,
+} from "../components/order/weight-gap-note";
 import { GatedOrderPage } from "../components/orders/gated-order-page";
 import {
 	DeliveryAddressDisplay,
@@ -1879,12 +1879,14 @@ function OrderDetailRoute() {
 						</span>
 					</div>
 				) : null}
-				{/* The courier priced the one-kilo floor, not the parcel (23 Oct
-				    2026): said HERE, under the fee it explains, so the seller
-				    learns it before booking — not from a blank weight field. */}
-				{pricedAtFloor(order.deliverySnapshot) ? (
+				{/* The courier priced without part of the parcel — the one-kilo
+				    floor, or unweighed lines in a heavier cart (23 Oct 2026; PR
+				    #416 review): said HERE, under the fee it explains, so the
+				    seller learns it before booking — not from a blank weight
+				    field. */}
+				{pricedWithoutWeight(order.deliverySnapshot) ? (
 					<div className="px-3">
-						<FloorPricedNote snapshot={order.deliverySnapshot} />
+						<WeightGapNote snapshot={order.deliverySnapshot} />
 					</div>
 				) : null}
 				{deliveryFeePending ? (

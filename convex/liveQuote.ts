@@ -36,6 +36,7 @@ import {
 	isColdItemType,
 	liveQuoteWeightFacts,
 	type ProviderQuote,
+	weightGapStamp,
 } from "./lib/liveQuote";
 import { rateLimiter } from "./lib/rateLimiter";
 
@@ -274,16 +275,13 @@ export const quoteForCheckout = action({
 				lines: args.items,
 				latitude: args.latitude,
 				longitude: args.longitude,
-				// Only a courier prices by weight, so the floor is only worth
-				// recording on a Delyva-won quote; a rider's price never used it.
-				weightFloored:
-					outcome.provider === "delyva" && context.weightFloored
-						? true
-						: undefined,
-				unweighedLines:
-					outcome.provider === "delyva" && context.weightFloored
-						? context.unweighedLines
-						: undefined,
+				// What the courier priced without: the floor, and any line with
+				// no weight even when the floor didn't fire (`weightGapStamp`).
+				...weightGapStamp({
+					provider: outcome.provider,
+					weightFloored: context.weightFloored,
+					unweighedLines: context.unweighedLines,
+				}),
 			},
 		);
 		return { status: "quoted", quoteId, fee: outcome.fee };
