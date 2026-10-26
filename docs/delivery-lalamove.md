@@ -989,11 +989,28 @@ one-kilo floor (`liveQuoteWeightKg`), so it never escalates.
   order's weight, and returns `vehicleAdvice` — the card says "Car picked —
   this order weighs 25 kg, over a motorcycle's 10 kg", warns amber if the
   seller switches back ("The rider may refuse it at pickup"), and over a
-  car's load says no rider vehicle here fits (book a van in the Lalamove app,
-  or arrange a courier). The seller's switch still wins.
-- **Settings**: "Lalamove's limits — good to know" on the live-pricing card
-  states the rule with this market's numbers (`lalamove.vehicleLoads`), or
-  the rule alone before the market has been quoted.
+  car's load says no rider vehicle here fits. The seller's switch still wins.
+- **Dispatch, nothing fits** (`/test-code`, 26 Oct 2026): the dialog still
+  prices the biggest vehicle — the store's product weights may be wrong, and
+  it's the seller's call — but stops presenting that as the next step. The
+  "difference stays with you" price comparison is hidden (it rewarded the
+  booking the line advises against), and Confirm becomes **Book a car
+  anyway**. Inside the dispatch hub (both providers armed) the primary action
+  is **Use a Delyva courier**, which switches the hub's tab
+  (`onUseCourier`), and the line names the courier when one won the
+  buyer's checkout ("Your buyer paid a DHL eCommerce price at checkout").
+  Without a courier tab it points at a Lalamove van or the seller's own
+  courier plus the tracking box.
+- **Settings**: under the Default vehicle picker, a motorcycle store reads
+  "A cart over a motorcycle's 10 kg is priced on a car at checkout, and
+  booking opens on one" (`vehiclePickerHint`) — the choice is made there,
+  so the rule is said there. "Lalamove's limits — good to know" states the
+  full rule with this market's numbers (`lalamove.vehicleLoads`), or the rule
+  alone before the market has been quoted. Past a car's load it says a Delyva
+  courier prices the cart **if one carries that weight** — a Delyva account
+  only covers the weights its couriers take (the demo has none from 10.4 to
+  40.4 kg to KL), so the unconditional "your couriers price it" was a
+  promise the store couldn't keep.
 
 **Rejected:** sending `item.weight` (not offered in MY/SG); hardcoding the
 limits (they disagreed and Lalamove changes them); refusing every cart over

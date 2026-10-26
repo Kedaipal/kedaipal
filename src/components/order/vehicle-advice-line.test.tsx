@@ -17,7 +17,10 @@ vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => vi.fn(),
 }));
 
-import { riderLoadsLine } from "../settings/delivery-pricing";
+import {
+	riderLoadsLine,
+	vehiclePickerHint,
+} from "../settings/delivery-pricing";
 import { VehicleAdviceLine } from "./book-delivery-card";
 
 afterEach(cleanup);
@@ -95,7 +98,7 @@ describe("riderLoadsLine", () => {
 		expect(
 			riderLoadsLine({ loads, vehicle: "MOTORCYCLE", delyvaArmed: true }),
 		).toBe(
-			"A cart over a motorcycle's 10 kg is quoted on a car instead; over a car's 40 kg, riders don't bid and your Delyva couriers price it",
+			"A cart over a motorcycle's 10 kg is quoted on a car instead; over a car's 40 kg, riders don't bid: a Delyva courier prices it if one carries that weight, otherwise the buyer is asked to pick up or message you",
 		);
 	});
 
@@ -113,5 +116,46 @@ describe("riderLoadsLine", () => {
 				delyvaArmed: false,
 			}),
 		).toMatch(/^A cart too heavy for a motorcycle is quoted on a car instead/);
+	});
+});
+
+describe("vehiclePickerHint — the rule where the vehicle is chosen", () => {
+	const loads = [
+		{ key: "CAR", loadKg: 40 },
+		{ key: "MOTORCYCLE", loadKg: 10 },
+	];
+
+	it("a motorcycle store hears that heavy carts move up to a car", () => {
+		expect(vehiclePickerHint({ loads, vehicle: "MOTORCYCLE" })).toBe(
+			"Just the default — switch per order when you book. A cart over a motorcycle's 10 kg is priced on a car at checkout, and booking opens on one.",
+		);
+	});
+
+	it("before the market has been quoted, the rule without the number", () => {
+		expect(vehiclePickerHint({ loads: null, vehicle: "MOTORCYCLE" })).toBe(
+			"Just the default — switch per order when you book. A cart too heavy for a motorcycle is priced on a car at checkout, and booking opens on one.",
+		);
+	});
+
+	it("a car store is never moved, so it hears only the default", () => {
+		expect(vehiclePickerHint({ loads, vehicle: "CAR" })).toBe(
+			"Just the default — switch per order when you book.",
+		);
+	});
+});
+
+describe("VehicleAdviceLine — too heavy, with a courier tab", () => {
+	it("names the courier the buyer paid for", () => {
+		const { container } = render(
+			<VehicleAdviceLine
+				advice={{ kind: "too_heavy", cartKg: 40.6, maxKg: 40 }}
+				quotedVehicle="CAR"
+				courierOffered
+				buyerPaidCourier="DHL eCommerce"
+			/>,
+		);
+		expect(container.textContent).toBe(
+			"This order weighs 40.6 kg — over a car's 40 kg, so no rider vehicle here can carry it. Your buyer paid a DHL eCommerce price at checkout — book the courier instead.",
+		);
 	});
 });

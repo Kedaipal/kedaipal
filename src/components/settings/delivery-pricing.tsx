@@ -371,8 +371,11 @@ export function riderLoadsLine({
 	const kg = (key: string) => loads?.find((l) => l.key === key)?.loadKg;
 	const bike = kg("MOTORCYCLE");
 	const car = kg("CAR");
+	// Conditional on purpose: a Delyva account only prices the weights its
+	// couriers carry (the demo has none between 10 and 40 kg to KL), so
+	// "your couriers price it" would be a promise the store can't keep.
 	const beyond = delyvaArmed
-		? "riders don't bid and your Delyva couriers price it"
+		? "riders don't bid: a Delyva courier prices it if one carries that weight, otherwise the buyer is asked to pick up or message you"
 		: "riders don't bid and the buyer is asked to pick up or message you";
 	if (vehicle === "CAR") {
 		return car !== undefined
@@ -382,6 +385,29 @@ export function riderLoadsLine({
 	if (bike !== undefined && car !== undefined)
 		return `A cart over a motorcycle's ${formatKg(bike)} is quoted on a car instead; over a car's ${formatKg(car)}, ${beyond}`;
 	return `A cart too heavy for a motorcycle is quoted on a car instead; too heavy for a car, ${beyond}`;
+}
+
+/**
+ * The line under the Default vehicle picker (26 Oct 2026). "Just the
+ * default" stopped being the whole truth when heavy carts started moving up
+ * to a car on their own, so a motorcycle store is told where it chooses —
+ * not only in the collapsed limits list above.
+ */
+export function vehiclePickerHint({
+	loads,
+	vehicle,
+}: {
+	loads: ReadonlyArray<{ key: string; loadKg: number }> | null;
+	vehicle: "MOTORCYCLE" | "CAR";
+}): string {
+	const base = "Just the default — switch per order when you book.";
+	if (vehicle === "CAR") return base;
+	const bike = loads?.find((l) => l.key === "MOTORCYCLE")?.loadKg;
+	const over =
+		bike !== undefined
+			? `A cart over a motorcycle's ${formatKg(bike)}`
+			: "A cart too heavy for a motorcycle";
+	return `${base} ${over} is priced on a car at checkout, and booking opens on one.`;
 }
 
 /** A pick-one policy, as rows — the same chooser as the modes above it. */
@@ -1399,7 +1425,10 @@ export function DeliveryPricing({
 								/>
 							</div>
 							<p className="text-xs text-muted-foreground">
-								Just the default — switch per order when you book.
+								{vehiclePickerHint({
+									loads: vehicleLoads?.loads ?? null,
+									vehicle: vehicleType,
+								})}
 							</p>
 						</div>
 						<OptionRow
