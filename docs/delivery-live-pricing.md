@@ -287,7 +287,10 @@ only): 1 kg RM 4.75, 10 kg RM 9.50, 25 kg RM 53.77 on DHL once the cart
 outgrew Instant Delivery — and a burst of 17 taps spent one quote.
 Weight units: the cart is summed in grams and sent to Delyva as
 `weight: { unit: "kg", value }` (`convex/lib/delyva.ts`, `roundKg`); Lalamove
-is never sent a weight — riders price by vehicle and distance.
+is never sent a weight — riders price by vehicle and distance, so the cart's
+weight instead CHOOSES the vehicle (Motorcycle up to Lalamove's published
+load, then Car, then no rider bid — `too_heavy`). See
+[`delivery-lalamove.md`](./delivery-lalamove.md#heavy-carts--the-vehicle-that-can-carry-it-25-oct-2026).
 
 **The address helper names who prices it.** `delivery.quote`'s `live` result
 carries `riders` / `couriers` — which kinds of provider can bid

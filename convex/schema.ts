@@ -2667,6 +2667,26 @@ export default defineSchema({
 		unweighedLines: v.optional(v.number()),
 	}).index("by_retailer", ["retailerId"]),
 
+	// Lalamove's carrying limit per vehicle, per market and environment, read
+	// from `GET /v3/cities` (25 Oct 2026, `convex/lib/lalamoveVehicle.ts`).
+	// Lalamove prices by vehicle and never refuses an overweight trip, so the
+	// rider quote picks the smallest vehicle that can carry the cart from
+	// these. A market-level catalogue fact (no seller data), refreshed in the
+	// background once a day; `loads` is a list of pairs, never an object keyed
+	// by the vehicle name. Own table, not a retailer field: every store in a
+	// market shares one row.
+	lalamoveVehicleLoads: defineTable({
+		market: v.union(v.literal("MY"), v.literal("SG")),
+		env: v.union(v.literal("sandbox"), v.literal("production")),
+		loads: v.array(v.object({ key: v.string(), loadKg: v.number() })),
+		fetchedAt: v.number(),
+		// When a background refresh was last scheduled for a stale row. A
+		// stale row is read by every quote and dispatch; this stamp lets one
+		// refresh go per market per few minutes instead of one per checkout
+		// (and a failing `/v3/cities` retry at that pace, not per buyer).
+		refreshScheduledAt: v.optional(v.number()),
+	}).index("by_market_env", ["market", "env"]),
+
 	// One rider booking (dispatch) against an order. The ledger row of record:
 	// actual cost the seller's own Lalamove wallet paid (BYO-only — audit +
 	// future insights, no Kedaipal settlement), driver + live-tracking link

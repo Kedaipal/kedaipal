@@ -104,6 +104,7 @@ import type * as lib_invoiceReplace from "../lib/invoiceReplace.js";
 import type * as lib_lalamove from "../lib/lalamove.js";
 import type * as lib_lalamoveSignature from "../lib/lalamoveSignature.js";
 import type * as lib_lalamoveTip from "../lib/lalamoveTip.js";
+import type * as lib_lalamoveVehicle from "../lib/lalamoveVehicle.js";
 import type * as lib_legal from "../lib/legal.js";
 import type * as lib_liveQuote from "../lib/liveQuote.js";
 import type * as lib_locale from "../lib/locale.js";
@@ -309,6 +310,7 @@ declare const fullApi: ApiFromModules<{
   "lib/lalamove": typeof lib_lalamove;
   "lib/lalamoveSignature": typeof lib_lalamoveSignature;
   "lib/lalamoveTip": typeof lib_lalamoveTip;
+  "lib/lalamoveVehicle": typeof lib_lalamoveVehicle;
   "lib/legal": typeof lib_legal;
   "lib/liveQuote": typeof lib_liveQuote;
   "lib/locale": typeof lib_locale;

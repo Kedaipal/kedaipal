@@ -67,6 +67,13 @@ export type ProviderQuote =
 			 * not the buyer's fault and not retryable by them. */
 			status: "store_unavailable";
 	  }
+	| {
+			provider: LiveQuoteProvider;
+			/** Riders only (25 Oct 2026): the cart is heavier than every rider
+			 * vehicle's published load (`chooseRiderVehicle`), so no rider bids.
+			 * Not a coverage answer — the address is fine. */
+			status: "too_heavy";
+	  }
 	| { provider: LiveQuoteProvider; status: "unavailable" };
 
 export type LiveQuoteOutcome =
@@ -93,6 +100,7 @@ export type LiveQuoteOutcome =
 			reason:
 				| "out_of_range"
 				| "no_cold_service"
+				| "too_heavy"
 				| "store_unavailable"
 				| "unavailable";
 	  };
@@ -284,6 +292,11 @@ export function chooseLiveQuote(args: {
 	const reasons = new Set(eligible.map((q) => q.status));
 	if (cold && reasons.has("no_cold_service"))
 		return { kind: "unquotable", reason: "no_cold_service" };
+	// Too heavy for a rider, and nothing else priced it: the buyer can act on
+	// that (pickup, a smaller order), so it outranks the seller-side and
+	// generic answers — and it is never "change your address".
+	if (reasons.has("too_heavy"))
+		return { kind: "unquotable", reason: "too_heavy" };
 	if (reasons.has("store_unavailable"))
 		return { kind: "unquotable", reason: "store_unavailable" };
 	// Every provider that answered says the address is outside its coverage —

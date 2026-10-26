@@ -17,7 +17,18 @@ const state = vi.hoisted(() => ({
 // The hub only switches between the two cards — their internals are covered
 // by their own suites, so stub them to labelled markers.
 vi.mock("./book-delivery-card", () => ({
-	BookDeliveryCard: () => <div>LALAMOVE-CARD</div>,
+	// Exposes the courier hand-off the rider dialog uses when no rider
+	// vehicle can carry the order.
+	BookDeliveryCard: (p: { onUseCourier?: () => void }) => (
+		<div>
+			LALAMOVE-CARD
+			{p.onUseCourier ? (
+				<button type="button" onClick={p.onUseCourier}>
+					USE-COURIER
+				</button>
+			) : null}
+		</div>
+	),
 }));
 vi.mock("./delyva-dispatch-card", () => ({
 	DelyvaDispatchCard: () => <div>DELYVA-CARD</div>,
@@ -216,5 +227,25 @@ describe("the other provider holds the booking", () => {
 		fireEvent.click(screen.getByRole("tab", { name: /lalamove rider/i }));
 		expect(container.textContent).toContain("LALAMOVE-CARD");
 		expect(container.textContent).not.toContain("one booking at a time");
+	});
+});
+
+describe("the rider dialog's courier hand-off (26 Oct 2026)", () => {
+	it("switches the hub to the Delyva tab and remembers it", () => {
+		window.localStorage.setItem("kp:dispatch-provider", "lalamove");
+		const { container } = render(<DispatchHub order={order} />);
+		expect(container.textContent).toContain("LALAMOVE-CARD");
+
+		fireEvent.click(screen.getByRole("button", { name: "USE-COURIER" }));
+		expect(container.textContent).toContain("DELYVA-CARD");
+		expect(container.textContent).not.toContain("LALAMOVE-CARD");
+		expect(window.localStorage.getItem("kp:dispatch-provider")).toBe("delyva");
+	});
+
+	it("is never offered when there is no courier tab to hand off to", () => {
+		state.delyva = null;
+		const { container } = render(<DispatchHub order={order} />);
+		expect(container.textContent).toContain("LALAMOVE-CARD");
+		expect(screen.queryByRole("button", { name: "USE-COURIER" })).toBeNull();
 	});
 });

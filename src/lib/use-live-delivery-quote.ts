@@ -33,6 +33,10 @@ export type LiveDeliveryQuoteState =
 	 * address is fine, so the copy must not send the buyer editing it. Riders
 	 * are never substituted: they carry no temperature guarantee. */
 	| { state: "no_cold_service" }
+	/** Heavier than any rider vehicle can carry, and no courier priced it
+	 * (25 Oct 2026). The address is fine — the ORDER is too big for a rider —
+	 * so the copy offers pickup or the store, never a different address. */
+	| { state: "too_heavy" }
 	| { state: "unavailable" };
 
 /**
