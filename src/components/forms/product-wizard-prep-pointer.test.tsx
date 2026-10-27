@@ -69,7 +69,9 @@ describe("wizard — the Preparation step says where prep TIME lives", () => {
 	it("answering 'Made fresh' names prep time and the step that holds it", () => {
 		renderWizard(atTypeStep());
 		// Type → Price → Preparation, the route a food seller actually walks.
-		fireEvent.click(screen.getByRole("button", { name: /just one item/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /one item, one price/i }),
+		);
 		fireEvent.click(screen.getByRole("button", { name: /continue/i }));
 		const price = document.querySelector(
 			'input[inputmode="decimal"], input[type="number"]',

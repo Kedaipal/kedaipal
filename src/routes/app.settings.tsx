@@ -20,8 +20,6 @@ import {
 	Store,
 	Trash2,
 	UsersRound,
-	UtensilsCrossed,
-	Wrench,
 } from "lucide-react";
 import {
 	type FormEvent,
@@ -281,13 +279,6 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	// it looks, and this is the only group that changes nothing a buyer sees.
 	{ label: "App", tabs: ["appearance"] },
 ];
-
-/** The store type as a glance word ("Set · Food & goods"). */
-const STORE_TYPE_SHORT: Record<"physical" | "service" | "booking", string> = {
-	physical: "Food & goods",
-	service: "Service",
-	booking: "Booking",
-};
 
 const SETTINGS_TAB_LABELS = Object.fromEntries(
 	SETTINGS_TABS.map((t) => [t.id, t.label]),
@@ -845,39 +836,21 @@ function SettingsRoute() {
 													/>
 												</Card>
 												{slugRenameForm}
+												{/* One field, so the form owns the card heading — the
+												    Business name card's posture. The "What does your store
+												    sell?" picker shared this card until z8r3fdxt99; its one
+												    job was pre-selecting the wizard's kind card, retired
+												    because the kind is fixed once published and a store
+												    sells more than one (single meals AND meal plans).
+												    `retailers.storeType` is unread until the field is
+												    dropped. */}
 												<Card>
-													<SectionHeading
-														title="Description & store type"
-														description="What buyers read under your name, and the type new products start as."
-														glance={
-															<Glance tone="grey">
-																{[
-																	retailer.storeDescription?.trim()
-																		? "Set"
-																		: "No description",
-																	retailer.storeType
-																		? STORE_TYPE_SHORT[retailer.storeType]
-																		: null,
-																]
-																	.filter(Boolean)
-																	.join(" · ")}
-															</Glance>
-														}
-													/>
 													<StoreDescriptionForm
 														current={retailer.storeDescription ?? ""}
 														onSave={(storeDescription) =>
 															updateSettings({ storeDescription })
 														}
 													/>
-													<div className="border-t border-border/60 pt-4">
-														<StoreTypeForm
-															current={retailer.storeType}
-															onSave={(storeType) =>
-																updateSettings({ storeType })
-															}
-														/>
-													</div>
 												</Card>
 												{/* The directory card is built from the name, description
 										    and area above — it belongs with them. */}
@@ -1518,9 +1491,13 @@ function StoreDescriptionForm({
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<SectionHeading
-				level="sub"
 				title="Store description"
 				description="Shown under your store name — what you sell, your lead time or area. Leave blank to hide it."
+				glance={
+					<Glance tone="grey">
+						{current.trim() ? "Set" : "No description"}
+					</Glance>
+				}
 			/>
 			<div className="flex flex-col gap-1.5">
 				<textarea
@@ -1543,110 +1520,6 @@ function StoreDescriptionForm({
 				{saving ? "Saving…" : "Save description"}
 			</Button>
 		</form>
-	);
-}
-
-/**
- * "What does your store sell?" (86eyj70z1 decision 5) — sets the DEFAULT kind
- * pre-selected for NEW products in the wizard, nothing else: existing products
- * never re-type, and every kind stays pickable per product. Four cards mirror
- * the wizard's step 0 exactly (Food stores as `physical` — it's a vocabulary
- * router, never a stored value). Tap to save; tap the selected card again to
- * clear.
- */
-function StoreTypeForm({
-	current,
-	onSave,
-}: {
-	current: "physical" | "service" | "booking" | undefined;
-	onSave: (
-		storeType: "physical" | "service" | "booking" | null,
-	) => Promise<unknown>;
-}) {
-	const [saving, setSaving] = useState(false);
-	// Three cards, not the wizard's four: Food is a wizard-session router that
-	// stores as `physical`, so here (where only the stored default matters) the
-	// two share one card — two lit cards for one saved value would read broken.
-	const cards = [
-		{
-			value: "physical" as const,
-			icon: <UtensilsCrossed className="size-4" aria-hidden />,
-			label: "Food & physical goods",
-			hint: "Cakes, kuih, frozen, gear, packaged items",
-		},
-		{
-			value: "service" as const,
-			icon: <Wrench className="size-4" aria-hidden />,
-			label: "Service",
-			hint: "Cleaning, wash, repair",
-		},
-		{
-			value: "booking" as const,
-			icon: <CalendarRange className="size-4" aria-hidden />,
-			label: "Booking",
-			hint: "Campsite, venue, homestay, rental",
-		},
-	];
-	async function pick(value: "physical" | "service" | "booking") {
-		setSaving(true);
-		try {
-			// Tapping the selected type again clears it (back to no default).
-			await onSave(current === value ? null : value);
-			toast.success(
-				current === value ? "Store type cleared." : "Store type saved.",
-			);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSaving(false);
-		}
-	}
-	return (
-		<div className="flex flex-col gap-4">
-			<SectionHeading
-				level="sub"
-				title="What does your store sell?"
-				description="Pre-selects the type when you add a product — tap the selected one again to clear."
-			/>
-			<InfoDisclosure summary="How store type works">
-				<HelperBullets
-					items={[
-						"Only a starting point — you can still pick another type on any product",
-						"Existing products never change",
-					]}
-				/>
-			</InfoDisclosure>
-			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-				{cards.map((card) => {
-					const selected = current === card.value;
-					return (
-						<button
-							key={card.label}
-							type="button"
-							disabled={saving}
-							aria-pressed={selected}
-							onClick={() => pick(card.value)}
-							className={cn(
-								"flex min-h-11 items-center gap-3 rounded-xl border p-3 text-left transition-colors disabled:opacity-60",
-								selected
-									? "border-accent bg-accent/10"
-									: "border-border hover:border-accent/60",
-							)}
-						>
-							<span className="text-accent-emphasis">{card.icon}</span>
-							<span className="min-w-0">
-								<span className="block text-sm font-semibold">
-									{card.label}
-								</span>
-								<span className="block truncate text-xs text-muted-foreground">
-									{card.hint}
-								</span>
-							</span>
-						</button>
-					);
-				})}
-			</div>
-		</div>
 	);
 }
 

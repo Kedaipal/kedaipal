@@ -520,7 +520,8 @@ Paid events run the normal handshake unchanged.
 | Product page | `EventNotice` — the moment, the seats, and that there's no delivery and no date to pick. CTA reads **RSVP** |
 | Cart | Refuses a second event date with the reason; the stepper is capped by seats as well as stock |
 | Checkout | A lock banner at the TOP (adding an RSVP changes the terms of the whole order) with a one-tap "remove the RSVP" escape; section 3 reads the moment back instead of asking |
-| Seller product page | The **RSVPs panel**, above the form: total, per-option tally, seats left, and a link into the inbox searching the product's frozen item name (the inbox's `from`/`to` bind to createdAt, and no arbitrary fulfilment-day filter exists) |
+| Seller product page | The **RSVPs panel**, above the form: total, per-option tally, seats left, and a link into the inbox on **exactly this listing and day** (`?listing=&ffrom=&fto=`, [`z8r3fdjv0d`](./schedule-view.md#the-inboxs-listing-filter)). It used to search the product's frozen item name, which also caught "Breakfast Club" and missed RSVPs frozen under an old name |
+| Orders → **Schedule** | Every event date (and booking check-in) on one screen with seats, registered and paid per date — see [`schedule-view.md`](./schedule-view.md) |
 | Seller product form | Its own **Event** card above "Order rules" (see below) |
 | `/track/<token>` | "Event: Fri 25 Sep · 8:00 AM — set by the store for this event" |
 | Product CSV export | `event_date`, `event_end_date`, `event_time`, `event_seats` (export-only; the import names them as ignored) |

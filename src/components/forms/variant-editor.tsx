@@ -12,6 +12,7 @@ import {
 import {
 	type MutableRefObject,
 	type ReactNode,
+	useCallback,
 	useEffect,
 	useId,
 	useMemo,
@@ -59,6 +60,8 @@ import {
 	choiceDetailsAnswer,
 	choicesAnswer,
 } from "./product-answers";
+import { settingAnchor } from "./product-setting-index";
+import { LAZY_DISCLOSURE_ATTR } from "./reveal-setting";
 
 export type VariantRow = {
 	optionValues: string[];
@@ -879,6 +882,17 @@ export function VariantEditor({
 	// every variant again. A refused parcel weight opens it (weight lives
 	// here outside weight mode); focus-error's reveal covers the rest.
 	const [detailsOpen, setDetailsOpen] = useState(!collapseChoices);
+	// Advanced is the one box on the form whose body is NOT rendered while
+	// closed, so "Find a setting" can't walk up from a field inside it — it
+	// asks this element to open first (`revealSetting`, z8r3fdwwy3).
+	// A callback ref, so the listener binds whenever the box mounts — it isn't
+	// rendered at all for made-to-order, and comes back when the type does.
+	const advancedRef = useCallback((el: HTMLDivElement | null) => {
+		if (!el) return;
+		const reveal = () => setAdvOpen(true);
+		el.addEventListener(REVEAL_EVENT, reveal);
+		return () => el.removeEventListener(REVEAL_EVENT, reveal);
+	}, []);
 	useEffect(() => {
 		if (
 			issues.some(
@@ -999,7 +1013,7 @@ export function VariantEditor({
 		);
 	}
 
-	// --- Mode switch (the "What kind of product is it?" question) -------------
+	// --- Mode switch (the "Does the buyer choose anything?" question) ---------
 	function switchToChoices() {
 		if (hasOptions) return;
 		if (!confirmLosingChoices()) return;
@@ -1396,12 +1410,16 @@ export function VariantEditor({
 
 	return (
 		<div className="flex flex-col gap-4">
-			{/* Q1 — what kind of product is it? Drives the shape of everything
+			{/* Q1 — does the buyer choose anything? Drives the shape of everything
 			    below: one price field, a price per choice, or no required price
 			    at all. Three segments now (86eyfq04j) — a bespoke seller had no
 			    way in without inventing a price and digging through Advanced. */}
-			<div className="flex flex-col gap-1.5">
-				<span className="text-sm font-medium">What kind of product is it?</span>
+			<div className="flex flex-col gap-1.5" {...settingAnchor("product-type")}>
+				{/* The wizard's step-2 question, in the same words (z8r3fdxt99) —
+				    "what kind of product" read as step 0's question asked twice. */}
+				<span className="text-sm font-medium">
+					Does the buyer choose anything?
+				</span>
 				<div className="flex gap-1 rounded-xl bg-muted p-1">
 					{(
 						[
@@ -1454,7 +1472,10 @@ export function VariantEditor({
 				<div className="flex flex-col gap-3">
 					{/* "Starting price", not "Price" — the same field as the bespoke
 					    line under Advanced, and the buyer sees it as "From RM 40". */}
-					<label className="flex flex-col gap-1 text-sm font-medium">
+					<label
+						className="flex flex-col gap-1 text-sm font-medium"
+						{...settingAnchor("starting-price")}
+					>
 						Starting price ({moneySymbol}){" "}
 						<span className="font-normal text-muted-foreground">
 							(optional)
@@ -1471,7 +1492,10 @@ export function VariantEditor({
 							instead.
 						</span>
 					</label>
-					<label className="flex flex-col gap-1 text-sm font-medium">
+					<label
+						className="flex flex-col gap-1 text-sm font-medium"
+						{...settingAnchor("mto-prompt")}
+					>
 						What should the buyer tell you?{" "}
 						<span className="font-normal text-muted-foreground">
 							(optional)
@@ -1499,7 +1523,10 @@ export function VariantEditor({
 				</div>
 			) : !hasOptions ? (
 				<div className="grid grid-cols-2 gap-3">
-					<label className="flex flex-col gap-1 text-sm font-medium">
+					<label
+						className="flex flex-col gap-1 text-sm font-medium"
+						{...settingAnchor("price")}
+					>
 						Price ({moneySymbol})
 						<PriceInput
 							value={rows[0]?.price ?? ""}
@@ -1516,7 +1543,10 @@ export function VariantEditor({
 								);
 								if (live)
 									return (
-										<div className="flex flex-col gap-1 text-sm font-medium">
+										<div
+											className="flex flex-col gap-1 text-sm font-medium"
+											{...settingAnchor("stock", 0)}
+										>
 											<span>In stock</span>
 											<LiveStockCell
 												onHand={live.onHand}
@@ -1532,7 +1562,10 @@ export function VariantEditor({
 										</div>
 									);
 								return (
-									<label className="flex flex-col gap-1 text-sm font-medium">
+									<label
+										className="flex flex-col gap-1 text-sm font-medium"
+										{...settingAnchor("stock", 0)}
+									>
 										In stock now
 										<StockInput
 											value={rows[0]?.stock ?? ""}
@@ -1549,7 +1582,10 @@ export function VariantEditor({
 			) : (
 				<>
 					{/* First axis — what the buyer chooses by. */}
-					<div className="flex flex-col gap-2">
+					<div
+						className="flex flex-col gap-2"
+						{...settingAnchor("choice-axis")}
+					>
 						<div className="flex items-center justify-between">
 							<span className="text-sm font-medium">They choose by</span>
 							{variantCount > 0 ? (
@@ -1671,7 +1707,10 @@ export function VariantEditor({
 											) : null}
 										</div>
 										<div className="grid grid-cols-2 gap-2">
-											<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+											<label
+												className="flex flex-col gap-1 text-xs font-medium text-muted-foreground"
+												{...settingAnchor("choice-price", i)}
+											>
 												Price ({moneySymbol})
 												<PriceInput
 													value={row.price}
@@ -1688,7 +1727,10 @@ export function VariantEditor({
 														);
 														if (live)
 															return (
-																<div className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+																<div
+																	className="flex flex-col gap-1 text-xs font-medium text-muted-foreground"
+																	{...settingAnchor("stock", i)}
+																>
 																	<span>In stock</span>
 																	<LiveStockCell
 																		onHand={live.onHand}
@@ -1704,7 +1746,10 @@ export function VariantEditor({
 																</div>
 															);
 														return (
-															<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+															<label
+																className="flex flex-col gap-1 text-xs font-medium text-muted-foreground"
+																{...settingAnchor("stock", i)}
+															>
 																In stock now
 																<StockInput
 																	value={row.stock}
@@ -1741,7 +1786,10 @@ export function VariantEditor({
 			    Skipped entirely for made-to-order: the type IS the answer, and
 			    picking "from stock" here would silently undo it. */}
 			{gridReady && !madeToOrder ? (
-				<div className="flex flex-col gap-1.5 border-t border-border pt-3">
+				<div
+					className="flex flex-col gap-1.5 border-t border-border pt-3"
+					{...settingAnchor("prepare")}
+				>
 					<PrepareQuestion
 						allTrack={allTrack}
 						allMto={allMto}
@@ -1806,6 +1854,7 @@ export function VariantEditor({
 							<li
 								key={variantLabel(row.optionValues) || "single"}
 								className="flex flex-col gap-1"
+								{...settingAnchor("parcel-weight", i)}
 							>
 								<span className="flex min-h-9 items-center justify-between gap-3">
 									<span className="min-w-0 flex-1 truncate text-sm">
@@ -1829,7 +1878,11 @@ export function VariantEditor({
 			    second axis is already gated on `hasOptions`. The approval fact is
 			    stated in the type's own setup above instead. */}
 			{madeToOrder ? null : (
-				<div className="rounded-xl border border-dashed border-border">
+				<div
+					ref={advancedRef}
+					className="rounded-xl border border-dashed border-border"
+					{...{ [LAZY_DISCLOSURE_ATTR]: "advanced" }}
+				>
 					<button
 						type="button"
 						onClick={() => setAdvOpen((v) => !v)}
@@ -1903,12 +1956,18 @@ export function VariantEditor({
 							{/* Second axis (choices mode only) — Size × Flavour grids. */}
 							{hasOptions ? (
 								options.length > 1 ? (
-									<div className="flex flex-col gap-2">
+									<div
+										className="flex flex-col gap-2"
+										{...settingAnchor("second-choice")}
+									>
 										<span className="text-sm font-medium">Second choice</span>
 										{renderAxisEditor(1, true)}
 									</div>
 								) : (
-									<div className="flex flex-col gap-2">
+									<div
+										className="flex flex-col gap-2"
+										{...settingAnchor("second-choice")}
+									>
 										<Button
 											type="button"
 											variant="outline"
@@ -1966,7 +2025,12 @@ export function VariantEditor({
 												)}
 											>
 												<div className="flex items-center gap-2.5">
-													{renderRowImage(i, row)}
+													<span
+														className="shrink-0"
+														{...settingAnchor("choice-photo", i)}
+													>
+														{renderRowImage(i, row)}
+													</span>
 													<span className="min-w-0 flex-1 truncate text-sm font-medium">
 														{variantLabel(row.optionValues)}
 													</span>
@@ -1976,10 +2040,14 @@ export function VariantEditor({
 														onChange={(e) => setRow(i, { sku: e.target.value })}
 														className="h-9 w-28"
 														aria-label={`SKU for ${variantLabel(row.optionValues)}`}
+														{...settingAnchor("sku", i)}
 													/>
 												</div>
 												<div className="flex flex-wrap items-center gap-4 text-xs">
-													<label className="flex items-center gap-1.5">
+													<label
+														className="flex items-center gap-1.5"
+														{...settingAnchor("choice-on-off", i)}
+													>
 														<input
 															type="checkbox"
 															checked={row.active}
@@ -2006,7 +2074,10 @@ export function VariantEditor({
 														</label>
 													)}
 													{!weightMode ? (
-														<span className="flex items-center gap-1.5">
+														<span
+															className="flex items-center gap-1.5"
+															{...settingAnchor("parcel-weight", i)}
+														>
 															Parcel weight
 															{renderWeightInput(i, row)}
 														</span>
@@ -2018,7 +2089,10 @@ export function VariantEditor({
 								</ChoiceListDisclosure>
 							) : null}
 							{!hasOptions ? (
-								<label className="flex flex-col gap-1 text-sm font-medium">
+								<label
+									className="flex flex-col gap-1 text-sm font-medium"
+									{...settingAnchor("sku", 0)}
+								>
 									SKU{" "}
 									<span className="font-normal text-muted-foreground">
 										(optional — your own item code)
@@ -2031,7 +2105,10 @@ export function VariantEditor({
 								</label>
 							) : null}
 							{!hasOptions && !weightMode && rows[0] ? (
-								<div className="flex flex-col gap-1 text-sm font-medium">
+								<div
+									className="flex flex-col gap-1 text-sm font-medium"
+									{...settingAnchor("parcel-weight", 0)}
+								>
 									Parcel weight{" "}
 									<span className="font-normal text-muted-foreground">
 										(grams, optional — prices delivery on courier-rate stores)

@@ -146,6 +146,12 @@ export interface OrderFilterValue {
 	 * optional so that is the common case (PR #235 review). */
 	categoriesUnspecified: boolean;
 	/**
+	 * ONE listing's orders (`z8r3fdjv0d`), as a `products._id`. Like the due
+	 * span, no picker writes it: it arrives on the URL from a Schedule row, so
+	 * the panel's job is to show it — by name — and let it go.
+	 */
+	listing?: string;
+	/**
 	 * Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys, e.g.
 	 * "tiktok" / "direct" / "counter". Multi-select: several channels OR
 	 * together, because "how did my socials do" spans more than one. Empty =
@@ -172,6 +178,7 @@ export function activeFilterCount(v: OrderFilterValue): number {
 		v.bookingPeriods.length +
 		v.categories.length +
 		(v.categoriesUnspecified ? 1 : 0) +
+		(v.listing != null ? 1 : 0) +
 		v.attributionSources.length
 	);
 }
@@ -314,8 +321,23 @@ function activeFilterTokens(
 	/** Resolves a raw status to the retailer's own stage wording, so a token
 	 * reads the same as the Status column it came from. */
 	statusLabel?: (status: string) => string,
+	/** The `listing` filter's name: a string once resolved, `null` when the id
+	 * names no listing of this store, `undefined` while loading. */
+	listingName?: string | null,
 ): FilterToken[] {
 	const tokens: FilterToken[] = [];
+	// First: when present it is the subject of the whole list ("the Luncheon's
+	// orders"), and every other token narrows within it.
+	if (v.listing != null) {
+		tokens.push({
+			key: "listing",
+			label:
+				listingName === null
+					? "Listing not found"
+					: `Listing: ${listingName ?? "…"}`,
+			clear: (x) => ({ ...x, listing: undefined }),
+		});
+	}
 	for (const st of v.statuses) {
 		tokens.push({
 			key: `status-${st}`,
@@ -440,6 +462,7 @@ export function clearedFilters(): OrderFilterValue {
 		statuses: [],
 		categories: [],
 		categoriesUnspecified: false,
+		listing: undefined,
 		attributionSources: [],
 	};
 }
@@ -498,6 +521,7 @@ export function OrderFilters({
 	country,
 	availableSources,
 	availableCategories,
+	listingName,
 	statusLabel,
 	facets,
 	mockupCount,
@@ -521,6 +545,8 @@ export function OrderFilters({
 	/** Category names present in the seller's window, most-used first — the same
 	 * list the Categories header filter offers (86eyrtz74). */
 	availableCategories?: string[];
+	/** Name for the `listing` token, from `searchOrders.listingName`. */
+	listingName?: string | null;
 	/** Per-option row counts from `searchOrders`, tallied over the UNFILTERED
 	 * window. Optional so the dialog still renders while the query is in
 	 * flight — a missing facet shows 0 rather than blocking the panel. */
@@ -552,7 +578,12 @@ export function OrderFilters({
 		INBOX_LEAF_KEYS.length +
 		(showBookingPeriods ? BOOKING_PERIOD_CHIPS.length : 0);
 	const showMockup = (mockupCount ?? 0) > 0 || value.mockup;
-	const tokens = activeFilterTokens(value, mockupCount, statusLabel);
+	const tokens = activeFilterTokens(
+		value,
+		mockupCount,
+		statusLabel,
+		listingName,
+	);
 	const clearFilters = () => onChange(clearedFilters());
 
 	function togglePayment(p: PaymentStatus) {

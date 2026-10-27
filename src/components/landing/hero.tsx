@@ -1,11 +1,13 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
 import type { ReferralInvite } from "../../../convex/referrals";
+import { useAuthState } from "../../hooks/useAuthState";
 import { m } from "../../paraglide/messages";
+import { Skeleton } from "../ui/skeleton";
 import { HeroStage } from "./hero-stage";
 import {
+	AuthCtaPlaceholder,
 	CommissionBadge,
 	ctaPillClass,
 	DemoPill,
@@ -69,7 +71,7 @@ export function Hero({
 }: {
 	invite: ReferralInvite | null | undefined;
 }) {
-	const { isSignedIn } = useAuth();
+	const auth = useAuthState();
 	const shouldReduceMotion = useReducedMotion();
 
 	return (
@@ -116,7 +118,16 @@ export function Hero({
 						variants={revealUp}
 						className="mt-1 flex w-full flex-col items-center gap-3 sm:w-auto"
 					>
-						{isSignedIn ? (
+						{auth === "loading" ? (
+							// Sized to the signed-out stack — pill, text link, guarantee.
+							<AuthCtaPlaceholder className="flex w-full flex-col items-center gap-3 sm:w-auto">
+								<Skeleton className="h-[52px] w-full rounded-full sm:w-80" />
+								<div className="flex min-h-11 items-center">
+									<Skeleton className="h-4 w-56" />
+								</div>
+								<Skeleton className="mt-1 h-4 w-full max-w-md" />
+							</AuthCtaPlaceholder>
+						) : auth === "signed-in" ? (
 							<Link
 								to="/app"
 								className={`${ctaPillClass("accent")} w-full sm:w-fit`}

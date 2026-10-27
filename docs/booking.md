@@ -83,20 +83,23 @@ requests). `securityDeposit` joins this object in **S5** — the wizard field
 ships there WITH its machinery, because an input that silently does nothing is
 worse than hidden behaviour.
 
-`retailers.storeType` (same enum, optional) — "What does your store sell?" in
-Settings → Store, directly under the store description. Its ONLY job is
-pre-selecting the wizard's kind card for **new** products; it never re-types
-existing ones (the card copy says so). Settings shows **three** cards (Food &
-physical goods merged — two lit cards for one stored value would read broken);
-the wizard shows four because mid-wizard the Food card routes the preparation
-question. Tap again to clear (`storeType: null` in `updateSettings`).
+`retailers.storeType` (same enum, optional) — **retired from the UI in
+z8r3fdxt99.** It was "What does your store sell?" in Settings → Store, and its
+only job was pre-selecting the wizard's kind card. The kind is fixed once
+published and one store sells more than one kind (single meals AND meal
+plans), so a pre-picked card with a sticky Continue is how a meal plan was
+published as Food. The field and the `updateSettings` arg remain until a
+narrow drops them; nothing reads the value.
 
 ### The wizard's kind-first route
 
 Step **0** — "What are you selling?" (BM "Anda jual apa?" comes with the
-storefront i18n sweep; `/app` is EN like every dashboard route) — four
-`AnswerCard`s with one-line examples, pre-answered + badged "Your store type"
-when `storeType` is set, food/booking explainer notes under the cards. Step
+storefront i18n sweep; `/app` is EN like every dashboard route) — six
+`AnswerCard`s in two groups, never pre-answered (z8r3fdxt99; see
+[`product-setup-wizard.md`](./product-setup-wizard.md#step-0--two-groups-six-cards-z8r3fdxt99)).
+Booking is reached through **two cards**: *A plan or package* (package length
+required — memberships, meal plans, class passes) and *A stay or rental*
+(free range, optional fixed deal). Each card's next-step note sits under it. Step
 IDs stay stable; only the walked order changes (`wizardSteps(shape, kind)`):
 
 - physical/service: `[0, 1, 2, 3, 4, 5]`
@@ -800,9 +803,10 @@ checkout-only ceiling + conflict copy inputs).
 `convex/products.test.ts` ("product kind + booking config"): pairing
 enforcement both directions, capacity bounds, update re-tune + non-booking
 refusal, physical-normalizes-to-unset. `convex/retailers.test.ts`
-("storeType"): set/read/clear. `product-wizard.test.ts`: booking route
+("storeType"): set/read/clear (server only — no UI writes it since
+z8r3fdxt99). `product-wizard.test.ts`: booking route
 `[0,1,3,5]`. `product-wizard-booking.test.tsx`: render cover — step 0 cards +
-disabled-with-reason Continue, storeType pre-answer badge, food follow-up
+disabled-with-reason Continue, never pre-answered, the plan route, food follow-up
 note, the walked booking route, publish payload (`kind` + `booking`, no
 `minQuantity`, one `blockWhenOutOfStock: false` variant), junk-capacity
 inline error, leaving-booking re-asks. `product-summary.test.ts`: booking
