@@ -139,13 +139,27 @@ every listing filed under it.
   back to the earliest such start. Its group heading reads **"On now · started
   Mon, 9 Nov"**, because the seminar's second morning is exactly when the seller
   opens this screen. A row is past only once its *last* day is behind today.
+  This holds for an **archived** event too: archiving one with guests is
+  allowed, so the query reads every product in one pass, archived included.
+  That is bounded because a store's 200 product slots count archived rows. It
+  matters because without an archived event's start date the reach-back can't
+  find its RSVPs at all.
+- **A booking row is its check-in day, and it moves to the past section the
+  day after check-in**, even while the stay or package is still running. That is
+  deliberate (PR #425 review): the row exists to say who to chase *before* the
+  day. Keeping running bookings "on now" would leave a gym's 50 month-long
+  packages on the screen for a month and bury the dates that still need
+  chasing. A booking's whole span lives on the booking calendar, which is the
+  lens for "who is here right now". The row says **Check-in**, so the rule reads
+  on screen.
 - **Bounded like the calendar feed**: at most 2,000 orders per window. Past
   that the query logs and returns `truncated: true`, and the page says the
   numbers may be short. It is never silently short.
 - An event nobody has registered for still gets its row (seeded from the active
   event listings), because "0 of 30" five days before a luncheon is the most
   useful thing this screen can say. An **archived** listing with orders in the
-  window keeps its row; its day still happens.
+  window keeps its row (its day still happens), but an archived event with
+  nobody registered gets no empty row: the seller put it away.
 
 ## States
 
@@ -161,8 +175,10 @@ or rental*) · dated listings but nothing in 90 days (with *Show past 30 days*)
   no cap, cancelled excluded, multi-day on its start date, booking rows, the
   exact-one-bucket partition, seat vs order counting, gated orders.
 - `convex/schedule.test.ts`: the RSVP panel's number equals the row's; window
-  bounds and refusals; Starter and stranger refused; the `isFreeOrder` rule; the
-  inbox `listing` filter (exact match, a hand-edited id, another store's id,
+  bounds and refusals; Starter and stranger refused; the `isFreeOrder` rule; an
+  archived event that is still running (and one with nobody registered); a real
+  booking through `requestBooking`, then approval, then its inbox door; the inbox
+  `listing` filter (exact match, a hand-edited id, another store's id,
   Pro-gated).
 - `src/components/order/schedule-rows.test.tsx` and
   `src/routes/app.orders.schedule.test.tsx`: chips, notes, links and page states.

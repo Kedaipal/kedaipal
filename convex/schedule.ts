@@ -5,8 +5,8 @@
 // docs/schedule-view.md.
 
 import { ConvexError, v } from "convex/values";
-import type { Doc, Id } from "./_generated/dataModel";
-import { type QueryCtx, query } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
+import { query } from "./_generated/server";
 import { creditGateFor, isOrderGated } from "./creditLock";
 import { requireRetailerAccess } from "./lib/auth";
 import { DAY_MS, isMytMidnight } from "./lib/fulfilmentDate";
@@ -57,15 +57,6 @@ function toListing(
 	};
 }
 
-async function activeProducts(ctx: QueryCtx, retailerId: Id<"retailers">) {
-	return await ctx.db
-		.query("products")
-		.withIndex("by_retailer_active", (q) =>
-			q.eq("retailerId", retailerId).eq("active", true),
-		)
-		.collect();
-}
-
 /**
  * Does this store sell anything with a date of its own — an event or a booking
  * listing? Decides whether the Orders view switch offers Schedule at all, the
@@ -79,7 +70,12 @@ export const hasDatedListings = query({
 			area: "orders",
 			level: "read",
 		});
-		const products = await activeProducts(ctx, retailerId);
+		const products = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailerId).eq("active", true),
+			)
+			.collect();
 		return products.some((p) => datedKind(p) !== null);
 	},
 });
@@ -91,10 +87,12 @@ export const hasDatedListings = query({
  * `fromMyt` comes from the client, as in `orders.countDueByDay`: a query that
  * reads the clock to pick its window can't be cached.
  *
- * Reads: the window on `by_retailer_fulfilment`, the store's active products
- * (to seed events nobody has registered for yet), and one `get` per listing an
- * order names that isn't active any more — an archived event with RSVPs still
- * happens on its day.
+ * Reads: the window on `by_retailer_fulfilment`, and the store's products in
+ * ONE pass — archived ones included, which is bounded because a store's 200
+ * product slots count archived rows too (`MAX_PRODUCTS_PER_RETAILER`). Archived
+ * listings matter: an event archived after people registered still happens on
+ * its day, and if it's a multi-day event that started before the window, the
+ * reach-back below has to know its start date to find its RSVPs at all.
  */
 export const byDate = query({
 	args: {
@@ -122,13 +120,22 @@ export const byDate = query({
 			);
 
 		const listings = new Map<string, ScheduleListing>();
+		// Events that get a row even with nobody registered: ACTIVE ones only.
+		// An archived event with no RSVPs is a listing the seller put away, and
+		// "0 registered" for it would be noise.
 		const seedEvents: ScheduleListing[] = [];
-		// A multi-day event that STARTED before the window but is still running
-		// belongs on it (it's on today), and its RSVPs all sit on its first day —
-		// so the order read has to reach back to the earliest such start.
+		// Events overlapping the window, archived or not. A multi-day event that
+		// STARTED before the window but is still running belongs on it (it's on
+		// today), and its RSVPs all sit on its first day — so the order read has
+		// to reach back to the earliest such start, and those early RSVPs are
+		// kept only if they belong to one of these.
+		const runningEvents: ScheduleListing[] = [];
 		let readFrom = fromMyt;
-		const active = await activeProducts(ctx, retailerId);
-		for (const p of active) {
+		const products = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) => q.eq("retailerId", retailerId))
+			.collect();
+		for (const p of products) {
 			const kind = datedKind(p);
 			if (kind === null) continue;
 			const listing = toListing(p, kind);
@@ -138,7 +145,8 @@ export const byDate = query({
 				p.event.date <= toMyt &&
 				eventLastDay(p.event) >= fromMyt
 			) {
-				seedEvents.push(listing);
+				runningEvents.push(listing);
+				if (p.active) seedEvents.push(listing);
 				readFrom = Math.min(readFrom, p.event.date);
 			}
 		}
@@ -161,22 +169,6 @@ export const byDate = query({
 		}
 		const orders = window.slice(0, MAX_SCHEDULE_ORDERS);
 
-		// A listing archived after people registered for it: its day still
-		// happens, so its row must still be there. Looked up once each — and
-		// only ids that aren't ACTIVE products, so the cake on a dated order
-		// (active, just not dated) costs nothing.
-		const activeIds = new Set<Id<"products">>(active.map((p) => p._id));
-		const missing = new Set<Id<"products">>();
-		for (const o of orders) {
-			for (const id of listingIdsOf(o)) if (!activeIds.has(id)) missing.add(id);
-		}
-		for (const id of missing) {
-			const p = await ctx.db.get(id);
-			if (!p || p.retailerId !== retailerId) continue;
-			const kind = datedKind(p);
-			if (kind !== null) listings.set(p._id, toListing(p, kind));
-		}
-
 		// Counted, never described: a gated order holds its place on the row,
 		// reported as waiting on credits, and nothing else about it is read.
 		const gate = await creditGateFor(ctx, retailerId);
@@ -187,7 +179,7 @@ export const byDate = query({
 			if (
 				o.fulfilmentDate !== undefined &&
 				o.fulfilmentDate < fromMyt &&
-				!startsSeededEvent(o, seedEvents)
+				!isRunningEventRsvp(o, runningEvents)
 			)
 				continue;
 			projected.push({
@@ -212,19 +204,12 @@ export const byDate = query({
 	},
 });
 
-/** Every listing id an order could be counted against. */
-function listingIdsOf(o: Doc<"orders">): Id<"products">[] {
-	const ids = o.items.map((i) => i.productId);
-	if (o.bookingProductId) ids.push(o.bookingProductId);
-	return ids;
-}
-
 /** Is this pre-window order an RSVP to an event that is still running? */
-function startsSeededEvent(
+function isRunningEventRsvp(
 	o: Doc<"orders">,
-	seedEvents: readonly ScheduleListing[],
+	runningEvents: readonly ScheduleListing[],
 ): boolean {
-	return seedEvents.some(
+	return runningEvents.some(
 		(e) =>
 			e.event?.date === o.fulfilmentDate &&
 			o.items.some((i) => i.productId === e._id),

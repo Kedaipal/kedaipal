@@ -258,6 +258,44 @@ describe("schedule.byDate", () => {
 		]);
 	});
 
+	test("an ARCHIVED multi-day event still running today keeps its row", async () => {
+		// Archiving an event with guests is allowed, and its RSVPs sit on its
+		// first day — before the window. Only the full product read finds the
+		// start date to reach back to (PR #425 review).
+		const t = setup();
+		const store = await seedStore(t);
+		const { productId, variantId } = await seedEvent(t, store.retailerId, {
+			name: "RPJ 5.0",
+			date: day(3),
+		});
+		await rsvp(t, store, variantId, 2);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(productId, {
+				active: false,
+				event: { date: day(-1), endDate: day(0), timeMinutes: 9 * 60 },
+			});
+			const orders = await ctx.db.query("orders").collect();
+			for (const o of orders) await ctx.db.patch(o._id, { fulfilmentDate: day(-1) });
+		});
+		const { rows } = await ask(t, store.retailerId);
+		expect(rows).toEqual([
+			expect.objectContaining({ name: "RPJ 5.0", date: day(-1), registered: 2 }),
+		]);
+	});
+
+	test("an archived event with nobody registered gets no empty row", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		const { productId } = await seedEvent(t, store.retailerId, {
+			name: "Put away",
+			date: day(5),
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(productId, { active: false });
+		});
+		expect((await ask(t, store.retailerId)).rows).toEqual([]);
+	});
+
 	test("an order waiting on credits is counted as waiting, not by its payment", async () => {
 		const t = setup();
 		const store = await seedStore(t);
@@ -316,6 +354,64 @@ describe("schedule.byDate", () => {
 		await expect(ask(t, store.retailerId, day(5), day(0))).rejects.toThrow(
 			/must span/,
 		);
+	});
+});
+
+describe("schedule.byDate — bookings through the real path", () => {
+	test("a request awaits approval, an approved booking is owed, and its row opens it", async () => {
+		const t = setup();
+		const store = await seedStore(t);
+		const asOwner = t.withIdentity({ subject: OWNER });
+		const productId = await asOwner.mutation(api.products.create, {
+			retailerId: store.retailerId,
+			name: "Riverside Plot",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 0,
+			kind: "booking" as const,
+			booking: { capacityPerNight: 3 },
+			variants: [{ optionValues: [], price: 8000, onHand: 0 }],
+		});
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: store.retailerId,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			customer,
+		});
+
+		// A two-night stay is ONE booking, on its check-in day, and no payment
+		// has been asked for while it waits on the seller.
+		let { rows } = await ask(t, store.retailerId);
+		expect(rows).toEqual([
+			expect.objectContaining({
+				kind: "booking",
+				name: "Riverside Plot",
+				date: day(3),
+				registered: 1,
+				orders: 1,
+				awaitingApproval: 1,
+				unpaid: 0,
+			}),
+		]);
+		expect(rows[0].seats).toBeUndefined();
+
+		const order = await asOwner.query(api.orders.get, { shortId });
+		if (!order) throw new Error("booking missing");
+		await asOwner.mutation(api.bookings.approveBookingRequest, {
+			orderId: order._id,
+		});
+		({ rows } = await ask(t, store.retailerId));
+		expect(rows[0]).toMatchObject({ registered: 1, awaitingApproval: 0, unpaid: 1 });
+
+		// The row's door: the booking arm of the inbox's listing filter.
+		const res = await asOwner.query(api.orders.searchOrders, {
+			retailerId: store.retailerId,
+			listing: productId,
+			fulfilmentFrom: day(3),
+			fulfilmentTo: day(3),
+		});
+		expect(res.orders.map((o) => o.shortId)).toEqual([shortId]);
 	});
 });
 
