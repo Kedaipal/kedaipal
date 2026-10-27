@@ -1,5 +1,5 @@
 import type { FormEvent } from "react";
-import { DISCLOSURE_PANEL_ATTR, REVEAL_EVENT } from "../ui/question-row";
+import { openEnclosingDisclosure } from "./reveal-setting";
 
 /**
  * Shared "take me to the error" behaviour for every form built on the
@@ -33,13 +33,8 @@ export function focusFirstInvalidField(
 	// The error sits inside a COLLAPSED question row (z8r3fdv1z2): a hidden
 	// element can be neither scrolled to nor focused, so ask the row to open
 	// and report "not yet" — the caller's retry lands on it once it renders.
-	const closedPanel = target.closest<HTMLElement>(
-		`[${DISCLOSURE_PANEL_ATTR}][hidden]`,
-	);
-	if (closedPanel) {
-		closedPanel.dispatchEvent(new CustomEvent(REVEAL_EVENT));
-		return false;
-	}
+	// The same opener "Find a setting" uses (z8r3fdwwy3).
+	if (openEnclosingDisclosure(target)) return false;
 	// INSTANT, not smooth. Measured in Chrome on the product form: a smooth
 	// scrollIntoView over a long distance moved the page 0px, while the same
 	// call without `behavior` jumped correctly — so every form's "take me to

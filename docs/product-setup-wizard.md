@@ -338,7 +338,9 @@ alone is an FAQ accordion; with its answer it is state.
   whether the first invalid field sits inside a closed `[data-disclosure-panel]`;
   if so it dispatches `REVEAL_EVENT` on it and reports "not yet", and the
   submit path's existing timer retry focuses the field once it renders. One
-  generic hook, so any future row inherits it.
+  generic hook, so any future row inherits it. The opener is
+  `openEnclosingDisclosure` in `reveal-setting.ts`, shared with "Find a
+  setting" below, so the two paths can't disagree about what "open" means.
 - **Deep links** (`?spot=promo|prep_time|weekend_rate`) scroll to the ROW,
   ring it and open it (`defaultOpen`), so the seller lands on the field.
 - **Custom orders + mockup approval moved out of Advanced** in the full form:
@@ -361,6 +363,73 @@ alone is an FAQ accordion; with its answer it is state.
   (`src/components/forms/product-images-field.tsx`), used by both the form and
   the wizard. Both it and the variant editor render through staging's shared
   `AppImage` primitive (`86eybq1uk`).
+
+### "Find a setting" — every field, by name ([`z8r3fdwwy3`](https://app.clickup.com/t/z8r3fdwwy3))
+
+Collapsing the capabilities made the page learnable, but it made a KNOWN
+option slow to reach: sellers who know there's a prep time or a SKU guess
+which row holds it and open them one by one. The full form (create + edit,
+every kind) now opens with a search box: type "prep", "SKU", "berat" or a
+choice's name, pick a result, and the form opens whatever is in the way,
+scrolls to the field, rings it (the spotlight ring) and puts the cursor in it.
+
+- **A jump list, not a page filter.** Each result names *where* the field
+  lives ("SKU · Large — Pricing & choices → Advanced → Per-choice details"),
+  which is the thing the seller didn't know, and the page doesn't change shape
+  while they type. Filtering the page was the first idea and was rejected:
+  most hard-to-find fields sit inside the price card, which can't be
+  half-hidden.
+- **The index is data, one entry per FIELD** — `PRODUCT_SETTING_INDEX` in
+  `src/components/forms/product-setting-index.ts`, ~50 entries plus per-choice
+  instances and what the seller wrote (each choice, each buyer question, each
+  category). It is not read off the page, for two reasons. Advanced is **not
+  rendered while closed**, and keeping it mounted would render every choice
+  twice on a 40-choice product. And page labels never carry what sellers type
+  (*berat*, *diskaun*, *kod*, *masa sedia*). Matching is pure and synchronous:
+  folded per word, every word must hit by prefix, label beats alias beats
+  seller text beats breadcrumb, then page order. A per-choice field lists once
+  ("SKU"), and lists per choice only when the query names the choice ("large
+  sku").
+- **A field that exists but can't be used right now is still listed, with
+  the reason** ("Turn on “Run a promotion” first", "Events are on the Pro
+  plan", "Needs self-collect on — Settings → Fulfilment"), and the pick lands
+  on its row with the switch that fixes it focused. Leaving it out would be
+  the "is it even there?" doubt this exists to end. A field the KIND doesn't
+  have (weekend rate on a cake) is not listed.
+- **Getting there is one path**, `revealSetting` in
+  `src/components/forms/reveal-setting.ts`. Closed panels that stay mounted
+  (question rows, the choice lists) are opened by walking up from the field
+  (`openEnclosingDisclosure`, the same opener error-focus uses). The one box
+  that ISN'T mounted while closed, Advanced, carries `data-lazy-disclosure`,
+  and the entry names it in `opens`, so it is asked first. Retries ride a
+  timer, never rAF (a hidden tab never runs rAF; z8r3fdrkq2). After 2 s it
+  stops at the section and the status line says "Couldn't jump straight to …
+  — it's in the section shown."
+- **Loading states, only where a wait is real.** Typing has none: matching is
+  synchronous, so a spinner would only flicker. After a pick, "Opening
+  Pricing & choices → Advanced…" appears only if the jump takes over 150 ms (a
+  big Advanced box rendering), while the section is already scrolled into
+  view. While the product itself loads, the route's skeleton covers the whole
+  form, search included.
+- **Placement and keys.** First on the form, above the summary strip. Not
+  sticky: a row pinned under the variable-height mobile header "fought the
+  header/banner stack and visibly glitched" (the checkout precedent,
+  `app.checkout.tsx`). Instead the sticky save bar carries a **Find a setting**
+  button on phones (`lg:hidden`), and `/` focuses the box on desktop (never
+  while typing into a field). Esc clears. Enter picks the top result and never
+  submits the product. Combobox semantics follow `dial-country-picker`: the
+  options are `role="option"` buttons out of the tab order, driven by
+  `aria-activedescendant`.
+- **Zero results point to Settings**, where store-wide rules (delivery,
+  payments, currency) live, rather than a dead end.
+- **The rule for every new field:** give it a `data-setting` anchor
+  (`settingAnchor(id, choiceIndex?)`) or an `id`, and an index entry with
+  keywords. `product-form-setting-index-drift.test.tsx` renders the real form
+  for eight shapes of product, opens every section, and fails if a result's
+  target isn't on the page, if an anchor on the page isn't indexed, or if a
+  question row has no entry. Mutation-tested: a typo'd target, a dropped
+  anchor, a dropped row id, an unindexed anchor and a lost lazy marker each
+  turn it red.
 
 ### `rebuildRows` and the empty-axis moment
 
@@ -517,6 +586,11 @@ surface:
 - `src/components/forms/product-answers.ts` (+ `.test.ts`) — every row's answer line
 - `src/components/forms/product-form-questions.test.tsx` — which rows each kind gets, tri-state mockup, custom line as a row, refused save opens its row
 - `src/components/forms/focus-error.ts` — opens a collapsed row holding the first error
+- `src/components/forms/product-setting-index.ts` (+ `.test.ts`) — "Find a setting": the field index and matching (z8r3fdwwy3)
+- `src/components/forms/reveal-setting.ts` (+ `.test.ts`) — opening the way to a field; shared opener with focus-error
+- `src/components/forms/setting-search.tsx` — the search box, results list and status line
+- `src/components/forms/product-form-setting-search.test.tsx` — the search driven on the real form
+- `src/components/forms/product-form-setting-index-drift.test.tsx` — the index can't drift from the page
 
 ## Follow-ups (named, not hidden)
 
@@ -527,6 +601,12 @@ surface:
 - The wizard's Review "More options" and Settings' two home-grown expandable
   rows (`message-templates-form`, `order-flows-card`) could converge on
   `QuestionRow` — separate tickets, not part of `z8r3fdv1z2`.
+- **Search analytics** (which queries find nothing). The ticket asked for a
+  PostHog event, but PostHog isn't wired into this codebase (PR #237 never
+  merged); add `product_setting_search` with the zero-result query text when
+  it is.
+- The same search across **Settings**, using this index pattern — its own
+  ticket if the product-form search proves its keep.
 - Older What's-new entries in `src/content/releases.ts` still say "the
   Promotion card"; they are dated release records and were left as written.
   The next release's note should describe the question rows.

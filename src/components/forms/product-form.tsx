@@ -20,6 +20,7 @@ import {
 	MessageSquareText,
 	PackageCheck,
 	Save,
+	Search,
 	ShieldCheck,
 	Store,
 	Tag,
@@ -175,6 +176,7 @@ import {
 	type ProductImage,
 	ProductImagesField,
 } from "./product-images-field";
+import { type SettingContext, settingAnchor } from "./product-setting-index";
 import {
 	EMPTY_PROMO_DRAFT,
 	type PromoDraft,
@@ -185,6 +187,7 @@ import {
 	promoDraftValid,
 	promoSubmitValue,
 } from "./promo-fields";
+import { SettingSearch } from "./setting-search";
 import {
 	type CustomLineDraft,
 	CustomLineFields,
@@ -1205,6 +1208,11 @@ export function ProductForm({
 	// and photo — the way the event and promotion rows keep their drafts. It
 	// is NOT saved while off: the save sends `editor.customLine`, which is null.
 	const parkedCustomLine = useRef<CustomLineDraft | null>(null);
+	// "Find a setting" (z8r3fdwwy3): every jump is scoped to this form, and
+	// the save bar's search button brings the box back from far down a long
+	// form.
+	const formRef = useRef<HTMLFormElement>(null);
+	const searchInputRef = useRef<HTMLInputElement>(null);
 	// Submit-time validation issues, addressed to the exact editor input (see
 	// VariantIssue). Any edit clears them — they re-validate on the next save.
 	const [editorIssues, setEditorIssues] = useState<VariantIssue[]>([]);
@@ -1674,6 +1682,38 @@ export function ProductForm({
 	const eventPassedNow =
 		!isBooking && eventValue !== null && isEventPassed(eventValue);
 
+	// What "Find a setting" knows about this product — read off the same
+	// drafts the fields edit, so a result's "turn X on first" is true the
+	// moment X is switched (see product-setting-index.ts).
+	const choicesMode = editor.options.length > 0;
+	const settingContext: SettingContext = {
+		kind,
+		hasOptions: choicesMode,
+		madeToOrder,
+		gridReady: cartesian(editor.options).length > 0,
+		tracksStock: editor.rows.some((row) => row.blockWhenOutOfStock),
+		weightRequired: weightRequired !== null,
+		isEvent: eventDraft.on,
+		promoOn: promoDraft.on,
+		promoLocked,
+		groupedPromotion: Boolean(groupedPromotion),
+		eventsLocked,
+		categoriesLocked,
+		customLineOn: editor.customLine !== null,
+		offerSelfCollect,
+		isPackage: packageTrimmed.length > 0,
+		dayPackage: offersDayCounting,
+		countsOpenDays,
+		weekendRateSet: weekendTrimmed.length > 0,
+		choices: choicesMode
+			? editor.rows.map((row) => variantLabel(row.optionValues))
+			: [],
+		buyerQuestions: questionsDraft.map((q) => q.label),
+		categoryNames: (storeCategories ?? [])
+			.filter((c) => categoryIds.includes(c._id))
+			.map((c) => c.name),
+	};
+
 	/** A question row's collapsed line: its answer, unless a save was refused
 	 * for something inside it — then it says so, and `focusFirstInvalidField`
 	 * opens the first such row. */
@@ -1687,7 +1727,14 @@ export function ProductForm({
 	}
 
 	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-5">
+		<form ref={formRef} onSubmit={handleSubmit} className="flex flex-col gap-5">
+			{/* First on the page: a long form of collapsed sections is only
+			    quick to edit if the seller can name what they want. */}
+			<SettingSearch
+				context={settingContext}
+				formRef={formRef}
+				inputRef={searchInputRef}
+			/>
 			{/* Lead-in: the edit page confirms what the product IS in words; the
 			    create path shows what's still needed. */}
 			<form.Subscribe selector={(s) => s.values.name}>
@@ -1724,6 +1771,7 @@ export function ProductForm({
 			</form.Subscribe>
 
 			<ProductStepCard
+				id="product-basics"
 				icon={<PackageCheck className="size-5" />}
 				kicker="The product"
 				title="Product basics"
@@ -1776,6 +1824,7 @@ export function ProductForm({
 			</ProductStepCard>
 
 			<ProductStepCard
+				id="product-photos"
 				icon={<Camera className="size-5" />}
 				kicker="The product"
 				title="Photos"
@@ -1799,6 +1848,7 @@ export function ProductForm({
 				// create; archive + recreate is the escape hatch). What DEFINES the
 				// stay stays open here; its optional extras are questions below.
 				<ProductStepCard
+					id="product-pricing"
 					icon={<Layers3 className="size-5" />}
 					kicker="Selling"
 					title="Pricing & capacity"
@@ -1862,14 +1912,16 @@ export function ProductForm({
 					{/* A DAY package decides what a store closure does to it
 					    (z8r3fdhpm7) — asked right under the length it counts. */}
 					{offersDayCounting && packageLengthNum !== undefined ? (
-						<PackageDayCounting
-							packageLength={packageLengthNum}
-							skipsClosedDays={skipsClosedDays}
-							onChange={setSkipsClosedDays}
-							maxSkips={maxSkipsDraft}
-							onMaxSkipsChange={setMaxSkipsDraft}
-							schedule={storeSchedule}
-						/>
+						<div {...settingAnchor("day-counting")}>
+							<PackageDayCounting
+								packageLength={packageLengthNum}
+								skipsClosedDays={skipsClosedDays}
+								onChange={setSkipsClosedDays}
+								maxSkips={maxSkipsDraft}
+								onMaxSkipsChange={setMaxSkipsDraft}
+								schedule={storeSchedule}
+							/>
+						</div>
 					) : null}
 					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
 						<label htmlFor="booking-price" className="text-sm font-medium">
@@ -1941,6 +1993,7 @@ export function ProductForm({
 				</ProductStepCard>
 			) : (
 				<ProductStepCard
+					id="product-pricing"
 					icon={<Layers3 className="size-5" />}
 					kicker="Selling"
 					title="Pricing & choices"
@@ -1962,6 +2015,7 @@ export function ProductForm({
 					<Link
 						to="/app/settings"
 						search={{ tab: "store" }}
+						{...settingAnchor("currency")}
 						className="inline-flex items-center gap-1.5 self-start rounded-full bg-muted px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
 					>
 						<Info className="size-3.5" aria-hidden />
@@ -2041,7 +2095,10 @@ export function ProductForm({
 										</p>
 									) : null}
 									{weekendTrimmed.length > 0 ? (
-										<div className="flex flex-col gap-1.5 pt-1">
+										<div
+											className="flex flex-col gap-1.5 pt-1"
+											{...settingAnchor("weekend-nights")}
+										>
 											<span className="text-xs font-medium">
 												Which nights charge this rate?
 											</span>
@@ -2116,6 +2173,7 @@ export function ProductForm({
 				    booking listing: a stay already takes its own dates. */}
 				{isBooking ? null : (
 					<QuestionRow
+						id="product-event"
 						icon={<CalendarClock />}
 						question="Is it a fixed-date event?"
 						badge={eventsLocked ? <ProBadge /> : undefined}
@@ -2145,6 +2203,7 @@ export function ProductForm({
 				    product already IS both, so neither is asked of it. */}
 				{isBooking || madeToOrder ? null : (
 					<QuestionRow
+						id="product-custom-orders"
 						icon={<ChefHat />}
 						question="Do you take custom requests on it?"
 						{...rowAnswer(
@@ -2181,21 +2240,26 @@ export function ProductForm({
 							/>
 						</div>
 						{editor.customLine ? (
-							<CustomLineFields
-								line={editor.customLine}
-								onChange={(next) => setEditor({ ...editor, customLine: next })}
-								currency={currency}
-								priceIssue={
-									editorIssues.find(
-										(i) => i.where === "custom" && i.field === "price",
-									)?.message
-								}
-							/>
+							<div {...settingAnchor("custom-details")}>
+								<CustomLineFields
+									line={editor.customLine}
+									onChange={(next) =>
+										setEditor({ ...editor, customLine: next })
+									}
+									currency={currency}
+									priceIssue={
+										editorIssues.find(
+											(i) => i.where === "custom" && i.field === "price",
+										)?.message
+									}
+								/>
+							</div>
 						) : null}
 					</QuestionRow>
 				)}
 				{isBooking || madeToOrder ? null : (
 					<QuestionRow
+						id="product-mockup"
 						icon={<BadgeCheck />}
 						question="Does the buyer approve a mockup first?"
 						{...rowAnswer(mockupAnswer(editor.rows), false)}
@@ -2205,6 +2269,7 @@ export function ProductForm({
 				)}
 				{isBooking ? (
 					<QuestionRow
+						id="product-instant-book"
 						icon={<Zap />}
 						question="Confirm bookings instantly?"
 						{...rowAnswer(instantBookAnswer(autoAccept), false)}
@@ -2229,6 +2294,7 @@ export function ProductForm({
 				) : null}
 				{isBooking ? (
 					<QuestionRow
+						id="product-deposit"
 						icon={<ShieldCheck />}
 						question="Take a refundable security deposit?"
 						{...rowAnswer(depositAnswer(depositDraft, currency), !depositValid)}
@@ -2272,6 +2338,7 @@ export function ProductForm({
 			<QuestionGroup title="At checkout">
 				{isBooking ? null : (
 					<QuestionRow
+						id="product-buyer-questions"
 						icon={<MessageSquareText />}
 						question="Do buyers answer any questions?"
 						{...rowAnswer(
@@ -2511,6 +2578,7 @@ export function ProductForm({
 				</QuestionRow>
 				{isBooking ? null : (
 					<QuestionRow
+						id="product-pickup-note"
 						icon={<MapPin />}
 						question="Anything to know when collecting?"
 						{...rowAnswer(
@@ -2587,6 +2655,7 @@ export function ProductForm({
 			    product IS. */}
 			<QuestionGroup title="Publishing">
 				<QuestionRow
+					id="product-where"
 					icon={<Store />}
 					question="Where does it show?"
 					{...rowAnswer(
@@ -2608,8 +2677,13 @@ export function ProductForm({
 						false,
 					)}
 				>
-					<VisibilityControl hidden={hidden} onChange={setHidden} />
-					<div className="border-t border-border pt-4">
+					<div {...settingAnchor("visibility")}>
+						<VisibilityControl hidden={hidden} onChange={setHidden} />
+					</div>
+					<div
+						className="border-t border-border pt-4"
+						{...settingAnchor("categories")}
+					>
 						<CategoryPicker
 							retailerId={retailerId}
 							selectedIds={categoryIds}
@@ -2655,6 +2729,22 @@ export function ProductForm({
 					const photosHeld = photosFailed > 0 && !isSubmitting;
 					return (
 						<div className="sticky bottom-20 z-10 flex gap-2 lg:static">
+							{/* The search box is at the top of a long form; on a phone
+							    this is the way back to it from anywhere. Desktop has
+							    "/" and a bar that isn't pinned. */}
+							<Button
+								type="button"
+								variant="outline"
+								aria-label="Find a setting"
+								onClick={() => {
+									const input = searchInputRef.current;
+									input?.scrollIntoView?.({ block: "center" });
+									input?.focus({ preventScroll: true });
+								}}
+								className="size-12 shrink-0 bg-background lg:hidden"
+							>
+								<Search className="size-5" />
+							</Button>
 							{stickyAction}
 							<Button
 								type="submit"
