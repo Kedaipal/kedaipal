@@ -1,6 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useStore } from "@tanstack/react-form";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { Package, ShoppingBag, Truck } from "lucide-react";
@@ -94,6 +94,7 @@ import {
 	type TimeMove,
 	timeMovedCopy,
 } from "../../lib/fulfilment-time-issue";
+import { liveQuoteAddressHint } from "../../lib/live-quote-copy";
 import { composeCustomerNote } from "../../lib/order-note";
 import { overseasCourierNote } from "../../lib/overseas-courier-note";
 import {
@@ -106,7 +107,10 @@ import {
 	type CheckoutAddressValues,
 	checkoutFormSchemaFor,
 } from "../../lib/schemas";
-import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
+import {
+	heldDeliveryAnswer,
+	useLiveDeliveryQuote,
+} from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { CopyText, DayWindowsInline } from "../hours/hours-text";
@@ -1064,8 +1068,11 @@ export function CheckoutPage({
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
-	const deliveryQuote: PublicDeliveryQuote | undefined = useQuery(
-		convexQuery(
+	// Held across a cart edit when the answer is "live" — see
+	// `heldDeliveryAnswer`: without it every quantity tap blanked the
+	// delivery line and reset the live quote for a beat.
+	const deliveryQuoteRead = useQuery({
+		...convexQuery(
 			api.delivery.quote,
 			deliveryAvailable && watchedMethod === "delivery"
 				? {
@@ -1085,7 +1092,10 @@ export function CheckoutPage({
 					}
 				: "skip",
 		),
-	).data;
+		placeholderData: keepPreviousData,
+	});
+	const deliveryQuote: PublicDeliveryQuote | undefined =
+		heldDeliveryAnswer(deliveryQuoteRead);
 	const rawQuote = watchedMethod === "delivery" ? deliveryQuote : undefined;
 
 	// --- Live Lalamove quote (86eyb5hrf) ------------------------------------
@@ -1161,6 +1171,10 @@ export function CheckoutPage({
 			// "too far", which would send the buyer editing a good address.
 			case "no_cold_service":
 				return { kind: "blocked", reason: "no_cold_service" };
+			// Too heavy for any rider vehicle and no courier priced it — the
+			// order is the problem, never the address.
+			case "too_heavy":
+				return { kind: "blocked", reason: "too_heavy" };
 			case "unavailable":
 				return { kind: "blocked", reason: "unquotable" };
 			default:
@@ -1193,7 +1207,8 @@ export function CheckoutPage({
 			quoteForDelivery.reason === "unquotable" ||
 			quoteForDelivery.reason === "out_of_range" ||
 			quoteForDelivery.reason === "store_unavailable" ||
-			quoteForDelivery.reason === "no_cold_service");
+			quoteForDelivery.reason === "no_cold_service" ||
+			quoteForDelivery.reason === "too_heavy");
 	const allowManualAddressEntry =
 		rawQuote !== undefined && !(!hasCoords && pinRequiredBlock);
 
@@ -1334,6 +1349,15 @@ export function CheckoutPage({
 			case "missing_weights":
 			case "custom_item":
 				return `Your ${feeNounShort} can't be worked out for this order — see your order summary`;
+			// The address is fine for these three — the default below used to
+			// say "We can't deliver to this address" for all of them, under a
+			// summary that said otherwise (found driving a 41 kg cart).
+			case "too_heavy":
+				return "This order is too heavy for a rider — see your order summary";
+			case "no_cold_service":
+				return "Chilled or frozen delivery isn't available right now — see your order summary";
+			case "store_unavailable":
+				return `${collectsFromCustomer ? "Collection" : "Delivery"} pricing isn't working for this store — see your order summary`;
 			default:
 				return collectsFromCustomer
 					? "We can't collect from this address — see your order summary"
@@ -1624,6 +1648,19 @@ export function CheckoutPage({
 												? " Pickup is still available, or message"
 												: " Message"
 										} ${storeName} to arrange delivery.`;
+									case "too_heavy":
+										// Heavier than any rider vehicle carries, and no courier
+										// bid. The address is fine — say what IS the problem and
+										// the two ways through it.
+										return `This order is too heavy for a ${
+											collectsFromCustomer ? "collection" : "delivery"
+										} rider.${
+											selfCollectAvailable
+												? " Choose pickup, or message"
+												: " Message"
+										} ${storeName} to arrange ${
+											collectsFromCustomer ? "collection" : "delivery"
+										}.`;
 									case "store_unavailable":
 										// Seller-side breakage — not the buyer's fault, not
 										// fixable by retrying. Give them the two real ways out.
@@ -2063,12 +2100,14 @@ export function CheckoutPage({
 											    pickup point is owner-only data (never in the public
 											    payload), and Lalamove's coverage is a city zone, not
 											    a radius we could quote. */}
-											{isLiveMode ? (
+											{rawQuote?.kind === "live" ? (
 												<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-													{collectsFromCustomer
-														? "Collection is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be collected from"
-														: "Delivery is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be delivered"}
-													{selfCollectAvailable ? " — pick up instead" : ""}.
+													{liveQuoteAddressHint({
+														collectsFromCustomer,
+														riders: rawQuote.riders,
+														couriers: rawQuote.couriers,
+														selfCollectAvailable,
+													})}
 												</p>
 											) : null}
 											{/* Overseas WhatsApp number at a courier-booking store

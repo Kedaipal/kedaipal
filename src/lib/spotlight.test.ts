@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import { highlightRingClass, SETTINGS_ANCHOR } from "./country-setup-copy";
 import { PRODUCT_SPOTLIGHT } from "./product-spotlight";
 import {
+	isHomeSpotlightKey,
 	isProductSpotlightKey,
 	isSettingsSpotlightKey,
 	isSpotlightKey,
@@ -25,12 +26,16 @@ const SETTINGS_CARD_DIRS = [
 	join(__dirname, "../components/credits"),
 ];
 const PRODUCT_FORM = join(__dirname, "../components/forms/product-form.tsx");
+const HOME_COMPONENTS = join(__dirname, "../components/home");
 
 const settingsEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
 	([, t]) => t.page === "settings",
 );
 const productEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
 	([, t]) => t.page === "product",
+);
+const homeEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
+	([, t]) => t.page === "home",
 );
 
 describe("spotlight registry", () => {
@@ -54,6 +59,28 @@ describe("spotlight registry", () => {
 	test("every page has at least one key, so both branches stay exercised", () => {
 		expect(settingsEntries.length).toBeGreaterThan(0);
 		expect(productEntries.length).toBeGreaterThan(0);
+		expect(homeEntries.length).toBeGreaterThan(0);
+	});
+
+	test("every Home anchor is rendered as a section id by a Home component", () => {
+		// Same rule as the settings cards: a Home key nothing renders scrolls
+		// nowhere. The Refer card renders two sections (live and paused) and
+		// both must carry the anchor, or the deep link works for one standing
+		// and dead-ends for the other.
+		const source = readdirSync(HOME_COMPONENTS)
+			.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
+			.map((f) => readFileSync(join(HOME_COMPONENTS, f), "utf8"))
+			.join("\n");
+		for (const [key] of homeEntries) {
+			expect(
+				source.includes(`id={SPOTLIGHT_ANCHOR.${key}.anchor}`),
+				`no Home component renders id={SPOTLIGHT_ANCHOR.${key}.anchor}`,
+			).toBe(true);
+		}
+		const refer = readFileSync(join(HOME_COMPONENTS, "refer-card.tsx"), "utf8");
+		expect(refer.split("id={SPOTLIGHT_ANCHOR.refer.anchor}").length - 1).toBe(
+			2,
+		);
 	});
 
 	test("every anchor is rendered as a card id somewhere under settings", () => {
@@ -176,6 +203,15 @@ describe("spotlight registry", () => {
 			"/app/products?spot=weekend_rate",
 		);
 		expect(spotlightHref("promo")).toBe("/app/products?spot=promo");
+	});
+
+	test("a Home key lands on Home, with no tab", () => {
+		expect(spotlightHref("refer")).toBe("/app?spot=refer");
+		expect(isHomeSpotlightKey("refer")).toBe(true);
+		expect(isHomeSpotlightKey("delyva")).toBe(false);
+		expect(isSettingsSpotlightKey("refer")).toBe(false);
+		expect(isProductSpotlightKey("refer")).toBe(false);
+		expect(isHomeSpotlightKey("toString")).toBe(false);
 	});
 
 	test("isSpotlightKey admits registry keys only", () => {

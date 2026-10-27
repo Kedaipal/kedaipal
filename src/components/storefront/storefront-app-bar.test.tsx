@@ -61,6 +61,20 @@ describe("StorefrontAppBar (z8r3fdegb5)", () => {
 		expect(screen.getAllByRole("link")).toHaveLength(1);
 	});
 
+	it("ends with the theme flip, after Share, icon only (z8r3fdwc19)", () => {
+		render(<StorefrontAppBar retailer={retailer} slug="dapur-nadia" />);
+		const share = screen.getByRole("button", { name: "Share this page" });
+		const theme = screen.getByRole("button", {
+			name: /^Switch to (dark|light) mode$/,
+		});
+		expect(
+			share.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(theme.parentElement?.lastElementChild).toBe(theme);
+		expect(theme.className).toContain("size-11");
+		expect(theme.textContent).toBe("");
+	});
+
 	it("names the store as plain text — the subpage owns its own <h1>", () => {
 		render(<StorefrontAppBar retailer={retailer} slug="dapur-nadia" />);
 		expect(screen.getByText("Dapur Nadia")).toBeTruthy();

@@ -28,6 +28,7 @@ import {
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import type { LalamoveMarket } from "../../../convex/lib/lalamove";
+import { formatKg, vehicleWord } from "../../../convex/lib/lalamoveVehicle";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatCountdown } from "../../lib/countdown";
 import {
@@ -72,6 +73,17 @@ type QuoteState = {
 	fee: number;
 	buyerPaidFee: number;
 	vehicleType: string;
+	/** Why the default vehicle isn't the store's setting, or that no rider
+	 * vehicle can carry the order (25 Oct 2026, `prepareBooking`). */
+	vehicleAdvice?:
+		| {
+				kind: "escalated";
+				from: string;
+				to: string;
+				cartKg: number;
+				fromLoadKg?: number;
+		  }
+		| { kind: "too_heavy"; cartKg: number; maxKg: number };
 	buyerContactFallback: boolean;
 	/** The store's Lalamove market — the country the `buyerContactFallback`
 	 * notice names (z8r3fdh274). */
@@ -107,6 +119,7 @@ export function BookDeliveryCard({
 	onAdvanceBookUnavailable,
 	embedded = false,
 	lockedReason,
+	onUseCourier,
 }: {
 	order: Doc<"orders">;
 	/** Set while the store can't book right now — out of credits (Credits T3)
@@ -134,6 +147,10 @@ export function BookDeliveryCard({
 	 * provider down). The seller asked to move the order and got a toast — the
 	 * page owes them the other route out, so it reopens its own prompt. */
 	onAdvanceBookUnavailable?: () => void;
+	/** Hands the seller to the Delyva courier tab — set only by the dispatch
+	 * hub, i.e. when this order can also go by courier. Offered when no rider
+	 * vehicle can carry the order (25 Oct 2026). */
+	onUseCourier?: () => void;
 }) {
 	const dispatch = useQuery(
 		convexQuery(api.lalamove.getDeliveryJob, { shortId: order.shortId }),
@@ -623,6 +640,20 @@ export function BookDeliveryCard({
 	}
 
 	const variance = quote ? quote.fee - quote.buyerPaidFee : 0;
+	// No rider vehicle can carry this order. The dialog still prices the
+	// biggest one — the seller's product weights may be wrong, and it is their
+	// call — but it stops presenting that booking as the obvious next step.
+	const tooHeavy = quote?.vehicleAdvice?.kind === "too_heavy";
+	const snapshot = order.deliverySnapshot;
+	const buyerPaidCourier =
+		snapshot?.mode === "live" && snapshot.quoteProvider === "delyva"
+			? (snapshot.quoteServiceName ?? "Delyva courier")
+			: null;
+	const courierFirst = tooHeavy && onUseCourier !== undefined;
+	// Says what it books: the override is a specific vehicle, not "Confirm".
+	const bookAnywayLabel = quote
+		? `Book a ${vehicleWord(quote.vehicleType).toLowerCase()} anyway`
+		: "Book anyway";
 	// A quote past its window can't be dispatched, and neither can one whose
 	// confirm already failed — both need a fresh price, not another press.
 	const quoteStale = quote !== null && now >= quote.expiresAt;
@@ -1197,6 +1228,16 @@ export function BookDeliveryCard({
 									</button>
 								))}
 							</div>
+							{/* Why this vehicle (25 Oct 2026): Lalamove prices by vehicle
+							    and never refuses an overweight trip, so the default is
+							    the one that can carry THIS order — and the seller is told
+							    when that isn't their setting, or when nothing fits. */}
+							<VehicleAdviceLine
+								advice={quote.vehicleAdvice}
+								quotedVehicle={quote.vehicleType}
+								courierOffered={onUseCourier !== undefined}
+								buyerPaidCourier={buyerPaidCourier}
+							/>
 							<div className="flex items-center justify-between">
 								<span className="text-muted-foreground">
 									Rider ({quote.vehicleType === "CAR" ? "Car" : "Motorcycle"})
@@ -1229,7 +1270,9 @@ export function BookDeliveryCard({
 									{riderContactFallbackCopy(quote.market, collection)}
 								</p>
 							) : null}
-							{variance !== 0 ? (
+							{/* "The difference stays with you" would reward the one
+							    booking the line above advises against. */}
+							{variance !== 0 && !tooHeavy ? (
 								<p
 									className={`rounded-lg px-3 py-2 text-xs ${
 										variance > 0
@@ -1297,6 +1340,43 @@ export function BookDeliveryCard({
 							Price locked for {formatCountdown(quote.expiresAt - now)}
 						</p>
 					) : null}
+					{/* Nothing a rider can carry, and a courier is one tab away:
+					    the courier is the primary action and the rider booking a
+					    deliberate override on its own full-width row — the same
+					    shape as the no-rider way out above, so the footer never
+					    holds three equal-looking choices. */}
+					{courierFirst ? (
+						needsFreshQuote ? (
+							<Button
+								type="button"
+								variant="outline"
+								className="w-full"
+								onClick={() => void handleRequote({})}
+								disabled={booking || requoting || quote === null}
+							>
+								{requoting ? (
+									<>
+										<Loader2 className="size-4 animate-spin" /> Getting a fresh
+										price…
+									</>
+								) : (
+									<>
+										<RefreshCw className="size-4" /> Get a fresh price
+									</>
+								)}
+							</Button>
+						) : (
+							<Button
+								type="button"
+								variant="outline"
+								className="w-full"
+								onClick={handleConfirm}
+								disabled={booking || requoting || quote === null || !spendArmed}
+							>
+								{booking ? "Booking…" : bookAnywayLabel}
+							</Button>
+						)
+					) : null}
 					<DialogFooter>
 						<Button
 							type="button"
@@ -1313,7 +1393,19 @@ export function BookDeliveryCard({
 						    actually succeed: dispatch while the price is live, a
 						    re-quote once it isn't. Re-pressing a dead "Confirm" was
 						    the trap. */}
-						{needsFreshQuote ? (
+						{courierFirst ? (
+							<Button
+								type="button"
+								disabled={booking}
+								onClick={() => {
+									setQuote(null);
+									setBookingError(null);
+									onUseCourier?.();
+								}}
+							>
+								Use a Delyva courier
+							</Button>
+						) : needsFreshQuote ? (
 							<Button
 								type="button"
 								onClick={() => void handleRequote({})}
@@ -1338,7 +1430,11 @@ export function BookDeliveryCard({
 								// silently swallows a real tap reads as broken.
 								disabled={booking || requoting || quote === null || !spendArmed}
 							>
-								{booking ? "Booking…" : "Confirm & dispatch"}
+								{booking
+									? "Booking…"
+									: tooHeavy
+										? bookAnywayLabel
+										: "Confirm & dispatch"}
 							</Button>
 						)}
 					</DialogFooter>
@@ -1384,5 +1480,68 @@ function JobStatusPill({
 		>
 			{jobStatusLabel(status, { provider: "lalamove", collection })}
 		</span>
+	);
+}
+
+/**
+ * The dispatch card's vehicle reason (25 Oct 2026). Silent when the store's
+ * setting carries the order. Muted when a bigger vehicle was picked for it;
+ * amber when the seller has switched back to one the order is too heavy
+ * for, or when no rider vehicle can carry it at all.
+ */
+export function VehicleAdviceLine({
+	advice,
+	quotedVehicle,
+	courierOffered = false,
+	buyerPaidCourier = null,
+}: {
+	advice: QuoteState["vehicleAdvice"];
+	quotedVehicle: string;
+	/** The Delyva tab is one tap away (the dispatch hub's switch). */
+	courierOffered?: boolean;
+	/** The courier service whose price the buyer paid at checkout, when a
+	 * Delyva quote won it. */
+	buyerPaidCourier?: string | null;
+}) {
+	if (!advice) return null;
+	const amber =
+		"rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200";
+	if (advice.kind === "too_heavy") {
+		const weight = `This order weighs ${formatKg(advice.cartKg)} — over a car's ${formatKg(advice.maxKg)}, so no rider vehicle here can carry it.`;
+		if (courierOffered) {
+			return (
+				<p className={amber}>
+					{weight}{" "}
+					{buyerPaidCourier
+						? `Your buyer paid a ${buyerPaidCourier} price at checkout — book the courier instead.`
+						: "Send it by Delyva courier instead, or book a van in the Lalamove app."}
+				</p>
+			);
+		}
+		return (
+			<p className={amber}>
+				{weight} Book a van in the Lalamove app, or arrange your own courier and
+				add the tracking number below.
+			</p>
+		);
+	}
+	const fromLimit =
+		advice.fromLoadKg !== undefined
+			? ` ${formatKg(advice.fromLoadKg)}`
+			: " limit";
+	const fromWord = vehicleWord(advice.from).toLowerCase();
+	if (quotedVehicle === advice.from) {
+		return (
+			<p className={amber}>
+				This order weighs {formatKg(advice.cartKg)} — over a {fromWord}&apos;s
+				{fromLimit}. The rider may refuse it at pickup.
+			</p>
+		);
+	}
+	return (
+		<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+			{vehicleWord(advice.to)} picked — this order weighs{" "}
+			{formatKg(advice.cartKg)}, over a {fromWord}&apos;s{fromLimit}.
+		</p>
 	);
 }

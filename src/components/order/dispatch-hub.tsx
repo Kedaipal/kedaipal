@@ -126,16 +126,23 @@ export function DispatchHub({
 	};
 	/** Each provider's pane — `embedded` because the hub provides the shell. */
 	const renderCard: Record<Provider, () => ReactNode> = {
-		lalamove: () => (
-			<BookDeliveryCard
-				order={order}
-				bookRequestToken={bookRequestToken}
-				advanceWithoutRider={advanceWithoutRider}
-				onAdvanceBookUnavailable={onAdvanceBookUnavailable}
-				lockedReason={lockedReason}
-				embedded
-			/>
-		),
+		lalamove: () => {
+			// The courier is one tab away — the rider dialog hands the seller
+			// there when no rider vehicle can carry the order. Whichever parcel
+			// provider has a tab on this order, never a hard-coded one.
+			const courier = cardProviders.find((p) => p !== "lalamove");
+			return (
+				<BookDeliveryCard
+					order={order}
+					bookRequestToken={bookRequestToken}
+					advanceWithoutRider={advanceWithoutRider}
+					onAdvanceBookUnavailable={onAdvanceBookUnavailable}
+					lockedReason={lockedReason}
+					embedded
+					onUseCourier={courier ? () => pick(courier) : undefined}
+				/>
+			);
+		},
 		delyva: () => (
 			<DelyvaDispatchCard order={order} lockedReason={lockedReason} embedded />
 		),

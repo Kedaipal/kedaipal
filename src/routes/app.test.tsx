@@ -35,7 +35,9 @@ vi.mock("@clerk/tanstack-react-start", () => ({
 		children: ReactNode;
 		fallback: ReactNode;
 	}) => (signedIn.current ? children : fallback),
-	RedirectToSignIn: () => <p>Redirecting to sign-in</p>,
+	RedirectToSignIn: (props: Record<string, string>) => (
+		<p data-redirect={JSON.stringify(props)}>Redirecting to sign-in</p>
+	),
 	useClerk: () => ({ signOut: vi.fn() }),
 }));
 vi.mock("@convex-dev/react-query", () => ({
@@ -104,6 +106,22 @@ describe("/app shell", () => {
 		render(<AppLayout />);
 		expect(screen.getByText("Redirecting to sign-in")).toBeTruthy();
 		expect(screen.getByTestId("act-as-session")).toBeTruthy();
+	});
+
+	it("a new person bounced to sign-in comes back to /app on BOTH legs", () => {
+		// Sign-in falls through to sign-up for an unknown address (z8r3fdwdvq) —
+		// the handover email's /app link is mostly opened by people with no
+		// login. A sign-up leg without its own redirect would drop them on
+		// Clerk's default instead of the claim screen /app routes them to.
+		signedIn.current = false;
+		render(<AppLayout />);
+		const props = JSON.parse(
+			screen.getByText("Redirecting to sign-in").dataset.redirect ?? "{}",
+		);
+		expect(props).toEqual({
+			signInForceRedirectUrl: "/app",
+			signUpForceRedirectUrl: "/app",
+		});
 	});
 
 	it("an admin whose acted-as store failed exits act-as back to the directory", () => {

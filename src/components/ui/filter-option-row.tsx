@@ -65,9 +65,11 @@ export function FilterOptionRow({
 			}
 			onClick={onToggle}
 			className={cn(
-				// min-h-9 rather than a fixed height: a long custom stage name wraps
-				// instead of being clipped, and the row grows with it.
-				"flex min-h-9 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+				// A MIN height rather than a fixed one: a long custom stage name wraps
+				// instead of being clipped, and the row grows with it. 44px below
+				// `lg` (the house touch target — these panels are tapped on phones),
+				// a compact 36px on desktop where a pointer doesn't need the room.
+				"flex min-h-11 lg:min-h-9 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
 				selected && tintSelected ? "bg-accent/10" : "hover:bg-muted",
 			)}
 		>

@@ -13,6 +13,7 @@ import {
 } from "../../convex/lib/openingHours";
 import { parseShowcaseSlugParam } from "../../convex/lib/showcase";
 import type { MarketplaceStoreCard } from "../../convex/marketplace";
+import { searchText } from "./search-params";
 
 /**
  * Marketplace page derivations (z8r3fdkmyp) — pure, so the search/chip/region
@@ -39,6 +40,11 @@ export const SEARCH_QUERY_MAX = 80;
  * and a filtered view is a link someone can share. "All" and an empty search
  * are the ABSENCE of a param, so the bare `/stores` stays the canonical page.
  * Anything hand-edited or stale degrades to that default, never to a crash.
+ *
+ * Every key is RETURNED, `undefined` when absent: TanStack merges this over
+ * the raw parsed search, so an omitted key leaked the raw value — `?q=2024`
+ * parses as a number and crashed the page (z8r3fdtk87). An all-digit query
+ * is text the buyer meant, so it reads back as "2024" (`searchText`).
  */
 export function parseMarketplaceSearch(search: Record<string, unknown>): {
 	q?: string;
@@ -48,17 +54,11 @@ export function parseMarketplaceSearch(search: Record<string, unknown>): {
 	showcase?: string;
 } {
 	// Trim BEFORE the cap, so padding never spends the 80-char budget.
-	const q =
-		typeof search.q === "string"
-			? search.q.trim().slice(0, SEARCH_QUERY_MAX) || undefined
-			: undefined;
+	const q = searchText(search.q)?.trim().slice(0, SEARCH_QUERY_MAX);
 	const filter = FILTER_CHIPS.find((chip) => chip === search.filter);
-	const showcase = parseShowcaseSlugParam(search.showcase);
-	return {
-		...(q ? { q } : {}),
-		...(filter ? { filter } : {}),
-		...(showcase ? { showcase } : {}),
-	};
+	// A slug can be all digits, which the URL parses as a number.
+	const showcase = parseShowcaseSlugParam(searchText(search.showcase));
+	return { q, filter, showcase };
 }
 
 /**

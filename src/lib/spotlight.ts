@@ -9,8 +9,13 @@
  * scroll-and-ring machinery the post-switch checklist uses via `?fix=`
  * (86eyqgujv), with a friendlier colour because nothing is wrong.
  *
- * Two destinations, one ring:
+ * Three destinations, one ring:
  *
+ * - **`home`** — one section on the Home page. `spotlightHref` renders
+ *   `/app?spot=<key>`; Home scrolls to the section and rings its card. Added
+ *   for the Refer-a-kedai card (z8r3fdfp97), which sits LAST on Home — a note
+ *   that dropped the seller at the top of Home would have announced a card
+ *   below the fold.
  * - **`settings`** — one card on a Settings tab. `spotlightHref` renders
  *   `/app/settings?tab=<tab>&spot=<key>`; the route scrolls to the card.
  * - **`product`** — one card on a product's edit form. A note can't know
@@ -44,6 +49,7 @@ export type SpotlightTab =
 	| "order-status";
 
 export type SpotlightTarget =
+	| { page: "home"; anchor: string }
 	| { page: "settings"; tab: SpotlightTab; anchor: string }
 	| { page: "product"; anchor: string };
 
@@ -174,6 +180,10 @@ export const SPOTLIGHT_ANCHOR = {
 		tab: "store",
 		anchor: "settings-marketplace",
 	},
+	// The Refer-a-kedai section (z8r3fdfp97) — the last thing on Home, with
+	// the seller's referral link and what each side earns. The id sits on the
+	// section so the scroll lands on its heading; the ring goes on its card.
+	refer: { page: "home", anchor: "home-refer" },
 	// Product-page anchors are QUESTION ROWS since z8r3fdv1z2: the form scrolls
 	// to the row, rings it and opens it, so the seller lands on the field.
 	// The "Do weekend nights cost more?" row of a stay listing (S13,
@@ -189,6 +199,13 @@ export const SPOTLIGHT_ANCHOR = {
 } as const satisfies Record<string, SpotlightTarget>;
 
 export type SpotlightKey = keyof typeof SPOTLIGHT_ANCHOR;
+
+/** Keys whose section is on Home — the only ones `/app` accepts. */
+export type HomeSpotlightKey = {
+	[K in SpotlightKey]: (typeof SPOTLIGHT_ANCHOR)[K] extends { page: "home" }
+		? K
+		: never;
+}[SpotlightKey];
 
 /** Keys whose card is on a Settings tab — the only ones `/app/settings` accepts. */
 export type SettingsSpotlightKey = {
@@ -210,6 +227,10 @@ export function isSpotlightKey(value: unknown): value is SpotlightKey {
 	return typeof value === "string" && Object.hasOwn(SPOTLIGHT_ANCHOR, value);
 }
 
+export function isHomeSpotlightKey(value: unknown): value is HomeSpotlightKey {
+	return isSpotlightKey(value) && SPOTLIGHT_ANCHOR[value].page === "home";
+}
+
 export function isSettingsSpotlightKey(
 	value: unknown,
 ): value is SettingsSpotlightKey {
@@ -225,6 +246,7 @@ export function isProductSpotlightKey(
 /** The `href` a release note carries: page (and tab) and spot from one key. */
 export function spotlightHref(key: SpotlightKey): string {
 	const target = SPOTLIGHT_ANCHOR[key];
+	if (target.page === "home") return `/app?spot=${key}`;
 	if (target.page === "product") return `/app/products?spot=${key}`;
 	return `/app/settings?tab=${target.tab}&spot=${key}`;
 }

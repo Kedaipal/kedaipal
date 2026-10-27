@@ -44,7 +44,7 @@ steps.
 | --- | --- | --- |
 | 1 · Name it | "What are you selling?" — name + photos, description behind a link | `name`, `imageStorageIds`, `description` |
 | 2 · Type | "What kind of product is it?" — *Just one item* / *Buyer picks a choice* (preset chips: Size/Flavour/Weight/Pack, values typed as chips) / *Made to order*. "+ They also choose by something else" reveals the **second axis** (Size × Flavour) — zero pixels unless used | `editor.options`, `shape` |
-| 3 · Price | One price per choice (all combinations when two axes) + "Same price for all". "+ Photos, item codes (SKU) & more per choice" reveals per-row photo · SKU · on/off · design-approval — the full form's per-choice details, behind one link. **Made to order:** its OWN line — optional price + "What should the buyer tell you?" | per-row `price` (+ extras), or `customLine` |
+| 3 · Price | One price per choice (all combinations when two axes) + "Same price for all". **On a store that prices delivery by weight** (`weightPricing` — the rate card, or live pricing with Delyva armed; 23 Oct 2026) a **parcel weight box sits under every price, required** on a physical product's buyable choices, with "Same weight for all"; the step says why in the reason's words and `wizardStepIssues` maps the full form's `buildSubmitVariants` weight issue to `weight:<row>`, so a restored draft on such a store reopens here until weighed. "+ Photos, item codes (SKU) & more per choice" reveals per-row photo · SKU · on/off · design-approval — the full form's per-choice details, behind one link. **Made to order:** its OWN line — optional price + "What should the buyer tell you?" | per-row `price` (+ extras), or `customLine` |
 | 4 · Preparation | "How do you prepare orders?" — *Made fresh* / *From stock* (stock steppers on tracking rows). "Vary per choice" reveals per-row Track-stock/Made-fresh toggles (auto-open when a restored draft is mixed). **Skipped entirely for made-to-order** | per-row `blockWhenOutOfStock` + `onHand` |
 | 5 · Review | Buyer-eye preview card + summary rows with per-row Edit + **optional publish settings** (Visible/Hidden toggle; category picker **only when the store has categories**) + the **"More options"** disclosure | submit (+ `hidden`, `categoryIds`, `requiresProof`, custom line) |
 
@@ -266,6 +266,37 @@ alone is an FAQ accordion; with its answer it is state.
 - **Open core cards:** Product basics → Photos → **Pricing & choices** (a
   booking: **Pricing & capacity** — package length, open-days counting, price,
   capacity: what DEFINES the stay).
+- **The per-choice list folds on edit** ([`z8r3fdwnyk`](https://app.clickup.com/t/z8r3fdwnyk),
+  Zaki 22 Oct). Pricing & choices stays an open card, but its **"The choices &
+  prices"** list — one ~120px card per choice — sits behind a one-line header
+  whose answer is the list's state: "12 choices · RM 12–28 · 2 off sale", amber
+  "· 1 needs a price" when a line a buyer can buy has none (`choicesAnswer`,
+  same file as the row answers; off lines count only as "off", because the
+  save never prices them). A product with 20 sizes used to push every question
+  group thousands of pixels down. What stays visible: the product type and the
+  "They choose by" axis with its value chips — short, and they say what the
+  product IS. Same disclosure rules as a question row: **closed every visit**,
+  the rows stay mounted while hidden, and it **opens itself** when a refused
+  save points at a choice's price/stock (issue effect + focus-error's
+  `REVEAL_EVENT`) and when the seller adds a value (its new row has no price —
+  it must never land behind a closed list). An open list of more than three
+  ends in **"Hide the N choices"**, which closes it from where the seller
+  finished and brings the header back into view (`scroll-mt-24`, clear of the
+  sticky header). **Advanced folds too, on edit:** it used to force itself
+  open whenever it held config, and one parcel weight was enough, so nearly
+  every real product opened it, and its **Per-choice details** repeated every
+  variant again (the `/test-code` pass measured a 56-variant product with
+  "Selling options" still 8,500px down). On edit it starts **closed**, and its
+  line says what is inside rather than what could be: "Second choice: Colour ·
+  3 SKUs · 56 parcel weights · 1 off sale" (`advancedAnswer`; the generic menu
+  shows only when nothing is set), so the config is stated, never hidden.
+  Opened, its per-choice details are the **same disclosure** as the price
+  list (`ChoiceListDisclosure`, one control for both), closed, with "56
+  choices · 3 SKUs · 56 parcel weights". A refused parcel weight opens
+  Advanced and its details. Both lists say "off sale", not "off", which
+  reads like a discount. **Edit only** (`collapseChoices`
+  on `VariantEditor`): on create, and in the wizard, the seller is authoring
+  the grid and has to see every row to price it.
 - **Question groups, by meaning** (`src/components/ui/question-row.tsx`):
 
   | Group | Physical / food / service / event | Booking |
@@ -433,6 +464,9 @@ surface:
   and per-choice details (photo, SKU, on-sale, per-choice approval). It
   auto-opens when the product already uses any of these, or when a submit
   issue points inside it (so `focusFirstInvalidField` can land on the input).
+  **Not on the edit page** (`collapseChoices`, z8r3fdwnyk): there it starts
+  closed and its line states what it holds instead — see the edit-form
+  section above.
 - `rebuildRows` now seeds NEW combinations' fulfilment/approval flags from the
   first existing row — adding "XL" to a made-to-order product no longer
   silently creates a stock-tracked row.

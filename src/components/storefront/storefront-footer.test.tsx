@@ -26,6 +26,14 @@ describe("StorefrontFooter", () => {
 		expect(wordmark.getAttribute("src")).toBe("/poster/kedaipal-lockup.svg");
 	});
 
+	it("carries no theme control — it moved up into each page's header (z8r3fdwc19)", () => {
+		render(<StorefrontFooter slug="dapur-nadia" discover />);
+		expect(
+			screen.queryByRole("button", { name: /^Switch to (dark|light) mode$/ }),
+		).toBeNull();
+		expect(screen.queryByText("Dark mode")).toBeNull();
+	});
+
 	it("links to the marketing site tagged with the surface AND the store, in a new tab", () => {
 		const { container } = render(<StorefrontFooter slug="sweet-co" />);
 		const link = container.querySelector("a");

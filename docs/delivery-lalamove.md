@@ -939,6 +939,110 @@ Rejected: pointer-move scroll-vs-tap discrimination (it would guard a gesture
 that can't happen, per the scroll-lock above) and hold-to-confirm (friction on
 every seller's happy path for an accident the arm delay already covers).
 
+## Heavy carts — the vehicle that can carry it (25 Oct 2026)
+
+**The gap.** Lalamove prices by VEHICLE and distance, never by weight. The
+quotation's optional `item.weight` exists only in Thailand, Vietnam and Hong
+Kong, and Lalamove has no "overweight" refusal — so a store whose rider
+setting is Motorcycle was quoted a motorcycle for a 25 kg cart, a trip the
+rider can't make. The seller found out at pickup and absorbed the car's
+price when they rebooked. Found auditing PR #416's weight units.
+
+**The limits are Lalamove's own.** `GET /v3/cities` (market-scoped) lists
+every service with `load: { value, unit }`. `parseVehicleLoads`
+(`convex/lib/lalamoveVehicle.ts`) keeps the SMALLEST load per vehicle across
+the market's cities — the store's city isn't known in Lalamove's terms, and
+quoting a car for a cart the motorcycle could take costs the buyer a little
+while the reverse strands the order. Measured on the MY sandbox, 25 Oct
+2026: MOTORCYCLE 10 kg, CAR 40 kg (also 4X4 250, VAN 500, LARGEVAN 750,
+TRUCK330 1000, TRUCK550 2500). Third-party guides disagreed (motorcycle 8–10
+kg, car 20–40 kg), which is why nothing is hardcoded.
+
+**The cache.** `lalamoveVehicleLoads` — one row per `(market, env)`, a list
+of `{ key, loadKg }` pairs. `vehicleLoadsFor` reads it; a row older than a
+day is still used and refreshed in the background (`refreshVehicleLoads`,
+scheduled). With no row at all the CHECKOUT fetches inline (the first heavy
+cart in a market is still priced right); DISPATCH only schedules the fetch,
+so a booking never grows an extra network call.
+
+- **Which row a store uses** (PR #418 review): the stamped
+  `deliveryBooking.env`, or for an unstamped store the env of its
+  DECRYPTED key, exactly how `callLalamove` picks the host
+  (`vehicleLoadsEnv`). Never a default to production: an unstamped
+  sandbox-key store fetches from the sandbox host, and the row it would
+  have written is the one every real store in the market reads. The
+  pricing card's query can't decrypt, so an unstamped store gets `null`
+  there (the card states the rule without numbers). This holds whatever a
+  backfill stamped; the code follows the 86eypncfy rule on its own.
+- **One refresh per market per 5 minutes.** A stale row is read by every
+  quote and dispatch, so `claimVehicleLoadsRefresh` stamps
+  `refreshScheduledAt` in the same transaction as the read and only the
+  winner schedules `refreshVehicleLoads`. A failing `/v3/cities` then
+  retries at that pace, not once per checkout; a successful save clears the
+  stamp.
+- **The inline fetch is bounded.** It runs before the parallel provider
+  quotes, so `callLalamove` aborts this one call after 4 s
+  (`VEHICLE_LOADS_TIMEOUT_MS`) and the quote fails open on the seller's
+  vehicle. Every other Lalamove call is unchanged.
+- **Line cap:** checkout weighs at most `MAX_QUOTE_ITEMS` (100) lines and
+  dispatch weighs every line; they agree because `orders.create` caps an
+  order at `MAX_ITEMS_PER_ORDER`, also 100.
+
+Probe it:
+
+```
+npx convex run lalamove:refreshVehicleLoads '{"retailerId":"…"}'
+```
+
+**The rule** — `chooseRiderVehicle`: start at the seller's vehicle, only ever
+go UP the ladder we surface (Motorcycle → Car), take the first whose load
+carries the cart. Over the car's load → `too_heavy`: no rider bids. Fails
+OPEN on anything unknown (no cart weight, no loads, a vehicle with no
+published load) — the rule stops a motorcycle being quoted 25 kg, it never
+refuses an order on missing data. An unweighed cart is priced at the
+one-kilo floor (`liveQuoteWeightKg`), so it never escalates.
+
+- **Checkout** (`liveQuote.quoteForCheckout` → `fetchLalamoveQuote`): the
+  cart's weight picks the vehicle; the quote row and the order's snapshot
+  record the vehicle actually priced. `too_heavy` joins the provider-neutral
+  refusals; if a courier priced the cart it wins, and alone it reaches the
+  buyer as "This order is too heavy for a delivery rider — choose pickup, or
+  message the store" (storefront, claim and address-edit surfaces). It
+  outranks a coverage refusal: the address may be fine, the ORDER is too big.
+  The legacy single-provider action has no cart and is unchanged.
+- **Dispatch** (`prepareBooking`): defaults to the same vehicle from the
+  order's weight, and returns `vehicleAdvice` — the card says "Car picked —
+  this order weighs 25 kg, over a motorcycle's 10 kg", warns amber if the
+  seller switches back ("The rider may refuse it at pickup"), and over a
+  car's load says no rider vehicle here fits. The seller's switch still wins.
+- **Dispatch, nothing fits** (`/test-code`, 26 Oct 2026): the dialog still
+  prices the biggest vehicle — the store's product weights may be wrong, and
+  it's the seller's call — but stops presenting that as the next step. The
+  "difference stays with you" price comparison is hidden (it rewarded the
+  booking the line advises against), and Confirm becomes **Book a car
+  anyway**. Inside the dispatch hub (both providers armed) the primary action
+  is **Use a Delyva courier**, which switches the hub's tab
+  (`onUseCourier`), and the line names the courier when one won the
+  buyer's checkout ("Your buyer paid a DHL eCommerce price at checkout").
+  Without a courier tab it points at a Lalamove van or the seller's own
+  courier plus the tracking box.
+- **Settings**: under the Default vehicle picker, a motorcycle store reads
+  "A cart over a motorcycle's 10 kg is priced on a car at checkout, and
+  booking opens on one" (`vehiclePickerHint`) — the choice is made there,
+  so the rule is said there. "Lalamove's limits — good to know" states the
+  full rule with this market's numbers (`lalamove.vehicleLoads`), or the rule
+  alone before the market has been quoted. Past a car's load it says a Delyva
+  courier prices the cart **if one carries that weight** — a Delyva account
+  only covers the weights its couriers take (the demo has none from 10.4 to
+  40.4 kg to KL), so the unconditional "your couriers price it" was a
+  promise the store couldn't keep.
+
+**Rejected:** sending `item.weight` (not offered in MY/SG); hardcoding the
+limits (they disagreed and Lalamove changes them); refusing every cart over
+the SELLER's vehicle (a car exists and the dispatch card already lets the
+seller book one — refusing would lose the sale); escalating past Car to
+vans (not a vehicle the seller can see or book from the order).
+
 ## Markets — how Singapore gets riders (z8r3fdch3r)
 
 **Lalamove serves Singapore.** Its REST API is segmented by a `Market` header

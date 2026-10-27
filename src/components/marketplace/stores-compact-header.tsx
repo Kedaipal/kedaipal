@@ -1,10 +1,8 @@
 import { Link } from "@tanstack/react-router";
 import { Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { Country } from "../../../convex/lib/country";
 import type { MarketplaceChip } from "../../lib/marketplace";
 import { cn } from "../../lib/utils";
-import { RegionToggle } from "../landing/landing-ui";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ThemeToggle } from "../ui/theme-toggle";
@@ -12,8 +10,7 @@ import { Wordmark } from "../ui/wordmark";
 
 /**
  * /stores' compact header (z8r3fdr6mv): once the hero scrolls past, a
- * frosted bar takes over with the logo, a floating search and the region
- * switch — on desktop the filter chips too, and the seller CTA. The hero's
+ * frosted bar takes over with the logo and a floating search — on desktop the filter chips too, and the seller CTA. The hero's
  * own search and chips are the same STATE; this bar is a second view of it,
  * not a second control, so typing in either moves the other.
  *
@@ -34,8 +31,6 @@ export function StoresCompactHeader({
 	chip,
 	chips,
 	onChip,
-	region,
-	onRegion,
 	maxLength,
 	placeholder,
 }: {
@@ -47,8 +42,6 @@ export function StoresCompactHeader({
 	chip: MarketplaceChip;
 	chips: ReadonlyArray<{ id: MarketplaceChip; label: string }>;
 	onChip: (next: MarketplaceChip) => void;
-	region: Country;
-	onRegion: (next: Country) => void;
 	maxLength: number;
 	/** The bar's hint — `storeSearchPlaceholder(...).compact`. */
 	placeholder: string;
@@ -148,11 +141,6 @@ export function StoresCompactHeader({
 				</div>
 
 				<div className="ml-auto flex shrink-0 items-center gap-2.5">
-					<RegionToggle
-						region={region}
-						onChange={onRegion}
-						className="[&>button]:min-w-11 [&>button]:px-2.5 lg:[&>button]:min-w-16 lg:[&>button]:px-4"
-					/>
 					<ThemeToggle variant="ghost" />
 					<Button
 						asChild

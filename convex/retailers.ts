@@ -4,7 +4,7 @@ import {
 	takesBuyerOrders,
 	takesCounterOrders,
 } from "./lib/storeAvailability";
-import { offlineStoreIds, storeAvailabilityOf } from "./storeAvailability";
+import { storeAvailabilityOf } from "./storeAvailability";
 
 // One customisable key survives the one-message-per-order cut (86eyd63r8):
 // `confirm`, the write-in reply for a buyer who messages their ORD- reference
@@ -281,6 +281,8 @@ import {
 	voidPendingInvoiceOnHandover,
 } from "./subscriptions";
 import { detachAutoRenewForRetailer } from "./subscriptionPayments";
+import { isStorefrontIndexable } from "./storefrontIndex";
+import { indexableStores } from "./storefrontIndex";
 import {
 	type ClaimRefusal,
 	isUnclaimed,
@@ -293,7 +295,9 @@ import {
 	riderBookingAllowed,
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
-import { storeBooksCouriers } from "./lib/courierBooking";
+import { delyvaBookingArmed, storeBooksCouriers } from "./lib/courierBooking";
+import { assertCatalogueWeighed } from "./lib/parcelWeights";
+import { type WeightPricing, weightPricingOf } from "./lib/weightPricing";
 import { isEncrypted } from "./lib/credentialCrypto";
 import {
 	ackableKeys,
@@ -881,6 +885,10 @@ type RetailerPublic = {
 	// lands in your WhatsApp" instead of the wa.me handoff. Public-safe (a
 	// deployment-level flag, not seller data); only the by-slug payload sets it.
 	confirmPushEnabled?: boolean;
+	/** Whether search engines are told about this storefront (z8r3fdh2ye) —
+	 * the sitemap rule, so the page's `robots` meta can't disagree with the
+	 * sitemap. Only the by-slug payload sets it. */
+	indexable?: boolean;
 	// Collection-service store (86eyg0n8e): the rider collects FROM the buyer's
 	// address and brings the order TO the seller (Bearcamp gear-wash). Flips
 	// checkout copy ("Collection address — where should we collect from?") and
@@ -946,6 +954,14 @@ type RetailerPublic = {
 	// Lalamove booking summary (86eyb5hrf) — OWNER-only like the two fields
 	// above, and secret-free (see DeliveryBookingSummary).
 	deliveryBooking?: DeliveryBookingSummary;
+	// WHY this store's delivery charge depends on parcel weight (23 Oct 2026,
+	// `weightPricingOf`): the seller's rate card, or a live courier that
+	// quotes by weight. Unset = it doesn't. One enum derived server-side from
+	// owner-only config (the mode + whether Delyva is armed, which rides on
+	// its credentials), so the product form, the wizard and the Products list
+	// never re-derive it from pieces they can't all see. Only the owner read
+	// sets it; it is harmless but pointless on the storefront payload.
+	weightPricing?: WeightPricing;
 	// HitPay connection summary (86eyb6z3a) — OWNER-only and secret-free like
 	// deliveryBooking. Buyers learn "gateway available" per-order through
 	// orders.getPaymentMethods, never from a retailer payload.
@@ -1208,6 +1224,7 @@ async function buildRetailerPublic(
 		businessAddress: row.businessAddress,
 		businessIdentity: row.businessIdentity,
 		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
+		weightPricing: weightPricingOf(row) ?? undefined,
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		openingHours: row.openingHours,
@@ -1414,6 +1431,7 @@ export const getRetailerBySlug = query({
 					acceptsVouchers: await storeShowsVoucherEntry(ctx, active._id),
 					marketplaceUnlisted: active.marketplaceUnlistedAt !== undefined,
 					storefrontChatEnabled: active.storefrontChatDisabledAt === undefined,
+					indexable: await isStorefrontIndexable(ctx, active, false),
 					// paymentInstructions intentionally omitted from the public
 					// storefront payload — only revealed in the WhatsApp confirm
 					// reply after the shopper commits to an order.
@@ -3043,6 +3061,25 @@ export const updateSettings = mutation({
 				// decided with Arif 11 Aug). sanitizeDeliveryConfig above already
 				// guarantees ≥1 zone with ≥1 state + ≥1 band, so a stored weight
 				// config can never be dead weight.
+				// Arming weight pricing (23 Oct 2026): switching the charge onto the
+				// weight rate card, or onto live pricing while Delyva is armed,
+				// starts pricing every order by parcel weight — so it refuses
+				// while buyable choices are unweighed, naming the count and the
+				// page that fixes it. Only the SWITCH is gated: a store already on
+				// that mode keeps saving (its policies, its zones) and is pointed
+				// at the fix by the readiness notice instead.
+				const storedMode = (retailer.deliveryConfig as DeliveryConfig | undefined)
+					?.mode;
+				if (clean.mode === "weight" && storedMode !== "weight") {
+					await assertCatalogueWeighed(ctx, retailer._id, "rate_card");
+				}
+				if (
+					clean.mode === "live" &&
+					storedMode !== "live" &&
+					delyvaBookingArmed(retailer)
+				) {
+					await assertCatalogueWeighed(ctx, retailer._id, "courier");
+				}
 				if (clean.mode === "lalamove") {
 					// Live-quote pricing rides the booking config (credentials +
 					// vehicle + origin) — require booking enabled in the effective
@@ -3977,21 +4014,13 @@ export const backfillPaymentMethods = internalMutation({
 export const listSlugsForSitemap = query({
 	args: {},
 	handler: async (ctx): Promise<Array<{ slug: string; updatedAt: number }>> => {
-		const rows = await ctx.db.query("retailers").collect();
-		const offline = await offlineStoreIds(ctx);
-		return (
-			rows
-				// Taken offline by Kedaipal (z8r3fdudf7): the page is a noindex
-				// "unavailable" screen — never hand it to a crawler.
-				.filter((r) => !offline.has(r._id))
-				// A pre-built store's storefront works by direct link — that is how
-				// an admin shows the vendor their shop before handover — but it is
-				// nobody's shop yet, so it must not be submitted to search engines.
-				// Indexing a URL whose store may never be claimed (or may be renamed
-				// at handover) spends the slug's ranking on a page that could vanish.
-				.filter((r) => !isUnclaimed(r))
-				.map((r) => ({ slug: r.slug, updatedAt: r._creationTime }))
-		);
+		// One rule for what a crawler may see (z8r3fdh2ye): claimed, online,
+		// not cancelled, at least one visible product — `convex/lib/storefrontIndex.ts`.
+		// `updatedAt` is the newest store or product write, not creation time.
+		return (await indexableStores(ctx)).map(({ retailer, lastmod }) => ({
+			slug: retailer.slug,
+			updatedAt: lastmod,
+		}));
 	},
 });
 

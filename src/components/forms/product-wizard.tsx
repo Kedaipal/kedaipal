@@ -45,6 +45,10 @@ import {
 	overCapMessage,
 } from "../../../convex/lib/variant";
 import {
+	WEIGHT_REQUIRED_COPY,
+	type WeightPricing,
+} from "../../../convex/lib/weightPricing";
+import {
 	bookingPriceSuffix,
 	bookingSpanCounted,
 	bookingSpanNoun,
@@ -57,6 +61,7 @@ import {
 	formatDraftPriceRange,
 	normalizePriceInput,
 	parsePriceInput,
+	sanitizeIntInput,
 } from "../../lib/format";
 import type { KindCard } from "../../lib/kind-card";
 import { NOTE_LINK_HINT } from "../../lib/linkify";
@@ -64,6 +69,8 @@ import { asPackageUnit } from "../../lib/package-unit";
 import type { UnsavedState } from "../../lib/product-form-dirty";
 import {
 	isSecurityDepositInRange,
+	maxSkipsDraftIssue,
+	maxSkipsFromDraft,
 	securityDepositRangeMessage,
 	weekendRateConsequence,
 } from "../../lib/product-summary";
@@ -74,6 +81,7 @@ import { CreditLockCta, SaveLockNote } from "../credits/credit-lock-cta";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
+import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
@@ -197,6 +205,9 @@ export type WizardState = {
 	/** Booking kind, DAY package only — "Only days you're open" (z8r3fdhpm7):
 	 * the term skips the store's closed days. Sent only for a day package. */
 	skipsClosedDays: boolean;
+	/** Booking kind, open-days package only — "Skips per package" as typed
+	 * (z8r3fdh3ay); blank = no limit. Sent only with skipsClosedDays. */
+	maxSkips: string;
 	/** Booking kind only — refundable security deposit (RM, as typed; blank =
 	 * none). Collected with the payment, returned after check-out (S5). */
 	securityDeposit: string;
@@ -256,6 +267,7 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		packageUnit: "month",
 		autoAccept: false,
 		skipsClosedDays: false,
+		maxSkips: "",
 		securityDeposit: "",
 		weekendPrice: "",
 		weekendDays: [...DEFAULT_WEEKEND_DAYS],
@@ -498,6 +510,10 @@ export function wizardStepIssues(
 		 * symbol ("S$ 10,000"). Only the on-screen callers need it — a caller
 		 * that just counts issues can leave it off. */
 		currency?: string;
+		/** The store prices delivery by weight (23 Oct 2026): step 3 asks for
+		 * a parcel weight on every buyable choice of a physical product, with
+		 * the full form's own sentence (`buildSubmitVariants`). */
+		weightRequired?: WeightPricing | null;
 	} = {},
 ): WizardIssue[] {
 	const issues: WizardIssue[] = [];
@@ -594,6 +610,15 @@ export function wizardStepIssues(
 					message: `Enter a whole number of ${state.packageUnit}s between 1 and ${pkgMax}, or leave blank.`,
 				});
 			}
+		}
+		// "Skips per package" (z8r3fdh3ay) — judged only while it's on screen
+		// (an open-days day package); the field shows the sentence itself.
+		const maxSkipsIssue =
+			pkgRaw.length > 0 && state.packageUnit === "day" && state.skipsClosedDays
+				? maxSkipsDraftIssue(state.maxSkips)
+				: null;
+		if (maxSkipsIssue !== null) {
+			issues.push({ field: "maxSkips", message: maxSkipsIssue });
 		}
 		const depositRaw = state.securityDeposit.trim();
 		if (depositRaw.length > 0) {
@@ -693,12 +718,27 @@ export function wizardStepIssues(
 		}
 	}
 	if (step === 3 && !madeToOrder && gridReady) {
-		const built = buildSubmitVariants(rows, null);
+		const built = buildSubmitVariants(rows, null, {
+			// Only goods that SHIP are weighed — a service or booking has no
+			// parcel, and an event RSVP is met at the venue.
+			weightRequired:
+				wizardKind(state) === "physical" && !state.event.on
+					? (opts.weightRequired ?? null)
+					: null,
+		});
 		if ("issues" in built) {
 			for (const issue of built.issues) {
 				if (issue.where === "row" && issue.field === "price") {
 					issues.push({
 						field: `price:${rowKey(rows[issue.index])}`,
+						message: issue.message,
+					});
+				}
+				// A required (or malformed) parcel weight lives on this step too,
+				// under the price it travels with.
+				if (issue.where === "row" && issue.field === "weight") {
+					issues.push({
+						field: `weight:${rowKey(rows[issue.index])}`,
 						message: issue.message,
 					});
 				}
@@ -878,6 +918,15 @@ export function buildWizardSubmitValues(
 							state.skipsClosedDays
 								? true
 								: undefined,
+						// The cap rides only with open days — the server refuses it
+						// anywhere else.
+						maxSkips:
+							packageLengthValue !== undefined &&
+							state.packageUnit === "day" &&
+							state.skipsClosedDays &&
+							state.maxSkips.trim().length > 0
+								? maxSkipsFromDraft(state.maxSkips)
+								: undefined,
 						securityDeposit: (() => {
 							const dep = parsePriceInput(state.securityDeposit.trim());
 							return dep !== null && dep > 0
@@ -965,6 +1014,7 @@ export function wizardHandoff(state: WizardState): {
 			packageUnit: state.packageUnit,
 			autoAccept: state.autoAccept,
 			skipsClosedDays: state.skipsClosedDays,
+			maxSkips: state.maxSkips,
 			securityDeposit: state.securityDeposit,
 			weekendPrice: state.weekendPrice,
 			weekendDays: state.weekendDays,
@@ -1009,6 +1059,7 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		packageUnit: draft.packageUnit ?? "month",
 		autoAccept: draft.autoAccept === true,
 		skipsClosedDays: draft.skipsClosedDays === true,
+		maxSkips: draft.maxSkips ?? "",
 		securityDeposit: draft.securityDeposit ?? "",
 		weekendPrice: draft.weekendPrice ?? "",
 		weekendDays: draft.weekendDays ?? [...DEFAULT_WEEKEND_DAYS],
@@ -1042,7 +1093,11 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
  */
 export function wizardInitialStep(
 	state: WizardState,
-	opts: { requireEventVenue?: boolean; noEventVenue?: boolean } = {},
+	opts: {
+		requireEventVenue?: boolean;
+		noEventVenue?: boolean;
+		weightRequired?: WeightPricing | null;
+	} = {},
 ): number {
 	const steps = wizardSteps(
 		effectiveShape(state),
@@ -1174,9 +1229,16 @@ export function ProductWizard({
 	storeSchedule,
 	saveLock,
 	onUnsavedChange,
+	weightPricing = null,
 }: {
 	/** Owning retailer — feeds the review step's category picker. */
 	retailerId: Id<"retailers">;
+	/** WHY the store prices delivery by weight (`retailers.weightPricing`,
+	 * 23 Oct 2026) — the Price step then asks for a parcel weight on every
+	 * choice of a physical product, required, with the reason's own sentence.
+	 * Null/unset = not asked here (it stays optional inside the full form's
+	 * Advanced). */
+	weightPricing?: WeightPricing | null;
 	/** Set while this seller can't create products right now (view-only, out
 	 * of credits, or a teammate with view on products) — see ProductForm's
 	 * `saveLock`. Every step still works, so the draft is ready to publish the
@@ -1220,7 +1282,9 @@ export function ProductWizard({
 	storeSchedule?: StoreSchedule;
 }) {
 	const [step, setStep] = useState(() =>
-		initialState ? wizardInitialStep(initialState) : 0,
+		initialState
+			? wizardInitialStep(initialState, { weightRequired: weightPricing })
+			: 0,
 	);
 	// Derived once, at mount — a lazy initialiser, not an effect, so the first
 	// paint already shows the linked card (or the refusal) with no flicker.
@@ -1769,6 +1833,7 @@ export function ProductWizard({
 			requireEventVenue,
 			noEventVenue,
 			currency,
+			weightRequired: weightPricing,
 		});
 		if (found.length > 0) {
 			setIssues(found);
@@ -1799,6 +1864,16 @@ export function ProductWizard({
 		patchEditor({ rows: rows.map((r) => ({ ...r, price: v })) });
 	}
 
+	// Parcel weight is asked on the Price step only where pricing depends on
+	// it, and only of goods — a service or booking has no parcel.
+	const weightRequired: WeightPricing | null =
+		kind === "physical" && !state.event.on ? weightPricing : null;
+	function fillAllWeights(v: string) {
+		patchEditor({
+			rows: rows.map((r) => ({ ...r, parcelWeightG: sanitizeIntInput(v) })),
+		});
+	}
+
 	async function publish() {
 		// Belt-and-braces: re-validate every step before submitting (review-step
 		// edits jump around, so a hole could otherwise slip through). Walks the
@@ -1808,6 +1883,7 @@ export function ProductWizard({
 				requireEventVenue,
 				noEventVenue,
 				currency,
+				weightRequired: weightPricing,
 			});
 			if (found.length > 0) {
 				setIssues(found);
@@ -2389,13 +2465,14 @@ export function ProductWizard({
 									isError={!!issueFor("packageLength")}
 									className="w-32"
 								/>
-								<select
+								<Select
 									aria-label="Package length unit"
 									value={state.packageUnit}
 									onChange={(e) =>
 										patch({ packageUnit: asPackageUnit(e.target.value) })
 									}
-									className="h-11 rounded-xl border border-input bg-background px-2 text-sm font-normal"
+									variant="field"
+									className="w-32"
 								>
 									<option value="month">months</option>
 									{/* "nights" and "days" are the SAME span — a 2-night stay and
@@ -2404,7 +2481,7 @@ export function ProductWizard({
 									    3D2N deal is two nights), a gym or class by the day. */}
 									<option value="night">nights</option>
 									<option value="day">days</option>
-								</select>
+								</Select>
 							</span>
 							<IssueText message={issueFor("packageLength")} />
 							<span className="text-xs font-normal text-muted-foreground">
@@ -2425,6 +2502,8 @@ export function ProductWizard({
 								packageLength={packageLengthNum}
 								skipsClosedDays={state.skipsClosedDays}
 								onChange={(next) => patch({ skipsClosedDays: next })}
+								maxSkips={state.maxSkips}
+								onMaxSkipsChange={(next) => patch({ maxSkips: next })}
 								schedule={storeSchedule}
 							/>
 						) : null}
@@ -2677,19 +2756,47 @@ export function ProductWizard({
 								</label>
 							</>
 						) : null}
+						{/* Parcel weight, asked HERE where pricing depends on it (23 Oct
+						    2026): on a store whose couriers or rate card price by
+						    weight, a product published without one is quoted at the
+						    one-kilo floor or can't be priced at all — so the wizard
+						    says why once, then asks beside every price. */}
+						{weightRequired && !madeToOrder ? (
+							<p className="-mt-2 text-sm text-muted-foreground">
+								<span className="font-medium text-foreground">
+									{WEIGHT_REQUIRED_COPY[weightRequired].cause}
+								</span>{" "}
+								— so each {showAxes ? "choice" : "item"} needs its parcel weight
+								in grams.
+							</p>
+						) : null}
 						{!madeToOrder && rows.length > 1 ? (
-							<label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-								Same price for all
-								<Input
-									inputMode="decimal"
-									placeholder="0.00"
-									className="h-9 w-24"
-									onChange={(e) => fillAllPrices(e.target.value)}
-									onBlur={(e) =>
-										fillAllPrices(normalizePriceInput(e.target.value))
-									}
-								/>
-							</label>
+							<div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+								<label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+									Same price for all
+									<Input
+										inputMode="decimal"
+										placeholder="0.00"
+										className="h-9 w-24"
+										onChange={(e) => fillAllPrices(e.target.value)}
+										onBlur={(e) =>
+											fillAllPrices(normalizePriceInput(e.target.value))
+										}
+									/>
+								</label>
+								{weightRequired ? (
+									<label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+										Same weight for all
+										<Input
+											inputMode="numeric"
+											placeholder="500"
+											className="h-9 w-24"
+											onChange={(e) => fillAllWeights(e.target.value)}
+										/>
+										g
+									</label>
+								) : null}
+							</div>
 						) : null}
 						<div className="flex flex-col gap-3">
 							{rows.map((row, i) => {
@@ -2721,6 +2828,39 @@ export function ProductWizard({
 												invalid={!!issueFor(`price:${key}`)}
 											/>
 										</div>
+										{/* The price's refusal sits under the price, before the weight
+										    row — not after it, where it would read as the weight's. */}
+										<IssueText message={issueFor(`price:${key}`)} />
+										{weightRequired && !madeToOrder ? (
+											<div className="flex items-center justify-end gap-3">
+												<label
+													htmlFor={`wizard-weight-${i}`}
+													className="text-xs text-muted-foreground"
+												>
+													Parcel weight
+												</label>
+												<Input
+													id={`wizard-weight-${i}`}
+													variant="field"
+													inputMode="numeric"
+													placeholder="500"
+													value={row.parcelWeightG}
+													onChange={(e) =>
+														setRow(i, {
+															parcelWeightG: sanitizeIntInput(e.target.value),
+														})
+													}
+													isError={!!issueFor(`weight:${key}`)}
+													aria-required={row.active ? true : undefined}
+													aria-label={`Parcel weight in grams for ${key || "this item"}`}
+													className="w-28 text-right"
+												/>
+												<span className="w-4 text-sm text-muted-foreground">
+													g
+												</span>
+											</div>
+										) : null}
+										<IssueText message={issueFor(`weight:${key}`)} />
 										{showRowDetails ? (
 											<div className="flex flex-wrap items-center gap-3 rounded-lg bg-muted/40 p-2">
 												<VariantImageCell
@@ -2777,7 +2917,6 @@ export function ProductWizard({
 												<IssueText message={issueFor(`sku:${key}`)} />
 											</div>
 										) : null}
-										<IssueText message={issueFor(`price:${key}`)} />
 									</div>
 								);
 							})}
@@ -3060,7 +3199,13 @@ export function ProductWizard({
 								{allMto ? (
 									<span className="self-start rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-amber-950/50 dark:text-amber-400">
 										{isBooking
-											? "Booking — request to book"
+											? // The storefront's own door words (`product-page.tsx`):
+												// an instant-book listing has no request step, so the
+												// preview must not promise one beside "Confirmed
+												// instantly".
+												state.autoAccept
+												? "Booking — book now"
+												: "Booking — request to book"
 											: madeToOrder
 												? "Made to order"
 												: "Made fresh"}
@@ -3108,7 +3253,7 @@ export function ProductWizard({
 												? [
 														{
 															label: "Package",
-															value: `${state.packageLength.trim()} ${state.packageUnit}${state.packageLength.trim() === "1" ? "" : "s"}${state.packageUnit === "day" && state.skipsClosedDays ? " (open days only)" : ""}, flat price`,
+															value: `${state.packageLength.trim()} ${state.packageUnit}${state.packageLength.trim() === "1" ? "" : "s"}${state.packageUnit === "day" && state.skipsClosedDays ? ` (open days only${state.maxSkips.trim().length > 0 ? `, up to ${state.maxSkips.trim()} skips` : ""})` : ""}, flat price`,
 															step: 3,
 														},
 													]

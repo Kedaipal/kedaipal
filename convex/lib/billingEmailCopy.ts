@@ -5,7 +5,7 @@
 // shell is intentionally local here because invoices need a richer summary +
 // payment-details layout than order alerts.
 
-import { escapeHtml, type Locale, logoHeader, wrapHtml } from "./emailCopy";
+import { ctaButton, escapeHtml, type Locale, logoHeader, wrapHtml } from "./emailCopy";
 import {
 	ENTERPRISE_FROM_ORDERS,
 	INVOICE_DUE_GRACE_DAYS,
@@ -242,7 +242,7 @@ function holdBlock(locale: Locale, v: BillingEmailVars): string {
 	return `<div style="border:1px solid #c7d2fe;background:#eef2ff;border-radius:16px;padding:16px;margin:0 0 12px 0;">
 <p style="margin:0 0 6px 0;font-size:13px;font-weight:800;color:#3730a3;">${escapeHtml(L.holdHeading)} · ${escapeHtml(v.holdPriceFormatted)}</p>
 <p style="margin:0 0 12px 0;font-size:13px;line-height:1.6;color:#3730a3;">${escapeHtml(body)}</p>
-<a href="${escapeHtml(v.billingUrl)}" style="display:inline-block;background:#4338ca;color:#ffffff;text-decoration:none;font-size:14px;font-weight:800;padding:10px 16px;border-radius:10px;">${escapeHtml(L.holdCta)}</a>
+${ctaButton(v.billingUrl, L.holdCta, { background: "#4338ca", fontWeight: 800, radius: 10 })}
 </div>`;
 }
 
@@ -340,9 +340,8 @@ function paymentRow(label: string, value: string, strong = false): string {
 function payNowBlock(locale: Locale, v: BillingEmailVars): string {
 	if (!v.payNowUrl) return "";
 	const L = t[locale];
-	const safeUrl = escapeHtml(v.payNowUrl);
 	return `<div style="border:1px solid #a7f3d0;background:#ecfdf5;border-radius:16px;padding:16px;margin:0 0 12px 0;">
-<a href="${safeUrl}" style="display:inline-block;background:#059669;color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;padding:12px 18px;border-radius:12px;">${escapeHtml(L.payNow)}</a>
+${ctaButton(v.payNowUrl, L.payNow, { background: "#059669", fontSize: 15, fontWeight: 800, radius: 12 })}
 <p style="margin:10px 0 0 0;font-size:12px;line-height:1.5;color:#047857;">${escapeHtml(L.payNowHint)}</p>
 </div>`;
 }
@@ -391,14 +390,13 @@ function wrapBillingHtml(
 ): string {
 	const L = t[locale];
 	const tone = invoiceStatusTone(key);
-	const safeUrl = escapeHtml(v.billingUrl);
 	// Empty for every key but `recoveryFinal` — and when empty its whole row is
 	// omitted, so the six pre-existing billing emails keep their exact spacing.
 	const hold = holdBlock(locale, v);
 	return `<!doctype html><html><body style="margin:0;padding:0;background:#f6f8fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f8fb;padding:28px 14px;">
 <tr><td align="center">
-<table role="presentation" width="640" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;background:#ffffff;border:1px solid #e5e7eb;border-radius:20px;overflow:hidden;box-shadow:0 10px 30px rgba(15,23,42,.06);">
+<table role="presentation" width="640" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;overflow-wrap:anywhere;word-break:break-word;background:#ffffff;border:1px solid #e5e7eb;border-radius:20px;overflow:hidden;box-shadow:0 10px 30px rgba(15,23,42,.06);">
 <tr><td style="height:6px;background:${tone.accent};font-size:0;line-height:0;">&nbsp;</td></tr>
 <tr><td style="padding:28px 28px 20px 28px;">
 ${logoHeader(18)}
@@ -434,7 +432,7 @@ ${paymentPanel(locale, v)}
 </td></tr>
 ${hold ? `<tr><td style="padding:12px 28px 0 28px;">${hold}</td></tr>` : ""}
 <tr><td style="padding:24px 28px 30px 28px;">
-<a href="${safeUrl}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;padding:13px 18px;border-radius:12px;">${escapeHtml(ctaLabel)}</a>
+${ctaButton(v.billingUrl, ctaLabel, { background: "#0f172a", fontSize: 15, fontWeight: 800, radius: 12 })}
 </td></tr>
 </table>
 <p style="margin:16px 0 0 0;font-size:12px;line-height:1.5;color:#94a3b8;">Sent by Kedaipal — your WhatsApp-first order hub.</p>

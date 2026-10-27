@@ -569,3 +569,43 @@ describe("pickup address", () => {
 		expect(postcode.value).toBe("50450");
 	});
 });
+
+describe("booking held for parcel weights (23 Oct 2026)", () => {
+	it("says booking is off until the products are weighed, and links the fix", () => {
+		state.settings = settings({ enabled: false, bookingHeldForWeights: 2 });
+		const { container } = render(card());
+		expect(container.textContent).toContain(
+			"Booking is off until 2 products have a parcel weight — couriers price by weight.",
+		);
+		// The router stub renders `to` as-is — assert the destination, not the role.
+		expect(screen.getByText(/set parcel weights/i).getAttribute("to")).toBe(
+			"/app/products/weights",
+		);
+		// The pointer to the switch still stands — it is where they go next.
+		expect(container.textContent).toContain("Courier booking");
+	});
+
+	it("a connect that held booking warns straight away", async () => {
+		const { toast } = await import("sonner");
+		state.actions.set(
+			NAME.connect,
+			vi.fn().mockResolvedValue({
+				ok: true,
+				accountName: "Mandos",
+				webhooksSubscribed: true,
+				isDemo: false,
+				bookingHeldForWeights: 4,
+			}),
+		);
+		render(card());
+		fireEvent.change(screen.getByLabelText(/delyva api key/i), {
+			target: { value: "dx-abc" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /connect delyva/i }));
+		await waitFor(() =>
+			expect(toast.warning).toHaveBeenCalledWith(
+				"Booking stays off until 4 products have a parcel weight — see the note on this card.",
+			),
+		);
+	});
+});

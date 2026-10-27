@@ -40,6 +40,7 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
+import { assertCounterSaleFunded } from "./creditLock";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import {
@@ -456,6 +457,7 @@ export const bindSessionManualPhone = mutation({
 		await assertSubscriptionActive(ctx, access.retailer._id);
 		const retailer = access.retailer;
 		await assertOrderingNotPaused(ctx, retailer);
+		await assertCounterSaleFunded(ctx, retailer);
 
 		// Only after the store-level gates above: a paused or lapsed store says so
 		// before any complaint about the number (pinned by seasonalHold.test.ts for the pause and counterCheckout.test.ts for the lapse).
@@ -560,6 +562,7 @@ export const startAnonymousSession = mutation({
 		await assertSubscriptionActive(ctx, access.retailer._id);
 		const retailer = access.retailer;
 		await assertOrderingNotPaused(ctx, retailer);
+		await assertCounterSaleFunded(ctx, retailer);
 		const now = Date.now();
 		const openBound = await openBoundSessions(ctx, retailer._id, now);
 
@@ -866,6 +869,7 @@ export const createOrderFromSession = mutation({
 		await assertSubscriptionActive(ctx, session.retailerId);
 		const retailer = access.retailer;
 		await assertOrderingNotPaused(ctx, retailer);
+		await assertCounterSaleFunded(ctx, retailer);
 		if (session.status !== "buyer_identified")
 			throw new ConvexError(
 				"Bind a buyer to this checkout before creating the order",
@@ -1295,9 +1299,10 @@ export const createOrderFromSession = mutation({
 		// real first order — activate the store (one-time stamp).
 		await stampRetailerActivation(ctx, retailer._id, now);
 
-		// Meter against the monthly usage nudge (SOFT cap, never a block) and
-		// use the order's credit — counter orders count like storefront ones,
-		// including while the store is out of credits (intake never stops).
+		// Use the order's credit, like every channel. Unlike the buyer doors the
+		// counter only gets here with a credit in hand (`assertCounterSaleFunded`
+		// above, in this same transaction), so a counter sale is never born
+		// gated — never invisible to the seller who just rang it up (z8r3fdwbbb).
 		await recordOrderCreated(ctx, {
 			retailerId: retailer._id,
 			orderId,

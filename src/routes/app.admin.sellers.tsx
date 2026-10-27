@@ -52,6 +52,7 @@ import {
 	sortSellers,
 } from "../lib/admin-seller-view";
 import { downloadCsv } from "../lib/download";
+import { searchText } from "../lib/search-params";
 import { storefrontOrigin } from "../lib/storefront-url";
 
 /** The directory's URL state. Defaults are omitted from the URL so the plain
@@ -63,16 +64,19 @@ export interface SellersSearch {
 }
 
 export const Route = createFileRoute("/app/admin/sellers")({
+	// Every key is returned, `undefined` when absent or invalid: an omitted key
+	// lets the raw parsed value through, and `?q=9981` parses as a NUMBER that
+	// crashed the page on `q.trim()` (z8r3fdtk87, src/lib/search-params.ts).
 	validateSearch: (search: Record<string, unknown>): SellersSearch => ({
-		...(isSellerFilter(search.status) && search.status !== "all"
-			? { status: search.status }
-			: {}),
-		...(isSellerSort(search.sort) && search.sort !== "founding"
-			? { sort: search.sort }
-			: {}),
-		...(typeof search.q === "string" && search.q.trim().length > 0
-			? { q: search.q }
-			: {}),
+		status:
+			isSellerFilter(search.status) && search.status !== "all"
+				? search.status
+				: undefined,
+		sort:
+			isSellerSort(search.sort) && search.sort !== "founding"
+				? search.sort
+				: undefined,
+		q: searchText(search.q),
 	}),
 	component: AdminSellersRoute,
 });

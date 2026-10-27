@@ -428,9 +428,50 @@
 	.animate-kp-marquee-slow,
 	.animate-kp-marquee-slow-reverse,
 	.animate-kp-highlight-sweep,
-	.animate-kp-spotlight {
+	.animate-kp-spotlight,
+	html[data-theme-transition] .kp-theme-glyph {
 		animation: none;
 	}
+}
+
+/* =============================================
+   Theme change — the lights dim, they don't cut
+   =============================================
+   `lib/theme.ts` runs the class flip inside a view transition and stamps the
+   direction on <html> for its duration (docs/dark-mode.md, "The fade"). The
+   browser's own crossfade is 250ms — a softened cut, not a feeling. Going
+   dark is a dimmer turned down: a symmetric ease over half a second. Coming
+   back is brighter sooner and settles slower, the way eyes adjust to a lamp
+   coming on. Old and new share one curve so their opacities always sum to 1
+   under the pair's plus-lighter blend — no dip in the middle.
+   Reduced motion never arrives here: theme.ts commits without a transition. */
+html[data-theme-transition="to-dark"]::view-transition-old(root),
+html[data-theme-transition="to-dark"]::view-transition-new(root) {
+	animation-duration: 520ms;
+	animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+}
+html[data-theme-transition="to-light"]::view-transition-old(root),
+html[data-theme-transition="to-light"]::view-transition-new(root) {
+	animation-duration: 680ms;
+	animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* The toggle's incoming glyph (sun or moon) turns into place under the fade.
+   The glyphs are CSS-picked (`dark:hidden` / `hidden dark:block`), so the
+   incoming one is freshly rendered at the flip and its animation starts
+   there; gated on the attribute so a page load never replays it. */
+@keyframes kp-theme-glyph-in {
+	from {
+		opacity: 0;
+		transform: rotate(-90deg) scale(0.5);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+html[data-theme-transition] .kp-theme-glyph {
+	animation: kp-theme-glyph-in 560ms cubic-bezier(0.2, 0, 0, 1) both;
 }
 
 /* Highlighter swipe behind accent words — mint */

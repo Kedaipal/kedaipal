@@ -98,6 +98,20 @@ describe("CreditTotals", () => {
 			expect(tileText(label)).not.toMatch(/RM|S\$|MYR|SGD/);
 	});
 
+	// Scenario 3 of the z8r3fdwf9t test: red only while a store is below zero.
+	it("orders owed reads red while any store is below zero, neutral at zero", () => {
+		const tileOf = (label: RegExp) =>
+			screen.getByText(label).closest('[class*="@container"]')?.className ?? "";
+		state.totals = totals({ ordersOwed: 5, storesOwing: 1 });
+		render(<CreditTotals />);
+		expect(tileOf(/Orders owed/)).toContain("bg-red-50");
+		cleanup();
+		state.totals = totals();
+		render(<CreditTotals />);
+		expect(tileOf(/Orders owed/)).not.toContain("red");
+		expect(tileOf(/Orders owed/)).toContain("bg-muted/50");
+	});
+
 	it("top-up revenue: this month's paid packs, summed per currency — never flattened", () => {
 		state.totals = totals();
 		state.revenue = revenue({

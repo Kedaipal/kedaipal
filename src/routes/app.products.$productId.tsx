@@ -43,6 +43,7 @@ import { convexErrorMessage } from "../lib/format";
 import type { UnsavedState } from "../lib/product-form-dirty";
 import { draftPreviewOverlay } from "../lib/product-preview";
 import { type ProductStatus, productStatus } from "../lib/product-status";
+import { capacityDraftFromListing } from "../lib/product-summary";
 import {
 	isProductSpotlightKey,
 	type ProductSpotlightKey,
@@ -58,7 +59,9 @@ export const Route = createFileRoute("/app/products/$productId")({
 	validateSearch: (
 		search: Record<string, unknown>,
 	): { spot?: ProductSpotlightKey } =>
-		isProductSpotlightKey(search.spot) ? { spot: search.spot } : {},
+		// Returned even when absent — an omitted key leaks its raw value
+		// (z8r3fdtk87, src/lib/search-params.ts).
+		({ spot: isProductSpotlightKey(search.spot) ? search.spot : undefined }),
 	component: EditProductRoute,
 });
 
@@ -377,7 +380,7 @@ function EditProductRoute() {
 					hidden: product.hidden,
 					kind: product.kind,
 					capacityPerNight: product.booking
-						? String(product.booking.capacityPerNight)
+						? capacityDraftFromListing(product.booking.capacityPerNight)
 						: undefined,
 					securityDeposit: product.booking?.securityDeposit
 						? (product.booking.securityDeposit / 100).toFixed(2)
@@ -391,6 +394,7 @@ function EditProductRoute() {
 					packageUnit: product.booking?.packageUnit,
 					autoAccept: product.booking?.autoAccept === true,
 					skipsClosedDays: product.booking?.skipsClosedDays === true,
+					maxSkips: product.booking?.maxSkips?.toString() ?? "",
 					weekendPrice: product.booking?.weekendPrice
 						? (product.booking.weekendPrice / 100).toFixed(2)
 						: undefined,
@@ -426,10 +430,10 @@ function EditProductRoute() {
 						customPrompt: vr.customPrompt,
 					})),
 				}}
-				// Weight/zone-priced store (86eyeea1n): parcel weight is promoted to
-				// a first-class field in the editor — a weightless item strands that
-				// store's checkout on "missing weights".
-				weightMode={retailer.deliveryConfig?.mode === "weight"}
+				// A store that prices delivery by weight (its rate card, or a live
+				// courier — `weightPricingOf`): parcel weight is promoted to a
+				// first-class, required field in the editor.
+				weightPricing={retailer.weightPricing ?? null}
 				storeSchedule={{
 					openingHours: retailer.openingHours,
 					closedDates: retailer.closedDates,

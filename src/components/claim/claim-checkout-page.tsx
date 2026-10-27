@@ -66,6 +66,7 @@ import {
 	type TimeMove,
 	timeMovedCopy,
 } from "../../lib/fulfilment-time-issue";
+import { liveQuoteAddressHint } from "../../lib/live-quote-copy";
 import { overseasCourierNote } from "../../lib/overseas-courier-note";
 import { claimFormSchemaFor } from "../../lib/schemas";
 import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
@@ -661,6 +662,10 @@ export function ClaimCheckoutPage({
 				return { kind: "blocked", reason: "store_unavailable" };
 			case "no_cold_service":
 				return { kind: "blocked", reason: "no_cold_service" };
+			// Too heavy for any rider vehicle and no courier priced it — the
+			// order is the problem, never the address.
+			case "too_heavy":
+				return { kind: "blocked", reason: "too_heavy" };
 			case "unavailable":
 				return { kind: "blocked", reason: "unquotable" };
 			default:
@@ -676,7 +681,8 @@ export function ClaimCheckoutPage({
 			quoteForDelivery.reason === "unquotable" ||
 			quoteForDelivery.reason === "out_of_range" ||
 			quoteForDelivery.reason === "store_unavailable" ||
-			quoteForDelivery.reason === "no_cold_service");
+			quoteForDelivery.reason === "no_cold_service" ||
+			quoteForDelivery.reason === "too_heavy");
 	const allowManualAddressEntry =
 		rawQuote !== undefined && !(!hasCoords && pinRequiredBlock);
 
@@ -717,6 +723,14 @@ export function ClaimCheckoutPage({
 			case "missing_weights":
 			case "custom_item":
 				return `Your ${feeNounShort} can't be worked out automatically — the store confirms it after you order`;
+			// The address is fine for these three, so none of them may say
+			// "try another address" (the default below used to, for all of them).
+			case "too_heavy":
+				return `This order is too heavy for a ${collectsFromCustomer ? "collection" : "delivery"} rider — message the store to arrange it`;
+			case "no_cold_service":
+				return "This store can't ship chilled or frozen items to this address right now — message them to arrange it";
+			case "store_unavailable":
+				return `${collectsFromCustomer ? "Collection" : "Delivery"} pricing isn't working for this store right now — message them on WhatsApp`;
 			default:
 				return collectsFromCustomer
 					? "We can't collect from this address — try another address"
@@ -924,12 +938,14 @@ export function ClaimCheckoutPage({
 												}
 												collectsFromCustomer={collectsFromCustomer}
 											/>
-											{isLiveMode ? (
+											{rawQuote?.kind === "live" ? (
 												<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-													{collectsFromCustomer
-														? "Collection is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion"
-														: "Delivery is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion"}
-													{selfCollectAvailable ? " — pick up instead" : ""}.
+													{liveQuoteAddressHint({
+														collectsFromCustomer,
+														riders: rawQuote.riders,
+														couriers: rawQuote.couriers,
+														selfCollectAvailable,
+													})}
 												</p>
 											) : null}
 											{overseasNote ? (

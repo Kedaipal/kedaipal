@@ -71,7 +71,7 @@ With the page as the only buyer view, a product without a stored slug would
 be **un-openable** — so `getPublicBySlug` resolves those by the slug derived
 from the name (`effectiveSlug`), and `productWithVariants` returns that same
 derived value so the grid always has a working link. Bounded by the
-50-product cap, and once a row has a stored slug the index arm answers first,
+per-retailer product cap, and once a row has a stored slug the index arm answers first,
 so it never runs on a migrated catalog. Net: the feature is correct the
 moment it deploys, independent of when `backfillProductSlugs` runs. The
 fallback still applies the full visibility rules (hidden/archived → null),
