@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { overCapMessage } from "../../../convex/lib/variant";
-import { isKindCard, KIND_CARDS } from "../../lib/kind-card";
+import { isKindCard, KIND_CARDS, parseKindCard } from "../../lib/kind-card";
 import { EMPTY_EVENT_DRAFT } from "./event-fields";
 import type { ProductFormDraft } from "./product-form";
 import {
 	buildWizardSubmitValues,
+	cardFromKind,
 	EVENTS_LOCKED_ISSUE,
 	emptyWizardState,
 	formDraftToWizardState,
@@ -971,7 +972,7 @@ describe("the wizard's money reads in the store's symbol", () => {
 
 	it("the deposit ceiling message names the store's symbol when the caller passes it", () => {
 		const stay: WizardState = {
-			...emptyWizardState("booking"),
+			...withKindCard(emptyWizardState(), "stay"),
 			name: "Riverside plot",
 			editor: {
 				options: [],
@@ -996,12 +997,14 @@ describe("the wizard's money reads in the store's symbol", () => {
 });
 
 describe("a `?card=` deep link opens on its card (`z8r3fdhkr7`)", () => {
-	it("admits the five step-0 cards and nothing else", () => {
+	it("admits the six step-0 cards and nothing else", () => {
+		expect(KIND_CARDS).toHaveLength(6);
 		for (const card of KIND_CARDS) expect(isKindCard(card)).toBe(true);
 		for (const junk of [
 			"",
 			"Event",
 			"events",
+			"booking",
 			"toString",
 			1,
 			null,
@@ -1011,63 +1014,32 @@ describe("a `?card=` deep link opens on its card (`z8r3fdhkr7`)", () => {
 		}
 	});
 
-	it("no link = today's opening: blank, pre-answered by the store type", () => {
-		for (const defaultKind of [
-			undefined,
-			"physical",
-			"service",
-			"booking",
-		] as const) {
-			expect(openingWizard({ defaultKind, eventsLocked: false })).toEqual({
-				state: emptyWizardState(defaultKind),
-				issues: [],
-			});
-		}
+	it("the retired `booking` card still parses — as Stay, its original meaning", () => {
+		expect(parseKindCard("booking")).toBe("stay");
+		expect(parseKindCard("plan")).toBe("plan");
+		expect(parseKindCard("Booking")).toBeUndefined();
+		expect(parseKindCard(undefined)).toBeUndefined();
 	});
 
-	it("an Event link lands exactly where the Event TAP does — whatever the store type", () => {
-		for (const defaultKind of [
-			undefined,
-			"physical",
-			"service",
-			"booking",
-		] as const) {
-			const opened = openingWizard({
-				defaultKind,
-				card: "event",
-				eventsLocked: false,
-			});
-			expect(opened.issues).toEqual([]);
-			expect(opened.state).toEqual(
-				withKindCard(emptyWizardState(defaultKind), "event"),
-			);
-			expect(opened.state.kindCard).toBe("event");
-			expect(opened.state.event.on).toBe(true);
-		}
-	});
-
-	it("from a BOOKING store, the linked event gets a normal selling substrate, not a stay's", () => {
-		// The booking default seeds one never-stock-blocked row and pre-answers
-		// preparation; an event is `physical`, so both must come back — the
-		// same rebuild the tap does after its (here empty) confirm.
-		const { state } = openingWizard({
-			defaultKind: "booking",
-			card: "event",
-			eventsLocked: false,
+	it("no link = an unanswered step 0 — never pre-answered (z8r3fdxt99)", () => {
+		expect(openingWizard({ eventsLocked: false })).toEqual({
+			state: emptyWizardState(),
+			issues: [],
 		});
-		expect(state.fulfilmentAnswered).toBe(false);
-		expect(state.shape).toBeNull();
-		expect(state.editor.rows).toHaveLength(1);
-		expect(state.editor.rows[0].blockWhenOutOfStock).toBe(true);
+		expect(emptyWizardState().kindCard).toBeNull();
 	});
 
-	it("a locked plan keeps the store-type default and says why on arrival", () => {
-		const opened = openingWizard({
-			defaultKind: "booking",
-			card: "event",
-			eventsLocked: true,
-		});
-		expect(opened.state).toEqual(emptyWizardState("booking"));
+	it("an Event link lands exactly where the Event TAP does", () => {
+		const opened = openingWizard({ card: "event", eventsLocked: false });
+		expect(opened.issues).toEqual([]);
+		expect(opened.state).toEqual(withKindCard(emptyWizardState(), "event"));
+		expect(opened.state.kindCard).toBe("event");
+		expect(opened.state.event.on).toBe(true);
+	});
+
+	it("a locked plan leaves step 0 unanswered and says why on arrival", () => {
+		const opened = openingWizard({ card: "event", eventsLocked: true });
+		expect(opened.state).toEqual(emptyWizardState());
 		expect(opened.state.event.on).toBe(false);
 		expect(opened.issues).toEqual([EVENTS_LOCKED_ISSUE]);
 		expect(opened.issues[0].message).toMatch(/pro plan/i);
@@ -1093,7 +1065,7 @@ describe("a `?card=` deep link opens on its card (`z8r3fdhkr7`)", () => {
 
 describe("open-days packages in the wizard (z8r3fdhpm7)", () => {
 	const course = (over: Partial<WizardState> = {}): WizardState => ({
-		...emptyWizardState("booking"),
+		...withKindCard(emptyWizardState(), "plan"),
 		name: "5-day kayak course",
 		packageLength: "5",
 		packageUnit: "day",
@@ -1262,5 +1234,168 @@ describe("the Price step asks for a parcel weight where pricing depends on it (2
 		expect(
 			wizardInitialStep(browniesState(), { weightRequired: "rate_card" }),
 		).toBe(3);
+	});
+});
+
+describe("Plan and Stay — two doors onto one booking kind (z8r3fdxt99)", () => {
+	const named = (state: WizardState): WizardState => ({
+		...state,
+		name: "20-day lunch plan",
+		editor: {
+			...state.editor,
+			rows: [{ ...state.editor.rows[0], price: "300" }],
+		},
+	});
+
+	it("both store as booking; Food and Event still route to physical", () => {
+		expect(kindFromCard("plan")).toBe("booking");
+		expect(kindFromCard("stay")).toBe("booking");
+		expect(kindFromCard("food")).toBe("physical");
+		expect(kindFromCard("event")).toBe("physical");
+		expect(kindFromCard("service")).toBe("service");
+	});
+
+	it("a stored booking re-lights Plan only for a day- or month-counted package", () => {
+		expect(
+			cardFromKind("booking", { packageLength: "1", packageUnit: "month" }),
+		).toBe("plan");
+		expect(
+			cardFromKind("booking", { packageLength: "20", packageUnit: "day" }),
+		).toBe("plan");
+		// A night-counted package is a stay sold as a deal (3D2N).
+		expect(
+			cardFromKind("booking", { packageLength: "2", packageUnit: "night" }),
+		).toBe("stay");
+		expect(
+			cardFromKind("booking", { packageLength: " ", packageUnit: "month" }),
+		).toBe("stay");
+		expect(cardFromKind("booking")).toBe("stay");
+		expect(cardFromKind("service")).toBe("service");
+	});
+
+	it("a plan's length is required; a stay's stays optional", () => {
+		const plan = named(withKindCard(emptyWizardState(), "plan"));
+		const issue = wizardStepIssues(plan, 3).find(
+			(i) => i.field === "packageLength",
+		);
+		expect(issue?.message).toMatch(/how long the plan runs/i);
+		expect(
+			wizardStepIssues({ ...plan, packageLength: "1" }, 3).some(
+				(i) => i.field === "packageLength",
+			),
+		).toBe(false);
+		// A bad plan length never offers "or leave blank" — it can't be.
+		expect(
+			wizardStepIssues({ ...plan, packageLength: "40" }, 3).find(
+				(i) => i.field === "packageLength",
+			)?.message,
+		).not.toMatch(/leave blank/);
+
+		const stay = named(withKindCard(emptyWizardState(), "stay"));
+		expect(
+			wizardStepIssues(stay, 3).some((i) => i.field === "packageLength"),
+		).toBe(false);
+		expect(
+			wizardStepIssues({ ...stay, packageLength: "x" }, 3).find(
+				(i) => i.field === "packageLength",
+			)?.message,
+		).toMatch(/or leave blank/);
+	});
+
+	it("each counts in its own trade's word until the seller types a length", () => {
+		expect(withKindCard(emptyWizardState(), "plan").packageUnit).toBe("month");
+		expect(withKindCard(emptyWizardState(), "stay").packageUnit).toBe("night");
+		// A typed length keeps the seller's own unit across the switch…
+		const typed = {
+			...withKindCard(emptyWizardState(), "plan"),
+			packageLength: "20",
+			packageUnit: "day" as const,
+		};
+		expect(withKindCard(typed, "stay").packageUnit).toBe("day");
+		// …except "nights", which a plan doesn't offer — same arithmetic as days.
+		const deal = {
+			...withKindCard(emptyWizardState(), "stay"),
+			packageLength: "2",
+		};
+		expect(deal.packageUnit).toBe("night");
+		expect(withKindCard(deal, "plan").packageUnit).toBe("day");
+	});
+
+	it("Plan ⇄ Stay is a relabel, never a rebuild — typed price and rows survive", () => {
+		const plan = named(withKindCard(emptyWizardState(), "plan"));
+		const stay = withKindCard(plan, "stay");
+		expect(stay.kindCard).toBe("stay");
+		expect(stay.editor).toBe(plan.editor);
+		expect(stay.fulfilmentAnswered).toBe(true);
+		expect(wizardSteps(null, "booking")).toEqual([0, 1, 3, 5]);
+	});
+
+	it("publishes a plan as a booking package and round-trips through the full form", () => {
+		const plan = {
+			...named(withKindCard(emptyWizardState(), "plan")),
+			packageLength: "1",
+		};
+		const values = buildWizardSubmitValues(plan);
+		expect(values.kind).toBe("booking");
+		expect(values.booking).toMatchObject({
+			packageLength: 1,
+			packageUnit: "month",
+		});
+		const { initialValues, initialEditor } = wizardHandoff(plan);
+		expect(initialValues.packageLength).toBe("1");
+		expect(initialEditor).toBe(plan.editor);
+	});
+
+	it("a full-form booking draft comes back on the card its package implies", () => {
+		const draft = (packageLength: string, packageUnit: "month" | "night") =>
+			({
+				name: "Lunch plan",
+				description: "",
+				hidden: false,
+				kind: "booking" as const,
+				capacityPerNight: "",
+				packageLength,
+				packageUnit,
+				prepMinutes: "",
+				pickupNote: "",
+				categoryIds: [],
+				images: [],
+				editor: {
+					options: [],
+					rows: [row({ price: "300", blockWhenOutOfStock: false })],
+					customLine: null,
+				},
+				minQuantity: "",
+				minNoticeDays: "",
+			}) satisfies ProductFormDraft;
+		expect(formDraftToWizardState(draft("1", "month")).kindCard).toBe("plan");
+		expect(formDraftToWizardState(draft("2", "night")).kindCard).toBe("stay");
+		expect(formDraftToWizardState(draft("", "month")).kindCard).toBe("stay");
+	});
+});
+
+describe("capacity's starting value follows the card (z8r3fdxt99)", () => {
+	it("a plan starts unlimited, a stay starts at one", () => {
+		expect(withKindCard(emptyWizardState(), "plan").capacityPerNight).toBe("");
+		expect(withKindCard(emptyWizardState(), "stay").capacityPerNight).toBe("1");
+		expect(
+			buildWizardSubmitValues({
+				...withKindCard(emptyWizardState(), "plan"),
+				packageLength: "1",
+			}).booking?.capacityPerNight,
+		).toBeUndefined();
+	});
+
+	it("swaps defaults across Plan ⇄ Stay, but never a value the seller set", () => {
+		const plan = withKindCard(emptyWizardState(), "plan");
+		expect(withKindCard(plan, "stay").capacityPerNight).toBe("1");
+		const stay = withKindCard(emptyWizardState(), "stay");
+		expect(withKindCard(stay, "plan").capacityPerNight).toBe("");
+		const typed = { ...stay, capacityPerNight: "5" };
+		expect(withKindCard(typed, "plan").capacityPerNight).toBe("5");
+		expect(
+			withKindCard({ ...plan, capacityPerNight: "20" }, "stay")
+				.capacityPerNight,
+		).toBe("20");
 	});
 });
