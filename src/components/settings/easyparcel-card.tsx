@@ -41,6 +41,7 @@ import { useActAsRetailerId } from "../../hooks/useActAs";
 import type { FixHighlight } from "../../lib/country-setup-copy";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { parseGoogleAddress } from "../../lib/google-address";
+import { easyparcelCardShown } from "../../lib/integrations-glance";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { TONE_PANEL } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
@@ -255,7 +256,7 @@ export function EasyparcelCard({
 
 	// Nothing to offer where EasyParcel isn't available, and nothing connected
 	// to unwind — stay out of the tab entirely (shell included).
-	if (settings && !settings.available && !connected) return null;
+	if (settings && !easyparcelCardShown(settings)) return null;
 
 	const connectButton = (label: string) => (
 		<Button

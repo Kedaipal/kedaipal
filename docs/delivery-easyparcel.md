@@ -75,6 +75,19 @@ authorize it.
 The pickup address EasyParcel holds is imported as a **prefill** (fill-if-unset,
 same-country only); a reconnect keeps the seller's own address and switch.
 
+**Connecting arms booking; the switch pauses it.** A first connect stores
+`enabled: true` (the Delyva posture). The on/off lives where every courier's
+does — **Settings → Delivery pricing → Courier booking**, an "EasyParcel
+couriers" row beside Lalamove/Delyva (`courier-booking-section.tsx`), and the
+Fulfilment row's glance names it while it's armed (`easyparcelBookingOn`, the
+client mirror of `easyparcelBookingArmed`). Switching it on is Pro-gated;
+switching it off never is. Signed out at EasyParcel's end (`needsReconnect`),
+the row reads **Paused** with a reconnect link rather than a switch that
+claims "on". EasyParcel never quotes the buyer's live charge, so it is never
+the "last live bidder" that locks Lalamove on, and it doesn't wait on parcel
+weights (the dispatch card asks per order). The Integrations "N of M" counts
+the card wherever the card shows (`easyparcelCardShown`).
+
 **Why a table, not `retailers.easyparcel`:** the access token refreshes every
 ~10h and the wallet snapshot moves on every booking — a retailer patch re-runs
 every open storefront tab; tokens stay off every retailer read; and new

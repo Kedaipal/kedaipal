@@ -127,6 +127,7 @@ import {
 	formatMobile,
 } from "../lib/format";
 import { IMAGE_ACCEPT } from "../lib/image-upload";
+import { integrationsGlance } from "../lib/integrations-glance";
 import { NOTE_LINK_HINT } from "../lib/linkify";
 import { LOCALE_LABELS } from "../lib/message-templates";
 import type { StatusLabels } from "../lib/orderStatus";
@@ -224,13 +225,13 @@ const SETTINGS_TABS: ReadonlyArray<{
 		description: "Delivery & self-collect options",
 		icon: <MapPinned className="size-4" />,
 	},
-	// Third-party ACCOUNTS (Lalamove, Delyva, HitPay): keys, connection
+	// Third-party ACCOUNTS (couriers + HitPay): keys, connection
 	// health, per-service details. The behaviour those accounts power stays
 	// under Fulfilment / Payments, which link here when nothing is connected.
 	{
 		id: "integrations",
 		label: "Integrations",
-		description: "Lalamove, Delyva & HitPay accounts",
+		description: "Courier & payment accounts",
 		icon: <Plug className="size-4" />,
 	},
 	// Booking stores only (filtered out of both navs otherwise) — the Google
@@ -439,6 +440,9 @@ function useSettingsGlances(
 	const delyva = useQuery(
 		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
 	).data;
+	const easyparcel = useQuery(
+		convexQuery(api.easyparcel.getSettings, { retailerId: actAsRetailerId }),
+	).data;
 	// Same args as StoreStatusCard, so the card and the glance share one entry.
 	const storeStatus = useQuery(
 		convexQuery(
@@ -462,13 +466,14 @@ function useSettingsGlances(
 		retailer.hitpay?.enabled === true && retailer.hitpay.hasCredentials;
 	const deliveryOn = retailer.offerDelivery !== false;
 	const pickupOn = retailer.offerSelfCollect === true;
-	// "Connected" counts accounts with keys stored; Delyva only counts where
-	// the store's country can book it at all.
-	const integrations = [
-		Boolean(retailer.deliveryBooking?.apiKeyHint),
-		Boolean(retailer.hitpay?.hasCredentials),
-		...(delyva?.countryAllowed ? [delyva.connected] : []),
-	];
+	// "Connected" counts accounts with keys stored, over the cards this store
+	// can actually see — the same rule the cards use to show themselves.
+	const integrations = integrationsGlance({
+		lalamoveConnected: Boolean(retailer.deliveryBooking?.apiKeyHint),
+		hitpayConnected: Boolean(retailer.hitpay?.hasCredentials),
+		delyva,
+		easyparcel,
+	});
 	const customisedFlows =
 		Object.values(retailer.orderFlows ?? {}).some(
 			(stages) => (stages?.length ?? 0) > 0,
@@ -510,7 +515,7 @@ function useSettingsGlances(
 				: { text: "Off", tone: "warn" },
 		"order-status": { text: customisedFlows ? "Customised" : "Default" },
 		integrations: {
-			text: `${integrations.filter(Boolean).length} of ${integrations.length}`,
+			text: `${integrations.connected} of ${integrations.total}`,
 		},
 		bookings:
 			feed === undefined
