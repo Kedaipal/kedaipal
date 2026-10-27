@@ -331,7 +331,9 @@ Presentation rules:
   query are still resolving, the purchasable-tier buttons show a **spinner**
   (`Button isLoading`) instead of a label, so a signed-in seller's CTA doesn't
   flip trial → dashboard → final on one refresh — the SSR render is the spinner
-  too, so hydration matches. A storeless admin / genuinely-null plan then falls
+  too, so hydration matches. Auth comes from `useAuthState`, so a Clerk that
+  never loads falls back to the trial CTA after 3 s instead of spinning forever
+  ([landing-v2](./landing-v2.md#signed-in-or-not--we-dont-know-yet-is-its-own-state-z8r3fdy2m0-27-oct-2026)). A storeless admin / genuinely-null plan then falls
   back to "Go to Dashboard". The full page reads plan/status via the narrow
   `retailers.getMyPlan` query (not the heavy `getMyRetailer` payload) so a
   marketing route doesn't sign storage URLs just to read an enum; the landing
