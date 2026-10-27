@@ -421,6 +421,11 @@ recurring/charge events) — the signing secret shown for THAT endpoint is
   a real country change (the same path as a store handover), reports
   `autoRenewDetached`, and the post-switch checklist's `billing_currency` row
   sends the seller to set auto-renewal up again. Pay-now keeps working.
+  A setup STARTED but not finished (`autoRenewSetup`) is cleared by the same
+  switch: its HitPay page was minted in the old currency, and "Finish setting
+  up" after the move would authorise that session on a store now billed in
+  the new one (found in the Chrome test, 28 Oct 2026). A half-started setup
+  was never on, so it is not reported as detached.
 - `times_to_be_charged` is NEVER sent: a save-payment-method session
   rejects it outright ("You cant set times_to_be_charged for save_card is
   true", sandbox 11 Sep 2026). No charge-count ceiling exists on the

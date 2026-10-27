@@ -3204,20 +3204,72 @@ describe("countrySetup query + ack (86eyqgujv)", () => {
 				expect.stringContaining("/recurring-billing/rb_switch_1"),
 			]);
 
-			// ...and the checklist sends them to set it up again in SGD.
+			// ...and the checklist sends them to set it up again in SGD — and
+			// says it is OFF, because it is.
 			const list = await asA.query(api.retailers.countrySetup, {});
 			expect(list?.items.map((i) => i.key)).toContain("billing_currency");
+			expect(list?.autoRenewOn).toBe(false);
 
 			// A second switch with nothing attached detaches nothing and says so.
 			const back = await asA.mutation(api.retailers.updateSettings, {
 				country: "MY",
 			});
 			expect(back.autoRenewDetached).toBe(false);
+
+			// Once they set it up again, the row stops saying "turn it on".
+			await t.run(async (ctx) => {
+				await ctx.db.patch(subId, {
+					autoRenewSessionId: "rb_switch_2",
+					autoRenew: {
+						provider: "hitpay" as const,
+						method: "card",
+						attachedAt: Date.now(),
+					},
+				});
+			});
+			expect(
+				(await asA.query(api.retailers.countrySetup, {}))?.autoRenewOn,
+			).toBe(true);
 		} finally {
 			vi.useRealTimers();
 			vi.unstubAllGlobals();
 			vi.unstubAllEnvs();
 		}
+	});
+
+	test("a country switch clears a setup started in the old currency — never 'Finish setting up' into the wrong one (86eyp7hn7)", async () => {
+		// The pending setup's HitPay page was minted in SGD; resuming it on a
+		// store now billed in MYR would authorise an SGD session. Found live:
+		// the abandoned SGD page survived the move and offered "Finish setting
+		// up". A half-started setup was never ON, so the toast must not claim
+		// auto-renewal was turned off.
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-pending-setup");
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		const subId = await t.run(async (ctx) => {
+			const row = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "switch-pending-setup"))
+				.first();
+			if (!row) throw new Error("no retailer");
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", row._id))
+				.first();
+			if (!sub) throw new Error("no sub");
+			await ctx.db.patch(sub._id, {
+				autoRenewSetup: {
+					url: "https://sandbox.example/recurring-plan/sgd",
+					createdAt: Date.now(),
+				},
+			});
+			return sub._id;
+		});
+		const moved = await asA.mutation(api.retailers.updateSettings, {
+			country: "MY",
+		});
+		expect(moved.autoRenewDetached).toBe(false);
+		expect((await t.run((ctx) => ctx.db.get(subId)))?.autoRenewSetup).toBeUndefined();
 	});
 
 	test("a comped store's checklist never mentions billing — nothing it pays changed", async () => {

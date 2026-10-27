@@ -2904,13 +2904,19 @@ export const updateSettings = mutation({
 				// deleted that money could still be hanging off. Pay-now keeps
 				// working; the checklist row below sends them to set it up
 				// again.
+				// A setup STARTED but not finished goes too: its HitPay page was
+				// minted in the old currency, and "Finish setting up" after the
+				// move would authorise that session on a store now billed in the
+				// new one (found in the Chrome test, 28 Oct 2026). Only an
+				// ATTACHED method is reported — the toast promises "auto-renewal
+				// is now off", and a half-started setup was never on.
 				const sub = await ctx.db
 					.query("subscriptions")
 					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 					.first();
-				if (sub?.autoRenew !== undefined) {
+				if (sub?.autoRenew !== undefined || sub?.autoRenewSetup !== undefined) {
 					await detachAutoRenewForRetailer(ctx, retailer._id);
-					autoRenewDetached = true;
+					autoRenewDetached = sub.autoRenew !== undefined;
 				}
 			}
 			patch.country = args.country;
@@ -3634,6 +3640,10 @@ export const countrySetup = query({
 		changedFrom: Country | undefined;
 		changedAt: number;
 		items: CountrySetupItem[];
+		/** A saved auto-renew method is attached right now — the
+		 * `billing_currency` row says "set it up again" only while there is
+		 * none, and never claims one existed (86eyp7hn7). */
+		autoRenewOn: boolean;
 	} | null> => {
 		// Country-switch checklist is OWNER territory (a country change reprices
 		// the store) — members never see it, matching updateSettings' owner-only
@@ -3685,6 +3695,7 @@ export const countrySetup = query({
 			changedFrom: retailer.countryChangedFrom,
 			changedAt: retailer.countryChangedAt,
 			items,
+			autoRenewOn: sub?.autoRenew !== undefined,
 		};
 	},
 });

@@ -1146,6 +1146,14 @@ was already currency-agnostic — the work was the issue path and the pay surfac
     auto-renewal card) for every store Kedaipal bills — not comped, not on a
     contract. The country card warns before the save; the admin form's
     helper says the switch also turns off auto-renewal. Pay-now is untouched.
+    A setup started but not finished is cleared too — resuming it would
+    authorise the old currency's session. The checklist row reads the
+    PRESENT (`countrySetup.autoRenewOn`): "turn it on from Billing with an
+    SGD card" while nothing is attached, "auto-renewal is set up for it"
+    once something is — never "if auto-renewal was on", which read as a
+    claim about a seller who never had it. One author for the rails a
+    currency can save, `autoRenewMethodPhrase` ("a card or Touch 'n Go" /
+    "an SGD card"), feeds the toast, the country card and the row.
 - **No payment block on non-MYR invoices.** The `billingConfig` rails (MY bank +
   DuitNow) can only settle MYR, so a cross-border invoice deliberately shows
   **amount only** everywhere — PDF (no "Payment instructions" card; footer says

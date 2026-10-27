@@ -112,6 +112,7 @@ import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
 import {
+	autoRenewMethodPhrase,
 	type CardTarget,
 	type FixHighlight,
 	highlightFor,
@@ -2431,7 +2432,7 @@ function CountryForm({
 					value.country === current
 						? "Country saved."
 						: result.autoRenewDetached
-							? `Country saved — auto-renewal is now off. Set it up again on Billing with a ${storeBillingCurrency(value.country as Country)} card, and check the list below.`
+							? `Country saved — auto-renewal is now off. Set it up again on Billing with ${autoRenewMethodPhrase(storeBillingCurrency(value.country as Country))}, and check the list below.`
 							: `Country saved — check the list below for anything that still needs updating.`,
 				);
 			} catch (err) {
@@ -2479,14 +2480,16 @@ function CountryForm({
 					// turns "why is my delivery not quoting?" a week later into a
 					// decision made now, with the same list waiting underneath the
 					// card afterwards.
+					// The store's own money is NOT a carried-over thing that "only
+					// works in" the old country — it is the one thing the switch
+					// changes (86eyp7hn7), so it gets its own sentence above the
+					// carried list rather than a bullet under that list's frame.
+					const billingLine = `Your Kedaipal subscription bills in ${storeBillingCurrency(picked)} from your next invoice.${
+						autoRenewOn
+							? ` Auto-renewal turns off — your saved method was authorised in ${storeBillingCurrency(current)} — so set it up again on Billing with ${autoRenewMethodPhrase(storeBillingCurrency(picked))} afterwards.`
+							: ""
+					}`;
 					const carried = [
-						// The store's own money first — it is the one thing the
-						// switch actually switches off (86eyp7hn7).
-						`your Kedaipal subscription bills in ${storeBillingCurrency(picked)} from your next invoice${
-							autoRenewOn
-								? ` — auto-renewal turns off, because your saved card was authorised in ${storeBillingCurrency(current)}; set it up again on Billing afterwards`
-								: ""
-						}`,
 						...(deliveryConfig &&
 						!deliveryModeAllowed(picked, deliveryConfig.mode)
 							? [
@@ -2521,6 +2524,7 @@ function CountryForm({
 										Switching to {COUNTRY_LABELS[picked]} keeps everything you
 										have set up.
 									</p>
+									<p className="text-muted-foreground">{billingLine}</p>
 									{carried.length > 0 ? (
 										<>
 											<p className="text-muted-foreground">
