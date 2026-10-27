@@ -46,6 +46,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
 import {
+	describeEasyparcelService,
 	type EasyparcelRate,
 	PARCEL_BOXES,
 	type ParcelBox,
@@ -153,6 +154,9 @@ export function EasyparcelDispatchCard({
 	const bookable = blockReason === null;
 	const walletCurrency =
 		quotedCurrency ?? dispatch.balanceCurrency ?? order.currency;
+	const bookedService = job?.serviceName
+		? describeEasyparcelService(job.serviceName)
+		: undefined;
 
 	if (surface === "hint") {
 		if (blockReason === "disabled") {
@@ -378,10 +382,12 @@ export function EasyparcelDispatchCard({
 
 			{job && (activeJob || completedJob) ? (
 				<div className="flex flex-col gap-2.5 text-sm">
+					{/* The stored name, read for what it promises — the label the
+					    picker showed, and whether the seller must drop it off. */}
 					<div className="flex items-center gap-2">
 						<Truck className="size-4 shrink-0 text-accent" />
 						<span className="font-medium">
-							{job.serviceName ?? "EasyParcel"}
+							{bookedService?.label ?? "EasyParcel"}
 						</span>
 						{job.shipmentNumber ? (
 							<span className="ml-auto font-mono text-xs text-muted-foreground">
@@ -404,9 +410,9 @@ export function EasyparcelDispatchCard({
 						</div>
 					) : (
 						<p className="text-muted-foreground">
-							Booked — waiting for {job.serviceName ?? "the courier"} to issue a
-							tracking number. It appears here and on your buyer&apos;s order
-							page by itself.
+							Booked — waiting for {bookedService?.label ?? "the courier"} to
+							issue a tracking number. It appears here and on your buyer&apos;s
+							order page by itself.
 						</p>
 					)}
 
@@ -425,10 +431,27 @@ export function EasyparcelDispatchCard({
 						</a>
 					) : null}
 
+					{/* Drop-off is the one service the seller still has a job on —
+					    say it while it's owed (test-code F21). */}
+					{activeJob &&
+					activeJob.status === "assigning" &&
+					bookedService?.sellerHandoff === "dropoff" ? (
+						<p
+							className={`rounded-xl border px-3 py-2.5 text-sm ${TONE_PANEL.info}`}
+						>
+							<b>Next: drop the parcel off.</b> Print the courier label above,
+							stick it on, and hand the parcel in at any{" "}
+							{order.courierName ?? "courier"} drop-off point. Nothing is
+							collected from you for this service.
+						</p>
+					) : null}
+
 					<p className="text-muted-foreground">
 						{completedJob
-							? "Delivered. Your buyer was notified automatically."
-							: "Your buyer can see the tracking number on their order page. The order marks itself Shipped at collection and Delivered on arrival."}
+							? "Delivered — your buyer's order page shows it."
+							: bookedService?.sellerHandoff === "dropoff"
+								? "Your buyer can see the tracking number on their order page. The order marks itself Shipped once the courier scans the parcel in, and Delivered on arrival."
+								: "Your buyer can see the tracking number on their order page. The order marks itself Shipped at collection and Delivered on arrival."}
 					</p>
 
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -598,7 +621,11 @@ export function EasyparcelDispatchCard({
 							) : (
 								<>
 									<Truck className="size-4" />
-									{failedJob ? "Try again" : "Get courier prices"}
+									{failedJob
+										? failedJob.status === "canceled"
+											? "Book again"
+											: "Try again"
+										: "Get courier prices"}
 								</>
 							)}
 						</Button>
@@ -907,6 +934,7 @@ export function EasyparcelDispatchCard({
 				title="Cancel this courier booking?"
 				description="We'll ask EasyParcel to cancel the shipment, and the charge goes back to your EasyParcel wallet. EasyParcel won't cancel once 7 days have passed since the collection date. The order itself doesn't change, and you can book again afterwards."
 				confirmLabel="Cancel booking"
+				cancelLabel="Keep booking"
 				destructive
 				onConfirm={async () => {
 					const result = await cancelBooking({ shortId: order.shortId });

@@ -11,6 +11,8 @@ import {
 	buildQuotationBody,
 	buildSubmitBody,
 	buildTokenRequestBody,
+	accountCountryFromCurrency,
+	accountCountryMismatch,
 	classifyEasyparcelFailure,
 	connectionEnvironment,
 	describeEasyparcelService,
@@ -715,6 +717,41 @@ describe("connectionEnvironment — sandbox from the token, else the account nam
 		expect(
 			connectionEnvironment("opaque-token", "Sandboxed Snacks Pte Ltd"),
 		).toBeUndefined();
+	});
+});
+
+describe("account country from the wallet currency", () => {
+	it("maps the currencies we sell in, and nothing else", () => {
+		expect(accountCountryFromCurrency("MYR")).toBe("MY");
+		expect(accountCountryFromCurrency("sgd")).toBe("SG");
+		expect(accountCountryFromCurrency("USD")).toBeUndefined();
+		expect(accountCountryFromCurrency(undefined)).toBeUndefined();
+	});
+
+	it("a mismatch names the account's country; unknown is no claim", () => {
+		expect(
+			accountCountryMismatch({ balanceCurrency: "MYR", storeCountry: "SG" }),
+		).toBe("MY");
+		expect(
+			accountCountryMismatch({ balanceCurrency: "SGD", storeCountry: "SG" }),
+		).toBeUndefined();
+		expect(
+			accountCountryMismatch({ balanceCurrency: undefined, storeCountry: "SG" }),
+		).toBeUndefined();
+	});
+});
+
+describe("sellerHandoff — read from a STORED service name", () => {
+	it("pickup, drop-off, or no claim", () => {
+		expect(
+			describeEasyparcelService("Speedpost - Economy [1-3 Days] (Pick Up) (From Door to Door)")
+				.sellerHandoff,
+		).toBe("pickup");
+		expect(
+			describeEasyparcelService("Speedpost - Standard [1-2 Days] (Drop-Off) (From Point to Door)")
+				.sellerHandoff,
+		).toBe("dropoff");
+		expect(describeEasyparcelService("Aramex").sellerHandoff).toBeUndefined();
 	});
 });
 

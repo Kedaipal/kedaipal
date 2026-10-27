@@ -11,7 +11,9 @@
  *    a declined, expired or failed attempt is stated here afterwards.
  *  - A grant EasyParcel stopped honouring reads "Reconnect", not "Connected".
  *  - PREPAID: the wallet balance lives here with a refresh.
- *  - A Demo account (when the token says so) carries the test-mode banner.
+ *  - A Demo account (a token claim, or "… Sandbox Account" in its name)
+ *    carries the test-mode banner, and says when its prices are in another
+ *    country's currency (EasyParcel issues one sandbox per login, in RM).
  *  - AMBIENT ONLY: EasyParcel couriers don't carry chilled or frozen goods.
  *
  * Owns its own reads/actions (EasyParcel has its own Convex namespace) and
@@ -36,7 +38,12 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { MY_STATES, postcodeRule } from "../../../convex/lib/address";
-import { COUNTRY_CURRENCY, type Country } from "../../../convex/lib/country";
+import {
+	COUNTRY_CURRENCY,
+	COUNTRY_LABELS,
+	type Country,
+} from "../../../convex/lib/country";
+import { accountCountryMismatch } from "../../../convex/lib/easyparcel";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import type { FixHighlight } from "../../lib/country-setup-copy";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
@@ -149,6 +156,16 @@ export function EasyparcelCard({
 			? lastAttempt.message
 			: undefined;
 
+	// A sandbox from the other country (EasyParcel's one-per-login sandbox is
+	// MY) prices in its own currency — said, so RM quotes on an S$ store
+	// don't read as a bug.
+	const sandboxCountry =
+		settings?.environment === "sandbox"
+			? accountCountryMismatch({
+					balanceCurrency: settings.balanceCurrency,
+					storeCountry: country,
+				})
+			: undefined;
 	const storedAddress = settings?.pickupAddress;
 	const setupDone =
 		(connected && !needsReconnect ? 1 : 0) + (storedAddress ? 1 : 0);
@@ -379,6 +396,15 @@ export function EasyparcelCard({
 											an EasyParcel demo account, so bookings are simulated and
 											its credit is play money. Reconnect and pick your live
 											account before telling buyers.
+											{sandboxCountry ? (
+												<>
+													{" "}
+													It&apos;s a {COUNTRY_LABELS[sandboxCountry]} test
+													account, so its prices and wallet show in{" "}
+													{COUNTRY_CURRENCY[sandboxCountry]} — your live account
+													prices in {COUNTRY_CURRENCY[country]}.
+												</>
+											) : null}
 										</span>
 									</p>
 								) : null}

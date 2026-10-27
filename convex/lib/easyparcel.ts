@@ -19,7 +19,7 @@
 //  - Status arrives by webhook (unsigned — see convex/http.ts) and by
 //    `/shipment/details`, which takes ONE shipment number per call.
 
-import type { Country } from "./country";
+import { COUNTRY_CURRENCY, type Country } from "./country";
 import type { DeliveryJobStatus } from "./deliveryJobs";
 
 export const EASYPARCEL_API_BASE =
@@ -171,6 +171,40 @@ export function connectionEnvironment(
 			? "sandbox"
 			: undefined)
 	);
+}
+
+/**
+ * Which country an EasyParcel account belongs to, read from its WALLET
+ * currency — the one structured signal the API gives (an account's wallet is
+ * in its home currency; the account read carries no country). Unknown when
+ * the wallet read failed or names a currency we don't sell in.
+ */
+export function accountCountryFromCurrency(
+	currency: string | undefined,
+): Country | undefined {
+	if (!currency) return undefined;
+	const match = (Object.keys(COUNTRY_CURRENCY) as Country[]).find(
+		(c) => COUNTRY_CURRENCY[c] === currency.toUpperCase(),
+	);
+	return match;
+}
+
+/**
+ * The other country an account belongs to, if it isn't the store's. A LIVE
+ * mismatch can't serve the store — its prices and wallet are in the wrong
+ * currency — so callers refuse it; a SANDBOX is exempt at the call site:
+ * EasyParcel issues one sandbox per login, in the login's home country (MY
+ * for the 28 Oct /test-code tester), and it quotes SG-to-SG fine, so the card
+ * labels it instead. Unknown ⇒ no claim.
+ */
+export function accountCountryMismatch(args: {
+	balanceCurrency: string | undefined;
+	storeCountry: Country;
+}): Country | undefined {
+	const accountCountry = accountCountryFromCurrency(args.balanceCurrency);
+	return accountCountry && accountCountry !== args.storeCountry
+		? accountCountry
+		: undefined;
 }
 
 export function accessTokenNeedsRefresh(
@@ -459,6 +493,10 @@ export type EasyparcelServiceFacts = {
 	minParcels?: number;
 	/** Transit after collection, in days. Same-day / hour services = 0. */
 	transit?: { minDays: number; maxDays: number };
+	/** How the parcel leaves the SELLER — read from a STORED service name,
+	 * where the quote's is_pickup / is_dropoff booleans are no longer at hand
+	 * (a booked job keeps only the name). */
+	sellerHandoff?: "pickup" | "dropoff";
 };
 
 export function describeEasyparcelService(
@@ -487,6 +525,11 @@ export function describeEasyparcelService(
 
 	return {
 		label: cleanServiceLabel(serviceName),
+		sellerHandoff: /\((?:pick\s*up)\)/i.test(serviceName)
+			? "pickup"
+			: /\(drop[-\s]?off\)/i.test(serviceName)
+				? "dropoff"
+				: undefined,
 		deliversTo,
 		minParcels: minParcels && minParcels > 1 ? minParcels : undefined,
 		transit: parseTransit(deliveryDuration) ?? parseTransit(serviceName),

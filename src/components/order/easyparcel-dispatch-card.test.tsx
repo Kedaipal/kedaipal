@@ -269,3 +269,71 @@ describe("copy follows the picked service (F12) and the reason is attached (F14)
 		);
 	});
 });
+
+describe("after booking (test-code F20–F25)", () => {
+	const job = (over: Record<string, unknown>) => ({
+		_id: "j1",
+		provider: "easyparcel",
+		status: "assigning",
+		costActual: 1375,
+		shipmentNumber: "ES-2610-4SMXE",
+		serviceName:
+			"Speedpost - E-Saver [1-3 Days] (Drop Off) (From Point to Door OR to Point)",
+		...over,
+	});
+
+	it("a drop-off booking says the seller's next job, under the clean name", () => {
+		state.dispatch = { ...(state.dispatch as object), job: job({}) };
+		card({ ...ORDER, courierName: "Singapore Post Limited" } as Doc<"orders">);
+		expect(screen.getByText("Speedpost - E-Saver")).toBeTruthy();
+		expect(screen.getByText(/Next: drop the parcel off\./)).toBeTruthy();
+		expect(
+			screen.getByText(/Shipped once the courier scans the parcel in/),
+		).toBeTruthy();
+		expect(screen.queryByText(/Shipped at collection/)).toBeNull();
+	});
+
+	it("a pickup booking has nothing to drop off", () => {
+		state.dispatch = {
+			...(state.dispatch as object),
+			job: job({
+				serviceName:
+					"J&T Express - Next-Day Guaranteed [1 Day] (Pick Up) (From Door to Door)",
+			}),
+		};
+		card();
+		expect(screen.queryByText(/Next: drop the parcel off/)).toBeNull();
+		expect(screen.getByText(/Shipped at collection/)).toBeTruthy();
+	});
+
+	it("delivered never claims a message nobody sent", () => {
+		state.dispatch = {
+			...(state.dispatch as object),
+			job: job({ status: "completed" }),
+		};
+		card({ ...ORDER, status: "delivered" } as Doc<"orders">);
+		expect(screen.queryByText(/notified automatically/)).toBeNull();
+		expect(screen.getByText(/your buyer's order page shows it/)).toBeTruthy();
+	});
+
+	it("after the seller cancels, the way back reads Book again — not Try again", () => {
+		state.dispatch = {
+			...(state.dispatch as object),
+			job: job({ status: "canceled", failureReason: "Cancelled by you" }),
+		};
+		card();
+		expect(screen.getByRole("button", { name: /book again/i })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+	});
+
+	it("the cancel dialog's way out says Keep booking", () => {
+		state.dispatch = { ...(state.dispatch as object), job: job({}) };
+		card();
+		fireEvent.click(screen.getByRole("button", { name: /cancel booking/i }));
+		const dialog =
+			screen.queryByRole("alertdialog") ?? screen.getByRole("dialog");
+		expect(
+			within(dialog).getByRole("button", { name: "Keep booking" }),
+		).toBeTruthy();
+	});
+});

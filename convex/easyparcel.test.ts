@@ -336,6 +336,60 @@ describe("connect — the callback route", () => {
 		expect(settings.lastAttempt?.outcome).toBe("connected");
 	});
 
+	// One EasyParcel login lists BOTH a seller's Malaysian and Singapore
+	// accounts at sign-in (28 Oct /test-code). Picking the wrong row must not
+	// connect an account that quotes and pays in the wrong currency.
+	const otherCountryAccount = (name: string, currency: string) => ({
+		"/oauth/token": () => json(TOKEN_RESPONSE),
+		"/account/get_account_information": () =>
+			json({ status_code: 200, data: { account: { name, account_type: "Business" } } }),
+		"/wallet": () =>
+			json({ status_code: 200, data: { wallet: [{ balance: 100, currency }] } }),
+	});
+
+	test("a LIVE account from the other country is refused, naming the fix", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const state = await startAndGetState(t);
+		mockEasyparcel(otherCountryAccount("Zaki Sapuan", "MYR"));
+		const res = await t.fetch(
+			`/oauth/easyparcel/callback?code=auth-code-1&state=${state}`,
+			{ method: "GET" },
+		);
+		expect(res.status).toBe(302);
+		const conn = await t.run(async (ctx) =>
+			ctx.db
+				.query("easyparcelConnections")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.unique(),
+		);
+		expect(conn).toBeNull();
+		const settings = await t
+			.withIdentity({ subject: USER })
+			.query(api.easyparcel.getSettings, {});
+		expect(settings.lastAttempt).toMatchObject({ outcome: "failed" });
+		expect(settings.lastAttempt?.message).toMatch(
+			/your Malaysia EasyParcel account.*pick your Singapore account/,
+		);
+	});
+
+	test("…but EasyParcel's one-per-login SANDBOX connects whatever its country", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const state = await startAndGetState(t);
+		mockEasyparcel(otherCountryAccount("Zaki Sapuan null Sandbox Account", "MYR"));
+		await t.fetch(`/oauth/easyparcel/callback?code=auth-code-1&state=${state}`, {
+			method: "GET",
+		});
+		const conn = await t.run(async (ctx) =>
+			ctx.db
+				.query("easyparcelConnections")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.unique(),
+		);
+		expect(conn).toMatchObject({ environment: "sandbox", balanceCurrency: "MYR" });
+	});
+
 	test("a state redeems ONCE — a replayed callback never reaches the token exchange", async () => {
 		const t = setup();
 		await seedRetailer(t);
@@ -693,6 +747,28 @@ describe("dispatch state — every block names its cause", () => {
 		expect(state?.blockReason).toBeNull();
 		expect(state?.bookingEnabled).toBe(true);
 		expect(state?.pickupSummary).toBe("#05-11 10 Anson Road, 079903");
+	});
+
+	test("a live account from the other country, connected before the check, can't book", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await seedConnection(t, retailer._id, { balanceCurrency: "MYR" });
+		const { shortId } = await seedOrder(t, retailer._id);
+		const asUser = t.withIdentity({ subject: USER });
+		expect(
+			(await asUser.query(api.easyparcel.getDispatchState, { shortId }))?.blockReason,
+		).toBe("wrong_country");
+		// A sandbox from the other country is the testing exemption.
+		await t.run(async (ctx) => {
+			const conn = await ctx.db
+				.query("easyparcelConnections")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.unique();
+			if (conn) await ctx.db.patch(conn._id, { environment: "sandbox" });
+		});
+		expect(
+			(await asUser.query(api.easyparcel.getDispatchState, { shortId }))?.blockReason,
+		).toBeNull();
 	});
 
 	test("MY store → country_unsupported; unconfigured deployment → not_configured", async () => {

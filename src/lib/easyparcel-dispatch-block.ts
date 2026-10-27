@@ -26,8 +26,10 @@ const BLOCK_COPY: Record<EasyparcelDispatchBlock, string> = {
 		"Connect your EasyParcel account first — Settings → Integrations → EasyParcel.",
 	reconnect_needed:
 		"Kedaipal's access to your EasyParcel account has ended — reconnect it under Settings → Integrations → EasyParcel. It takes one sign-in.",
+	wrong_country:
+		"The connected EasyParcel account belongs to another country, so its prices and wallet are in the wrong currency. Switch to your account for this store's country under Settings → Integrations → EasyParcel.",
 	disabled:
-		"EasyParcel booking is paused — resume it under Settings → Fulfilment → Courier booking.",
+		"EasyParcel booking is paused — resume it under Settings → Delivery pricing → Courier booking.",
 	plan_gated:
 		"EasyParcel courier booking is a Pro feature. Upgrade to book couriers in one tap.",
 	no_pickup_address:

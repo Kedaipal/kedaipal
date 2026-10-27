@@ -113,13 +113,27 @@ account **name** (EasyParcel names sandbox accounts "… Sandbox Account" in the
 Developer Hub); anything else is unknown and rendered as unknown — never as
 live. The account name on the card is the human check.
 
-**There is no Singapore sandbox (found 28 Oct 2026, /test-code).** The
-Developer Hub's sandbox account is a ringgit (MY) account; signing in from an
-SG store and picking "SG" connected the tester's **live** SG account (SGD
-wallet, real courier prices). Quotes are free, so the run quoted safely, but a
-booking on that connection would have dispatched a real courier — the S$0
-wallet was the only thing in the way. Until EasyParcel provides an SG sandbox,
-SG bookings can only be exercised on a live account with a real parcel.
+**Sandboxes: one per login, in the login's home country (found 28 Oct 2026,
+/test-code).** The Developer Hub's *Account Connection → Add New Connection*
+creates a single sandbox per EasyParcel login ("App has already been installed
+in this account" on a second try), and the tester's came out a **ringgit (MY)**
+account. EasyParcel's sign-in lists every account under the login — MY
+business, SG business, and the sandbox — so picking "SG" connected the **live**
+SG account (real courier prices; only a S$0 wallet stood between the run and a
+real courier). **What works:** connect the MY sandbox to the SG store. It
+quotes and books SG-to-SG services normally, priced and charged in RM test
+credit — the full book → label → cancel → refund loop ran on it. Its shipment
+status never advances (EasyParcel's docs), so Collected → Delivered was
+exercised through `applyStatusSync`, the function the webhook re-read and the
+hourly sync feed, which proves everything after the status read.
+
+**The account must belong to the store's country — sandboxes excepted.** An
+account's country isn't in the account read; its **wallet currency** is
+(`accountCountryFromCurrency`). `completeConnect` refuses a LIVE account from
+the other country before storing anything, naming the row to pick instead;
+`dispatchBlockReason` returns `wrong_country` for one connected before the
+check existed. A sandbox from the other country is allowed — it's the only way
+to test SG — and the card says its prices are in RM.
 
 ## Dispatch
 
@@ -154,6 +168,14 @@ SG bookings can only be exercised on a live account with a real parcel.
   **Show all N**, and the pick always stays on screen.
 - **Booking copy follows the pick**: a drop-off service says to drop it at a
   point; only a pickup service says EasyParcel arranges collection today.
+- **After booking**, the card shows the clean service label, and a **drop-off**
+  booking states the seller's next job ("Next: drop the parcel off" — print the
+  label, hand it in at the courier's point) until the courier scans it in. A
+  booked job keeps only the service NAME, so the drop-off fact is read from it
+  (`sellerHandoff`). Delivered says the buyer's order page shows it — never
+  that the buyer was "notified" (one message per order). A seller-cancelled
+  booking offers **Book again**; the cancel dialog's way out reads **Keep
+  booking**.
 - **The wallet rides the quote**: a pick it can't cover is amber and Book is
   disabled-with-reason. `confirmBooking` re-reads the wallet and refuses
   server-side too.

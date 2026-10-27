@@ -31,7 +31,7 @@ import {
 } from "./_generated/server";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { requireRetailerAccess, resolveMyRetailer } from "./lib/auth";
-import { DEFAULT_COUNTRY, type Country } from "./lib/country";
+import { COUNTRY_LABELS, DEFAULT_COUNTRY, type Country } from "./lib/country";
 import { toDomesticContactPhone } from "./lib/courierContact";
 import { courierBookingAllowed } from "./lib/courierProviders";
 import { findCourier } from "./lib/couriers";
@@ -65,6 +65,7 @@ import {
 	parseSubmitResponse,
 	parseTokenResponse,
 	parseWalletResponse,
+	accountCountryMismatch,
 	connectionEnvironment,
 } from "./lib/easyparcel";
 import { generateTrackingToken } from "./lib/order";
@@ -416,6 +417,26 @@ export async function completeConnect(
 			{ retailerId: state.retailerId },
 		);
 		const imported = account?.pickupAddress;
+		const environment = connectionEnvironment(tokens.accessToken, account?.name);
+		const storeCountry = retailer?.country ?? DEFAULT_COUNTRY;
+		const otherCountry =
+			environment === "sandbox"
+				? undefined
+				: accountCountryMismatch({
+						balanceCurrency: wallet?.currency,
+						storeCountry,
+					});
+		if (otherCountry) {
+			// Refused before anything is stored: a live account from the other
+			// country quotes in the wrong currency and books from the wrong
+			// wallet. EasyParcel's sign-in lists both under one login, so the
+			// seller only picked the wrong row (test-code, 28 Oct).
+			await record(
+				"failed",
+				`That's your ${COUNTRY_LABELS[otherCountry]} EasyParcel account, and this store ships in ${COUNTRY_LABELS[storeCountry]}. Tap Connect EasyParcel again and pick your ${COUNTRY_LABELS[storeCountry]} account when EasyParcel asks.`,
+			);
+			return state.returnTo;
+		}
 		await ctx.runMutation(internal.easyparcel.storeConnection, {
 			retailerId: state.retailerId,
 			accessToken: await encryptSecret(tokens.accessToken),
@@ -426,7 +447,7 @@ export async function completeConnect(
 			refreshExpiresAt: tokens.refreshExpiresAt,
 			accountName: account?.name,
 			accountType: account?.accountType,
-			environment: connectionEnvironment(tokens.accessToken, account?.name),
+			environment,
 			balanceMinor: wallet?.balanceMinor,
 			balanceCurrency: wallet?.currency,
 			// Imported only when it is in the store's own country — an MY
@@ -863,6 +884,7 @@ export type EasyparcelDispatchBlock =
 	| "job_active"
 	| "not_connected"
 	| "reconnect_needed"
+	| "wrong_country"
 	| "disabled"
 	| "plan_gated"
 	| "no_pickup_address"
@@ -887,6 +909,16 @@ function dispatchBlockReason(args: {
 	if (activeJob) return "job_active";
 	if (!conn) return "not_connected";
 	if (conn.revokedAt !== undefined) return "reconnect_needed";
+	// A live account from the other country (connected before the connect
+	// check existed): its wallet and prices are in the wrong currency.
+	if (
+		conn.environment !== "sandbox" &&
+		accountCountryMismatch({
+			balanceCurrency: conn.balanceCurrency,
+			storeCountry: retailer.country ?? DEFAULT_COUNTRY,
+		})
+	)
+		return "wrong_country";
 	if (!conn.enabled) return "disabled";
 	if (!planOk) return "plan_gated";
 	if (!conn.pickupAddress) return "no_pickup_address";

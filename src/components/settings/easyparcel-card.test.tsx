@@ -178,6 +178,19 @@ describe("connected", () => {
 		expect(screen.getByText("Ambient parcels only.")).toBeDefined();
 	});
 
+	it("a sandbox from the other country says why its prices are in RM", () => {
+		state.settings = settings({
+			environment: "sandbox",
+			balanceCurrency: "MYR",
+		});
+		render(card({ country: "SG" }));
+		expect(
+			screen.getByText(
+				/Malaysia test account, so its prices and wallet show in MYR/,
+			),
+		).toBeTruthy();
+	});
+
 	it("a demo account reads Test mode with the no-courier warning", () => {
 		state.settings = settings({ environment: "sandbox" });
 		render(card());
