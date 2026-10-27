@@ -217,6 +217,16 @@ describe("where focus goes", () => {
 		expect(block.classList.contains("outline-none")).toBe(false);
 	});
 
+	it("a landing that is itself a control takes focus as it is", () => {
+		const pill = document.createElement("a");
+		pill.id = "currency";
+		pill.href = "/app/settings";
+		root.append(pill);
+		land("currency");
+		expect(document.activeElement).toBe(pill);
+		expect(pill.hasAttribute("tabindex")).toBe(false);
+	});
+
 	it("keeps a tabindex the element already had", () => {
 		const block = document.createElement("div");
 		block.id = "own";
@@ -247,6 +257,20 @@ describe("the landing ring", () => {
 		vi.advanceTimersByTime(3000);
 		for (const c of ["-m-2", "p-2", "rounded-lg"])
 			expect(wrap.classList.contains(c), c).toBe(false);
+	});
+
+	it("a second pick inside the ring's time restarts it, not cut short by the first", () => {
+		vi.useFakeTimers();
+		const wrap = document.createElement("div");
+		wrap.id = "again";
+		root.append(wrap);
+		land("again");
+		vi.advanceTimersByTime(2000);
+		land("again");
+		vi.advanceTimersByTime(1000);
+		expect(wrap.classList.contains("animate-kp-spotlight")).toBe(true);
+		vi.advanceTimersByTime(1500);
+		expect(wrap.classList.contains("animate-kp-spotlight")).toBe(false);
 	});
 
 	it("leaves an element with its own shape alone", () => {

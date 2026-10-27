@@ -197,12 +197,27 @@ describe("the box itself", () => {
 		expect(options()[0].getAttribute("aria-selected")).toBe("true");
 	});
 
-	it("Enter in the search box never saves the product", async () => {
+	// jsdom's keyDown never triggers the browser's implicit submission, so
+	// "onSubmit wasn't called" proves nothing alone: the keydown must be
+	// PREVENTED, which is what stops a real browser (and a phone's Go key)
+	// from submitting. fireEvent returns false exactly when it was.
+	it("Enter in the search box never saves the product — empty, no match, or a match", async () => {
 		const onSubmit = renderForm();
+		fireEvent.focus(box());
+		expect(fireEvent.keyDown(box(), { key: "Enter" })).toBe(false);
 		type("zebra");
-		fireEvent.keyDown(box(), { key: "Enter" });
+		expect(fireEvent.keyDown(box(), { key: "Enter" })).toBe(false);
+		type("prep");
+		expect(fireEvent.keyDown(box(), { key: "Enter" })).toBe(false);
 		await act(async () => {});
 		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
+	it("Enter in the box left empty by the save bar's button doesn't save", () => {
+		renderForm();
+		fireEvent.click(screen.getByRole("button", { name: "Find a setting" }));
+		expect(document.activeElement).toBe(box());
+		expect(fireEvent.keyDown(box(), { key: "Enter" })).toBe(false);
 	});
 
 	it("“/” jumps to the box, but not while typing into a field", () => {
@@ -214,6 +229,19 @@ describe("the box itself", () => {
 		name.blur();
 		fireEvent.keyDown(document.body, { key: "/" });
 		expect(document.activeElement).toBe(box());
+	});
+
+	it("“/” leaves a dialog opened from the form alone", () => {
+		renderForm();
+		const dialog = document.createElement("div");
+		dialog.setAttribute("role", "dialog");
+		const ok = document.createElement("button");
+		dialog.append(ok);
+		document.body.append(dialog);
+		ok.focus();
+		fireEvent.keyDown(ok, { key: "/" });
+		expect(document.activeElement).toBe(ok);
+		dialog.remove();
 	});
 
 	it("the save bar's search button brings the box back from anywhere", () => {

@@ -93,6 +93,9 @@ export function SettingSearch({
 			const t = e.target as HTMLElement | null;
 			if (t?.closest("input, textarea, select, [contenteditable='true']"))
 				return;
+			// A dialog opened from the form owns the keyboard; the box behind
+			// it must not take focus out from under it.
+			if (t?.closest("[role='dialog'], [role='alertdialog']")) return;
 			e.preventDefault();
 			// The last search is selected, so typing starts a new one.
 			inputRef.current?.focus();
@@ -134,6 +137,15 @@ export function SettingSearch({
 			}
 			return;
 		}
+		if (e.key === "Enter") {
+			// Never submits the product form from the search box — not even
+			// empty, the state the save bar's button and "/" land in, where a
+			// phone's Go key would otherwise save the product.
+			e.preventDefault();
+			const r = typed ? shown[active] : undefined;
+			if (r) pick(r);
+			return;
+		}
 		if (!typed) return;
 		if (e.key === "ArrowDown") {
 			e.preventDefault();
@@ -142,11 +154,6 @@ export function SettingSearch({
 		} else if (e.key === "ArrowUp") {
 			e.preventDefault();
 			setActive((i) => Math.max(i - 1, 0));
-		} else if (e.key === "Enter") {
-			// Never submits the product form from the search box.
-			e.preventDefault();
-			const r = shown[active];
-			if (r) pick(r);
 		}
 	}
 

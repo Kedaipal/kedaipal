@@ -50,7 +50,8 @@ const FOCUSABLE =
  * switch), else the first control at all — a link counts ("create your
  * first category"). */
 function focusTarget(el: HTMLElement): HTMLElement | null {
-	if (el.matches("input, textarea, select")) return el;
+	// Already a control (a field, or a link like the currency pill): itself.
+	if (el.matches(FOCUSABLE)) return el;
 	return (
 		el.querySelector<HTMLElement>(
 			`[${DISCLOSURE_PANEL_ATTR}] :is(${FOCUSABLE})`,
@@ -91,7 +92,7 @@ function focusLanding(el: HTMLElement) {
 const BARE_RING = ["-m-2", "p-2", "rounded-lg"];
 
 function isBare(el: HTMLElement): boolean {
-	if (el.matches("input, textarea, select")) return false;
+	if (el.matches(FOCUSABLE)) return false;
 	const s = getComputedStyle(el);
 	const zero = (v: string) => v === "" || v === "0px";
 	return [
@@ -109,6 +110,10 @@ function isBare(el: HTMLElement): boolean {
 
 /** How long the landing ring stays — the spotlight pulse runs once inside it. */
 const RING_MS = 2400;
+/** A landing's pending ring removal, so a second pick of the same field
+ * inside RING_MS restarts the ring instead of having the first pick's timer
+ * strip it early. */
+const ringTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 
 function land(el: HTMLElement) {
 	// Instant, never smooth: a smooth scroll over a long distance was measured
@@ -119,8 +124,16 @@ function land(el: HTMLElement) {
 		...highlightRingClass("spotlight").split(" "),
 		...(isBare(el) ? BARE_RING : []),
 	];
+	const pending = ringTimers.get(el);
+	if (pending !== undefined) clearTimeout(pending);
 	el.classList.add(...ring);
-	setTimeout(() => el.classList.remove(...ring), RING_MS);
+	ringTimers.set(
+		el,
+		setTimeout(() => {
+			el.classList.remove(...ring);
+			ringTimers.delete(el);
+		}, RING_MS),
+	);
 	focusLanding(el);
 }
 

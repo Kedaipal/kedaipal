@@ -475,12 +475,15 @@ scrolls to the field, rings it (the spotlight ring) and puts the cursor in it.
   timer, never rAF (a hidden tab never runs rAF; z8r3fdrkq2). After 2 s it
   stops at the section and the status line says "Couldn't jump straight to …
   — it's in the section shown." **Focus always leaves the search box**: to the
-  field, else the row's first control (a link counts — "create your first
+  field (or the landing itself when it is a control, like the currency
+  link), else the row's first control (a link counts — "create your first
   one"), else the landing itself (a borrowed `tabindex="-1"`, handed back on
   blur). Left behind, it sat off-screen and kept a phone's keyboard up over
   the place the seller was sent (found in /test-code). A bare wrapper (no
   padding, margin or rounding) is ringed with `-m-2 p-2 rounded-lg` for the
-  ring's lifetime — room and corners, layout unmoved.
+  ring's lifetime — room and corners, layout unmoved. Picking the same field
+  again inside the ring's 2.4 s restarts its timer rather than letting the
+  first pick's strip it early.
 - **Loading states, only where a wait is real.** Typing has none: matching is
   synchronous, so a spinner would only flicker. After a pick, "Opening
   Pricing & choices → Advanced…" appears only if the jump takes over 150 ms (a
@@ -496,7 +499,12 @@ scrolls to the field, rings it (the spotlight ring) and puts the cursor in it.
   new one. The bar's outline buttons (search, Archive/Restore) are opaque in
   dark too (`dark:bg-background`): the outline variant's dark fill is 30%
   see-through and the form showed through the pinned bar. Esc clears. Enter picks the top result and never
-  submits the product. Combobox semantics follow `dial-country-picker`: the
+  submits the product — **in every state, empty included**: the save bar's
+  button and `/` land on an empty box, and a phone's Go key there used to
+  save the edit through the browser's implicit submission (PR #426 review).
+  jsdom's `keyDown` never submits implicitly, so the test asserts the keydown
+  was PREVENTED, not merely that `onSubmit` wasn't called. `/` ignores a key
+  that comes from inside an open dialog. Combobox semantics follow `dial-country-picker`: the
   options are `role="option"` buttons out of the tab order, driven by
   `aria-activedescendant`.
 - **Zero results point to Settings**, where store-wide rules (delivery,
