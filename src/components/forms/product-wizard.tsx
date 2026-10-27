@@ -377,8 +377,12 @@ export function withKindCard(state: WizardState, card: KindCard): WizardState {
 				: state.packageUnit;
 	// Capacity's starting value follows the card: one plot for a stay, but a
 	// plan defaults to UNLIMITED — a meal plan or gym capped at one customer at
-	// a time by a default nobody chose is a silent sales ceiling. A value the
-	// seller changed is never overwritten.
+	// a time by a default nobody chose is a silent sales ceiling. A number the
+	// seller typed is never overwritten. BLANK is the one value the swap can't
+	// tell from the plan default, so a stay blanked on purpose, switched to Plan
+	// and back, returns at 1 — kept that way deliberately: the opposite error
+	// (a stay silently unlimited after a Plan detour) oversells one plot, and
+	// step 3 shows the value with its consequence either way (#421 review).
 	const capacityPerNight =
 		card === "plan" && state.capacityPerNight === STAY_DEFAULT_CAPACITY
 			? ""

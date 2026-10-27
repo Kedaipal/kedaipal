@@ -217,8 +217,19 @@ claimed "you can change it any time". Now:
   "Length and price" / "How long does it run?" / "Price for the whole plan" /
   "Spots available at a time", and **a plan starts with UNLIMITED capacity**
   where a stay starts at 1 — a meal plan capped at one customer by a default
-  nobody chose is a silent sales ceiling (the swap never touches a value the
-  seller changed).
+  nobody chose is a silent sales ceiling. The swap never touches a number the
+  seller typed; **blank** is the one value it can't tell from the plan's
+  default, so a stay blanked on purpose, switched to Plan and back, returns at
+  1. Deliberate: the other way round, a Plan detour would leave a stay
+  silently unlimited and oversell one plot, and step 3 shows the value with
+  its consequence either way.
+- **A day-counted stay reopens as Plan.** Stay's unit dropdown keeps *days*
+  (a rental sold as a fixed "2 days" — see S14, `z8r3fdet90`), but
+  `cardFromKind` reads any day- or month-counted package as a plan. So a stay
+  sold as "2 days", switched to the full form and back, re-lights **Plan**:
+  same stored kind and nothing breaks, but the seller sees plan wording (and
+  no weekend-rate note) until they tap Stay. Only the full-form round trip
+  reaches it; a fresh wizard never does.
 - **Each card's "what happens next" sits under that card**, inside its
   wrapper — on a phone a hint below a six-card list is off-screen.
 - **Never pre-answered.** `retailers.storeType` used to pre-pick a card with a

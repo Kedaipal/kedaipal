@@ -1398,4 +1398,15 @@ describe("capacity's starting value follows the card (z8r3fdxt99)", () => {
 				.capacityPerNight,
 		).toBe("20");
 	});
+
+	it("a stay blanked on purpose returns at 1 after a Plan detour — the deliberate trade (#421 review)", () => {
+		// Blank can't be told from the plan default. The other way round, a
+		// Plan detour would leave a stay silently unlimited and oversell a plot.
+		const blanked = {
+			...withKindCard(emptyWizardState(), "stay"),
+			capacityPerNight: "",
+		};
+		const back = withKindCard(withKindCard(blanked, "plan"), "stay");
+		expect(back.capacityPerNight).toBe("1");
+	});
 });
