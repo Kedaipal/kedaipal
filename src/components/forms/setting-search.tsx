@@ -94,7 +94,9 @@ export function SettingSearch({
 			if (t?.closest("input, textarea, select, [contenteditable='true']"))
 				return;
 			e.preventDefault();
+			// The last search is selected, so typing starts a new one.
 			inputRef.current?.focus();
+			inputRef.current?.select();
 		};
 		document.addEventListener("keydown", onKey);
 		return () => document.removeEventListener("keydown", onKey);

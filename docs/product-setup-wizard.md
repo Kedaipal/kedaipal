@@ -449,13 +449,21 @@ scrolls to the field, rings it (the spotlight ring) and puts the cursor in it.
   twice on a 40-choice product. And page labels never carry what sellers type
   (*berat*, *diskaun*, *kod*, *masa sedia*). Matching is pure and synchronous:
   folded per word, every word must hit by prefix, label beats alias beats
-  seller text beats breadcrumb, then page order. A per-choice field lists once
+  seller text beats breadcrumb, then page order. A plural is the same word
+  ("photo" is an exact hit on "Photos"). A per-choice field lists once
   ("SKU"), and lists per choice only when the query names the choice ("large
-  sku").
+  sku"). The choice list's result carries the seller's own name for it
+  ("Choices buyers pick from · Size"), so "size" finds the Size they have
+  ahead of "Add a second choice"; with no choices yet, size/colour/flavour
+  (and *saiz*, *warna*, *perisa*) find "Does the buyer choose anything?".
+  Example words never go in a label — "(e.g. Size × Flavour)" in one made it
+  outrank the real answer.
 - **A field that exists but can't be used right now is still listed, with
   the reason** ("Turn on “Run a promotion” first", "Events are on the Pro
   plan", "Needs self-collect on — Settings → Fulfilment"), and the pick lands
-  on its row with the switch that fixes it focused. Leaving it out would be
+  on its row with the switch that fixes it focused. It ranks a step under
+  the switch that unlocks it ("sale" leads with "Put it on sale", not the
+  locked "Sale price"). Leaving it out would be
   the "is it even there?" doubt this exists to end. A field the KIND doesn't
   have (weekend rate on a cake) is not listed.
 - **Getting there is one path**, `revealSetting` in
@@ -466,7 +474,13 @@ scrolls to the field, rings it (the spotlight ring) and puts the cursor in it.
   and the entry names it in `opens`, so it is asked first. Retries ride a
   timer, never rAF (a hidden tab never runs rAF; z8r3fdrkq2). After 2 s it
   stops at the section and the status line says "Couldn't jump straight to …
-  — it's in the section shown."
+  — it's in the section shown." **Focus always leaves the search box**: to the
+  field, else the row's first control (a link counts — "create your first
+  one"), else the landing itself (a borrowed `tabindex="-1"`, handed back on
+  blur). Left behind, it sat off-screen and kept a phone's keyboard up over
+  the place the seller was sent (found in /test-code). A bare wrapper (no
+  padding, margin or rounding) is ringed with `-m-2 p-2 rounded-lg` for the
+  ring's lifetime — room and corners, layout unmoved.
 - **Loading states, only where a wait is real.** Typing has none: matching is
   synchronous, so a spinner would only flicker. After a pick, "Opening
   Pricing & choices → Advanced…" appears only if the jump takes over 150 ms (a
@@ -478,7 +492,10 @@ scrolls to the field, rings it (the spotlight ring) and puts the cursor in it.
   header/banner stack and visibly glitched" (the checkout precedent,
   `app.checkout.tsx`). Instead the sticky save bar carries a **Find a setting**
   button on phones (`lg:hidden`), and `/` focuses the box on desktop (never
-  while typing into a field). Esc clears. Enter picks the top result and never
+  while typing into a field); both select the last search, so typing starts a
+  new one. The bar's outline buttons (search, Archive/Restore) are opaque in
+  dark too (`dark:bg-background`): the outline variant's dark fill is 30%
+  see-through and the form showed through the pinned bar. Esc clears. Enter picks the top result and never
   submits the product. Combobox semantics follow `dial-country-picker`: the
   options are `role="option"` buttons out of the tab order, driven by
   `aria-activedescendant`.

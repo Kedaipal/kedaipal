@@ -62,6 +62,8 @@ export type SettingContext = {
 	weekendRateSet: boolean;
 	/** Each choice's label, in grid order (choices mode). */
 	choices: readonly string[];
+	/** What the seller calls the choice itself — "Size", "Flavour". */
+	choiceNames: readonly string[];
 	/** The text of each buyer question. */
 	buyerQuestions: readonly string[];
 	/** The names of the categories this product is in. */
@@ -241,6 +243,14 @@ export const PRODUCT_SETTING_INDEX: readonly ProductSetting[] = [
 		keywords: [
 			"product type",
 			"what kind",
+			"size",
+			"flavour",
+			"flavor",
+			"colour",
+			"color",
+			"saiz",
+			"perisa",
+			"warna",
 			"type",
 			"jenis",
 			"single",
@@ -267,7 +277,12 @@ export const PRODUCT_SETTING_INDEX: readonly ProductSetting[] = [
 	},
 	{
 		id: "choice-axis",
-		label: "Choices buyers pick from",
+		// The seller's own name for it is in the label, so "size" finds the
+		// Size they already have ahead of "add a second choice".
+		label: (c) =>
+			c.choiceNames.length > 0
+				? `Choices buyers pick from · ${c.choiceNames.join(" × ")}`
+				: "Choices buyers pick from",
 		where: ["Pricing & choices", "They choose by"],
 		keywords: [
 			"size",
@@ -392,9 +407,12 @@ export const PRODUCT_SETTING_INDEX: readonly ProductSetting[] = [
 	},
 	{
 		id: "second-choice",
-		label: "Second choice (e.g. Size × Flavour)",
+		label: "Add a second choice",
 		where: (c) => advanced(c, false),
 		keywords: [
+			"size",
+			"flavour",
+			"colour",
 			"second option",
 			"two options",
 			"another choice",
@@ -503,7 +521,7 @@ export const PRODUCT_SETTING_INDEX: readonly ProductSetting[] = [
 		blocked: (c) =>
 			c.dayPackage
 				? null
-				: "Asked for a package counted in days — set the package length in days first",
+				: "Only for a package counted in days — set a package length in days first",
 		target: field("day-counting"),
 		section: PRICING,
 	},
@@ -556,6 +574,7 @@ export const PRODUCT_SETTING_INDEX: readonly ProductSetting[] = [
 		where: ["Selling options", "Do weekend nights cost more?"],
 		keywords: [
 			"weekend",
+			"nights",
 			"hujung minggu",
 			"friday",
 			"saturday",
@@ -977,6 +996,7 @@ const words = (text: string) => {
 // breadcrumb ("advanced", "checkout") barely counts — it finds everything in
 // a section, which is useful but should never beat a named field.
 const WEIGHT = { label: 4, keyword: 3, text: 3, where: 1 } as const;
+const BLOCKED_PENALTY = 2;
 type Source = keyof typeof WEIGHT;
 
 type Candidate = {
@@ -994,8 +1014,9 @@ function tokenScore(token: string, fields: Candidate["fields"]) {
 	let hitText = false;
 	for (const f of fields) {
 		for (const w of f.words) {
+			// A plural is the same word: "photo" is an exact hit on "Photos".
 			const score =
-				w === token
+				w === token || w === `${token}s`
 					? WEIGHT[f.source] + 1
 					: w.startsWith(token)
 						? WEIGHT[f.source]
@@ -1144,6 +1165,9 @@ export function searchSettings(
 		}
 		if (!all || (cand.needsText && !namedText)) continue;
 		if (foldText(cand.label).startsWith(folded)) score += 2;
+		// A field that can't be used yet ranks under the one that unlocks it:
+		// "sale" leads with "Put it on sale", not the locked "Sale price".
+		if (cand.result.blocked) score -= BLOCKED_PENALTY;
 		scored.push({ score, order: cand.order, r: cand.result });
 	}
 	return scored

@@ -221,4 +221,17 @@ describe("the box itself", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Find a setting" }));
 		expect(document.activeElement).toBe(box());
 	});
+
+	it("coming back selects the last search, so typing starts a new one", () => {
+		renderForm();
+		type("prep");
+		const input = box() as HTMLInputElement;
+		input.blur();
+		fireEvent.keyDown(document.body, { key: "/" });
+		expect([input.selectionStart, input.selectionEnd]).toEqual([0, 4]);
+		input.setSelectionRange(4, 4);
+		input.blur();
+		fireEvent.click(screen.getByRole("button", { name: "Find a setting" }));
+		expect([input.selectionStart, input.selectionEnd]).toEqual([0, 4]);
+	});
 });

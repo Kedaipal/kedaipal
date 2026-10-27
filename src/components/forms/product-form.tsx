@@ -1708,6 +1708,9 @@ export function ProductForm({
 		choices: choicesMode
 			? editor.rows.map((row) => variantLabel(row.optionValues))
 			: [],
+		choiceNames: choicesMode
+			? editor.options.map((o) => o.name).filter((n) => n.trim().length > 0)
+			: [],
 		buyerQuestions: questionsDraft.map((q) => q.label),
 		categoryNames: (storeCategories ?? [])
 			.filter((c) => categoryIds.includes(c._id))
@@ -2740,8 +2743,13 @@ export function ProductForm({
 									const input = searchInputRef.current;
 									input?.scrollIntoView?.({ block: "center" });
 									input?.focus({ preventScroll: true });
+									// Whatever they searched last is selected, so typing
+									// starts a new search instead of adding to the old one.
+									input?.select();
 								}}
-								className="size-12 shrink-0 bg-background lg:hidden"
+								// Opaque in dark too — the outline variant's dark fill is
+								// see-through, and this bar is pinned over the form.
+								className="size-12 shrink-0 rounded-xl bg-background lg:hidden dark:bg-background dark:hover:bg-muted"
 							>
 								<Search className="size-5" />
 							</Button>

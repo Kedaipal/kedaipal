@@ -38,6 +38,7 @@ const PHYSICAL: SettingContext = {
 	countsOpenDays: false,
 	weekendRateSet: false,
 	choices: [],
+	choiceNames: [],
 	buyerQuestions: [],
 	categoryNames: [],
 };
@@ -45,6 +46,7 @@ const SIZES: SettingContext = {
 	...PHYSICAL,
 	hasOptions: true,
 	choices: ["Small", "Large"],
+	choiceNames: ["Size"],
 };
 const STAY: SettingContext = { ...PHYSICAL, kind: "booking" };
 
@@ -88,6 +90,12 @@ describe("matching", () => {
 		expect(first(PHYSICAL, "PREP-TIME")?.key).toBe("prep-time");
 	});
 
+	it("a plural is the same word, so “photo” leads with the product's Photos", () => {
+		expect(first(PHYSICAL, "photo")?.key).toBe("photos");
+		expect(first(SIZES, "photo")?.key).toBe("photos");
+		expect(ids(SIZES, "photo")).toContain("choice-photo");
+	});
+
 	it("needs every word to hit", () => {
 		expect(ids(PHYSICAL, "prep zebra")).toEqual([]);
 	});
@@ -128,6 +136,18 @@ describe("fields that exist but can't be used right now", () => {
 		expect(cap?.target).toBe("#promo-cap");
 	});
 
+	it("rank under the switch that unlocks them", () => {
+		expect(first(PHYSICAL, "sale")?.key).toBe("promo");
+		expect(ids(PHYSICAL, "sale")).toContain("sale-prices");
+		expect(first(STAY, "nights")?.key).toBe("weekend-rate");
+	});
+
+	it("say why in words a seller can act on", () => {
+		expect(first(STAY, "days counted")?.blocked).toBe(
+			"Only for a package counted in days — set a package length in days first",
+		);
+	});
+
 	it("name the real reason — an event, a plan, a store setting", () => {
 		const onSaleEvent = { ...PHYSICAL, promoOn: true, isEvent: true };
 		expect(first(onSaleEvent, "max per order")?.blocked).toMatch(/event/);
@@ -158,6 +178,19 @@ describe("per-choice fields", () => {
 		expect(first(SIZES, "large")?.label).toBe("Price · Large");
 		expect(keys).toEqual(expect.arrayContaining(["sku:1", "stock:1"]));
 		expect(keys.some((k) => k.endsWith(":0"))).toBe(false);
+	});
+});
+
+describe("a seller who wants sizes", () => {
+	it("finds the switch for choices by the words they'd type", () => {
+		for (const q of ["size", "colour", "flavour", "saiz", "warna", "perisa"])
+			expect(first(PHYSICAL, q)?.key, q).toBe("product-type");
+	});
+
+	it("once they have one, finds it by its own name ahead of adding another", () => {
+		expect(first(SIZES, "size")?.key).toBe("choice-axis");
+		expect(first(SIZES, "size")?.label).toBe("Choices buyers pick from · Size");
+		expect(ids(SIZES, "size")).toContain("second-choice");
 	});
 });
 

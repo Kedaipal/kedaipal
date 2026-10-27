@@ -43,11 +43,12 @@ function openOwnPanel(el: HTMLElement): boolean {
 }
 
 const FOCUSABLE =
-	"input:not([type='hidden']):not(:disabled), textarea:not(:disabled), select:not(:disabled), button:not(:disabled)";
+	"input:not([type='hidden']):not(:disabled), textarea:not(:disabled), select:not(:disabled), button:not(:disabled), a[href]";
 
 /** The control a seller should be typing into once they land on `el`: the
  * field itself, else the first control inside an opened panel (a row's
- * switch), else the first control at all. */
+ * switch), else the first control at all — a link counts ("create your
+ * first category"). */
 function focusTarget(el: HTMLElement): HTMLElement | null {
 	if (el.matches("input, textarea, select")) return el;
 	return (
@@ -55,6 +56,55 @@ function focusTarget(el: HTMLElement): HTMLElement | null {
 			`[${DISCLOSURE_PANEL_ATTR}] :is(${FOCUSABLE})`,
 		) ?? el.querySelector<HTMLElement>(FOCUSABLE)
 	);
+}
+
+/** Focus must always LEAVE the search box: left behind, it sits off-screen
+ * and a phone's keyboard stays up over the place the seller was sent. With
+ * no control to take it, the landing itself does, for as long as it holds
+ * it. */
+function focusLanding(el: HTMLElement) {
+	const control = focusTarget(el);
+	if (control) {
+		control.focus({ preventScroll: true });
+		return;
+	}
+	const borrowed = !el.hasAttribute("tabindex");
+	if (borrowed) el.setAttribute("tabindex", "-1");
+	// The ring is the focus mark here; the browser's own outline would be a
+	// second one.
+	el.classList.add("outline-none");
+	el.addEventListener(
+		"blur",
+		() => {
+			el.classList.remove("outline-none");
+			if (borrowed) el.removeAttribute("tabindex");
+		},
+		{ once: true },
+	);
+	el.focus({ preventScroll: true });
+}
+
+/** A bare wrapper (no padding, margin or rounding — a label around one
+ * field) would wear the ring flush on its text with square corners. Grow it
+ * by the same amount it is pulled out, so the ring has room and the layout
+ * doesn't move. */
+const BARE_RING = ["-m-2", "p-2", "rounded-lg"];
+
+function isBare(el: HTMLElement): boolean {
+	if (el.matches("input, textarea, select")) return false;
+	const s = getComputedStyle(el);
+	const zero = (v: string) => v === "" || v === "0px";
+	return [
+		s.borderRadius,
+		s.paddingTop,
+		s.paddingRight,
+		s.paddingBottom,
+		s.paddingLeft,
+		s.marginTop,
+		s.marginRight,
+		s.marginBottom,
+		s.marginLeft,
+	].every(zero);
 }
 
 /** How long the landing ring stays — the spotlight pulse runs once inside it. */
@@ -65,10 +115,13 @@ function land(el: HTMLElement) {
 	// moving the page 0px in Chrome (see focus-error.ts). Optional-called —
 	// jsdom has no scrollIntoView.
 	el.scrollIntoView?.({ block: "center" });
-	const ring = highlightRingClass("spotlight").split(" ");
+	const ring = [
+		...highlightRingClass("spotlight").split(" "),
+		...(isBare(el) ? BARE_RING : []),
+	];
 	el.classList.add(...ring);
 	setTimeout(() => el.classList.remove(...ring), RING_MS);
-	focusTarget(el)?.focus({ preventScroll: true });
+	focusLanding(el);
 }
 
 export type RevealLanding = {
