@@ -50,6 +50,7 @@ import {
 import { priorityFeeWire, TIP_OPTIONS } from "./lib/lalamoveTip";
 import { formatBusinessAddress } from "./lib/address";
 import { DEFAULT_COUNTRY } from "./lib/country";
+import { courierProviderValidator } from "./lib/courierProviders";
 import { lalamoveBookingArmed } from "./lib/courierBooking";
 import { type CartWeightItem, riderBookingAllowed } from "./lib/delivery";
 import {
@@ -435,9 +436,7 @@ export const vehicleLoads = query({
 export const saveCheckoutQuote = internalMutation({
 	args: {
 		retailerId: v.id("retailers"),
-		provider: v.optional(
-			v.union(v.literal("lalamove"), v.literal("delyva")),
-		),
+		provider: v.optional(courierProviderValidator),
 		quotationId: v.optional(v.string()),
 		fee: v.number(),
 		currency: v.optional(v.string()),
@@ -447,7 +446,7 @@ export const saveCheckoutQuote = internalMutation({
 		considered: v.optional(
 			v.array(
 				v.object({
-					provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+					provider: courierProviderValidator,
 					fee: v.number(),
 					currency: v.string(),
 				}),
