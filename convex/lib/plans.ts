@@ -943,9 +943,20 @@ export function renewalCurrency(args: {
 	lastPaidCurrency: string | undefined;
 	country: Country | undefined;
 }): BillingCurrency {
-	return args.lastPaidCurrency === "SGD" || args.lastPaidCurrency === "MYR"
-		? args.lastPaidCurrency
+	return renewalCurrencySource(args) === "last_paid"
+		? (args.lastPaidCurrency as BillingCurrency)
 		: BILLING_CURRENCY_FOR_COUNTRY[args.country ?? "MY"];
+}
+
+/** WHY `renewalCurrency` answered what it did — so a surface can say which
+ * rule applied instead of reciting both (an SG store billing in RM reads as a
+ * mistake unless the page says it follows a ringgit payment, 86eyp7hn7). */
+export function renewalCurrencySource(args: {
+	lastPaidCurrency: string | undefined;
+}): "last_paid" | "country" {
+	return args.lastPaidCurrency === "SGD" || args.lastPaidCurrency === "MYR"
+		? "last_paid"
+		: "country";
 }
 
 /** Everything the NEXT renewal bill will say — see `renewalQuote`. */

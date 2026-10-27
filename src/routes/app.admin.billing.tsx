@@ -43,6 +43,7 @@ import {
 	ANNUAL_MONTHS_RECEIVED,
 	annualQuote,
 	BILLING_CURRENCIES,
+	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
 	DEFAULT_BILLING_CURRENCY,
 	enterprisePrice,
@@ -898,6 +899,42 @@ function currencyChoiceLabel(currency: BillingCurrency): string {
 	return currency === "MYR" ? "RM (MYR)" : "S$ (SGD)";
 }
 
+/** The same name inside a sentence — never split across lines ("S$ /
+ * (SGD)" wrapped mid-name in the override warning). */
+function CurrencyName({ currency }: { currency: BillingCurrency }) {
+	return (
+		<span className="whitespace-nowrap">{currencyChoiceLabel(currency)}</span>
+	);
+}
+
+/** Why the form opened on this store's currency — the ONE rule that applied,
+ * never both recited: an SG store billing in RM reads as a mistake unless the
+ * line says it follows a ringgit payment (86eyp7hn7). */
+function StoreCurrencyReason({
+	store,
+}: {
+	store: {
+		billingCurrency: BillingCurrency;
+		billingCurrencySource: "last_paid" | "country";
+		country: Country;
+	};
+}) {
+	const countryName = COUNTRY_LABELS[store.country];
+	if (store.billingCurrencySource === "country") {
+		return <>No paid invoice yet, so it bills in {countryName}'s currency.</>;
+	}
+	const paid = <CurrencyName currency={store.billingCurrency} />;
+	return store.billingCurrency ===
+		BILLING_CURRENCY_FOR_COUNTRY[store.country] ? (
+		<>Its last paid invoice was in {paid}.</>
+	) : (
+		<>
+			Its last paid invoice was in {paid} — renewals follow that, not its
+			country ({countryName}).
+		</>
+	);
+}
+
 /**
  * Issue a pending invoice — covers standard conversions/renewals AND onboarding a
  * Founding-10 member (founding toggle). Built for minimal typing: amount is
@@ -1291,14 +1328,13 @@ export function IssueInvoiceForm() {
 						</span>
 					) : currencyDiffers ? (
 						<span className="text-[11px] text-amber-700 dark:text-amber-400">
-							This store bills in {currencyChoiceLabel(storeCurrency)}. Once
-							this invoice is paid, its renewals bill in{" "}
-							{currencyChoiceLabel(currency)} too.
+							This store bills in <CurrencyName currency={storeCurrency} />.
+							Once this invoice is paid, its renewals bill in{" "}
+							<CurrencyName currency={currency} /> too.
 						</span>
 					) : selected ? (
 						<span className="text-[11px] text-muted-foreground">
-							The store's billing currency — its last paid invoice's, else its
-							country's.
+							<StoreCurrencyReason store={selected} />
 						</span>
 					) : null}
 					{effectiveCurrency === "SGD" ? (

@@ -103,6 +103,8 @@ const store = (overrides: Record<string, unknown> = {}) => ({
 	comped: false,
 	unclaimed: false,
 	billingCurrency: "MYR",
+	billingCurrencySource: "last_paid",
+	country: "MY",
 	...overrides,
 });
 
@@ -110,6 +112,13 @@ const store = (overrides: Record<string, unknown> = {}) => ({
 function pickStore() {
 	fireEvent.change(screen.getByRole("combobox"), { target: { value: "r1" } });
 }
+
+/** A sentence that spans inline children (the currency names are their own
+ * no-wrap spans) — matched on the innermost element whose WHOLE text fits. */
+const sentence = (re: RegExp) => (_: string, el: Element | null) =>
+	el !== null &&
+	re.test(el.textContent ?? "") &&
+	![...el.children].some((c) => re.test(c.textContent ?? ""));
 
 const planButton = (name: "starter" | "pro" | "enterprise") =>
 	screen.getByRole("button", { name: new RegExp(`^${name}$`, "i") });
@@ -365,7 +374,12 @@ describe("Issue an invoice — the currency opens on the store's own (86eyp7hn7)
 
 	it("an SG store opens on S$ and bills S$41 Founding Pro without a click on currency", () => {
 		state.retailers = [
-			store({ billingCurrency: "SGD", isFoundingMember: true }),
+			store({
+				billingCurrency: "SGD",
+				billingCurrencySource: "country",
+				country: "SG",
+				isFoundingMember: true,
+			}),
 		];
 		render(<IssueInvoiceForm />);
 		pickStore();
@@ -373,7 +387,12 @@ describe("Issue an invoice — the currency opens on the store's own (86eyp7hn7)
 		// The bug: the form reset to RM on every pick, so an SG store was one
 		// missed click from a ringgit invoice.
 		expect(screen.getByText(/S\$\s?41\.00/)).toBeTruthy();
-		expect(screen.getByText(/the store's billing currency/i)).toBeTruthy();
+		// Says WHICH rule put it on S$ — not both.
+		expect(
+			screen.getByText(
+				"No paid invoice yet, so it bills in Singapore's currency.",
+			),
+		).toBeTruthy();
 		fireEvent.click(issueButton());
 		expect(state.issue).toHaveBeenCalledWith(
 			expect.objectContaining({ currency: "SGD", founding: true, plan: "pro" }),
@@ -388,7 +407,9 @@ describe("Issue an invoice — the currency opens on the store's own (86eyp7hn7)
 
 		expect(
 			screen.getByText(
-				/This store bills in S\$ \(SGD\)\. Once this invoice is paid, its renewals bill in RM \(MYR\) too\./,
+				sentence(
+					/This store bills in S\$ \(SGD\)\. Once this invoice is paid, its renewals bill in RM \(MYR\) too\./,
+				),
 			),
 		).toBeTruthy();
 		fireEvent.click(issueButton());
@@ -410,17 +431,46 @@ describe("Issue an invoice — the currency opens on the store's own (86eyp7hn7)
 		render(<IssueInvoiceForm />);
 		pickStore();
 		fireEvent.click(currencyButton(/S\$ \(SGD\)/));
-		expect(screen.getByText(/This store bills in RM \(MYR\)/)).toBeTruthy();
+		expect(
+			screen.getByText(sentence(/This store bills in RM \(MYR\)/)),
+		).toBeTruthy();
 
 		// Switching to the SG store opens on ITS currency, with no warning —
 		// and back to the MY store opens on RM, not the S$ pick left behind.
 		fireEvent.change(screen.getByRole("combobox"), { target: { value: "r2" } });
-		expect(screen.queryByText(/This store bills in/)).toBeNull();
+		expect(screen.queryByText(sentence(/This store bills in/))).toBeNull();
 		fireEvent.change(screen.getByRole("combobox"), { target: { value: "r1" } });
-		expect(screen.queryByText(/This store bills in/)).toBeNull();
+		expect(screen.queryByText(sentence(/This store bills in/))).toBeNull();
 		fireEvent.click(issueButton());
 		expect(state.issue).toHaveBeenCalledWith(
 			expect.objectContaining({ currency: "MYR" }),
 		);
+	});
+
+	it("an SG store billing in RM says it follows a ringgit payment, not a mistake", () => {
+		// The case the hands-on test found: an SG store on RM with a line that
+		// recited both rules left the admin unable to tell if RM was right.
+		state.retailers = [store({ country: "SG", billingCurrency: "MYR" })];
+		render(<IssueInvoiceForm />);
+		pickStore();
+		expect(
+			screen.getByText(
+				sentence(
+					/Its last paid invoice was in\s*RM \(MYR\)\s*— renewals follow that, not its country \(Singapore\)\./,
+				),
+			),
+		).toBeTruthy();
+	});
+
+	it("a store paying in its own country's currency gets the short line", () => {
+		state.retailers = [store()];
+		render(<IssueInvoiceForm />);
+		pickStore();
+		expect(
+			screen.getByText(
+				sentence(/^Its last paid invoice was in\s*RM \(MYR\)\s*\.$/),
+			),
+		).toBeTruthy();
+		expect(screen.queryByText(sentence(/not its country/))).toBeNull();
 	});
 });

@@ -1124,6 +1124,14 @@ was already currency-agnostic — the work was the issue path and the pay surfac
   ringgit bill. Billing off the store's currency stays possible, but the form
   says what it does: *"This store bills in S$ (SGD). Once this invoice is paid,
   its renewals bill in RM (MYR) too."*
+- **It says WHICH rule set that currency, not both.** The row also carries
+  `billingCurrencySource` (`renewalCurrencySource` in `lib/plans.ts`, the same
+  test `renewalCurrency` applies) and the store's `country`, and the line reads
+  one of: *"No paid invoice yet, so it bills in Singapore's currency."* ·
+  *"Its last paid invoice was in RM (MYR)."* · *"Its last paid invoice was in
+  RM (MYR) — renewals follow that, not its country (Singapore)."* The last one
+  is the case the hands-on test found: an SG store billing in RM looks like a
+  mistake unless the form says it follows a ringgit payment.
 - **No payment block on non-MYR invoices.** The `billingConfig` rails (MY bank +
   DuitNow) can only settle MYR, so a cross-border invoice deliberately shows
   **amount only** everywhere — PDF (no "Payment instructions" card; footer says

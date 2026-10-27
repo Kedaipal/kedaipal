@@ -37,6 +37,7 @@ import {
 	planQualifiesForFounding,
 	PLANS,
 	renewalCurrency,
+	renewalCurrencySource,
 	renewalQuote,
 	starterPricePerDay,
 	subscriptionPrice,
@@ -445,6 +446,16 @@ describe("renewalCurrency", () => {
 		expect(
 			renewalCurrency({ lastPaidCurrency: undefined, country: undefined }),
 		).toBe("MYR");
+	});
+});
+
+describe("renewalCurrencySource", () => {
+	test("names the rule renewalCurrency applied — a billable paid currency wins", () => {
+		expect(renewalCurrencySource({ lastPaidCurrency: "MYR" })).toBe("last_paid");
+		expect(renewalCurrencySource({ lastPaidCurrency: "SGD" })).toBe("last_paid");
+		// No paid bill, or one in a currency we don't bill in, falls to country.
+		expect(renewalCurrencySource({ lastPaidCurrency: undefined })).toBe("country");
+		expect(renewalCurrencySource({ lastPaidCurrency: "USD" })).toBe("country");
 	});
 });
 

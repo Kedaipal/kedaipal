@@ -2505,13 +2505,15 @@ describe("the issue-invoice picker carries each store's billing currency (86eyp7
 		});
 	}
 
-	async function currencyOf(t: ReturnType<typeof setup>, slug: string) {
+	async function rowOf(t: ReturnType<typeof setup>, slug: string) {
 		const { stores } = await asAdmin(t).query(
 			api.invoices.listRetailersForAdmin,
 			{},
 		);
-		return stores.find((s) => s.slug === slug)?.billingCurrency;
+		return stores.find((s) => s.slug === slug);
 	}
+	const currencyOf = async (t: ReturnType<typeof setup>, slug: string) =>
+		(await rowOf(t, slug))?.billingCurrency;
 
 	test("a store with no paid bill bills in its country's currency", async () => {
 		const t = setup();
@@ -2519,6 +2521,11 @@ describe("the issue-invoice picker carries each store's billing currency (86eyp7
 		await seedStore(t, "my-new", "MY");
 		expect(await currencyOf(t, "sg-new")).toBe("SGD");
 		expect(await currencyOf(t, "my-new")).toBe("MYR");
+		// …and says so, so the form can name the rule that applied.
+		expect(await rowOf(t, "sg-new")).toMatchObject({
+			billingCurrencySource: "country",
+			country: "SG",
+		});
 	});
 
 	test("the last PAID bill outranks the country", async () => {
@@ -2526,7 +2533,11 @@ describe("the issue-invoice picker carries each store's billing currency (86eyp7
 		// (`renewalCurrency`) — the form must open on what its renewals say.
 		const t = setup();
 		await seedStore(t, "sg-paid-rm", "SG", { status: "paid", currency: "MYR" });
-		expect(await currencyOf(t, "sg-paid-rm")).toBe("MYR");
+		expect(await rowOf(t, "sg-paid-rm")).toMatchObject({
+			billingCurrency: "MYR",
+			billingCurrencySource: "last_paid",
+			country: "SG",
+		});
 	});
 
 	test("an open or void bill never decides it — only a paid one", async () => {

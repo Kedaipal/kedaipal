@@ -23,6 +23,7 @@ import {
 	resolveMyRetailerFor,
 } from "./lib/auth";
 import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
+import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import { contractForAdmin } from "./lib/enterprise";
 import {
 	autoRenewAfterReplace,
@@ -58,6 +59,7 @@ import {
 	type Plan,
 	planChangeCarryoverDays,
 	renewalCurrency,
+	renewalCurrencySource,
 	renewalQuote,
 	subscriptionPrice,
 } from "./lib/plans";
@@ -1748,6 +1750,12 @@ export const listRetailersForAdmin = query({
 			 * opens on it, so an SG store is never one missed click from an RM
 			 * invoice (86eyp7hn7). */
 			billingCurrency: BillingCurrency;
+			/** Which rule gave `billingCurrency` — so the form can say WHY,
+			 * not recite both rules (an SG store billing in RM is right only
+			 * when it follows a ringgit payment). */
+			billingCurrencySource: "last_paid" | "country";
+			/** The store's country, as `renewalCurrency` reads it (unset ⇒ MY). */
+			country: Country;
 			/** On the house (z8r3fdeub2) — the picker labels these so nobody
 			 * drafts a bill `issueInvoice` will refuse anyway. */
 			comped: boolean;
@@ -1833,6 +1841,10 @@ export const listRetailersForAdmin = query({
 					lastPaidCurrency: lastPaid?.currency,
 					country: r.country,
 				}),
+				billingCurrencySource: renewalCurrencySource({
+					lastPaidCurrency: lastPaid?.currency,
+				}),
+				country: r.country ?? DEFAULT_COUNTRY,
 				autoChargeIdle: autoChargeIdle(sub?.autoRenew),
 				chargeInFlight: sub?.autoRenew?.lastChargeAttemptAt !== undefined,
 				comped: sub?.comped === true,
