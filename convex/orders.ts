@@ -4199,7 +4199,7 @@ function riderGateMessage(provider: CourierProviderId): string {
 		delyva:
 			"A Delyva courier booking is on this order — it updates itself when the courier collects and delivers, with the tracking number attached. Open the order and use “Update manually” to move it yourself.",
 		easyparcel:
-			"An EasyParcel courier booking is on this order — it updates itself when the courier collects and delivers (checked every half hour), with the tracking number attached. Open the order and use “Update manually” to move it yourself.",
+			"An EasyParcel courier booking is on this order — it updates itself when the courier collects and delivers (EasyParcel reports each step; Kedaipal double-checks every hour), with the tracking number attached. Open the order and use “Update manually” to move it yourself.",
 	};
 	return MESSAGES[provider];
 }

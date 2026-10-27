@@ -1073,7 +1073,7 @@ function OrderDetailRoute() {
 														— it moves to <b>{stageLabel(nextStage, "en")}</b>{" "}
 														on its own once {riderMoment}
 														{activeCourierName === "EasyParcel"
-															? " — EasyParcel is checked every half hour"
+															? " — EasyParcel reports each step, and Kedaipal double-checks every hour"
 															: `, as long as your ${activeCourierName ?? "Lalamove"} webhook is set up`}
 														.
 													</>
