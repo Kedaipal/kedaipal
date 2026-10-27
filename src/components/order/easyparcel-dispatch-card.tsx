@@ -505,7 +505,7 @@ export function EasyparcelDispatchCard({
 							<Link
 								to="/app/settings"
 								search={{ tab: "integrations" }}
-								className="font-medium text-accent hover:underline"
+								className="-my-2 py-2 font-medium text-accent hover:underline"
 							>
 								Edit
 							</Link>
@@ -714,79 +714,84 @@ export function EasyparcelDispatchCard({
 										aria-pressed={active}
 										disabled={booking}
 										onClick={() => setSelectedId(rate.serviceId)}
-										className={`flex w-full items-center gap-2.5 rounded-2xl border-2 p-2.5 text-left transition-colors disabled:opacity-60 ${
+										// Two lines, not three columns: on a phone the middle
+										// column was ~80px and the chips — the facts F9–F13
+										// exist to show — folded into blobs (test-code F27).
+										className={`flex w-full flex-col gap-1.5 rounded-2xl border-2 p-2.5 text-left transition-colors disabled:opacity-60 ${
 											active
 												? "border-accent bg-accent/5"
 												: "border-border bg-card hover:border-accent/40"
 										}`}
 									>
-										<span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-primary text-xs font-bold text-primary-foreground">
-											{initials(rate.courierName)}
-										</span>
-										<span className="flex min-w-0 grow flex-col gap-0.5">
-											<span className="truncate text-sm font-semibold">
-												{rate.label}
+										<span className="flex w-full items-start gap-2.5">
+											{/* Decoration — it yields its width to the name on the
+											    narrowest phones. */}
+											<span className="hidden size-9 shrink-0 items-center justify-center rounded-[10px] bg-primary text-xs font-bold text-primary-foreground min-[400px]:flex">
+												{initials(rate.courierName)}
 											</span>
-											<span className="truncate text-xs text-muted-foreground">
-												{rateMeta(rate)}
-											</span>
-											{rate.deliversTo === "point" ||
-											rate.minParcels !== undefined ||
-											(fit && buyerDate) ? (
-												<span className="flex flex-wrap gap-1 pt-0.5">
-													{rate.deliversTo === "point" ? (
-														<span
-															className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${TONE_CHIP.warn}`}
-														>
-															Buyer collects at a point
-														</span>
-													) : null}
-													{rate.minParcels !== undefined ? (
-														<span
-															className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${TONE_CHIP.warn}`}
-														>
-															Pickup needs {rate.minParcels}+ parcels
-														</span>
-													) : null}
-													{fit && buyerDate ? (
-														<span
-															className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
-																fit === "late"
-																	? TONE_CHIP.danger
-																	: TONE_CHIP.warn
-															}`}
-														>
-															{fit === "late"
-																? `Arrives after ${buyerDate}`
-																: `May miss ${buyerDate}`}
-														</span>
-													) : null}
+											<span className="flex min-w-0 grow flex-col gap-0.5">
+												<span className="text-sm font-semibold leading-snug">
+													{rate.label}
 												</span>
-											) : null}
-										</span>
-										<span className="flex shrink-0 flex-col items-end gap-1">
-											<span className="text-sm font-bold">
-												{formatPrice(
-													rate.priceMinor,
-													rate.currency || walletCurrency,
-												)}
-											</span>
-											{index === 0 && filtered.length > 1 ? (
-												<span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent-emphasis">
-													Cheapest
+												<span className="text-xs text-muted-foreground">
+													{rateMeta(rate)}
 												</span>
-											) : null}
+											</span>
+											<span className="flex shrink-0 flex-col items-end gap-1">
+												<span className="text-sm font-bold">
+													{formatPrice(
+														rate.priceMinor,
+														rate.currency || walletCurrency,
+													)}
+												</span>
+												{index === 0 && filtered.length > 1 ? (
+													<span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent-emphasis">
+														Cheapest
+													</span>
+												) : null}
+											</span>
+											<span
+												aria-hidden="true"
+												className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border-2 ${
+													active ? "border-accent" : "border-border"
+												}`}
+											>
+												{active ? (
+													<span className="size-2 rounded-full bg-accent" />
+												) : null}
+											</span>
 										</span>
-										<span
-											aria-hidden="true"
-											className={`flex size-4 shrink-0 items-center justify-center rounded-full border-2 ${
-												active ? "border-accent" : "border-border"
-											}`}
-										>
-											{active ? (
-												<span className="size-2 rounded-full bg-accent" />
-											) : null}
-										</span>
+										{rate.deliversTo === "point" ||
+										rate.minParcels !== undefined ||
+										(fit && buyerDate) ? (
+											<span className="flex flex-wrap gap-1 min-[400px]:pl-[2.875rem]">
+												{rate.deliversTo === "point" ? (
+													<span
+														className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${TONE_CHIP.warn}`}
+													>
+														Buyer collects at a point
+													</span>
+												) : null}
+												{rate.minParcels !== undefined ? (
+													<span
+														className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${TONE_CHIP.warn}`}
+													>
+														Pickup needs {rate.minParcels}+ parcels
+													</span>
+												) : null}
+												{fit && buyerDate ? (
+													<span
+														className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+															fit === "late" ? TONE_CHIP.danger : TONE_CHIP.warn
+														}`}
+													>
+														{fit === "late"
+															? `Arrives after ${buyerDate}`
+															: `May miss ${buyerDate}`}
+													</span>
+												) : null}
+											</span>
+										) : null}
 									</button>
 								);
 							})}
@@ -893,7 +898,7 @@ export function EasyparcelDispatchCard({
 							<button
 								type="button"
 								disabled={booking || quoting}
-								className="flex min-h-9 items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline disabled:opacity-60"
+								className="flex min-h-11 items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline disabled:opacity-60"
 								onClick={() => void handleQuote()}
 							>
 								<RefreshCw className="size-3" /> Refresh prices

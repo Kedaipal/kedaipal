@@ -322,7 +322,7 @@ export function EasyparcelCard({
 						switched on under{" "}
 						<Link
 							to="/app/settings/delivery-pricing"
-							className="font-medium text-accent-emphasis hover:underline"
+							className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
 						>
 							Delivery pricing → Courier booking
 						</Link>
@@ -497,7 +497,7 @@ export function EasyparcelCard({
 								type="button"
 								variant="ghost"
 								size="sm"
-								className="ml-auto h-9"
+								className="ml-auto h-11"
 								isLoading={refreshing}
 								disabled={needsReconnect}
 								onClick={() => void handleRefreshBalance()}
@@ -528,7 +528,7 @@ export function EasyparcelCard({
 								Manage it under{" "}
 								<Link
 									to="/app/settings/delivery-pricing"
-									className="font-medium text-accent-emphasis hover:underline"
+									className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
 								>
 									Delivery pricing → Courier booking
 								</Link>
