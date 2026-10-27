@@ -210,6 +210,26 @@ describe("BottomNav — 5-tab bar + More sheet", () => {
 	});
 });
 
+describe("BottomNav — Blog videos in the More sheet (admin areas, z8r3fdwwpe)", () => {
+	it("shows a Blog videos row out to admin.kedaipal.com when the caller holds the area", async () => {
+		renderNav({ blogVideos: true });
+		await waitFor(() => expect(screen.getByText("More")).toBeTruthy());
+		fireEvent.click(screen.getByText("More"));
+		const row = await screen.findByText("Blog videos");
+		expect(row.closest("a")?.getAttribute("href")).toBe(
+			"https://admin.kedaipal.com/videos",
+		);
+	});
+
+	it("has no such row for a seller without the area", async () => {
+		renderNav();
+		await waitFor(() => expect(screen.getByText("More")).toBeTruthy());
+		fireEvent.click(screen.getByText("More"));
+		await screen.findByText("Settings");
+		expect(screen.queryByText("Blog videos")).toBeNull();
+	});
+});
+
 describe("BottomNav — team-member gating (86exr91r4)", () => {
 	it("a member sees only the tabs their grants cover", async () => {
 		permFixture.role = "member";
