@@ -46,6 +46,7 @@ import { Route as AppProductsNewRouteImport } from './routes/app.products.new'
 import { Route as AppProductsImportRouteImport } from './routes/app.products.import'
 import { Route as AppProductsCategoriesRouteImport } from './routes/app.products.categories'
 import { Route as AppProductsProductIdRouteImport } from './routes/app.products.$productId'
+import { Route as AppOrdersScheduleRouteImport } from './routes/app.orders.schedule'
 import { Route as AppOrdersCalendarRouteImport } from './routes/app.orders.calendar'
 import { Route as AppOrdersShortIdRouteImport } from './routes/app.orders.$shortId'
 import { Route as AppCustomersCustomerIdRouteImport } from './routes/app.customers.$customerId'
@@ -246,6 +247,11 @@ const AppProductsProductIdRoute = AppProductsProductIdRouteImport.update({
   path: '/products/$productId',
   getParentRoute: () => AppRoute,
 } as any)
+const AppOrdersScheduleRoute = AppOrdersScheduleRouteImport.update({
+  id: '/orders/schedule',
+  path: '/orders/schedule',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppOrdersCalendarRoute = AppOrdersCalendarRouteImport.update({
   id: '/orders/calendar',
   path: '/orders/calendar',
@@ -350,6 +356,7 @@ export interface FileRoutesByFullPath {
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/orders/calendar': typeof AppOrdersCalendarRoute
+  '/app/orders/schedule': typeof AppOrdersScheduleRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
@@ -401,6 +408,7 @@ export interface FileRoutesByTo {
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/orders/calendar': typeof AppOrdersCalendarRoute
+  '/app/orders/schedule': typeof AppOrdersScheduleRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
@@ -454,6 +462,7 @@ export interface FileRoutesById {
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/orders/calendar': typeof AppOrdersCalendarRoute
+  '/app/orders/schedule': typeof AppOrdersScheduleRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
@@ -508,6 +517,7 @@ export interface FileRouteTypes {
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/orders/calendar'
+    | '/app/orders/schedule'
     | '/app/products/$productId'
     | '/app/products/categories'
     | '/app/products/import'
@@ -559,6 +569,7 @@ export interface FileRouteTypes {
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/orders/calendar'
+    | '/app/orders/schedule'
     | '/app/products/$productId'
     | '/app/products/categories'
     | '/app/products/import'
@@ -611,6 +622,7 @@ export interface FileRouteTypes {
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/orders/calendar'
+    | '/app/orders/schedule'
     | '/app/products/$productId'
     | '/app/products/categories'
     | '/app/products/import'
@@ -915,6 +927,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProductsProductIdRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/orders/schedule': {
+      id: '/app/orders/schedule'
+      path: '/orders/schedule'
+      fullPath: '/app/orders/schedule'
+      preLoaderRoute: typeof AppOrdersScheduleRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/orders/calendar': {
       id: '/app/orders/calendar'
       path: '/orders/calendar'
@@ -1022,6 +1041,7 @@ interface AppRouteChildren {
   AppCustomersCustomerIdRoute: typeof AppCustomersCustomerIdRoute
   AppOrdersShortIdRoute: typeof AppOrdersShortIdRoute
   AppOrdersCalendarRoute: typeof AppOrdersCalendarRoute
+  AppOrdersScheduleRoute: typeof AppOrdersScheduleRoute
   AppProductsProductIdRoute: typeof AppProductsProductIdRoute
   AppProductsCategoriesRoute: typeof AppProductsCategoriesRoute
   AppProductsImportRoute: typeof AppProductsImportRoute
@@ -1054,6 +1074,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppCustomersCustomerIdRoute: AppCustomersCustomerIdRoute,
   AppOrdersShortIdRoute: AppOrdersShortIdRoute,
   AppOrdersCalendarRoute: AppOrdersCalendarRoute,
+  AppOrdersScheduleRoute: AppOrdersScheduleRoute,
   AppProductsProductIdRoute: AppProductsProductIdRoute,
   AppProductsCategoriesRoute: AppProductsCategoriesRoute,
   AppProductsImportRoute: AppProductsImportRoute,

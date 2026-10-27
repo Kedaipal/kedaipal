@@ -13,6 +13,7 @@ import { SellerBookingCalendar } from "../components/order/seller-booking-calend
 import { NewBookingLinks } from "../components/products/new-booking-links";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { hasFeature } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/orders/calendar")({
 	component: OrdersCalendarPage,
@@ -24,6 +25,18 @@ function OrdersCalendarPage() {
 		convexQuery(
 			api.bookingBlocks.hasBookingListings,
 			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
+
+	// The calendar is all-tier; Schedule is a Pro inbox lens, so a Starter
+	// store's switch here stays Calendar-only, as it is on the inbox.
+	const inboxEnabled =
+		retailer?.actingAsAdmin === true ||
+		hasFeature(retailer?.subscription, "orderInbox");
+	const hasDatedListings = useQuery(
+		convexQuery(
+			api.schedule.hasDatedListings,
+			retailer && inboxEnabled ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
 
@@ -41,7 +54,13 @@ function OrdersCalendarPage() {
 			<PageHeader
 				title="Orders"
 				subtitle="Booking calendar"
-				actions={<OrdersViewToggle active="calendar" showCalendar />}
+				actions={
+					<OrdersViewToggle
+						active="calendar"
+						showCalendar
+						showSchedule={hasDatedListings === true}
+					/>
+				}
 			/>
 			<div className="flex items-center justify-between gap-3 lg:hidden">
 				<div className="min-w-0">
@@ -50,7 +69,11 @@ function OrdersCalendarPage() {
 					</h2>
 					<p className="text-[13px] text-muted-foreground">Booking calendar</p>
 				</div>
-				<OrdersViewToggle active="calendar" showCalendar />
+				<OrdersViewToggle
+					active="calendar"
+					showCalendar
+					showSchedule={hasDatedListings === true}
+				/>
 			</div>
 
 			{hasBookings ? (

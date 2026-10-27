@@ -2943,6 +2943,19 @@ function toInboxFilterArgs({
 }
 
 
+/** The name of a listing named by a URL id, or null when the id is malformed
+ * or isn't one of this store's products — never another store's name. */
+async function listingNameFor(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+	listing: string,
+): Promise<string | null> {
+	const id = ctx.db.normalizeId("products", listing);
+	if (id === null) return null;
+	const product = await ctx.db.get(id);
+	return product && product.retailerId === retailerId ? product.name : null;
+}
+
 /** Increment a tally entry. Enough repetitions of `(m.get(k) ?? 0) + 1` to be
  * worth a name. */
 function bump(tally: Map<string, number>, key: string): void {
@@ -3158,6 +3171,10 @@ export const searchOrders = query({
 	// Keep orders with NO frozen categories — the twin of `methodUnspecified`,
 	// without which "select every category" silently drops them (86eyrtz74).
 	categoriesUnspecified: v.optional(v.boolean()),
+	// ONE listing (`z8r3fdjv0d`) — the orders a Schedule row counted. A plain
+	// string, not v.id: it arrives off a URL, and a hand-edited id must read as
+	// "matches nothing", never as an argument error that takes the inbox down.
+	listing: v.optional(v.string()),
 	// Checkout surface, MULTI since 86eyrtz74. `source` (singular) is still
 	// accepted so a bookmarked URL or an in-flight client from before the widen
 	// keeps working; the handler folds it into `sources`. Drop it a release on.
@@ -3218,6 +3235,7 @@ export const searchOrders = query({
 			statuses,
 			categories,
 			categoriesUnspecified,
+			listing,
 			attributionSources,
 			searchText,
 			showPinned,
@@ -3261,6 +3279,7 @@ export const searchOrders = query({
 			statuses,
 			categories,
 			categoriesUnspecified,
+			listing,
 			attributionSources,
 			searchText,
 			showPinned,
@@ -3521,6 +3540,13 @@ export const searchOrders = query({
 			// 1,000 are outside the window, so the list AND counts under-report.
 			// The inbox surfaces this in a footer; export is the full-history path.
 			capped: all.length >= MAX_INBOX_SCAN,
+			// The `listing` filter's name, for its removable token. Resolved here
+			// because the URL carries only the id; null = an id that names no
+			// listing of THIS store, which the token says rather than hiding.
+			listingName:
+				listing === undefined
+					? undefined
+					: await listingNameFor(ctx, retailerId, listing),
 		};
 	},
 });
@@ -3587,6 +3613,9 @@ const exportFilterValidators = {
 	// Keep orders with NO frozen categories — the twin of `methodUnspecified`,
 	// without which "select every category" silently drops them (86eyrtz74).
 	categoriesUnspecified: v.optional(v.boolean()),
+	// The Schedule's one-listing view (`z8r3fdjv0d`), in the shared set so an
+	// export of it holds exactly the orders the row counted.
+	listing: v.optional(v.string()),
 	// Checkout surface, MULTI since 86eyrtz74. `source` (singular) is still
 	// accepted so a bookmarked URL or an in-flight client from before the widen
 	// keeps working; the handler folds it into `sources`. Drop it a release on.

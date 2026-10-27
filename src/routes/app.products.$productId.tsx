@@ -312,7 +312,11 @@ function EditProductRoute() {
 			    Breakfast" the morning of the event, "18 RSVPs · 11 Set A" is what
 			    she came for — not the name field. Absent on every other product. */}
 			{headcount ? (
-				<EventRsvpPanel headcount={headcount} productName={product.name} />
+				<EventRsvpPanel
+					headcount={headcount}
+					productId={product._id}
+					productName={product.name}
+				/>
 			) : null}
 
 			{/* Mobile header — back button, title, storefront preview + the honest
