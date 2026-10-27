@@ -236,9 +236,10 @@ export const PRODUCT_SETTING_INDEX: readonly ProductSetting[] = [
 	// --- Pricing & choices (everything but a booking) -----------------------
 	{
 		id: "product-type",
-		label: "Product type — one item, buyer picks or made to order",
+		label: "Does the buyer choose anything?",
 		where: ["Pricing & choices"],
 		keywords: [
+			"product type",
 			"what kind",
 			"type",
 			"jenis",

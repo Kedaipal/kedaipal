@@ -19,7 +19,7 @@ import { WaDock } from "./wa-dock";
 
 const { trackDemoCta, authState } = vi.hoisted(() => ({
 	trackDemoCta: vi.fn(),
-	authState: { isSignedIn: false },
+	authState: { isLoaded: true, isSignedIn: false },
 }));
 vi.mock("../../lib/ga-events", () => ({ trackDemoCta }));
 vi.mock("@clerk/tanstack-react-start", () => ({ useAuth: () => authState }));
@@ -79,6 +79,7 @@ const dock = () =>
 describe("WaDock", () => {
 	beforeEach(() => {
 		observers.length = 0;
+		authState.isLoaded = true;
 		authState.isSignedIn = false;
 		trackDemoCta.mockClear();
 		vi.stubGlobal("IntersectionObserver", FakeObserver);
@@ -111,6 +112,13 @@ describe("WaDock", () => {
 
 	it("never shows a demo pill to a signed-in seller", () => {
 		authState.isSignedIn = true;
+		renderDock();
+		report("top", false);
+		expect(dock()).toBeNull();
+	});
+
+	it("stays hidden while Clerk hasn't said who the visitor is (z8r3fdy2m0)", () => {
+		authState.isLoaded = false;
 		renderDock();
 		report("top", false);
 		expect(dock()).toBeNull();

@@ -22,8 +22,8 @@ export interface ProductSpotlightCopy {
 	/** What to do instead, when NO listing is eligible — never a dead end. */
 	empty: string;
 	/** The step-0 card "+ New product" opens on (`?card=`, z8r3fdhkr7) when
-	 * only one kind can carry the thing — a weekend rate needs a stay, so the
-	 * wizard opens on Booking instead of asking the seller to find it. */
+	 * only one card can carry the thing — a weekend rate needs a stay, so the
+	 * wizard opens on Stay instead of asking the seller to find it. */
 	createCard?: KindCard;
 	/** Which rows carry the key forward (and so get the ring on their form). */
 	applies: (product: { kind?: string }) => boolean;
@@ -37,8 +37,8 @@ export const PRODUCT_SPOTLIGHT: Record<
 		title: "Weekend rate lives on each stay listing",
 		body: "Open a stay listing below and we'll take you straight to its “Do weekend nights cost more?” question, open and ready to set.",
 		empty:
-			"You don't have a stay listing yet. + New product opens one on Booking, and the weekend rate is in its Pricing step.",
-		createCard: "booking",
+			"You don't have a stay listing yet. + New product opens one on “A stay or rental”, and the weekend rate is in its Pricing step.",
+		createCard: "stay",
 		// Every stay, packaged or not: a package's row says the weekend rate
 		// doesn't apply and why, which is the answer that seller came for.
 		applies: (product) => effectiveKind(product.kind) === "booking",
