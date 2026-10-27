@@ -15,7 +15,6 @@ import {
 } from "./courierProviders";
 import { delyvaBookingAllowed, riderBookingAllowed } from "./delivery";
 import { resolveDelyvaCredentials } from "./delyva";
-import { resolveEasyparcelCredentials } from "./easyparcel";
 
 /** The slice of a retailer row the booking predicates read. */
 export type CourierRetailer = {
@@ -28,9 +27,17 @@ export type CourierRetailer = {
 		customerId?: number;
 		pickupAddress?: unknown;
 	};
+	/**
+	 * EasyParcel's grant lives in its own table (`easyparcelConnections` —
+	 * tokens off every retailer read), so a caller that wants this provider
+	 * judged loads the summary with `loadEasyparcelArming` and passes it here.
+	 * Absent = not loaded = not armed: failing closed is the safe direction
+	 * for a "will a courier call this buyer" bit.
+	 */
 	easyparcel?: {
-		enabled?: boolean;
-		apiKey?: string;
+		/** A live grant exists AND this deployment is configured. */
+		connected: boolean;
+		enabled: boolean;
 	};
 };
 
@@ -58,8 +65,8 @@ export function delyvaBookingArmed(retailer: CourierRetailer): boolean {
  * reports. */
 export function easyparcelBookingArmed(retailer: CourierRetailer): boolean {
 	return (
-		resolveEasyparcelCredentials(retailer.easyparcel) !== null &&
-		retailer.easyparcel?.enabled === true &&
+		retailer.easyparcel?.connected === true &&
+		retailer.easyparcel.enabled === true &&
 		courierBookingAllowed("easyparcel", retailer.country ?? DEFAULT_COUNTRY)
 	);
 }

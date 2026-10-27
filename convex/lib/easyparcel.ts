@@ -1,113 +1,423 @@
-// EasyParcel legacy "Individual API" — pure client helpers (form encoding,
-// request building, response parsing, status normalization). NO fetch and NO
-// Convex imports so every piece unit-tests in isolation; the actions in
-// convex/easyparcel.ts own the network + db. See docs/delivery-easyparcel.md
-// (ClickUp z8r3fdcje2).
+// EasyParcel Open API (2026-09) — pure client helpers: OAuth URLs + token
+// parsing, request bodies, response parsing, status normalisation, failure
+// classes. NO fetch and NO Convex imports, so every piece unit-tests in
+// isolation; convex/easyparcel.ts owns the network, the tokens and the db.
+// See docs/delivery-easyparcel.md (ClickUp z8r3fdcje2).
 //
-// API shape (developers.easyparcel.com MY Individual 1.4.0.0 + SG Individual
-// 1.1.0.0, cross-checked against EasyParcel's own WooCommerce plugin source,
-// extracted 20 Oct 2026):
-//  - One host PER COUNTRY, and a separate demo host per country:
-//    connect.easyparcel.my / connect.easyparcel.sg (demo.connect.…). The
-//    seller's account lives on one platform; the store's country picks it.
-//  - Every call is POST form-encoded (PHP http_build_query bracket notation)
-//    to `{host}/?ac={Action}`, authenticated by a single `api` key field.
-//  - Flow: EPRateCheckingBulk (service list w/ prices) → EPSubmitOrderBulk
-//    (order_number; EasyParcel re-validates) → EPPayOrderBulk (pays from the
-//    seller's PREPAID wallet; returns AWB + label PDF link + tracking URL).
-//  - Status is POLLED: EPParcelStatusBulk by order_number (ship_status
-//    strings), EPTrackingBulk by AWB. No webhook in the Individual docs —
-//    the status cron in convex/crons.ts is the sync mechanism.
-//  - Rates/prices arrive as STRINGS in major units ("8.00").
-//  - SG differences the builders encode: no state tier (rate check sends no
-//    *_state at all; submit sends the literal "Singapore", the plugin's own
-//    behaviour), 6-digit postcodes, `pick_unit`/`send_unit` address fields,
-//    and thinner responses (no rate_id/dropoff points; pay returns no
-//    tracking_url).
+// API shape (easyparcel.github.io/OpenAPI, version 2026-09, read 27 Oct 2026):
+//  - OAuth 2.0 AUTHORIZATION CODE. Kedaipal registers ONE app (client id +
+//    secret, Convex env); each SELLER signs in at EasyParcel, picks which of
+//    their accounts (Live or Demo) Kedaipal may book with, and allows. The
+//    token is bound to that account — environment included, which no
+//    response field reports (see `environment` on the connection row).
+//  - One host for every country and both environments:
+//    https://api.easyparcel.com/open_api/2026-09/…, JSON, Bearer token.
+//  - Batch-shaped endpoints answer HTTP 200 even when an item fails: the
+//    verdict is each item's `status`, never the HTTP code.
+//  - Submit CHARGES the connected account's prepaid wallet in the same call —
+//    there is no separate pay step.
+//  - Status arrives by webhook (unsigned — see convex/http.ts) and by
+//    `/shipment/details`, which takes ONE shipment number per call.
 
-import { decryptSecret } from "./credentialCrypto";
 import type { Country } from "./country";
 import type { DeliveryJobStatus } from "./deliveryJobs";
 
-/** Production + demo hosts per country. The demo host is a real, separate
- * environment (same key format; support tops up play-money credit) — which
- * host a key authenticates on is how connect resolves `isDemo`. */
-export function easyparcelBaseUrl(country: Country, isDemo: boolean): string {
-	const tld = country === "SG" ? "sg" : "my";
-	return isDemo
-		? `https://demo.connect.easyparcel.${tld}`
-		: `https://connect.easyparcel.${tld}`;
+export const EASYPARCEL_API_BASE =
+	"https://api.easyparcel.com/open_api/2026-09";
+export const EASYPARCEL_AUTHORIZE_URL =
+	"https://api.easyparcel.com/oauth/login";
+export const EASYPARCEL_TOKEN_URL = "https://api.easyparcel.com/oauth/token";
+
+/** Refresh this long before the access token's stated expiry, so a call made
+ * a moment before expiry never races it. */
+export const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// OAuth
+// ---------------------------------------------------------------------------
+
+export function buildAuthorizeUrl(args: {
+	clientId: string;
+	redirectUri: string;
+	state: string;
+}): string {
+	const params = new URLSearchParams({
+		client_id: args.clientId,
+		redirect_uri: args.redirectUri,
+		state: args.state,
+	});
+	return `${EASYPARCEL_AUTHORIZE_URL}?${params.toString()}`;
 }
 
-export function easyparcelActionUrl(
-	country: Country,
-	isDemo: boolean,
-	action: string,
+/** `Authorization: Basic base64(client_id:client_secret)` — the token
+ * endpoint's documented client authentication. */
+export function basicAuthHeader(clientId: string, clientSecret: string): string {
+	return `Basic ${btoa(`${clientId}:${clientSecret}`)}`;
+}
+
+/** Token request body for both grants. Sent form-encoded — the OAuth 2.0
+ * standard (RFC 6749 §4.1.3); the docs give fields but no content type. */
+export function buildTokenRequestBody(
+	grant:
+		| { kind: "authorization_code"; code: string; redirectUri: string }
+		| { kind: "refresh_token"; refreshToken: string; redirectUri: string },
 ): string {
-	return `${easyparcelBaseUrl(country, isDemo)}/?ac=${encodeURIComponent(action)}`;
+	const params = new URLSearchParams();
+	if (grant.kind === "authorization_code") {
+		params.set("grant_type", "authorization_code");
+		params.set("code", grant.code);
+	} else {
+		params.set("grant_type", "refresh_token");
+		params.set("refresh_token", grant.refreshToken);
+	}
+	params.set("redirect_uri", grant.redirectUri);
+	return params.toString();
 }
 
-export type EasyparcelCredentials = {
-	/** The seller's Individual API key (≤25 chars plaintext; stored
-	 * `enc.v1.`-encrypted). The ONLY credential this API has. */
-	apiKey: string;
+export type EasyparcelTokens = {
+	accessToken: string;
+	/** Absent when a refresh response doesn't rotate it — keep the old one. */
+	refreshToken?: string;
+	accessExpiresAt: number;
+	refreshExpiresAt?: number;
 };
 
-/** BYO-only resolver, same posture as the Delyva/Lalamove/HitPay siblings:
- * the seller's own account or nothing — incomplete reads as null and callers
- * fail closed. */
-export function resolveEasyparcelCredentials(
-	config: { apiKey?: string } | undefined,
-): EasyparcelCredentials | null {
-	const apiKey = config?.apiKey?.trim();
-	if (!apiKey) return null;
-	return { apiKey };
-}
-
-/** Decrypt-at-use (the 86eyn25gk posture): stored values are ciphertext;
- * called by the network client right before every request. */
-export async function decryptEasyparcelCredentials(
-	credentials: EasyparcelCredentials,
-): Promise<EasyparcelCredentials> {
-	return { apiKey: await decryptSecret(credentials.apiKey) };
-}
-
 /**
- * PHP `http_build_query` equivalent: flattens nested objects/arrays into
- * bracket-notation form fields (`bulk[0][pick_code]=43700`). EasyParcel's
- * endpoints read exactly this shape (their own plugin posts it); JSON bodies
- * are NOT accepted on the standard actions. Booleans are the caller's job to
- * spell ("1"/"0" — the plugin's submit convention) so nothing here guesses a
- * representation the API might read differently.
+ * The token response. Expiry is computed from `expires_in` (seconds), never
+ * the `expires_at` timestamp: the documented sample's two timestamps disagree
+ * with its own durations, and a relative duration can't be wrong about the
+ * server's clock.
  */
-export function encodeEasyparcelForm(params: Record<string, unknown>): string {
-	const pairs: string[] = [];
-	const walk = (prefix: string, value: unknown) => {
-		if (value === undefined || value === null) return;
-		if (Array.isArray(value)) {
-			value.forEach((item, i) => walk(`${prefix}[${i}]`, item));
-			return;
-		}
-		if (typeof value === "object") {
-			for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-				walk(`${prefix}[${k}]`, v);
-			}
-			return;
-		}
-		pairs.push(`${encodeURIComponent(prefix)}=${encodeURIComponent(String(value))}`);
+export function parseTokenResponse(
+	body: string,
+	now: number,
+): EasyparcelTokens {
+	let parsed: Record<string, unknown>;
+	try {
+		parsed = JSON.parse(body) as Record<string, unknown>;
+	} catch {
+		throw new EasyparcelApiError("token_unparseable", 0, body.slice(0, 200));
+	}
+	const accessToken = str(parsed.access_token);
+	if (!accessToken) {
+		throw new EasyparcelApiError(
+			"token_missing",
+			0,
+			str(parsed.error_description) ?? str(parsed.error) ?? "No access token",
+		);
+	}
+	const expiresIn = num(parsed.expires_in) ?? 3600;
+	const refreshIn = num(parsed.refresh_token_expires_in);
+	return {
+		accessToken,
+		refreshToken: str(parsed.refresh_token),
+		accessExpiresAt: now + expiresIn * 1000,
+		refreshExpiresAt:
+			refreshIn !== undefined ? now + refreshIn * 1000 : undefined,
 	};
-	for (const [k, v] of Object.entries(params)) walk(k, v);
-	return pairs.join("&");
 }
 
 /**
- * EasyParcel money → integer minor units (sen/cents). Their prices arrive as
- * strings in major units ("8.00", "99999755.99"); string math avoids float
- * dust, and anything that doesn't look like money throws — a mis-parsed fee
- * must never freeze onto a job (the Delyva rule).
+ * Whether a token belongs to EasyParcel's sandbox. No API response reports
+ * the environment (the token is bound to whichever account the seller picked
+ * at sign-in), so the only possible tell is the token itself — when it is a
+ * JWT carrying an environment claim. Anything else is `undefined`: unknown is
+ * an honest answer, and every surface renders it as unknown, never as live.
  */
-export function easyparcelAmountToMinor(raw: string | number): number {
-	const s = String(raw).trim();
+export function tokenEnvironment(
+	token: string,
+): "sandbox" | "live" | undefined {
+	const parts = token.split(".");
+	if (parts.length !== 3) return undefined;
+	let payload: Record<string, unknown>;
+	try {
+		const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+		payload = JSON.parse(
+			atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "=")),
+		) as Record<string, unknown>;
+	} catch {
+		return undefined;
+	}
+	for (const key of ["environment", "env", "mode", "account_environment"]) {
+		const value = payload[key];
+		if (typeof value !== "string") continue;
+		const v = value.toLowerCase();
+		if (v.includes("sandbox") || v.includes("demo") || v.includes("test"))
+			return "sandbox";
+		if (v.includes("live") || v.includes("prod")) return "live";
+	}
+	for (const key of ["is_demo", "isDemo", "demo", "sandbox", "is_sandbox"]) {
+		const value = payload[key];
+		if (typeof value === "boolean") return value ? "sandbox" : "live";
+	}
+	return undefined;
+}
+
+export function accessTokenNeedsRefresh(
+	accessExpiresAt: number,
+	now: number,
+): boolean {
+	return accessExpiresAt - TOKEN_REFRESH_SKEW_MS <= now;
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/**
+ * One error type for the whole API. `kind` is OUR classification — the API's
+ * own error shapes differ by endpoint (four documented 401 bodies), so the
+ * HTTP status and the per-item messages are what we classify on.
+ */
+export class EasyparcelApiError extends Error {
+	constructor(
+		public readonly code: string,
+		public readonly httpStatus: number,
+		public readonly detail: string,
+	) {
+		super(`EasyParcel ${code} (${httpStatus}): ${detail}`);
+	}
+}
+
+export type EasyparcelFailure =
+	| "auth" // the seller's grant is dead — reconnect
+	| "credit" // prepaid wallet can't cover it
+	| "invalid_address"
+	| "rate_limited"
+	| "unknown";
+
+export function classifyEasyparcelFailure(
+	err: EasyparcelApiError,
+): EasyparcelFailure {
+	if (err.httpStatus === 401 || err.code === "auth") return "auth";
+	if (err.httpStatus === 429) return "rate_limited";
+	const d = err.detail.toLowerCase();
+	if (
+		d.includes("insufficient") ||
+		d.includes("credit") ||
+		d.includes("balance") ||
+		d.includes("top up") ||
+		d.includes("topup")
+	)
+		return "credit";
+	if (
+		d.includes("postcode") ||
+		d.includes("postal") ||
+		d.includes("address") ||
+		d.includes("subdivision")
+	)
+		return "invalid_address";
+	return "unknown";
+}
+
+/** Read the shared envelope `{ status_code, message, data }`. An envelope
+ * whose own `status_code` isn't 2xx throws (some endpoints carry 404 inside
+ * an HTTP 200); per-ITEM failures are the caller's to read. */
+function readEnvelope(body: string, httpStatus: number): unknown {
+	let parsed: Record<string, unknown>;
+	try {
+		parsed = JSON.parse(body) as Record<string, unknown>;
+	} catch {
+		throw new EasyparcelApiError("unparseable", httpStatus, body.slice(0, 200));
+	}
+	const code = num(parsed.status_code) ?? httpStatus;
+	if (code < 200 || code >= 300) {
+		const detail =
+			str(parsed.message) ??
+			(typeof parsed.data === "string" ? parsed.data : undefined) ??
+			"Request failed";
+		throw new EasyparcelApiError(
+			code === 401 ? "auth" : "envelope",
+			code,
+			detail,
+		);
+	}
+	return parsed.data;
+}
+
+// ---------------------------------------------------------------------------
+// Addresses
+// ---------------------------------------------------------------------------
+
+/**
+ * Our canonical MY state names → ISO 3166-2:MY codes, exactly the list the
+ * Open API documents (MY-01 Johor … MY-16 Putrajaya).
+ */
+export const MY_SUBDIVISION_CODES: Record<string, string> = {
+	Johor: "MY-01",
+	Kedah: "MY-02",
+	Kelantan: "MY-03",
+	Melaka: "MY-04",
+	"Negeri Sembilan": "MY-05",
+	Pahang: "MY-06",
+	"Pulau Pinang": "MY-07",
+	Perak: "MY-08",
+	Perlis: "MY-09",
+	Selangor: "MY-10",
+	Terengganu: "MY-11",
+	Sabah: "MY-12",
+	Sarawak: "MY-13",
+	"WP Kuala Lumpur": "MY-14",
+	"WP Labuan": "MY-15",
+	"WP Putrajaya": "MY-16",
+};
+
+/**
+ * Singapore has no state tier in our model, but quotations REQUIRE a
+ * subdivision code. ISO 3166-2:SG splits the island into five CDC districts
+ * (SG-01…05) that no postal sector maps onto cleanly — and the docs' own SG
+ * example pairs a Central postcode (018916) with SG-04, so EasyParcel
+ * evidently doesn't price on it. One constant, verified against the sandbox:
+ * if that ever changes, this is the single line to revisit.
+ */
+export const SG_SUBDIVISION_CODE = "SG-01";
+
+export function subdivisionCode(
+	country: Country,
+	stateName: string | undefined,
+): string | undefined {
+	if (country === "SG") return SG_SUBDIVISION_CODE;
+	return stateName ? MY_SUBDIVISION_CODES[stateName] : undefined;
+}
+
+/** ISO code → our canonical state name, for importing the pickup address
+ * EasyParcel already holds (`province_code` on account info). */
+export function stateNameForSubdivision(code: string | undefined): string | undefined {
+	if (!code) return undefined;
+	for (const [name, iso] of Object.entries(MY_SUBDIVISION_CODES)) {
+		if (iso === code) return name;
+	}
+	return undefined;
+}
+
+const DIAL_CODE: Record<Country, string> = { MY: "60", SG: "65" };
+
+/**
+ * Bare digits ("60123456789") → the Open API's phone pair: the ISO alpha-2
+ * country of the number + the national number WITHOUT the country code
+ * (documented sample: "MY" + "1126760658"). A number from neither country
+ * returns null — the caller hands the courier the store's number instead.
+ */
+export function splitPhone(
+	digits: string,
+): { countryCode: Country; nationalNumber: string } | null {
+	const clean = digits.replace(/\D/g, "");
+	for (const country of ["MY", "SG"] as const) {
+		const dial = DIAL_CODE[country];
+		if (clean.startsWith(dial) && clean.length > dial.length + 5) {
+			return { countryCode: country, nationalNumber: clean.slice(dial.length) };
+		}
+	}
+	return null;
+}
+
+/** One stop of a shipment in our vocabulary. `state` is our canonical
+ * display name; the builders map it to an ISO subdivision. */
+export type EasyparcelParty = {
+	name: string;
+	/** Bare digits incl. country code ("6591234567"). */
+	phone: string;
+	email?: string;
+	company?: string;
+	/** SG unit ("#05-11") — folded into address line 1, the Open API has no
+	 * unit field. */
+	unit?: string;
+	address1: string;
+	address2?: string;
+	city: string;
+	state?: string;
+	postcode: string;
+	country: Country;
+};
+
+function addressLine1(party: EasyparcelParty): string {
+	return party.unit ? `${party.unit} ${party.address1}` : party.address1;
+}
+
+/** Box dimensions in cm. Couriers price on the volumetric weight too, so the
+ * box is part of every quote, never only of the booking. */
+export type ParcelDims = { lengthCm: number; widthCm: number; heightCm: number };
+
+/** The three boxes the dispatch card offers — sized to common courier box
+ * tiers, each stated on the pill so the seller knows what's being declared. */
+export const PARCEL_BOXES = {
+	small: { lengthCm: 20, widthCm: 15, heightCm: 10 },
+	medium: { lengthCm: 30, widthCm: 25, heightCm: 15 },
+	large: { lengthCm: 40, widthCm: 30, heightCm: 25 },
+} as const satisfies Record<string, ParcelDims>;
+
+export type ParcelBox = keyof typeof PARCEL_BOXES;
+
+/** kg → the API's double(8,2), rounded UP so a declared weight is never
+ * lighter than the real one (an under-declared parcel is surcharged by the
+ * courier after the fact). */
+export function apiWeight(kg: number): number {
+	return Math.max(0.01, Math.ceil(kg * 100) / 100);
+}
+
+// ---------------------------------------------------------------------------
+// Quotations
+// ---------------------------------------------------------------------------
+
+export function buildQuotationBody(args: {
+	sender: { postcode: string; state?: string; country: Country };
+	receiver: { postcode: string; state?: string; country: Country };
+	weightKg: number;
+	dims: ParcelDims;
+	/** Declared parcel value, major units. */
+	parcelValue?: number;
+}): Record<string, unknown> {
+	return {
+		api_rate_on: true,
+		shipment: [
+			{
+				sender: {
+					postcode: args.sender.postcode,
+					subdivision_code: subdivisionCode(
+						args.sender.country,
+						args.sender.state,
+					),
+					country: args.sender.country,
+				},
+				receiver: {
+					postcode: args.receiver.postcode,
+					subdivision_code: subdivisionCode(
+						args.receiver.country,
+						args.receiver.state,
+					),
+					country: args.receiver.country,
+				},
+				parcel_value: args.parcelValue,
+				weight: apiWeight(args.weightKg),
+				length: args.dims.lengthCm,
+				width: args.dims.widthCm,
+				height: args.dims.heightCm,
+			},
+		],
+	};
+}
+
+/** One quoted courier service, normalised. */
+export type EasyparcelRate = {
+	/** What a submit books with. */
+	serviceId: string;
+	serviceName: string;
+	courierName: string;
+	courierLogo?: string;
+	/** Courier collects from the seller's door. */
+	isPickup: boolean;
+	/** Seller drops the parcel at a point. */
+	isDropoff: boolean;
+	/** What the seller's wallet pays, minor units. */
+	priceMinor: number;
+	currency: string;
+};
+
+/** Money as the API sends it — a JSON number in the quotation, a decimal
+ * STRING in submit/details. Either way → integer minor units; anything that
+ * isn't money throws (a mis-parsed price must never freeze onto a job). */
+export function easyparcelAmountToMinor(raw: unknown): number {
+	const s = typeof raw === "number" ? raw.toFixed(2) : String(raw ?? "").trim();
 	if (!/^\d+(\.\d{1,2})?$/.test(s)) {
 		throw new Error(`Unparseable EasyParcel amount: ${JSON.stringify(raw)}`);
 	}
@@ -115,450 +425,414 @@ export function easyparcelAmountToMinor(raw: string | number): number {
 	return Number(whole) * 100 + Number((frac + "00").slice(0, 2));
 }
 
-/**
- * Our canonical MY state names → EasyParcel's Appendix III codes. Error 1005
- * is explicit that the API takes CODES, never names. SG has no state tier, so
- * this map is the one MY-only piece of the module — kept here so the future
- * MY lane (cross-border z8r3fdr5yy) is a registry flip, not a rebuild.
- */
-export const MY_EASYPARCEL_STATE_CODES: Record<string, string> = {
-	Johor: "jhr",
-	Kedah: "kdh",
-	Kelantan: "ktn",
-	Melaka: "mlk",
-	"Negeri Sembilan": "nsn",
-	Pahang: "phg",
-	Perak: "prk",
-	Perlis: "pls",
-	"Pulau Pinang": "png",
-	Sabah: "sbh",
-	Sarawak: "srw",
-	Selangor: "sgr",
-	Terengganu: "trg",
-	"WP Kuala Lumpur": "kul",
-	"WP Labuan": "lbn",
-	"WP Putrajaya": "pjy",
-};
-
-export function easyparcelStateCode(
-	country: Country,
-	stateName: string | undefined,
-): string | undefined {
-	if (country !== "MY") return undefined;
-	return stateName ? MY_EASYPARCEL_STATE_CODES[stateName] : undefined;
-}
-
-/** One side of a shipment, in our vocabulary. `unit` is the SG unit number
- * ("#05-11"); `state` is our canonical display name (mapped to the MY code or
- * the SG literal inside the builders, never by callers). */
-export type EasyparcelParty = {
-	name: string;
-	/** Bare digits MSISDN ("6591234567"). */
-	phone: string;
-	company?: string;
-	unit?: string;
-	address1: string;
-	address2?: string;
-	city?: string;
-	state?: string;
-	postcode: string;
-	country: Country;
-};
-
-/** EPRateCheckingBulk — one shipment per call (bulk of 1: dispatch quotes one
- * order at a time, and a 1-item bulk keeps the response parse trivial). */
-export function buildRateCheckForm(args: {
-	apiKey: string;
-	pickup: { postcode: string; state?: string; country: Country };
-	send: { postcode: string; state?: string; country: Country };
-	weightKg: number;
-	/** "YYYY-MM-DD"; omitted → EasyParcel defaults to today. */
-	dateColl?: string;
-}): string {
-	const item: Record<string, unknown> = {
-		pick_code: args.pickup.postcode,
-		pick_country: args.pickup.country,
-		send_code: args.send.postcode,
-		send_country: args.send.country,
-		// The plugin floors at 0.25kg — a 0 weight quotes nothing but errors
-		// nowhere, which reads as "no courier serves this address". Never that.
-		weight: Math.max(args.weightKg, 0.25).toFixed(3),
-		date_coll: args.dateColl,
-	};
-	// MY requires Appendix III state codes on BOTH ends; the SG doc has no
-	// state fields at all (sending none is the documented shape).
-	const pickState = easyparcelStateCode(args.pickup.country, args.pickup.state);
-	const sendState = easyparcelStateCode(args.send.country, args.send.state);
-	if (pickState) item.pick_state = pickState;
-	if (sendState) item.send_state = sendState;
-	return encodeEasyparcelForm({ api: args.apiKey, bulk: [item] });
-}
-
-/** One quoted courier service, normalized across the rich MY response and the
- * thinner SG one (no rate_id / points / COD keys there). */
-export type EasyparcelRate = {
-	/** What EPSubmitOrderBulk books with. */
-	serviceId: string;
-	serviceName: string;
-	courierName: string;
-	courierLogo?: string;
-	/** "parcel" | "document" (their vocabulary, passed through). */
-	serviceType?: string;
-	/** Human ETA, e.g. "3-5 working day(s)". */
-	deliveryEta?: string;
-	/** Earliest pickup date EasyParcel offers ("YYYY-MM-DD"). */
-	pickupDate?: string;
-	/** Total price (shipping + addons), minor units. */
-	priceMinor: number;
-	/** MY only: whether the service is dropoff / pickup / both. */
-	serviceDetail?: string;
-};
-
-export class EasyparcelResponseError extends Error {
-	constructor(
-		public readonly errorCode: string,
-		public readonly errorRemark: string,
-	) {
-		super(`EasyParcel error ${errorCode}: ${errorRemark}`);
+/** Quotation response → rates, cheapest first. An empty list is an answer
+ * (nothing covers the shipment); an item-level error throws with its
+ * messages so the card can say what EasyParcel objected to. */
+export function parseQuotationResponse(
+	body: string,
+	httpStatus = 200,
+): EasyparcelRate[] {
+	const data = readEnvelope(body, httpStatus);
+	const item = Array.isArray(data)
+		? (data[0] as Record<string, unknown> | undefined)
+		: undefined;
+	if (!item) return [];
+	if (str(item.status) === "error") {
+		throw new EasyparcelApiError("item", httpStatus, itemErrors(item));
 	}
-}
-
-type RawEnvelope = {
-	api_status?: unknown;
-	error_code?: unknown;
-	error_remark?: unknown;
-	result?: unknown;
-};
-
-const str = (v: unknown): string | undefined =>
-	typeof v === "string" && v.trim() ? v.trim() : undefined;
-
-/** Parse the shared `{api_status, error_code, error_remark, result}` envelope.
- * error_code arrives as number OR string ("0"); anything non-zero throws with
- * the machine code preserved for classification. */
-export function parseEasyparcelEnvelope(body: string): {
-	result: unknown;
-} {
-	let parsed: RawEnvelope;
-	try {
-		parsed = JSON.parse(body) as RawEnvelope;
-	} catch {
-		throw new EasyparcelResponseError("unparseable", body.slice(0, 200));
-	}
-	const code = String(parsed.error_code ?? "");
-	if (code !== "0" && code !== "") {
-		throw new EasyparcelResponseError(
-			code,
-			str(parsed.error_remark) ?? "Unknown EasyParcel error",
-		);
-	}
-	return { result: parsed.result };
-}
-
-/** EPRateCheckingBulk response → normalized rates, cheapest first. An empty
- * list is a normal answer (no courier covers the shipment), never a throw. */
-export function parseRateCheckResponse(body: string): EasyparcelRate[] {
-	const { result } = parseEasyparcelEnvelope(body);
-	if (!Array.isArray(result)) return [];
-	const first = result[0] as { rates?: unknown } | undefined;
-	if (!first || !Array.isArray(first.rates)) return [];
 	const rates: EasyparcelRate[] = [];
-	for (const raw of first.rates as Array<Record<string, unknown>>) {
-		const serviceId = str(raw.service_id);
-		const price = raw.price;
-		if (!serviceId || (typeof price !== "string" && typeof price !== "number"))
-			continue;
+	for (const q of arr(item.quotations)) {
+		const courier = obj(q.courier);
+		const pricing = obj(q.pricing);
+		const serviceId = str(courier.service_id);
+		if (!serviceId) continue;
 		let priceMinor: number;
 		try {
-			priceMinor = easyparcelAmountToMinor(price);
+			priceMinor = easyparcelAmountToMinor(
+				pricing.seller_payable_amount ?? pricing.total_amount,
+			);
 		} catch {
 			continue; // one malformed row must not sink the quote
 		}
 		rates.push({
 			serviceId,
-			serviceName: str(raw.service_name) ?? str(raw.courier_name) ?? serviceId,
-			courierName: str(raw.courier_name) ?? "Courier",
-			courierLogo: str(raw.courier_logo),
-			serviceType: str(raw.service_type),
-			deliveryEta: str(raw.delivery),
-			pickupDate: str(raw.pickup_date),
+			serviceName: str(courier.service_name) ?? str(courier.courier_name) ?? serviceId,
+			courierName: str(courier.courier_name) ?? "Courier",
+			courierLogo: str(courier.courier_logo),
+			isPickup: courier.is_pickup === true,
+			isDropoff: courier.is_dropoff === true,
 			priceMinor,
-			serviceDetail: str(raw.service_detail),
+			currency: str(pricing.currency) ?? "",
 		});
 	}
 	return rates.sort((a, b) => a.priceMinor - b.priceMinor);
 }
 
-/** EPSubmitOrderBulk — one shipment. Field set follows the plugin (it sends
- * the superset for both countries and the API ignores what a country doesn't
- * use); flags ride as "1"/"0", the plugin's submit convention. */
-export function buildSubmitOrderForm(args: {
-	apiKey: string;
-	pickup: EasyparcelParty;
-	send: EasyparcelParty;
-	weightKg: number;
-	/** Label description, truncated here — their validator rejects essays. */
+// ---------------------------------------------------------------------------
+// Submit (books AND charges the wallet)
+// ---------------------------------------------------------------------------
+
+export type EasyparcelItem = {
 	content: string;
-	/** Declared parcel value, MAJOR units string ("120.00"). */
-	value: string;
+	/** Per-unit weight, kg. */
+	weightKg: number;
+	/** Per-unit value, major units. */
+	value: number;
+	quantity: number;
+};
+
+function party(p: EasyparcelParty): Record<string, unknown> {
+	const phone = splitPhone(p.phone);
+	return {
+		name: p.name.slice(0, 100),
+		company: p.company,
+		phone_number_country_code: phone?.countryCode ?? p.country,
+		phone_number: phone?.nationalNumber ?? p.phone.replace(/\D/g, ""),
+		email: p.email,
+		address_1: addressLine1(p).slice(0, 255),
+		address_2: p.address2,
+		postcode: p.postcode,
+		city: p.city,
+		subdivision_code: subdivisionCode(p.country, p.state),
+		country_code: p.country,
+	};
+}
+
+export function buildSubmitBody(args: {
 	serviceId: string;
 	/** "YYYY-MM-DD". */
-	collectDate?: string;
-	/** Our order shortId — echoed back on their dashboard rows. */
-	reference?: string;
-}): string {
-	const party = (p: EasyparcelParty, prefix: "pick" | "send") => {
-		const stateCode = easyparcelStateCode(p.country, p.state);
-		return {
-			[`${prefix}_name`]: p.name,
-			[`${prefix}_company`]: p.company,
-			[`${prefix}_contact`]: p.phone,
-			[`${prefix}_mobile`]: p.phone,
-			[`${prefix}_unit`]: p.unit,
-			[`${prefix}_addr1`]: p.address1,
-			[`${prefix}_addr2`]: p.address2,
-			[`${prefix}_city`]: p.city,
-			// MY: Appendix III code. SG: the literal "Singapore" — the SG doc
-			// marks send_state required and the plugin sends exactly this.
-			[`${prefix}_state`]: p.country === "SG" ? "Singapore" : stateCode,
-			[`${prefix}_code`]: p.postcode,
-			[`${prefix}_country`]: p.country,
-		};
-	};
-	const item: Record<string, unknown> = {
-		...party(args.pickup, "pick"),
-		...party(args.send, "send"),
-		weight: Math.max(args.weightKg, 0.25).toFixed(3),
-		content: args.content.slice(0, 100),
-		value: args.value,
-		service_id: args.serviceId,
-		collect_date: args.collectDate,
-		reference: args.reference,
-		sms: "0",
-		addon_tracking_email_enabled: "0",
-		addon_whatsapp_tracking_enabled: "0",
-		eori_acknowledged: "0",
-	};
-	return encodeEasyparcelForm({ api: args.apiKey, bulk: [item] });
-}
-
-export type EasyparcelSubmitResult = {
-	/** "EI-…" — the handle EPPayOrderBulk + status polling key on. */
-	orderNumber: string;
-	/** Total price EasyParcel will charge the wallet, minor units. */
-	priceMinor: number;
-};
-
-/** EPSubmitOrderBulk response. A per-row "Fail" throws with the row's remarks
- * (the envelope is Success even when the row fails). SG rows carry no
- * parcel_number — only order_number is universal, so it is all we keep. */
-export function parseSubmitOrderResponse(body: string): EasyparcelSubmitResult {
-	const { result } = parseEasyparcelEnvelope(body);
-	const row = Array.isArray(result)
-		? (result[0] as Record<string, unknown> | undefined)
-		: undefined;
-	if (!row) throw new EasyparcelResponseError("empty", "No submit result row");
-	const status = str(row.status);
-	const orderNumber = str(row.order_number);
-	if (status?.toLowerCase() !== "success" || !orderNumber) {
-		throw new EasyparcelResponseError(
-			"row_fail",
-			str(row.remarks) ?? "Order was not accepted",
-		);
-	}
-	let priceMinor = 0;
-	if (typeof row.price === "string" || typeof row.price === "number") {
-		try {
-			priceMinor = easyparcelAmountToMinor(row.price);
-		} catch {
-			priceMinor = 0;
-		}
-	}
-	return { orderNumber, priceMinor };
-}
-
-export function buildPayOrderForm(args: {
-	apiKey: string;
-	orderNumber: string;
-}): string {
-	return encodeEasyparcelForm({
-		api: args.apiKey,
-		bulk: [{ order_no: args.orderNumber }],
-	});
-}
-
-export type EasyparcelPayResult =
-	| {
-			paid: true;
-			awb?: string;
-			/** Courier AWB label PDF (their `awb_id_link`). */
-			labelUrl?: string;
-			/** MY responses only; SG omits it (tracking rides the AWB). */
-			trackingUrl?: string;
-	  }
-	| {
-			paid: false;
-			/** "Insufficient Credit" arrives INSIDE a Success envelope — the
-			 * message string is the verdict, so it is preserved verbatim. */
-			message: string;
-	  };
-
-export function parsePayOrderResponse(body: string): EasyparcelPayResult {
-	const { result } = parseEasyparcelEnvelope(body);
-	const row = Array.isArray(result)
-		? (result[0] as Record<string, unknown> | undefined)
-		: undefined;
-	if (!row) throw new EasyparcelResponseError("empty", "No pay result row");
-	const message = str(row.messagenow) ?? "";
-	if (!/fully paid/i.test(message)) {
-		return { paid: false, message: message || "Payment was not completed" };
-	}
-	const parcel = Array.isArray(row.parcel)
-		? (row.parcel[0] as Record<string, unknown> | undefined)
-		: undefined;
+	collectionDate: string;
+	weightKg: number;
+	dims: ParcelDims;
+	items: EasyparcelItem[];
+	currency: string;
+	sender: EasyparcelParty;
+	receiver: EasyparcelParty;
+	/** Our order shortId — shown on the seller's EasyParcel dashboard. */
+	reference: string;
+}): Record<string, unknown> {
 	return {
-		paid: true,
-		awb: str(parcel?.awb),
-		labelUrl: str(parcel?.awb_id_link),
-		trackingUrl: str(parcel?.tracking_url),
+		shipment: [
+			{
+				reference: args.reference,
+				service_id: args.serviceId,
+				collection_date: args.collectionDate,
+				weight: apiWeight(args.weightKg),
+				length: args.dims.lengthCm,
+				width: args.dims.widthCm,
+				height: args.dims.heightCm,
+				item: args.items.map((i) => ({
+					content: i.content.slice(0, 100),
+					weight: apiWeight(i.weightKg),
+					length: args.dims.lengthCm,
+					width: args.dims.widthCm,
+					height: args.dims.heightCm,
+					currency_code: args.currency,
+					value: Math.round(i.value * 100) / 100,
+					quantity: i.quantity,
+				})),
+				sender: party(args.sender),
+				receiver: party(args.receiver),
+				// Required object. Every add-on stays OFF: each is a charge on
+				// the seller's wallet they didn't choose, and EasyParcel's own
+				// buyer SMS/WhatsApp would duplicate what the track page already
+				// tells the buyer.
+				feature: {
+					sms_tracking: false,
+					email_tracking: false,
+					whatsapp_tracking: false,
+				},
+			},
+		],
 	};
 }
 
-export function buildParcelStatusForm(args: {
-	apiKey: string;
-	orderNumbers: string[];
-}): string {
-	return encodeEasyparcelForm({
-		api: args.apiKey,
-		bulk: args.orderNumbers.map((order_no) => ({ order_no })),
-	});
-}
-
-export type EasyparcelParcelStatus = {
-	orderNumber: string;
-	shipStatus?: string;
+export type EasyparcelBooked = {
+	/** "ES-YYMM-XXXXX" — what details, cancel and webhooks key on. */
+	shipmentNumber: string;
+	/** "EI-…" — the order it sits in on the seller's dashboard. */
+	orderNumber?: string;
+	courierName?: string;
 	awb?: string;
 	labelUrl?: string;
+	trackingUrl?: string;
+	paidMinor?: number;
+	currency?: string;
 };
 
-/** EPParcelStatusBulk response — one entry per queried order_no, in order. */
-export function parseParcelStatusResponse(
+/** Submit response → the one shipment we booked. An item-level failure
+ * throws with EasyParcel's own messages (HTTP is 200 either way). */
+export function parseSubmitResponse(
 	body: string,
-): EasyparcelParcelStatus[] {
-	const { result } = parseEasyparcelEnvelope(body);
-	if (!Array.isArray(result)) return [];
-	const out: EasyparcelParcelStatus[] = [];
-	for (const raw of result as Array<Record<string, unknown>>) {
-		const orderNumber = str(raw.order_no);
-		if (!orderNumber) continue;
-		const parcel = Array.isArray(raw.parcel)
-			? (raw.parcel[0] as Record<string, unknown> | undefined)
-			: undefined;
-		out.push({
-			orderNumber,
-			shipStatus: str(parcel?.ship_status),
-			awb: str(parcel?.awb),
-			labelUrl: str(parcel?.awb_id_link),
-		});
-	}
-	return out;
-}
-
-export function buildCheckBalanceForm(apiKey: string): string {
-	return encodeEasyparcelForm({ api: apiKey });
-}
-
-/** EPCheckCreditBalance — `result` is the balance string; `currency` is
- * undocumented but present live (their plugin reads it). */
-export function parseCheckBalanceResponse(body: string): {
-	balanceMinor: number;
-	currency?: string;
-} {
-	let parsed: RawEnvelope & { currency?: unknown };
-	try {
-		parsed = JSON.parse(body) as RawEnvelope & { currency?: unknown };
-	} catch {
-		throw new EasyparcelResponseError("unparseable", body.slice(0, 200));
-	}
-	const code = String(parsed.error_code ?? "");
-	if (code !== "0") {
-		throw new EasyparcelResponseError(
-			code,
-			str(parsed.error_remark) ?? "Unknown EasyParcel error",
+	httpStatus = 200,
+): EasyparcelBooked {
+	const data = readEnvelope(body, httpStatus);
+	const order = Array.isArray(data)
+		? (data[0] as Record<string, unknown> | undefined)
+		: undefined;
+	if (!order) throw new EasyparcelApiError("empty", httpStatus, "No order returned");
+	const shipment = arr(order.shipments)[0];
+	if (!shipment) {
+		throw new EasyparcelApiError(
+			"item",
+			httpStatus,
+			itemErrors(order) || "No shipment returned",
 		);
 	}
-	if (typeof parsed.result !== "string" && typeof parsed.result !== "number") {
-		throw new EasyparcelResponseError("empty", "No balance in response");
+	if (str(shipment.status) !== "success") {
+		throw new EasyparcelApiError("item", httpStatus, itemErrors(shipment));
+	}
+	const shipmentNumber = str(shipment.shipment_number);
+	if (!shipmentNumber) {
+		throw new EasyparcelApiError("empty", httpStatus, "No shipment number");
+	}
+	const pricing = obj(shipment.pricing_breakdown);
+	let paidMinor: number | undefined;
+	try {
+		paidMinor = easyparcelAmountToMinor(pricing.total_paid_amount);
+	} catch {
+		paidMinor = undefined;
 	}
 	return {
-		balanceMinor: easyparcelAmountToMinor(parsed.result),
-		currency: str(parsed.currency),
+		shipmentNumber,
+		orderNumber: str(obj(order.order_details).order_number),
+		courierName: str(shipment.courier),
+		awb: str(shipment.awb_number),
+		labelUrl: labelUrlOf(shipment.awb_url, shipment.awb_urls_by_format),
+		trackingUrl: str(shipment.tracking_url),
+		paidMinor,
+		currency: str(pricing.currency_code),
 	};
 }
 
-/**
- * EasyParcel `ship_status` → our normalized job status. Their vocabulary is
- * free-ish prose (MY and SG enums differ slightly), so matching is
- * case-insensitive and unknown strings return undefined — status simply
- * doesn't move, the webhook-vocab posture normalizeDelyvaStatus set.
- *
- *   pre-collection (incl. drop-off pending)  → assigning
- *   collected / dropped off / in transit     → picked_up (the courier HAS the
- *                                              parcel — mirrors Delyva 500/600)
- *   Successfully Delivered                   → completed
- *   Cancel / Cancel By Admin                 → canceled
- *   Expired (Unpaid)                         → expired
- *   Returned                                 → rejected (terminal: the flow
- *                                              ended without delivery)
- *   On Hold / Other Status                   → undefined (informational; a
- *                                              hold must never regress or
- *                                              terminate the job)
- */
-export function normalizeEasyparcelShipStatus(
-	shipStatus: string | undefined,
-): DeliveryJobStatus | undefined {
-	if (!shipStatus) return undefined;
-	const s = shipStatus.trim().toLowerCase();
-	if (
-		s === "waiting payment" ||
-		s === "schedule in arrangement" ||
-		s === "pending for collection" ||
-		s === "pending for drop off"
-	)
-		return "assigning";
-	if (
-		s === "collected" ||
-		s === "parcel has been collected" ||
-		s === "parcel drop off at point" ||
-		s === "drop off" ||
-		s === "delivering(in transit)" ||
-		s === "delivering (in transit)"
-	)
-		return "picked_up";
-	if (s === "successfully delivered") return "completed";
-	if (s === "cancel" || s === "cancel by admin") return "canceled";
-	if (s === "expired (unpaid)") return "expired";
-	if (s === "returned") return "rejected";
-	return undefined;
+/** The label to link: A6 first (the thermal-printer size most couriers
+ * accept), then whatever `awb_url` is. Empty strings mean "not yet". */
+function labelUrlOf(awbUrl: unknown, byFormat: unknown): string | undefined {
+	const formats = obj(byFormat);
+	return str(formats.A6) ?? str(awbUrl) ?? str(formats.A4);
 }
 
-/**
- * Why an EasyParcel call failed, as a stable machine class. Unlike Delyva,
- * most failures carry a REAL machine code (Appendix I), so classification
- * leans on codes first and only falls back to the one message-shaped verdict
- * the API has (pay's "Insufficient Credit" inside a Success envelope).
- */
-export type EasyparcelFailure =
-	| "auth" // 3/4/5 bad key, 8 invalid account, 9 unverified account
-	| "invalid_address" // 1004 postcode, 1005 state code
-	| "credit" // prepaid wallet can't cover the pay step
-	| "unknown";
+// ---------------------------------------------------------------------------
+// Details (status + AWB) — one shipment per call
+// ---------------------------------------------------------------------------
 
-export function classifyEasyparcelFailure(
-	err: EasyparcelResponseError,
-): EasyparcelFailure {
-	if (["3", "4", "5", "8", "9"].includes(err.errorCode)) return "auth";
-	if (["1004", "1005"].includes(err.errorCode)) return "invalid_address";
-	if (/insufficient credit/i.test(err.errorRemark)) return "credit";
-	return "unknown";
+export type EasyparcelShipmentState = {
+	shipmentNumber: string;
+	statusCode?: number;
+	statusText?: string;
+	awb?: string;
+	labelUrl?: string;
+	trackingUrl?: string;
+};
+
+export function parseDetailsResponse(
+	body: string,
+	httpStatus = 200,
+): EasyparcelShipmentState {
+	const data = readEnvelope(body, httpStatus);
+	const row = Array.isArray(data)
+		? (data[0] as Record<string, unknown> | undefined)
+		: undefined;
+	const shipmentNumber = row ? str(row.shipment_number) : undefined;
+	if (!row || !shipmentNumber) {
+		throw new EasyparcelApiError("empty", httpStatus, "Shipment not found");
+	}
+	const d = obj(row.shipment_details);
+	return {
+		shipmentNumber,
+		statusCode: num(d.shipment_status_code),
+		statusText: str(d.shipment_status),
+		awb: str(d.awb_number),
+		labelUrl: str(d.awb_url),
+		trackingUrl: str(d.tracking_url),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Cancel
+// ---------------------------------------------------------------------------
+
+export function buildCancelBody(
+	shipmentNumber: string,
+	remark: string,
+): Record<string, unknown> {
+	return { cancel_list: [{ shipment_number: shipmentNumber, remark }] };
+}
+
+/** `ok: false` carries EasyParcel's own sentence ("…cancellation period is
+ * over (7 days from collection date…)") — it IS the seller-facing reason. */
+export function parseCancelResponse(
+	body: string,
+	httpStatus = 200,
+): { ok: true } | { ok: false; message: string } {
+	const data = readEnvelope(body, httpStatus);
+	const row = Array.isArray(data)
+		? (data[0] as Record<string, unknown> | undefined)
+		: undefined;
+	if (row && str(row.status) === "success") return { ok: true };
+	return {
+		ok: false,
+		message: (row && str(row.message)) || "EasyParcel didn't cancel it",
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Wallet + account
+// ---------------------------------------------------------------------------
+
+export function parseWalletResponse(
+	body: string,
+	httpStatus = 200,
+): { balanceMinor: number; currency: string } {
+	const data = obj(readEnvelope(body, httpStatus));
+	const wallet = arr(data.wallet)[0];
+	if (!wallet) throw new EasyparcelApiError("empty", httpStatus, "No wallet");
+	return {
+		balanceMinor: easyparcelAmountToMinor(wallet.balance),
+		currency: str(wallet.currency) ?? "",
+	};
+}
+
+export type EasyparcelAccount = {
+	name?: string;
+	accountType?: string;
+	/** The pickup address the account already holds — imported as a PREFILL
+	 * (fill-if-unset), never trusted over what the seller saved with us. */
+	pickupAddress?: {
+		address1: string;
+		address2?: string;
+		city: string;
+		state?: string;
+		postcode: string;
+		country?: string;
+	};
+};
+
+export function parseAccountResponse(
+	body: string,
+	httpStatus = 200,
+): EasyparcelAccount {
+	const data = obj(readEnvelope(body, httpStatus));
+	const account = obj(data.account);
+	const pickup = obj(obj(data.address).pickup_address);
+	const address1 = str(pickup.address1);
+	const city = str(pickup.city);
+	const postcode = str(pickup.postcode);
+	return {
+		name: str(account.name),
+		accountType: str(account.account_type),
+		pickupAddress:
+			address1 && city && postcode
+				? {
+						address1,
+						address2: str(pickup.address2),
+						city,
+						state: stateNameForSubdivision(str(pickup.province_code)),
+						postcode,
+						country: str(pickup.country_code),
+					}
+				: undefined,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+/**
+ * EasyParcel's shipment status codes → our job status (the code table is
+ * shared by details, tracking and webhooks):
+ *
+ *   7  Schedule In Arrangement   → assigning
+ *   2  To Be Collected           → assigning
+ *   3  Collected                 → picked_up (the courier HAS it)
+ *   11 Drop Off                  → picked_up (parcel left at a point)
+ *   4  Delivery In Transit       → picked_up
+ *   5  Delivered                 → completed
+ *   0  Cancel                    → canceled
+ *   6  Returned                  → rejected (terminal without delivery)
+ *   8  On Hold                   → undefined — informational; a hold must
+ *                                   never move or terminate the job
+ *
+ * Unknown codes → undefined: "codes may vary by courier and region", so the
+ * job simply doesn't move rather than moving wrong.
+ */
+export function normalizeEasyparcelStatus(
+	code: number | undefined,
+): DeliveryJobStatus | undefined {
+	switch (code) {
+		case 7:
+		case 2:
+			return "assigning";
+		case 3:
+		case 11:
+		case 4:
+			return "picked_up";
+		case 5:
+			return "completed";
+		case 0:
+			return "canceled";
+		case 6:
+			return "rejected";
+		default:
+			return undefined;
+	}
+}
+
+export const EASYPARCEL_ON_HOLD = 8;
+
+// ---------------------------------------------------------------------------
+// Webhook
+// ---------------------------------------------------------------------------
+
+/**
+ * The only thing we take from a webhook body is WHICH shipment it's about.
+ * Payloads are unsigned (the docs define no signature), so nothing in them is
+ * trusted: the route re-reads the shipment with the seller's own token and
+ * applies that. A forged event can at most cause one extra lookup.
+ */
+export function parseWebhookShipmentNumber(body: string): string | null {
+	try {
+		const parsed = JSON.parse(body) as Record<string, unknown>;
+		const shipmentNumber = str(parsed.shipment_number);
+		return shipmentNumber && /^ES-[A-Z0-9-]{4,40}$/i.test(shipmentNumber)
+			? shipmentNumber
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// small readers
+// ---------------------------------------------------------------------------
+
+function str(v: unknown): string | undefined {
+	return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+function num(v: unknown): number | undefined {
+	if (typeof v === "number" && Number.isFinite(v)) return v;
+	if (typeof v === "string" && /^-?\d+(\.\d+)?$/.test(v.trim()))
+		return Number(v);
+	return undefined;
+}
+function obj(v: unknown): Record<string, unknown> {
+	return v && typeof v === "object" && !Array.isArray(v)
+		? (v as Record<string, unknown>)
+		: {};
+}
+function arr(v: unknown): Record<string, unknown>[] {
+	if (Array.isArray(v)) return v.filter((x) => x && typeof x === "object");
+	// Some documented samples print arrays as {"0": {...}} objects.
+	if (v && typeof v === "object") {
+		return Object.values(v as Record<string, unknown>).filter(
+			(x): x is Record<string, unknown> => !!x && typeof x === "object",
+		);
+	}
+	return [];
+}
+function itemErrors(item: Record<string, unknown>): string {
+	const errs = item.errors;
+	if (Array.isArray(errs)) return errs.map(String).join(" ");
+	return str(item.message) ?? "EasyParcel rejected the request";
 }

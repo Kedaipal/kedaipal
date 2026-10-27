@@ -33,15 +33,24 @@ crons.daily(
 	{},
 );
 
-// EasyParcel status poll (z8r3fdcje2): their legacy Individual API has no
-// webhook, so active easyparcel jobs are swept via EPParcelStatusBulk — one
-// bulk call per retailer with live shipments, applied idempotently. The
+// EasyParcel (z8r3fdcje2): status arrives by webhook (unsigned — each one
+// only schedules a re-read); this hourly sweep re-reads every active
+// shipment as the backstop for a webhook EasyParcel never delivered. The
 // dispatch card's "Refresh status" covers the impatient path between runs.
 // See docs/delivery-easyparcel.md.
 crons.interval(
-	"sync easyparcel job statuses",
-	{ minutes: 30 },
-	internal.easyparcel.syncJobStatuses,
+	"sync easyparcel shipments",
+	{ hours: 1 },
+	internal.easyparcel.syncActiveJobs,
+	{},
+);
+
+// Connect attempts (`courierOAuthStates`) only matter for minutes — the
+// settings card reads the latest one. Drop anything older than a week.
+crons.daily(
+	"purge courier oauth states",
+	{ hourUTC: 3, minuteUTC: 55 },
+	internal.easyparcel.purgeOAuthStates,
 	{},
 );
 

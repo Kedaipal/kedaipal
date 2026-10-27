@@ -101,15 +101,17 @@ describe("delyvaBookingArmed", () => {
 });
 
 describe("easyparcelBookingArmed", () => {
-	const EASYPARCEL_CONNECTED = { enabled: true, apiKey: "enc.v1.ciphertext" };
+	// The summary `loadEasyparcelArming` hands in — the grant itself lives in
+	// its own table, never on the retailer row.
+	const EASYPARCEL_CONNECTED = { connected: true, enabled: true };
 
 	test("connected and switched on, in SG only (MY is registry-closed)", () => {
 		expect(
 			easyparcelBookingArmed({ country: "SG", easyparcel: EASYPARCEL_CONNECTED }),
 		).toBe(true);
 		// MY is deliberately closed (frozen-prohibition finding, 29 Jul 2026);
-		// an MY store with a pasted key stays un-armed until the cross-border
-		// lane flips the registry.
+		// an MY store stays un-armed until the cross-border lane flips the
+		// registry.
 		expect(
 			easyparcelBookingArmed({ country: "MY", easyparcel: EASYPARCEL_CONNECTED }),
 		).toBe(false);
@@ -118,19 +120,21 @@ describe("easyparcelBookingArmed", () => {
 		);
 	});
 
-	test("switched on is not enough — it needs the key; off is off", () => {
+	test("a dead grant, a paused switch, or an unloaded summary is not armed", () => {
 		expect(
 			easyparcelBookingArmed({
 				country: "SG",
-				easyparcel: { enabled: true, apiKey: "   " },
+				easyparcel: { connected: false, enabled: true },
 			}),
 		).toBe(false);
 		expect(
 			easyparcelBookingArmed({
 				country: "SG",
-				easyparcel: { ...EASYPARCEL_CONNECTED, enabled: false },
+				easyparcel: { connected: true, enabled: false },
 			}),
 		).toBe(false);
+		// Not loaded = not armed: the caller forgot to pass it, and failing
+		// closed is the safe direction.
 		expect(easyparcelBookingArmed({ country: "SG" })).toBe(false);
 	});
 });
@@ -152,7 +156,7 @@ describe("storeBooksCouriers — either provider armed", () => {
 		expect(
 			storeBooksCouriers({
 				country: "SG",
-				easyparcel: { enabled: true, apiKey: "enc.v1.ciphertext" },
+				easyparcel: { connected: true, enabled: true },
 			}),
 		).toBe(true);
 		expect(

@@ -1,161 +1,189 @@
-# EasyParcel — Singapore parcel courier booking
+# EasyParcel — Singapore parcel courier booking (Open API)
 
 > **Status:** built Oct 2026 (ClickUp
-> [z8r3fdcje2](https://app.clickup.com/t/z8r3fdcje2), PR2 of the pair that
-> started with the courier provider registry —
-> [courier-providers.md](./courier-providers.md)). **Sandbox E2E is pending**:
-> EasyParcel demo credit is a manual support top-up on a real account, so the
-> wire shapes are verified against their docs + their own WooCommerce plugin
-> source, and the first live run happens once the dev account exists.
+> [z8r3fdcje2](https://app.clickup.com/t/z8r3fdcje2)), PR2 of the pair that
+> started with the courier provider registry
+> ([courier-providers.md](./courier-providers.md)). Built on EasyParcel's
+> **Open API 2026-09** (OAuth). An earlier draft targeted the legacy
+> "Individual API" (pasted per-seller key, form-encoded `?ac=` actions); it was
+> rebuilt before merge once the developer platform was confirmed as the
+> current generation — see "Why the Open API" below.
 
 The SG parcel lane: what Delyva is for Malaysia, EasyParcel is for Singapore
-stores — J&T, SingPost, Qxpress, Ninja Van SG, Teleport and more, booked from
-the order page on the seller's own EasyParcel account (BYO, locked posture:
-no Kedaipal master account, no float). Delyva's SG tenant ships an empty
-service catalogue, so when this landed, **Delyva SG retired**
-(`COUNTRY_COURIER_BOOKING.delyva.SG = false` — the registry entry holds the
-history) and SG sellers see exactly one parcel aggregator.
+stores — J&T, SingPost, Qxpress, Ninja Van, Teleport and more, booked from the
+order page on the **seller's own EasyParcel account and prepaid wallet**.
+Kedaipal never books or pays on a seller's behalf. Delyva's SG tenant ships an
+empty service catalogue, so **Delyva SG retired** in the same change
+(`COUNTRY_COURIER_BOOKING.delyva.SG = false`); SG sellers see one parcel
+aggregator.
 
-## The API (legacy "Individual API")
+## The API
 
-Verified 20 Oct 2026 against developers.easyparcel.com (MY Individual
-1.4.0.0, SG Individual 1.1.0.0) and the `easyparcel-shipping` WooCommerce
-plugin source. Everything wire-shaped lives in
-[`convex/lib/easyparcel.ts`](../convex/lib/easyparcel.ts) (pure, unit-tested);
-[`convex/easyparcel.ts`](../convex/easyparcel.ts) owns auth, network and the
-`deliveryJobs` ledger.
+Reference: **easyparcel.github.io/OpenAPI** (the Developer Hub at
+developer.easyparcel.com is the app console, not the docs). Pure wire logic is
+[`convex/lib/easyparcel.ts`](../convex/lib/easyparcel.ts); OAuth, tokens,
+network and the `deliveryJobs` ledger are
+[`convex/easyparcel.ts`](../convex/easyparcel.ts).
 
-- **Hosts:** one platform per country (`connect.easyparcel.sg` / `.my`), and
-  a separate DEMO host per country (`demo.connect.easyparcel.*`). Same key
-  format on both — **which host authenticates the key is how `isDemo` is
-  resolved** at connect (production first, demo on an auth-class refusal).
-- **Transport:** POST `application/x-www-form-urlencoded` in PHP
-  `http_build_query` bracket notation (`bulk[0][pick_code]=…`) to
-  `{host}/?ac={Action}`; auth is the `api` field. JSON is not accepted on the
-  standard actions. Prices arrive as strings in major units (`"8.00"`).
-- **Flow:** `EPRateCheckingBulk` (service list with prices) →
-  `EPSubmitOrderBulk` (creates the order, returns `order_number`) →
-  `EPPayOrderBulk` (pays from the PREPAID wallet; returns `awb`,
-  `awb_id_link` — **the courier's label PDF** — and, on MY, `tracking_url`).
-- **SG shape differences the builders encode:** no state tier at all in rate
-  checks; submit takes `pick_unit`/`send_unit` and the literal
-  `send_state: "Singapore"` (their own plugin's behaviour); 6-digit
-  postcodes; thinner responses (no `rate_id`, no dropoff points, no
-  `tracking_url` on pay).
-- **MY state codes:** error 1005 is explicit that `*_state` takes Appendix
-  III codes (`sgr`, `png`…), never names — `MY_EASYPARCEL_STATE_CODES` maps
-  our canonical state names, kept current so the future MY lane
-  (cross-border, z8r3fdr5yy) is a registry flip, not a rebuild.
-- **Failures carry machine codes** (Appendix I): 3/4/5/8/9 auth, 1004/1005
-  address, plus the one message-shaped verdict — pay's
-  `"Insufficient Credit"` arrives INSIDE a Success envelope
-  (`messagenow` is the verdict).
+- **One host, JSON, Bearer:** `https://api.easyparcel.com/open_api/2026-09/…`
+  for every country and both environments.
+- **OAuth 2.0 authorization code.** Kedaipal registers ONE app per Convex
+  deployment (client id + secret); each **seller** signs in at EasyParcel,
+  picks which of their accounts (Live or Demo) Kedaipal may book with, and
+  allows. The token is bound to that account.
+- **Batch-shaped answers:** HTTP 200 even when an item fails — every parser
+  reads the item's `status`, never the HTTP code. Four different 401 bodies
+  are documented, so auth is judged on the HTTP 401 itself.
+- **Submit books AND charges** the prepaid wallet in one call — there is no
+  pay step.
+- **Webhooks exist and are UNSIGNED** (the docs define no signature).
 
-## Connect (Settings → Integrations → EasyParcel)
+## Configuration (operator)
 
-One pasted **Individual API key** (seller's own dashboard → Integrations →
-Add New Store → API Key → Individual API). `easyparcel.connect` validates it
-with `EPCheckCreditBalance` (their plugin's own auth ping), resolves
-`isDemo` by host, stores the key `enc.v1.`-encrypted in the action (no
-plaintext ever lands), and snapshots the wallet balance + currency for the
-card. The card: 2-step setup checklist (account, pickup address — there is
-no webhook step because the API has none), a **Wallet** section with refresh
-(prepaid is the first thing that fails), the demo banner at the account step
-and again at the point of spend (86eypncfy posture), and the **ambient-only
-constraint said out loud** — EasyParcel prohibits chilled/frozen goods, the
-reason it lost the MY evaluation to Delyva in Jul 2026.
+| Where | What |
+|---|---|
+| Convex env (per deployment) | `EASYPARCEL_CLIENT_ID`, `EASYPARCEL_CLIENT_SECRET`. Absent ⇒ the integration is off on that deployment: every EasyParcel surface hides (`not_configured`), nothing half-works. `CONVEX_SITE_URL` + `SITE_URL` are already set everywhere. |
+| Developer Hub → app → Configuration | **Allowed Redirect URI** = `https://<deployment>.convex.site/oauth/easyparcel/callback`. Platform URL: the app's homepage (field undocumented by EasyParcel). |
+| Developer Hub → app → Webhook | URL `https://<deployment>.convex.site/webhook/easyparcel`, topics `shipment.status.update`, `shipment.awb.update`, `shipment.tracking.update`. Register only AFTER the route is deployed — the hub validates the URL on save. |
 
-The pickup address is its own structured field (unit + street + postcode for
-SG), never a parse of `businessAddress`. `name`/`contact` are not stored on
-it: submit takes them per-order from the store name + seller WhatsApp number.
+**One app per deployment.** Webhooks are configured per APP, and dev and prod
+Convex deployments have different site URLs, so the dev app ("Kedaipal Dev")
+and the production app are separate registrations with separate secrets. The
+same app serves both Live and Demo seller accounts — the environment is chosen
+per connection, not per app. A production app is needed for real sellers to
+connect at all: in OAuth the app credentials are Kedaipal's, and sellers
+authorize it.
 
-## Dispatch (order page)
+## Connect
 
-`EasyparcelDispatchCard` is the Delyva card's sibling: inline price-sorted
-courier picker (no quotation id to hold, so no countdown), weight editable in
-place (seeded from product weights via the same `summarizeCartWeight` the
-weight/zone pricing uses), pickup summary + buyer-contact fallback said
-before the first quote, empty list = a normal answer that hands off to the
-manual-courier flow. EasyParcel-specific:
+1. **Settings → Integrations → EasyParcel → Connect EasyParcel** calls
+   `startConnect`, which (Pro-gated, country-gated, configured-gated) mints a
+   `courierOAuthStates` row — crypto-random `nonce`, 10-minute TTL — and
+   returns EasyParcel's sign-in URL. `returnTo` is the card's own URL, pinned by
+   `allowedReturnTo`: the app's SITE_URL origin always; localhost origins only
+   when SITE_URL is itself localhost (dev worktrees each run their own port).
+2. EasyParcel sends the browser to **`GET /oauth/easyparcel/callback`**
+   (`convex/http.ts` → `completeConnect`). The state redeems **exactly once**
+   (a replayed or forged callback never reaches the token exchange); the code
+   is exchanged server-side with HTTP Basic client auth; account info + wallet
+   are read; tokens are `enc.v1.`-encrypted in the action and stored in
+   **`easyparcelConnections`**; the browser is 302'd back to `returnTo`.
+3. Every outcome — `connected`, `denied` (the seller declined), `expired`
+   (sign-in took >10 min), `failed` — is written on the state row, and the
+   card states it on return. No URL parameters.
 
-- **The wallet rides the rate list.** The quote response carries the balance
-  snapshot; a pick the wallet can't cover turns the line amber and disables
-  Book with the reason (the server re-reads the live balance and refuses
-  too — belt and braces, because `EPPayOrderBulk` on an empty wallet leaves
-  an UNPAID order in the seller's EasyParcel dashboard that no courier will
-  ever collect).
-- **Book = submit + pay in one tap.** A pay that still comes back unpaid
-  RELEASES the reservation with the EasyParcel order number in the message
-  (top up and rebook here, or cancel it in EasyParcel) — never a dangling
-  active job. The AWB + label PDF + tracking URL mirror fill-if-unset onto
-  the order's manual-courier fields (86eyehvk4), so a hand-typed entry is
-  never overwritten.
-- **The courier label PDF** (`awb_id_link`) links on the card — the first
-  provider that gives us a real courier AWB (the deferred half of
-  [despatch-labels.md](./despatch-labels.md) v2; Kedaipal's own despatch
-  label is unchanged and still prints).
-- **Cancel is honest.** The Individual API documents no cancel, so the card
-  never pretends one: "Cancelled it in EasyParcel?" opens a dialog that says
-  to cancel in their dashboard first, then marks the job cancelled here
-  (which frees the order's one-booking slot).
+The pickup address EasyParcel holds is imported as a **prefill** (fill-if-unset,
+same-country only); a reconnect keeps the seller's own address and switch.
 
-The dispatch hub takes its providers from the registry — with three armed it
-renders a 3-tab strip; a live booking's provider always wins the default and
-other tabs show the one-booking-at-a-time notice.
+**Why a table, not `retailers.easyparcel`:** the access token refreshes every
+~10h and the wallet snapshot moves on every booking — a retailer patch re-runs
+every open storefront tab; tokens stay off every retailer read; and new
+`retailers` fields break other branches' deploys to the shared dev deployment.
+`storeBooksCouriers` callers load the one-bit summary with
+`loadEasyparcelArming` (`convex/lib/easyparcelArming.ts`).
 
-## Status: polled, not pushed
+## Tokens
 
-No webhook exists on this API (a "Subscribe Webhook" link in their MY doc
-points at an undocumented Postman collection — worth revisiting if it turns
-real). Instead:
+`withToken` (in `convex/easyparcel.ts`) refreshes **ahead of** expiry
+(5-minute skew) and once more on any 401. Expiry is computed from
+`expires_in`, never the response's `expires_at` (the documented sample's
+timestamps disagree with its own durations). A refresh EasyParcel refuses
+stamps **`revokedAt`** — after a re-read, because a concurrent action may
+already have rotated the token being held. A dead grant makes dispatch block
+with `reconnect_needed` and the card read **Reconnect needed**; a fresh connect
+clears it. A refresh that doesn't rotate the refresh token keeps the old one.
 
-- A **30-minute cron** (`sync easyparcel job statuses`) sweeps active
-  easyparcel jobs via the `deliveryJobs.by_provider_status` index, one
-  `EPParcelStatusBulk` per retailer (bulk ≤300), applied through
-  `applyStatusSync` — the `applyWebhookEvent` contract: idempotent, job
-  follows provider truth, ORDER never regresses (`picked_up` → shipped with
-  the AWB attached, `completed` → delivered, both behind the
-  SHIPPABLE_FROM/DELIVERABLE_FROM guards), a seller-cancel story is never
-  rewritten by a later poll, "On Hold" surfaces a reason without moving
-  anything.
-- The card's **"Refresh status"** polls one order on demand, so nobody waits
-  half an hour on purpose.
-- `ship_status` vocabulary → our `DeliveryJobStatus` in
-  `normalizeEasyparcelShipStatus` (unknown strings move nothing — their enum
-  can grow). `Expired (Unpaid)` → `expired`; `Returned` → `rejected`.
+**Sandbox vs live:** no API response reports it. `environment` is set only if
+the token itself is a JWT carrying the claim (`tokenEnvironment`); otherwise it
+is unknown and rendered as unknown — never as live. The account name on the
+card is the human check.
+
+## Dispatch
+
+`EasyparcelDispatchCard` (order page) — the Delyva card's sibling:
+
+- **Weight + box** set the price. Weight is seeded from product weights
+  (`summarizeCartWeight`, the same rule as weight/zone pricing and Delyva);
+  the **box** (S 20×15×10 / M 30×25×15 / L 40×30×25 cm) exists because the API
+  requires dimensions and couriers bill volumetric weight. Changing either
+  drops stale prices.
+- **`/shipment/quotations`** → inline picker, cheapest first, priced at what the
+  SELLER pays (`seller_payable_amount`). Pickup vs drop-off is named per
+  service, with a note when the seller must drop the parcel at a point.
+- **The wallet rides the quote**: a pick it can't cover is amber and Book is
+  disabled-with-reason. `confirmBooking` re-reads the wallet and refuses
+  server-side too.
+- **`/shipment/submit_orders`** after reserving the order's single booking slot
+  (cross-provider). `providerOrderId` = the **`shipment_number`** (ES-…),
+  which details, cancel and webhooks all key on; the reference is the order
+  shortId. An item-level refusal releases with EasyParcel's own words; a
+  failure we can't classify AFTER the request left (timeout, 5xx) may still
+  have booked, so the reservation releases with "check your EasyParcel
+  dashboard for <shortId> before booking again".
+- The **AWB, the courier's label PDF** (A6 preferred) and EasyParcel's tracking
+  link mirror fill-if-unset onto the order (86eyehvk4); when the AWB isn't
+  issued at submit, a re-read is scheduled at +60s as a backstop to the AWB
+  webhook.
+- **Cancel** is real: `/shipment/cancel`, refunded to the wallet. EasyParcel's
+  own refusal sentence (e.g. "cancellation period is over (7 days from
+  collection date…)") is shown verbatim.
+- Every block names its fix (`easyparcel-dispatch-block.ts`); `not_configured`
+  and `country_unsupported` hide the card, `reconnect_needed` shows it with a
+  Reconnect link.
+
+## Status — webhooks are nudges
+
+`POST /webhook/easyparcel` takes **only the shipment number** from the body
+(`parseWebhookShipmentNumber`), finds the job via `by_provider_order`,
+rate-limits per job (`easyparcelWebhookSync`), and schedules **`syncJob`** —
+a `/shipment/details` re-read with the seller's own token. Only the re-read is
+applied (`applyStatusSync`). A forged event can at most cause one extra read; a
+forged "delivered" moves nothing. The route always answers 200 fast
+(EasyParcel's 30-second rule), and `GET` answers 200 too for the hub's
+save-time probe.
+
+`applyStatusSync` keeps the webhook-apply contract: idempotent, the job
+follows provider truth, the ORDER never regresses (`picked_up` → shipped with
+the AWB, `completed` → delivered, behind SHIPPABLE_FROM / DELIVERABLE_FROM),
+a seller-cancel story is never rewritten, On Hold (8) states a reason and
+moves nothing. Status codes: 7/2 → assigning, 3/11/4 → picked_up,
+5 → completed, 0 → canceled, 6 → rejected (returned); unknown codes move
+nothing.
+
+Backstops: an **hourly cron** re-reads every active easyparcel job (the
+`by_provider_status` index), and the card has **Refresh status**.
+
+**Sandbox caveat (EasyParcel's own docs):** shipment status never updates in
+sandbox, so shipped/delivered auto-transitions can only be exercised by tests
+and simulated reads, not a sandbox booking.
 
 ## Gating
 
-Same posture as every courier: connecting/enabling is Pro
-(`PLAN_FEATURES.delivery`), disconnecting/pausing never is, dispatch blocks
-with the typed reason (`plan_gated` included) before any spend, and
-`prepareBooking`/`confirmBooking` carry the per-order credit gate
-(`creditLockCoverage.test.ts` classifies the whole module). Country gate:
-`COUNTRY_COURIER_BOOKING.easyparcel = {MY: false, SG: true}` — MY is closed
-on purpose (frozen prohibition + Delyva already serves MY incl. cold chain);
-the MY column exists for the cross-border lane.
+Connect / enable: Pro (`PLAN_FEATURES.delivery`) + active subscription;
+disconnect, pause and cancel never are. `prepareBooking`/`confirmBooking`
+carry the per-order credit gate (`creditLockCoverage.test.ts` classifies the
+module); view-only stores are refused on every write
+(`sellerLockCoverage.test.ts`). Country: `COUNTRY_COURIER_BOOKING.easyparcel =
+{MY: false, SG: true}` — MY stays closed (the 29 Jul 2026 frozen-prohibition
+finding; Delyva serves MY incl. cold chain); the MY column exists for the
+cross-border lane (z8r3fdr5yy). Account deletion clears both tables.
 
-## Operator setup (dev/sandbox)
+## Why the Open API (not the legacy Individual API)
 
-1. Register a free EasyParcel **SG** account (easyparcel.com/sg).
-2. Dashboard → Integrations → Add New Store → API Key → **Individual API**.
-3. Ask support (live chat/email) for **demo credit** on the Sandbox
-   Environment — a manual top-up they confirm. The demo host pair is
-   `demo.connect.easyparcel.sg` / `.my`.
-4. Rate checks are free even in production; only submit/pay spend.
+The legacy API needed each seller to copy a key from their dashboard, had no
+webhooks (status was polled), no cancel endpoint, and a separate pay step that
+could leave an unpaid order orphaned in the seller's dashboard. The Open API
+replaces all four with a sign-in, pushed status, a refunding cancel and a
+single book-and-charge call — and it is the generation EasyParcel's developer
+platform issues credentials for.
 
-## Deliberate scope edges / follow-ups
+## Follow-ups
 
-- **No checkout live-quote yet** — SG stores price delivery flat or
-  live-via-Lalamove; adding EasyParcel to `convex/liveQuote.ts` (postcode +
-  weight-based buyer pricing) is the natural next slice once the booking
-  lane has run live.
-- **Marketplace API** (EasyParcel's platform-level integration — sellers
-  connect under one Kedaipal registration instead of pasting keys) is the
-  onboarding upgrade; requires registering with their integration team.
-- **No print-ready setup guide page yet** (`public/guides/` parity with
-  Delyva/Lalamove) and no brand mark under `public/img/` (marks are never
-  redrawn — the card and landing badge carry the name until the approved
-  asset lands).
-- **Collect date** is left to EasyParcel's default (today); a pickup-date
-  picker in the dispatch dialog is a follow-up if sellers ask.
+- **Webhook signing** — ask EasyParcel whether they sign deliveries; if so,
+  verify in the route (the refetch design stays as defence in depth).
+- **Wallets** — `courierWallets` is Lalamove-shaped (fingerprint-attributed
+  push events); generalising it would put EasyParcel on the Deliveries page
+  and the Home low-wallet banner. Today the balance lives on the connection
+  row and shows on the settings + dispatch cards.
+- **Checkout live-quote** via EasyParcel (`convex/liveQuote.ts`).
+- Brand mark asset and a print-ready setup guide page (`public/guides/`).

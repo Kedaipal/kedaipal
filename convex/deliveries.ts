@@ -29,6 +29,7 @@ import {
 	isActiveJobStatus,
 } from "./lib/deliveryJobs";
 import { storeBooksCouriers } from "./lib/courierBooking";
+import { loadEasyparcelArming } from "./lib/easyparcelArming";
 import { hasLalamoveCredentials } from "./lib/lalamove";
 import { isReadyToShipForLabel } from "./lib/pdf/awb";
 
@@ -285,7 +286,10 @@ export const overview = query({
 			currency: retailer.currency ?? DEFAULT_CURRENCY,
 			wallet: await readLalamoveWallet(ctx, retailerId),
 			booksCouriers,
-			bookingArmed: storeBooksCouriers(retailer),
+			bookingArmed: storeBooksCouriers({
+				...retailer,
+				easyparcel: await loadEasyparcelArming(ctx, retailer._id),
+			}),
 			shipsParcels,
 			jobs: jobRows,
 			counts: {

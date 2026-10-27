@@ -13,6 +13,9 @@ const BLOCK_COPY: Record<EasyparcelDispatchBlock, string> = {
 	// The only reason with no fix to offer — the card hides itself for this
 	// one; the line is the fallback for surfaces that can't. MY is closed on
 	// purpose (Delyva serves it), so the alternative is named.
+	// Neither has a fix the seller can make — the card hides itself for both;
+	// these lines are the fallback for surfaces that can't.
+	not_configured: "EasyParcel booking isn't available right now.",
 	country_unsupported:
 		"EasyParcel booking is for Singapore stores — Malaysian stores book couriers through Delyva instead.",
 	not_delivery: "This is a self-collect order — there's no parcel to send out.",
@@ -21,6 +24,8 @@ const BLOCK_COPY: Record<EasyparcelDispatchBlock, string> = {
 	job_active: "A courier is already booked on this order.",
 	not_connected:
 		"Connect your EasyParcel account first — Settings → Integrations → EasyParcel.",
+	reconnect_needed:
+		"Kedaipal's access to your EasyParcel account has ended — reconnect it under Settings → Integrations → EasyParcel. It takes one sign-in.",
 	disabled:
 		"EasyParcel booking is paused — resume it under Settings → Fulfilment → Courier booking.",
 	plan_gated:

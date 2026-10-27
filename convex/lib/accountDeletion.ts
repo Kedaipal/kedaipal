@@ -77,6 +77,8 @@ export const DELETION_PHASES = [
 	"deliveryJobs",
 	"deliveryQuotes",
 	"courierWallets",
+	"easyparcelConnections",
+	"courierOAuthStates",
 	"customers",
 	"pickupLocations",
 	"counterCheckoutSessions",
@@ -254,6 +256,26 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const quote of rows) await ctx.db.delete(quote._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "easyparcelConnections": {
+			// Encrypted OAuth tokens — deleting the row is the whole revocation
+			// on our side (EasyParcel exposes no revoke endpoint).
+			const rows = await ctx.db
+				.query("easyparcelConnections")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const row of rows) await ctx.db.delete(row._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "courierOAuthStates": {
+			const rows = await ctx.db
+				.query("courierOAuthStates")
+				.withIndex("by_retailer_provider", (q) =>
+					q.eq("retailerId", retailerId),
+				)
+				.take(limit);
+			for (const row of rows) await ctx.db.delete(row._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "courierWallets": {

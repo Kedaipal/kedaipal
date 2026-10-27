@@ -1,20 +1,20 @@
 /**
- * EasyParcel courier dispatch card — order detail (z8r3fdcje2).
+ * EasyParcel courier dispatch card — order detail (z8r3fdcje2, Open API).
  *
  * The Delyva card's sibling for Singapore parcels, differing where EasyParcel
  * differs:
- *  - Rates come back as a LIST with indicative prices (no quotation id, no
- *    countdown), so the picker is INLINE like Delyva's — on a phone, a
- *    scrollable list inside a scrollable dialog is the worse of the two.
- *  - EasyParcel is PREPAID: the wallet balance sits beside the rate list, and
- *    a pick the wallet can't cover is warned about BEFORE the book tap.
- *  - The booking pays in the same tap (submit → pay) and hands back the
- *    courier's own AWB label PDF — linked on the card the moment it exists.
- *  - Status is POLLED (no webhook), so an active booking carries a "Refresh
- *    status" action instead of silently waiting for the half-hour cron.
- *  - There is no cancel API: cancelling means doing it in the EasyParcel
- *    dashboard and then marking it cancelled here — the dialog says exactly
- *    that, never pretending an API call it can't make.
+ *  - Rates come back as a LIST with indicative prices (no quotation to hold,
+ *    no countdown), so the picker is INLINE like Delyva's.
+ *  - The API requires the parcel's DIMENSIONS and couriers price on volume,
+ *    so the box is picked here, stated in cm, and it re-prices like weight.
+ *  - EasyParcel is PREPAID and books AND charges in one call: the wallet sits
+ *    beside the rates, and a pick it can't cover is disabled with the reason
+ *    before the tap.
+ *  - The booking hands back the courier's own label PDF, linked on the card.
+ *  - Status arrives by webhook (and an hourly backstop); "Refresh status"
+ *    re-reads it now.
+ *  - Cancelling is real: EasyParcel cancels and refunds the wallet, and its
+ *    own refusal (the 7-days-from-collection window) is shown as it says it.
  *
  * An empty rate list is a normal answer, not an error — it hands off to the
  * manual-courier flow instead of a dead end.
@@ -23,12 +23,13 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useAction, useMutation } from "convex/react";
+import { useAction } from "convex/react";
 import {
 	CircleAlert,
 	ExternalLink,
 	FileText,
 	FlaskConical,
+	Package,
 	RefreshCw,
 	Truck,
 	Wallet,
@@ -38,7 +39,11 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
-import type { EasyparcelRate } from "../../../convex/lib/easyparcel";
+import {
+	type EasyparcelRate,
+	PARCEL_BOXES,
+	type ParcelBox,
+} from "../../../convex/lib/easyparcel";
 import { courierContactFallbackCopy } from "../../lib/delyva-dispatch-block";
 import { easyparcelSurface } from "../../lib/dispatch-surface";
 import {
@@ -46,11 +51,23 @@ import {
 	easyparcelStatusLabel,
 } from "../../lib/easyparcel-dispatch-block";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { TONE_ACCENT, TONE_CHIP, TONE_PANEL } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { CopyButton } from "../ui/copy-button";
 import { Input } from "../ui/input";
+
+const BOXES: ReadonlyArray<{ value: ParcelBox; label: string }> = [
+	{ value: "small", label: "Small" },
+	{ value: "medium", label: "Medium" },
+	{ value: "large", label: "Large" },
+];
+
+function boxSize(box: ParcelBox): string {
+	const d = PARCEL_BOXES[box];
+	return `${d.lengthCm}×${d.widthCm}×${d.heightCm} cm`;
+}
 
 export function EasyparcelDispatchCard({
 	order,
@@ -61,7 +78,7 @@ export function EasyparcelDispatchCard({
 	/** Rendered inside the dispatch hub's shell — see BookDeliveryCard. */
 	embedded?: boolean;
 	/** Set while the store can't book right now (out of credits, or
-	 * view-only) — see BookDeliveryCard. Marking cancelled stays open. */
+	 * view-only) — see BookDeliveryCard. Cancelling stays open. */
 	lockedReason?: string;
 }) {
 	const dispatch = useQuery(
@@ -70,14 +87,16 @@ export function EasyparcelDispatchCard({
 
 	const prepareBooking = useAction(api.easyparcel.prepareBooking);
 	const confirmBooking = useAction(api.easyparcel.confirmBooking);
+	const cancelBooking = useAction(api.easyparcel.cancelBooking);
 	const refreshJobStatus = useAction(api.easyparcel.refreshJobStatus);
-	const markCancelled = useMutation(api.easyparcel.markCancelled);
 
 	const [weightInput, setWeightInput] = useState("");
+	const [box, setBox] = useState<ParcelBox>("small");
 	const [rates, setRates] = useState<EasyparcelRate[] | null>(null);
-	/** The wallet snapshot that came back WITH the rates — what the warnings
-	 * compare against, so the verdict and the prices are from one moment. */
+	/** The wallet read that came back WITH the rates — the verdict and the
+	 * prices are from one moment. */
 	const [quotedBalance, setQuotedBalance] = useState<number | undefined>();
+	const [quotedCurrency, setQuotedCurrency] = useState<string | undefined>();
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [quoting, setQuoting] = useState(false);
 	const [booking, setBooking] = useState(false);
@@ -85,9 +104,8 @@ export function EasyparcelDispatchCard({
 	const [error, setError] = useState<string | null>(null);
 	const [confirmingCancel, setConfirmingCancel] = useState(false);
 
-	// Seed the weight field from the order's own parcel weight ONCE, when the
-	// dispatch state first arrives (the Delyva ref posture — clearing the field
-	// must not snap the computed value back under the seller's cursor).
+	// Seed the weight once from the order's product weights (the Delyva ref
+	// posture — clearing the field must not snap the value back).
 	const seededWeight = useRef(false);
 	useEffect(() => {
 		if (seededWeight.current) return;
@@ -114,10 +132,9 @@ export function EasyparcelDispatchCard({
 	const completedJob = job?.status === "completed" ? job : null;
 	const blockReason = dispatch.blockReason;
 	const bookable = blockReason === null;
-	const balanceCurrency = dispatch.balanceCurrency ?? order.currency;
+	const walletCurrency =
+		quotedCurrency ?? dispatch.balanceCurrency ?? order.currency;
 
-	// Not bookable from here yet — a one-line hint, not a disabled button for
-	// a feature the seller has never heard of (the Delyva posture, verbatim).
 	if (surface === "hint") {
 		if (blockReason === "disabled") {
 			return (
@@ -172,6 +189,7 @@ export function EasyparcelDispatchCard({
 		try {
 			const result = await prepareBooking({
 				shortId: order.shortId,
+				box,
 				weightKgOverride: weightValid ? weightKg : undefined,
 			});
 			if (!result.ok) {
@@ -181,7 +199,8 @@ export function EasyparcelDispatchCard({
 			}
 			setRates(result.rates);
 			setQuotedBalance(result.balanceMinor);
-			// Cheapest pre-selected — the list arrives price-sorted from the server.
+			setQuotedCurrency(result.balanceCurrency);
+			// Cheapest pre-selected — the list arrives price-sorted.
 			setSelectedId(result.rates[0]?.serviceId ?? null);
 		} catch (err) {
 			setError(convexErrorMessage(err));
@@ -202,10 +221,11 @@ export function EasyparcelDispatchCard({
 				serviceName: rate.serviceName,
 				courierName: rate.courierName,
 				priceMinor: rate.priceMinor,
+				box,
 				weightKgOverride: weightValid ? weightKg : undefined,
 			});
 			if (!result.ok) {
-				// In-place, not a toast: the seller has just come back from a top-up
+				// In place, not a toast: the seller may come back from a top-up,
 				// and the reason must still be on screen (the 86eypncfy lesson).
 				setError(result.message ?? easyparcelBlockCopy(result.reason));
 				return;
@@ -255,7 +275,7 @@ export function EasyparcelDispatchCard({
 					<span
 						className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
 							completedJob
-								? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+								? TONE_CHIP.success
 								: "bg-accent/15 text-accent-emphasis"
 						}`}
 					>
@@ -264,19 +284,20 @@ export function EasyparcelDispatchCard({
 				) : null}
 			</div>
 
-			{/* A demo booking dispatches no courier and spends play money, and
-			    looks identical to a real one until nobody turns up — said at the
-			    point of spend, not only in Settings (86eypncfy). */}
-			{dispatch.isDemo ? (
-				<p className="flex items-start gap-2 rounded-xl bg-amber-100 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+			{/* A sandbox booking dispatches no courier and spends play money,
+			    and looks identical to a real one until nobody turns up — so it
+			    is said at the point of spend (86eypncfy). */}
+			{dispatch.environment === "sandbox" ? (
+				<p
+					className={`flex items-start gap-2 rounded-xl px-3 py-2.5 text-sm border ${TONE_PANEL.warn}`}
+				>
 					<FlaskConical className="mt-0.5 size-4 shrink-0" />
 					<span>
 						<span className="font-medium">
 							Test mode — no courier will come.
 						</span>{" "}
-						Your EasyParcel key belongs to their demo environment, so any
-						booking here is simulated and nothing is really charged. Connect
-						your live key in{" "}
+						Kedaipal is connected to an EasyParcel demo account, so bookings
+						here are simulated. Reconnect with your live account in{" "}
 						<Link
 							to="/app/settings"
 							search={{ tab: "integrations" }}
@@ -289,12 +310,17 @@ export function EasyparcelDispatchCard({
 				</p>
 			) : null}
 
-			{/* Failed booking — amber, with the one-tap rebook below it. */}
 			{failedJob && !activeJob ? (
-				<p className="flex items-start gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+				<p
+					className={`flex items-start gap-2 rounded-xl px-3 py-2.5 text-sm border ${TONE_PANEL.warn}`}
+				>
 					<CircleAlert className="mt-0.5 size-4 shrink-0" />
 					<span>
-						<span className="font-medium">Booking didn&apos;t go through</span>
+						<span className="font-medium">
+							{failedJob.status === "canceled"
+								? "Booking cancelled"
+								: "Booking didn't go through"}
+						</span>
 						{failedJob.failureReason ? ` — ${failedJob.failureReason}` : ""}.
 						Your buyer was not notified; the order is unchanged.
 					</span>
@@ -308,6 +334,11 @@ export function EasyparcelDispatchCard({
 						<span className="font-medium">
 							{job.serviceName ?? "EasyParcel"}
 						</span>
+						{job.shipmentNumber ? (
+							<span className="ml-auto font-mono text-xs text-muted-foreground">
+								{job.shipmentNumber}
+							</span>
+						) : null}
 					</div>
 
 					{job.awb ? (
@@ -330,8 +361,8 @@ export function EasyparcelDispatchCard({
 						</p>
 					)}
 
-					{/* The courier's own label — the first provider that gives us one.
-					    Beside Kedaipal's despatch label, never instead of it. */}
+					{/* The courier's own label — beside Kedaipal's despatch label,
+					    never instead of it. */}
 					{job.labelUrl ? (
 						<a
 							href={job.labelUrl}
@@ -348,12 +379,13 @@ export function EasyparcelDispatchCard({
 					<p className="text-muted-foreground">
 						{completedJob
 							? "Delivered. Your buyer was notified automatically."
-							: "Your buyer already has this — the tracking number is on their order page. The order marks itself Shipped at collection and Delivered on arrival; EasyParcel is checked every half hour."}
+							: "Your buyer can see the tracking number on their order page. The order marks itself Shipped at collection and Delivered on arrival."}
 					</p>
 
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
 						<span>
-							Booking cost {formatPrice(job.costActual, balanceCurrency)}
+							Paid {formatPrice(job.costActual, walletCurrency)} from your
+							EasyParcel wallet
 						</span>
 						{order.carrierTrackingUrl ? (
 							<a
@@ -384,15 +416,13 @@ export function EasyparcelDispatchCard({
 								className="h-11 w-full text-destructive"
 								onClick={() => setConfirmingCancel(true)}
 							>
-								Cancelled it in EasyParcel?
+								Cancel booking
 							</Button>
 						</div>
 					) : null}
 				</div>
 			) : bookable && !lockedReason ? (
 				<>
-					{/* Where the courier collects — surfaced BEFORE the first quote so
-					    a stale pickup address is caught at the moment it matters. */}
 					{dispatch.pickupSummary ? (
 						<p className="text-xs text-muted-foreground">
 							Collecting from{" "}
@@ -410,15 +440,14 @@ export function EasyparcelDispatchCard({
 						</p>
 					) : null}
 
-					{/* Who the courier will phone at the buyer's end (z8r3fdh274). */}
 					{dispatch.buyerContactFallback ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
 							{courierContactFallbackCopy(dispatch.country)}
 						</p>
 					) : null}
 
-					{/* The weight is the one number that changes the price, so it is
-					    editable here rather than hidden behind a re-quote. */}
+					{/* Weight and box are the two numbers that set the price, so
+					    both are editable here and both drop stale prices. */}
 					<div className="flex flex-col gap-1.5">
 						<div className="flex items-center justify-between gap-2">
 							<span className="text-xs font-medium text-muted-foreground">
@@ -441,7 +470,6 @@ export function EasyparcelDispatchCard({
 								isError={weightInput !== "" && !weightValid}
 								onChange={(e) => {
 									setWeightInput(e.target.value.replace(/[^\d.]/g, ""));
-									// Prices are per-weight — an edited weight invalidates them.
 									setRates(null);
 									setError(null);
 								}}
@@ -458,8 +486,51 @@ export function EasyparcelDispatchCard({
 						) : null}
 					</div>
 
+					<div className="flex flex-col gap-1.5">
+						<span className="text-xs font-medium text-muted-foreground">
+							Box size
+						</span>
+						<div className="grid grid-cols-3 gap-2">
+							{BOXES.map((b) => {
+								const active = box === b.value;
+								return (
+									<button
+										key={b.value}
+										type="button"
+										aria-pressed={active}
+										disabled={quoting || booking}
+										onClick={() => {
+											setBox(b.value);
+											setRates(null);
+											setError(null);
+										}}
+										className={`flex min-h-11 flex-col items-center justify-center rounded-xl border-2 px-2 py-1.5 text-xs transition-colors disabled:opacity-60 ${
+											active
+												? "border-accent bg-accent/[0.08] font-semibold text-accent-emphasis"
+												: "border-border bg-card text-muted-foreground hover:border-accent/40"
+										}`}
+									>
+										<span className="flex items-center gap-1">
+											<Package className="size-3" />
+											{b.label}
+										</span>
+										<span className="text-[10px] font-normal">
+											{boxSize(b.value)}
+										</span>
+									</button>
+								);
+							})}
+						</div>
+						<p className="text-xs text-muted-foreground">
+							Couriers charge on size as well as weight — pick the box you pack
+							in, or the next size up.
+						</p>
+					</div>
+
 					{error ? (
-						<p className="flex items-start gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+						<p
+							className={`flex items-start gap-2 rounded-xl px-3 py-2.5 text-sm border ${TONE_PANEL.warn}`}
+						>
 							<CircleAlert className="mt-0.5 size-4 shrink-0" />
 							<span>{error}</span>
 						</p>
@@ -486,11 +557,11 @@ export function EasyparcelDispatchCard({
 						<div className="flex flex-col items-start gap-1.5 rounded-xl border border-dashed border-border px-3 py-3.5">
 							<p className="text-sm text-muted-foreground">
 								<span className="font-medium text-foreground">
-									No courier can take a parcel this weight to this address right
-									now.
+									No courier takes a parcel this size and weight to this address
+									right now.
 								</span>{" "}
-								Check the buyer&apos;s postal code and your pickup postal code —
-								EasyParcel quotes on those two numbers.
+								Check the buyer&apos;s postal code and your pickup address —
+								EasyParcel prices on those.
 							</p>
 							<p className="text-sm text-muted-foreground">
 								Arrange delivery yourself and add the tracking number below —
@@ -543,7 +614,10 @@ export function EasyparcelDispatchCard({
 										</span>
 										<span className="flex shrink-0 flex-col items-end gap-1">
 											<span className="text-sm font-bold">
-												{formatPrice(rate.priceMinor, balanceCurrency)}
+												{formatPrice(
+													rate.priceMinor,
+													rate.currency || walletCurrency,
+												)}
 											</span>
 											{index === 0 && rates.length > 1 ? (
 												<span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent-emphasis">
@@ -565,43 +639,40 @@ export function EasyparcelDispatchCard({
 								);
 							})}
 
-							{/* The prepaid wallet, right where the spend happens. Amber the
-							    moment the pick outprices it — the server refuses anyway,
-							    but a disabled-with-reason beats a bounced booking. */}
+							{/* A drop-off-only service is a different job for the
+							    seller — said before they book it, not after. */}
+							{selected && !selected.isPickup ? (
+								<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+									<b>{selected.courierName}</b> doesn&apos;t collect for this
+									service — you drop the parcel at one of their points after
+									booking.
+								</p>
+							) : null}
+
 							{quotedBalance !== undefined ? (
 								<p
 									className={`flex items-center gap-1.5 text-xs ${
 										selectedUnaffordable
-											? "font-medium text-amber-700 dark:text-amber-400"
+											? `font-medium ${TONE_ACCENT.warn}`
 											: "text-muted-foreground"
 									}`}
 								>
 									<Wallet className="size-3.5 shrink-0" />
 									{selectedUnaffordable ? (
 										<>
-											Wallet {formatPrice(quotedBalance, balanceCurrency)} — not
+											Wallet {formatPrice(quotedBalance, walletCurrency)} — not
 											enough for this courier. Top up in EasyParcel, then
-											re-quote.
+											refresh prices.
 										</>
 									) : (
 										<>
 											EasyParcel wallet:{" "}
-											{formatPrice(quotedBalance, balanceCurrency)}
+											{formatPrice(quotedBalance, walletCurrency)}
 										</>
 									)}
 								</p>
 							) : null}
 
-							{dispatch.isDemo ? (
-								<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-									<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
-									<span>
-										<span className="font-medium">Test keys.</span> This books a
-										simulated shipment — no courier is dispatched and nothing is
-										charged.
-									</span>
-								</p>
-							) : null}
 							<Button
 								type="button"
 								className="h-11 w-full"
@@ -616,15 +687,18 @@ export function EasyparcelDispatchCard({
 										<Truck className="size-4" />
 										Book {selected?.serviceName} —{" "}
 										{selected
-											? formatPrice(selected.priceMinor, balanceCurrency)
+											? formatPrice(
+													selected.priceMinor,
+													selected.currency || walletCurrency,
+												)
 											: ""}
 									</>
 								)}
 							</Button>
 							<p className="text-xs text-muted-foreground">
-								Paid from your EasyParcel wallet when you book. The tracking
-								number and the courier&apos;s label PDF land here, and the
-								tracking number reaches your buyer&apos;s order page.
+								Paid from your EasyParcel wallet when you book, for collection
+								today — EasyParcel arranges the pickup time with the courier.
+								The tracking number and the courier&apos;s label land here.
 							</p>
 							<button
 								type="button"
@@ -649,6 +723,15 @@ export function EasyparcelDispatchCard({
 							<>
 								{blockReason === "plan_gated" ? <ProBadge /> : null}
 								{easyparcelBlockCopy(blockReason ?? "")}
+								{blockReason === "reconnect_needed" ? (
+									<Link
+										to="/app/settings"
+										search={{ tab: "integrations" }}
+										className="font-medium text-accent hover:underline"
+									>
+										Reconnect EasyParcel
+									</Link>
+								) : null}
 							</>
 						)}
 					</p>
@@ -658,23 +741,23 @@ export function EasyparcelDispatchCard({
 			<ConfirmDialog
 				open={confirmingCancel}
 				onOpenChange={setConfirmingCancel}
-				title="Mark this booking cancelled?"
-				description="EasyParcel has no cancel API, so cancel the shipment in your EasyParcel dashboard first (their support can help if the courier already has it). This only updates Kedaipal: the booking is marked cancelled here and you can book a courier again. The order itself doesn't change."
-				confirmLabel="Mark cancelled"
+				title="Cancel this courier booking?"
+				description="We'll ask EasyParcel to cancel the shipment, and the charge goes back to your EasyParcel wallet. EasyParcel won't cancel once 7 days have passed since the collection date. The order itself doesn't change, and you can book again afterwards."
+				confirmLabel="Cancel booking"
 				destructive
 				onConfirm={async () => {
-					const result = await markCancelled({ shortId: order.shortId });
-					if (result.ok) toast.success("Booking marked cancelled");
-					else toast.error(result.message ?? "Couldn't mark it cancelled");
+					const result = await cancelBooking({ shortId: order.shortId });
+					if (result.ok)
+						toast.success("Booking cancelled — refunded to your wallet");
+					else toast.error(result.message ?? "Couldn't cancel the booking");
 				}}
 			/>
 		</section>
 	);
 }
 
-/** Two-letter mark for a courier with no logo of ours — deliberate over a
- * remote logo: the card must render identically offline and on a cold cache
- * (EasyParcel's `courier_logo` URLs are theirs to move). */
+/** Two-letter mark for a courier — deliberate over EasyParcel's logo URLs,
+ * which are theirs to move; the card renders the same offline. */
 function initials(name: string): string {
 	const words = name.trim().split(/\s+/).filter(Boolean);
 	if (words.length === 0) return "??";
@@ -682,11 +765,9 @@ function initials(name: string): string {
 	return (words[0][0] + words[1][0]).toUpperCase();
 }
 
-/** The one line under a rate's name: the courier, the ETA, the earliest
- * pickup — EasyParcel's own vocabulary, in plain words. */
+/** The one line under a service's name: the courier, and who moves the
+ * parcel to it. */
 function rateMeta(rate: EasyparcelRate): string {
-	const pickup = rate.pickupDate ? `pickup ${rate.pickupDate}` : null;
-	return [rate.courierName, rate.deliveryEta, pickup]
-		.filter(Boolean)
-		.join(" · ");
+	const how = rate.isPickup ? "Pickup from your door" : "You drop off";
+	return [rate.courierName, how].join(" · ");
 }

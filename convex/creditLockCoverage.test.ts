@@ -178,11 +178,11 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 		"renaming a run changes a private label, not an order — nothing to meter",
 	// Settings are always open.
 	"delyva.connect": "settings: connecting a courier account",
-	"easyparcel.connect": "settings: connecting a courier account",
+	"easyparcel.startConnect": "settings: starts the courier sign-in (OAuth) for the account",
 	"easyparcel.disconnect": "settings: removing a courier account is never trapped",
 	"easyparcel.updateSettings": "settings: courier pickup address and on/off",
 	"easyparcel.refreshBalance": "settings: re-reads the prepaid wallet snapshot",
-	"easyparcel.markCancelled": "cancelling a courier releases the order",
+	"easyparcel.cancelBooking": "cancelling a courier releases the order",
 	"easyparcel.refreshJobStatus": "status poll: reads provider truth, moves nothing the webhooks wouldn't",
 	"delyva.resubscribeWebhooks": "settings: re-registers the courier webhooks",
 	"lalamove.registerWebhook": "settings: registers the rider webhook",

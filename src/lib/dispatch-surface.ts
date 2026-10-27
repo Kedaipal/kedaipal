@@ -97,15 +97,24 @@ export function delyvaSurface(
 	return "card";
 }
 
-/** The Delyva rules verbatim — EasyParcel's block vocabulary is the same
- * shape, and the two parcel cards must behave alike (one idea, one control). */
+/** The Delyva rules, plus `not_configured` (EasyParcel's app credentials are
+ * deployment config) — the two parcel cards must behave alike (one idea, one
+ * control). A dead grant (`reconnect_needed`) is a CARD, not a hint: the
+ * seller has this integration and must be shown how to restore it. */
 export function easyparcelSurface(
 	order: Doc<"orders">,
 	dispatch: EasyparcelDispatch | undefined,
 ): DispatchSurface {
 	if (!shipsAsParcel(order.deliveryMethod) || !dispatch) return "none";
 	const { job, blockReason } = dispatch;
-	if (blockReason === "country_unsupported" && !job) return "none";
+	// An unconfigured deployment is the country case's twin: nothing the
+	// seller can fix, so no card — unless a booking from before is still out.
+	if (
+		(blockReason === "country_unsupported" ||
+			blockReason === "not_configured") &&
+		!job
+	)
+		return "none";
 	if ((blockReason === "not_delivery" || blockReason === "no_address") && !job)
 		return "none";
 	if (!dispatch.bookingEnabled && !job)

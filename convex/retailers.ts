@@ -296,6 +296,7 @@ import {
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
 import { delyvaBookingArmed, storeBooksCouriers } from "./lib/courierBooking";
+import { loadEasyparcelArming } from "./lib/easyparcelArming";
 import { assertCatalogueWeighed } from "./lib/parcelWeights";
 import { type WeightPricing, weightPricingOf } from "./lib/weightPricing";
 import { isEncrypted } from "./lib/credentialCrypto";
@@ -1396,7 +1397,10 @@ export const getRetailerBySlug = query({
 							?.deliveryDirection === "collection",
 					// One bit from the courier config, never the config — see the
 					// RetailerPublic comment.
-					booksCouriers: storeBooksCouriers(active),
+					booksCouriers: storeBooksCouriers({
+						...active,
+						easyparcel: await loadEasyparcelArming(ctx, active._id),
+					}),
 					logoStorageId: active.logoStorageId,
 					logoUrl,
 					coverImageStorageId: active.coverImageStorageId,

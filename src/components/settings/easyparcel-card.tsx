@@ -1,23 +1,22 @@
 /**
- * EasyParcel connection card — Settings → Integrations (z8r3fdcje2). The
- * ACCOUNT half of the EasyParcel story: the one-key connect (an Individual
- * API key), the prepaid wallet balance, and the pickup address couriers
- * collect from. Whether the store actually books through EasyParcel is
- * decided in Fulfilment → Courier booking — connection and use are two
- * different questions, the Delyva/Lalamove split.
+ * EasyParcel connection card — Settings → Integrations (z8r3fdcje2, Open API).
+ * The ACCOUNT half of the EasyParcel story: connecting by signing in at
+ * EasyParcel (OAuth — the seller never copies a key), the prepaid wallet, and
+ * the pickup address couriers collect from. Whether the store books through
+ * EasyParcel is decided in Fulfilment → Courier booking — connection and use
+ * are two different questions, the Delyva/Lalamove split.
  *
- * EasyParcel differences the card says out loud:
- *  - PREPAID: every booking draws from the wallet, so the balance lives here
- *    with a refresh — an empty wallet is the most likely first failure.
- *  - Their sandbox is a separate HOST, resolved at connect (which host
- *    accepted the key); a demo key gets the test-mode banner at the account
- *    step, the 86eypncfy posture.
- *  - AMBIENT ONLY: EasyParcel couriers don't carry chilled/frozen — stated
- *    on the card, not discovered at a failed pickup.
+ * What the card says out loud, so nothing is discovered by failing:
+ *  - The connect leaves Kedaipal for EasyParcel's sign-in and comes back, and
+ *    a declined, expired or failed attempt is stated here afterwards.
+ *  - A grant EasyParcel stopped honouring reads "Reconnect", not "Connected".
+ *  - PREPAID: the wallet balance lives here with a refresh.
+ *  - A Demo account (when the token says so) carries the test-mode banner.
+ *  - AMBIENT ONLY: EasyParcel couriers don't carry chilled or frozen goods.
  *
- * Owns its own reads/actions (EasyParcel has its own Convex namespace);
- * act-as is honoured the way the Delyva card does it. Connecting is Pro;
- * disconnecting never is.
+ * Owns its own reads/actions (EasyParcel has its own Convex namespace) and
+ * its section shell, so a country it doesn't serve hides it completely.
+ * Connecting is Pro; disconnecting never is.
  */
 
 import { convexQuery } from "@convex-dev/react-query";
@@ -25,13 +24,14 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useAction, useMutation } from "convex/react";
 import {
+	CircleAlert,
 	ExternalLink,
 	FlaskConical,
 	RefreshCw,
 	Snowflake,
 	Wallet,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -41,6 +41,8 @@ import { useActAsRetailerId } from "../../hooks/useActAs";
 import type { FixHighlight } from "../../lib/country-setup-copy";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { parseGoogleAddress } from "../../lib/google-address";
+import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
+import { TONE_PANEL } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
 import { GoogleAddressAutocomplete } from "../forms/google-address-autocomplete";
 import { Button } from "../ui/button";
@@ -72,6 +74,11 @@ const EMPTY_ADDRESS: PickupAddressDraft = {
 	postcode: "",
 };
 
+/** How long after a connect we still toast its success — the card is
+ * re-mounted by the redirect back, and a stale "connected" must not pop on
+ * every later visit. */
+const FRESH_ATTEMPT_MS = 2 * 60 * 1000;
+
 export function EasyparcelCard({
 	shellId,
 	highlight,
@@ -88,8 +95,7 @@ export function EasyparcelCard({
 	retailerId: Id<"retailers">;
 	/** Client mirror of PLAN_FEATURES.delivery (server is the lock). */
 	canUse: boolean;
-	/** Store country — drives the address form's shape and which EasyParcel
-	 * platform (easyparcel.sg / .my) the copy points at. */
+	/** Store country — drives the address form's shape. */
 	country: Country;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
@@ -97,35 +103,53 @@ export function EasyparcelCard({
 		convexQuery(api.easyparcel.getSettings, { retailerId: actAsRetailerId }),
 	).data;
 
-	const connect = useAction(api.easyparcel.connect);
+	const startConnect = useMutation(api.easyparcel.startConnect);
 	const refreshBalance = useAction(api.easyparcel.refreshBalance);
 	const disconnect = useMutation(api.easyparcel.disconnect);
 	const updateSettings = useMutation(api.easyparcel.updateSettings);
 
-	const [apiKey, setApiKey] = useState("");
-	const [editingKey, setEditingKey] = useState(false);
 	const [busy, setBusy] = useState(false);
+	const [leaving, setLeaving] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
 	const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 	const [address, setAddress] = useState<PickupAddressDraft | null>(null);
 	const [addressError, setAddressError] = useState<string | null>(null);
-	// A set address reads as one quiet row (86eye9xd4 5A); "change it" opens
-	// the editor, and a save or cancel folds it again.
 	const [editingPickup, setEditingPickup] = useState(false);
 
 	const connected = settings?.connected === true;
+	const needsReconnect = settings?.needsReconnect === true;
 	// A downgraded-but-connected seller keeps every control except re-enabling
 	// (which lives in Fulfilment) — connection management is never gated.
 	const locked = !canUse && !connected;
-	const countryBlocked = settings ? !settings.available : false;
-	const typedKey = apiKey.trim().length > 0;
 	const portalHost =
 		country === "SG" ? "easyparcel.com/sg" : "easyparcel.com/my";
 
+	// The redirect back from EasyParcel re-mounts this card: say "connected"
+	// once, for an attempt that just landed — never on a later visit.
+	const toasted = useRef(false);
+	const lastAttempt = settings?.lastAttempt;
+	useEffect(() => {
+		if (toasted.current || !lastAttempt) return;
+		if (lastAttempt.outcome !== "connected") return;
+		if (Date.now() - lastAttempt.at > FRESH_ATTEMPT_MS) return;
+		toasted.current = true;
+		toast.success("EasyParcel connected");
+	}, [lastAttempt]);
+
+	// A failed attempt stays on the card until something newer replaces it —
+	// the seller came back from EasyParcel and must see why nothing changed.
+	const attemptProblem =
+		lastAttempt &&
+		lastAttempt.outcome !== "connected" &&
+		(!connected ||
+			settings?.connectedAt === undefined ||
+			lastAttempt.at > settings.connectedAt)
+			? lastAttempt.message
+			: undefined;
+
 	const storedAddress = settings?.pickupAddress;
-	// The setup checklist's count: account, pickup address. (No webhook step —
-	// this API has none; status is polled.)
-	const setupDone = (connected ? 1 : 0) + (storedAddress ? 1 : 0);
+	const setupDone =
+		(connected && !needsReconnect ? 1 : 0) + (storedAddress ? 1 : 0);
 	const addressDraft: PickupAddressDraft =
 		address ??
 		(storedAddress
@@ -157,31 +181,24 @@ export function EasyparcelCard({
 		}
 	}
 
+	/** Leave for EasyParcel's sign-in. The return lands back on this card. */
 	async function handleConnect() {
-		setBusy(true);
+		setLeaving(true);
 		try {
-			const result = await connect({
+			const here = window.location;
+			const result = await startConnect({
 				retailerId: actAsRetailerId,
-				apiKey: apiKey.trim(),
+				returnTo: `${here.origin}${here.pathname}${here.search}#${SPOTLIGHT_ANCHOR.easyparcel.anchor}`,
 			});
 			if (!result.ok) {
-				// The action returns its reason rather than throwing — a wrong key
-				// is an ordinary outcome, not an exception.
 				toast.error(result.message);
+				setLeaving(false);
 				return;
 			}
-			setApiKey("");
-			setEditingKey(false);
-			toast.success("EasyParcel connected");
-			if (result.isDemo) {
-				toast.warning(
-					"This key belongs to EasyParcel's DEMO environment — bookings are simulated and no courier is dispatched.",
-				);
-			}
+			window.location.assign(result.url);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
-		} finally {
-			setBusy(false);
+			setLeaving(false);
 		}
 	}
 
@@ -206,7 +223,7 @@ export function EasyparcelCard({
 			(country === "MY" && (!draft.city.trim() || !draft.state.trim()))
 		) {
 			// Mirrors the server rule, so the seller is told here rather than by
-			// a thrown error after a round trip.
+			// a refusal after a round trip.
 			setAddressError(
 				country === "SG"
 					? "Fill in the street address and a 6-digit postal code."
@@ -215,21 +232,20 @@ export function EasyparcelCard({
 			return;
 		}
 		setAddressError(null);
-		void run(
-			() =>
-				updateSettings({
-					retailerId: actAsRetailerId,
-					pickupAddress: {
-						unit: draft.unit.trim() || undefined,
-						address1: draft.address1.trim(),
-						address2: draft.address2.trim() || undefined,
-						city: draft.city.trim() || undefined,
-						state: draft.state.trim() || undefined,
-						postcode: draft.postcode.trim(),
-					},
-				}),
-			"Pickup address saved",
-		).then((ok) => {
+		void run(async () => {
+			const result = await updateSettings({
+				retailerId: actAsRetailerId,
+				pickupAddress: {
+					unit: draft.unit.trim() || undefined,
+					address1: draft.address1.trim(),
+					address2: draft.address2.trim() || undefined,
+					city: draft.city.trim() || undefined,
+					state: draft.state.trim() || undefined,
+					postcode: draft.postcode.trim(),
+				},
+			});
+			if (!result.ok) throw new Error(result.message ?? "Couldn't save");
+		}, "Pickup address saved").then((ok) => {
 			if (ok) {
 				setAddress(null);
 				setEditingPickup(false);
@@ -237,27 +253,40 @@ export function EasyparcelCard({
 		});
 	}
 
-	// Nothing to offer in a country EasyParcel booking doesn't serve, and
-	// nothing connected to unwind — stay out of the tab entirely (shell
-	// included).
-	if (countryBlocked && !connected) return null;
+	// Nothing to offer where EasyParcel isn't available, and nothing connected
+	// to unwind — stay out of the tab entirely (shell included).
+	if (settings && !settings.available && !connected) return null;
+
+	const connectButton = (label: string) => (
+		<Button
+			type="button"
+			className="h-11 self-start"
+			isLoading={leaving}
+			disabled={locked || leaving || busy}
+			onClick={() => void handleConnect()}
+		>
+			{leaving ? "Opening EasyParcel…" : label}
+			{leaving ? null : <ExternalLink className="size-3.5" />}
+		</Button>
+	);
 
 	return (
 		<AccountCard id={shellId} highlight={highlight}>
 			<div className="flex flex-col gap-4">
 				<div className="flex flex-col gap-2">
 					<div className="flex items-center gap-2.5">
-						{/* No brand mark shipped yet (marks are never redrawn or
-					    re-tinted) — the name carries the identity until EasyParcel's
-					    approved asset lands. */}
+						{/* No brand mark shipped yet (marks are never redrawn) — the
+						    name carries the card until EasyParcel's asset lands. */}
 						<h2 className="font-heading text-lg font-bold">EasyParcel</h2>
 						{!canUse ? <ProBadge /> : null}
 						<span className="ml-auto flex shrink-0">
 							{!connected ? (
 								<Glance tone="grey">Not connected</Glance>
+							) : needsReconnect ? (
+								<Glance tone="warn">Reconnect needed</Glance>
 							) : setupDone < 2 ? (
 								<Glance tone="warn">Setup {setupDone} of 2</Glance>
-							) : settings?.isDemo ? (
+							) : settings?.environment === "sandbox" ? (
 								<Glance tone="warn">Test mode</Glance>
 							) : (
 								<Glance>Connected</Glance>
@@ -278,11 +307,20 @@ export function EasyparcelCard({
 					</p>
 				</div>
 
-				{countryBlocked ? (
+				{settings && !settings.available && connected ? (
 					<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-						EasyParcel booking isn&apos;t available in your store&apos;s country
-						— Malaysian stores book couriers through Delyva instead. Your
-						account stays connected until you disconnect it below.
+						EasyParcel booking isn&apos;t available for your store&apos;s
+						country — Malaysian stores book couriers through Delyva instead.
+						Your account stays connected until you disconnect it below.
+					</p>
+				) : null}
+
+				{attemptProblem ? (
+					<p
+						className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${TONE_PANEL.warn}`}
+					>
+						<CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+						<span>{attemptProblem}</span>
 					</p>
 				) : null}
 
@@ -294,91 +332,56 @@ export function EasyparcelCard({
 						<SetupChecklist>
 							<SetupStep
 								n={1}
-								state="done"
+								state={needsReconnect ? "action" : "done"}
 								title={
 									<>
-										Account
-										{settings.isDemo ? (
+										EasyParcel account
+										{settings.environment === "sandbox" ? (
 											<Glance tone="warn">Demo account</Glance>
-										) : (
+										) : settings.environment === "live" ? (
 											<Glance>Live</Glance>
-										)}
+										) : null}
 									</>
 								}
 								detail={
-									editingKey ? (
-										"Paste the key from your live EasyParcel account."
+									needsReconnect ? (
+										"EasyParcel stopped accepting Kedaipal's access (it can expire or be removed on their side). Reconnect — one sign-in, and your pickup address and settings are kept."
 									) : (
 										<>
-											key{" "}
-											<span className="font-mono">…{settings.apiKeyHint}</span>{" "}
-											·{" "}
-											<button
-												type="button"
-												onClick={() => setEditingKey(true)}
-												className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
-											>
-												Replace
-											</button>
+											{settings.accountName ? (
+												<strong className="font-medium text-foreground">
+													{settings.accountName}
+												</strong>
+											) : (
+												"Connected"
+											)}
+											{settings.accountType ? ` · ${settings.accountType}` : ""}
 										</>
 									)
 								}
 							>
-								{settings.isDemo ? (
-									<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+								{settings.environment === "sandbox" ? (
+									<p
+										className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs leading-relaxed ${TONE_PANEL.warn}`}
+									>
 										<FlaskConical className="mt-0.5 size-3.5 shrink-0" />
 										<span>
-											<strong>Test mode — no courier will come.</strong> This
-											key authenticated on EasyParcel&apos;s demo environment,
-											so bookings are simulated and its credit is play money.
-											Connect the key from your live account at{" "}
-											<a
-												href={`https://${portalHost}`}
-												target="_blank"
-												rel="noopener noreferrer"
-												className="font-medium underline underline-offset-2"
-											>
-												{portalHost}
-											</a>{" "}
-											before telling buyers.
+											<strong>Test mode — no courier will come.</strong> This is
+											an EasyParcel demo account, so bookings are simulated and
+											its credit is play money. Reconnect and pick your live
+											account before telling buyers.
 										</span>
 									</p>
 								) : null}
-								{editingKey ? (
-									<div className="mt-1 flex flex-col gap-2">
-										<KeyInput
-											value={apiKey}
-											disabled={busy}
-											onChange={setApiKey}
-										/>
-										<div className="flex flex-wrap items-center gap-2">
-											<Button
-												type="button"
-												className="h-11"
-												isLoading={busy}
-												disabled={!typedKey || busy}
-												onClick={() => void handleConnect()}
-											>
-												Save new key
-											</Button>
-											<Button
-												type="button"
-												variant="outline"
-												className="h-11"
-												onClick={() => {
-													setEditingKey(false);
-													setApiKey("");
-												}}
-											>
-												Keep the stored key
-											</Button>
-										</div>
-									</div>
-								) : null}
+								<div className="mt-1 flex flex-wrap items-center gap-2">
+									{connectButton(
+										needsReconnect ? "Reconnect EasyParcel" : "Switch account",
+									)}
+								</div>
 							</SetupStep>
 
 							{/* Its own field, not the business address: a parcel courier
-						    prices on the postcode, and this is where pickups happen. */}
+							    prices on the postal code, and this is where pickups happen. */}
 							<SetupStep
 								n={2}
 								state={storedAddress ? "done" : "action"}
@@ -391,7 +394,7 @@ export function EasyparcelCard({
 													.filter(Boolean)
 													.join(" "),
 												storedAddress.address2,
-												`${storedAddress.postcode}${storedAddress.city ? ` ${storedAddress.city}` : ""}`,
+												`${storedAddress.postcode}${storedAddress.city && country !== "SG" ? ` ${storedAddress.city}` : ""}`,
 											]
 												.filter(Boolean)
 												.join(", ")}{" "}
@@ -433,8 +436,7 @@ export function EasyparcelCard({
 							</SetupStep>
 						</SetupChecklist>
 
-						{/* The wallet is the thing that fails first on a prepaid platform —
-					    it gets its own section, not a footnote. */}
+						{/* Prepaid: the wallet is the thing that fails first. */}
 						<SectionLabel>Wallet</SectionLabel>
 						<div className="flex items-center gap-2 rounded-xl border border-input bg-muted/30 px-3 py-2.5">
 							<Wallet className="size-4 shrink-0 text-muted-foreground" />
@@ -443,10 +445,9 @@ export function EasyparcelCard({
 									<strong className="font-semibold">
 										{formatPrice(
 											settings.balanceMinor,
-											// EasyParcel reports its own currency; until a snapshot
-											// carries one, the store country's currency is the only
-											// honest guess (never a literal — the currency sweep).
-											settings.balanceCurrency ?? COUNTRY_CURRENCY[country],
+											// EasyParcel reports its own currency; until a read
+											// carries one, the store country's is the honest guess.
+											settings.balanceCurrency || COUNTRY_CURRENCY[country],
 										)}
 									</strong>
 								) : (
@@ -463,6 +464,7 @@ export function EasyparcelCard({
 								size="sm"
 								className="ml-auto h-9"
 								isLoading={refreshing}
+								disabled={needsReconnect}
 								onClick={() => void handleRefreshBalance()}
 							>
 								<RefreshCw className="size-3.5" />
@@ -470,8 +472,6 @@ export function EasyparcelCard({
 							</Button>
 						</div>
 
-						{/* The constraint, surfaced where the account lives — never
-					    discovered at a failed pickup. */}
 						<p className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
 							<Snowflake className="mt-0.5 size-3.5 shrink-0" />
 							<span>
@@ -483,9 +483,7 @@ export function EasyparcelCard({
 							</span>
 						</p>
 
-						{/* Where the on/off lives — the one cross-page pointer, so a
-					    seller who lands here first still finds the switch. */}
-						{!countryBlocked ? (
+						{settings.available ? (
 							<p className="text-xs text-muted-foreground">
 								{settings.enabled
 									? "Booking is on — you'll see EasyParcel on your delivery orders."
@@ -515,7 +513,7 @@ export function EasyparcelCard({
 							open={confirmingDisconnect}
 							onOpenChange={setConfirmingDisconnect}
 							title="Disconnect EasyParcel?"
-							description="The Book button disappears from your orders. Parcels already booked keep delivering and their tracking keeps updating from EasyParcel until they finish. Your pickup address is kept, so reconnecting is just one key."
+							description="Kedaipal deletes its access to your EasyParcel account and the Book button disappears from your orders. Parcels already booked keep moving at EasyParcel, but their status here stops updating — mark those orders shipped and delivered yourself. Reconnecting is one sign-in."
 							confirmLabel="Disconnect"
 							destructive
 							onConfirm={() =>
@@ -539,7 +537,7 @@ export function EasyparcelCard({
 							</Bullet>
 							<Bullet>
 								The <strong>courier&apos;s own label PDF</strong> comes back
-								with the booking, with the tracking number already on your
+								with the booking, and the tracking number lands on your
 								buyer&apos;s order.
 							</Bullet>
 							<Bullet>
@@ -551,61 +549,41 @@ export function EasyparcelCard({
 
 						<div className="flex flex-col gap-2 rounded-xl border border-input bg-muted/30 p-3 text-sm">
 							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-								How to connect
+								How connecting works
 							</p>
 							<ol className="flex list-decimal flex-col gap-1 pl-5">
 								<li>
-									Create a free account at{" "}
+									Have an EasyParcel account —{" "}
 									<a
 										href={`https://${portalHost}`}
 										target="_blank"
 										rel="noopener noreferrer"
 										className="inline-flex items-center gap-1 font-medium text-accent hover:underline"
 									>
-										{portalHost} <ExternalLink className="size-3" />
+										free at {portalHost} <ExternalLink className="size-3" />
 									</a>{" "}
-									and top up some credit — EasyParcel is prepaid, each booking
+									— with some credit in it. EasyParcel is prepaid: each booking
 									draws from your balance.
 								</li>
 								<li>
-									In the EasyParcel dashboard, open{" "}
-									<span className="font-medium">
-										Integrations → Add New Store → API Key
-									</span>{" "}
-									and choose <span className="font-medium">Individual API</span>
-									.
+									Tap <span className="font-medium">Connect EasyParcel</span>.
+									You&apos;ll sign in on EasyParcel&apos;s own page and choose
+									the account Kedaipal books with.
 								</li>
 								<li>
-									Paste the API key below — that&apos;s the only thing we need.
+									Tap <span className="font-medium">Allow</span> — you come
+									straight back here. Kedaipal never sees your EasyParcel
+									password.
 								</li>
 							</ol>
 						</div>
 
-						<KeyInput
-							value={apiKey}
-							disabled={locked || busy}
-							onChange={setApiKey}
-						/>
-
 						<div className="flex flex-col gap-2">
-							<Button
-								type="button"
-								className="h-11 self-start"
-								isLoading={busy}
-								disabled={locked || !typedKey || busy}
-								onClick={() => void handleConnect()}
-							>
-								Connect EasyParcel
-							</Button>
+							{connectButton("Connect EasyParcel")}
 							{locked ? (
 								<p className="text-xs text-muted-foreground">
 									Courier booking is a Pro feature — upgrade in Settings →
 									Billing to connect. (Disconnecting is never locked.)
-								</p>
-							) : !typedKey ? (
-								<p className="text-xs text-muted-foreground">
-									One key is all we need — we check it with EasyParcel and store
-									it encrypted.
 								</p>
 							) : null}
 						</div>
@@ -624,34 +602,6 @@ function Bullet({ children }: { children: React.ReactNode }) {
 			</span>
 			<span>{children}</span>
 		</li>
-	);
-}
-
-/** Same anti-autofill posture as the Delyva/Lalamove/HitPay key inputs. */
-function KeyInput({
-	value,
-	disabled,
-	onChange,
-}: {
-	value: string;
-	disabled: boolean;
-	onChange: (v: string) => void;
-}) {
-	return (
-		<Input
-			type="text"
-			name="easyparcel-api-key"
-			aria-label="EasyParcel API key"
-			autoComplete="off"
-			data-1p-ignore
-			data-lpignore="true"
-			data-form-type="other"
-			value={value}
-			disabled={disabled}
-			onChange={(e) => onChange(e.target.value)}
-			placeholder="Individual API key"
-			className="h-11 font-mono text-sm"
-		/>
 	);
 }
 
