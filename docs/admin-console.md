@@ -539,8 +539,15 @@ kedaipal.com subdomains). The first is the blog's video upload page,
 - **A blog editor is not an admin.** `ADMIN_USER_IDS` lets someone act as any seller;
   writing for the blog must never need that, so editors get their own env list and it grants
   the `videos` area only (a test pins that `isAdmin` stays false for an editor).
-- **`adminAccess.mine`** returns the caller's areas, `{ areas: AdminArea[] }`. Public,
-  because it only ever describes the caller; signed out is `{ areas: [] }`, never an error.
+- **`adminAccess.mine`** returns `{ areas: AdminArea[], hasStore: boolean }` for the caller.
+  Public, because it only ever describes the caller; signed out is
+  `{ areas: [], hasStore: false }`, never an error.
+- **`hasStore` is the app shell's own rule**, reused rather than re-derived:
+  `resolveMyRetailer` (an owned store, or an *active* team membership), the resolver behind
+  `getMyRetailer`. The app sends a caller without one to onboarding, so the admin page must
+  not link a storeless blog editor "back to the app" — it shows a **kedaipal.com** link
+  instead, and the app shell stays unchanged (there is no store-free mode for editors; they
+  never need to enter the app). Kris, the first editor, has no store.
 - **The upload Worker calls it over Convex's HTTP API** — `POST <CONVEX_URL>/api/query`,
   `{"path":"adminAccess:mine","args":{},"format":"json"}` — with the caller's own
   `convex`-template Clerk token, after verifying that token itself (iss, exp, `azp` =
