@@ -42,6 +42,7 @@ import {
 	emptyWizardState,
 	ProductWizard,
 	type WizardState,
+	withKindCard,
 } from "./product-wizard";
 import {
 	emptyRow,
@@ -92,7 +93,7 @@ function renderWizard(currency: string, initialState: WizardState) {
  * step (the first one still owing an answer). */
 function stayDraft(overrides: Partial<WizardState> = {}): WizardState {
 	return {
-		...emptyWizardState("booking"),
+		...withKindCard(emptyWizardState(), "stay"),
 		name: "Riverside plot",
 		securityDeposit: "20000",
 		...overrides,
@@ -103,7 +104,8 @@ function stayDraft(overrides: Partial<WizardState> = {}): WizardState {
  * review. */
 function answeredItem(price: string): WizardState {
 	return {
-		...emptyWizardState("physical"),
+		...emptyWizardState(),
+		kindCard: "physical",
 		name: "Kuih lapis",
 		shape: "single",
 		fulfilmentAnswered: true,

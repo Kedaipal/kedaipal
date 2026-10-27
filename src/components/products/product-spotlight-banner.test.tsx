@@ -62,7 +62,7 @@ describe("ProductSpotlightBanner", () => {
 		// (`?card=`, z8r3fdhkr7) instead of telling the seller to go find it.
 		expect(
 			screen.getByRole("link", { name: /new product/i }).getAttribute("href"),
-		).toBe("/app/products/new?card=booking");
+		).toBe("/app/products/new?card=stay");
 	});
 
 	it("a key any kind can carry opens the wizard on the store's own type", () => {
