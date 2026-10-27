@@ -62,6 +62,7 @@ import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
+import { DelyvaLogo } from "../ui/delyva-logo";
 import { FilterChip } from "../ui/filter-chip";
 import { Input } from "../ui/input";
 import { InputPrefixFrame } from "../ui/input-prefix-frame";
@@ -304,16 +305,13 @@ function BusinessAddressReference({
  * five-word detail, and a status chip instead of a paragraph. */
 function ProviderPricingRow({
 	logo,
-	brand,
-	logoHeight,
 	name,
 	detail,
 	status,
 }: {
-	logo: string;
-	/** The logo's alt — the row names the service, the logo names who runs it. */
-	brand: string;
-	logoHeight: string;
+	/** The provider's mark, alt'd with its brand — the row names the service,
+	 * the logo names who runs it. */
+	logo: ReactNode;
 	name: string;
 	detail: string;
 	status: "live" | "test" | "connected" | "paused" | "off";
@@ -328,13 +326,7 @@ function ProviderPricingRow({
 	return (
 		<div className="flex min-h-11 items-center justify-between gap-3">
 			<span className="flex min-w-0 items-center gap-2">
-				<AppImage
-					src={logo}
-					alt={brand}
-					aspect={`${logoHeight} w-auto`}
-					fill={false}
-					className="shrink-0"
-				/>
+				{logo}
 				<span className="truncate text-sm">
 					{name}{" "}
 					<span className="hidden text-xs text-muted-foreground sm:inline">
@@ -1235,9 +1227,15 @@ export function DeliveryPricing({
 					/>
 					<div className="flex flex-col gap-1 rounded-xl border border-border px-3 py-1">
 						<ProviderPricingRow
-							logo="/img/lalamove-logo.svg"
-							brand="Lalamove"
-							logoHeight="h-3.5"
+							logo={
+								<AppImage
+									src="/img/lalamove-logo.svg"
+									alt="Lalamove"
+									aspect="h-3.5 w-auto"
+									fill={false}
+									className="shrink-0"
+								/>
+							}
 							name="Riders"
 							detail="Same-day, around your city"
 							status={
@@ -1253,9 +1251,7 @@ export function DeliveryPricing({
 							}
 						/>
 						<ProviderPricingRow
-							logo="/img/delyva-logo.png"
-							brand="Delyva"
-							logoHeight="h-2.5"
+							logo={<DelyvaLogo heightClass="h-2.5" alt="Delyva" />}
 							name="Couriers"
 							detail="Nationwide parcels, cheapest service"
 							status={

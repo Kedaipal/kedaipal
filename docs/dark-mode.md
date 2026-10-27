@@ -134,6 +134,13 @@ Turning the storefront dark broke Kedaipal's own marks, which is easy to miss be
 
 **Product photos need no treatment.** They render `object-cover`, filling the box edge to edge, so there is no mat to glow — and the app already shows product photos against near-black in *light* mode via the lightbox overlay. Do not add brightness or dimming filters: they misrepresent the seller's product.
 
+## Third-party brand marks
+
+Partner logos are never recoloured — no light-ink variant of our own making, no `dark:invert` — so a mark drawn in black ink gets a **white plate** in dark mode instead. The landing's logo walls do this in both themes (`logoPillClass`); inline marks that sit bare in light mode get it in dark only.
+
+- **The DelyvaNow wordmark** is black "Delyva" + blue "Now" on transparency, so on a dark card only "Now" survived. Every surface renders it through `DelyvaLogo` (`src/components/ui/delyva-logo.tsx`), which adds `dark:bg-white` padding behind the mark; `delyva-logo.test.tsx` fails if anything else in `src/` references the PNG directly. The same pass fixed the landing dispatch badge, which squeezed the 300×55 wordmark into a 14 px square.
+- **Lalamove's** orange wordmark reads on both grounds and renders bare.
+
 ## Keeping it correct
 
 `src/lib/dark-mode-coverage.test.ts` scans every themed `.tsx` and fails when a raw palette colour has no `dark:` counterpart on the same element. It answers the question every new component raises — no, you do not have to remember.
