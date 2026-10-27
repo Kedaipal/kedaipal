@@ -294,6 +294,10 @@ function blockedDeliveryMessage(
 		// point at it — this is the store's to arrange.
 		no_cold_service:
 			"This store can't ship chilled or frozen items to that address right now — message them to arrange it",
+		// Heavier than any rider vehicle and no courier priced it: the ORDER is
+		// the problem, not the address.
+		too_heavy:
+			"This order is too heavy for a rider — choose pickup, or message the store to arrange delivery",
 		no_state: "Add a delivery address so we can calculate the delivery fee",
 		unserved_state: state
 			? `This store doesn't deliver to ${state}`
@@ -392,6 +396,8 @@ export function resolveDeliveryForOrder(
 				quoteProvider: quote.quoteProvider,
 				quoteServiceName: quote.quoteServiceName,
 				quotesConsidered: quote.quotesConsidered,
+				weightFloored: quote.weightFloored,
+				unweighedLines: quote.unweighedLines,
 			},
 			pending: false,
 		};
@@ -447,6 +453,8 @@ export async function loadCheckoutDeliveryQuote(
 		serviceName: row.serviceName,
 		considered: row.considered,
 		quotedAt: row.quotedAt,
+		weightFloored: row.weightFloored,
+		unweighedLines: row.unweighedLines,
 	};
 }
 

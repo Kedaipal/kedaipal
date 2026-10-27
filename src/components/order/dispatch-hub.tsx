@@ -168,6 +168,9 @@ export function DispatchHub({
 						onAdvanceBookUnavailable={onAdvanceBookUnavailable}
 						lockedReason={lockedReason}
 						embedded
+						// The courier is one tab away — the rider dialog hands the
+						// seller there when no rider vehicle can carry the order.
+						onUseCourier={() => pick("delyva")}
 					/>
 				) : (
 					<DelyvaDispatchCard

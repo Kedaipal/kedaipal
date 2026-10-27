@@ -259,3 +259,66 @@ describe("buildSubmitVariants — sale prices (z8r3fdcw72)", () => {
 		expect("variants" in result).toBe(true);
 	});
 });
+
+describe("buildSubmitVariants — parcel weight required where pricing depends on it (23 Oct 2026)", () => {
+	it("a buyable row with no weight is refused, addressed to its weight input, in the reason's words", () => {
+		const issues = issuesOf(
+			buildSubmitVariants([row({ parcelWeightG: "" })], null, {
+				weightRequired: "courier",
+			}),
+		);
+		expect(issues).toEqual([
+			{
+				where: "row",
+				index: 0,
+				field: "weight",
+				message:
+					"Enter the parcel weight — your couriers price by weight, and until it's weighed this item is quoted as a 1 kg parcel.",
+			},
+		]);
+	});
+
+	it("an explicit 0 is unweighed too — the same rule checkout uses", () => {
+		const issues = issuesOf(
+			buildSubmitVariants([row({ parcelWeightG: "0" })], null, {
+				weightRequired: "rate_card",
+			}),
+		);
+		expect(issues.map((i) => i.field)).toEqual(["weight"]);
+		expect(issues[0].message).toMatch(/can't be priced without one/);
+	});
+
+	it("an off-sale row can't be ordered, so it isn't asked", () => {
+		expect(
+			buildSubmitVariants([row({ parcelWeightG: "", active: false })], null, {
+				weightRequired: "courier",
+			}),
+		).toHaveProperty("variants");
+	});
+
+	it("a weighed row passes, and a store that doesn't price by weight never asks", () => {
+		expect(
+			buildSubmitVariants([row({ parcelWeightG: "250" })], null, {
+				weightRequired: "courier",
+			}),
+		).toHaveProperty("variants");
+		expect(
+			buildSubmitVariants([row({ parcelWeightG: "" })], null),
+		).toHaveProperty("variants");
+		expect(
+			buildSubmitVariants([row({ parcelWeightG: "" })], null, {
+				weightRequired: null,
+			}),
+		).toHaveProperty("variants");
+	});
+
+	it("a malformed weight gets the format issue, not the required one — one message per box", () => {
+		const issues = issuesOf(
+			buildSubmitVariants([row({ parcelWeightG: "abc" })], null, {
+				weightRequired: "courier",
+			}),
+		);
+		expect(issues).toHaveLength(1);
+		expect(issues[0].message).toMatch(/Whole grams only/);
+	});
+});
