@@ -547,7 +547,7 @@ export function BillingTab({
 					highlight={ring(SPOTLIGHT_ANCHOR.plan_change.anchor)}
 					sub={sub}
 					slug={retailer.slug}
-					currency={gateway.renewalCurrency}
+					currency={gateway.currency}
 					foundingPricing={gateway.foundingPricing}
 					ownerOnly={ownerOnly}
 					openInvoiceNumber={pending?.invoiceNumber}

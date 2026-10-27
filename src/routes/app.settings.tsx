@@ -45,6 +45,7 @@ import {
 	type DeliveryConfig,
 	deliveryModeAllowed,
 } from "../../convex/lib/delivery";
+import { storeBillingCurrency } from "../../convex/lib/plans";
 import { STORE_NAME_MAX, STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
 import type { Locale } from "../../convex/lib/whatsappCopy";
@@ -111,6 +112,7 @@ import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
 import {
+	autoRenewMethodPhrase,
 	type CardTarget,
 	type FixHighlight,
 	highlightFor,
@@ -966,6 +968,9 @@ function SettingsRoute() {
 																deliveryBooking={retailer.deliveryBooking}
 																waPhone={retailer.waPhone}
 																notifyWaPhone={retailer.notifyWaPhone}
+																autoRenewOn={
+																	retailer.subscription?.autoRenew !== undefined
+																}
 																onSave={(patch) => updateSettings(patch)}
 															/>
 															{/* Directly under the picker, so "what did that just
@@ -2395,10 +2400,15 @@ function CountryForm({
 	deliveryBooking,
 	waPhone,
 	notifyWaPhone,
+	autoRenewOn,
 	onSave,
 }: {
 	current: Country;
 	currency: string;
+	/** A saved auto-renew method is attached. A real country change detaches
+	 * it (86eyp7hn7: the card was authorised in the old billing currency), so
+	 * the card says so BEFORE the save and the toast confirms it after. */
+	autoRenewOn: boolean;
 	/** Read only to warn BEFORE the save about what will need updating after
 	 * it. None of these block the switch any more, and none are cleared by it
 	 * (86eyqgujv) — the checklist below the card tracks them until fixed. */
@@ -2409,17 +2419,21 @@ function CountryForm({
 	deliveryBooking?: { enabled: boolean; vehicleType: "MOTORCYCLE" | "CAR" };
 	waPhone?: string;
 	notifyWaPhone?: string;
-	onSave: (patch: { country: Country }) => Promise<unknown>;
+	onSave: (patch: {
+		country: Country;
+	}) => Promise<{ autoRenewDetached: boolean }>;
 }) {
 	const form = useAppForm({
 		defaultValues: { country: current as string },
 		onSubmit: async ({ value }) => {
 			try {
-				await onSave({ country: value.country as Country });
+				const result = await onSave({ country: value.country as Country });
 				toast.success(
 					value.country === current
 						? "Country saved."
-						: `Country saved — check the list below for anything that still needs updating.`,
+						: result.autoRenewDetached
+							? `Country saved — auto-renewal is now off. Set it up again on Billing with ${autoRenewMethodPhrase(storeBillingCurrency(value.country as Country))}, and check the list below.`
+							: `Country saved — check the list below for anything that still needs updating.`,
 				);
 			} catch (err) {
 				toast.error(convexErrorMessage(err));
@@ -2466,6 +2480,15 @@ function CountryForm({
 					// turns "why is my delivery not quoting?" a week later into a
 					// decision made now, with the same list waiting underneath the
 					// card afterwards.
+					// The store's own money is NOT a carried-over thing that "only
+					// works in" the old country — it is the one thing the switch
+					// changes (86eyp7hn7), so it gets its own sentence above the
+					// carried list rather than a bullet under that list's frame.
+					const billingLine = `Your Kedaipal subscription bills in ${storeBillingCurrency(picked)} from your next invoice.${
+						autoRenewOn
+							? ` Auto-renewal turns off — your saved method was authorised in ${storeBillingCurrency(current)} — so set it up again on Billing with ${autoRenewMethodPhrase(storeBillingCurrency(picked))} afterwards.`
+							: ""
+					}`;
 					const carried = [
 						...(deliveryConfig &&
 						!deliveryModeAllowed(picked, deliveryConfig.mode)
@@ -2501,6 +2524,7 @@ function CountryForm({
 										Switching to {COUNTRY_LABELS[picked]} keeps everything you
 										have set up.
 									</p>
+									<p className="text-muted-foreground">{billingLine}</p>
 									{carried.length > 0 ? (
 										<>
 											<p className="text-muted-foreground">

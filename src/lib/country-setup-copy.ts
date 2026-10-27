@@ -7,6 +7,10 @@ import type {
 	CountrySetupItem,
 	CountrySetupItemKey,
 } from "../../convex/lib/countrySetup";
+import {
+	type BillingCurrency,
+	storeBillingCurrency,
+} from "../../convex/lib/plans";
 
 /**
  * Seller-facing copy for the post-switch setup checklist (86eyqgujv).
@@ -32,7 +36,10 @@ export type CountrySetupTab =
 	| "fulfilment"
 	// Third-party accounts (2 Sep IA rework) — HitPay's checklist row lands
 	// on the card's new home.
-	| "integrations";
+	| "integrations"
+	// The store's own subscription — where auto-renewal is set up again after
+	// a switch detached it (86eyp7hn7).
+	| "billing";
 
 type CountrySetupCopy = {
 	title: string;
@@ -40,6 +47,10 @@ type CountrySetupCopy = {
 	body: string;
 	tab: CountrySetupTab;
 	action: string;
+	/** Overrides the severity chip's label. The money chip reads "Payments
+	 * at risk" — the buyer's payments — which is the wrong claim on the
+	 * seller's own subscription row. */
+	chip?: string;
 };
 
 type CopyContext = {
@@ -48,7 +59,25 @@ type CopyContext = {
 	/** Where it was, when we know — the copy degrades to "another country". */
 	from: Country | undefined;
 	count: number;
+	/** A saved auto-renew method is attached right now. */
+	autoRenewOn: boolean;
 };
+
+/**
+ * What a seller can save for auto-renewal in a billing currency, as the
+ * copy names it: the tokenisable rails per currency (`AUTO_RENEW_METHODS`,
+ * docs/hitpay-recurring.md) — MYR takes a card or Touch 'n Go, SGD a card
+ * only. One author, so the toast, the country card and the checklist can't
+ * promise different rails. Includes the article ("an SGD card").
+ */
+const AUTO_RENEW_METHOD_PHRASE: Record<BillingCurrency, string> = {
+	MYR: "a card or Touch 'n Go",
+	SGD: "an SGD card",
+};
+
+export function autoRenewMethodPhrase(currency: BillingCurrency): string {
+	return AUTO_RENEW_METHOD_PHRASE[currency];
+}
 
 const COPY: Record<
 	CountrySetupItemKey,
@@ -67,6 +96,30 @@ const COPY: Record<
 		tab: "integrations",
 		action: "Open Integrations",
 	}),
+	billing_currency: ({ to, from, autoRenewOn }) => {
+		const currency = storeBillingCurrency(to);
+		const was = from ? storeBillingCurrency(from) : undefined;
+		// The three lines below name Kedaipal's BILLING currency as a setting
+		// ("bills in SGD"), the way the Country card says "yours is set to
+		// SGD" — a code, not an amount, so no symbol belongs here.
+		return {
+			// currency-literal-ok: names the billing currency, not an amount
+			title: `Your Kedaipal subscription now bills in ${currency}`,
+			// Never "if auto-renewal was on": the row can't know the past, and
+			// a seller who never had it reads that as a claim about them. It
+			// states the rule and the present: a method saved in the old
+			// currency can't be charged in the new one, so the switch turns it
+			// off — and whether one is attached right now.
+			body: autoRenewOn
+				? // currency-literal-ok: names the billing currency, not an amount
+					`Every invoice from your next one is in ${currency}, at the ${COUNTRY_LABELS[to]} price, and auto-renewal is set up for it.`
+				: // currency-literal-ok: names the billing currency, not an amount
+					`Every invoice from your next one is in ${currency}, at the ${COUNTRY_LABELS[to]} price. Auto-renewal is off: a method saved in ${was ?? "another currency"} can't be charged in ${currency}, so the switch turns it off. Turn it on from Billing with ${autoRenewMethodPhrase(currency)}, or pay each invoice with its Pay-now link.`,
+			tab: "billing",
+			action: "Open Billing",
+			chip: "Your subscription",
+		};
+	},
 	business_address: ({ to, from }) => ({
 		title: "Set your business address",
 		body: `Your business address is still in ${placeName(from)}. It's the return address on every parcel label — we're leaving it off labels rather than sending undelivered parcels to the wrong country, so replace it with a ${COUNTRY_LABELS[to]} address.`,
@@ -140,8 +193,14 @@ export function countrySetupCopy(
 	item: CountrySetupItem,
 	to: Country,
 	from: Country | undefined,
+	state: { autoRenewOn: boolean },
 ): CountrySetupCopy {
-	return COPY[item.key]({ to, from, count: item.count ?? 1 });
+	return COPY[item.key]({
+		to,
+		from,
+		count: item.count ?? 1,
+		autoRenewOn: state.autoRenewOn,
+	});
 }
 
 /** Headline for the whole panel — one line that says what happened and how
@@ -174,6 +233,8 @@ export function countrySetupHeadline(
 export const SETTINGS_ANCHOR: Record<CountrySetupItemKey, string> = {
 	payment_methods: "settings-payment-methods",
 	hitpay: "settings-hitpay",
+	// The auto-renewal card — the same anchor `?spot=auto_renewal` rings.
+	billing_currency: "settings-auto-renewal",
 	business_address: "settings-business-address",
 	pickup_addresses: "settings-pickup",
 	delivery_mode: "settings-delivery-charge",

@@ -658,8 +658,8 @@ conversation). But three premises above changed when HitPay recurring landed:
   Pay-now link, a real checkout. The badge reads "2 months free", per the rule.
 - **Trialing / past_due / cancelled sellers self-serve annual directly** through
   the plan picker (`invoices.subscribeSelf`) — the WhatsApp prefill is no longer
-  their only route. Currency there derives from the store's country / last paid
-  invoice, same posture as above.
+  their only route. Currency there is the store's country's
+  (`storeBillingCurrency`, 86eyp7hn7), same posture as above.
 - **"The annual renewal chase does not exist" is stale.** The daily cron now
   auto-issues every renewal (annual included) with an email + Pay-now link, and
   auto-charges a saved method; the `console.info` is no longer the mechanism.
@@ -1114,6 +1114,46 @@ was already currency-agnostic — the work was the issue path and the pay surfac
 - **Issue:** `issueInvoice` takes an optional `currency` (`"MYR" | "SGD"`, default
   MYR) — a segmented control on the admin issue form; the founding checkbox works
   in either currency.
+- **A store is billed in its country's currency — always** (86eyp7hn7, Zaki
+  28 Oct 2026). One helper, `storeBillingCurrency(country)` in `lib/plans.ts`,
+  answers it for every bill: admin-issued invoices, renewals (`renewalQuote`),
+  self-serve subscribe and plan changes, top-up packs and Pay-now links.
+  `issueInvoice` takes **no `currency` argument** — the server derives it, so
+  no caller can send the wrong one. The admin form shows the currency
+  read-only with the country that set it (*"Set by its country (Singapore).
+  To bill another currency, change the store's country first (act as it →
+  Settings)."*). Only an Enterprise contract bills otherwise: its currency is
+  frozen with the deal.
+  - **Why it's a gate, not a default.** The form used to offer an RM/S$
+    picker that opened on MYR, and renewals followed the store's *last paid*
+    invoice — so one RM bill issued to an SG store (exactly what happened to
+    the dev throwaway store) made it a ringgit store for every renewal after.
+    A per-invoice override had no legitimate use on record; billing a store in
+    another currency now means changing where the store is, through the
+    owner's country switch, which is a deliberate act.
+  - **Rejected:** keeping "last paid wins" with a warning when it disagrees
+    with the country (still lets one mistake stick), and a per-store billing
+    currency field (no customer has needed cross-border billing — build it,
+    audited, if one does).
+  - **The country switch is therefore a billing event** (PR #424 review).
+    Under "last paid wins" a move was billing-neutral for an existing payer;
+    now it changes what the next bill is in — and the recurring session
+    HitPay authorised was in the OLD currency. So a real country change in
+    `retailers.updateSettings` runs `detachAutoRenewForRetailer` (the
+    handover path: reconcile-safe, remote session deleted), returns
+    `autoRenewDetached` for the toast, and the post-switch checklist gains a
+    `billing_currency` row (money severity, acknowledged, deep-links to the
+    auto-renewal card) for every store Kedaipal bills — not comped, not on a
+    contract. The country card warns before the save; the admin form's
+    helper says the switch also turns off auto-renewal. Pay-now is untouched.
+    A setup started but not finished is cleared too — resuming it would
+    authorise the old currency's session. The checklist row reads the
+    PRESENT (`countrySetup.autoRenewOn`): "turn it on from Billing with an
+    SGD card" while nothing is attached, "auto-renewal is set up for it"
+    once something is — never "if auto-renewal was on", which read as a
+    claim about a seller who never had it. One author for the rails a
+    currency can save, `autoRenewMethodPhrase` ("a card or Touch 'n Go" /
+    "an SGD card"), feeds the toast, the country card and the row.
 - **No payment block on non-MYR invoices.** The `billingConfig` rails (MY bank +
   DuitNow) can only settle MYR, so a cross-border invoice deliberately shows
   **amount only** everywhere — PDF (no "Payment instructions" card; footer says
