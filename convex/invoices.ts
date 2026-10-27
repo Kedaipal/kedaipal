@@ -1742,6 +1742,12 @@ export const listRetailersForAdmin = query({
 			 * detached method and a stranded charge — deriving the refusal
 			 * from it refused two states the server allows. */
 			chargeInFlight: boolean;
+			/** The currency this store's next bill is in — its last PAID
+			 * invoice's, else its country's (`renewalCurrency`, the same answer
+			 * renewals, top-ups and the sellers directory give). The issue form
+			 * opens on it, so an SG store is never one missed click from an RM
+			 * invoice (86eyp7hn7). */
+			billingCurrency: BillingCurrency;
 			/** On the house (z8r3fdeub2) — the picker labels these so nobody
 			 * drafts a bill `issueInvoice` will refuse anyway. */
 			comped: boolean;
@@ -1797,6 +1803,12 @@ export const listRetailersForAdmin = query({
 				.withIndex("by_retailer", (q) => q.eq("retailerId", r._id))
 				.filter((q) => q.eq(q.field("status"), "pending"))
 				.first();
+			const lastPaid = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r._id))
+				.order("desc")
+				.filter((q) => q.eq(q.field("status"), "paid"))
+				.first();
 			rows.push({
 				_id: r._id,
 				storeName: r.storeName,
@@ -1817,6 +1829,10 @@ export const listRetailersForAdmin = query({
 							origin: (pending.origin ?? "admin") as ReplaceableOrigin,
 						}
 					: undefined,
+				billingCurrency: renewalCurrency({
+					lastPaidCurrency: lastPaid?.currency,
+					country: r.country,
+				}),
 				autoChargeIdle: autoChargeIdle(sub?.autoRenew),
 				chargeInFlight: sub?.autoRenew?.lastChargeAttemptAt !== undefined,
 				comped: sub?.comped === true,

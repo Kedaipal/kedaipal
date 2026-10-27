@@ -2461,3 +2461,82 @@ describe("the billing picker and the sellers directory list the same book (z8r3f
 		expect(ADMIN_STORE_LIST_LIMIT).toBeGreaterThan(0);
 	});
 });
+
+describe("the issue-invoice picker carries each store's billing currency (86eyp7hn7)", () => {
+	/** A store in `country`, optionally with one invoice of `invoice`'s
+	 * status and currency already on its books. */
+	async function seedStore(
+		t: ReturnType<typeof setup>,
+		slug: string,
+		country: "MY" | "SG",
+		invoice?: { status: "paid" | "pending" | "void"; currency: "MYR" | "SGD" },
+	) {
+		await t
+			.withIdentity({ subject: `u_${slug}` })
+			.mutation(api.retailers.createRetailer, { storeName: `Store ${slug}`, slug });
+		await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			if (!r) throw new Error("no retailer");
+			await ctx.db.patch(r._id, { country });
+			if (!invoice) return;
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r._id))
+				.first();
+			if (!sub) throw new Error("no sub");
+			const now = Date.now();
+			await ctx.db.insert("invoices", {
+				retailerId: r._id,
+				subscriptionId: sub._id,
+				invoiceNumber: `INV-${slug}`,
+				amount: 14900,
+				total: 14900,
+				currency: invoice.currency,
+				periodStart: now,
+				periodEnd: now + 30 * 24 * 60 * 60 * 1000,
+				dueDate: now,
+				status: invoice.status,
+				createdAt: now,
+				...(invoice.status === "paid" ? { markedPaidAt: now } : {}),
+			});
+		});
+	}
+
+	async function currencyOf(t: ReturnType<typeof setup>, slug: string) {
+		const { stores } = await asAdmin(t).query(
+			api.invoices.listRetailersForAdmin,
+			{},
+		);
+		return stores.find((s) => s.slug === slug)?.billingCurrency;
+	}
+
+	test("a store with no paid bill bills in its country's currency", async () => {
+		const t = setup();
+		await seedStore(t, "sg-new", "SG");
+		await seedStore(t, "my-new", "MY");
+		expect(await currencyOf(t, "sg-new")).toBe("SGD");
+		expect(await currencyOf(t, "my-new")).toBe("MYR");
+	});
+
+	test("the last PAID bill outranks the country", async () => {
+		// An SG store deliberately billed in ringgit keeps renewing in ringgit
+		// (`renewalCurrency`) — the form must open on what its renewals say.
+		const t = setup();
+		await seedStore(t, "sg-paid-rm", "SG", { status: "paid", currency: "MYR" });
+		expect(await currencyOf(t, "sg-paid-rm")).toBe("MYR");
+	});
+
+	test("an open or void bill never decides it — only a paid one", async () => {
+		const t = setup();
+		await seedStore(t, "sg-pending-rm", "SG", {
+			status: "pending",
+			currency: "MYR",
+		});
+		await seedStore(t, "sg-void-rm", "SG", { status: "void", currency: "MYR" });
+		expect(await currencyOf(t, "sg-pending-rm")).toBe("SGD");
+		expect(await currencyOf(t, "sg-void-rm")).toBe("SGD");
+	});
+});

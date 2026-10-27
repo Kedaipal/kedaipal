@@ -44,6 +44,7 @@ import {
 	annualQuote,
 	BILLING_CURRENCIES,
 	type BillingCurrency,
+	DEFAULT_BILLING_CURRENCY,
 	enterprisePrice,
 	isPlanUpgrade,
 	PLANS,
@@ -891,6 +892,12 @@ function retailerOptionLabel(r: {
 	return parts.join(" · ");
 }
 
+/** How the issue form names a billing currency — on its buttons and in the
+ * line that says which one the store bills in. */
+function currencyChoiceLabel(currency: BillingCurrency): string {
+	return currency === "MYR" ? "RM (MYR)" : "S$ (SGD)";
+}
+
 /**
  * Issue a pending invoice — covers standard conversions/renewals AND onboarding a
  * Founding-10 member (founding toggle). Built for minimal typing: amount is
@@ -916,12 +923,23 @@ export function IssueInvoiceForm() {
 	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
 	// The operator's OVERRIDE only — not the effective value. See `founding`.
 	const [foundingOverride, setFoundingOverride] = useState(false);
-	const [currency, setCurrency] = useState<BillingCurrency>("MYR");
+	// The operator's OVERRIDE only — the effective value is `currency`, below.
+	const [currencyOverride, setCurrencyOverride] =
+		useState<BillingCurrency | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [contractSheetOpen, setContractSheetOpen] = useState(false);
 	const [confirmReplace, setConfirmReplace] = useState(false);
 
 	const selected = retailers?.find((r) => r._id === retailerId);
+	// The form opens on the store's OWN billing currency — its last paid
+	// bill's, else its country's (`renewalCurrency`, server-side) — DERIVED,
+	// not copied into state on pick: a hard "MYR" reset made every SG store one
+	// missed click from an RM invoice (86eyp7hn7).
+	const storeCurrency = selected?.billingCurrency ?? DEFAULT_BILLING_CURRENCY;
+	const currency = currencyOverride ?? storeCurrency;
+	// Billing a store off its own currency is allowed (it is Arif's override)
+	// but never silent: paying it moves what every renewal bills in.
+	const currencyDiffers = selected !== undefined && currency !== storeCurrency;
 	// Live contracts the admin could model a new deal on — off the picker list
 	// already loaded, so the "start from" dropdown costs no second query. Same
 	// helper the sellers directory uses, so the two pickers can't drift.
@@ -972,11 +990,11 @@ export function IssueInvoiceForm() {
 	// DIFFERENT store — never when a revoke elsewhere on the page changes the
 	// status. Currency clears with it: an SGD pick left over from the previous
 	// store must never silently carry to a Malaysian retailer (an SGD invoice
-	// ships with no bank/DuitNow block).
+	// ships with no bank/DuitNow block) — the next store opens on its own.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: retailerId is the TRIGGER, not a read — picking a different store is exactly what clears the operator's override
 	useEffect(() => {
 		setFoundingOverride(false);
-		setCurrency("MYR");
+		setCurrencyOverride(null);
 		// A contract store ARMS its contract (z8r3fdkp8h, found live on 2 Oct):
 		// the previous default left Pro · RM 149.00 one click from issue for a
 		// store whose paid Pro bill would take it OFF its contract — the most
@@ -1118,8 +1136,7 @@ export function IssueInvoiceForm() {
 			setConfirmReplace(false);
 			setRetailerId("");
 			setFoundingOverride(false);
-			// Reset to the default so the next store isn't silently billed in SGD.
-			setCurrency("MYR");
+			setCurrencyOverride(null);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -1250,7 +1267,9 @@ export function IssueInvoiceForm() {
 								key={cur}
 								type="button"
 								disabled={billsContract}
-								onClick={() => setCurrency(cur)}
+								onClick={() =>
+									setCurrencyOverride(cur === storeCurrency ? null : cur)
+								}
 								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 transition-all disabled:cursor-not-allowed ${
 									!noContract && effectiveCurrency === cur
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
@@ -1260,7 +1279,7 @@ export function IssueInvoiceForm() {
 								{!noContract && effectiveCurrency === cur ? (
 									<Check className="size-3.5 shrink-0" />
 								) : null}
-								{cur === "MYR" ? "RM (MYR)" : "S$ (SGD)"}
+								{currencyChoiceLabel(cur)}
 							</button>
 						))}
 					</div>
@@ -1269,6 +1288,17 @@ export function IssueInvoiceForm() {
 							{contract
 								? "Set by the store's Enterprise contract — the term and currency it was agreed in."
 								: "The contract sets both — choose the term while you write it."}
+						</span>
+					) : currencyDiffers ? (
+						<span className="text-[11px] text-amber-700 dark:text-amber-400">
+							This store bills in {currencyChoiceLabel(storeCurrency)}. Once
+							this invoice is paid, its renewals bill in{" "}
+							{currencyChoiceLabel(currency)} too.
+						</span>
+					) : selected ? (
+						<span className="text-[11px] text-muted-foreground">
+							The store's billing currency — its last paid invoice's, else its
+							country's.
 						</span>
 					) : null}
 					{effectiveCurrency === "SGD" ? (

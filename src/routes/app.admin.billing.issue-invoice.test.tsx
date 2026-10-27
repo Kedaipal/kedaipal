@@ -102,6 +102,7 @@ const store = (overrides: Record<string, unknown> = {}) => ({
 	autoChargeIdle: false,
 	comped: false,
 	unclaimed: false,
+	billingCurrency: "MYR",
 	...overrides,
 });
 
@@ -354,5 +355,72 @@ describe("Issue an invoice — the picker's cap (z8r3fdpm2p)", () => {
 		state.capped = false;
 		render(<IssueInvoiceForm />);
 		expect(screen.queryByText(/Showing the newest/)).toBeNull();
+	});
+});
+
+describe("Issue an invoice — the currency opens on the store's own (86eyp7hn7)", () => {
+	const currencyButton = (name: RegExp) => screen.getByRole("button", { name });
+	const issueButton = () =>
+		screen.getByRole("button", { name: /issue invoice/i });
+
+	it("an SG store opens on S$ and bills S$41 Founding Pro without a click on currency", () => {
+		state.retailers = [
+			store({ billingCurrency: "SGD", isFoundingMember: true }),
+		];
+		render(<IssueInvoiceForm />);
+		pickStore();
+
+		// The bug: the form reset to RM on every pick, so an SG store was one
+		// missed click from a ringgit invoice.
+		expect(screen.getByText(/S\$\s?41\.00/)).toBeTruthy();
+		expect(screen.getByText(/the store's billing currency/i)).toBeTruthy();
+		fireEvent.click(issueButton());
+		expect(state.issue).toHaveBeenCalledWith(
+			expect.objectContaining({ currency: "SGD", founding: true, plan: "pro" }),
+		);
+	});
+
+	it("billing off the store's currency is allowed, and says what paying it changes", () => {
+		state.retailers = [store({ billingCurrency: "SGD" })];
+		render(<IssueInvoiceForm />);
+		pickStore();
+		fireEvent.click(currencyButton(/RM \(MYR\)/));
+
+		expect(
+			screen.getByText(
+				/This store bills in S\$ \(SGD\)\. Once this invoice is paid, its renewals bill in RM \(MYR\) too\./,
+			),
+		).toBeTruthy();
+		fireEvent.click(issueButton());
+		expect(state.issue).toHaveBeenCalledWith(
+			expect.objectContaining({ currency: "MYR" }),
+		);
+	});
+
+	it("an override never carries to the next store", () => {
+		state.retailers = [
+			store(),
+			store({
+				_id: "r2",
+				storeName: "Lion City Bakes",
+				slug: "lcb",
+				billingCurrency: "SGD",
+			}),
+		];
+		render(<IssueInvoiceForm />);
+		pickStore();
+		fireEvent.click(currencyButton(/S\$ \(SGD\)/));
+		expect(screen.getByText(/This store bills in RM \(MYR\)/)).toBeTruthy();
+
+		// Switching to the SG store opens on ITS currency, with no warning —
+		// and back to the MY store opens on RM, not the S$ pick left behind.
+		fireEvent.change(screen.getByRole("combobox"), { target: { value: "r2" } });
+		expect(screen.queryByText(/This store bills in/)).toBeNull();
+		fireEvent.change(screen.getByRole("combobox"), { target: { value: "r1" } });
+		expect(screen.queryByText(/This store bills in/)).toBeNull();
+		fireEvent.click(issueButton());
+		expect(state.issue).toHaveBeenCalledWith(
+			expect.objectContaining({ currency: "MYR" }),
+		);
 	});
 });

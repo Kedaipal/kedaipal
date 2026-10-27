@@ -1114,6 +1114,16 @@ was already currency-agnostic — the work was the issue path and the pay surfac
 - **Issue:** `issueInvoice` takes an optional `currency` (`"MYR" | "SGD"`, default
   MYR) — a segmented control on the admin issue form; the founding checkbox works
   in either currency.
+- **The issue form opens on the store's own billing currency** (86eyp7hn7, Oct
+  2026). `listRetailersForAdmin` carries `billingCurrency` — `renewalCurrency`:
+  the last PAID invoice's currency, else the store's country's (a pending or
+  void bill never decides it) — the same answer renewals, top-ups and the
+  sellers directory give. The form DERIVES its currency from it and only stores
+  the operator's override, which clears on every store pick and after issue; it
+  used to hard-reset to MYR, leaving every SG store one missed click from a
+  ringgit bill. Billing off the store's currency stays possible, but the form
+  says what it does: *"This store bills in S$ (SGD). Once this invoice is paid,
+  its renewals bill in RM (MYR) too."*
 - **No payment block on non-MYR invoices.** The `billingConfig` rails (MY bank +
   DuitNow) can only settle MYR, so a cross-border invoice deliberately shows
   **amount only** everywhere — PDF (no "Payment instructions" card; footer says
