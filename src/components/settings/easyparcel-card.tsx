@@ -550,7 +550,7 @@ export function EasyparcelCard({
 							open={confirmingDisconnect}
 							onOpenChange={setConfirmingDisconnect}
 							title="Disconnect EasyParcel?"
-							description="Kedaipal deletes its access to your EasyParcel account and the Book button disappears from your orders. Parcels already booked keep moving at EasyParcel, but their status here stops updating — mark those orders shipped and delivered yourself. Reconnecting is one sign-in."
+							description="Kedaipal deletes its access to your EasyParcel account and the Book button disappears from your orders. Parcels already booked keep moving at EasyParcel, but their status here stops updating — mark those orders shipped and delivered yourself. Your pickup address goes too, so reconnecting is one sign-in plus that address."
 							confirmLabel="Disconnect"
 							destructive
 							onConfirm={() =>

@@ -178,6 +178,17 @@ describe("connected", () => {
 		expect(screen.getByText("Ambient parcels only.")).toBeDefined();
 	});
 
+	it("Disconnect says the pickup address goes with it (test-code F28)", () => {
+		state.settings = settings();
+		render(card());
+		fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+		expect(
+			screen.getByText(
+				/Your pickup address goes too, so reconnecting is one sign-in plus that address/,
+			),
+		).toBeTruthy();
+	});
+
 	it("a sandbox from the other country says why its prices are in RM", () => {
 		state.settings = settings({
 			environment: "sandbox",
