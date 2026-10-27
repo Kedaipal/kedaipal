@@ -36,8 +36,7 @@ import {
 	planPrice,
 	planQualifiesForFounding,
 	PLANS,
-	renewalCurrency,
-	renewalCurrencySource,
+	storeBillingCurrency,
 	renewalQuote,
 	starterPricePerDay,
 	subscriptionPrice,
@@ -428,34 +427,12 @@ describe("foundingPlanLocked — Founding Members stay on Founding Pro (Zaki, 17
 	});
 });
 
-describe("renewalCurrency", () => {
-	test("follows the last PAID invoice, else the country", () => {
-		expect(renewalCurrency({ lastPaidCurrency: "SGD", country: "MY" })).toBe(
-			"SGD",
-		);
-		expect(renewalCurrency({ lastPaidCurrency: "MYR", country: "SG" })).toBe(
-			"MYR",
-		);
-		expect(renewalCurrency({ lastPaidCurrency: undefined, country: "SG" })).toBe(
-			"SGD",
-		);
-		// An unreadable currency on an old row never beats the country.
-		expect(renewalCurrency({ lastPaidCurrency: "USD", country: "SG" })).toBe(
-			"SGD",
-		);
-		expect(
-			renewalCurrency({ lastPaidCurrency: undefined, country: undefined }),
-		).toBe("MYR");
-	});
-});
-
-describe("renewalCurrencySource", () => {
-	test("names the rule renewalCurrency applied — a billable paid currency wins", () => {
-		expect(renewalCurrencySource({ lastPaidCurrency: "MYR" })).toBe("last_paid");
-		expect(renewalCurrencySource({ lastPaidCurrency: "SGD" })).toBe("last_paid");
-		// No paid bill, or one in a currency we don't bill in, falls to country.
-		expect(renewalCurrencySource({ lastPaidCurrency: undefined })).toBe("country");
-		expect(renewalCurrencySource({ lastPaidCurrency: "USD" })).toBe("country");
+describe("storeBillingCurrency", () => {
+	test("is the store's country's currency — nothing else decides it (86eyp7hn7)", () => {
+		expect(storeBillingCurrency("SG")).toBe("SGD");
+		expect(storeBillingCurrency("MY")).toBe("MYR");
+		// A store from before SG-lite has no country — it is Malaysian.
+		expect(storeBillingCurrency(undefined)).toBe("MYR");
 	});
 });
 
@@ -472,7 +449,6 @@ describe("renewalQuote — the one author of the next renewal bill (z8r3fdfty4)"
 		benefitsRevokedAt: undefined,
 		benefitsRestoredAt: undefined,
 		paidThrough: NOW - 1000,
-		lastPaidCurrency: undefined,
 		country: "MY" as const,
 		enterprise: undefined,
 		now: NOW,
@@ -497,11 +473,12 @@ describe("renewalQuote — the one author of the next renewal bill (z8r3fdfty4)"
 		expect(renewalQuote({ ...ent, billingCycle: "annual" }).amount).toBe(
 			888000,
 		);
-		// An SG deal stays SGD whatever the last paid invoice said — no FX.
+		// An SG deal stays SGD whatever the store's country says — the contract
+		// currency is frozen with the deal, never converted.
 		expect(
 			renewalQuote({
 				...ent,
-				lastPaidCurrency: "MYR",
+				country: "MY",
 				enterprise: { baseFeeMinor: 99900, currency: "SGD" as const },
 			}),
 		).toMatchObject({ currency: "SGD", amount: 99900 });
@@ -549,10 +526,10 @@ describe("renewalQuote — the one author of the next renewal bill (z8r3fdfty4)"
 		).toBe(41000);
 	});
 
-	test("the currency follows the last paid invoice, not the country", () => {
+	test("a store with no country renews in MYR — it predates SG-lite", () => {
 		expect(
-			renewalQuote({ ...founding, country: "MY", lastPaidCurrency: "SGD" }),
-		).toMatchObject({ currency: "SGD", amount: 4100 });
+			renewalQuote({ ...founding, country: undefined }),
+		).toMatchObject({ currency: "MYR", amount: 10400 });
 	});
 
 	test("a lapsed founding member renews at list", () => {
@@ -1106,8 +1083,7 @@ describe("founding benefit REVOCATION — membership is permanent, benefits aren
 			isFoundingMember: true,
 			foundingIntent: true,
 			paidThrough: NOW - 10 * DAY,
-			lastPaidCurrency: undefined,
-			country: "MY" as const,
+				country: "MY" as const,
 			benefitsRestoredAt: undefined,
 			enterprise: undefined,
 			now: NOW,

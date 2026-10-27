@@ -7,7 +7,7 @@
 // The `Country` import is type-only, so this stays a pure module with no
 // runtime dependency on `country.ts` (which does import `convex/values`).
 
-import type { Country } from "./country";
+import { type Country, DEFAULT_COUNTRY } from "./country";
 
 /**
  * The three tiers (Credits T6, ClickUp z8r3fdkp8h — Arif, 30 Sep 2026):
@@ -934,29 +934,19 @@ export function foundingPlanLocked(plan: Plan, foundingEligible: boolean): boole
 }
 
 /**
- * The currency a store's renewals and mid-cycle plan changes bill in: its last
- * PAID invoice's (a one-off experiment or a void must not flip it), falling
- * back to its country. A brand-new self-serve subscription bills in the
- * country currency instead — there is no paid history to follow yet.
+ * The ONE currency Kedaipal bills a store in: its country's — every invoice,
+ * renewal, plan change, top-up pack and Pay-now link (86eyp7hn7, Zaki 28 Oct
+ * 2026). Billing in another country's currency means the store's country
+ * changes first, through its owner's country switch; there is no per-invoice
+ * override. It used to follow the last PAID invoice, which let one bill issued
+ * in the wrong currency (the admin form defaulted to MYR) stick to a
+ * Singapore store for every renewal after it. An Enterprise contract is the
+ * one exception: its currency is agreed and frozen with the deal.
  */
-export function renewalCurrency(args: {
-	lastPaidCurrency: string | undefined;
-	country: Country | undefined;
-}): BillingCurrency {
-	return renewalCurrencySource(args) === "last_paid"
-		? (args.lastPaidCurrency as BillingCurrency)
-		: BILLING_CURRENCY_FOR_COUNTRY[args.country ?? "MY"];
-}
-
-/** WHY `renewalCurrency` answered what it did — so a surface can say which
- * rule applied instead of reciting both (an SG store billing in RM reads as a
- * mistake unless the page says it follows a ringgit payment, 86eyp7hn7). */
-export function renewalCurrencySource(args: {
-	lastPaidCurrency: string | undefined;
-}): "last_paid" | "country" {
-	return args.lastPaidCurrency === "SGD" || args.lastPaidCurrency === "MYR"
-		? "last_paid"
-		: "country";
+export function storeBillingCurrency(
+	country: Country | undefined,
+): BillingCurrency {
+	return BILLING_CURRENCY_FOR_COUNTRY[country ?? DEFAULT_COUNTRY];
 }
 
 /** Everything the NEXT renewal bill will say — see `renewalQuote`. */
@@ -998,7 +988,6 @@ export function renewalQuote(args: {
 	/** `retailers.foundingBenefitsRestoredAt` — an admin re-grant re-prices the
 	 * next renewal at the founding rate, which is the promise the dialog makes. */
 	benefitsRestoredAt: number | undefined;
-	lastPaidCurrency: string | undefined;
 	country: Country | undefined;
 	/** The store's Enterprise contract, if it has one. Required as a KEY so
 	 * every caller answers it: an Enterprise renewal bills the contract, in
@@ -1006,7 +995,7 @@ export function renewalQuote(args: {
 	enterprise: EnterpriseTerms | undefined;
 	now: number;
 }): RenewalQuote {
-	const currency = renewalCurrency(args);
+	const currency = storeBillingCurrency(args.country);
 	if (args.status === "on_hold") {
 		return {
 			kind: "hold",

@@ -42,8 +42,6 @@ import {
 import {
 	ANNUAL_MONTHS_RECEIVED,
 	annualQuote,
-	BILLING_CURRENCIES,
-	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
 	DEFAULT_BILLING_CURRENCY,
 	enterprisePrice,
@@ -893,46 +891,9 @@ function retailerOptionLabel(r: {
 	return parts.join(" · ");
 }
 
-/** How the issue form names a billing currency — on its buttons and in the
- * line that says which one the store bills in. */
+/** How the issue form names a billing currency. */
 function currencyChoiceLabel(currency: BillingCurrency): string {
 	return currency === "MYR" ? "RM (MYR)" : "S$ (SGD)";
-}
-
-/** The same name inside a sentence — never split across lines ("S$ /
- * (SGD)" wrapped mid-name in the override warning). */
-function CurrencyName({ currency }: { currency: BillingCurrency }) {
-	return (
-		<span className="whitespace-nowrap">{currencyChoiceLabel(currency)}</span>
-	);
-}
-
-/** Why the form opened on this store's currency — the ONE rule that applied,
- * never both recited: an SG store billing in RM reads as a mistake unless the
- * line says it follows a ringgit payment (86eyp7hn7). */
-function StoreCurrencyReason({
-	store,
-}: {
-	store: {
-		billingCurrency: BillingCurrency;
-		billingCurrencySource: "last_paid" | "country";
-		country: Country;
-	};
-}) {
-	const countryName = COUNTRY_LABELS[store.country];
-	if (store.billingCurrencySource === "country") {
-		return <>No paid invoice yet, so it bills in {countryName}'s currency.</>;
-	}
-	const paid = <CurrencyName currency={store.billingCurrency} />;
-	return store.billingCurrency ===
-		BILLING_CURRENCY_FOR_COUNTRY[store.country] ? (
-		<>Its last paid invoice was in {paid}.</>
-	) : (
-		<>
-			Its last paid invoice was in {paid} — renewals follow that, not its
-			country ({countryName}).
-		</>
-	);
 }
 
 /**
@@ -960,23 +921,16 @@ export function IssueInvoiceForm() {
 	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
 	// The operator's OVERRIDE only — not the effective value. See `founding`.
 	const [foundingOverride, setFoundingOverride] = useState(false);
-	// The operator's OVERRIDE only — the effective value is `currency`, below.
-	const [currencyOverride, setCurrencyOverride] =
-		useState<BillingCurrency | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [contractSheetOpen, setContractSheetOpen] = useState(false);
 	const [confirmReplace, setConfirmReplace] = useState(false);
 
 	const selected = retailers?.find((r) => r._id === retailerId);
-	// The form opens on the store's OWN billing currency — its last paid
-	// bill's, else its country's (`renewalCurrency`, server-side) — DERIVED,
-	// not copied into state on pick: a hard "MYR" reset made every SG store one
-	// missed click from an RM invoice (86eyp7hn7).
-	const storeCurrency = selected?.billingCurrency ?? DEFAULT_BILLING_CURRENCY;
-	const currency = currencyOverride ?? storeCurrency;
-	// Billing a store off its own currency is allowed (it is Arif's override)
-	// but never silent: paying it moves what every renewal bills in.
-	const currencyDiffers = selected !== undefined && currency !== storeCurrency;
+	// Not a pick: a store is billed in its country's currency, and
+	// `issueInvoice` applies that itself (86eyp7hn7). The form only SHOWS it,
+	// with the country that set it — a picker here once defaulted to MYR and
+	// handed a Singapore store a ringgit bill.
+	const currency = selected?.billingCurrency ?? DEFAULT_BILLING_CURRENCY;
 	// Live contracts the admin could model a new deal on — off the picker list
 	// already loaded, so the "start from" dropdown costs no second query. Same
 	// helper the sellers directory uses, so the two pickers can't drift.
@@ -1031,7 +985,6 @@ export function IssueInvoiceForm() {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: retailerId is the TRIGGER, not a read — picking a different store is exactly what clears the operator's override
 	useEffect(() => {
 		setFoundingOverride(false);
-		setCurrencyOverride(null);
 		// A contract store ARMS its contract (z8r3fdkp8h, found live on 2 Oct):
 		// the previous default left Pro · RM 149.00 one click from issue for a
 		// store whose paid Pro bill would take it OFF its contract — the most
@@ -1153,7 +1106,6 @@ export function IssueInvoiceForm() {
 				plan: effectivePlan,
 				billingCycle: effectiveCycle,
 				founding: foundingBill,
-				currency: effectiveCurrency,
 				// The server re-checks that this is still the open bill, so a
 				// stale page replaces nothing.
 				...(openBill ? { replacePendingId: openBill._id } : {}),
@@ -1173,7 +1125,6 @@ export function IssueInvoiceForm() {
 			setConfirmReplace(false);
 			setRetailerId("");
 			setFoundingOverride(false);
-			setCurrencyOverride(null);
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -1298,45 +1249,22 @@ export function IssueInvoiceForm() {
 					<span className="text-xs font-medium text-muted-foreground">
 						Currency
 					</span>
-					<div className="grid grid-cols-2 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
-						{BILLING_CURRENCIES.map((cur) => (
-							<button
-								key={cur}
-								type="button"
-								disabled={billsContract}
-								onClick={() =>
-									setCurrencyOverride(cur === storeCurrency ? null : cur)
-								}
-								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 transition-all disabled:cursor-not-allowed ${
-									!noContract && effectiveCurrency === cur
-										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
-										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
-								}`}
-							>
-								{!noContract && effectiveCurrency === cur ? (
-									<Check className="size-3.5 shrink-0" />
-								) : null}
-								{currencyChoiceLabel(cur)}
-							</button>
-						))}
+					<div className="flex min-h-11 items-center rounded-xl bg-background px-3 text-sm font-semibold shadow-inner shadow-border/40">
+						{selected && !noContract ? (
+							currencyChoiceLabel(effectiveCurrency)
+						) : (
+							<span className="text-muted-foreground">—</span>
+						)}
 					</div>
-					{billsContract ? (
-						<span className="text-[11px] text-muted-foreground">
-							{contract
+					<span className="text-[11px] text-muted-foreground">
+						{billsContract
+							? contract
 								? "Set by the store's Enterprise contract — the term and currency it was agreed in."
-								: "The contract sets both — choose the term while you write it."}
-						</span>
-					) : currencyDiffers ? (
-						<span className="text-[11px] text-amber-700 dark:text-amber-400">
-							This store bills in <CurrencyName currency={storeCurrency} />.
-							Once this invoice is paid, its renewals bill in{" "}
-							<CurrencyName currency={currency} /> too.
-						</span>
-					) : selected ? (
-						<span className="text-[11px] text-muted-foreground">
-							<StoreCurrencyReason store={selected} />
-						</span>
-					) : null}
+								: "The contract sets both — choose the term while you write it."
+							: selected
+								? `Set by its country (${COUNTRY_LABELS[selected.country]}). To bill another currency, change the store's country first (act as it → Settings).`
+								: "Follows the store's country."}
+					</span>
 					{effectiveCurrency === "SGD" ? (
 						<span className="text-[11px] text-muted-foreground">
 							SGD invoices carry no bank/DuitNow block — payment is arranged

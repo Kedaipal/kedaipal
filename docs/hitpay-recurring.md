@@ -842,8 +842,8 @@ pay **RM104** (S$59 vs S$41). Two defects stacked:
 
 **One number everywhere.** `renewalQuote` (lib/plans.ts) is the single author
 of what the next renewal bills — tier (a scheduled downgrade lands with it),
-cycle, founding, currency (`renewalCurrency`: last PAID invoice, else the
-country) and amount (the hold price for a paused store). The cron's renewal
+cycle, founding, currency (`storeBillingCurrency`: the store's country's,
+86eyp7hn7) and amount (the hold price for a paused store). The cron's renewal
 invoice, the pre-charge email, HitPay's authorisation page (which used to show
 the MONTHLY price in the COUNTRY currency — wrong for annual and SGD-billed
 stores) and the billing page (`billingGatewayAvailable.nextRenewal`) all read

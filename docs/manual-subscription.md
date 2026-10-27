@@ -658,8 +658,8 @@ conversation). But three premises above changed when HitPay recurring landed:
   Pay-now link, a real checkout. The badge reads "2 months free", per the rule.
 - **Trialing / past_due / cancelled sellers self-serve annual directly** through
   the plan picker (`invoices.subscribeSelf`) — the WhatsApp prefill is no longer
-  their only route. Currency there derives from the store's country / last paid
-  invoice, same posture as above.
+  their only route. Currency there is the store's country's
+  (`storeBillingCurrency`, 86eyp7hn7), same posture as above.
 - **"The annual renewal chase does not exist" is stale.** The daily cron now
   auto-issues every renewal (annual included) with an email + Pay-now link, and
   auto-charges a saved method; the `console.info` is no longer the mechanism.
@@ -1114,24 +1114,27 @@ was already currency-agnostic — the work was the issue path and the pay surfac
 - **Issue:** `issueInvoice` takes an optional `currency` (`"MYR" | "SGD"`, default
   MYR) — a segmented control on the admin issue form; the founding checkbox works
   in either currency.
-- **The issue form opens on the store's own billing currency** (86eyp7hn7, Oct
-  2026). `listRetailersForAdmin` carries `billingCurrency` — `renewalCurrency`:
-  the last PAID invoice's currency, else the store's country's (a pending or
-  void bill never decides it) — the same answer renewals, top-ups and the
-  sellers directory give. The form DERIVES its currency from it and only stores
-  the operator's override, which clears on every store pick and after issue; it
-  used to hard-reset to MYR, leaving every SG store one missed click from a
-  ringgit bill. Billing off the store's currency stays possible, but the form
-  says what it does: *"This store bills in S$ (SGD). Once this invoice is paid,
-  its renewals bill in RM (MYR) too."*
-- **It says WHICH rule set that currency, not both.** The row also carries
-  `billingCurrencySource` (`renewalCurrencySource` in `lib/plans.ts`, the same
-  test `renewalCurrency` applies) and the store's `country`, and the line reads
-  one of: *"No paid invoice yet, so it bills in Singapore's currency."* ·
-  *"Its last paid invoice was in RM (MYR)."* · *"Its last paid invoice was in
-  RM (MYR) — renewals follow that, not its country (Singapore)."* The last one
-  is the case the hands-on test found: an SG store billing in RM looks like a
-  mistake unless the form says it follows a ringgit payment.
+- **A store is billed in its country's currency — always** (86eyp7hn7, Zaki
+  28 Oct 2026). One helper, `storeBillingCurrency(country)` in `lib/plans.ts`,
+  answers it for every bill: admin-issued invoices, renewals (`renewalQuote`),
+  self-serve subscribe and plan changes, top-up packs and Pay-now links.
+  `issueInvoice` takes **no `currency` argument** — the server derives it, so
+  no caller can send the wrong one. The admin form shows the currency
+  read-only with the country that set it (*"Set by its country (Singapore).
+  To bill another currency, change the store's country first (act as it →
+  Settings)."*). Only an Enterprise contract bills otherwise: its currency is
+  frozen with the deal.
+  - **Why it's a gate, not a default.** The form used to offer an RM/S$
+    picker that opened on MYR, and renewals followed the store's *last paid*
+    invoice — so one RM bill issued to an SG store (exactly what happened to
+    the dev throwaway store) made it a ringgit store for every renewal after.
+    A per-invoice override had no legitimate use on record; billing a store in
+    another currency now means changing where the store is, through the
+    owner's country switch, which is a deliberate act.
+  - **Rejected:** keeping "last paid wins" with a warning when it disagrees
+    with the country (still lets one mistake stick), and a per-store billing
+    currency field (no customer has needed cross-border billing — build it,
+    audited, if one does).
 - **No payment block on non-MYR invoices.** The `billingConfig` rails (MY bank +
   DuitNow) can only settle MYR, so a cross-border invoice deliberately shows
   **amount only** everywhere — PDF (no "Payment instructions" card; footer says

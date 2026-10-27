@@ -722,7 +722,7 @@ tier**, and a **term change** while a contract bill at the other term is open
 term back). One author, `enterpriseTermChangeBlocker`, for the last two. The
 form says every one of these before the tap — the admin row carries the open
 bill's tier and term, the founding intent, and **`billingCurrency`**, the exact
-currency (`renewalCurrency`: last paid bill's, else the country's) the server
+currency (`storeBillingCurrency`: the store's country's) the server
 freezes a new contract in, so the fee's label can never disagree with what is
 stored. It is a page of the seller sheet — the same drill-in as the credit
 ledger, one drawer with a back link.
@@ -826,9 +826,9 @@ RM888 for it. With nothing to call off, it says so instead of a false success.
   annual = 12 months prepaid); a second field meaning the same thing would be
   two sources of truth.
 - **The contract carries its `currency`.** The ticket said "currency from the
-  store"; a store's billing currency can change (`renewalCurrency` follows the
-  last paid invoice), and a contract agreed in SGD must stay SGD. Frozen at
-  creation.
+  store"; a store's country — and so its billing currency — can change
+  (`storeBillingCurrency`), and a contract agreed in SGD must stay SGD. Frozen
+  at creation.
 - **No `multiOutlet` / `prioritySupport` flags on `PLAN_FEATURES.enterprise`.**
   `PlanFeatures` is, by its own rule, only for features that are LIVE —
   coming-soon rows don't belong there until they ship, and a flag with no
