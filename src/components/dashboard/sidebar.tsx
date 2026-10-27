@@ -2,7 +2,9 @@ import { UserButton, useUser } from "@clerk/tanstack-react-start";
 import { Link, type LinkProps } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import {
+	ArrowUpRight,
 	ChevronLeft,
+	Clapperboard,
 	GalleryHorizontalEnd,
 	Home,
 	LineChart,
@@ -29,6 +31,7 @@ import type { api } from "../../../convex/_generated/api";
 import { useActAs } from "../../hooks/useActAs";
 import { usePermission } from "../../hooks/usePermission";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
+import { BLOG_VIDEOS_URL } from "../../lib/admin-sites";
 import { hasFeature } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
 import { ProBadge } from "../app/pro-gate";
@@ -50,6 +53,9 @@ interface SidebarProps {
 	// note on BottomNavProps: a badge is a notification, not a pipeline gauge.
 	newOrdersCount: number;
 	isAdmin?: boolean;
+	// Holds the "videos" admin area (an admin, or a blog editor who is not one) —
+	// shows the "Blog videos" shortcut out to admin.kedaipal.com/videos.
+	blogVideos?: boolean;
 	// True when an admin is viewing their OWN store — the tier pill reads "Admin"
 	// instead of the store's trial/plan state. False while acting-as a seller.
 	adminBadge?: boolean;
@@ -59,6 +65,7 @@ export function Sidebar({
 	retailer,
 	newOrdersCount,
 	isAdmin,
+	blogVideos,
 	adminBadge,
 }: SidebarProps) {
 	// Team members (86exr91r4): hide sections this MEMBER can't read — the
@@ -326,8 +333,10 @@ export function Sidebar({
 				{/* Admin group — visually separated + labelled so it's unmistakable from
 				    the vendor nav while acting-as. Server `requireAdmin` is the real gate;
 				    these links just save typing the URL. They END the act-as session
-				    (leaving the vendor-operation view). */}
-				{isAdmin ? (
+				    (leaving the vendor-operation view).
+				    A blog editor who is NOT an admin sees the group with only the
+				    "Blog videos" row: the in-app console stays admin-only. */}
+				{isAdmin || blogVideos ? (
 					<div
 						className={cn(
 							"mt-2 flex flex-col gap-1 border-t border-border pt-3",
@@ -346,38 +355,54 @@ export function Sidebar({
 						>
 							Admin
 						</span>
-						<SidebarLink
-							to="/app/admin/sellers"
-							onClick={exitActAs}
-							icon={Store}
-							label="All sellers"
-							collapsed={collapsed}
-							motion={motion}
-						/>
-						<SidebarLink
-							to="/app/admin/billing"
-							onClick={exitActAs}
-							icon={ShieldCheck}
-							label="Billing"
-							collapsed={collapsed}
-							motion={motion}
-						/>
-						<SidebarLink
-							to="/app/admin/showcases"
-							onClick={exitActAs}
-							icon={GalleryHorizontalEnd}
-							label="Showcases"
-							collapsed={collapsed}
-							motion={motion}
-						/>
-						<SidebarLink
-							to="/app/admin/waba"
-							onClick={exitActAs}
-							icon={Siren}
-							label="WABA Safety"
-							collapsed={collapsed}
-							motion={motion}
-						/>
+						{isAdmin ? (
+							<>
+								<SidebarLink
+									to="/app/admin/sellers"
+									onClick={exitActAs}
+									icon={Store}
+									label="All sellers"
+									collapsed={collapsed}
+									motion={motion}
+								/>
+								<SidebarLink
+									to="/app/admin/billing"
+									onClick={exitActAs}
+									icon={ShieldCheck}
+									label="Billing"
+									collapsed={collapsed}
+									motion={motion}
+								/>
+								<SidebarLink
+									to="/app/admin/showcases"
+									onClick={exitActAs}
+									icon={GalleryHorizontalEnd}
+									label="Showcases"
+									collapsed={collapsed}
+									motion={motion}
+								/>
+								<SidebarLink
+									to="/app/admin/waba"
+									onClick={exitActAs}
+									icon={Siren}
+									label="WABA Safety"
+									collapsed={collapsed}
+									motion={motion}
+								/>
+							</>
+						) : null}
+						{/* Last: it is the one row that LEAVES the app (its own site on
+						    admin.kedaipal.com, signed in with this same account). */}
+						{blogVideos ? (
+							<SidebarExternalLink
+								href={BLOG_VIDEOS_URL}
+								icon={Clapperboard}
+								label="Blog videos"
+								hint="Opens admin.kedaipal.com"
+								collapsed={collapsed}
+								motion={motion}
+							/>
+						) : null}
 					</div>
 				) : null}
 			</nav>
@@ -617,6 +642,54 @@ function SidebarLink({
 				</>
 			)}
 		</Link>
+	);
+}
+
+/**
+ * A sidebar row that leaves the app (a sibling site on admin.kedaipal.com). Same
+ * look as `SidebarLink`, never "active", and an ↗ so it doesn't pass for an
+ * in-app page.
+ */
+function SidebarExternalLink({
+	href,
+	icon: Icon,
+	label,
+	hint,
+	collapsed,
+	motion,
+}: {
+	href: string;
+	icon: LucideIcon;
+	label: string;
+	hint: string;
+	collapsed: boolean;
+	motion: string;
+}) {
+	return (
+		<a
+			href={href}
+			title={collapsed ? `${label} — ${hint}` : hint}
+			className={cn(
+				"group relative flex h-10 items-center gap-3 overflow-hidden rounded-lg text-sm text-muted-foreground hover:bg-accent/10 hover:text-foreground",
+				collapsed ? "pl-4" : "px-3",
+				motion || "transition-colors",
+			)}
+		>
+			<span className="relative shrink-0">
+				<Icon className="size-5 stroke-current" strokeWidth={1.75} />
+			</span>
+			<span
+				aria-hidden={collapsed || undefined}
+				className={cn(
+					"flex min-w-0 flex-1 items-center gap-3 whitespace-nowrap",
+					collapsed ? "opacity-0" : "opacity-100",
+					motion,
+				)}
+			>
+				<span className="flex-1">{label}</span>
+				<ArrowUpRight className="size-4 shrink-0" strokeWidth={1.75} />
+			</span>
+		</a>
 	);
 }
 

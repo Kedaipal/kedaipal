@@ -9,6 +9,7 @@
  */
 
 import type * as admin from "../admin.js";
+import type * as adminAccess from "../adminAccess.js";
 import type * as analytics from "../analytics.js";
 import type * as awb from "../awb.js";
 import type * as billing from "../billing.js";
@@ -43,6 +44,7 @@ import type * as lalamove from "../lalamove.js";
 import type * as lib_accountDeletion from "../lib/accountDeletion.js";
 import type * as lib_activation from "../lib/activation.js";
 import type * as lib_address from "../lib/address.js";
+import type * as lib_adminAreas from "../lib/adminAreas.js";
 import type * as lib_adminDirectory from "../lib/adminDirectory.js";
 import type * as lib_appVersion from "../lib/appVersion.js";
 import type * as lib_attribution from "../lib/attribution.js";
@@ -215,6 +217,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   admin: typeof admin;
+  adminAccess: typeof adminAccess;
   analytics: typeof analytics;
   awb: typeof awb;
   billing: typeof billing;
@@ -249,6 +252,7 @@ declare const fullApi: ApiFromModules<{
   "lib/accountDeletion": typeof lib_accountDeletion;
   "lib/activation": typeof lib_activation;
   "lib/address": typeof lib_address;
+  "lib/adminAreas": typeof lib_adminAreas;
   "lib/adminDirectory": typeof lib_adminDirectory;
   "lib/appVersion": typeof lib_appVersion;
   "lib/attribution": typeof lib_attribution;
