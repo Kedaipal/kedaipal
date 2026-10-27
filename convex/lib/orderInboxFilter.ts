@@ -95,6 +95,7 @@ const NARROWING_FILTER_KEYS: Record<
 	statuses: true,
 	categories: true,
 	categoriesUnspecified: true,
+	listing: true,
 	sources: true,
 	attributionSources: true,
 	fulfilments: true,
@@ -208,6 +209,22 @@ export type InboxFilterArgs = {
 	 * changed nothing while their list quietly shrank.
 	 */
 	categoriesUnspecified?: boolean;
+	/**
+	 * ONE listing (`products._id`) — the orders for this event or booking
+	 * listing only (`z8r3fdjv0d`). An order matches when any line is that
+	 * product, or when it is a booking OF it (`bookingProductId`).
+	 *
+	 * Exact, where categories and search are not: it exists so a Schedule row
+	 * ("Luncheon, 13 Nov — 14 registered, 3 unpaid") opens precisely the orders
+	 * it counted. A name search would also catch "Luncheon VIP"; a category
+	 * holds every listing filed under it. No picker writes it — it arrives on
+	 * the URL from the Schedule view, so the panel's job is to SHOW it and let it
+	 * go, the same posture as the due span from Home.
+	 *
+	 * A gated order (Credits T3.1) has its lines stripped before this runs, so
+	 * it can't match by line — the Schedule row says how many are waiting.
+	 */
+	listing?: string;
 	// Checkout surface: "storefront" (public web / wa.me) vs "counter" (walk-in)
 	// vs "claim". Legacy orders with no stamped source read as "storefront".
 	// MULTI-select since 86eyrtz74 (was one value) — "online or claim link, but
@@ -337,6 +354,9 @@ export type FilterableOrder = CsvOrder & {
 	 * never computed here: the filter and the row's own contents then come from
 	 * one decision and cannot disagree. */
 	creditGated?: boolean;
+	/** The booking's listing, denormalised at request (the `listing` filter's
+	 * booking arm — a pre-denormalisation booking still matches by its line). */
+	bookingProductId?: string;
 };
 
 /** An order is awaiting the seller's mockup action. */
@@ -426,6 +446,13 @@ export function buildInboxPredicate(
 			if (!byLeaf && !byPeriod) return false;
 		}
 		if (args.mockupPending && !needsMockup(o.mockupStatus)) return false;
+		// One listing (z8r3fdjv0d): a line of it, or a booking of it.
+		if (
+			args.listing !== undefined &&
+			o.bookingProductId !== args.listing &&
+			!o.items.some((item) => item.productId === args.listing)
+		)
+			return false;
 		// Category filter — the same shape as the method filter below: the named
 		// set ORs with the "none recorded" arm, so selecting every category plus
 		// Uncategorized genuinely matches every order.

@@ -913,3 +913,71 @@ describe("OrderFilters — the due-date axis is one control", () => {
 		expect("dueTo" in next).toBe(true);
 	});
 });
+
+/**
+ * The Schedule's drill-down (`z8r3fdjv0d`): a row opens the inbox narrowed to
+ * ONE listing. No picker writes it, so the panel's whole job is to name it and
+ * let it go — a filter in force that the seller can't see would leave them
+ * wondering where their other orders went.
+ */
+describe("OrderFilters — the listing filter is named and removable", () => {
+	it("counts as one filter and reads the listing's name", () => {
+		expect(activeFilterCount({ ...EMPTY, mockup: false, listing: "p1" })).toBe(
+			1,
+		);
+		renderFilters({
+			value: { ...EMPTY, mockup: false, listing: "p1" },
+			listingName: "Luncheon",
+		});
+		expect(
+			screen.getAllByRole("button", {
+				name: /remove filter: listing: luncheon/i,
+			}).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("says so when the id names no listing, rather than hiding the filter", () => {
+		renderFilters({
+			value: { ...EMPTY, mockup: false, listing: "gone" },
+			listingName: null,
+		});
+		expect(
+			screen.getAllByRole("button", {
+				name: /remove filter: listing not found/i,
+			}).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("removing it clears the listing and nothing else", () => {
+		const DUE = Date.parse("2026-11-13T00:00:00+08:00");
+		const { onChange } = renderFilters({
+			value: {
+				...EMPTY,
+				mockup: false,
+				listing: "p1",
+				dueFrom: DUE,
+				dueTo: DUE,
+			},
+			listingName: "Luncheon",
+		});
+		fireEvent.click(
+			screen.getAllByRole("button", {
+				name: /remove filter: listing: luncheon/i,
+			})[0],
+		);
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.listing).toBeUndefined();
+		// The date the row was about stays — the seller dropped one filter.
+		expect(next.dueFrom).toBe(DUE);
+	});
+
+	it("Clear all drops it too", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, listing: "p1" },
+			listingName: "Luncheon",
+		});
+		fireEvent.click(screen.getAllByRole("button", { name: /^clear all/i })[0]);
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.listing).toBeUndefined();
+	});
+});

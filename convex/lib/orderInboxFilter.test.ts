@@ -985,3 +985,33 @@ describe("compareInboxOrder — same-day ties break by TIME (z8r3fdff97)", () =>
 		]);
 	});
 });
+
+describe("buildInboxPredicate — listing (the Schedule's drill-down, z8r3fdjv0d)", () => {
+	const line = (productId: string) => ({
+		productId,
+		name: "Line",
+		quantity: 1,
+		price: 1000,
+	});
+
+	test("matches an order with a line of that listing, among others", () => {
+		const p = buildInboxPredicate({ listing: "p_lunch" });
+		expect(p(order({ items: [line("p_cake"), line("p_lunch")] }))).toBe(true);
+		expect(p(order({ items: [line("p_cake")] }))).toBe(false);
+	});
+
+	test("matches a booking of that listing by its denormalised id", () => {
+		const p = buildInboxPredicate({ listing: "p_studio" });
+		expect(p(order({ items: [], bookingProductId: "p_studio" }))).toBe(true);
+		expect(p(order({ items: [], bookingProductId: "p_other" }))).toBe(false);
+	});
+
+	test("a gated order (lines stripped) does not match", () => {
+		const p = buildInboxPredicate({ listing: "p_lunch" });
+		expect(p(order({ items: [], creditGated: true }))).toBe(false);
+	});
+
+	test("is a narrowing (Pro) filter", () => {
+		expect(narrowsTheInbox({ listing: "p_lunch" })).toBe(true);
+	});
+});
