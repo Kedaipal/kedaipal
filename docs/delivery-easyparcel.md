@@ -58,7 +58,7 @@ authorize it.
 
 1. **Settings → Integrations → EasyParcel → Connect EasyParcel** calls
    `startConnect`, which (Pro-gated, country-gated, configured-gated) mints a
-   `courierOAuthStates` row — crypto-random `nonce`, 10-minute TTL — and
+   `courierOAuthStates` row — crypto-random `nonce`, 30-minute TTL (EasyParcel's own sign-in state lives 30 minutes, and a new seller may sign up mid-flow) — and
    returns EasyParcel's sign-in URL. `returnTo` is the card's own URL, pinned by
    `allowedReturnTo`: the app's SITE_URL origin always; localhost origins only
    when SITE_URL is itself localhost (dev worktrees each run their own port).
@@ -69,7 +69,7 @@ authorize it.
    are read; tokens are `enc.v1.`-encrypted in the action and stored in
    **`easyparcelConnections`**; the browser is 302'd back to `returnTo`.
 3. Every outcome — `connected`, `denied` (the seller declined), `expired`
-   (sign-in took >10 min), `failed` — is written on the state row, and the
+   (sign-in took >30 min), `failed` — is written on the state row, and the
    card states it on return. No URL parameters.
 
 The pickup address EasyParcel holds is imported as a **prefill** (fill-if-unset,
@@ -106,10 +106,20 @@ already have rotated the token being held. A dead grant makes dispatch block
 with `reconnect_needed` and the card read **Reconnect needed**; a fresh connect
 clears it. A refresh that doesn't rotate the refresh token keeps the old one.
 
-**Sandbox vs live:** no API response reports it. `environment` is set only if
-the token itself is a JWT carrying the claim (`tokenEnvironment`); otherwise it
-is unknown and rendered as unknown — never as live. The account name on the
-card is the human check.
+**Sandbox vs live:** no API response reports it, and EasyParcel's sign-in
+never asks — its account picker offers **"SG or MY"**, not "sandbox or live".
+`connectionEnvironment` reads a JWT claim when the token has one, else the
+account **name** (EasyParcel names sandbox accounts "… Sandbox Account" in the
+Developer Hub); anything else is unknown and rendered as unknown — never as
+live. The account name on the card is the human check.
+
+**There is no Singapore sandbox (found 28 Oct 2026, /test-code).** The
+Developer Hub's sandbox account is a ringgit (MY) account; signing in from an
+SG store and picking "SG" connected the tester's **live** SG account (SGD
+wallet, real courier prices). Quotes are free, so the run quoted safely, but a
+booking on that connection would have dispatched a real courier — the S$0
+wallet was the only thing in the way. Until EasyParcel provides an SG sandbox,
+SG bookings can only be exercised on a live account with a real parcel.
 
 ## Dispatch
 
@@ -123,6 +133,27 @@ card is the human check.
 - **`/shipment/quotations`** → inline picker, cheapest first, priced at what the
   SELLER pays (`seller_payable_amount`). Pickup vs drop-off is named per
   service, with a note when the seller must drop the parcel at a point.
+- **What a service promises is read, not guessed** (`describeEasyparcelService`,
+  /test-code F9–F13). The quote has no structured field for where the BUYER
+  receives the parcel or for a minimum parcel count, and `delivery_duration`
+  arrives null; every SG service name carries them in one convention —
+  `Ninja - Standard [1-3 Days] (Pick Up) (From Door to Door | 5 MOQ)`. The
+  structured `service_tag` wins when present, then the name; neither saying
+  means the fact is undefined and the card claims nothing. The row shows a
+  clean label plus chips — **Buyer collects at a point**, **Pickup needs N+
+  parcels**, **May miss / Arrives after <buyer's date>** — so a phone never
+  truncates the part that matters.
+- **Pre-selection keeps the order's promise** (`defaultRateId`,
+  `src/lib/easyparcel-rates.ts`): the cheapest service that reaches the door,
+  takes one parcel and makes the buyer's date; else the cheapest door service;
+  else the cheapest. The trap it closes: on the first live quote the cheapest
+  was *Point to Point* — a delivery order would have been parked at a locker.
+- **20+ services, the cheap end first.** A quote holding both door and point
+  services splits them (`To the buyer's door (n)` / `Buyer collects (n)`, the
+  latter warning the buyer chose delivery); six rows show, the rest behind
+  **Show all N**, and the pick always stays on screen.
+- **Booking copy follows the pick**: a drop-off service says to drop it at a
+  point; only a pickup service says EasyParcel arranges collection today.
 - **The wallet rides the quote**: a pick it can't cover is amber and Book is
   disabled-with-reason. `confirmBooking` re-reads the wallet and refuses
   server-side too.

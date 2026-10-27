@@ -65,7 +65,7 @@ import {
 	parseSubmitResponse,
 	parseTokenResponse,
 	parseWalletResponse,
-	tokenEnvironment,
+	connectionEnvironment,
 } from "./lib/easyparcel";
 import { generateTrackingToken } from "./lib/order";
 import type { PermissionLevel } from "./lib/permissions";
@@ -77,7 +77,10 @@ type Connection = Doc<"easyparcelConnections">;
 
 /** How long a connect attempt may sit at EasyParcel's sign-in before its
  * state stops being redeemable. */
-const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+// EasyParcel's own sign-in state lives 30 minutes, and the card sends a new
+// seller to SIGN UP mid-flow — 10 minutes expired a real sign-in during the
+// z8r3fdcje2 /test-code run (F5). Single-use + crypto nonce either way.
+const OAUTH_STATE_TTL_MS = 30 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Configuration (Kedaipal's OAuth app — Convex env, never a table)
@@ -264,7 +267,7 @@ export const consumeOAuthState = internalMutation({
 			await ctx.db.patch(row._id, {
 				outcome: "expired",
 				message:
-					"That sign-in took longer than 10 minutes, so we didn't use it. Tap Connect EasyParcel to try again.",
+					"That sign-in took longer than 30 minutes, so we didn't use it. Tap Connect EasyParcel to try again.",
 			});
 			return { kind: "expired", returnTo: row.returnTo, stateId: row._id };
 		}
@@ -423,7 +426,7 @@ export async function completeConnect(
 			refreshExpiresAt: tokens.refreshExpiresAt,
 			accountName: account?.name,
 			accountType: account?.accountType,
-			environment: tokenEnvironment(tokens.accessToken),
+			environment: connectionEnvironment(tokens.accessToken, account?.name),
 			balanceMinor: wallet?.balanceMinor,
 			balanceCurrency: wallet?.currency,
 			// Imported only when it is in the store's own country — an MY

@@ -160,15 +160,23 @@ export function DispatchHub({
 
 	// One primary action at a time only matters when at least two compete.
 	if (cardProviders.length < 2) {
+		// Lalamove's "set riders up" hint is a nudge for a store that books
+		// nothing. Above a courier that can book this order right now it is a
+		// two-hop detour to a switch that says "connect first" (z8r3fdcje2
+		// /test-code F8) — the working card speaks alone.
+		const lalamoveHintOnly =
+			lalamoveSurface(order, lalamove) === "hint" && cardProviders.length > 0;
 		return (
 			<>
-				<BookDeliveryCard
-					order={order}
-					bookRequestToken={bookRequestToken}
-					advanceWithoutRider={advanceWithoutRider}
-					onAdvanceBookUnavailable={onAdvanceBookUnavailable}
-					lockedReason={lockedReason}
-				/>
+				{lalamoveHintOnly ? null : (
+					<BookDeliveryCard
+						order={order}
+						bookRequestToken={bookRequestToken}
+						advanceWithoutRider={advanceWithoutRider}
+						onAdvanceBookUnavailable={onAdvanceBookUnavailable}
+						lockedReason={lockedReason}
+					/>
+				)}
 				<DelyvaDispatchCard order={order} lockedReason={lockedReason} />
 				<EasyparcelDispatchCard order={order} lockedReason={lockedReason} />
 			</>

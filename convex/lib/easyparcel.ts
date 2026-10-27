@@ -153,6 +153,26 @@ export function tokenEnvironment(
 	return undefined;
 }
 
+/**
+ * Sandbox or live for a fresh connection. The token's own claim wins; when
+ * it has none (EasyParcel's tokens carried none in the 28 Oct /test-code run),
+ * the account NAME decides — EasyParcel names a sandbox account "… Sandbox
+ * Account" in its Developer Hub, and the account picker at sign-in asks only
+ * "SG or MY", never "sandbox or live". A name without the word stays
+ * UNKNOWN, never "live": a guess at live is the claim that sends a courier.
+ */
+export function connectionEnvironment(
+	accessToken: string,
+	accountName: string | undefined,
+): "sandbox" | "live" | undefined {
+	return (
+		tokenEnvironment(accessToken) ??
+		(accountName && /\b(sandbox|demo)\b/i.test(accountName)
+			? "sandbox"
+			: undefined)
+	);
+}
+
 export function accessTokenNeedsRefresh(
 	accessExpiresAt: number,
 	now: number,
@@ -411,7 +431,102 @@ export type EasyparcelRate = {
 	/** What the seller's wallet pays, minor units. */
 	priceMinor: number;
 	currency: string;
+} & EasyparcelServiceFacts;
+
+/**
+ * What a service promises the BUYER and the seller beyond its price — the
+ * three facts a seller actually chooses on (z8r3fdcje2 /test-code F9–F13).
+ *
+ * EasyParcel's quotation has NO structured field for where the buyer
+ * receives the parcel or for a minimum parcel count, and `delivery_duration`
+ * is documented as "string/null" and arrives null. What it does carry, on
+ * every Singapore service, is a stable naming convention:
+ *
+ *   "Ninja - Standard [1-3 Days] (Pick Up) (From Door to Door | 5 MOQ)"
+ *
+ * So each fact is read from the structured field first (a `service_tag`
+ * "Service Methods" of "Deliver to Door", `delivery_duration`), then from the
+ * name — and where neither says, the fact is UNDEFINED and the card claims
+ * nothing. A wrong "to your door" is worse than no label.
+ */
+export type EasyparcelServiceFacts = {
+	/** The service name without the bracketed facts the chips now show. */
+	label: string;
+	/** Where the BUYER gets the parcel. "point" = a locker or shop they
+	 * collect from — a different promise from a delivery order's. */
+	deliversTo?: "door" | "point";
+	/** The courier only collects this many parcels or more at once. */
+	minParcels?: number;
+	/** Transit after collection, in days. Same-day / hour services = 0. */
+	transit?: { minDays: number; maxDays: number };
 };
+
+export function describeEasyparcelService(
+	serviceName: string,
+	serviceTags: ReadonlyArray<{ name?: string; value?: string }> = [],
+	deliveryDuration?: string,
+): EasyparcelServiceFacts {
+	const methods = serviceTags
+		.filter((t) => /service methods/i.test(t.name ?? ""))
+		.map((t) => t.value ?? "");
+	const route = /\(From\s+(Door|Point)\s+to\s+(Door|Point)(?:\s+OR\s+to\s+(Door|Point))?/i.exec(
+		serviceName,
+	);
+	const deliversTo: EasyparcelServiceFacts["deliversTo"] = methods.some((m) =>
+		/deliver to door/i.test(m),
+	)
+		? "door"
+		: route
+			? [route[2], route[3]].some((end) => end && /door/i.test(end))
+				? "door"
+				: "point"
+			: undefined;
+
+	const moq = /(\d+)\s*MOQ/i.exec(serviceName);
+	const minParcels = moq ? Number(moq[1]) : undefined;
+
+	return {
+		label: cleanServiceLabel(serviceName),
+		deliversTo,
+		minParcels: minParcels && minParcels > 1 ? minParcels : undefined,
+		transit: parseTransit(deliveryDuration) ?? parseTransit(serviceName),
+	};
+}
+
+function parseTransit(
+	text: string | undefined,
+): EasyparcelServiceFacts["transit"] {
+	if (!text) return undefined;
+	const range = /(\d+)\s*-\s*(\d+)\s*(?:working\s+)?days?/i.exec(text);
+	if (range) return { minDays: Number(range[1]), maxDays: Number(range[2]) };
+	if (/same[-\s]?day|\d+\s*hours?/i.test(text)) return { minDays: 0, maxDays: 0 };
+	if (/next[-\s]?day/i.test(text)) return { minDays: 1, maxDays: 1 };
+	const single = /(\d+)\s*(?:working\s+)?days?/i.exec(text);
+	if (single) return { minDays: Number(single[1]), maxDays: Number(single[1]) };
+	return undefined;
+}
+
+function cleanServiceLabel(serviceName: string): string {
+	const cleaned = serviceName
+		.replace(/\[[^\]]*\]/g, " ")
+		.replace(/\((?:pick\s*up|drop[-\s]?off)\)/gi, " ")
+		.replace(/\(From[^)]*\)/gi, " ")
+		.replace(/\(\s*\d+\s*MOQ\s*\)/gi, " ")
+		.replace(/\s{2,}/g, " ")
+		.trim()
+		.replace(/[\s\-–|]+$/, "");
+	return cleaned || serviceName;
+}
+
+/** "1–3 days", "Same day", "Next day" — the chip text for a transit. */
+export function transitLabel(
+	transit: NonNullable<EasyparcelServiceFacts["transit"]>,
+): string {
+	if (transit.maxDays === 0) return "Same day";
+	if (transit.minDays === transit.maxDays)
+		return transit.maxDays === 1 ? "Next day" : `${transit.maxDays} days`;
+	return `${transit.minDays}–${transit.maxDays} days`;
+}
 
 /** Money as the API sends it — a JSON number in the quotation, a decimal
  * STRING in submit/details. Either way → integer minor units; anything that
@@ -454,15 +569,25 @@ export function parseQuotationResponse(
 		} catch {
 			continue; // one malformed row must not sink the quote
 		}
+		const serviceName =
+			str(courier.service_name) ?? str(courier.courier_name) ?? serviceId;
 		rates.push({
 			serviceId,
-			serviceName: str(courier.service_name) ?? str(courier.courier_name) ?? serviceId,
+			serviceName,
 			courierName: str(courier.courier_name) ?? "Courier",
 			courierLogo: str(courier.courier_logo),
 			isPickup: courier.is_pickup === true,
 			isDropoff: courier.is_dropoff === true,
 			priceMinor,
 			currency: str(pricing.currency) ?? "",
+			...describeEasyparcelService(
+				serviceName,
+				arr(courier.service_tag).map((t) => ({
+					name: str(t.name),
+					value: str(t.value),
+				})),
+				str(courier.delivery_duration),
+			),
 		});
 	}
 	return rates.sort((a, b) => a.priceMinor - b.priceMinor);

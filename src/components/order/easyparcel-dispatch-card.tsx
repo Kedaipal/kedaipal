@@ -11,6 +11,12 @@
  *    beside the rates, and a pick it can't cover is disabled with the reason
  *    before the tap.
  *  - The booking hands back the courier's own label PDF, linked on the card.
+ *  - A quote runs to 20+ services, so the list opens on the cheap end with
+ *    "Show all", splits door delivery from point collection when a quote
+ *    holds both, and pre-selects the cheapest service that KEEPS the order's
+ *    promise — to the buyer's door, one parcel, by their date
+ *    (`src/lib/easyparcel-rates.ts`). Each fact a service's name hides is a
+ *    chip, so a phone never truncates the part that matters.
  *  - Status arrives by webhook (and an hourly backstop); "Refresh status"
  *    re-reads it now.
  *  - Cancelling is real: EasyParcel cancels and refunds the wallet, and its
@@ -43,19 +49,30 @@ import {
 	type EasyparcelRate,
 	PARCEL_BOXES,
 	type ParcelBox,
+	transitLabel,
 } from "../../../convex/lib/easyparcel";
+import { formatFulfilmentDate } from "../../../convex/lib/fulfilmentDate";
 import { courierContactFallbackCopy } from "../../lib/delyva-dispatch-block";
 import { easyparcelSurface } from "../../lib/dispatch-surface";
 import {
 	easyparcelBlockCopy,
 	easyparcelStatusLabel,
 } from "../../lib/easyparcel-dispatch-block";
+import {
+	defaultRateId,
+	filterRates,
+	RATES_SHOWN_FIRST,
+	type RateFilter,
+	rateDateFit,
+	rateFilterCounts,
+} from "../../lib/easyparcel-rates";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { TONE_ACCENT, TONE_CHIP, TONE_PANEL } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { CopyButton } from "../ui/copy-button";
+import { FilterChip } from "../ui/filter-chip";
 import { Input } from "../ui/input";
 
 const BOXES: ReadonlyArray<{ value: ParcelBox; label: string }> = [
@@ -98,6 +115,8 @@ export function EasyparcelDispatchCard({
 	const [quotedBalance, setQuotedBalance] = useState<number | undefined>();
 	const [quotedCurrency, setQuotedCurrency] = useState<string | undefined>();
 	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [filter, setFilter] = useState<RateFilter>("door");
+	const [showAll, setShowAll] = useState(false);
 	const [quoting, setQuoting] = useState(false);
 	const [booking, setBooking] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
@@ -200,8 +219,16 @@ export function EasyparcelDispatchCard({
 			setRates(result.rates);
 			setQuotedBalance(result.balanceMinor);
 			setQuotedCurrency(result.balanceCurrency);
-			// Cheapest pre-selected — the list arrives price-sorted.
-			setSelectedId(result.rates[0]?.serviceId ?? null);
+			// The cheapest that keeps the order's promise — never just the
+			// cheapest, which can leave a delivery at a locker.
+			const pick = defaultRateId(result.rates, order.fulfilmentDate);
+			setSelectedId(pick);
+			setFilter(
+				result.rates.find((r) => r.serviceId === pick)?.deliversTo === "point"
+					? "point"
+					: "door",
+			);
+			setShowAll(false);
 		} catch (err) {
 			setError(convexErrorMessage(err));
 		} finally {
@@ -232,7 +259,7 @@ export function EasyparcelDispatchCard({
 			}
 			setRates(null);
 			setSelectedId(null);
-			toast.success(`${rate.serviceName} booked`);
+			toast.success(`${rate.label} booked`);
 		} catch (err) {
 			setError(convexErrorMessage(err));
 		} finally {
@@ -258,6 +285,28 @@ export function EasyparcelDispatchCard({
 		selected !== null &&
 		quotedBalance !== undefined &&
 		selected.priceMinor > quotedBalance;
+	const counts = rates ? rateFilterCounts(rates) : { door: 0, point: 0 };
+	const bothModes = counts.door > 0 && counts.point > 0;
+	const filtered = rates
+		? bothModes
+			? filterRates(rates, filter)
+			: rates
+		: [];
+	// The cheap end first; the pick always stays on screen even when it sits
+	// past the fold, so "Book X" never names a row the seller can't see.
+	const visibleRates = showAll
+		? filtered
+		: [
+				...filtered.slice(0, RATES_SHOWN_FIRST),
+				...filtered
+					.slice(RATES_SHOWN_FIRST)
+					.filter((r) => r.serviceId === selectedId),
+			];
+	const hiddenCount = filtered.length - visibleRates.length;
+	const buyerDate =
+		order.fulfilmentDate !== undefined
+			? formatFulfilmentDate(order.fulfilmentDate, { year: false })
+			: null;
 
 	return (
 		<section
@@ -586,8 +635,51 @@ export function EasyparcelDispatchCard({
 									{formatPrice(order.deliveryFee ?? 0, order.currency)}
 								</span>
 							</div>
-							{rates.map((rate, index) => {
+							{bothModes ? (
+								// The house segment chip (one idea, one control) — not a
+								// look-alike radio row.
+								<fieldset className="flex flex-wrap gap-1.5">
+									<legend className="sr-only">
+										Where the buyer gets the parcel
+									</legend>
+									{(
+										[
+											["door", "To the buyer's door", counts.door],
+											["point", "Buyer collects", counts.point],
+										] as const
+									).map(([value, label, count]) => (
+										<FilterChip
+											key={value}
+											selected={filter === value}
+											count={count}
+											className="h-11"
+											onClick={() => {
+												setFilter(value);
+												setShowAll(false);
+												// Keep the pick if it's in this group; else take
+												// this group's own best.
+												const group = filterRates(rates, value);
+												if (!group.some((r) => r.serviceId === selectedId))
+													setSelectedId(
+														defaultRateId(group, order.fulfilmentDate),
+													);
+											}}
+										>
+											{label}
+										</FilterChip>
+									))}
+								</fieldset>
+							) : null}
+							{filter === "point" && bothModes ? (
+								<p className="text-xs text-muted-foreground">
+									These leave the parcel at a locker or shop for the buyer to
+									collect — they chose delivery, so tell them before you book
+									one.
+								</p>
+							) : null}
+							{visibleRates.map((rate, index) => {
 								const active = rate.serviceId === selectedId;
+								const fit = rateDateFit(rate, order.fulfilmentDate);
 								return (
 									<button
 										key={rate.serviceId}
@@ -606,11 +698,44 @@ export function EasyparcelDispatchCard({
 										</span>
 										<span className="flex min-w-0 grow flex-col gap-0.5">
 											<span className="truncate text-sm font-semibold">
-												{rate.serviceName}
+												{rate.label}
 											</span>
 											<span className="truncate text-xs text-muted-foreground">
 												{rateMeta(rate)}
 											</span>
+											{rate.deliversTo === "point" ||
+											rate.minParcels !== undefined ||
+											(fit && buyerDate) ? (
+												<span className="flex flex-wrap gap-1 pt-0.5">
+													{rate.deliversTo === "point" ? (
+														<span
+															className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${TONE_CHIP.warn}`}
+														>
+															Buyer collects at a point
+														</span>
+													) : null}
+													{rate.minParcels !== undefined ? (
+														<span
+															className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${TONE_CHIP.warn}`}
+														>
+															Pickup needs {rate.minParcels}+ parcels
+														</span>
+													) : null}
+													{fit && buyerDate ? (
+														<span
+															className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+																fit === "late"
+																	? TONE_CHIP.danger
+																	: TONE_CHIP.warn
+															}`}
+														>
+															{fit === "late"
+																? `Arrives after ${buyerDate}`
+																: `May miss ${buyerDate}`}
+														</span>
+													) : null}
+												</span>
+											) : null}
 										</span>
 										<span className="flex shrink-0 flex-col items-end gap-1">
 											<span className="text-sm font-bold">
@@ -619,7 +744,7 @@ export function EasyparcelDispatchCard({
 													rate.currency || walletCurrency,
 												)}
 											</span>
-											{index === 0 && rates.length > 1 ? (
+											{index === 0 && filtered.length > 1 ? (
 												<span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent-emphasis">
 													Cheapest
 												</span>
@@ -639,6 +764,38 @@ export function EasyparcelDispatchCard({
 								);
 							})}
 
+							{hiddenCount > 0 ? (
+								<button
+									type="button"
+									onClick={() => setShowAll(true)}
+									className="min-h-11 rounded-xl border border-dashed border-border text-xs font-medium text-accent-emphasis hover:border-accent/40"
+								>
+									Show all {filtered.length} — {hiddenCount} more, pricier
+								</button>
+							) : null}
+
+							{/* The pick isn't the cheapest — say why, or the seller
+							    wonders why we chose the dearer one (test-code F19). */}
+							{selected &&
+							filtered[0] &&
+							selected.serviceId ===
+								defaultRateId(filtered, order.fulfilmentDate) &&
+							selected.serviceId !== filtered[0].serviceId ? (
+								<p className="text-xs text-muted-foreground">
+									Picked <b className="text-foreground">{selected.label}</b>:
+									the cheapest that{" "}
+									{selected.deliversTo === "point"
+										? "takes this parcel"
+										: "reaches the buyer's door"}
+									{buyerDate && rateDateFit(filtered[0], order.fulfilmentDate)
+										? ` by ${buyerDate}`
+										: filtered[0].minParcels !== undefined
+											? " with a single parcel"
+											: ""}
+									. Cheaper ones are above — your call.
+								</p>
+							) : null}
+
 							{/* A drop-off-only service is a different job for the
 							    seller — said before they book it, not after. */}
 							{selected && !selected.isPickup ? (
@@ -651,6 +808,7 @@ export function EasyparcelDispatchCard({
 
 							{quotedBalance !== undefined ? (
 								<p
+									id={`easyparcel-wallet-${order.shortId}`}
 									className={`flex items-center gap-1.5 text-xs ${
 										selectedUnaffordable
 											? `font-medium ${TONE_ACCENT.warn}`
@@ -678,6 +836,11 @@ export function EasyparcelDispatchCard({
 								className="h-11 w-full"
 								isLoading={booking}
 								disabled={booking || !selected || selectedUnaffordable}
+								aria-describedby={
+									selectedUnaffordable
+										? `easyparcel-wallet-${order.shortId}`
+										: undefined
+								}
 								onClick={() => void handleBook()}
 							>
 								{booking ? (
@@ -685,7 +848,7 @@ export function EasyparcelDispatchCard({
 								) : (
 									<>
 										<Truck className="size-4" />
-										Book {selected?.serviceName} —{" "}
+										Book {selected?.label} —{" "}
 										{selected
 											? formatPrice(
 													selected.priceMinor,
@@ -696,9 +859,9 @@ export function EasyparcelDispatchCard({
 								)}
 							</Button>
 							<p className="text-xs text-muted-foreground">
-								Paid from your EasyParcel wallet when you book, for collection
-								today — EasyParcel arranges the pickup time with the courier.
-								The tracking number and the courier&apos;s label land here.
+								{selected && !selected.isPickup
+									? "Paid from your EasyParcel wallet when you book. Then drop the parcel at one of the courier's points — the tracking number and the courier's label land here."
+									: "Paid from your EasyParcel wallet when you book, for collection today — EasyParcel arranges the pickup time with the courier. The tracking number and the courier's label land here."}
 							</p>
 							<button
 								type="button"
@@ -769,5 +932,9 @@ function initials(name: string): string {
  * parcel to it. */
 function rateMeta(rate: EasyparcelRate): string {
 	const how = rate.isPickup ? "Pickup from your door" : "You drop off";
-	return [rate.courierName, how].join(" · ");
+	return [
+		rate.courierName,
+		how,
+		...(rate.transit ? [transitLabel(rate.transit)] : []),
+	].join(" · ");
 }

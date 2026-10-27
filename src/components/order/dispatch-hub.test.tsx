@@ -230,6 +230,28 @@ describe("a tab is only offered for a provider that renders", () => {
 		expect(container.textContent).toContain("LALAMOVE-CARD");
 	});
 
+	it("the Lalamove set-up hint stays out when another courier can book (test-code F8)", () => {
+		// An SG store with EasyParcel live and Lalamove never set up: the hint
+		// would be a two-hop detour above the courier that works.
+		state.lalamove = lalamove({
+			bookingEnabled: false,
+			blockReason: "booking_disabled",
+		});
+		const { container } = render(<DispatchHub order={order} />);
+		expect(container.textContent).not.toContain("LALAMOVE-CARD");
+		expect(container.textContent).toContain("DELYVA-CARD");
+	});
+
+	it("…but a store that books nothing still gets the Lalamove hint", () => {
+		state.lalamove = lalamove({
+			bookingEnabled: false,
+			blockReason: "booking_disabled",
+		});
+		state.delyva = delyva({ bookingEnabled: false });
+		const { container } = render(<DispatchHub order={order} />);
+		expect(container.textContent).toContain("LALAMOVE-CARD");
+	});
+
 	it("a bare discoverability hint never earns a tab", () => {
 		// Never-set-up Lalamove renders a dashed one-liner, not a card — a
 		// tab strip around it would read as a broken provider.

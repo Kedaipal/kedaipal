@@ -49,6 +49,7 @@ import { GoogleAddressAutocomplete } from "../forms/google-address-autocomplete"
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
+import { Skeleton } from "../ui/skeleton";
 import {
 	AccountCard,
 	Glance,
@@ -281,7 +282,11 @@ export function EasyparcelCard({
 						<h2 className="font-heading text-lg font-bold">EasyParcel</h2>
 						{!canUse ? <ProBadge /> : null}
 						<span className="ml-auto flex shrink-0">
-							{!connected ? (
+							{/* Loading says nothing — "Not connected" for a beat on a
+							    connected store is a false alarm (test-code F15). */}
+							{settings === undefined ? (
+								<Skeleton className="h-6 w-24 rounded-full" />
+							) : !connected ? (
 								<Glance tone="grey">Not connected</Glance>
 							) : needsReconnect ? (
 								<Glance tone="warn">Reconnect needed</Glance>
@@ -326,7 +331,10 @@ export function EasyparcelCard({
 				) : null}
 
 				{settings === undefined ? (
-					<p className="text-sm text-muted-foreground">Loading…</p>
+					<div className="flex flex-col gap-2" aria-busy="true">
+						<Skeleton className="h-4 w-2/3" />
+						<Skeleton className="h-11 w-full rounded-xl" />
+					</div>
 				) : connected ? (
 					<>
 						<SectionLabel>Setup</SectionLabel>
@@ -486,9 +494,11 @@ export function EasyparcelCard({
 
 						{settings.available ? (
 							<p className="text-xs text-muted-foreground">
-								{settings.enabled
-									? "Booking is on — you'll see EasyParcel on your delivery orders."
-									: "Booking is currently off."}{" "}
+								{!settings.enabled
+									? "Booking is currently off."
+									: setupDone < 2
+										? "Booking is switched on, and starts once the setup above is done."
+										: "Booking is on — you'll see EasyParcel on your delivery orders."}{" "}
 								Manage it under{" "}
 								<Link
 									to="/app/settings/delivery-pricing"

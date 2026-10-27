@@ -208,6 +208,11 @@ describe("connect — start", () => {
 		expect(state?.retailerId).toBe(retailer._id);
 		expect(state?.provider).toBe("easyparcel");
 		expect(state?.consumedAt).toBeUndefined();
+		// EasyParcel's own sign-in state lives 30 minutes; ours matches, or a
+		// seller who signs up mid-flow comes back to "expired" (test-code F5).
+		expect((state?.expiresAt ?? 0) - (state?.createdAt ?? 0)).toBe(
+			30 * 60 * 1000,
+		);
 	});
 
 	test("refuses an unconfigured deployment, an MY store, and a foreign returnTo", async () => {

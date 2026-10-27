@@ -149,6 +149,24 @@ describe("not connected — the OAuth hand-off", () => {
 	});
 });
 
+describe("loading and half-set-up states (test-code F6, F15)", () => {
+	it("loading never claims Not connected", () => {
+		state.settings = undefined;
+		const { container } = render(card());
+		expect(screen.queryByText("Not connected")).toBeNull();
+		expect(container.querySelector('[aria-busy="true"]')).toBeTruthy();
+	});
+
+	it("booking switched on but no pickup address yet says it starts after setup", () => {
+		state.settings = settings({ pickupAddress: undefined });
+		render(card());
+		expect(
+			screen.getByText(/starts once the setup above is done/i),
+		).toBeTruthy();
+		expect(screen.queryByText(/^Booking is on/)).toBeNull();
+	});
+});
+
 describe("connected", () => {
 	it("shows who's connected, the wallet, the pickup address, the ambient rule", () => {
 		state.settings = settings();

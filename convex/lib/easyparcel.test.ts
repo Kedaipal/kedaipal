@@ -12,6 +12,8 @@ import {
 	buildSubmitBody,
 	buildTokenRequestBody,
 	classifyEasyparcelFailure,
+	connectionEnvironment,
+	describeEasyparcelService,
 	EasyparcelApiError,
 	easyparcelAmountToMinor,
 	normalizeEasyparcelStatus,
@@ -30,6 +32,7 @@ import {
 	subdivisionCode,
 	TOKEN_REFRESH_SKEW_MS,
 	tokenEnvironment,
+	transitLabel,
 } from "./easyparcel";
 
 const NOW = Date.parse("2026-10-27T04:00:00.000Z");
@@ -568,3 +571,150 @@ describe("webhook body", () => {
 		expect(parseWebhookShipmentNumber(JSON.stringify({ topic: "x" }))).toBeNull();
 	});
 });
+
+describe("describeEasyparcelService — the facts a service name hides (test-code F9–F13)", () => {
+	// Real Singapore service names from the 28 Oct 2026 live quote.
+	it("reads where the BUYER gets it from the route", () => {
+		expect(
+			describeEasyparcelService(
+				"Park N Parcel - Paperless [1-3 Days] (Drop Off) (From Point to Point)",
+			).deliversTo,
+		).toBe("point");
+		expect(
+			describeEasyparcelService(
+				"J&T Express - PUDO [1-3 Days] (Drop Off) (From Point to Door)",
+			).deliversTo,
+		).toBe("door");
+		// "to Door OR to Point" — the door is on offer, so it keeps the promise.
+		expect(
+			describeEasyparcelService(
+				"Speedpost - E-Saver [1-3 Days] (Drop Off) (From Point to Door OR to Point)",
+			).deliversTo,
+		).toBe("door");
+	});
+
+	it("the structured service_tag wins over the name", () => {
+		expect(
+			describeEasyparcelService("Plain Name", [
+				{ name: "Service Methods", value: "Deliver to Door" },
+			]).deliversTo,
+		).toBe("door");
+	});
+
+	it("claims NOTHING when neither the tag nor the name says", () => {
+		expect(describeEasyparcelService("Aramex")).toEqual({
+			label: "Aramex",
+			deliversTo: undefined,
+			minParcels: undefined,
+			transit: undefined,
+		});
+	});
+
+	it("reads a minimum parcel count, in either spelling", () => {
+		expect(
+			describeEasyparcelService(
+				"Ninja - Standard [1-3 Days] (Pick Up) (From Door to Door | 5 MOQ)",
+			).minParcels,
+		).toBe(5);
+		expect(
+			describeEasyparcelService(
+				"SF Express [1-2 Days] (Pick Up) (From Door to Door) (3 MOQ)",
+			).minParcels,
+		).toBe(3);
+	});
+
+	it("reads transit from delivery_duration first, then the name", () => {
+		expect(describeEasyparcelService("X [1-3 Days]").transit).toEqual({
+			minDays: 1,
+			maxDays: 3,
+		});
+		expect(describeEasyparcelService("X [Same-Day]").transit).toEqual({
+			minDays: 0,
+			maxDays: 0,
+		});
+		expect(describeEasyparcelService("X [3 Hours Express]").transit).toEqual({
+			minDays: 0,
+			maxDays: 0,
+		});
+		expect(describeEasyparcelService("X [Next-Day]").transit).toEqual({
+			minDays: 1,
+			maxDays: 1,
+		});
+		expect(describeEasyparcelService("X [1 Day]").transit).toEqual({
+			minDays: 1,
+			maxDays: 1,
+		});
+		expect(
+			describeEasyparcelService("X [1-3 Days]", [], "2-4 working days").transit,
+		).toEqual({ minDays: 2, maxDays: 4 });
+	});
+
+	it("labels drop the bracketed facts the chips now carry", () => {
+		expect(
+			describeEasyparcelService(
+				"Ninja - Standard [1-3 Days] (Pick Up) (From Door to Door | 5 MOQ)",
+			).label,
+		).toBe("Ninja - Standard");
+		expect(
+			describeEasyparcelService(
+				"SF Express [1-2 Days] (Pick Up) (From Door to Door) (3 MOQ)",
+			).label,
+		).toBe("SF Express");
+	});
+
+	it("transitLabel", () => {
+		expect(transitLabel({ minDays: 0, maxDays: 0 })).toBe("Same day");
+		expect(transitLabel({ minDays: 1, maxDays: 1 })).toBe("Next day");
+		expect(transitLabel({ minDays: 2, maxDays: 2 })).toBe("2 days");
+		expect(transitLabel({ minDays: 1, maxDays: 3 })).toBe("1–3 days");
+	});
+
+	it("parseQuotationResponse carries the facts onto each rate", () => {
+		const [r] = parseQuotationResponse(
+			JSON.stringify({
+				status_code: 200,
+				data: [
+					{
+						status: "success",
+						quotations: [
+							{
+								courier: {
+									service_id: "EP-1",
+									service_name:
+										"Park N Parcel - Paperless [1-3 Days] (Drop Off) (From Point to Point)",
+									courier_name: "Park N Parcel Pte Ltd",
+									is_pickup: false,
+									is_dropoff: true,
+									service_tag: [{ name: "Service Destinations", value: "Domestic" }],
+								},
+								pricing: { currency: "SGD", seller_payable_amount: 3.24 },
+							},
+						],
+					},
+				],
+			}),
+		);
+		expect(r).toMatchObject({
+			label: "Park N Parcel - Paperless",
+			deliversTo: "point",
+			transit: { minDays: 1, maxDays: 3 },
+			priceMinor: 324,
+		});
+	});
+});
+
+describe("connectionEnvironment — sandbox from the token, else the account name", () => {
+	it("a sandbox account's name marks it, a plain name stays unknown (never live)", () => {
+		expect(
+			connectionEnvironment("opaque-token", "Zaki Sapuan null Sandbox Account"),
+		).toBe("sandbox");
+		expect(connectionEnvironment("opaque-token", "Demo")).toBe("sandbox");
+		expect(connectionEnvironment("opaque-token", "zaki.s")).toBeUndefined();
+		expect(connectionEnvironment("opaque-token", undefined)).toBeUndefined();
+		// "Sandboxed Snacks Pte Ltd" is a shop, not a sandbox.
+		expect(
+			connectionEnvironment("opaque-token", "Sandboxed Snacks Pte Ltd"),
+		).toBeUndefined();
+	});
+});
+

@@ -514,9 +514,12 @@ function useSettingsGlances(
 				? { text: "Pickup only" }
 				: { text: "Off", tone: "warn" },
 		"order-status": { text: customisedFlows ? "Customised" : "Default" },
-		integrations: {
-			text: `${integrations.connected} of ${integrations.total}`,
-		},
+		// No count until both courier reads land — a "0 of 2" that becomes
+		// "0 of 3" a beat later is a number that lied (test-code F17).
+		integrations:
+			delyva === undefined || easyparcel === undefined
+				? undefined
+				: { text: `${integrations.connected} of ${integrations.total}` },
 		bookings:
 			feed === undefined
 				? undefined
