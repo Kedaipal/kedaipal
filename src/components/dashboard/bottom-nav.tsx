@@ -1,6 +1,8 @@
 import { Link, type LinkProps, useLocation } from "@tanstack/react-router";
 import {
+	ArrowUpRight,
 	ChevronRight,
+	Clapperboard,
 	GalleryHorizontalEnd,
 	Home,
 	LayoutGrid,
@@ -22,6 +24,7 @@ import {
 import { Dialog as MorePrimitive } from "radix-ui";
 import { useEffect, useRef, useState } from "react";
 import { usePermission } from "../../hooks/usePermission";
+import { BLOG_VIDEOS_URL } from "../../lib/admin-sites";
 import { cn } from "../../lib/utils";
 import { AppVersionRow } from "./app-version-row";
 import { WhatsNewNavItem } from "./whats-new";
@@ -40,6 +43,9 @@ export interface BottomNavProps {
 	// The admin has a seller app to return to (own store or act-as) — the admin
 	// tab row leads with an "App" tab so the console is never a dead end.
 	hasStore?: boolean;
+	// Holds the "videos" admin area — the More sheet gets a "Blog videos" row out
+	// to admin.kedaipal.com/videos (convex/lib/adminAreas.ts).
+	blogVideos?: boolean;
 	// CRM is plan-locked for this seller (Starter) — mark the Customers row with
 	// a "Pro" chip so the upgrade wall behind it is never a surprise.
 	crmLocked?: boolean;
@@ -81,6 +87,7 @@ export function BottomNav({
 	newOrdersCount,
 	adminNav,
 	hasStore,
+	blogVideos,
 	crmLocked,
 	vouchersLocked,
 	promotionsLocked,
@@ -181,6 +188,7 @@ export function BottomNav({
 				))}
 				{!adminNav ? (
 					<MoreTab
+						blogVideos={blogVideos}
 						open={moreOpen}
 						onOpenChange={setMoreOpen}
 						active={moreOpen || onMoreRoute}
@@ -287,6 +295,7 @@ function TabFace({
  * of losing the whole screen to a modal.
  */
 function MoreTab({
+	blogVideos,
 	open,
 	onOpenChange,
 	active,
@@ -294,6 +303,7 @@ function MoreTab({
 	vouchersLocked,
 	promotionsLocked,
 }: {
+	blogVideos?: boolean;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	active: boolean;
@@ -392,6 +402,28 @@ function MoreTab({
 						sub="Store, selling & billing"
 						onNavigate={close}
 					/>
+					{/* Leaves the app, so it sits below its own rule rather than reading
+					    as one more store page. */}
+					{blogVideos ? (
+						<div className="mt-1 border-t border-border pt-1">
+							<a
+								href={BLOG_VIDEOS_URL}
+								onClick={close}
+								className="flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-accent/5 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+							>
+								<span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent">
+									<Clapperboard className="size-5" strokeWidth={1.75} />
+								</span>
+								<span className="flex min-w-0 flex-1 flex-col">
+									<span className="text-sm font-semibold">Blog videos</span>
+									<span className="truncate text-xs text-muted-foreground">
+										Upload a video for a blog post · admin.kedaipal.com
+									</span>
+								</span>
+								<ArrowUpRight className="size-4 shrink-0 text-muted-foreground" />
+							</a>
+						</div>
+					) : null}
 					{/* Support + info affordances, not navigation — so they sit below a
 					    rule rather than reading as further destinations. "What's new"
 					    is above the version because it's the one a seller might act on
