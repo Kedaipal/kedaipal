@@ -20,7 +20,7 @@ import { isBuyerRouteId } from "../lib/buyer-routes";
 import { clerkAppearance } from "../lib/clerk-appearance";
 import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
-import { readVisitorRegion } from "../lib/geo-region";
+import { readVisitorMarket, readVisitorRegion } from "../lib/geo-region";
 import { readReferralSlugOnServer } from "../lib/referral-cookie";
 import { THEME_INIT_SCRIPT } from "../lib/theme";
 import { getLocale } from "../paraglide/runtime";
@@ -37,8 +37,16 @@ export const Route = createRootRoute({
 	 * is a header lookup — no I/O — so authenticated `/app` renders that never
 	 * use it are not measurably slower for carrying it.
 	 */
-	loader: (): { region: Country | null; referralSlug: string | null } => ({
+	loader: (): {
+		region: Country | null;
+		market: Country | null;
+		referralSlug: string | null;
+	} => ({
 		region: readVisitorRegion(),
+		// `/stores`' market (z8r3fdwduz): geo-IP ONLY. Unlike `region` it never
+		// reads the pricing toggle's cookie — the directory has no switch, so a
+		// stored pricing pick must not decide which market a buyer browses.
+		market: readVisitorMarket(),
 		// The referral the visitor arrived with (z8r3fdetf5), when they hold
 		// the cookie — so the landing reserves the invite's place in the first
 		// paint rather than pushing the hero down when it resolves. A cookie
@@ -60,6 +68,10 @@ export const Route = createRootRoute({
 		links: [
 			{ rel: "stylesheet", href: appCss },
 			{ rel: "icon", type: "image/x-icon", href: "/favicon.ico" },
+			// The vector mark, padded (the Logo Kit bag mark with ~10% air on
+			// every side so it never touches the tab edge); modern browsers
+			// prefer it over the PNGs below and it stays crisp at any DPR.
+			{ rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
 			{
 				rel: "icon",
 				type: "image/png",
@@ -122,7 +134,18 @@ function Providers({ children }: { children: React.ReactNode }) {
 			{isBuyerSurface ? (
 				<ConvexProvider client={convex}>{children}</ConvexProvider>
 			) : (
-				<ClerkProvider publishableKey={publishableKey} appearance={appearance}>
+				// signInUrl/signUpUrl point every Clerk redirect (RedirectToSignIn on
+				// the /app and /onboarding gates) at OUR pages. Without them Clerk
+				// falls back to its hosted Account Portal, which never sees
+				// `/sign-in`'s `withSignUp`. So the handover email's /app link
+				// dead-ended a brand-new vendor on the hosted page even after the
+				// fix (z8r3fdwdvq; caught driving the gate signed-out).
+				<ClerkProvider
+					publishableKey={publishableKey}
+					appearance={appearance}
+					signInUrl="/sign-in"
+					signUpUrl="/sign-up"
+				>
 					<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
 						{children}
 					</ConvexProviderWithClerk>

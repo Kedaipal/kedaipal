@@ -17,12 +17,13 @@ export const Route = createFileRoute("/sitemap.xml")({
 		handlers: {
 			GET: async () => {
 				const client = getConvexHttpClient();
-				const [stores, products] = await Promise.all([
+				const [stores, categories, products] = await Promise.all([
 					client.query(api.retailers.listSlugsForSitemap),
+					client.query(api.categories.listForSitemap),
 					client.query(api.products.listForSitemap),
 				]);
 				return new Response(
-					buildSitemapXml({ siteUrl: SITE_URL, stores, products }),
+					buildSitemapXml({ siteUrl: SITE_URL, stores, categories, products }),
 					{
 						status: 200,
 						headers: {

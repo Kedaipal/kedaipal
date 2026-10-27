@@ -16,7 +16,7 @@ import { delyvaBookingAllowed, riderBookingAllowed } from "./delivery";
 import { resolveDelyvaCredentials } from "./delyva";
 
 /** The slice of a retailer row the booking predicates read. */
-type CourierRetailer = {
+export type CourierRetailer = {
 	country?: Country;
 	deliveryBooking?: { enabled?: boolean };
 	delyva?: {
@@ -24,6 +24,7 @@ type CourierRetailer = {
 		apiKey?: string;
 		apiSecret?: string;
 		customerId?: number;
+		pickupAddress?: unknown;
 	};
 };
 
@@ -43,6 +44,21 @@ export function delyvaBookingArmed(retailer: CourierRetailer): boolean {
 		resolveDelyvaCredentials(retailer.delyva) !== null &&
 		retailer.delyva?.enabled === true &&
 		delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY)
+	);
+}
+
+/**
+ * Delyva will actually BID on a live checkout quote: armed, and with the
+ * pickup address an instantQuote needs (without it the call is a 400, so an
+ * account half-way through connecting simply doesn't bid). This is the one
+ * condition `getLiveQuoteContext` arms Delyva on, exported so the public
+ * `delivery.quote` can tell the checkout which providers can price the
+ * address — "by rider" copy on a store whose courier reaches the whole
+ * country was a lie (`/test-code` on PR #415).
+ */
+export function delyvaBidsAtCheckout(retailer: CourierRetailer): boolean {
+	return (
+		delyvaBookingArmed(retailer) && retailer.delyva?.pickupAddress !== undefined
 	);
 }
 

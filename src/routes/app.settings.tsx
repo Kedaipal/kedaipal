@@ -339,16 +339,17 @@ export const Route = createFileRoute("/app/settings")({
 			tab: SETTINGS_TAB_IDS.includes(raw as SettingsTab)
 				? (raw as SettingsTab)
 				: undefined,
-			...(fix ? { fix } : {}),
-			...(spot ? { spot } : {}),
+			// Every key is returned, `undefined` when absent — an omitted key
+			// leaks its raw value through TanStack's merge (z8r3fdtk87,
+			// src/lib/search-params.ts).
+			fix,
+			spot,
 			// HitPay redirect returns (86eyb6z4r): back from the auto-renewal
 			// authorisation page / from an invoice's hosted checkout. The billing
 			// tab reconciles once and then clears the flag from the URL.
-			...(search.autorenew === "return"
-				? { autorenew: "return" as const }
-				: {}),
-			...(search.paid === "return" ? { paid: "return" as const } : {}),
-			...(topup ? { topup } : {}),
+			autorenew: search.autorenew === "return" ? "return" : undefined,
+			paid: search.paid === "return" ? "return" : undefined,
+			topup,
 		};
 	},
 	component: SettingsRoute,

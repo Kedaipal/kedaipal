@@ -137,6 +137,41 @@ describe("SubscriptionBanner — running low (the last 20% of the month)", () =>
 		expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
 	});
 
+	// z8r3fdwbbb: the counter is the one door that stops at zero, so the
+	// banner that says intake carries on says which intake — and names the
+	// counter's rule on every page, not only on the Counter.
+	it("names the counter as the exception — before zero and at it", () => {
+		storeWith();
+		reads(low());
+		const { unmount } = render(
+			<SubscriptionBanner subscription={sub()} slug="kedai" />,
+		);
+		expect(
+			screen.getByText(/The counter stops ringing up sales at 0\./),
+		).toBeTruthy();
+		unmount();
+
+		state.role = "member";
+		state.canBuy = false;
+		storeWith();
+		reads(low({ total: 0, plan: 0 }));
+		render(<SubscriptionBanner subscription={sub()} slug="kedai" />);
+		expect(screen.getByText(/^Online orders keep coming in/)).toBeTruthy();
+		expect(screen.queryByText(/^Orders keep coming in/)).toBeNull();
+		expect(
+			screen.getByText(/The counter can't ring up a sale until credits land\./),
+		).toBeTruthy();
+	});
+
+	it("stands down on the Counter, which carries its own credit banner", () => {
+		storeWith();
+		reads(low());
+		const { container } = render(
+			<SubscriptionBanner subscription={sub()} slug="kedai" yieldCredits />,
+		);
+		expect(container.textContent).toBe("");
+	});
+
 	it("just above the line: no banner", () => {
 		storeWith();
 		reads(low({ total: 41, plan: 41 }));

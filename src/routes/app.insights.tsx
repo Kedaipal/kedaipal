@@ -47,8 +47,16 @@ export const Route = createFileRoute("/app/insights")({
 	): { from?: number; to?: number } => {
 		const from = typeof search.from === "number" ? search.from : undefined;
 		const to = typeof search.to === "number" ? search.to : undefined;
-		if (from === undefined || to === undefined || to < from) return {};
-		if (!isMytMidnight(from) || !isMytMidnight(to)) return {};
+		// Both keys are returned even when rejected: an omitted key lets the raw
+		// value through TanStack's merge (z8r3fdtk87, src/lib/search-params.ts).
+		if (
+			from === undefined ||
+			to === undefined ||
+			to < from ||
+			!isMytMidnight(from) ||
+			!isMytMidnight(to)
+		)
+			return { from: undefined, to: undefined };
 		return { from, to };
 	},
 });

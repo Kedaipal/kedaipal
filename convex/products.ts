@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
-import { isStoreOffline, offlineStoreIds } from "./storeAvailability";
+import { isStoreOffline } from "./storeAvailability";
+import { indexableStores } from "./storefrontIndex";
 import {
 	formatFulfilmentDate,
 	isMytMidnight,
@@ -55,6 +56,7 @@ import {
 	sanitizeCapacityPerNight,
 	sanitizePackageLength,
 	sanitizeSecurityDeposit,
+	sanitizeMaxSkips,
 	sanitizeSkipsClosedDays,
 	sanitizeWeekendRate,
 	type PackageUnit,
@@ -83,7 +85,8 @@ import {
 	POPULAR_TOP_CANDIDATES,
 	rankPopularProducts,
 } from "./lib/popularProducts";
-import { lacksParcelWeight } from "./lib/delivery";
+import { collectUnweighedChoices } from "./lib/parcelWeights";
+import { PARCEL_WEIGHTS_BATCH_MAX } from "./lib/weightPricing";
 import { rateLimiter } from "./lib/rateLimiter";
 import { SLUG_MAX, SLUG_MIN, slugify } from "./lib/slug";
 import {
@@ -105,6 +108,7 @@ import {
 	normalizeOptions,
 	sameOptionValues,
 	variantLabel,
+	PARCEL_WEIGHT_MAX_G,
 } from "./lib/variant";
 
 /** Per-product fulfilment-notice override (made-to-order items). Integer days
@@ -1004,15 +1008,18 @@ export const hasEventListings = query({
 export const MISSING_WEIGHT_NAMED_MAX = 5;
 
 /**
- * The weight & zone readiness check (86eye9xd4, 4A): live, active, physical
+ * The weight readiness check (86eye9xd4, 4A): live, active, physical
  * products with at least one live non-custom choice that has no parcel
- * weight. Checkout refuses (or holds for WhatsApp) any cart holding one, so
- * the delivery-pricing page names them up front instead of leaving the seller
- * to find out from a stranded order.
+ * weight. Weight-zone checkout refuses (or holds for WhatsApp) any cart
+ * holding one, and a live courier quotes it at the one-kilo floor
+ * (`liveQuoteWeightKg`), so the delivery-pricing page and the Products list
+ * name them up front instead of leaving the seller to find out from a
+ * stranded order or an under-collected courier bill.
  *
- * Bounded by the product cap (z8r3fdjmf4q): one indexed variant read per
- * active product. Custom choices never count — their weight is unknowable by
- * design, and the "When the weight can't be calculated" rule covers them.
+ * The walk itself is `collectUnweighedChoices` (convex/lib/parcelWeights.ts),
+ * shared with the bulk fill and the arming gates so the three can't disagree
+ * about a row. Bounded by the product cap: one indexed variant read per
+ * active product.
  */
 export const missingParcelWeights = query({
 	args: { retailerId: v.id("retailers") },
@@ -1021,30 +1028,102 @@ export const missingParcelWeights = query({
 		{ retailerId },
 	): Promise<{
 		count: number;
+		/** Buyable choices across those products — the number the fill page
+		 * will list, so a notice can say "3 products · 7 choices". */
+		choiceCount: number;
 		named: Array<{ productId: Id<"products">; name: string }>;
 	}> => {
 		await requireRetailerOwnership(ctx, retailerId, "read");
-		const products = await ctx.db
-			.query("products")
-			.withIndex("by_retailer_active", (q) =>
-				q.eq("retailerId", retailerId).eq("active", true),
-			)
-			.collect();
-		const missing: Array<{ productId: Id<"products">; name: string }> = [];
-		for (const product of products) {
-			if (effectiveKind(product.kind) !== "physical") continue;
-			const variants = await ctx.db
-				.query("productVariants")
-				.withIndex("by_product", (q) => q.eq("productId", product._id))
-				.collect();
-			if (variants.some((v) => v.active && lacksParcelWeight(v))) {
-				missing.push({ productId: product._id, name: product.name });
-			}
-		}
+		const missing = await collectUnweighedChoices(ctx, retailerId);
 		return {
 			count: missing.length,
-			named: missing.slice(0, MISSING_WEIGHT_NAMED_MAX),
+			choiceCount: missing.reduce((n, p) => n + p.choices.length, 0),
+			named: missing
+				.slice(0, MISSING_WEIGHT_NAMED_MAX)
+				.map((p) => ({ productId: p.productId, name: p.name })),
 		};
+	},
+});
+
+/**
+ * The bulk weight fill's list (Products → Parcel weights): every live
+ * physical product with an unweighed buyable choice, those choices named, in
+ * catalogue order. The same walk as `missingParcelWeights`, un-truncated.
+ */
+export const unweighedChoices = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<
+		Array<{
+			productId: Id<"products">;
+			name: string;
+			choices: Array<{ variantId: Id<"productVariants">; label: string }>;
+		}>
+	> => {
+		await requireRetailerOwnership(ctx, retailerId, "read");
+		return collectUnweighedChoices(ctx, retailerId);
+	},
+});
+
+/**
+ * Set parcel weights on many choices at once — the bulk fill's one save.
+ *
+ * Bounded (`PARCEL_WEIGHTS_BATCH_MAX` rows a call; the page sends batches),
+ * every row checked against the calling store (a variant id from another
+ * store refuses the whole batch — nothing is written), and the payload is a
+ * list of ids and grams, never an object keyed by a choice's name. Writes
+ * `parcelWeightG` and nothing else, the same field `updateVariant` edits,
+ * through the same validation.
+ */
+export const setParcelWeights = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		weights: v.array(
+			v.object({
+				variantId: v.id("productVariants"),
+				parcelWeightG: v.number(),
+			}),
+		),
+	},
+	handler: async (ctx, { retailerId, weights }): Promise<{ updated: number }> => {
+		const userId = await requireUserId(ctx);
+		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
+		await requireRetailerOwnership(ctx, retailerId, "write");
+		await assertSubscriptionActive(ctx, retailerId);
+		if (weights.length === 0) return { updated: 0 };
+		if (weights.length > PARCEL_WEIGHTS_BATCH_MAX)
+			throw new ConvexError(
+				`Save at most ${PARCEL_WEIGHTS_BATCH_MAX} weights at a time.`,
+			);
+		for (const { parcelWeightG } of weights) {
+			if (
+				!Number.isInteger(parcelWeightG) ||
+				parcelWeightG <= 0 ||
+				parcelWeightG > PARCEL_WEIGHT_MAX_G
+			)
+				throw new ConvexError(
+					"Each parcel weight must be a whole number of grams, above 0 and at most 1,000 kg.",
+				);
+		}
+		// Resolve every row before writing any: a foreign or vanished id refuses
+		// the batch whole rather than half-applying it.
+		const rows = await Promise.all(
+			weights.map(async (w) => {
+				const variant = await ctx.db.get(w.variantId);
+				if (!variant || variant.retailerId !== retailerId)
+					throw new ConvexError(
+						"One of these choices isn't in your store any more — reload and try again.",
+					);
+				return { variant, parcelWeightG: w.parcelWeightG };
+			}),
+		);
+		const now = Date.now();
+		for (const { variant, parcelWeightG } of rows) {
+			await ctx.db.patch(variant._id, { parcelWeightG, updatedAt: now });
+		}
+		return { updated: rows.length };
 	},
 });
 
@@ -1249,6 +1328,9 @@ export const create = mutation({
 				// "Only days you're open" (z8r3fdhpm7) — a DAY package that skips
 				// the store's closed days. Refused on any other shape.
 				skipsClosedDays: v.optional(v.boolean()),
+				// "Up to N skips per package" (z8r3fdh3ay) — open-days packages
+				// only. Unset / 0 = no limit.
+				maxSkips: v.optional(v.number()),
 			}),
 		),
 		variants: v.array(variantInputValidator),
@@ -1296,6 +1378,7 @@ export const create = mutation({
 					weekendPrice?: number;
 					weekendDays?: number[];
 					skipsClosedDays?: true;
+					maxSkips?: number;
 			  }
 			| undefined;
 		if (kind === "booking") {
@@ -1305,6 +1388,10 @@ export const create = mutation({
 				const packageLength = sanitizePackageLength(
 					args.booking.packageLength,
 					args.booking.packageUnit,
+				);
+				const skipsClosedDays = sanitizeSkipsClosedDays(
+					args.booking.skipsClosedDays,
+					{ packageLength, packageUnit: args.booking.packageUnit },
 				);
 				booking = {
 					// Unset capacity = unlimited (S7), not a missing value.
@@ -1317,10 +1404,8 @@ export const create = mutation({
 					packageLength,
 					packageUnit: args.booking.packageUnit,
 					autoAccept: args.booking.autoAccept === true ? true : undefined,
-					skipsClosedDays: sanitizeSkipsClosedDays(
-						args.booking.skipsClosedDays,
-						{ packageLength, packageUnit: args.booking.packageUnit },
-					),
+					skipsClosedDays,
+					maxSkips: sanitizeMaxSkips(args.booking.maxSkips, { skipsClosedDays }),
 					// Free-range only — a package refuses the pair (S13).
 					...sanitizeWeekendRate(
 						args.booking.weekendPrice,
@@ -1697,6 +1782,9 @@ export const update = mutation({
 				// "Only days you're open" (z8r3fdhpm7) — a DAY package that skips
 				// the store's closed days. Refused on any other shape.
 				skipsClosedDays: v.optional(v.boolean()),
+				// "Up to N skips per package" (z8r3fdh3ay) — open-days packages
+				// only. Unset / 0 = no limit.
+				maxSkips: v.optional(v.number()),
 			}),
 		),
 	},
@@ -1770,6 +1858,10 @@ export const update = mutation({
 					fields.booking.packageLength,
 					fields.booking.packageUnit,
 				);
+				const skipsClosedDays = sanitizeSkipsClosedDays(
+					fields.booking.skipsClosedDays,
+					{ packageLength, packageUnit: fields.booking.packageUnit },
+				);
 				updates.booking = {
 					capacityPerNight: sanitizeCapacityPerNight(
 						fields.booking.capacityPerNight,
@@ -1780,10 +1872,8 @@ export const update = mutation({
 					packageLength,
 					packageUnit: fields.booking.packageUnit,
 					autoAccept: fields.booking.autoAccept === true ? true : undefined,
-					skipsClosedDays: sanitizeSkipsClosedDays(
-						fields.booking.skipsClosedDays,
-						{ packageLength, packageUnit: fields.booking.packageUnit },
-					),
+					skipsClosedDays,
+					maxSkips: sanitizeMaxSkips(fields.booking.maxSkips, { skipsClosedDays }),
 					// Free-range only — a package refuses the pair (S13).
 					...sanitizeWeekendRate(
 						fields.booking.weekendPrice,
@@ -2044,9 +2134,13 @@ export const updateVariant = mutation({
 			throw new ConvexError("Price must be non-negative");
 		if (
 			fields.parcelWeightG !== undefined &&
-			(!Number.isInteger(fields.parcelWeightG) || fields.parcelWeightG < 0)
+			(!Number.isInteger(fields.parcelWeightG) ||
+				fields.parcelWeightG < 0 ||
+				fields.parcelWeightG > PARCEL_WEIGHT_MAX_G)
 		)
-			throw new ConvexError("Parcel weight must be a non-negative integer");
+			throw new ConvexError(
+				"Parcel weight must be a whole number of grams, at most 1,000 kg",
+			);
 		if (
 			fields.imageStorageIds !== undefined &&
 			fields.imageStorageIds.length > MAX_IMAGES_PER_VARIANT
@@ -3002,7 +3096,7 @@ export const getPublicBySlug = query({
 			)
 			.unique();
 		// Fallback for rows the slug backfill hasn't stamped yet: match on the
-		// slug derived from the name. Bounded by the 50-product cap. A HIT on a
+		// slug derived from the name. Bounded by the per-retailer product cap. A HIT on a
 		// migrated catalog never reaches here (the index arm answers first); a
 		// MISS — an unknown or probed slug — always does, which is the same
 		// bounded scan `list` already runs on every storefront page load.
@@ -3113,37 +3207,22 @@ export const listForSitemap = query({
 	): Promise<
 		Array<{ storeSlug: string; productSlug: string; updatedAt: number }>
 	> => {
-		const offline = await offlineStoreIds(ctx);
-		const retailers = (await ctx.db.query("retailers").collect()).filter(
-			// An offline store's product pages are the "unavailable" screen.
-			(r) => !offline.has(r._id),
-		);
+		// Same store rule as `retailers.listSlugsForSitemap` (z8r3fdh2ye): a
+		// product page of a store the sitemap doesn't list is not listed either.
+		// `products` is already the storefront-visible set (no hidden, no
+		// finished event). `updatedAt` is the product's last write.
 		const out: Array<{
 			storeSlug: string;
 			productSlug: string;
 			updatedAt: number;
 		}> = [];
-		for (const retailer of retailers) {
-			const rows = await ctx.db
-				.query("products")
-				.withIndex("by_retailer_active", (q) =>
-					q.eq("retailerId", retailer._id).eq("active", true),
-				)
-				.filter((q) =>
-					q.and(
-						q.neq(q.field("hidden"), true),
-						q.neq(q.field("hiddenByCategory"), true),
-					),
-				)
-				.collect();
-			for (const row of rows) {
+		for (const { retailer, products } of await indexableStores(ctx)) {
+			for (const row of products) {
 				if (row.slug === undefined) continue;
-				// Never hand a crawler a finished event's URL — the page 404s.
-				if (hiddenFromStorefront(row)) continue;
 				out.push({
 					storeSlug: retailer.slug,
 					productSlug: row.slug,
-					updatedAt: row._creationTime,
+					updatedAt: row.updatedAt,
 				});
 			}
 		}

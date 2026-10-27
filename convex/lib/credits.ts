@@ -582,6 +582,88 @@ export function orderGatedLine(creditsToUnlock: number): string {
 		: `Waiting on ${creditsToUnlock} credits`;
 }
 
+// ---------------------------------------------------------------------------
+// The counter needs a credit IN HAND (z8r3fdwbbb)
+// ---------------------------------------------------------------------------
+
+/**
+ * How many credits the store must add before the COUNTER can ring up a sale —
+ * 0 while it can. The one exception to "order intake never stops", and the
+ * reason it is one: a gated order is invisible, and at the counter the seller
+ * has just served the buyer face to face, so hiding the sale protects nothing
+ * and reads as a lost order. The seller is the one tapping, so refusing them
+ * is pressure on the seller, never the buyer — every door the BUYER drives
+ * (storefront, booking, RSVP, finishing a claim link) stays open.
+ *
+ * The rule is exactly `debitIsFunded`: the sale may go ahead iff its debit
+ * would leave the total at or above zero. So a store on its LAST credit takes
+ * that sale (funded, visible), and a store 3 in debt needs 4 — credits that
+ * land fund the waiting orders first (`fundingAdvance`), oldest first.
+ */
+export function counterSaleCreditsNeeded(total: number): number {
+	return debitIsFunded(total - 1) ? 0 : 1 - total;
+}
+
+function credits(n: number): string {
+	return `${n} ${n === 1 ? "credit" : "credits"}`;
+}
+
+/**
+ * The ONE sentence a credit-closed counter says — the server's refusal and the
+ * counter page's banner and disabled buttons all read it, so they can't
+ * disagree. Names what's closed, the way back THIS reader can take, and that
+ * the storefront is untouched (the seller's first fear is "are my buyers
+ * locked out too?" — they aren't).
+ *
+ * `creditsNeeded` is only spoken past 1: "1 credit reopens it" is the case
+ * every top-up already covers, but "4 credits reopen it" is a number the
+ * seller can't work out alone, because waiting orders take credits first.
+ */
+export function counterCreditClosedMessage(
+	route: CreditUnlockRoute,
+	audience: CreditLockAudience,
+	creditsNeeded: number,
+): string {
+	// "Your" to the owner; a teammate reads about THE store, as the rest of
+	// their sentence does.
+	const STOREFRONT_OPEN =
+		audience === "owner"
+			? "Your storefront keeps taking orders."
+			: "The storefront keeps taking orders.";
+	const reopens =
+		creditsNeeded > 1
+			? ` ${credits(creditsNeeded)} reopen it — orders waiting on credits are opened first.`
+			: "";
+	if (audience === "member")
+		return `The store is out of credits, so the counter can't ring up a sale. Ask the store owner to add credits. ${STOREFRONT_OPEN}`;
+	if (audience === "member_topup")
+		return `The store is out of credits, so the counter can't ring up a sale. Top up in Settings → Billing.${reopens} ${STOREFRONT_OPEN}`;
+	switch (route) {
+		case "pick_plan":
+			return `Your trial's orders are used up, so the counter can't ring up a sale. Pick a plan in Settings → Billing to carry on. ${STOREFRONT_OPEN}`;
+		case "pay_invoice":
+			return `You're out of credits, so the counter can't ring up a sale. Pay your invoice in Settings → Billing and this month's credits land straight away. ${STOREFRONT_OPEN}`;
+		case "resume":
+			return `You're out of credits, so the counter can't ring up a sale. Resume your plan in Settings → Billing and this month's credits land straight away. ${STOREFRONT_OPEN}`;
+		case "subscribe":
+			return `You're out of credits, so the counter can't ring up a sale. Choose a plan in Settings → Billing to carry on. ${STOREFRONT_OPEN}`;
+		case "topup":
+			return `You're out of credits, so the counter can't ring up a sale. Top up or upgrade in Settings → Billing.${reopens} ${STOREFRONT_OPEN}`;
+	}
+}
+
+/** The heads-up BEFORE the counter closes — the rule is discoverable while it
+ * can still be avoided, not only once it bites. Shown at or below
+ * `lowCreditLine`, to readers who may see the balance.
+ *
+ * A BALANCE is said in orders ("3 orders left"), like the meter and every
+ * other balance surface; only an amount to ADD is said in credits ("Waiting on
+ * 3 credits", "4 credits reopen it"). The first version said "3 credits left"
+ * right under a banner saying "3 orders left" (found hands-on). */
+export function counterLowCreditLine(creditsLeft: number): string {
+	return `${orders(creditsLeft)} left — the counter stops ringing up sales at 0.`;
+}
+
 /** The phrase every gate refusal and every gate surface contains — what the
  * copy tests and the toast matchers key on, now that the opening words carry
  * a live count and can't be a fixed prefix. */
@@ -648,6 +730,30 @@ export function creditLockErrorData(args: {
 		unlockRoute: args.route,
 		audience: args.audience,
 		creditsToUnlock: args.creditsToUnlock,
+		ordersWaiting: args.ordersWaiting,
+	};
+}
+
+/** The counter's refusal (z8r3fdwbbb), in the SAME typed shape, so every toast
+ * and `CreditLockCta` that already understands the gate offers the way back
+ * here too. `creditsToUnlock` is what reopens the counter, not an order's
+ * position — there is no order yet. */
+export function counterCreditErrorData(args: {
+	route: CreditUnlockRoute;
+	audience: CreditLockAudience;
+	creditsNeeded: number;
+	ordersWaiting: number;
+}): CreditLockErrorData {
+	return {
+		kind: "credits_locked",
+		message: counterCreditClosedMessage(
+			args.route,
+			args.audience,
+			args.creditsNeeded,
+		),
+		unlockRoute: args.route,
+		audience: args.audience,
+		creditsToUnlock: args.creditsNeeded,
 		ordersWaiting: args.ordersWaiting,
 	};
 }

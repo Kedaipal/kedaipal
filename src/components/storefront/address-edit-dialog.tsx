@@ -309,6 +309,16 @@ export function AddressEditDialog({
 										address right now. Message them on WhatsApp to arrange
 										delivery.
 									</p>
+								) : liveQuote.state === "too_heavy" ? (
+									// The order, not the address, is the problem.
+									<p
+										role="alert"
+										className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+									>
+										This order is too heavy for a{" "}
+										{collectsFromCustomer ? "collection" : "delivery"} rider.
+										Message the store on WhatsApp to arrange it.
+									</p>
 								) : liveQuote.state === "store_unavailable" ? (
 									// Seller-side breakage — retrying can't help the buyer.
 									<p

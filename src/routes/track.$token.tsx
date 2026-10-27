@@ -56,6 +56,7 @@ import {
 } from "../components/order/order-store-links";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
 import { PickupNotes } from "../components/order/pickup-notes";
+import { PlanSkipsNote } from "../components/order/plan-skips-note";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
 import { RescheduledNote } from "../components/order/rescheduled-note";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
@@ -68,6 +69,7 @@ import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
 import { LinkifiedText } from "../components/ui/linkified-text";
 import { Skeleton } from "../components/ui/skeleton";
+import { ThemeToggle } from "../components/ui/theme-toggle";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { bookingLengthLabel } from "../lib/booking-dates";
 import { getConvexHttpClient } from "../lib/convex-server";
@@ -94,6 +96,8 @@ import {
 } from "../lib/orderStatus";
 import { ssrRead } from "../lib/ssr-read";
 import { TONE_PANEL, type Tone } from "../lib/tone";
+import { confirmationSentBody } from "../lib/track-confirmation-copy";
+import { trackFirstBeatLabel } from "../lib/track-first-beat";
 import { createWaAutoOpen, isWhatsAppWebview } from "../lib/wa-auto-open";
 import { buildOrderWaMessage, waOrderUrl } from "../lib/wa-order-message";
 
@@ -534,6 +538,7 @@ function TrackingRoute() {
 					packaged: isBookingPackage,
 					weekendDays: order.bookingWeekendDays,
 					skippedDays: order.bookingSkippedDays,
+					customerSkips: order.bookingCustomerSkips,
 				}
 			: undefined;
 	const ms = order.retailerLocale === "ms";
@@ -667,16 +672,17 @@ function TrackingRoute() {
 	}> = [
 		{
 			key: "pending",
-			// A booking's first beat is the request, not "Order Received" — reuse
-			// the swept status label so a seller's locale flows through.
-			// An RSVP on an event that approves each guest (`z8r3fdkjek`) shares
-			// the request's first beat — judged by status, not by kind.
-			label:
-				isBooking ||
-				order.status === "booking_requested" ||
-				order.bookingResolution !== undefined
-					? statusConfig.booking_requested.label
-					: statusConfig.pending.label,
+			// Request → "Awaiting Approval"; a booking past it → "Booking
+			// Received" (an instant booking never waited); else "Order
+			// Received". The rules and their reasons: `trackFirstBeatLabel`.
+			label: trackFirstBeatLabel({
+				isBooking,
+				status: order.status,
+				bookingResolution: order.bookingResolution,
+				locale: stageLocale,
+				requestedLabel: statusConfig.booking_requested.label,
+				pendingLabel: statusConfig.pending.label,
+			}),
 			icon: statusConfig.pending.icon,
 			isDone: true, // any order on this page has at least been received
 			isCurrent: currentPos === 0,
@@ -724,8 +730,23 @@ function TrackingRoute() {
 			    page as far as the buyer is concerned (same as the storefront, where
 			    the store brand leads); Kedaipal's own mark is the powered-by badge
 			    at the foot of the page, so the platform isn't named twice. It links
-			    back into the store (z8r3fducgw): one tap to keep shopping. */}
-			<OrderStoreEyebrow storeName={order.storeName} slug={storeSlug} ms={ms} />
+			    back into the store (z8r3fducgw): one tap to keep shopping. The
+			    theme flip shares its row, at the right edge like every buyer
+			    header (z8r3fdwc19); `-my-3.5` centres the 44px disc on the 16px
+			    eyebrow line without pushing the heading down, and `-mr-3` puts
+			    the glyph on the column's right edge. */}
+			<div className="flex items-center justify-between gap-2">
+				{/* `min-w-0`: a long store name truncates instead of pushing the
+				    toggle off the right edge. */}
+				<div className="flex min-w-0">
+					<OrderStoreEyebrow
+						storeName={order.storeName}
+						slug={storeSlug}
+						ms={ms}
+					/>
+				</div>
+				<ThemeToggle variant="ghost" className="-my-3.5 -mr-3" />
+			</div>
 			<h1 className="mt-3 font-mono text-2xl font-bold tracking-tight">
 				#{order.shortId}
 			</h1>
@@ -1424,7 +1445,9 @@ function TrackingRoute() {
 			) : null}
 
 			{/* The stay itself — a booking's equivalent of the address/pickup blocks.
-			    Frozen at request (bookingCheckIn/Out never change after create). */}
+			    Frozen at request, except that a seller's "Skip a day" on an
+			    open-days plan moves the last day out (z8r3fdh3ay) — this page is
+			    live, so it shows the new one. */}
 			{isBooking &&
 			order.bookingCheckIn !== undefined &&
 			order.bookingCheckOut !== undefined ? (
@@ -1483,6 +1506,15 @@ function TrackingRoute() {
 							{bookingLengthLabel(order, ms ? "ms" : "en")} ·{" "}
 							{order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
 						</p>
+						{isBookingPackage ? (
+							<PlanSkipsNote
+								order={order}
+								maxSkips={order.bookingMaxSkips}
+								skippable={order.bookingSkippable === true}
+								storeName={order.storeName}
+								ms={ms}
+							/>
+						) : null}
 					</div>
 				</section>
 			) : null}
@@ -1827,6 +1859,7 @@ function TrackingRoute() {
 								imageUrl={itemImageUrls?.[i] ?? undefined}
 								booking={itemBookingSpan}
 								answers={item.answers}
+								locale={ms ? "ms" : "en"}
 							/>
 						);
 					})}
@@ -1991,8 +2024,7 @@ function TrackingRoute() {
 			{/* PDPA notice companion (86ey5m3hx item 1): this page is the buyer's
 			    only web surface after checkout — and the ONLY one for counter
 			    buyers, whose consent notice arrives on WhatsApp. Link the policy
-			    that notice names. (The theme toggle rides StorefrontFooter below —
-			    one slot on every buyer page, z8r3fdadub.) */}
+			    that notice names. */}
 			<p className="mt-8 text-center text-xs text-muted-foreground">
 				<a
 					href="/privacy"
@@ -2144,17 +2176,7 @@ function ConfirmationSentCard({
 				</div>
 			</div>
 			<p className="text-sm text-muted-foreground">
-				{ms
-					? free
-						? "Tak perlu hantar apa-apa dan tiada bayaran diperlukan. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini. Simpan pautan ini."
-						: paymentsPaused
-							? "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — status terkini dan resit anda ada di sini, dan cara membayar akan muncul di sini sebaik sahaja kedai menerima bayaran. Simpan pautan ini."
-							: "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
-					: free
-						? "Nothing to send and nothing to pay. That's the only message we'll send you — your latest status and your receipt live here. Keep this link."
-						: paymentsPaused
-							? "Nothing to send. That's the only message we'll send you — your latest status and your receipt live here, and how to pay appears here once the store is taking payments. Keep this link."
-							: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
+				{confirmationSentBody({ ms, free, paymentsPaused })}
 			</p>
 			<Button asChild variant="outline" className="h-11 w-full">
 				<a

@@ -154,6 +154,12 @@ export function OpeningHoursLine({
 			(headsUp.label ? ` · ${headsUp.label}` : "")
 		: null;
 
+	// Hoisted for the same reason as coverPillClass below: the reason has to
+	// sit directly on the colour, which biome won't allow inside the ternary.
+	const coverDotClass =
+		// dark-ok: a dimmed dot over the cover photo's scrim — white is right in
+		// both themes, because the ground is the photo, not the theme.
+		"bg-white/60";
 	// The live open/closed signal — mint when open, dimmed when shut. It
 	// replaced the Clock glyph in the polish pass (z8r3fdegb5): a state dot
 	// says more than a static icon in the same 6px.
@@ -164,7 +170,7 @@ export function OpeningHoursLine({
 				status.open
 					? "bg-accent"
 					: onCover
-						? "bg-white/60"
+						? coverDotClass
 						: "bg-muted-foreground/60"
 			}`}
 		/>

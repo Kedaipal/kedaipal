@@ -11,7 +11,9 @@ import {
 } from "lucide-react";
 import {
 	type MutableRefObject,
+	type ReactNode,
 	useEffect,
+	useId,
 	useMemo,
 	useRef,
 	useState,
@@ -24,6 +26,10 @@ import {
 	MAX_VARIANTS_PER_PRODUCT,
 	overCapMessage,
 } from "../../../convex/lib/variant";
+import {
+	WEIGHT_REQUIRED_COPY,
+	type WeightPricing,
+} from "../../../convex/lib/weightPricing";
 import { useRevealOnAdd } from "../../hooks/useRevealOnAdd";
 import { takePickedFiles } from "../../lib/file-input";
 import {
@@ -45,7 +51,14 @@ import { StockAdjustDialog, type StockLine } from "../product/stock-adjust";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { DISCLOSURE_PANEL_ATTR, REVEAL_EVENT } from "../ui/question-row";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
+import {
+	type Answer,
+	advancedAnswer,
+	choiceDetailsAnswer,
+	choicesAnswer,
+} from "./product-answers";
 
 export type VariantRow = {
 	optionValues: string[];
@@ -141,10 +154,14 @@ interface VariantEditorProps {
 	currency: string;
 	/** Submit-time issues to render inline (cleared by the parent on any edit). */
 	issues?: VariantIssue[];
-	/** The store prices delivery by weight/zone (86eyeea1n) — promotes the
-	 * parcel-weight inputs out of Advanced into their own labelled block, since
-	 * a weightless item strands that store's checkout on "missing weights". */
-	weightMode?: boolean;
+	/** WHY the store prices delivery by weight (`weightPricingOf`, 23 Oct
+	 * 2026) — its rate card (86eyeea1n) or a live courier that quotes by
+	 * weight. Either promotes the parcel-weight inputs out of Advanced into
+	 * their own labelled block and makes them REQUIRED on every buyable
+	 * choice; the reason picks the explainer, because "can't be priced" is the
+	 * rate card's truth and "quoted as a 1 kg parcel" is the courier's. Null /
+	 * unset = optional, tucked inside Advanced. */
+	weightPricing?: WeightPricing | null;
 	/** Saved variants + their live counts. Absent on create. See LiveVariantStock. */
 	liveStock?: LiveVariantStock[];
 	/** Product name, for the adjust dialog's subtitle. */
@@ -158,6 +175,12 @@ interface VariantEditorProps {
 	 * describes the CHOICES: a second axis, per-choice SKU/photo/on-off and
 	 * parcel weight. The wizard leaves this off and keeps both in Advanced. */
 	capabilitiesOutside?: boolean;
+	/** Fold the per-choice list behind a one-line summary, closed on every
+	 * visit (z8r3fdwnyk). The edit form sets it: a saved product with 20
+	 * sizes would otherwise push every other section thousands of pixels
+	 * down. Create and the wizard leave it off — a seller authoring the grid
+	 * has to see each new row to price it. */
+	collapseChoices?: boolean;
 }
 
 /**
@@ -220,6 +243,116 @@ function IssueText({ message }: { message: string | undefined }) {
 		<span role="alert" className="text-xs font-normal text-destructive">
 			{message}
 		</span>
+	);
+}
+
+/**
+ * A per-choice list folded behind a one-line summary (z8r3fdwnyk) — the price
+ * list and Advanced's per-choice details are the two parts of the editor that
+ * grow with the variant count, so on the edit page both fold the same way:
+ * one idea, one control.
+ *
+ * Controlled, because the editor decides when a list must open (a new value,
+ * a refused save). The rules a question row owns hold here too: the panel
+ * stays MOUNTED while closed (`hidden`), so a half-typed value survives and
+ * focus-error can find an invalid field in it and send {@link REVEAL_EVENT};
+ * a long open list ends in "Hide the N choices", closing it from where the
+ * seller finished and bringing the header back into view.
+ *
+ * `collapse` off renders a plain heading over an always-open list — create
+ * and the wizard, where the seller is authoring the grid.
+ */
+function ChoiceListDisclosure({
+	title,
+	summary,
+	count,
+	collapse,
+	open,
+	onOpenChange,
+	children,
+}: {
+	title: string;
+	summary: Answer;
+	count: number;
+	collapse: boolean;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	children: ReactNode;
+}) {
+	const panelId = useId();
+	const panelRef = useRef<HTMLDivElement>(null);
+	const headerRef = useRef<HTMLButtonElement>(null);
+	// Read through a ref so the listener is bound once per mount, not per render.
+	const onOpenChangeRef = useRef(onOpenChange);
+	onOpenChangeRef.current = onOpenChange;
+	useEffect(() => {
+		const panel = panelRef.current;
+		if (!collapse || !panel) return;
+		const reveal = () => onOpenChangeRef.current(true);
+		panel.addEventListener(REVEAL_EVENT, reveal);
+		return () => panel.removeEventListener(REVEAL_EVENT, reveal);
+	}, [collapse]);
+
+	return (
+		<div className="flex flex-col gap-2">
+			{collapse ? (
+				<button
+					ref={headerRef}
+					type="button"
+					aria-expanded={open}
+					aria-controls={panelId}
+					onClick={() => onOpenChange(!open)}
+					// scroll-mt clears the sticky header when "Hide" brings it back.
+					className="flex min-h-14 w-full scroll-mt-24 items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+				>
+					<span className="flex min-w-0 flex-1 flex-col">
+						<span className="text-sm font-medium">{title}</span>
+						<span
+							data-choices-answer
+							className={cn(
+								"mt-0.5 line-clamp-2 text-xs leading-snug",
+								summary.tone === "warn"
+									? "font-medium text-amber-700 dark:text-amber-400"
+									: "text-muted-foreground",
+							)}
+						>
+							{summary.text}
+						</span>
+					</span>
+					<ChevronDown
+						aria-hidden="true"
+						className={cn(
+							"size-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
+							open && "rotate-180",
+						)}
+					/>
+				</button>
+			) : (
+				<span className="text-sm font-medium">{title}</span>
+			)}
+			<div
+				ref={panelRef}
+				id={panelId}
+				hidden={collapse && !open}
+				{...(collapse ? { [DISCLOSURE_PANEL_ATTR]: "" } : {})}
+				className="flex flex-col gap-2"
+			>
+				{children}
+				{collapse && count > 3 ? (
+					<button
+						type="button"
+						onClick={() => {
+							onOpenChange(false);
+							headerRef.current?.scrollIntoView?.({ block: "start" });
+						}}
+						className="flex min-h-11 items-center justify-center gap-1.5 self-center rounded-full px-4 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+					>
+						<ChevronUp className="size-4" aria-hidden />
+						Hide the {count} choices
+					</button>
+				) : null}
+			</div>
+		</div>
 	);
 }
 
@@ -660,18 +793,25 @@ function MockupApprovalToggle({
 	);
 }
 
+/** One shared empty list, so a host that passes no `issues` doesn't hand the
+ * issue effects a new array — and a re-run — on every render. */
+const EMPTY_ISSUES: VariantIssue[] = [];
+
 export function VariantEditor({
 	value,
 	onChange,
 	currency,
-	issues = [],
-	weightMode = false,
+	issues = EMPTY_ISSUES,
+	weightPricing = null,
 	liveStock,
 	productName = "This product",
 	stockLocked = false,
 	capabilitiesOutside = false,
+	collapseChoices = false,
 }: VariantEditorProps) {
 	const { options, rows, customLine } = value;
+	// Layout follows WHETHER the store prices by weight; copy follows WHY.
+	const weightMode = weightPricing !== null;
 	// Every price label wears the store's symbol ("RM", "S$") — `currency` is
 	// the ISO code, which a seller never reads.
 	const moneySymbol = currencySymbol(currency);
@@ -714,17 +854,31 @@ export function VariantEditor({
 	// case), forced open when it holds pre-existing config or a submit issue
 	// points inside it. Parcel weight counts only when it LIVES here (weight
 	// mode promotes it to its own block outside).
+	//
+	// EXCEPT on the edit page (collapseChoices, z8r3fdwnyk): there the
+	// "pre-existing config" rule opened Advanced on nearly every real product
+	// (one parcel weight was enough) and its per-choice details repeated every
+	// variant again — 56 of them pushed the question groups 8,000px down. So
+	// it starts closed and its header line states what is inside instead
+	// (`advancedAnswer`): the config is still never invisible, it is just
+	// said rather than spread open. A submit issue still opens it.
 	const [advOpen, setAdvOpen] = useState(
 		() =>
-			(!capabilitiesOutside && (customLine !== null || someProof)) ||
-			options.length > 1 ||
-			rows.some(
-				(r) =>
-					r.sku.trim().length > 0 ||
-					!r.active ||
-					(!weightMode && r.parcelWeightG.trim().length > 0),
-			),
+			!collapseChoices &&
+			((!capabilitiesOutside && (customLine !== null || someProof)) ||
+				options.length > 1 ||
+				rows.some(
+					(r) =>
+						r.sku.trim().length > 0 ||
+						!r.active ||
+						(!weightMode && r.parcelWeightG.trim().length > 0),
+				)),
 	);
+	// Advanced's per-choice details fold the same way as the price list on
+	// edit — opening Advanced to rename the second choice must not unroll
+	// every variant again. A refused parcel weight opens it (weight lives
+	// here outside weight mode); focus-error's reveal covers the rest.
+	const [detailsOpen, setDetailsOpen] = useState(!collapseChoices);
 	useEffect(() => {
 		if (
 			issues.some(
@@ -735,6 +889,12 @@ export function VariantEditor({
 			)
 		) {
 			setAdvOpen(true);
+		}
+		if (
+			!weightMode &&
+			issues.some((i) => i.where === "row" && i.field === "weight")
+		) {
+			setDetailsOpen(true);
 		}
 	}, [issues, weightMode, capabilitiesOutside]);
 
@@ -768,6 +928,25 @@ export function VariantEditor({
 	// grid to actually exist rather than render a phantom blank-labelled row.
 	const gridReady = variantCount > 0;
 
+	// The per-choice list's disclosure (collapseChoices). Closed on every visit
+	// — the summary line says what is inside — and it opens itself whenever
+	// hiding it would hide something the seller must act on: a refused save
+	// pointing at a choice (the issue effect below, plus focus-error's
+	// REVEAL_EVENT for a first error the seller is taken to), and a freshly
+	// added value, whose new row has a blank price.
+	const [choicesOpen, setChoicesOpen] = useState(!collapseChoices);
+	const choicesSummary = choicesAnswer(rows, currency);
+	useEffect(() => {
+		if (
+			issues.some(
+				(i) =>
+					i.where === "row" && (i.field === "price" || i.field === "stock"),
+			)
+		) {
+			setChoicesOpen(true);
+		}
+	}, [issues]);
+
 	function setOptions(nextOptions: OptionAxis[]) {
 		update({ options: nextOptions, rows: rebuildRows(nextOptions, rows) });
 	}
@@ -781,7 +960,17 @@ export function VariantEditor({
 	// Parcel-weight input — one author for its three mounts (the weight-mode
 	// block, the Advanced per-choice line, the Advanced single-item field), so
 	// the binding and the issue anchor can't drift between them.
-	function renderWeightInput(i: number, row: VariantRow) {
+	//
+	// `issueBelow`: the promoted block renders the refusal UNDER the whole
+	// row instead of inside this column — a long message next to a `flex-1
+	// truncate` label otherwise grows the column to its text and shrinks the
+	// label to nothing (seen on the first /test-code pass: six red boxes, no
+	// choice names).
+	function renderWeightInput(
+		i: number,
+		row: VariantRow,
+		opts: { issueBelow?: boolean } = {},
+	) {
 		const issue = issueFor("row", i, "weight");
 		return (
 			<span className="flex flex-col gap-1">
@@ -792,13 +981,20 @@ export function VariantEditor({
 						placeholder="500"
 						value={row.parcelWeightG}
 						onChange={(e) => setRow(i, { parcelWeightG: e.target.value })}
-						className="h-9 w-24"
+						// Promoted (weight mode) it is a first-class field and wears
+						// the 44px `field` variant like every other; inside Advanced
+						// it stays the compact per-choice control of its row.
+						variant={weightMode ? "field" : undefined}
+						className={weightMode ? "w-28 text-right" : "h-9 w-24"}
 						aria-invalid={issue ? true : undefined}
+						// Required on a buyable choice wherever pricing depends on it
+						// (the save refuses a blank); an off-sale row can't be ordered.
+						aria-required={weightMode && row.active ? true : undefined}
 						aria-label={`Parcel weight in grams for ${variantLabel(row.optionValues) || "this product"}`}
 					/>
 					<span className="text-xs text-muted-foreground">g</span>
 				</span>
-				<IssueText message={issue} />
+				{opts.issueBelow ? null : <IssueText message={issue} />}
 			</span>
 		);
 	}
@@ -905,6 +1101,8 @@ export function VariantEditor({
 	) {
 		const axis = options[axisIndex];
 		if (!axis) return;
+		// Seeding an empty axis makes new, unpriced rows — show them.
+		if (axis.values.length === 0) setChoicesOpen(true);
 		// Rename to the preset; seed its starter values only when the axis is
 		// still empty (never clobber values the seller already typed).
 		setOptions(
@@ -951,6 +1149,9 @@ export function VariantEditor({
 			),
 		);
 		setValueDrafts((d) => d.map((v, i) => (i === axisIndex ? "" : v)));
+		// The new value's rows arrive with a blank price — never behind a
+		// closed list, where the seller can't see what they just made.
+		setChoicesOpen(true);
 	}
 
 	function removeValue(axisIndex: number, value: string) {
@@ -1178,6 +1379,11 @@ export function VariantEditor({
 	// Made-to-order has already answered both of the first two — approval is what
 	// the type IS, and a bespoke line on a bespoke product is the same offer
 	// twice — so neither is listed or rendered below.
+	// On edit, Advanced starts closed, so its line says what is set inside
+	// rather than what could be — falling back to the menu when nothing is.
+	const advancedState = collapseChoices
+		? advancedAnswer({ options, rows, weightMode })
+		: null;
 	const advancedTeaser = capabilitiesOutside
 		? hasOptions
 			? "A second choice · per-choice SKUs, photos & on/off"
@@ -1387,8 +1593,14 @@ export function VariantEditor({
 
 					{/* The choices & their prices. */}
 					{gridReady ? (
-						<div className="flex flex-col gap-2">
-							<span className="text-sm font-medium">The choices & prices</span>
+						<ChoiceListDisclosure
+							title="The choices & prices"
+							summary={choicesSummary}
+							count={rows.length}
+							collapse={collapseChoices}
+							open={choicesOpen}
+							onOpenChange={setChoicesOpen}
+						>
 							{rows.length > 3 ? (
 								<div className="flex items-center gap-2">
 									<Input
@@ -1518,7 +1730,7 @@ export function VariantEditor({
 									</li>
 								))}
 							</ul>
-						</div>
+						</ChoiceListDisclosure>
 					) : null}
 				</>
 			)}
@@ -1576,26 +1788,32 @@ export function VariantEditor({
 			    Made-to-order-only products have no rows (their custom line's
 			    weight is unknowable by design — the resolver holds those orders
 			    for a seller-confirmed charge), so the block hides itself. */}
-			{weightMode && gridReady && rows.length > 0 ? (
+			{weightPricing !== null && gridReady && rows.length > 0 ? (
 				<div className="flex flex-col gap-2.5 rounded-xl border border-border p-4">
 					<span className="flex flex-col">
-						<span className="text-sm font-semibold">Parcel weight</span>
+						<span className="text-sm font-semibold">
+							Parcel weight{" "}
+							<span className="font-normal text-muted-foreground">
+								(required)
+							</span>
+						</span>
 						<span className="text-xs text-muted-foreground">
-							Your store prices delivery by weight — checkout charges each
-							item&apos;s parcel weight × quantity. An item without a weight
-							can&apos;t be priced automatically.
+							{WEIGHT_REQUIRED_COPY[weightPricing].lead}
 						</span>
 					</span>
 					<ul className="flex flex-col gap-2">
 						{rows.map((row, i) => (
 							<li
 								key={variantLabel(row.optionValues) || "single"}
-								className="flex items-center justify-between gap-3"
+								className="flex flex-col gap-1"
 							>
-								<span className="min-w-0 flex-1 truncate text-sm">
-									{variantLabel(row.optionValues) || "This product"}
+								<span className="flex min-h-9 items-center justify-between gap-3">
+									<span className="min-w-0 flex-1 truncate text-sm">
+										{variantLabel(row.optionValues) || "This product"}
+									</span>
+									{renderWeightInput(i, row, { issueBelow: true })}
 								</span>
-								{renderWeightInput(i, row)}
+								<IssueText message={issueFor("row", i, "weight")} />
 							</li>
 						))}
 					</ul>
@@ -1620,8 +1838,11 @@ export function VariantEditor({
 					>
 						<span className="flex min-w-0 flex-col">
 							<span className="text-sm font-semibold">Advanced</span>
-							<span className="truncate text-xs text-muted-foreground">
-								{advancedTeaser}
+							<span
+								data-advanced-answer
+								className="line-clamp-2 text-xs text-muted-foreground"
+							>
+								{advancedState ?? advancedTeaser}
 							</span>
 						</span>
 						{advOpen ? (
@@ -1727,10 +1948,14 @@ export function VariantEditor({
 							{/* Per-choice details: SKU, photo, on/off sale, per-choice
 						    approval. Single-item mode gets just the SKU. */}
 							{hasOptions && gridReady ? (
-								<div className="flex flex-col gap-2">
-									<span className="text-sm font-medium">
-										Per-choice details
-									</span>
+								<ChoiceListDisclosure
+									title="Per-choice details"
+									summary={choiceDetailsAnswer(rows, weightMode)}
+									count={rows.length}
+									collapse={collapseChoices}
+									open={detailsOpen}
+									onOpenChange={setDetailsOpen}
+								>
 									<ul className="flex flex-col gap-2">
 										{rows.map((row, i) => (
 											<li
@@ -1790,7 +2015,7 @@ export function VariantEditor({
 											</li>
 										))}
 									</ul>
-								</div>
+								</ChoiceListDisclosure>
 							) : null}
 							{!hasOptions ? (
 								<label className="flex flex-col gap-1 text-sm font-medium">

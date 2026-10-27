@@ -101,6 +101,12 @@ export function CourierBookingSection({
 	const delyvaArmed = delyvaConnected && delyva?.enabled === true;
 	const lalamoveIsLastBidder = livePricing && lalamoveArmed && !delyvaArmed;
 	const delyvaIsLastBidder = livePricing && delyvaArmed && !lalamoveArmed;
+	// Switching Delyva on would make this live store price every order by
+	// parcel weight (23 Oct 2026); the server refuses while buyable choices
+	// are unweighed, and the summary carries that count so the toggle says
+	// so BEFORE the tap — disabled-with-reason, with the one page that fixes
+	// it. Undefined whenever the flip would be accepted.
+	const delyvaHeldForWeights = delyva?.bookingHeldForWeights;
 
 	async function run(fn: () => Promise<unknown>, message: string) {
 		setBusy(true);
@@ -131,7 +137,10 @@ export function CourierBookingSection({
 			{riderBookingAvailable ? (
 				<div className="flex items-start justify-between gap-4 rounded-xl border border-input p-3">
 					<div className="min-w-0">
-						<p className="flex items-center gap-2 text-sm font-medium">
+						{/* A div, not a <p>: AppImage renders a block skeleton, and a
+						    block inside a <p> is invalid HTML React warns about on
+						    every hydration of this page. */}
+						<div className="flex items-center gap-2 text-sm font-medium">
 							<AppImage
 								src="/img/lalamove-logo.svg"
 								alt=""
@@ -140,7 +149,7 @@ export function CourierBookingSection({
 								className="shrink-0"
 							/>
 							Lalamove riders
-						</p>
+						</div>
 						<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
 							{lalamovePricing
 								? "On — your delivery charge runs on Lalamove live quotes, so rider booking comes with it. Switch the charge mode above to change this."
@@ -196,7 +205,7 @@ export function CourierBookingSection({
 			{delyvaCountryOk ? (
 				<div className="flex items-start justify-between gap-4 rounded-xl border border-input p-3">
 					<div className="min-w-0">
-						<p className="flex items-center gap-2 text-sm font-medium">
+						<div className="flex items-center gap-2 text-sm font-medium">
 							<AppImage
 								src="/img/delyva-logo.png"
 								alt=""
@@ -210,7 +219,7 @@ export function CourierBookingSection({
 									Demo
 								</span>
 							) : null}
-						</p>
+						</div>
 						<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
 							{delyvaIsLastBidder ? (
 								<>
@@ -223,6 +232,18 @@ export function CourierBookingSection({
 										className="font-medium text-accent hover:underline"
 									>
 										Manage account
+									</Link>
+								</>
+							) : delyvaHeldForWeights ? (
+								<>
+									Couriers price by weight, and {delyvaHeldForWeights} of your
+									products {delyvaHeldForWeights === 1 ? "has" : "have"} no
+									parcel weight — switch this on once they do.{" "}
+									<Link
+										to="/app/products/weights"
+										className="font-medium text-accent hover:underline"
+									>
+										Set parcel weights
 									</Link>
 								</>
 							) : delyvaConnected ? (
@@ -259,6 +280,7 @@ export function CourierBookingSection({
 							busy ||
 							delyvaIsLastBidder ||
 							!delyvaConnected ||
+							delyvaHeldForWeights !== undefined ||
 							(!canUse && delyva?.enabled !== true)
 						}
 						label="Delyva courier booking"

@@ -12,9 +12,11 @@ function SignUpPage() {
 				routing="path"
 				path="/sign-up"
 				signInUrl="/sign-in"
-				// fallback (not force) so an admin invite's signUpForceRedirectUrl —
-				// the prefilled /onboarding?…&via=admin URL — survives account creation.
-				// Plain self-signups (no redirect param) still land on /onboarding.
+				// fallback (not force) so a ?redirect_url= survives account creation
+				// — a team invite's "Create your login" sends /join/<token>. Plain
+				// self-signups (no redirect param) land on /onboarding. Every gate
+				// that bounces a signed-out visitor goes to /sign-in instead, which
+				// creates the login itself for an unknown address (z8r3fdwdvq).
 				fallbackRedirectUrl="/onboarding"
 			/>
 		</main>

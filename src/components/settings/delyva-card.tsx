@@ -43,6 +43,7 @@ import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
 import { ModeButton } from "../ui/mode-button";
+import { Select } from "../ui/select";
 import {
 	Glance,
 	SectionLabel,
@@ -196,6 +197,14 @@ export function DelyvaCard({
 			if (result.isDemo) {
 				toast.warning(
 					"This is a Delyva DEMO account — bookings are simulated and no courier is dispatched.",
+				);
+			}
+			if (result.bookingHeldForWeights) {
+				// The key is stored; booking waited because this live store would
+				// start pricing by weight with unweighed products. The card's
+				// "Booking is off" line below carries the same reason and link.
+				toast.warning(
+					`Booking stays off until ${result.bookingHeldForWeights} product${result.bookingHeldForWeights === 1 ? " has" : "s have"} a parcel weight — see the note on this card.`,
 				);
 			}
 			if (!result.webhooksSubscribed) {
@@ -571,8 +580,22 @@ export function DelyvaCard({
 						<p className="text-xs text-muted-foreground">
 							{settings.enabled
 								? "Booking is on — you'll see Delyva on your delivery orders."
-								: "Booking is currently off."}{" "}
-							Manage it under{" "}
+								: settings.bookingHeldForWeights
+									? `Booking is off until ${settings.bookingHeldForWeights} product${settings.bookingHeldForWeights === 1 ? " has" : "s have"} a parcel weight — couriers price by weight.`
+									: "Booking is currently off."}{" "}
+							{settings.bookingHeldForWeights ? (
+								<>
+									<Link
+										to="/app/products/weights"
+										className="font-medium text-accent-emphasis hover:underline"
+									>
+										Set parcel weights
+									</Link>
+									, then switch it on under{" "}
+								</>
+							) : (
+								<>Manage it under </>
+							)}
 							<Link
 								to="/app/settings/delivery-pricing"
 								className="font-medium text-accent-emphasis hover:underline"
@@ -855,16 +878,13 @@ function PickupAddressFields({
 			    fields. A dropdown with one option is not a choice, so there
 			    isn't one. */}
 			{country === "SG" ? null : (
-				<select
+				<Select
 					aria-label="State"
 					value={draft.state}
 					disabled={disabled}
 					onChange={(e) => onChange({ state: e.target.value })}
-					className={`min-h-11 w-full rounded-xl border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
-						error !== null && !draft.state.trim()
-							? "border-destructive"
-							: "border-input"
-					}`}
+					variant="field"
+					isError={error !== null && !draft.state.trim()}
 				>
 					<option value="">Select state…</option>
 					{MY_STATES.map((state) => (
@@ -872,7 +892,7 @@ function PickupAddressFields({
 							{state}
 						</option>
 					))}
-				</select>
+				</Select>
 			)}
 			{error ? (
 				<p className="text-xs font-medium text-destructive">{error}</p>

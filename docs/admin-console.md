@@ -54,7 +54,11 @@ login or screen-share, neither of which scales.
      credits" crosses every status bucket), Newest store, Name A–Z. Filter, sort and search ride the URL
      (`?status=past_due&sort=expiry&q=…`, validated by `validateSearch`) so a
      filtered view is a link; defaults are omitted so the plain route stays
-     `/app/admin/sellers`.
+     `/app/admin/sellers`. A pasted `?q=9981` parses as a number: the
+     validator reads it back as text (`searchText`) and returns every key, so
+     the URL's raw value can't reach the page. It used to crash the page
+     ([`z8r3fdtk87`](https://app.clickup.com/t/z8r3fdtk87),
+     [url-search-params.md](./url-search-params.md)).
    - **Detail sheet:** the store's name opens a read-only `Sheet side="right"`
      (a drawer beside the table at `sm+`, a bottom sheet on a phone —
      `src/components/admin/seller-sheet.tsx`) with every fact and its own copy

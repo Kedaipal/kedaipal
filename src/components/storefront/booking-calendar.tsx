@@ -194,7 +194,9 @@ export function BookingCalendar({
 }
 
 /** The closed-day hatch, shared by the day cells and the legend swatch. */
-const CLOSED_HATCH =
+/** Shared with the seller's skip dialog (z8r3fdh3ay) so a shut day reads the
+ * same on both sides. */
+export const CLOSED_HATCH =
 	"[&>button]:bg-[repeating-linear-gradient(135deg,color-mix(in_oklab,var(--muted-foreground)_35%,transparent)_0_1.5px,transparent_1.5px_6px)]";
 
 /** The legend under the calendar — states only, never the blocked/full split.

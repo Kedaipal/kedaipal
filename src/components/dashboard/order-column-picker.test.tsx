@@ -107,3 +107,37 @@ describe("OrderColumnPicker — bulk selection (86eyrtz74)", () => {
 		expect(screen.queryByText(/at least one column stays/i)).toBeNull();
 	});
 });
+
+describe("OrderColumnPicker — every row is reachable", () => {
+	it("caps the panel at the measured room below the trigger, with the list as the flexible region", () => {
+		// jsdom has no layout, so this pins the contract (the dropdown-menu
+		// shell's test does the same). A fixed `max-h-[52vh]` on the list
+		// alone ignored the header and the page banner: on a 763px window
+		// the panel ran 58px past the viewport and its LAST rows — the
+		// Booking group — could not be scrolled to.
+		renderPicker([ORDER_COLUMNS[0].key]);
+		const panel = screen.getByTestId("column-picker-panel");
+		expect(panel.className).toMatch(
+			/\bmax-h-\(--radix-popover-content-available-height\)/,
+		);
+		expect(panel.className).toMatch(/\bflex-col\b/);
+		const list = screen.getByTestId("column-picker-list");
+		expect(list.className).toMatch(/\bmin-h-0\b/);
+		expect(list.className).toMatch(/\bflex-1\b/);
+		expect(list.className).toMatch(/\boverflow-y-auto\b/);
+	});
+
+	it("offers the Booking group, after Fulfilment, with its four columns", () => {
+		renderPicker([ORDER_COLUMNS[0].key]);
+		const groups = screen
+			.getAllByRole("checkbox", { name: / — \d+ of \d+ columns selected$/ })
+			.map((el) => el.getAttribute("aria-label")?.split(" — ")[0]);
+		expect(groups.at(-1)).toBe("Booking");
+		expect(groups.at(-2)).toBe("Fulfilment");
+		expect(
+			screen
+				.getByRole("checkbox", { name: /^booking —/i })
+				.getAttribute("aria-label"),
+		).toMatch(/0 of 4 columns selected/);
+	});
+});

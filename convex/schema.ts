@@ -1262,6 +1262,11 @@ export default defineSchema({
 				// stored-and-ignored). Unset = every day in a row (every existing
 				// listing). See closureRule / resolveOpenDaysTerm.
 				skipsClosedDays: v.optional(v.boolean()),
+				// "Up to N skips per package" (z8r3fdh3ay) — caps the seller's
+				// "Skip a day" on an open-days package. Only with skipsClosedDays
+				// (refused otherwise). Unset = no limit; 0 normalizes to unset.
+				// Read LIVE at skip time: it is a policy, not a term of the sale.
+				maxSkips: v.optional(v.number()),
 				// "Instant book" (S7 — the spec's named follow-up): set = a request
 				// lands `confirmed` with the payment ask firing straight away,
 				// skipping `booking_requested`. Unset = request-to-book.
@@ -1822,7 +1827,26 @@ export default defineSchema({
 		// WHICH days inside it weren't counted, so the receipt and order pages
 		// keep naming them after the store edits its hours or closures. Unset
 		// when nothing was skipped (and on every other booking shape).
+		//
+		// Since z8r3fdh3ay it holds EVERY unused day inside the span — the shut
+		// days AND the days the customer skipped (below) — so capacity, the
+		// grid, the calendar feed and every "N days" count stay right without
+		// a second field to union. Kept sorted, deduped.
 		bookingSkippedDays: v.optional(v.array(v.number())),
+		// The days the CUSTOMER skipped (z8r3fdh3ay) — a subset of
+		// `bookingSkippedDays`, in the order the seller logged them, so the
+		// last entry is the one "Undo" reverses. Each skip moved
+		// `bookingCheckOut` out by one open day; check-in, price and quantity
+		// never move. What it adds over `bookingSkippedDays` is the WHY: a
+		// customer skip is labelled as one, counts against the listing's
+		// `maxSkips`, and can be undone. Unset = never skipped.
+		bookingCustomerSkips: v.optional(v.array(v.number())),
+		// Frozen at create: this package counts OPEN days (`closureRule`
+		// "skipped", z8r3fdhpm7), so the seller can skip a day of it. Frozen
+		// because a later listing edit must not take "Skip a day" off a plan
+		// that was sold as days of service. Absent on orders from before
+		// z8r3fdh3ay — those fall back to the listing.
+		bookingOpenDays: v.optional(v.boolean()),
 		// HOW a request left `booking_requested` when it didn't get approved —
 		// "declined" (seller said no, reason below) or "expired" (the 24 h window
 		// lapsed). Both land the order in `cancelled`; this marker is what lets
@@ -2003,6 +2027,14 @@ export default defineSchema({
 						}),
 					),
 				),
+				// The courier was asked to price the one-kilo FLOOR rather than the
+				// cart's real weight (`liveQuoteWeightFacts`), and how many lines a
+				// product weight would have priced. Lets the seller's order page say
+				// "priced at the 1 kg floor — 2 items had no weight" and point at
+				// the fix, instead of a fee that silently under-collects. Widen-only
+				// (23 Oct 2026); absent = not floored or minted before the stamp.
+				weightFloored: v.optional(v.boolean()),
+				unweighedLines: v.optional(v.number()),
 			}),
 		),
 		// Order-level mirror of `deliverySnapshot.fee` (minor units) for cheap
@@ -2530,6 +2562,16 @@ export default defineSchema({
 		// and for admin act-as writes (an admin is not a teammate; adminAuditLog
 		// already traces those).
 		actorUserId: v.optional(v.string()),
+		// A NON-status event (z8r3fdh3ay) — something happened to the order
+		// without its status moving. The timeline titles the row by this
+		// instead of the status; `note` carries the human detail. Unset = an
+		// ordinary status event (every row before it).
+		action: v.optional(
+			v.union(
+				v.literal("booking_day_skipped"),
+				v.literal("booking_day_skip_undone"),
+			),
+		),
 		createdAt: v.number(),
 	}).index("by_order", ["orderId"]),
 
@@ -2616,7 +2658,33 @@ export default defineSchema({
 		latitude: v.number(),
 		longitude: v.number(),
 		quotedAt: v.number(),
+		// The cart was quoted at the one-kilo floor (`liveQuoteWeightFacts`) and
+		// how many of its lines had no product weight — copied onto the order's
+		// deliverySnapshot at create. Absent = not floored (or a row minted
+		// before the stamp; rows live a day, so this narrows itself).
+		weightFloored: v.optional(v.boolean()),
+		unweighedLines: v.optional(v.number()),
 	}).index("by_retailer", ["retailerId"]),
+
+	// Lalamove's carrying limit per vehicle, per market and environment, read
+	// from `GET /v3/cities` (25 Oct 2026, `convex/lib/lalamoveVehicle.ts`).
+	// Lalamove prices by vehicle and never refuses an overweight trip, so the
+	// rider quote picks the smallest vehicle that can carry the cart from
+	// these. A market-level catalogue fact (no seller data), refreshed in the
+	// background once a day; `loads` is a list of pairs, never an object keyed
+	// by the vehicle name. Own table, not a retailer field: every store in a
+	// market shares one row.
+	lalamoveVehicleLoads: defineTable({
+		market: v.union(v.literal("MY"), v.literal("SG")),
+		env: v.union(v.literal("sandbox"), v.literal("production")),
+		loads: v.array(v.object({ key: v.string(), loadKg: v.number() })),
+		fetchedAt: v.number(),
+		// When a background refresh was last scheduled for a stale row. A
+		// stale row is read by every quote and dispatch; this stamp lets one
+		// refresh go per market per few minutes instead of one per checkout
+		// (and a failing `/v3/cities` retry at that pace, not per buyer).
+		refreshScheduledAt: v.optional(v.number()),
+	}).index("by_market_env", ["market", "env"]),
 
 	// One rider booking (dispatch) against an order. The ledger row of record:
 	// actual cost the seller's own Lalamove wallet paid (BYO-only — audit +

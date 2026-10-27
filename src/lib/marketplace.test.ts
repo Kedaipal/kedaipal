@@ -164,10 +164,32 @@ describe("parseMarketplaceSearch — the URL state Back returns to", () => {
 	});
 
 	test("hand-edited junk degrades to the default, never a crash", () => {
-		expect(parseMarketplaceSearch({ q: 42, filter: "cheapest" })).toEqual({});
+		expect(
+			parseMarketplaceSearch({ q: [1], filter: "cheapest", showcase: {} }),
+		).toEqual({});
 		expect(
 			parseMarketplaceSearch({ q: "x".repeat(SEARCH_QUERY_MAX + 20) }).q,
 		).toHaveLength(SEARCH_QUERY_MAX);
+	});
+
+	// z8r3fdtk87: TanStack parses `?q=2024` as the NUMBER 2024 and merges this
+	// result OVER the raw search, so a key left out leaked that number and
+	// `q.trim()` took the page down. Every key must be present, and an
+	// all-digit query is text the buyer typed.
+	test("every key is returned, so no raw value can leak through the router", () => {
+		for (const raw of [{}, { q: 2024, filter: 7, showcase: true }]) {
+			const parsed = parseMarketplaceSearch(raw);
+			for (const key of ["q", "filter", "showcase"]) {
+				expect(Object.hasOwn(parsed, key)).toBe(true);
+			}
+		}
+	});
+
+	test("an all-digit query or showcase slug reads back as the text in the URL", () => {
+		expect(parseMarketplaceSearch({ q: 2024, showcase: 2026 })).toEqual({
+			q: "2024",
+			showcase: "2026",
+		});
 	});
 
 	test("padding is trimmed before the length cap, never counted against it", () => {

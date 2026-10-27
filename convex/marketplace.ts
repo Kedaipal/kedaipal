@@ -6,7 +6,11 @@ import { type QueryCtx, query } from "./_generated/server";
 import { adminUserIds, requireRetailerAccess } from "./lib/auth";
 import { isExcludedRetailer } from "./lib/businessReport";
 import type { ClosedDateRange } from "./lib/closedDates";
-import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import {
+	type Country,
+	countryValidator,
+	DEFAULT_COUNTRY,
+} from "./lib/country";
 import {
 	highlightSource,
 	isInternalStore,
@@ -221,20 +225,26 @@ function generalOrder(a: Doc<"retailers">, b: Doc<"retailers">): number {
 }
 
 /**
- * Every listable store, as directory cards. Public + arg-less: the region
- * split (MY/SG) and the filter chips act client-side on the one payload —
- * the table is small (low hundreds), the page needs the counts per region
- * anyway, and one cacheable result beats a query per toggle flip.
+ * Every listable store IN ONE MARKET, as directory cards (z8r3fdwduz). /stores
+ * shows a buyer their own market only — Shopee-style, no MY/SG switch — so the
+ * market is scoped HERE, not by the client hiding the other half of a payload
+ * it already received. The filter chips still act client-side on the result.
+ *
+ * `country` is optional only so a tab opened before this shipped (calling with
+ * `{}`) keeps rendering until it reloads; absent returns every market, the old
+ * contract. The page always passes it.
  *
  * Full-table `.collect()` is a documented ceiling, not an accident: there is
  * no field to index a "listable" scan on (the rule spans three tables), and
- * at the current store count the read is cheap. The upgrade path — a
- * denormalized `marketplaceListedAt` maintained by the writers — is named in
- * docs/marketplace-home.md so it's a follow-up, not a rediscovery.
+ * at the current store count the read is cheap. The market check runs FIRST,
+ * so the other market's rows cost no subscription/product/storage reads. The
+ * upgrade path — a denormalized `marketplaceListedAt` maintained by the
+ * writers — is named in docs/marketplace-home.md so it's a follow-up, not a
+ * rediscovery.
  */
 export const listStores = query({
-	args: {},
-	handler: async (ctx): Promise<MarketplaceStoreCard[]> => {
+	args: { country: v.optional(countryValidator) },
+	handler: async (ctx, args): Promise<MarketplaceStoreCard[]> => {
 		const now = Date.now();
 		const adminIds = adminUserIds();
 		const rows = await ctx.db.query("retailers").collect();
@@ -242,6 +252,11 @@ export const listStores = query({
 		const cards: Array<{ card: MarketplaceStoreCard; row: Doc<"retailers"> }> =
 			[];
 		for (const row of rows) {
+			if (
+				args.country !== undefined &&
+				(row.country ?? DEFAULT_COUNTRY) !== args.country
+			)
+				continue;
 			// The subscription is read for TWO store facts — is this an internal
 			// store, and is it comped into Store highlights — and never shipped:
 			// the card says "sponsored", not why.

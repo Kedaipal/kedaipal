@@ -5,11 +5,13 @@ import { useConvex, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
 	CalendarClock,
+	CalendarDays,
 	ChevronRight,
 	Download,
 	EyeOff,
 	FileSpreadsheet,
 	FolderOpen,
+	Scale,
 	Search,
 	Tag,
 	Upload,
@@ -26,6 +28,7 @@ import {
 	productCapState,
 } from "../../convex/lib/productCap";
 import { formatEventBadge, isEventPassed } from "../../convex/lib/productEvent";
+import { effectiveKind } from "../../convex/lib/productKind";
 import { NeedsAccessNote } from "../components/app/owner-only-note";
 import { ProBadge } from "../components/app/pro-gate";
 import { ViewOnlyNote } from "../components/app/view-only-note";
@@ -35,6 +38,7 @@ import {
 	type StockLine,
 	StockSheet,
 } from "../components/product/stock-adjust";
+import { MissingWeightsNotice } from "../components/products/missing-weights-notice";
 import { ProductSpotlightBanner } from "../components/products/product-spotlight-banner";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
@@ -58,6 +62,7 @@ import {
 	type ExportableProduct,
 } from "../lib/product-export";
 import { PRODUCT_SPOTLIGHT } from "../lib/product-spotlight";
+import { bookingCapacityLabel } from "../lib/product-summary";
 import { reorderByIds } from "../lib/reorder";
 import {
 	isProductSpotlightKey,
@@ -89,8 +94,10 @@ export const Route = createFileRoute("/app/products/")({
 	validateSearch: (
 		search: Record<string, unknown>,
 	): { spot?: ProductSpotlightKey; stock?: "out" } => ({
-		...(isProductSpotlightKey(search.spot) ? { spot: search.spot } : {}),
-		...(search.stock === "out" ? { stock: "out" as const } : {}),
+		// Every key returned — an omitted one leaks its raw value
+		// (z8r3fdtk87, src/lib/search-params.ts).
+		spot: isProductSpotlightKey(search.spot) ? search.spot : undefined,
+		stock: search.stock === "out" ? "out" : undefined,
 	}),
 	component: ProductsRoute,
 });
@@ -121,7 +128,9 @@ function BulkIoMenu({
 					size="icon"
 					className="size-11 shrink-0 rounded-xl"
 					aria-label={
-						exporting ? "Exporting products…" : "Import or export products"
+						exporting
+							? "Exporting products…"
+							: "Import, export or set parcel weights"
 					}
 				>
 					{/* Spreadsheet glyph, not arrows — an up/down icon reads as "sort"
@@ -138,6 +147,20 @@ function BulkIoMenu({
 					>
 						<Download className="size-4 text-muted-foreground" aria-hidden />
 						Import products
+					</Link>
+					{/* The bulk weight fill's PERMANENT door (23 Oct 2026). The amber
+					    readiness notice above the list links it while products are
+					    unweighed and vanishes once they aren't — this entry is how
+					    the page stays reachable after that, and before a store
+					    starts pricing by weight at all. A catalogue-wide edit, so it
+					    lives with the other catalogue-wide actions. */}
+					<Link
+						to="/app/products/weights"
+						onClick={() => setOpen(false)}
+						className="flex h-10 items-center gap-2 rounded-md px-3 text-sm transition-colors hover:bg-muted"
+					>
+						<Scale className="size-4 text-muted-foreground" aria-hidden />
+						Parcel weights
 					</Link>
 					{canExport ? (
 						<>
@@ -291,6 +314,20 @@ function ProductsRoute() {
 	// create/reorder/export affordances that the server will refuse.
 	const productsPerm = usePermission("products");
 	const canExportProducts = usePermission("exports").canRead;
+	// Which products a weight-priced checkout can't weigh (23 Oct 2026) —
+	// fetched only on a store whose delivery charge depends on it, for a
+	// reader who may see product names. The list is where a seller fixing
+	// their catalogue looks, so the readiness notice lives here too, with the
+	// same one tap to the bulk fill the Settings page offers.
+	const weightPricing = retailer?.weightPricing ?? null;
+	const missingWeights = useQuery(
+		convexQuery(
+			api.products.missingParcelWeights,
+			retailer && weightPricing && productsPerm.canRead
+				? { retailerId: retailer._id }
+				: "skip",
+		),
+	).data;
 	// Every reason the catalogue can't change right now, in one shape: the
 	// store lapsed (view-only), it ran out of credits (Credits T3), or this
 	// teammate holds view on products. One author for each sentence, shared
@@ -490,6 +527,13 @@ function ProductsRoute() {
 			    teammate with view on products. Each renders nothing otherwise. */}
 			<ViewOnlyNote />
 			<NeedsAccessNote area="products" />
+
+			{weightPricing ? (
+				<MissingWeightsNotice
+					missingWeights={missingWeights}
+					reason={weightPricing}
+				/>
+			) : null}
 
 			{spot && products !== undefined ? (
 				<ProductSpotlightBanner
@@ -768,6 +812,20 @@ function ProductCard({
 							<span className="truncate">
 								{isEventPassed(p.event) ? "Ended" : "Event"} ·{" "}
 								{formatEventBadge(p.event)}
+							</span>
+						</span>
+					) : effectiveKind(p.kind) === "booking" ? (
+						// A booking has no stock — it has capacity. "In stock" under
+						// a campsite or a meal plan named a thing the seller never
+						// set up; this names the thing they did.
+						<span className="inline-flex max-w-full items-center gap-1 text-accent-emphasis">
+							<CalendarDays className="size-3 shrink-0" aria-hidden />
+							<span className="truncate">
+								Booking ·{" "}
+								{bookingCapacityLabel(
+									p.booking?.capacityPerNight,
+									(p.booking?.packageLength ?? 0) > 0,
+								)}
 							</span>
 						</span>
 					) : outOfStock ? (

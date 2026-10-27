@@ -80,6 +80,9 @@ const GATED_FUNCTIONS = [
 	"orders.updateStatus",
 	"orders.advanceToStage",
 	"bookings.approveBookingRequest",
+	// Skip a day (z8r3fdh3ay) — working the plan of a hidden order.
+	"bookings.skipPackageDay",
+	"bookings.unskipPackageDay",
 	// Taking payment by hand.
 	"orders.markPaymentReceived",
 	// Fulfilment work.
@@ -256,9 +259,28 @@ function publicDefs(mod: string, kinds: readonly string[]): Map<string, string> 
 const publicWrites = (mod: string) => publicDefs(mod, ["mutation", "action"]);
 const publicReads = (mod: string) => publicDefs(mod, ["query"]);
 
-/** Seller-keyed order INTAKE — "order intake never stops" (the counter, claim
- * links): none of their public writes may carry the credit guard. */
+/** Seller-keyed order INTAKE (the counter, claim links): none of their public
+ * writes may carry the PER-ORDER credit guard — there is no order yet to hold.
+ * What they carry instead is the counter's own store-level rule, below. */
 const INTAKE_MODULES = ["counterCheckout", "orderClaims"];
+
+/** The counter needs a credit IN HAND (z8r3fdwbbb): the one order door that
+ * refuses at zero, because a counter sale born below zero is born gated —
+ * invisible to the seller who just served the buyer. Every SELLER write that
+ * starts or completes a counter sale or a claim link must carry it… */
+const COUNTER_SALE_GUARD = "assertCounterSaleFunded(";
+const COUNTER_SALE_GUARDED = [
+	"counterCheckout.startAnonymousSession",
+	"counterCheckout.bindSessionManualPhone",
+	"counterCheckout.createOrderFromSession",
+	"orderClaims.sendClaim",
+	"orderClaims.resendClaim",
+];
+/** …and no door a BUYER drives may: pressure on the seller, never the buyer.
+ * (`counterCheckout.startSessionFromStoreQr`, the buyer's QR check-in, is
+ * internal and asserted by name.) */
+const BUYER_DOOR_MODULES = ["orders", "bookings", "orderClaims"];
+const BUYER_DOORS = ["orders.create", "bookings.requestBooking", "orderClaims.commit"];
 
 /** The WAYS BACK — topping up (T2), paying or changing a plan, resuming a
  * hold, settings and the team: a gated store must always be able to reach
@@ -436,6 +458,32 @@ describe("the per-order credit gate covers every write it should", () => {
 			for (const [name, body] of publicWrites(mod))
 				if (guarded(body)) offenders.push(name);
 		expect(offenders).toEqual([]);
+	});
+
+	test("the counter's seller writes carry the in-hand credit rule; no buyer door does", () => {
+		const writes = new Map(
+			INTAKE_MODULES.flatMap((mod) => [...publicWrites(mod)]),
+		);
+		const missing = COUNTER_SALE_GUARDED.filter(
+			(name) => !writes.get(name)?.includes(COUNTER_SALE_GUARD),
+		);
+		expect(missing, "seller counter writes without the rule").toEqual([]);
+
+		const buyerWrites = new Map(
+			BUYER_DOOR_MODULES.flatMap((mod) => [...publicWrites(mod)]),
+		);
+		for (const door of BUYER_DOORS) {
+			// Proof the scan reaches each door before asserting what it lacks.
+			expect(buyerWrites.has(door), door).toBe(true);
+			expect(buyerWrites.get(door)?.includes(COUNTER_SALE_GUARD), door).toBe(
+				false,
+			);
+		}
+		const storeQr = publicDefs("counterCheckout", ["internalMutation"]).get(
+			"counterCheckout.startSessionFromStoreQr",
+		);
+		expect(storeQr).toBeDefined();
+		expect(storeQr?.includes(COUNTER_SALE_GUARD)).toBe(false);
 	});
 
 	test("every way back stays open — top-up, billing, plans, settings, team", () => {
