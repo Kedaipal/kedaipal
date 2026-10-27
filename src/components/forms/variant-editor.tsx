@@ -999,7 +999,7 @@ export function VariantEditor({
 		);
 	}
 
-	// --- Mode switch (the "What kind of product is it?" question) -------------
+	// --- Mode switch (the "Does the buyer choose anything?" question) ---------
 	function switchToChoices() {
 		if (hasOptions) return;
 		if (!confirmLosingChoices()) return;
@@ -1396,12 +1396,16 @@ export function VariantEditor({
 
 	return (
 		<div className="flex flex-col gap-4">
-			{/* Q1 — what kind of product is it? Drives the shape of everything
+			{/* Q1 — does the buyer choose anything? Drives the shape of everything
 			    below: one price field, a price per choice, or no required price
 			    at all. Three segments now (86eyfq04j) — a bespoke seller had no
 			    way in without inventing a price and digging through Advanced. */}
 			<div className="flex flex-col gap-1.5">
-				<span className="text-sm font-medium">What kind of product is it?</span>
+				{/* The wizard's step-2 question, in the same words (z8r3fdxt99) —
+				    "what kind of product" read as step 0's question asked twice. */}
+				<span className="text-sm font-medium">
+					Does the buyer choose anything?
+				</span>
 				<div className="flex gap-1 rounded-xl bg-muted p-1">
 					{(
 						[

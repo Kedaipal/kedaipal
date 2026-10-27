@@ -18,7 +18,7 @@ import { Nav } from "./nav";
 const { trackDemoCta, trackSignupCta, authState } = vi.hoisted(() => ({
 	trackDemoCta: vi.fn(),
 	trackSignupCta: vi.fn(),
-	authState: { isSignedIn: false },
+	authState: { isLoaded: true, isSignedIn: false },
 }));
 
 vi.mock("@clerk/tanstack-react-start", () => ({
@@ -63,7 +63,7 @@ class NeverInViewObserver {
 
 function links(pattern: RegExp): HTMLAnchorElement[] {
 	return screen
-		.getAllByRole("link")
+		.queryAllByRole("link")
 		.filter((el): el is HTMLAnchorElement =>
 			pattern.test(el.getAttribute("href") ?? ""),
 		);
@@ -73,6 +73,7 @@ const demo = () => links(/^https:\/\/wa\.me\//);
 const signUp = () => links(/^\/sign-up/);
 
 beforeEach(() => {
+	authState.isLoaded = true;
 	authState.isSignedIn = false;
 	trackDemoCta.mockClear();
 	trackSignupCta.mockClear();
@@ -150,5 +151,38 @@ describe("nav — demo first", () => {
 		const menuSignUp = signUp()[0];
 		expect(menuSignUp.className).not.toContain("bg-accent");
 		expect(menuSignUp.textContent).toContain(m.nav_start_free());
+	});
+});
+
+/**
+ * Clerk resolves auth client-side only, so the first paint doesn't know who
+ * the visitor is (z8r3fdy2m0). Every slot holds a placeholder then — never
+ * the signed-out doors a signed-in seller would watch flip to the dashboard.
+ */
+describe("every CTA slot while Clerk resolves", () => {
+	const placeholders = () =>
+		screen.getAllByRole("status", { name: m.nav_auth_checking() });
+
+	it.each([
+		["hero", () => render(<Hero invite={null} />)],
+		["final CTA", () => render(<FinalCta />)],
+		["nav bar", () => render(<Nav />)],
+	])("%s shows a placeholder, not sign-up/log-in or the dashboard", (_, mount) => {
+		authState.isLoaded = false;
+		mount();
+		expect(placeholders()).toHaveLength(1);
+		expect(placeholders()[0].getAttribute("aria-busy")).toBe("true");
+		expect(signUp()).toHaveLength(0);
+		expect(links(/^\/sign-in/)).toHaveLength(0);
+		expect(links(/^\/app$/)).toHaveLength(0);
+	});
+
+	it("holds the mobile menu's doors too", () => {
+		authState.isLoaded = false;
+		render(<Nav />);
+		fireEvent.click(screen.getByLabelText(m.nav_menu_open()));
+		// The bar's slot and the menu's.
+		expect(placeholders()).toHaveLength(2);
+		expect(signUp()).toHaveLength(0);
 	});
 });

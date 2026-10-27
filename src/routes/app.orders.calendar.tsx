@@ -4,13 +4,13 @@
 
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { CalendarRange } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { PageHeader } from "../components/dashboard/page-header";
 import { OrdersViewToggle } from "../components/order/orders-view-toggle";
 import { SellerBookingCalendar } from "../components/order/seller-booking-calendar";
-import { Button } from "../components/ui/button";
+import { NewBookingLinks } from "../components/products/new-booking-links";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 
@@ -65,16 +65,12 @@ function OrdersCalendarPage() {
 							No booking listings yet
 						</p>
 						<p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
-							The calendar shows booked nights for listings sold by date. Create
-							one to start taking requests — it opens with Booking already
+							The calendar shows bookings for plans and stays sold by date. Add
+							one to start taking requests — it opens with that type already
 							picked.
 						</p>
 					</div>
-					<Button asChild variant="outline" className="tap-target">
-						<Link to="/app/products/new" search={{ card: "booking" }}>
-							Create a booking listing
-						</Link>
-					</Button>
+					<NewBookingLinks />
 				</div>
 			)}
 		</div>

@@ -79,9 +79,9 @@ const withOptions: VariantEditorState = {
 };
 
 describe("VariantEditor — the promoted questions", () => {
-	it("asks 'What kind of product is it?' with Just one item selected for a single product", () => {
+	it("asks 'Does the buyer choose anything?' with Just one item selected for a single product", () => {
 		render(<Harness initial={singleVariant} />);
-		expect(screen.getByText(/what kind of product is it/i)).toBeTruthy();
+		expect(screen.getByText(/does the buyer choose anything/i)).toBeTruthy();
 		expect(
 			screen
 				.getByRole("button", { name: /just one item/i })

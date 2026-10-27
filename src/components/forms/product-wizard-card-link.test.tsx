@@ -3,8 +3,7 @@
  * Render cover for the step-0 deep link (`z8r3fdhkr7`): `/app/products/new?card=event`
  * is where the v2026.09.7 "Host an event" note sends a seller. The pure tests
  * pin the state; these pin what the seller actually SEES on arrival — which
- * card is lit, whether the store-type badge still claims the page, the Event
- * route's step count, the refusal a locked plan gets (under the card it
+ * card is lit, the Event route's step count, the refusal a locked plan gets (under the card it
  * refuses, with a way to upgrade), the scroll that brings the answer out from
  * under a phone's sticky Continue, and a link that changes while the wizard
  * is already open.
@@ -40,7 +39,6 @@ vi.mock("@tanstack/react-router", () => ({
 	),
 }));
 
-import type { ProductKind } from "../../../convex/lib/productKind";
 import type { KindCard } from "../../lib/kind-card";
 import { ProductWizard } from "./product-wizard";
 
@@ -56,18 +54,12 @@ beforeEach(() => {
 afterEach(cleanup);
 
 type Opts = {
-	defaultKind?: ProductKind;
 	linkedCard?: KindCard;
 	eventsLocked?: boolean;
 	currency?: string;
 };
 
-function wizard({
-	defaultKind,
-	linkedCard,
-	eventsLocked = false,
-	currency = "MYR",
-}: Opts) {
+function wizard({ linkedCard, eventsLocked = false, currency = "MYR" }: Opts) {
 	return (
 		<ProductWizard
 			retailerId={"r1" as never}
@@ -75,7 +67,6 @@ function wizard({
 			eventsLocked={eventsLocked}
 			promoLocked={false}
 			currency={currency}
-			defaultKind={defaultKind}
 			linkedCard={linkedCard}
 			onSubmit={vi.fn() as never}
 			onSkipToFullForm={vi.fn()}
@@ -101,34 +92,34 @@ const continueBtn = () => screen.getByRole("button", { name: /continue/i });
 const scrolledTo = () => scrolled.mock.calls.map(([el]) => el as Element);
 
 describe("wizard — `?card=` deep link (`z8r3fdhkr7`)", () => {
-	it("lands on Event, not the store's own type — and the badge stops claiming the page", () => {
-		renderWizard({ defaultKind: "booking", linkedCard: "event" });
-		expect(pressed(/^event/i)).toBe("true");
-		expect(pressed(/^booking/i)).toBe("false");
-		// "Your store type" explains a PRE-selection; with the link's card lit
-		// it would badge a card that isn't selected.
-		expect(screen.queryByText("Your store type")).toBeNull();
+	it("lands on Event — the only card lit", () => {
+		renderWizard({ linkedCard: "event" });
+		expect(pressed(/^an event on one date/i)).toBe("true");
+		expect(pressed(/^a stay or rental/i)).toBe("false");
 		// The Event route's hint and a live Continue — one tap from Next.
 		expect(screen.getByText(/RSVP to one date you fix/i)).toBeTruthy();
 		expect(continueBtn().getAttribute("disabled")).toBeNull();
 	});
 
 	it("opens the SAME route a tap on Event does", () => {
-		renderWizard({ defaultKind: "booking", linkedCard: "event" });
+		renderWizard({ linkedCard: "event" });
 		const linked = screen.getByText(/^Step 1 of \d+$/).textContent;
 		cleanup();
-		renderWizard({ defaultKind: "booking" });
-		fireEvent.click(cardButton(/^event/i));
+		renderWizard({});
+		fireEvent.click(cardButton(/^an event on one date/i));
 		expect(screen.getByText(/^Step 1 of \d+$/).textContent).toBe(linked);
 		expect(linked).toBe("Step 1 of 7");
 	});
 
-	it("scrolls the event hint into view once — on a phone the fifth card sits under the sticky Continue", () => {
-		renderWizard({ defaultKind: "booking", linkedCard: "event" });
-		// Exactly once, and onto the hint that sits directly under the Event
-		// card — so the lit card AND what it means are both on screen.
+	it("scrolls the Event card and its hint into view once — on a phone it sits under the sticky Continue", () => {
+		renderWizard({ linkedCard: "event" });
+		// Exactly once, onto the card's block, which holds the hint under it —
+		// so the lit card AND what it means are both on screen.
 		expect(scrolled).toHaveBeenCalledTimes(1);
 		expect(scrolledTo()[0].textContent).toMatch(/RSVP to one date you fix/);
+		expect(scrolledTo()[0].contains(cardButton(/^an event on one date/i))).toBe(
+			true,
+		);
 		// `nearest` + a phone-only scroll margin: scrolls only when covered, so
 		// a desktop page that already shows it never jumps.
 		expect(scrolled.mock.calls[0][1]).toEqual({ block: "nearest" });
@@ -136,10 +127,10 @@ describe("wizard — `?card=` deep link (`z8r3fdhkr7`)", () => {
 		expect(scrolledTo()[0].className).toMatch(/lg:scroll-mb-0/);
 	});
 
-	it("no link keeps today's opening — nothing lit but the store type, no scroll", () => {
-		renderWizard({ defaultKind: "booking" });
-		expect(pressed(/^booking/i)).toBe("true");
-		expect(pressed(/^event/i)).toBe("false");
+	it("no link opens unanswered — nothing lit, no scroll", () => {
+		renderWizard({});
+		expect(pressed(/^a stay or rental/i)).toBe("false");
+		expect(pressed(/^an event on one date/i)).toBe("false");
 		expect(screen.queryByRole("alert")).toBeNull();
 		expect(scrolled).not.toHaveBeenCalled();
 	});
@@ -159,17 +150,16 @@ describe("wizard — `?card=` deep link (`z8r3fdhkr7`)", () => {
 
 describe("wizard — a locked plan's Event refusal (`z8r3fdhkr7` review)", () => {
 	/** The Event card's own block — the card plus anything rendered under it. */
-	const eventBlock = () => cardButton(/^event/i).parentElement as HTMLElement;
+	const eventBlock = () =>
+		cardButton(/^an event on one date/i).parentElement as HTMLElement;
 
-	it("arrival: the store type stays lit and the refusal sits UNDER the Event card, with the way to upgrade", () => {
+	it("arrival: nothing is lit and the refusal sits UNDER the Event card, with the way to upgrade", () => {
 		renderWizard({
-			defaultKind: "booking",
 			linkedCard: "event",
 			eventsLocked: true,
 		});
-		expect(pressed(/^booking/i)).toBe("true");
-		expect(pressed(/^event/i)).toBe("false");
-		expect(screen.getByText("Your store type")).toBeTruthy();
+		expect(pressed(/^an event on one date/i)).toBe("false");
+		expect(continueBtn().getAttribute("disabled")).not.toBeNull();
 		const alert = screen.getByRole("alert");
 		expect(alert.textContent).toMatch(/Events are part of the Pro plan/);
 		// Under the card it refuses — not below the whole list, where a
@@ -184,9 +174,9 @@ describe("wizard — a locked plan's Event refusal (`z8r3fdhkr7` review)", () =>
 	});
 
 	it("a tap gets the same refusal in the same place; picking an allowed card clears it", () => {
-		renderWizard({ defaultKind: "booking", eventsLocked: true });
+		renderWizard({ eventsLocked: true });
 		expect(screen.queryByRole("alert")).toBeNull();
-		fireEvent.click(cardButton(/^event/i));
+		fireEvent.click(cardButton(/^an event on one date/i));
 		expect(eventBlock().contains(screen.getByRole("alert"))).toBe(true);
 		fireEvent.click(cardButton(/^food/i));
 		expect(screen.queryByRole("alert")).toBeNull();
@@ -194,7 +184,7 @@ describe("wizard — a locked plan's Event refusal (`z8r3fdhkr7` review)", () =>
 
 	it("'Pick one to continue' keeps its own slot — only the lock moved", () => {
 		renderWizard({ eventsLocked: true });
-		fireEvent.click(cardButton(/^event/i));
+		fireEvent.click(cardButton(/^an event on one date/i));
 		// The refusal is the one alert; step 0's structural hint is unchanged.
 		expect(screen.getAllByRole("alert")).toHaveLength(1);
 		expect(screen.getByText(/Pick one to continue/)).toBeTruthy();
@@ -203,34 +193,42 @@ describe("wizard — a locked plan's Event refusal (`z8r3fdhkr7` review)", () =>
 
 describe("wizard — a `?card=` that changes while the wizard is open", () => {
 	it("is applied once, as a tap: back to step 0, card lit, brought into view", () => {
-		const { relink } = renderWizard({ defaultKind: "physical" });
+		const { relink } = renderWizard();
 		// Mid-draft: past step 0.
+		fireEvent.click(cardButton(/^goods/i));
 		fireEvent.click(continueBtn());
 		expect(screen.queryByText("What are you selling?")).toBeNull();
 		relink("event");
 		expect(screen.getByText("What are you selling?")).toBeTruthy();
-		expect(pressed(/^event/i)).toBe("true");
+		expect(pressed(/^an event on one date/i)).toBe("true");
 		expect(scrolled).toHaveBeenCalledTimes(1);
 	});
 
 	it("a re-render with the same link never re-applies it over the seller's own tap", () => {
-		const { relink } = renderWizard({
-			defaultKind: "physical",
-			linkedCard: "event",
-		});
+		const { relink } = renderWizard({ linkedCard: "event" });
 		fireEvent.click(cardButton(/^food/i));
 		relink("event"); // same value — the route re-rendering, not a new link
 		expect(pressed(/^food/i)).toBe("true");
-		expect(pressed(/^event/i)).toBe("false");
+		expect(pressed(/^an event on one date/i)).toBe("false");
 	});
 
 	it("on a locked plan it refuses with the reason, exactly like the tap", () => {
-		const { relink } = renderWizard({
-			defaultKind: "booking",
-			eventsLocked: true,
-		});
+		const { relink } = renderWizard({ eventsLocked: true });
+		fireEvent.click(cardButton(/^a stay or rental/i));
 		relink("event");
-		expect(pressed(/^booking/i)).toBe("true");
+		expect(pressed(/^a stay or rental/i)).toBe("true");
 		expect(screen.getByRole("alert").textContent).toMatch(/Pro plan/);
+	});
+});
+
+describe("wizard — the retired Booking link (z8r3fdxt99)", () => {
+	it("a Stay link lands on Stay with its hint, scrolled into view", () => {
+		// `?card=booking` parses to "stay" at the route (`parseKindCard`).
+		renderWizard({ linkedCard: "stay" });
+		expect(pressed(/^a stay or rental/i)).toBe("true");
+		expect(screen.getByText(/request to book/i)).toBeTruthy();
+		expect(scrolledTo()[0].contains(cardButton(/^a stay or rental/i))).toBe(
+			true,
+		);
 	});
 });
