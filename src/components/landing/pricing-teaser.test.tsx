@@ -21,8 +21,12 @@ import { PricingTeaser } from "./pricing-teaser";
  * sign-up, and its unbuilt rows carry "Soon" instead of reading as included.
  */
 
+const { authState } = vi.hoisted(() => ({
+	authState: { isLoaded: true, isSignedIn: false },
+}));
+
 vi.mock("@clerk/tanstack-react-start", () => ({
-	useAuth: () => ({ isSignedIn: false }),
+	useAuth: () => authState,
 }));
 vi.mock("../../hooks/useSupportWaNumber", () => ({
 	useSupportWaNumber: () => "60123456789",
@@ -62,7 +66,11 @@ beforeAll(() => {
 	globalThis.IntersectionObserver ??= NeverInView as never;
 });
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	authState.isLoaded = true;
+	authState.isSignedIn = false;
+});
 
 /** Rendered text, NBSP-flattened. */
 const text = () => (document.body.textContent ?? "").replace(/ /g, " ");
@@ -185,5 +193,28 @@ describe("PricingTeaser — credits, and Enterprise by conversation", () => {
 		expect(screen.getByText(m.pricingpage_annual_badge())).toBeTruthy();
 		// Credits stay monthly on annual, said under the toggle.
 		expect(screen.getByText(m.pricingpage_annual_credits_note())).toBeTruthy();
+	});
+});
+
+describe("PricingTeaser — the door while Clerk resolves (z8r3fdy2m0)", () => {
+	it("holds each self-serve door as a busy button, never a sign-up link", () => {
+		authState.isLoaded = false;
+		render(<PricingTeaser />);
+		expect(
+			screen.queryAllByRole("link", { name: /Start free — pay when you sell/ }),
+		).toHaveLength(0);
+		const busy = screen.getAllByRole("button", { name: m.nav_auth_checking() });
+		expect(busy).toHaveLength(2);
+		for (const b of busy) expect((b as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it("gives a signed-in seller the dashboard on every self-serve card", () => {
+		authState.isSignedIn = true;
+		render(<PricingTeaser />);
+		expect(
+			screen.getAllByRole("link", {
+				name: new RegExp(m.nav_go_to_dashboard()),
+			}),
+		).toHaveLength(2);
 	});
 });

@@ -1,9 +1,11 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
+import { useAuthState } from "../../hooks/useAuthState";
 import { m } from "../../paraglide/messages";
+import { Skeleton } from "../ui/skeleton";
 import { FadeIn } from "./fade-in";
 import {
+	AuthCtaPlaceholder,
 	ctaPillClass,
 	DemoPill,
 	GuaranteeLine,
@@ -16,7 +18,7 @@ import {
  * demo actually promises.
  */
 export function FinalCta() {
-	const { isSignedIn } = useAuth();
+	const auth = useAuthState();
 	return (
 		<section
 			aria-labelledby="final-cta-heading"
@@ -48,7 +50,17 @@ export function FinalCta() {
 						{m.final_sub()}
 					</p>
 					<div className="mt-10 flex flex-col items-center gap-3.5">
-						{isSignedIn ? (
+						{auth === "loading" ? (
+							// On the navy mesh `bg-muted` would glare — the placeholder
+							// takes the section's own foreground at low alpha.
+							<AuthCtaPlaceholder className="flex w-full flex-col items-center gap-3.5">
+								<Skeleton className="h-[52px] w-full max-w-80 rounded-full bg-cta-mesh-foreground/10" />
+								<div className="flex min-h-11 items-center">
+									<Skeleton className="h-4 w-56 bg-cta-mesh-foreground/10" />
+								</div>
+								<Skeleton className="h-4 w-full max-w-md bg-cta-mesh-foreground/10" />
+							</AuthCtaPlaceholder>
+						) : auth === "signed-in" ? (
 							<Link to="/app" className={ctaPillClass("accent")}>
 								{m.nav_go_to_dashboard()}
 								<ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />

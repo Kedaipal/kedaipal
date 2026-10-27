@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ArrowRight, Check, Sparkles } from "lucide-react";
@@ -20,6 +19,7 @@ import {
 	starterPricePerDay,
 	TRIAL_CREDIT_GRANT,
 } from "../../../convex/lib/plans";
+import { useAuthState } from "../../hooks/useAuthState";
 import { useLandingRegionContext } from "../../hooks/useLandingRegion";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
 import {
@@ -155,8 +155,18 @@ function getTiers(): TeaserTier[] {
 	];
 }
 
+/** The card's self-serve door — one class for the link and its loading twin. */
+function teaserDoorClass(popular: boolean) {
+	return cn(
+		"h-11 w-full rounded-full",
+		popular
+			? "border-primary-foreground/30 bg-transparent text-primary-foreground hover:bg-primary-foreground/10"
+			: "border-border bg-background text-foreground hover:bg-muted",
+	);
+}
+
 export function PricingTeaser() {
-	const { isSignedIn } = useAuth();
+	const auth = useAuthState();
 	const tiers = getTiers();
 	const supportWa = useSupportWaNumber();
 	const shouldReduceMotion = useReducedMotion();
@@ -413,6 +423,20 @@ export function PricingTeaser() {
 											<div className="flex h-11 w-full items-center justify-center rounded-full border border-dashed border-border bg-muted/40 text-sm font-semibold text-muted-foreground">
 												{m.pricing_coming_soon()}
 											</div>
+										) : auth === "loading" ? (
+											// Clerk still resolving (z8r3fdy2m0): a spinner holds the
+											// door's place — same control as `/pricing`'s cards — so a
+											// signed-in seller never sees "Start free" flip to the
+											// dashboard.
+											<Button
+												size="lg"
+												isLoading
+												aria-label={m.nav_auth_checking()}
+												className={teaserDoorClass(tier.popular)}
+												variant="outline"
+											>
+												{m.pricing_cta()}
+											</Button>
 										) : (
 											// Outline on every card (demo-first, z8r3fdtpub T1): the
 											// page's one accent pill is "Book a demo"; self-serve is a
@@ -421,15 +445,10 @@ export function PricingTeaser() {
 											<Button
 												asChild
 												size="lg"
-												className={cn(
-													"h-11 w-full rounded-full",
-													tier.popular
-														? "border-primary-foreground/30 bg-transparent text-primary-foreground hover:bg-primary-foreground/10"
-														: "border-border bg-background text-foreground hover:bg-muted",
-												)}
+												className={teaserDoorClass(tier.popular)}
 												variant="outline"
 											>
-												{isSignedIn ? (
+												{auth === "signed-in" ? (
 													<Link to="/app">
 														{m.nav_go_to_dashboard()}
 														<ArrowRight />
