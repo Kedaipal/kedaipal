@@ -1683,7 +1683,10 @@ export const queueSyncForShipment = internalMutation({
 			.withIndex("by_provider_order", (q) =>
 				q.eq("provider", "easyparcel").eq("providerOrderId", shipmentNumber),
 			)
-			.unique();
+			// `.first()`, never `.unique()`: this runs under an UNAUTHENTICATED
+			// route that promises a fast 200, so a duplicate shipment number
+			// (should EasyParcel ever reissue one) must not throw it into a 500.
+			.first();
 		if (!job) return;
 		const { ok } = await rateLimiter.limit(ctx, "easyparcelWebhookSync", {
 			key: job._id,
