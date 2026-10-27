@@ -7,6 +7,7 @@ import type {
 	CountrySetupItem,
 	CountrySetupItemKey,
 } from "../../convex/lib/countrySetup";
+import { storeBillingCurrency } from "../../convex/lib/plans";
 
 /**
  * Seller-facing copy for the post-switch setup checklist (86eyqgujv).
@@ -32,7 +33,10 @@ export type CountrySetupTab =
 	| "fulfilment"
 	// Third-party accounts (2 Sep IA rework) — HitPay's checklist row lands
 	// on the card's new home.
-	| "integrations";
+	| "integrations"
+	// The store's own subscription — where auto-renewal is set up again after
+	// a switch detached it (86eyp7hn7).
+	| "billing";
 
 type CountrySetupCopy = {
 	title: string;
@@ -66,6 +70,12 @@ const COPY: Record<
 		// HitPay's card moved to Integrations (2 Sep IA rework).
 		tab: "integrations",
 		action: "Open Integrations",
+	}),
+	billing_currency: ({ to, from }) => ({
+		title: `Your Kedaipal subscription now bills in ${storeBillingCurrency(to)}`,
+		body: `Every invoice from your next one is in ${storeBillingCurrency(to)}, at the ${COUNTRY_LABELS[to]} price. If auto-renewal was on, we turned it off — the card you saved${from ? ` in ${COUNTRY_LABELS[from]}` : ""} was authorised in ${from ? storeBillingCurrency(from) : "another currency"} and can't be charged in ${storeBillingCurrency(to)}. Set it up again on Billing, or pay each invoice with its Pay-now link.`,
+		tab: "billing",
+		action: "Open Billing",
 	}),
 	business_address: ({ to, from }) => ({
 		title: "Set your business address",
@@ -174,6 +184,8 @@ export function countrySetupHeadline(
 export const SETTINGS_ANCHOR: Record<CountrySetupItemKey, string> = {
 	payment_methods: "settings-payment-methods",
 	hitpay: "settings-hitpay",
+	// The auto-renewal card — the same anchor `?spot=auto_renewal` rings.
+	billing_currency: "settings-auto-renewal",
 	business_address: "settings-business-address",
 	pickup_addresses: "settings-pickup",
 	delivery_mode: "settings-delivery-charge",

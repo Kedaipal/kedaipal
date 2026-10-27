@@ -411,8 +411,16 @@ recurring/charge events) — the signing secret shown for THAT endpoint is
   ACCOUNT's own tokenisable set decides (sandbox: a TnG-only account
   rejected `card`, and a card-only fallback would have been the one method
   it did not have).
-- Renewal/self-serve invoice currency: last **paid** invoice's currency,
-  falling back to `BILLING_CURRENCY_FOR_COUNTRY[retailer.country]`.
+- Every invoice — first, renewal, plan change, top-up — bills in the store's
+  **country's** currency (`storeBillingCurrency`, 86eyp7hn7). It used to
+  follow the last paid invoice, which let one wrong-currency bill stick.
+- **A country switch detaches the saved method.** The switch is the one way
+  to change what a store bills in, and the session HitPay authorised was in
+  the OLD currency — charging it in the new one is a charge the seller never
+  agreed to. `retailers.updateSettings` runs `detachAutoRenewForRetailer` on
+  a real country change (the same path as a store handover), reports
+  `autoRenewDetached`, and the post-switch checklist's `billing_currency` row
+  sends the seller to set auto-renewal up again. Pay-now keeps working.
 - `times_to_be_charged` is NEVER sent: a save-payment-method session
   rejects it outright ("You cant set times_to_be_charged for save_card is
   true", sandbox 11 Sep 2026). No charge-count ceiling exists on the

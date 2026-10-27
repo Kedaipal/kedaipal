@@ -1135,6 +1135,17 @@ was already currency-agnostic — the work was the issue path and the pay surfac
     with the country (still lets one mistake stick), and a per-store billing
     currency field (no customer has needed cross-border billing — build it,
     audited, if one does).
+  - **The country switch is therefore a billing event** (PR #424 review).
+    Under "last paid wins" a move was billing-neutral for an existing payer;
+    now it changes what the next bill is in — and the recurring session
+    HitPay authorised was in the OLD currency. So a real country change in
+    `retailers.updateSettings` runs `detachAutoRenewForRetailer` (the
+    handover path: reconcile-safe, remote session deleted), returns
+    `autoRenewDetached` for the toast, and the post-switch checklist gains a
+    `billing_currency` row (money severity, acknowledged, deep-links to the
+    auto-renewal card) for every store Kedaipal bills — not comped, not on a
+    contract. The country card warns before the save; the admin form's
+    helper says the switch also turns off auto-renewal. Pay-now is untouched.
 - **No payment block on non-MYR invoices.** The `billingConfig` rails (MY bank +
   DuitNow) can only settle MYR, so a cross-border invoice deliberately shows
   **amount only** everywhere — PDF (no "Payment instructions" card; footer says

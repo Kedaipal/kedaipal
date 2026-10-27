@@ -6,7 +6,11 @@
  * seller was left at the top of the tab.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { revealAnchorWhenMounted } from "./country-setup-copy";
+import {
+	countrySetupCopy,
+	revealAnchorWhenMounted,
+	SETTINGS_ANCHOR,
+} from "./country-setup-copy";
 
 afterEach(() => {
 	document.body.innerHTML = "";
@@ -20,6 +24,32 @@ function mountCard(id: string) {
 	document.body.append(card);
 	return card;
 }
+
+describe("billing_currency copy (86eyp7hn7)", () => {
+	const item = {
+		key: "billing_currency" as const,
+		severity: "money" as const,
+		verifiable: false,
+	};
+
+	it("names the new currency, the old authorisation and where to fix it", () => {
+		const copy = countrySetupCopy(item, "SG", "MY");
+		expect(copy.title).toBe("Your Kedaipal subscription now bills in SGD");
+		expect(copy.body).toContain("Every invoice from your next one is in SGD");
+		expect(copy.body).toContain("authorised in MYR");
+		expect(copy.tab).toBe("billing");
+		expect(copy.action).toBe("Open Billing");
+		// The deep link rings the auto-renewal card, which is where "set it up
+		// again" happens.
+		expect(SETTINGS_ANCHOR.billing_currency).toBe("settings-auto-renewal");
+	});
+
+	it("never invents the previous country on an older, un-stamped row", () => {
+		const copy = countrySetupCopy(item, "MY", undefined);
+		expect(copy.body).toContain("authorised in another currency");
+		expect(copy.body).not.toContain("undefined");
+	});
+});
 
 describe("revealAnchorWhenMounted", () => {
 	it("waits for a card that mounts late, then scrolls to it once", async () => {

@@ -4,8 +4,11 @@
 // money is in MINOR units (sen), consistent with orders. See
 // docs/manual-subscription.md.
 //
-// The `Country` import is type-only, so this stays a pure module with no
-// runtime dependency on `country.ts` (which does import `convex/values`).
+// `DEFAULT_COUNTRY` is a runtime import from `country.ts`, which pulls in
+// `convex/values` — a package, not a Convex function module, so the client-
+// imports gate (`src/lib/convex-client-imports.test.ts`) allows it and the
+// browser bundle already carries it through `convex/react`. The module still
+// has no Convex FUNCTION dependency.
 
 import { type Country, DEFAULT_COUNTRY } from "./country";
 

@@ -374,7 +374,7 @@ describe("Issue an invoice — the currency is the store's country's, never a pi
 		expect(screen.getByText(/S\$\s?41\.00/)).toBeTruthy();
 		expect(
 			screen.getByText(
-				"Set by its country (Singapore). To bill another currency, change the store's country first (act as it → Settings).",
+				"Set by its country (Singapore). To bill another currency, change the store's country first (act as it → Settings) — that also turns off its auto-renewal.",
 			),
 		).toBeTruthy();
 		fireEvent.click(issueButton());

@@ -1262,7 +1262,7 @@ export function IssueInvoiceForm() {
 								? "Set by the store's Enterprise contract — the term and currency it was agreed in."
 								: "The contract sets both — choose the term while you write it."
 							: selected
-								? `Set by its country (${COUNTRY_LABELS[selected.country]}). To bill another currency, change the store's country first (act as it → Settings).`
+								? `Set by its country (${COUNTRY_LABELS[selected.country]}). To bill another currency, change the store's country first (act as it → Settings) — that also turns off its auto-renewal.`
 								: "Follows the store's country."}
 					</span>
 					{effectiveCurrency === "SGD" ? (

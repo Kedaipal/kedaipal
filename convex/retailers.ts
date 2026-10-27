@@ -2705,6 +2705,10 @@ export const updateSettings = mutation({
 	): Promise<{
 		ok: true;
 		productsCurrencySynced: number;
+		/** A real country change detached the saved auto-renew method — the
+		 * card HitPay authorised was in the OLD billing currency (86eyp7hn7).
+		 * The country card tells the seller so in the same breath. */
+		autoRenewDetached: boolean;
 	}> => {
 		// Resolve the target store: an explicit `retailerId` is the admin act-as
 		// path; otherwise the store the caller works in. Field-level enforcement
@@ -2776,6 +2780,7 @@ export const updateSettings = mutation({
 		// change wins over the stored row, so "switch to SG + save the SG number"
 		// in one call validates coherently instead of bouncing off the old arm.
 		const effectiveCountry = args.country ?? retailer.country ?? DEFAULT_COUNTRY;
+		let autoRenewDetached = false;
 
 		if (args.storeName !== undefined) {
 			try { patch.storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
@@ -2889,6 +2894,24 @@ export const updateSettings = mutation({
 				// confirmed — their bank details were checked against the OLD
 				// destination.
 				patch.countrySetupAcked = undefined;
+				// The ONE thing the switch does switch off. A store is billed in
+				// its country's currency (`storeBillingCurrency`, 86eyp7hn7), so
+				// this move changes what every bill from the next one is in —
+				// and the recurring session HitPay authorised was in the OLD
+				// currency. Charging that session in the new one is a charge the
+				// seller never agreed to, so the method goes the way it goes on a
+				// store handover: the same helper, reconcile-safe, nothing
+				// deleted that money could still be hanging off. Pay-now keeps
+				// working; the checklist row below sends them to set it up
+				// again.
+				const sub = await ctx.db
+					.query("subscriptions")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+					.first();
+				if (sub?.autoRenew !== undefined) {
+					await detachAutoRenewForRetailer(ctx, retailer._id);
+					autoRenewDetached = true;
+				}
 			}
 			patch.country = args.country;
 		}
@@ -3543,7 +3566,7 @@ export const updateSettings = mutation({
 			);
 		}
 		await logAdminAction(ctx, access, "retailers.updateSettings", retailer._id);
-		return { ok: true, productsCurrencySynced };
+		return { ok: true, productsCurrencySynced, autoRenewDetached };
 	},
 });
 
@@ -3581,11 +3604,14 @@ export const recordConsentAcceptance = mutation({
 });
 
 /**
- * Idempotent: mark the signed-in retailer as having visited the Pickup
- * settings tab at least once. Drives the dashboard checklist's step-4
- * dismissal so a seller who deliberately skips self-collect isn't nagged.
- * No-op if already true.
+ * Whether Kedaipal bills this store at all — the only stores a country switch
+ * changes a bill for (86eyp7hn7). Comped stores get no bill; an Enterprise
+ * contract's currency is frozen with the deal.
  */
+function billedByKedaipal(sub: Doc<"subscriptions"> | null): boolean {
+	return sub !== null && sub.comped !== true && sub.enterprise === undefined;
+}
+
 /**
  * The post-switch setup checklist (86eyqgujv) — what a store still needs to
  * fix after moving country, most costly first.
@@ -3623,9 +3649,15 @@ export const countrySetup = query({
 			.query("pickupLocations")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.collect();
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.first();
 		const items = resolveCountrySetup({
 			country: retailer.country,
 			countryChangedAt: retailer.countryChangedAt,
+			countryChangedFrom: retailer.countryChangedFrom,
+			billedByKedaipal: billedByKedaipal(sub),
 			acked: retailer.countrySetupAcked,
 			businessAddress: retailer.businessAddress,
 			pickupLocations: locations.map((l) => ({
@@ -3689,9 +3721,15 @@ export const ackCountrySetup = mutation({
 			.query("pickupLocations")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.collect();
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.first();
 		const items = resolveCountrySetup({
 			country: retailer.country,
 			countryChangedAt: retailer.countryChangedAt,
+			countryChangedFrom: retailer.countryChangedFrom,
+			billedByKedaipal: billedByKedaipal(sub),
 			acked: undefined,
 			businessAddress: retailer.businessAddress,
 			pickupLocations: locations.map((l) => ({
@@ -3733,6 +3771,12 @@ export const ackCountrySetup = mutation({
 	},
 });
 
+/**
+ * Idempotent: mark the signed-in retailer as having visited the Pickup
+ * settings tab at least once. Drives the dashboard checklist's step-4
+ * dismissal so a seller who deliberately skips self-collect isn't nagged.
+ * No-op if already true.
+ */
 export const markPickupSetupSeen = mutation({
 	args: {},
 	handler: async (ctx): Promise<{ updated: boolean }> => {
