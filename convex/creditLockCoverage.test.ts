@@ -177,6 +177,8 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 	"delyva.connect": "settings: connecting a courier account",
 	"delyva.resubscribeWebhooks": "settings: re-registers the courier webhooks",
 	"lalamove.registerWebhook": "settings: registers the rider webhook",
+	"lalamove.verifyKeys":
+		"settings: asks Lalamove whether a pasted key pair works — writes nothing",
 	"delyva.refreshEnvironment": "settings: re-reads the courier account's mode",
 	"delyva.disconnect": "settings: removing a courier account is never trapped",
 	"delyva.updateSettings": "settings: courier defaults and preferences",

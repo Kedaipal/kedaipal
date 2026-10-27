@@ -1135,13 +1135,73 @@ stored keys belong to the old market — quotes then fail at the point of use.
 The country-switch checklist's `delivery_booking` item now covers exactly
 this (money severity, ACKABLE — we cannot see which market a stored key was
 created for, so the seller confirms), and the switch dialog warns in the same
-sentence.
+sentence. A key pair pasted **after** the switch is checked against the new
+market before it is stored ([below](#keys-checked-before-theyre-stored-and-removable-z8r3fdy5ht)),
+so the hazard is only ever a key that predates the switch.
 
 **Still genuinely unverified: one live SG booking end to end.** The first SG
 vendor run is the verification. If anything surprises, it will surface as a
 named quote/booking failure on their dispatch card — collect the message and
 it locates the layer immediately. `COUNTRY_DELIVERY_MODES.SG` gaining
 `"live"` pricing waits for z8r3fdbvdy to merge (one line there).
+
+## Keys: checked before they're stored, and removable (z8r3fdy5ht)
+
+Found 28 Oct 2026 during the EasyParcel test: an EasyParcel OAuth client ID +
+secret pasted into the Lalamove card was stored and badged **Live** —
+`inferLalamoveEnv` files anything that isn't `pk_test_` as production — and
+the card had no way to remove it. Both halves are fixed.
+
+**A pasted pair is checked three times, cheapest first.**
+
+| Check | Where | Catches |
+| --- | --- | --- |
+| Shape, as the seller types | `checkLalamoveKeyShape` (`convex/lib/lalamove.ts`), run by the card | another provider's ID, a stray secret, swapped fields, a live key with a sandbox secret |
+| Lalamove itself, on Save | `lalamove.verifyKeys` — signed `GET /v3/cities` with the pair, on the store's own `Market` | a well-formed pair that is wrong, revoked, or from the other country's app |
+| The lock | `retailers.updateSettings` refuses a NEW paste that fails the shape rule | anything that skipped the card |
+
+The shape rule is the server's lock; the probe is not (it is an action, and
+a mutation can't call Lalamove). A seller bypassing their own probe only
+hurts themselves, and the shape rule still holds. **Stored keys are never
+re-judged** — only a new paste — so a legacy row keeps working.
+
+`verifyKeys` **fails closed**: a 4xx (except 429) is a verdict ("Lalamove
+didn't accept this key and secret for Malaysia"); a 429, 5xx, timeout (8 s)
+or network error says "couldn't reach Lalamove — nothing was saved", never a
+pass. It writes nothing, refuses a view-only store (`assertWritable`, so a
+lapsed seller hears the lock before the probe, not after a check that
+"passed"), and is rate-limited per store (`lalamoveKeyCheck`, 6/min, burst
+3) because "does this key pair work?" is an oracle a stolen-key tester would
+hammer.
+
+**Disconnect** is `updateSettings({ deliveryBooking: null })` — the path
+existed, with no UI. It removes the key, secret and everything learned from
+them (env, hint, webhook stamp, the wallet snapshot) and **keeps** the
+seller's rider preferences (vehicle, collection direction, prompt-on-packed),
+so reconnecting is one paste — the Delyva posture. Never plan-gated. It is
+refused only where removing the keys would break something the seller can't
+see, by one rule (`convex/lib/lalamoveDisconnect.ts`) shared by the mutation
+and the card's `lalamove.getDisconnectState` read, so the button is greyed
+out with the reason **before** the tap:
+
+- **`pricing`** — the delivery charge is quoted by Lalamove: the `lalamove`
+  mode, or `live` mode where Lalamove is the only courier bidding
+  (`delyvaBidsAtCheckout` false). Links to Delivery pricing. A seller
+  switching the charge in the same call is honoured.
+- **`rider_out`** — a Lalamove job is still active. Cancelling and following
+  it both need the keys. Names the orders and links the first. Read from the
+  store's newest 50 jobs (`by_retailer`, desc) — a trip finishes within the
+  day, so an active one is always among them, and no new index is needed.
+
+The seller's Lalamove account is untouched: its wallet is theirs, and its
+webhook keeps pointing at us. Events that arrive afterwards fail signature
+verification (no stored secret) and are ignored — harmless, which the confirm
+dialog says.
+
+**Not changed:** switching rider booking OFF under `live` pricing is still
+guarded only in the client (`courier-booking-section.tsx`'s last-bidder
+check); the server guard here covers disconnect. Worth aligning when that
+toggle is next touched.
 
 ## Sandbox E2E — verified 21 Jul 2026
 
