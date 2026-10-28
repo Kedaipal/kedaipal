@@ -26,6 +26,7 @@ import {
 	buildLalamoveHeaders,
 	buildPlaceOrderBody,
 	buildQuotationBody,
+	checkLalamoveKeyShape,
 	classifyQuoteFailure,
 	type DeliveryJobStatus,
 	isActiveJobStatus,
@@ -46,10 +47,16 @@ import {
 	resolveScheduleAt,
 	toLalamoveContactPhone,
 	toLalamovePhone,
+	hasLalamoveCredentials,
 } from "./lib/lalamove";
+import {
+	type LalamoveDisconnectBlock,
+	lalamovePricingBlock,
+	lalamoveRiderOutBlock,
+} from "./lib/lalamoveDisconnect";
 import { priorityFeeWire, TIP_OPTIONS } from "./lib/lalamoveTip";
 import { formatBusinessAddress } from "./lib/address";
-import { DEFAULT_COUNTRY } from "./lib/country";
+import { COUNTRY_LABELS, type Country, DEFAULT_COUNTRY } from "./lib/country";
 import { courierProviderValidator } from "./lib/courierProviders";
 import { lalamoveBookingArmed } from "./lib/courierBooking";
 import { type CartWeightItem, riderBookingAllowed } from "./lib/delivery";
@@ -780,6 +787,145 @@ async function stampWebhookKnown(
 		deliveryBooking: { ...booking, webhookRegisteredAt: Date.now() },
 	});
 }
+
+// ---------------------------------------------------------------------------
+// Key check + disconnect state (z8r3fdy5ht)
+// ---------------------------------------------------------------------------
+
+/** Bounded so a hanging Lalamove doesn't hold the seller's Save button. */
+const KEY_CHECK_TIMEOUT_MS = 8000;
+
+/** Integrations write on the target store + its country (= Lalamove market). */
+export const getKeyCheckContext = internalQuery({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ retailerId: Id<"retailers">; country: Country }> => {
+		let target = retailerId;
+		if (!target) {
+			const my = await resolveMyRetailer(ctx);
+			if (!my) throw new ConvexError("No store found");
+			target = my.retailer._id;
+		}
+		const access = await requireRetailerAccess(ctx, target, {
+			area: "integrations",
+			level: "write",
+		});
+		return {
+			retailerId: target,
+			country: access.retailer.country ?? DEFAULT_COUNTRY,
+		};
+	},
+});
+
+/**
+ * Is this pasted pair really a working Lalamove key for this store's market?
+ * The card calls it before saving (z8r3fdy5ht): shape first (the same rule
+ * `retailers.updateSettings` enforces), then a signed `GET /v3/cities`
+ * against the store's own market — the cheapest call that proves the key,
+ * the secret AND the country line up. Nothing is stored here.
+ *
+ * Fails CLOSED: an unreachable Lalamove says "try again", never "saved", so
+ * an unproven pair can't be badged Live. Rate-limited per store — this is an
+ * oracle for "does this key pair work", and a stolen-key tester is exactly
+ * who would hammer it.
+ */
+export const verifyKeys = action({
+	args: {
+		retailerId: v.optional(v.id("retailers")),
+		apiKey: v.string(),
+		apiSecret: v.string(),
+	},
+	handler: async (
+		ctx,
+		args,
+	): Promise<
+		| { ok: true; env: "sandbox" | "production" }
+		| { ok: false; message: string }
+	> => {
+		const target = await ctx.runQuery(internal.lalamove.getKeyCheckContext, {
+			retailerId: args.retailerId,
+		});
+		// The save this precedes is locked for a view-only store — say so
+		// before asking Lalamove anything, not after a check that "passed".
+		await ctx.runQuery(internal.subscriptions.assertWritable, {
+			retailerId: target.retailerId,
+		});
+		await rateLimiter.limit(ctx, "lalamoveKeyCheck", {
+			key: target.retailerId,
+			throws: true,
+		});
+		const shape = checkLalamoveKeyShape(args.apiKey, args.apiSecret);
+		if (!shape.ok) return shape;
+		const place = COUNTRY_LABELS[target.country];
+		try {
+			await callLalamove(
+				{
+					apiKey: args.apiKey.trim(),
+					apiSecret: args.apiSecret.trim(),
+					env: shape.env,
+					market: lalamoveMarketForCountry(target.country),
+				},
+				"GET",
+				"/v3/cities",
+				undefined,
+				{ timeoutMs: KEY_CHECK_TIMEOUT_MS },
+			);
+			return { ok: true, env: shape.env };
+		} catch (err) {
+			const status = err instanceof LalamoveApiError ? err.status : undefined;
+			// Lalamove answered, and said no: a definite verdict on this pair.
+			if (status !== undefined && status >= 400 && status < 500 && status !== 429) {
+				return {
+					ok: false,
+					message: `Lalamove didn't accept this key and secret for ${place}. Check both came from the same Lalamove account, set up for ${place}.`,
+				};
+			}
+			console.warn("[lalamove] key check couldn't reach Lalamove", {
+				status,
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return {
+				ok: false,
+				message:
+					"Couldn't reach Lalamove to check these keys — nothing was saved. Try again in a minute.",
+			};
+		}
+	},
+});
+
+/**
+ * Why the card's Disconnect is greyed out right now, or null when it isn't —
+ * the same rule `retailers.updateSettings` applies to `deliveryBooking: null`
+ * (`convex/lib/lalamoveDisconnect.ts`), read ahead of the tap.
+ */
+export const getDisconnectState = query({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<LalamoveDisconnectBlock | null> => {
+		let target = retailerId;
+		if (!target) {
+			const my = await resolveMyRetailer(ctx);
+			if (!my) return null;
+			target = my.retailer._id;
+		}
+		const access = await requireRetailerAccess(ctx, target, {
+			area: "integrations",
+			level: "read",
+		});
+		const retailer = access.retailer;
+		if (!hasLalamoveCredentials(retailer.deliveryBooking)) return null;
+		return (
+			lalamovePricingBlock(
+				retailer,
+				(retailer.deliveryConfig as { mode?: string } | undefined)?.mode,
+			) ?? (await lalamoveRiderOutBlock(ctx, retailer._id))
+		);
+	},
+});
 
 // ---------------------------------------------------------------------------
 // One-tap webhook registration (86eye9xd4, 5A)

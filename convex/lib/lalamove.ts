@@ -150,6 +150,66 @@ export function inferLalamoveEnv(apiKey: string): LalamoveEnv {
 	return apiKey.startsWith("pk_test_") ? "sandbox" : "production";
 }
 
+const LALAMOVE_KEY = /^pk_(test|prod)_\S+$/;
+const LALAMOVE_SECRET = /^sk_(test|prod)_\S+$/;
+
+const ENV_WORD: Record<"test" | "prod", string> = {
+	test: "sandbox",
+	prod: "live",
+};
+
+/**
+ * Does a key pair a seller pasted LOOK like Lalamove's (z8r3fdy5ht)? Before
+ * this, `inferLalamoveEnv` filed anything that wasn't `pk_test_` as a live
+ * key, so an EasyParcel client ID pasted into the wrong card was stored and
+ * badged "Live" — and failed only at the first quote, far from the mistake.
+ *
+ * Shape only: a pair can be well-formed and still wrong, which the
+ * `lalamove.verifyKeys` probe catches. This half is pure so the card says it
+ * while the seller types and `retailers.updateSettings` enforces it as the
+ * lock. Never applied to keys already stored — only to a new paste.
+ */
+export function checkLalamoveKeyShape(
+	apiKey: string,
+	apiSecret: string,
+): { ok: true; env: LalamoveEnv } | { ok: false; message: string } {
+	const key = apiKey.trim();
+	const secret = apiSecret.trim();
+	if (LALAMOVE_SECRET.test(key) && LALAMOVE_KEY.test(secret)) {
+		return {
+			ok: false,
+			message:
+				"These look swapped — the API key starts with pk_, the secret with sk_.",
+		};
+	}
+	const keyEnv = LALAMOVE_KEY.exec(key)?.[1] as "test" | "prod" | undefined;
+	if (!keyEnv) {
+		return {
+			ok: false,
+			message:
+				"That isn't a Lalamove API key — Lalamove keys start with pk_prod_ (live) or pk_test_ (sandbox). Copy it from the Lalamove Partner Portal → Developers.",
+		};
+	}
+	const secretEnv = LALAMOVE_SECRET.exec(secret)?.[1] as
+		| "test"
+		| "prod"
+		| undefined;
+	if (!secretEnv) {
+		return {
+			ok: false,
+			message:
+				"That isn't a Lalamove API secret — it starts with sk_prod_ (live) or sk_test_ (sandbox), right beside the key in the Partner Portal.",
+		};
+	}
+	if (keyEnv !== secretEnv) {
+		return {
+			ok: false,
+			message: `The key is a ${ENV_WORD[keyEnv]} key but the secret is a ${ENV_WORD[secretEnv]} one — copy both from the same place in the Partner Portal.`,
+		};
+	}
+	return { ok: true, env: keyEnv === "test" ? "sandbox" : "production" };
+}
+
 const encoder = new TextEncoder();
 
 async function hmacSha256Hex(secret: string, message: string): Promise<string> {

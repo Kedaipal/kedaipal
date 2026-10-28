@@ -22,6 +22,16 @@ export const TERMINAL_JOB_STATUSES: ReadonlySet<DeliveryJobStatus> = new Set([
 	"rejected",
 ]);
 
+/** The complement of `TERMINAL_JOB_STATUSES`, as a list — for reads that
+ * walk the active jobs by index (`deliveryJobs.by_retailer_status`, one query
+ * per status) instead of filtering a window. Kept in step with the union by
+ * `deliveryJobs.test.ts`: a status is in exactly one of the two sets. */
+export const ACTIVE_JOB_STATUSES = [
+	"assigning",
+	"ongoing",
+	"picked_up",
+] as const satisfies readonly DeliveryJobStatus[];
+
 /** A job in one of these states still occupies the order's "one active job"
  * slot; anything terminal frees it for a rebook. */
 export function isActiveJobStatus(status: DeliveryJobStatus): boolean {
