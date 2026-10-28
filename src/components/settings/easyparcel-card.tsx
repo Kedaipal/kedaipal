@@ -55,6 +55,7 @@ import { ProBadge } from "../app/pro-gate";
 import { GoogleAddressAutocomplete } from "../forms/google-address-autocomplete";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
+import { EasyparcelLogo } from "../ui/easyparcel-logo";
 import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import {
@@ -294,9 +295,14 @@ export function EasyparcelCard({
 			<div className="flex flex-col gap-4">
 				<div className="flex flex-col gap-2">
 					<div className="flex items-center gap-2.5">
-						{/* No brand mark shipped yet (marks are never redrawn) — the
-						    name carries the card until EasyParcel's asset lands. */}
-						<h2 className="font-heading text-lg font-bold">EasyParcel</h2>
+						{/* The EasyParcel wordmark — what the seller sees in their own
+						    account, so the card matches the account it manages (the
+						    Delyva/Lalamove precedent). The heading stays in the tree for
+						    structure/anchors, unseen (the image would double it). */}
+						<EasyparcelLogo heightClass="h-5" />
+						<h2 className="sr-only font-heading text-lg font-bold">
+							EasyParcel
+						</h2>
 						{!canUse ? <ProBadge /> : null}
 						<span className="ml-auto flex shrink-0">
 							{/* Loading says nothing — "Not connected" for a beat on a

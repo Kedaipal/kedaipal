@@ -243,6 +243,18 @@ replaces all four with a sign-in, pushed status, a refunding cancel and a
 single book-and-charge call — and it is the generation EasyParcel's developer
 platform issues credentials for.
 
+## Brand mark
+
+`public/img/easyparcel-logo.svg` is EasyParcel's own `logo_horizontal.svg`
+(`easyparcel.com/sg/wp-content/uploads/2022/03/`), untouched — marks are never
+redrawn or recoloured. It renders through **one component**,
+`EasyparcelLogo` (`src/components/ui/easyparcel-logo.tsx`); a test fails if any
+other file references the asset, the same rule as `DelyvaLogo`. It is a single
+brand pink that reads on light and dark cards, so unlike Delyva's black ink it
+needs no dark-mode plate. Surfaces: the Integrations card header (wordmark +
+`sr-only` heading), the Courier booking row, and the landing dispatch badge.
+The order's dispatch card stays text-only, like the Delyva and Lalamove ones.
+
 ## Follow-ups
 
 - **Webhook signing** — ask EasyParcel whether they sign deliveries; if so,
@@ -252,4 +264,4 @@ platform issues credentials for.
   and the Home low-wallet banner. Today the balance lives on the connection
   row and shows on the settings + dispatch cards.
 - **Checkout live-quote** via EasyParcel (`convex/liveQuote.ts`).
-- Brand mark asset and a print-ready setup guide page (`public/guides/`).
+- A print-ready setup guide page (`public/guides/`).
