@@ -73,6 +73,7 @@ import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
 import { tallyPromoUnits } from "./lib/promoTally";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import { storeBooksCouriers } from "./lib/courierBooking";
+import { loadEasyparcelArming } from "./lib/easyparcelArming";
 import { getDisplayName, requireCustomerName } from "./lib/customer";
 import type { CartWeightItem } from "./lib/delivery";
 import {
@@ -806,7 +807,10 @@ export const getByToken = query({
 				offerSelfCollect: retailer.offerSelfCollect === true,
 				collectsFromCustomer:
 					retailer.deliveryBooking?.deliveryDirection === "collection",
-				booksCouriers: storeBooksCouriers(retailer),
+				booksCouriers: storeBooksCouriers({
+					...retailer,
+					easyparcel: await loadEasyparcelArming(ctx, retailer._id),
+				}),
 				minNoticeDays,
 				openingHours: retailer.openingHours as OpeningHours | undefined,
 				closedDates: retailer.closedDates,

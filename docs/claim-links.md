@@ -537,7 +537,7 @@ outcome.
   from the counter session — a scan, or a manual bind that takes any country —
   so it can be foreign, and a courier only takes a contact number from the
   store's own country. When the store books couriers and the buyer picks
-  delivery, the delivery section says the rider will contact the store instead
+  delivery, the delivery section says the courier will contact the store instead
   of them, that the store can still reach them on WhatsApp, and that their
   order page shows every update — never a promise of a stream of WhatsApp
   updates (one message per order); collection wording and BM included. The number is already known here, so the test is the

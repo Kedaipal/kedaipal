@@ -21,6 +21,8 @@ import {
 	verifyEventSignature,
 } from "./lib/hitpayBilling";
 import { keyFingerprint, parseWalletBalance } from "./lib/courierWallet";
+import { completeConnect } from "./easyparcel";
+import { parseWebhookShipmentNumber } from "./lib/easyparcel";
 import { extractWebhookOrderId } from "./lib/lalamove";
 import {
 	type LalamoveWebhookEnvelope,
@@ -741,6 +743,63 @@ async function handleBillingCompletionWebhook(
 	});
 	return new Response("ok", { status: 200 });
 }
+
+/**
+ * EasyParcel OAuth callback (z8r3fdcje2). EasyParcel sends the seller's
+ * browser here after sign-in with `?code=&state=` (or `?error=` when they
+ * decline). The code exchange needs Kedaipal's client secret, so it runs here,
+ * server-side — and because this URL is the app's ONE registered redirect, it
+ * works for every worktree and port; the browser is then sent back to the
+ * page that started the connect (`returnTo`, pinned at mint). Never shows an
+ * error page: every outcome is recorded for the settings card to state.
+ */
+http.route({
+	path: "/oauth/easyparcel/callback",
+	method: "GET",
+	handler: httpAction(async (ctx, req) => {
+		const params = new URL(req.url).searchParams;
+		const location = await completeConnect(ctx, {
+			state: params.get("state"),
+			code: params.get("code"),
+			error: params.get("error"),
+		});
+		return new Response(null, {
+			status: 302,
+			headers: { Location: location, "Cache-Control": "no-store" },
+		});
+	}),
+});
+
+/**
+ * EasyParcel status webhooks (z8r3fdcje2) — `shipment.status.update`,
+ * `shipment.awb.update`, `shipment.tracking.update`. EasyParcel defines NO
+ * signature for these, so nothing in the body is trusted: the shipment number
+ * only schedules a re-read of that shipment with the seller's own token
+ * (rate-limited per job), and the re-read is what moves anything. Always a
+ * fast 200 — EasyParcel requires one within 30s, and an unknown or malformed
+ * body is simply not ours.
+ */
+http.route({
+	path: "/webhook/easyparcel",
+	method: "POST",
+	handler: httpAction(async (ctx, req) => {
+		const shipmentNumber = parseWebhookShipmentNumber(await req.text());
+		if (shipmentNumber) {
+			await ctx.runMutation(internal.easyparcel.queueSyncForShipment, {
+				shipmentNumber,
+			});
+		}
+		return new Response("ok", { status: 200 });
+	}),
+});
+
+// The Developer Hub validates a webhook URL when it is saved; whether that
+// probe is a GET or a POST isn't documented, so both answer 200.
+http.route({
+	path: "/webhook/easyparcel",
+	method: "GET",
+	handler: httpAction(async () => new Response("ok", { status: 200 })),
+});
 
 /**
  * Seller booking-calendar ICS feed (booking S6, 86eyn4kf2) — ONE-WAY: Google

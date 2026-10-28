@@ -417,7 +417,11 @@ function BookingLine({
 	const tone = jobStatusTone(job.status);
 	const carrier =
 		[job.carrier, job.vehicle].filter(Boolean).join(" · ") ||
-		(job.provider === "delyva" ? "Delyva" : "Lalamove");
+		(job.provider === "delyva"
+			? "Delyva"
+			: job.provider === "easyparcel"
+				? "EasyParcel"
+				: "Lalamove");
 	const cost = tone === "failed" ? "—" : formatPrice(job.cost, currency);
 	const status = (
 		<span
