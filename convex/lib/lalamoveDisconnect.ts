@@ -19,12 +19,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { delyvaBidsAtCheckout, lalamoveBookingArmed } from "./courierBooking";
-import { isActiveJobStatus } from "./deliveryJobs";
-
-/** How many of the store's newest jobs to look through for a rider still out.
- * A Lalamove trip finishes (or expires) within the day, so an active one is
- * always among the newest — this bounds the read without a new index. */
-const RECENT_JOBS = 50;
+import { ACTIVE_JOB_STATUSES } from "./deliveryJobs";
 
 export type LalamoveDisconnectBlock =
 	| { reason: "pricing"; message: string }
@@ -70,14 +65,19 @@ export async function lalamoveRiderOutBlock(
 	ctx: Pick<QueryCtx, "db">,
 	retailerId: Id<"retailers">,
 ): Promise<LalamoveDisconnectBlock | null> {
-	const jobs = await ctx.db
-		.query("deliveryJobs")
-		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-		.order("desc")
-		.take(RECENT_JOBS);
-	const out = jobs.filter(
-		(job) => job.provider === "lalamove" && isActiveJobStatus(job.status),
-	);
+	// One indexed read per active status — exact, never a "newest N" window:
+	// a scheduled booking can sit in `assigning` for up to 30 days
+	// (`MAX_SCHEDULE_AHEAD_MS`) while a busy store books dozens more trips.
+	const out: Doc<"deliveryJobs">[] = [];
+	for (const status of ACTIVE_JOB_STATUSES) {
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_retailer_status", (q) =>
+				q.eq("retailerId", retailerId).eq("status", status),
+			)
+			.collect();
+		out.push(...jobs.filter((job) => job.provider === "lalamove"));
+	}
 	if (out.length === 0) return null;
 	const shortIds: string[] = [];
 	for (const job of out) {

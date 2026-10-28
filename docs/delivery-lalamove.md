@@ -1189,9 +1189,12 @@ out with the reason **before** the tap:
   (`delyvaBidsAtCheckout` false). Links to Delivery pricing. A seller
   switching the charge in the same call is honoured.
 - **`rider_out`** — a Lalamove job is still active. Cancelling and following
-  it both need the keys. Names the orders and links the first. Read from the
-  store's newest 50 jobs (`by_retailer`, desc) — a trip finishes within the
-  day, so an active one is always among them, and no new index is needed.
+  it both need the keys. Names the orders and links the first. Read exactly:
+  one `deliveryJobs.by_retailer_status` query per active status
+  (`assigning` / `ongoing` / `picked_up`), never a "newest N" window — a
+  scheduled booking can sit in `assigning` for 30 days while a busy store
+  books dozens more trips, and the first review draft (a 50-job window) would
+  have let it slip past and stranded it. The index was added for this.
 
 The seller's Lalamove account is untouched: its wallet is theirs, and its
 webhook keeps pointing at us. Events that arrive afterwards fail signature

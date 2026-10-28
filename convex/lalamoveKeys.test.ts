@@ -335,6 +335,27 @@ describe("Disconnect — deliveryBooking: null", () => {
 		expect((await stored(t, id))?.apiKey).toBeUndefined();
 	});
 
+	test("a scheduled booking buried under 51 finished trips still holds it (PR #427 review)", async () => {
+		// Lalamove accepts `scheduleAt` up to 30 days out, so an `assigning`
+		// job can be the store's OLDEST while dozens finish after it. A
+		// "newest N" window over `by_retailer` let this one slip past; the
+		// `by_retailer_status` read can't.
+		const t = setup();
+		const id = await seedStore(t, { deliveryBooking: KEYED });
+		await seedJob(t, id, "assigning", "ORD-SCHED");
+		for (let i = 0; i < 51; i++) {
+			await seedJob(t, id, "completed", `ORD-DONE${i}`);
+		}
+		await expect(
+			asUser(t).mutation(api.retailers.updateSettings, {
+				deliveryBooking: null,
+			}),
+		).rejects.toThrow(/rider is still out on ORD-SCHED/);
+		expect(await asUser(t).query(api.lalamove.getDisconnectState, {})).toEqual(
+			expect.objectContaining({ reason: "rider_out", shortIds: ["ORD-SCHED"] }),
+		);
+	});
+
 	test("never plan-gated: a Starter store can still remove its keys", async () => {
 		const t = setup();
 		const id = await seedStore(t, { deliveryBooking: KEYED });
