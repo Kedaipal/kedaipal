@@ -24,6 +24,8 @@ Categories are a pure browse layer — never frozen onto an order line (unlike `
 >
 > **Per-line, not a deduped union on the order.** The union is all today's single column needs, but it cannot attribute revenue on an order spanning two categories, and "sales by category" is the obvious next question. The union derives for free via `orderCategoryNames()` in `convex/lib/orderCsv.ts`.
 >
+> **Every order door stamps it — through one helper.** `withCategoryNames` in `convex/lib/orderCategoryNames.ts` is called by all four create paths: storefront (`orders.create`), counter (`counterCheckout.createOrderFromSession`), claim links (`orderClaims.commit`, stamped at COMMIT from the live junctions) and bookings (`bookings.requestBooking`). Until Oct 2026 only the storefront stamped, so every counter, claim and booking order read **Uncategorized** in the inbox filter whatever the seller had filed — each door builds its own line snapshot, so a frozen field kept inside one door was stamped by one door. A new order door must call `withCategoryNames` before its insert; each door has a test pinning it.
+>
 > **Present means recorded — `[]` included.** An uncategorised product stamps an empty list, because "filed under nothing" is a real answer. **Absent** is reserved for orders that predate the field, so the two are always distinguishable. Both render as an empty cell; the distinction is internal, and it is what lets the backfill below terminate. Archived categories ARE included at stamp time: they name a real grouping the seller was using.
 >
 > **The backfill is opt-in, manual, and approximate.** `migrations:backfillOrderCategoryNames` fills in orders that predate the field. It necessarily stamps **today's** categorisation — there is no record of what a product was filed under last March — which is the one thing freezing exists to avoid. The first pass shipped with no backfill for exactly that reason; the owner overrode it (28 Aug), and the override is right: a permanently blank column on a store's entire history is worse than an approximate one, and the approximation is bounded to orders placed before the feature existed. Everything from that moment on is exact. It is a `npx convex run`, never something the app does on its own, and it never re-dates a line that already carries a stamp.
@@ -37,6 +39,23 @@ Categories are a pure browse layer — never frozen onto an order line (unlike `
 > `categories.namesByProduct` remains and is still a live lookup — it feeds the **product** export, where live catalogue state is the correct answer.
 >
 > Categories are also **never a sellability gate**: counter checkout, order create, and admin flows are untouched (a category-hidden product is still counter-sellable).
+
+## Filing past orders when a product gains a category
+
+Categories are frozen onto order lines at sale (above), so a seller who sets up categories **after** taking orders found every one of them "Uncategorized" in the inbox filter. Dr Niki Trainings created her first category on 28 Oct 2026, after all 23 orders had come in, and the filter offered nothing else.
+
+**Adding a category to a product now files that product's past order lines that recorded none** (`categoryNames` of `[]`, or absent on an order older than the field) under the product's current categories. `filePastOrdersPage` in `convex/lib/orderCategoryNames.ts` does it, called by `categories.setProductCategories` whenever the save ADDS a membership:
+
+- **A line that already carries a category is never rewritten.** An order sold under "Kuih" stays "Kuih" when the product later gains "Bestseller"; that sale-time record is why freezing exists. Only "filed under nothing" is filled in, because the seller filing the product now is telling us where those orders belong.
+- **Only that product's lines.** A mixed order keeps its other lines as they were.
+- **Removing a category files nothing.** Past orders keep what they recorded.
+- **`updatedAt` is not bumped**, as in the backfill: recording metadata about a sale is not a change to the sale.
+- **It fills gaps once; it does not follow later changes.** A line it filed under "A" looks exactly like one sold under "A", so adding "B" later leaves those past orders at "A" while new sales read "A, B". That is the same rule as every sale-time record, applied consistently; an order follows the product's categories only up to the moment it first has one.
+- **Bounded by the product's age.** No index reaches an order by its lines, so it walks `by_retailer`, but only from `product._creationTime` on: an older order cannot hold the product, and a brand-new product (the create page files it too) reads nothing.
+- **Batched.** The newest `PAST_ORDER_FILING_PAGE` (200) orders are filed inside the save, so it can say how many; older ones go to the scheduled `internal.categories.filePastOrders`, one batch per run. A batch that finds the product has no categories left stops.
+- **Surfaced on both sides of the action.** The mutation returns `{ filedOrders, filingContinues, categoryNames }` and the product page's "Product saved." toast says "15 earlier orders are now filed under …" with **View in orders** (`pastOrderFilingMessage`, `src/lib/past-order-filing.ts`). The category picker's helper line says it before the save, and the inbox Categories filter states the rule under its options (see [order-inbox.md](./order-inbox.md)).
+
+Renaming a category is NOT covered: past orders keep the old name, so the filter lists old and new names separately. That is a separate decision.
 
 ## Hidden categories
 

@@ -936,6 +936,7 @@ function OrdersRoute() {
 		facets: result?.facets,
 		availableSources: result?.availableSources ?? [],
 		availableCategories: result?.availableCategories ?? [],
+		storeHasCategories: result?.storeHasCategories,
 		country: retailer.country,
 		// The same resolver the Status column renders with, so the filter offers
 		// the seller's own stage words rather than our internal keys.
