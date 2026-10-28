@@ -133,7 +133,6 @@ type Gateway = {
 	autoRenew: boolean;
 	methods: string[];
 	currency: string;
-	renewalCurrency: string;
 	foundingPricing: boolean;
 	foundingPricingLapsed: boolean;
 	foundingBenefitsRevoked: boolean;
@@ -154,7 +153,6 @@ const GATEWAY_OFF: Gateway = {
 	autoRenew: false,
 	methods: ["card", "touch_n_go"],
 	currency: "MYR",
-	renewalCurrency: "MYR",
 	foundingPricing: false,
 	foundingPricingLapsed: false,
 	foundingBenefitsRevoked: false,
@@ -1732,7 +1730,6 @@ describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)"
 			...GATEWAY_ON,
 			methods: currency === "SGD" ? ["card"] : ["card", "touch_n_go"],
 			currency,
-			renewalCurrency: currency,
 			foundingPricing: founding,
 			foundingPricingLapsed: lapsed,
 			foundingBenefitsRevoked: revoked,
@@ -2153,7 +2150,6 @@ describe("BillingTab under admin act-as (z8r3fdfty4)", () => {
 		...GATEWAY_ON,
 		methods: ["card"],
 		currency: "SGD",
-		renewalCurrency: "SGD",
 		foundingPricing: true,
 		nextRenewal: {
 			kind: "plan",
@@ -2465,7 +2461,6 @@ describe("BillingTab — Enterprise (Credits T6)", () => {
 	const gatewayIn = (currency: "MYR" | "SGD" = "MYR"): Gateway => ({
 		...GATEWAY_ON,
 		currency,
-		renewalCurrency: currency,
 	});
 	/** An active store on a contract, renewing in 10 days. */
 	function onContract(

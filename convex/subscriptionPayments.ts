@@ -64,13 +64,12 @@ import {
 	lookupPaymentRequest,
 } from "./lib/hitpayBillingClient";
 import {
-	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
 	foundingBenefitsAtRisk,
 	foundingBenefitsEndAt,
 	foundingPriceEligible,
 	type RenewalQuote,
-	renewalCurrency,
+	storeBillingCurrency,
 	renewalQuote,
 } from "./lib/plans";
 import { rateLimiter } from "./lib/rateLimiter";
@@ -99,9 +98,9 @@ const SETUP_RESUME_WINDOW_MS = 24 * 60 * 60 * 1000;
  *    every member marked founding by admin and shows a lapsed one a discount
  *    `subscribeSelf` won't bill; `foundingPricingLapsed` powers the one-line
  *    explanation instead. A store on it is locked to Founding Pro.
- *  - `currency` — what a NEW self-serve subscription bills in (the country).
- *  - `renewalCurrency` — what renewals and plan changes bill in (the last
- *    paid invoice's currency, else the country).
+ *  - `currency` — what every bill this store gets is in: its country's
+ *    (`storeBillingCurrency`) — new subscriptions, renewals and plan changes
+ *    alike (86eyp7hn7).
  *  - `nextRenewal` — the renewal bill itself (`renewalQuote`, the author the
  *    cron's invoice and the heads-up email read), or null for a comped store
  *    or one with no subscription row.
@@ -121,7 +120,6 @@ export const billingGatewayAvailable = query({
 		autoRenew: boolean;
 		methods: string[];
 		currency: BillingCurrency;
-		renewalCurrency: BillingCurrency;
 		foundingPricing: boolean;
 		foundingPricingLapsed: boolean;
 		/** Benefits ended for good (z8r3fdfyw5) — a DIFFERENT state from
@@ -157,17 +155,9 @@ export const billingGatewayAvailable = query({
 			.query("subscriptions")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.first();
-		// Newest paid invoice only — `renewalCurrency` needs nothing else, and
-		// this query stays live on the billing tab.
-		const lastPaid = await ctx.db
-			.query("invoices")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
-			.order("desc")
-			.filter((q) => q.eq(q.field("status"), "paid"))
-			.first();
 		const available = billingCredentials() !== null;
 		const now = Date.now();
-		const currency = BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
+		const currency = storeBillingCurrency(retailer.country);
 		const foundingShaped =
 			retailer.isFoundingMember === true || sub?.foundingIntent === true;
 		const eligibility = sub
@@ -187,10 +177,6 @@ export const billingGatewayAvailable = query({
 			autoRenew: available,
 			methods: AUTO_RENEW_METHODS[currency],
 			currency,
-			renewalCurrency: renewalCurrency({
-				lastPaidCurrency: lastPaid?.currency,
-				country: retailer.country,
-			}),
 			foundingPricing,
 			foundingPricingLapsed: foundingShaped && !foundingPricing,
 			foundingBenefitsRevoked:
@@ -219,7 +205,6 @@ export const billingGatewayAvailable = query({
 							plan: sub.plan,
 							billingCycle: sub.billingCycle,
 							pendingPlanChange: sub.pendingPlanChange?.plan,
-							lastPaidCurrency: lastPaid?.currency,
 							country: retailer.country,
 							enterprise: sub.enterprise,
 						})
@@ -587,12 +572,6 @@ export const autoRenewSetupContext = internalQuery({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.filter((q) => q.eq(q.field("status"), "pending"))
 			.first();
-		const lastPaid = await ctx.db
-			.query("invoices")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
-			.order("desc")
-			.filter((q) => q.eq(q.field("status"), "paid"))
-			.first();
 		return {
 			retailerId: retailer._id,
 			subscriptionId: sub._id,
@@ -611,7 +590,6 @@ export const autoRenewSetupContext = internalQuery({
 				benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 				foundingIntent: sub.foundingIntent === true,
 				paidThrough: sub.currentPeriodEnd,
-				lastPaidCurrency: lastPaid?.currency,
 				country: retailer.country,
 				enterprise: sub.enterprise,
 				now: Date.now(),

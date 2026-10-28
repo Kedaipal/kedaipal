@@ -434,6 +434,13 @@ Two kinds of row, and the difference is load-bearing:
 - **Acknowledged** (bank details, HitPay keys, the seller's own message
   wording) — free text nothing in the row can judge, so the seller confirms it.
   The button says exactly what it retires and what it doesn't.
+- **`billing_currency`** (86eyp7hn7) is the one row about the seller's OWN
+  money: a store is billed in its country's currency, so the move changed what
+  the next Kedaipal invoice is in, and the switch detached any saved
+  auto-renew method (its session was authorised in the old currency). Raised
+  for every store Kedaipal bills — not comped, not on an Enterprise contract —
+  and acknowledged like the other notices; it deep-links to the auto-renewal
+  card on Billing. See [`manual-subscription.md`](./manual-subscription.md#sgd-invoices--billing-a-singapore-seller-aug-2026).
 
 Rendered in two places by one component (`country-setup-panel.tsx`): under the
 country picker in Settings → Store, where "what did that just do?" gets asked,

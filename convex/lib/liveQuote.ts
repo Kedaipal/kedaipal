@@ -22,9 +22,10 @@
  * testable without a network or a database. Fetching lives in the action.
  */
 
+import type { CourierProviderId } from "./courierProviders";
 import { type CartWeightItem, lacksParcelWeight } from "./delivery";
 
-export type LiveQuoteProvider = "lalamove" | "delyva";
+export type LiveQuoteProvider = CourierProviderId;
 
 /** One provider's answer. Failure kinds are deliberately provider-neutral:
  * the buyer-facing copy keys off the resolved outcome, never off which API

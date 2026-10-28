@@ -18,6 +18,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query } from "./_generated/server";
+import type { CourierProviderId } from "./lib/courierProviders";
 import { readLalamoveWallet, type WalletView } from "./courierWallets";
 import { creditGateFor, isOrderGated } from "./creditLock";
 import { requireRetailerAccess } from "./lib/auth";
@@ -46,7 +47,7 @@ export type DeliveryJobRow = {
 	jobId: Id<"deliveryJobs">;
 	orderId: Id<"orders">;
 	shortId: string;
-	provider: "lalamove" | "delyva";
+	provider: CourierProviderId;
 	status: DeliveryJobStatus;
 	group: JobGroup;
 	direction: "standard" | "collection";

@@ -53,7 +53,7 @@ export const LALAMOVE_BASE_URL: Record<LalamoveEnv, string> = {
  *
  * Kept as its own type rather than reusing `Country` because the two answer
  * different questions — a country we sell in is not automatically a market
- * Lalamove operates in, and `COUNTRY_RIDER_BOOKING` is where that judgement
+ * Lalamove operates in, and `COUNTRY_COURIER_BOOKING.lalamove` is where that judgement
  * lives.
  */
 export type LalamoveMarket = "MY" | "SG";
@@ -61,7 +61,7 @@ export type LalamoveMarket = "MY" | "SG";
 export const DEFAULT_LALAMOVE_MARKET: LalamoveMarket = "MY";
 
 /** Store country → Lalamove market. Only markets we've verified end to end
- * appear here; anything else has no rider booking (`COUNTRY_RIDER_BOOKING`). */
+ * appear here; anything else has no rider booking (`COUNTRY_COURIER_BOOKING.lalamove`). */
 export function lalamoveMarketForCountry(
 	country: string | undefined,
 ): LalamoveMarket {

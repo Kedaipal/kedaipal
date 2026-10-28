@@ -115,7 +115,9 @@ describe("admin act-as access", () => {
 		const { acked } = await t
 			.withIdentity({ subject: ADMIN })
 			.mutation(api.retailers.ackCountrySetup, { retailerId: retailer._id });
-		expect(acked).toBe(1);
+		// Bank details + the billing-currency notice (86eyp7hn7) — two rows,
+		// ONE audited act.
+		expect(acked).toBe(2);
 		expect(await auditCount(t, retailer._id)).toBe(1);
 		const rows = await t
 			.withIdentity({ subject: ADMIN })

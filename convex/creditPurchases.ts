@@ -72,7 +72,7 @@ import {
 	creditPackById,
 	foundingPriceEligible,
 	PLAN_CREDIT_GRANT,
-	renewalCurrency,
+	storeBillingCurrency,
 } from "./lib/plans";
 import { rateLimiter } from "./lib/rateLimiter";
 import { monthStartMyt, usagePeriodKey } from "./lib/usagePeriod";
@@ -106,28 +106,6 @@ async function loadSubscription(
 		.query("subscriptions")
 		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 		.first();
-}
-
-/**
- * The currency a store is billed in — and so the ONLY currency its packs are
- * sold in: the newest PAID invoice's, else the country's (`renewalCurrency`,
- * the author renewals and plan changes already bill by). Never the visitor's
- * geo cookie: a seller travelling to Singapore still pays in ringgit.
- */
-async function billingCurrencyFor(
-	ctx: AnyCtx,
-	retailer: Doc<"retailers">,
-): Promise<BillingCurrency> {
-	const lastPaid = await ctx.db
-		.query("invoices")
-		.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
-		.order("desc")
-		.filter((q) => q.eq(q.field("status"), "paid"))
-		.first();
-	return renewalCurrency({
-		lastPaidCurrency: lastPaid?.currency,
-		country: retailer.country,
-	});
 }
 
 /** The store's open invoice, for the past-due refusal's way out. */
@@ -290,7 +268,7 @@ export const topUpOptions = query({
 		if (!access) return null;
 		const retailer = access.retailer;
 		const sub = await loadSubscription(ctx, retailer._id);
-		const currency = await billingCurrencyFor(ctx, retailer);
+		const currency = storeBillingCurrency(retailer.country);
 		const refusal = topUpRefusal({
 			status: sub?.status ?? null,
 			comped: sub?.comped === true,
@@ -423,7 +401,7 @@ export const openPurchase = internalMutation({
 			throw new ConvexError(
 				"That credit pack isn't on sale — reload the page to see the current packs.",
 			);
-		const currency = await billingCurrencyFor(ctx, retailer);
+		const currency = storeBillingCurrency(retailer.country);
 		if (pack.currency !== currency)
 			throw new ConvexError(
 				"That pack is priced in a different currency from your billing — reload the page to see your packs.",

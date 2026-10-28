@@ -28,12 +28,12 @@ import { formatDocDate } from "./lib/pdf/document";
 import { HOLD_LABEL } from "./lib/seasonalHold";
 import type { Locale } from "./lib/emailCopy";
 import {
-	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
 	FOUNDING_PRO_CREDIT_GRANT,
 	HOLD_MONTHLY_PRICES,
 	PLAN_CREDIT_GRANT,
 	renewalQuote,
+	storeBillingCurrency,
 } from "./lib/plans";
 
 
@@ -638,7 +638,7 @@ export const getHoldEmailContext = internalQuery({
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			plan: sub?.plan ?? "pro",
-			currency: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"],
+			currency: storeBillingCurrency(retailer.country),
 		};
 	},
 });
@@ -708,7 +708,6 @@ export const getAutoRenewEmailContext = internalQuery({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.order("desc")
 			.collect();
-		const lastPaid = invoices.find((inv) => inv.status === "paid");
 		const pending = invoices.find((inv) => inv.status === "pending");
 		// The heads-up must quote exactly what the renewal will charge, so it
 		// reads the same author as the cron's invoice (z8r3fdfty4): a scheduled
@@ -726,7 +725,6 @@ export const getAutoRenewEmailContext = internalQuery({
 			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
 			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			paidThrough: sub.currentPeriodEnd,
-			lastPaidCurrency: lastPaid?.currency,
 			country: retailer.country,
 			enterprise: sub.enterprise,
 			now: Date.now(),

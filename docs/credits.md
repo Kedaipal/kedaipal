@@ -559,9 +559,9 @@ bucket **exactly once**, as a 12-month lot, through `addPurchasedCredits`.
 | MYR | 50 credits — RM 45 · 200 credits — RM 160 |
 | SGD | 50 credits — S$ 22 · 200 credits — S$ 75 |
 
-A store sees **one currency's packs: its BILLING currency** — `renewalCurrency`
-(the newest paid invoice's currency, else the country), the author renewals
-already bill by. Never the visitor's geo cookie: a Malaysian seller on holiday
+A store sees **one currency's packs: its BILLING currency** —
+`storeBillingCurrency`, its country's (86eyp7hn7), the author renewals already
+bill by. Never the visitor's geo cookie: a Malaysian seller on holiday
 in Singapore still pays in ringgit. A pack id from the other currency is
 refused. The purchase row freezes the pack, credits, amount and currency;
 nothing ever re-prices it.
