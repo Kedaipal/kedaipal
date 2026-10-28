@@ -56,10 +56,23 @@ single author for identity, gating and arming.
    `convex/<provider>.ts` (Convex functions: connect/settings, prepare/confirm
    /cancel booking, status sync, dispatch-state query), mirroring the Delyva
    structure.
-4. Credentials arm on `retailers` (BYO posture), webhook route in
-   `convex/http.ts` (or a polling cron where the provider pushes nothing),
-   checkout branch in `convex/liveQuote.ts` if it quotes at checkout.
-5. Seller surfaces: an Integrations card, a dispatch card + `<provider>Surface`
-   in `src/lib/dispatch-surface.ts`, and a tab in the dispatch hub (the hub's
-   tab strip takes its providers from the registry id list).
+4. Credentials (BYO posture): pasted keys on `retailers` (Lalamove, Delyva),
+   or the provider's own connection table when they are OAuth tokens that
+   refresh (EasyParcel's `easyparcelConnections` — the reasons are in its
+   doc). Webhook route in `convex/http.ts` (or a polling cron where the
+   provider pushes nothing), checkout branch in `convex/liveQuote.ts` if it
+   quotes at checkout.
+5. Seller surfaces — **all five**, because each is a separate place a seller
+   reads "which couriers do I have", and missing one is invisible until
+   someone looks (EasyParcel first shipped without the last two):
+   - an Integrations card;
+   - a dispatch card + `<provider>Surface` in `src/lib/dispatch-surface.ts`;
+   - a tab in the dispatch hub (its tab strip takes providers from the
+     registry id list);
+   - a **switch in Delivery pricing → Courier booking**
+     (`courier-booking-section.tsx`) plus its name in `courierBookingGlance` —
+     the card's copy points sellers there to pause, so it must exist;
+   - its slot in the Integrations **"N of M"** count (`integrationsGlance` in
+     `src/lib/integrations-glance.ts`), using the same visibility rule the
+     card renders by.
 6. Its own `docs/delivery-<provider>.md`, and a row in `docs/README.md`.

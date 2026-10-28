@@ -2701,6 +2701,94 @@ export default defineSchema({
 		refreshScheduledAt: v.optional(v.number()),
 	}).index("by_market_env", ["market", "env"]),
 
+	// EasyParcel connection per store (z8r3fdcje2) — the Open API's OAuth
+	// grant. The seller signs in at EasyParcel and picks which of their
+	// accounts (Live or Demo) Kedaipal may book with; we hold the resulting
+	// tokens, `enc.v1.`-encrypted in the callback ACTION so no plaintext ever
+	// passes through a mutation. Kedaipal's own app credentials are Convex env
+	// (`EASYPARCEL_CLIENT_ID` / `_SECRET`), never a table.
+	//
+	// Its own table, deliberately NOT a `retailers` field: the access token
+	// refreshes every ~10h and the wallet snapshot moves on every booking, and
+	// a retailer patch re-runs every open storefront tab; tokens also stay off
+	// every retailer read; and new `retailers` fields break other branches'
+	// deploys to the shared dev deployment. See docs/delivery-easyparcel.md.
+	easyparcelConnections: defineTable({
+		retailerId: v.id("retailers"),
+		// Fulfilment → Courier booking switch. Connecting sets it; pausing
+		// keeps the grant.
+		enabled: v.boolean(),
+		accessToken: v.string(),
+		// Absent only if EasyParcel ever issues a grant without one — the
+		// connection then lives until the access token expires.
+		refreshToken: v.optional(v.string()),
+		accessExpiresAt: v.number(),
+		refreshExpiresAt: v.optional(v.number()),
+		// Stamped when EasyParcel refuses our refresh: the grant is dead and
+		// dispatch blocks with "Reconnect EasyParcel" until a fresh connect
+		// clears it. Never inferred from a single failed call.
+		revokedAt: v.optional(v.number()),
+		// Who the token belongs to (account info), shown on the settings card
+		// as proof the right account was linked.
+		accountName: v.optional(v.string()),
+		accountType: v.optional(v.string()),
+		// Sandbox vs live. No API field reports it — the token is bound to the
+		// account picked at sign-in — so this is set only when the token
+		// itself carries the claim (`tokenEnvironment`); undefined = unknown,
+		// rendered as unknown, never as live.
+		environment: v.optional(
+			v.union(v.literal("sandbox"), v.literal("live")),
+		),
+		// Prepaid wallet snapshot (minor units) from the last /wallet read —
+		// connect, every quote, every booking, and the card's refresh.
+		balanceMinor: v.optional(v.number()),
+		balanceCurrency: v.optional(v.string()),
+		balanceCheckedAt: v.optional(v.number()),
+		// Where couriers collect. Imported from the EasyParcel account at
+		// connect as a PREFILL (fill-if-unset), then the seller's own. `unit`
+		// is the SG unit number, folded into address line 1 at booking.
+		pickupAddress: v.optional(
+			v.object({
+				unit: v.optional(v.string()),
+				address1: v.string(),
+				address2: v.optional(v.string()),
+				city: v.string(),
+				state: v.optional(v.string()),
+				postcode: v.string(),
+			}),
+		),
+		connectedAt: v.number(),
+		updatedAt: v.number(),
+	}).index("by_retailer", ["retailerId"]),
+
+	// One OAuth connect attempt (z8r3fdcje2). `nonce` is the `state` we hand
+	// the provider — crypto-random, single-use, 10-minute TTL — so a replayed
+	// or forged callback never reaches a token exchange. The attempt's
+	// OUTCOME is recorded here too, which is how the settings card says what
+	// happened at the provider without a URL parameter. Purged after a week.
+	courierOAuthStates: defineTable({
+		provider: courierProviderValidator,
+		retailerId: v.id("retailers"),
+		nonce: v.string(),
+		// Where the browser returns — validated at mint against SITE_URL /
+		// localhost, so the callback can't be turned into an open redirect.
+		returnTo: v.string(),
+		createdAt: v.number(),
+		expiresAt: v.number(),
+		consumedAt: v.optional(v.number()),
+		outcome: v.optional(
+			v.union(
+				v.literal("connected"),
+				v.literal("denied"),
+				v.literal("failed"),
+				v.literal("expired"),
+			),
+		),
+		message: v.optional(v.string()),
+	})
+		.index("by_nonce", ["nonce"])
+		.index("by_retailer_provider", ["retailerId", "provider"]),
+
 	// One rider booking (dispatch) against an order. The ledger row of record:
 	// actual cost the seller's own Lalamove wallet paid (BYO-only — audit +
 	// future insights, no Kedaipal settlement), driver + live-tracking link
@@ -2776,12 +2864,18 @@ export default defineSchema({
 		// Delyva only — the courier service actually booked ("DHL eCommerce",
 		// "Ninja Cold"), for the dispatch card + orders.courierName mirror.
 		serviceName: v.optional(v.string()),
-		// Delyva only — the consignment number (AWB) the buyer can track with.
-		// Arrives via the order.created webhook (or the post-process fetch) and
-		// is mirrored onto orders.courierName/trackingNo (86eyehvk4 fields) the
-		// moment it's known. Distinct from providerOrderId (Delyva's internal
-		// order id, which webhooks correlate on).
+		// Delyva + EasyParcel — the consignment number (AWB) the buyer can track
+		// with. Delyva: arrives via the order.created webhook (or the
+		// post-process fetch); EasyParcel: returned by EPPayOrderBulk. Mirrored
+		// onto orders.courierName/trackingNo (86eyehvk4 fields) the moment it's
+		// known. Distinct from providerOrderId (the provider's own order id,
+		// which webhooks/polling correlate on).
 		awb: v.optional(v.string()),
+		// EasyParcel only — the courier AWB label PDF (their `awb_id_link`),
+		// returned by EPPayOrderBulk. The first provider that hands us a real
+		// courier label (the deferred Delyva label work, docs/despatch-labels.md
+		// v2); the dispatch card links it beside Kedaipal's own despatch label.
+		labelUrl: v.optional(v.string()),
 		// Delyva only — the itemType this trip was booked as (PARCEL/CHILLED/
 		// FROZEN), frozen at dispatch for the audit trail.
 		itemType: v.optional(v.string()),
@@ -2831,7 +2925,11 @@ export default defineSchema({
 		// Provider-qualified since Delyva (86eyjpv6z): two providers' order ids
 		// are both opaque strings, so a bare providerOrderId index + .unique()
 		// would let a cross-provider collision throw in a webhook handler.
-		.index("by_provider_order", ["provider", "providerOrderId"]),
+		.index("by_provider_order", ["provider", "providerOrderId"])
+		// The EasyParcel status cron's read (z8r3fdcje2): that API has no
+		// webhook, so a poll sweeps the ACTIVE easyparcel jobs — one indexed
+		// query per active status, never a table scan.
+		.index("by_provider_status", ["provider", "status"]),
 
 	// --- Counter Checkout (in-person order spine, docs/counter-checkout.md) ----
 	// A seller-initiated, in-person checkout session. The seller opens Counter

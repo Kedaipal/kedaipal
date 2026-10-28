@@ -484,3 +484,32 @@ export function SettingsSection({
  * Shared so every tab's primary action lands in the same place. */
 export const SAVE_BTN_CLASS =
 	"h-11 lg:h-10 lg:w-auto lg:self-end lg:min-w-[160px]";
+
+/**
+ * One Integrations account card per provider — a `section` with a stable `id`
+ * so a deep link can land on the exact card and ring it (src/lib/spotlight.ts).
+ * Lives here (not in the Integrations tab) because the courier cards wrap
+ * THEMSELVES in it: a provider that doesn't serve the store's country renders
+ * nothing at all, and the shell has to disappear with it — an empty bordered
+ * box is exactly the artefact that would otherwise ship (surfaced when
+ * Delyva SG retired, z8r3fdcje2).
+ */
+export function AccountCard({
+	id,
+	highlight,
+	children,
+}: {
+	id: string;
+	highlight: FixHighlight | undefined;
+	children: ReactNode;
+}) {
+	return (
+		<section
+			id={id}
+			data-fix-highlight={highlight ?? undefined}
+			className={`flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
+		>
+			{children}
+		</section>
+	);
+}

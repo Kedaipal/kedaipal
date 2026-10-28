@@ -5,9 +5,10 @@
 // mechanics are covered in convex/lib/delyva.test.ts.
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { COUNTRY_COURIER_BOOKING } from "./lib/courierProviders";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -561,9 +562,15 @@ describe("getDispatchState", () => {
 	});
 });
 
-describe("Singapore stores (z8r3fdbqmc)", () => {
-	// Delyva books in Singapore too (its own tenant), so the country gate and
-	// the address rules have to hold here, not just in Malaysia.
+describe("Singapore stores (z8r3fdbqmc; SG retired with EasyParcel, z8r3fdcje2)", () => {
+	// Delyva SG closed in the registry when EasyParcel became the SG parcel
+	// lane (the SG tenant ships an empty service catalogue). The address rules
+	// and the country-stamp MECHANISM still hold — they are what a future
+	// re-open relies on — so the mechanism tests below re-open the registry
+	// row for their own duration and the afterEach restores the real decision.
+	afterEach(() => {
+		COUNTRY_COURIER_BOOKING.delyva.SG = false;
+	});
 	async function seedSgRetailer(t: ReturnType<typeof setup>) {
 		const retailer = await seedRetailer(t);
 		await t.run(async (ctx) => {
@@ -590,14 +597,17 @@ describe("Singapore stores (z8r3fdbqmc)", () => {
 		return retailer;
 	}
 
-	test("booking is allowed in SG — the gate is per provider, not inherited", async () => {
+	test("SG reads country-closed — but a connected account keeps its unwind path", async () => {
 		const t = setup();
 		const retailer = await seedSgRetailer(t);
 		const asUser = t.withIdentity({ subject: USER });
 		const view = await asUser.query(api.delyva.getSettings, {
 			retailerId: retailer._id,
 		});
-		expect(view.countryAllowed).toBe(true);
+		// The retirement (z8r3fdcje2): no NEW SG bookings through Delyva…
+		expect(view.countryAllowed).toBe(false);
+		// …while the connection stays visible, so a connected store can still
+		// see and disconnect it (the settings card's country-blocked note).
 		expect(view.connected).toBe(true);
 	});
 
@@ -655,6 +665,8 @@ describe("Singapore stores (z8r3fdbqmc)", () => {
 	});
 
 	test("stamps SG on both waypoints — an MY literal would quote nothing", async () => {
+		// Mechanism test: runs with the registry row re-opened (see describe).
+		COUNTRY_COURIER_BOOKING.delyva.SG = true;
 		const t = setup();
 		const retailer = await seedSgRetailer(t);
 		const orderId = await seedOrder(t, retailer._id, {
@@ -950,24 +962,31 @@ describe("overseas buyer numbers (z8r3fdh274) — the courier calls the store", 
 	});
 
 	test("a Singapore store judges by ITS country: a +60 buyer is the foreign one", async () => {
-		const t = setup();
-		const retailer = await seedStoreWithPhone(t, "6581815321");
-		await t.run(async (ctx) => {
-			await ctx.db.patch(retailer._id, { country: "SG" });
-		});
+		// Mechanism test — the registry closed Delyva SG (z8r3fdcje2), so the
+		// row re-opens for this test's duration and restores after.
+		COUNTRY_COURIER_BOOKING.delyva.SG = true;
+		try {
+			const t = setup();
+			const retailer = await seedStoreWithPhone(t, "6581815321");
+			await t.run(async (ctx) => {
+				await ctx.db.patch(retailer._id, { country: "SG" });
+			});
 		const { context, state } = await contextFor(t, retailer._id, {
-			currency: "SGD",
-			customer: { name: "Aisha", waPhone: "60123456789" },
-			deliveryAddress: {
-				line1: "1 Raffles Place",
-				city: "Singapore",
-				state: "Singapore",
-				postcode: "048616",
-			},
-		});
-		expect(context.destination.phone).toBe("6581815321");
-		expect(context.note).toBe("Buyer WhatsApp: +60123456789");
-		expect(state?.buyerContactFallback).toBe(true);
-		expect(state?.country).toBe("SG");
+				currency: "SGD",
+				customer: { name: "Aisha", waPhone: "60123456789" },
+				deliveryAddress: {
+					line1: "1 Raffles Place",
+					city: "Singapore",
+					state: "Singapore",
+					postcode: "048616",
+				},
+			});
+			expect(context.destination.phone).toBe("6581815321");
+			expect(context.note).toBe("Buyer WhatsApp: +60123456789");
+			expect(state?.buyerContactFallback).toBe(true);
+			expect(state?.country).toBe("SG");
+		} finally {
+			COUNTRY_COURIER_BOOKING.delyva.SG = false;
+		}
 	});
 });

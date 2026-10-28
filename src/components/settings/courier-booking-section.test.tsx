@@ -10,25 +10,43 @@ import {
 	screen,
 	waitFor,
 } from "@testing-library/react";
+import { getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { api } from "../../../convex/_generated/api";
 import type { DeliveryBookingSummary } from "../../../convex/retailers";
 import { CourierBookingSection } from "./courier-booking-section";
 
 const state = vi.hoisted(() => ({
 	delyva: undefined as unknown,
+	easyparcel: undefined as unknown,
 	updateSettings: undefined as ReturnType<typeof vi.fn> | undefined,
 	updateDelyva: undefined as ReturnType<typeof vi.fn> | undefined,
+	updateEasyparcel: undefined as ReturnType<typeof vi.fn> | undefined,
 }));
 
-vi.mock("convex/react", () => ({
-	useMutation: () => state.updateDelyva ?? vi.fn(),
-}));
+// Routed by function name: each provider's switch must read and write its
+// OWN provider — a shared mock would let a crossed wire pass.
+vi.mock("convex/react", async () => {
+	const { getFunctionName: name } = await import("convex/server");
+	return {
+		useMutation: (fn: never) =>
+			name(fn) === "easyparcel:updateSettings"
+				? (state.updateEasyparcel ?? vi.fn())
+				: (state.updateDelyva ?? vi.fn()),
+	};
+});
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
-vi.mock("@tanstack/react-query", () => ({
-	useQuery: () => ({ data: state.delyva }),
-}));
+vi.mock("@tanstack/react-query", async () => {
+	const { getFunctionName: name } = await import("convex/server");
+	return {
+		useQuery: (opts: { fn: never }) =>
+			name(opts.fn) === "easyparcel:getSettings"
+				? { data: state.easyparcel }
+				: { data: state.delyva },
+	};
+});
 vi.mock("@tanstack/react-router", () => ({
 	Link: (props: Record<string, unknown>) => <a {...props} />,
 }));
@@ -65,6 +83,17 @@ const delyva = (overrides: Record<string, unknown> = {}) => ({
 	...overrides,
 });
 
+/** A connected, switched-on EasyParcel. The suite DEFAULT (beforeEach) is
+ * the MY store's view instead — not offered here, nothing connected. */
+const easyparcel = (overrides: Record<string, unknown> = {}) => ({
+	available: true,
+	connected: true,
+	enabled: true,
+	needsReconnect: false,
+	environment: "live",
+	...overrides,
+});
+
 function section(
 	props: Partial<Parameters<typeof CourierBookingSection>[0]> = {},
 ) {
@@ -81,6 +110,8 @@ function section(
 
 beforeEach(() => {
 	state.delyva = delyva();
+	state.easyparcel = easyparcel({ available: false, connected: false });
+	state.updateEasyparcel = vi.fn().mockResolvedValue({ ok: true });
 	state.updateSettings = vi.fn().mockResolvedValue({ ok: true });
 	state.updateDelyva = vi.fn().mockResolvedValue({ ok: true });
 });
@@ -314,5 +345,105 @@ describe("arming Delyva waits for parcel weights on a live store (23 Oct 2026)",
 				.getByRole("switch", { name: /delyva courier/i })
 				.hasAttribute("disabled"),
 		).toBe(false);
+	});
+});
+
+describe("EasyParcel couriers (z8r3fdcje2) — its own switch, so it can be paused", () => {
+	const ep = () => screen.getByRole("switch", { name: /easyparcel courier/i });
+
+	it("pins the routing: the mock names are the real function names", () => {
+		expect(getFunctionName(api.easyparcel.getSettings)).toBe(
+			"easyparcel:getSettings",
+		);
+		expect(getFunctionName(api.easyparcel.updateSettings)).toBe(
+			"easyparcel:updateSettings",
+		);
+	});
+
+	it("stays out where EasyParcel isn't offered and nothing is connected", () => {
+		render(section());
+		expect(
+			screen.queryByRole("switch", { name: /easyparcel courier/i }),
+		).toBeNull();
+	});
+
+	it("an unconnected EasyParcel is disabled and points at Integrations", () => {
+		state.easyparcel = easyparcel({ connected: false, enabled: false });
+		render(section());
+		expect(ep().hasAttribute("disabled")).toBe(true);
+		expect(
+			screen.getByText(/Connect EasyParcel in Integrations/i),
+		).toBeTruthy();
+	});
+
+	it("pausing writes easyparcel, never delyva or deliveryBooking", async () => {
+		state.easyparcel = easyparcel();
+		render(section());
+		expect(ep().getAttribute("aria-checked")).toBe("true");
+		fireEvent.click(ep());
+		await waitFor(() => expect(state.updateEasyparcel).toHaveBeenCalled());
+		expect(state.updateEasyparcel).toHaveBeenCalledWith({
+			retailerId: undefined,
+			enabled: false,
+		});
+		expect(state.updateDelyva).not.toHaveBeenCalled();
+		expect(state.updateSettings).not.toHaveBeenCalled();
+	});
+
+	it("a refusal the server RETURNS is shown, never toasted as success", async () => {
+		const { toast } = await import("sonner");
+		state.easyparcel = easyparcel({ enabled: false });
+		state.updateEasyparcel = vi
+			.fn()
+			.mockResolvedValue({ ok: false, message: "Connect EasyParcel first." });
+		render(section());
+		fireEvent.click(ep());
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith("Connect EasyParcel first."),
+		);
+		expect(toast.success).not.toHaveBeenCalled();
+	});
+
+	it("signed out at EasyParcel's end: reads paused and says how to fix it", () => {
+		state.easyparcel = easyparcel({ needsReconnect: true });
+		render(section());
+		expect(ep().getAttribute("aria-checked")).toBe("false");
+		expect(ep().hasAttribute("disabled")).toBe(true);
+		expect(screen.getByText(/reconnect in Integrations/i)).toBeTruthy();
+	});
+
+	it("a Starter seller can pause it but not switch it on", () => {
+		state.easyparcel = easyparcel({ enabled: true });
+		const { unmount } = render(section({ canUse: false }));
+		expect(ep().hasAttribute("disabled")).toBe(false);
+		unmount();
+		state.easyparcel = easyparcel({ enabled: false });
+		render(section({ canUse: false }));
+		expect(ep().hasAttribute("disabled")).toBe(true);
+	});
+
+	it("doesn't count as a live-pricing bidder — Lalamove stays the last one", () => {
+		state.delyva = delyva({ countryAllowed: false, connected: false });
+		state.easyparcel = easyparcel();
+		render(
+			section({
+				chargeMode: "live",
+				deliveryBooking: lalamove({ enabled: true }),
+			}),
+		);
+		expect(
+			screen
+				.getByRole("switch", { name: /lalamove rider/i })
+				.hasAttribute("disabled"),
+		).toBe(true);
+		expect(
+			screen.getByText(/doesn't quote your buyers' live delivery charge/i),
+		).toBeTruthy();
+	});
+
+	it("labels a sandbox connection as test mode", () => {
+		state.easyparcel = easyparcel({ environment: "sandbox" });
+		render(section());
+		expect(screen.getByText("Test mode")).toBeTruthy();
 	});
 });

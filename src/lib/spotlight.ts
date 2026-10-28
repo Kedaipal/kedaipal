@@ -60,6 +60,11 @@ export const SPOTLIGHT_ANCHOR = {
 		anchor: "settings-lalamove",
 	},
 	delyva: { page: "settings", tab: "integrations", anchor: "settings-delyva" },
+	easyparcel: {
+		page: "settings",
+		tab: "integrations",
+		anchor: "settings-easyparcel",
+	},
 	hitpay: { page: "settings", tab: "integrations", anchor: "settings-hitpay" },
 	delivery_charge: {
 		page: "settings",
