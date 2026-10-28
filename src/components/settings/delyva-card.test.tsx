@@ -95,6 +95,8 @@ const RETAILER = "r1" as Id<"retailers">;
 function card(props: { canUse?: boolean; country?: "MY" | "SG" } = {}) {
 	return (
 		<DelyvaCard
+			shellId="settings-delyva"
+			highlight={undefined}
 			retailerId={RETAILER}
 			canUse={props.canUse ?? true}
 			country={props.country ?? "MY"}

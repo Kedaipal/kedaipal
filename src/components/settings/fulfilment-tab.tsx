@@ -106,6 +106,7 @@ import { ClosedDatesCard } from "./closed-dates-card";
 import {
 	COURIER_BOOKING_ANCHOR,
 	courierBookingGlance,
+	easyparcelBookingOn,
 } from "./courier-booking-section";
 import type { BusinessAddress } from "./delivery-pricing";
 import { DespatchLabelCard } from "./despatch-label-card";
@@ -313,11 +314,15 @@ export function FulfilmentTab({
 	const delyva = useQuery(
 		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
 	).data;
+	const easyparcel = useQuery(
+		convexQuery(api.easyparcel.getSettings, { retailerId: actAsRetailerId }),
+	).data;
 	const courierBooking = courierBookingGlance({
 		riderBookingAvailable: riderBookingAllowed(country),
 		lalamoveArmed: deliveryBooking?.enabled === true,
 		lalamovePricing: deliveryConfig?.mode === "lalamove",
 		delyvaArmed: delyva?.connected === true && delyva.enabled === true,
+		easyparcelArmed: easyparcelBookingOn(easyparcel),
 	});
 	/** Ring this card when it's the one the deep link sent the seller to.
 	 * Undefined on a normal visit. */

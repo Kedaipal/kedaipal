@@ -58,9 +58,12 @@ const SKELETON_ROWS = 3;
 
 /**
  * The integration badge on the mock card follows the quoted row's provider.
- * Both marks are wordmarks, so each IS the name — no text label beside it.
+ * Delyva and Lalamove marks are wordmarks, so each IS the name — no text label
+ * beside it. EasyParcel is a name-only pill: its brand-approved mark isn't in
+ * `public/img/` yet, and no landing row carries it until the SG rows go visible.
  */
 const PROVIDER_BADGE: Record<CourierProvider, ReactNode> = {
+	easyparcel: "EasyParcel",
 	delyva: <DelyvaLogo heightClass="h-3" alt="Delyva" />,
 	lalamove: (
 		<AppImage

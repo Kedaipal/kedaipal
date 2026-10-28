@@ -10,6 +10,7 @@
 import { type Country, DEFAULT_COUNTRY } from "./country";
 import {
 	COURIER_PROVIDER_IDS,
+	courierBookingAllowed,
 	type CourierProviderId,
 } from "./courierProviders";
 import { delyvaBookingAllowed, riderBookingAllowed } from "./delivery";
@@ -25,6 +26,18 @@ export type CourierRetailer = {
 		apiSecret?: string;
 		customerId?: number;
 		pickupAddress?: unknown;
+	};
+	/**
+	 * EasyParcel's grant lives in its own table (`easyparcelConnections` —
+	 * tokens off every retailer read), so a caller that wants this provider
+	 * judged loads the summary with `loadEasyparcelArming` and passes it here.
+	 * Absent = not loaded = not armed: failing closed is the safe direction
+	 * for a "will a courier call this buyer" bit.
+	 */
+	easyparcel?: {
+		/** A live grant exists AND this deployment is configured. */
+		connected: boolean;
+		enabled: boolean;
 	};
 };
 
@@ -44,6 +57,17 @@ export function delyvaBookingArmed(retailer: CourierRetailer): boolean {
 		resolveDelyvaCredentials(retailer.delyva) !== null &&
 		retailer.delyva?.enabled === true &&
 		delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY)
+	);
+}
+
+/** EasyParcel parcel booking is connected, switched on and allowed in the
+ * store's country — the same bit the EasyParcel card's `bookingEnabled`
+ * reports. */
+export function easyparcelBookingArmed(retailer: CourierRetailer): boolean {
+	return (
+		retailer.easyparcel?.connected === true &&
+		retailer.easyparcel.enabled === true &&
+		courierBookingAllowed("easyparcel", retailer.country ?? DEFAULT_COUNTRY)
 	);
 }
 
@@ -73,6 +97,7 @@ const PROVIDER_BOOKING_ARMED: Record<
 > = {
 	lalamove: lalamoveBookingArmed,
 	delyva: delyvaBookingArmed,
+	easyparcel: easyparcelBookingArmed,
 };
 
 /**

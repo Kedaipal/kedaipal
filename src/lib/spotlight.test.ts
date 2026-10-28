@@ -103,6 +103,10 @@ describe("spotlight registry", () => {
 			// asserted equal below, so either spelling proves the card exists.
 			const accepted = [
 				`id={SPOTLIGHT_ANCHOR.${key}.anchor}`,
+				// The courier cards wrap their OWN AccountCard shell (so hiding in
+				// an unserved country takes the border with it) and receive the
+				// anchor as `shellId` — same registry source, different prop.
+				`shellId={SPOTLIGHT_ANCHOR.${key}.anchor}`,
 				...Object.entries(SETTINGS_ANCHOR)
 					.filter(([, id]) => id === anchor)
 					.map(([fixKey]) => `id={SETTINGS_ANCHOR.${fixKey}}`),

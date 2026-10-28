@@ -392,13 +392,19 @@ const en = {
 		return { subject, html, text };
 	},
 	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
-		const delyva = v.deliveryProvider === "delyva";
-		const provider = delyva ? "Delyva" : "Lalamove";
-		const rebook = delyva ? "rebook the courier" : "rebook a rider";
+		const courier =
+			v.deliveryProvider === "delyva" || v.deliveryProvider === "easyparcel";
+		const provider =
+			v.deliveryProvider === "delyva"
+				? "Delyva"
+				: v.deliveryProvider === "easyparcel"
+					? "EasyParcel"
+					: "Lalamove";
+		const rebook = courier ? "rebook the courier" : "rebook a rider";
 		const subject = `🚨 Delivery booking failed for ${v.shortId}`;
 		const reasonLine = v.jobFailureReason
 			? `Reason: ${v.jobFailureReason}`
-			: delyva
+			: courier
 				? `The booking ended without a courier.`
 				: `The booking ended without a rider.`;
 		const lines = [
@@ -593,13 +599,19 @@ const ms = {
 		return { subject, html, text };
 	},
 	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
-		const delyva = v.deliveryProvider === "delyva";
-		const provider = delyva ? "Delyva" : "Lalamove";
-		const rebook = delyva ? "tempah kurier semula" : "tempah rider semula";
+		const courier =
+			v.deliveryProvider === "delyva" || v.deliveryProvider === "easyparcel";
+		const provider =
+			v.deliveryProvider === "delyva"
+				? "Delyva"
+				: v.deliveryProvider === "easyparcel"
+					? "EasyParcel"
+					: "Lalamove";
+		const rebook = courier ? "tempah kurier semula" : "tempah rider semula";
 		const subject = `🚨 Tempahan penghantaran gagal untuk ${v.shortId}`;
 		const reasonLine = v.jobFailureReason
 			? `Sebab: ${v.jobFailureReason}`
-			: delyva
+			: courier
 				? `Tempahan tamat tanpa kurier.`
 				: `Tempahan tamat tanpa rider.`;
 		const lines = [
@@ -794,13 +806,19 @@ const zh = {
 		return { subject, html, text };
 	},
 	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
-		const delyva = v.deliveryProvider === "delyva";
-		const provider = delyva ? "Delyva" : "Lalamove";
-		const rebook = delyva ? "重新预订快递" : "重新预订骑士";
+		const courier =
+			v.deliveryProvider === "delyva" || v.deliveryProvider === "easyparcel";
+		const provider =
+			v.deliveryProvider === "delyva"
+				? "Delyva"
+				: v.deliveryProvider === "easyparcel"
+					? "EasyParcel"
+					: "Lalamove";
+		const rebook = courier ? "重新预订快递" : "重新预订骑士";
 		const subject = `🚨 ${v.shortId} 的配送预订失败`;
 		const reasonLine = v.jobFailureReason
 			? `原因：${v.jobFailureReason}`
-			: delyva
+			: courier
 				? `预订没有配对到快递。`
 				: `预订没有配对到骑士。`;
 		const lines = [
