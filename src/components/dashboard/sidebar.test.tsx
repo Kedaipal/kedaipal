@@ -321,3 +321,52 @@ describe("a short window scrolls the link list; the chrome never squashes", () =
 		);
 	});
 });
+
+describe("Admin group — the Blog videos shortcut (admin areas, z8r3fdwwpe)", () => {
+	const blogLink = (c: HTMLElement) =>
+		c.querySelector<HTMLAnchorElement>(
+			'a[href="https://admin.kedaipal.com/videos"]',
+		);
+
+	it("a blog editor who is NOT an admin sees the group with only Blog videos — never the console", () => {
+		const { container, getByText, queryByText } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} blogVideos />,
+		);
+		expect(getByText("Admin")).toBeTruthy();
+		expect(blogLink(container)?.textContent).toContain("Blog videos");
+		for (const label of ["All sellers", "Billing", "Showcases", "WABA Safety"])
+			expect(queryByText(label)).toBeNull();
+	});
+
+	it("an admin sees the console links and Blog videos last, as the one row that leaves the app", () => {
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin blogVideos />,
+		);
+		const group = blogLink(container)?.parentElement as HTMLElement;
+		const labels = Array.from(group.querySelectorAll("a")).map((a) =>
+			a.textContent?.trim(),
+		);
+		expect(labels[0]).toBe("All sellers");
+		expect(labels.at(-1)).toBe("Blog videos");
+	});
+
+	it("a seller with no admin area sees no Admin group at all", () => {
+		const { container, queryByText } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(queryByText("Admin")).toBeNull();
+		expect(blogLink(container)).toBeNull();
+	});
+
+	it("collapsed, the external row keeps its name as a tooltip and hides the label cluster", () => {
+		collapsed = true;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} blogVideos />,
+		);
+		const link = blogLink(container);
+		expect(link?.getAttribute("title")).toBe(
+			"Blog videos — Opens admin.kedaipal.com",
+		);
+		expect(link?.querySelector('[aria-hidden="true"]')).not.toBeNull();
+	});
+});

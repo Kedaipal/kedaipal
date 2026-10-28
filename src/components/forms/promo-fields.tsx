@@ -12,6 +12,7 @@ import { cn } from "../../lib/utils";
 import { ProBadge } from "../app/pro-gate";
 import { Input } from "../ui/input";
 import { ToggleSwitch } from "../ui/toggle-switch";
+import { settingAnchor } from "./product-setting-index";
 
 /**
  * The Promotion block (z8r3fdcw72) — a lower price for a while that snaps back
@@ -463,7 +464,10 @@ export function PromoFields({
 				>
 					{/* Sale price per sellable line. */}
 					{pricing === "rows" ? (
-						<div className="flex flex-col gap-3">
+						<div
+							className="flex flex-col gap-3"
+							{...settingAnchor("sale-prices")}
+						>
 							<div className="flex flex-wrap items-center gap-2">
 								<span className="text-xs font-semibold">Quick fill</span>
 								{PROMO_PERCENT_PRESETS.map((percent) => (
@@ -619,7 +623,10 @@ export function PromoFields({
 							)}
 
 							{/* HOW LONG it runs. */}
-							<div className="flex flex-col gap-2">
+							<div
+								className="flex flex-col gap-2"
+								{...settingAnchor("sale-window")}
+							>
 								<span className="text-xs font-semibold">
 									How long does it run?
 								</span>
@@ -731,7 +738,10 @@ export function PromoFields({
 											onChange={(e) => set({ maxPerOrder: e.target.value })}
 										/>
 									</div>
-									<div className="flex flex-col gap-2">
+									<div
+										className="flex flex-col gap-2"
+										{...settingAnchor("flash-pay-within")}
+									>
 										<span className="text-sm">Buyers must pay within</span>
 										<div className="flex flex-wrap gap-2">
 											{PROMO_PAY_WINDOW_CHOICES.map((choice) => (

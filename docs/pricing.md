@@ -331,7 +331,9 @@ Presentation rules:
   query are still resolving, the purchasable-tier buttons show a **spinner**
   (`Button isLoading`) instead of a label, so a signed-in seller's CTA doesn't
   flip trial → dashboard → final on one refresh — the SSR render is the spinner
-  too, so hydration matches. A storeless admin / genuinely-null plan then falls
+  too, so hydration matches. Auth comes from `useAuthState`, so a Clerk that
+  never loads falls back to the trial CTA after 3 s instead of spinning forever
+  ([landing-v2](./landing-v2.md#signed-in-or-not--we-dont-know-yet-is-its-own-state-z8r3fdy2m0-27-oct-2026)). A storeless admin / genuinely-null plan then falls
   back to "Go to Dashboard". The full page reads plan/status via the narrow
   `retailers.getMyPlan` query (not the heavy `getMyRetailer` payload) so a
   marketing route doesn't sign storage URLs just to read an enum; the landing
@@ -722,7 +724,7 @@ tier**, and a **term change** while a contract bill at the other term is open
 term back). One author, `enterpriseTermChangeBlocker`, for the last two. The
 form says every one of these before the tap — the admin row carries the open
 bill's tier and term, the founding intent, and **`billingCurrency`**, the exact
-currency (`renewalCurrency`: last paid bill's, else the country's) the server
+currency (`storeBillingCurrency`: the store's country's) the server
 freezes a new contract in, so the fee's label can never disagree with what is
 stored. It is a page of the seller sheet — the same drill-in as the credit
 ledger, one drawer with a back link.
@@ -826,9 +828,9 @@ RM888 for it. With nothing to call off, it says so instead of a false success.
   annual = 12 months prepaid); a second field meaning the same thing would be
   two sources of truth.
 - **The contract carries its `currency`.** The ticket said "currency from the
-  store"; a store's billing currency can change (`renewalCurrency` follows the
-  last paid invoice), and a contract agreed in SGD must stay SGD. Frozen at
-  creation.
+  store"; a store's country — and so its billing currency — can change
+  (`storeBillingCurrency`), and a contract agreed in SGD must stay SGD. Frozen
+  at creation.
 - **No `multiOutlet` / `prioritySupport` flags on `PLAN_FEATURES.enterprise`.**
   `PlanFeatures` is, by its own rule, only for features that are LIVE —
   coming-soon rows don't belong there until they ship, and a flag with no

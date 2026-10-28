@@ -437,6 +437,20 @@ same Pro gate as payment and category (that record is compiler-enforced complete
 — the reason a filter added without touching it can no longer fail the gate open
 silently).
 
+## One listing's orders — `?listing=` (`z8r3fdjv0d`)
+
+`InboxFilterArgs.listing` narrows to the orders of ONE product: a line of it,
+or a booking of it (`bookingProductId`). No picker writes it — it arrives from
+the [Schedule view](./schedule-view.md) and the event RSVP panel, both of which
+open `?listing=<id>&ffrom=<day>&fto=<day>` so the list holds exactly the orders
+they counted. The panel shows it as a removable `Listing: <name>` token (the name
+comes back as `searchOrders.listingName`, resolved for this store's products
+only; a dead id reads *Listing not found*). It narrows, so it is Pro like every
+other inbox filter, rides the export's shared validators, and is a plain
+`v.string()` so a hand-edited URL matches nothing instead of erroring. A gated
+order's lines are stripped before the predicate runs, so it never matches by
+line.
+
 ## Views: Cards and Table (86eyrtz74)
 
 `?view=table` switches the list to a spreadsheet-shaped table. It exists for a

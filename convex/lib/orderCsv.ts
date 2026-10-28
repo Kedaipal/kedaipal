@@ -301,6 +301,9 @@ export type CsvOrder = {
 	bookingOpenDays?: boolean;
 	customer: { name?: string; waPhone?: string };
 	items: Array<{
+		/** The listing this line sold — read by the inbox's `listing` filter
+		 * (`z8r3fdjv0d`), never printed: an id is not a cell a seller reads. */
+		productId?: string;
 		name: string;
 		variantLabel?: string;
 		quantity: number;

@@ -1,4 +1,5 @@
 import { type Country, DEFAULT_COUNTRY } from "./country";
+import { storeBillingCurrency } from "./plans";
 import {
 	type DeliveryConfig,
 	deliveryModeAllowed,
@@ -39,6 +40,7 @@ import { STORED_MOBILE_PATTERN } from "./slug";
 export type CountrySetupItemKey =
 	| "payment_methods"
 	| "hitpay"
+	| "billing_currency"
 	| "business_address"
 	| "pickup_addresses"
 	| "delivery_mode"
@@ -78,6 +80,9 @@ export type CountrySetupItem = {
 export const VERIFIABLE: Record<CountrySetupItemKey, boolean> = {
 	payment_methods: false,
 	hitpay: false,
+	// "Your subscription now bills in S$" is a fact about the FUTURE — nothing
+	// in the row says the seller has taken it in, so they confirm it.
+	billing_currency: false,
 	message_copy: false,
 	business_address: true,
 	pickup_addresses: true,
@@ -105,6 +110,13 @@ export type CountrySetupInput = {
 	country: Country | undefined;
 	/** Unset = the store has never switched; there is nothing to check. */
 	countryChangedAt: number | undefined;
+	/** Where it moved from, when stamped — decides whether the move changed
+	 * what Kedaipal bills the store in (86eyp7hn7). */
+	countryChangedFrom: Country | undefined;
+	/** The store pays Kedaipal — a subscription that is neither comped nor on
+	 * an Enterprise contract (a contract's currency is frozen with the deal,
+	 * so the move never changes its bills). */
+	billedByKedaipal: boolean;
 	acked: readonly string[] | undefined;
 	businessAddress: { country?: Country } | undefined;
 	pickupLocations: readonly {
@@ -160,6 +172,21 @@ export function resolveCountrySetup(
 	// --- money: the buyer's payment goes somewhere unusable -----------------
 	if (input.hasPaymentMethods) add("payment_methods", "money");
 	if (input.hasHitpay) add("hitpay", "money");
+	// The store's OWN money, after the buyer's: a country switch is the one
+	// way a store's billing currency changes (`storeBillingCurrency`,
+	// 86eyp7hn7), and the switch detached any saved auto-renew method — the
+	// card HitPay authorised was in the old currency. An older row with no
+	// `countryChangedFrom` stamp reads as "may have changed": saying so to a
+	// seller it didn't apply to costs one tick; staying silent to one it did
+	// costs a surprise bill.
+	if (
+		input.billedByKedaipal &&
+		(input.countryChangedFrom === undefined ||
+			storeBillingCurrency(input.countryChangedFrom) !==
+				storeBillingCurrency(country))
+	) {
+		add("billing_currency", "money");
+	}
 
 	// --- buyer- and courier-visible wrongness -------------------------------
 	if (foreign(input.businessAddress?.country, country)) {

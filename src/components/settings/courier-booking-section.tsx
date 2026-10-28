@@ -38,6 +38,7 @@ import {
 import { TONE_CHIP } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
+import { DelyvaLogo } from "../ui/delyva-logo";
 import { ToggleSwitch } from "../ui/toggle-switch";
 
 /** The card's id on the Delivery pricing page — the Fulfilment row and the
@@ -244,13 +245,7 @@ export function CourierBookingSection({
 				<div className="flex items-start justify-between gap-4 rounded-xl border border-input p-3">
 					<div className="min-w-0">
 						<div className="flex items-center gap-2 text-sm font-medium">
-							<AppImage
-								src="/img/delyva-logo.png"
-								alt=""
-								aspect="h-3.5 w-auto"
-								fill={false}
-								className="shrink-0"
-							/>
+							<DelyvaLogo heightClass="h-3.5" />
 							Delyva couriers
 							{delyva?.isDemo ? (
 								<span

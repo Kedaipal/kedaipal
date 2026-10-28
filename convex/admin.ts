@@ -48,7 +48,7 @@ import {
 import {
 	type BillingCurrency,
 	isUnlimited,
-	renewalCurrency,
+	storeBillingCurrency,
 } from "./lib/plans";
 import { loadCreditAccount } from "./credits";
 import { referralForReferee } from "./referrals";
@@ -250,9 +250,9 @@ export type AdminSellerRow = {
 		billingCycle: Doc<"subscriptions">["billingCycle"];
 		kind: "plan" | "hold";
 	};
-	/** The currency this store's next bill is in — its last paid invoice's,
-	 * else its country's (`renewalCurrency`). A new Enterprise contract is
-	 * frozen in exactly this, so the form labels the fee with it (T6). */
+	/** The currency this store is billed in — its country's
+	 * (`storeBillingCurrency`). A new Enterprise contract is frozen in exactly
+	 * this, so the form labels the fee with it (T6). */
 	billingCurrency: BillingCurrency;
 	/** The most recently settled bill — "when did they last pay, how much". */
 	lastPaidInvoice?: {
@@ -292,9 +292,9 @@ async function loadInvoiceFacts(
 	fallback: { plan: Doc<"subscriptions">["plan"]; billingCycle: Doc<"subscriptions">["billingCycle"] },
 ): Promise<
 	Pick<AdminSellerRow, "pendingInvoice" | "lastPaidInvoice"> & {
-		/** The last paid bill's currency, stamp or no stamp — what
-		 * `renewalCurrency` (and so `setContract`) reads. */
-		lastPaidCurrency: string | undefined;
+		/** Any bill has been paid, stamp or no stamp — what
+		 * `referralEditable` reads. */
+		hasPaidInvoice: boolean;
 	}
 > {
 	const pending = await ctx.db
@@ -334,7 +334,7 @@ async function loadInvoiceFacts(
 					},
 				}
 			: {}),
-		lastPaidCurrency: paid?.currency,
+		hasPaidInvoice: paid !== null,
 	};
 }
 
@@ -397,7 +397,7 @@ export const listSellersForAdmin = query({
 			const referrer = r.signupReferrerId
 				? await ctx.db.get(r.signupReferrerId)
 				: null;
-			const { lastPaidCurrency, ...invoiceFacts } = await loadInvoiceFacts(
+			const { hasPaidInvoice, ...invoiceFacts } = await loadInvoiceFacts(
 				ctx,
 				r._id,
 				{ plan: sub?.plan ?? "pro", billingCycle: sub?.billingCycle ?? "monthly" },
@@ -508,7 +508,7 @@ export const listSellersForAdmin = query({
 				// bill only ever follows one) — the same answer
 				// `referrals.hasPaidPlanInvoice` gives the mutations that
 				// enforce it.
-				referralEditable: lastPaidCurrency === undefined,
+				referralEditable: !hasPaidInvoice,
 				createdAt: r._creationTime,
 				unclaimed: isUnclaimed(r),
 				pendingOwnerEmail: r.pendingOwnerEmail,
@@ -557,10 +557,7 @@ export const listSellersForAdmin = query({
 						}
 					: undefined,
 				...invoiceFacts,
-				billingCurrency: renewalCurrency({
-					lastPaidCurrency,
-					country: r.country,
-				}),
+				billingCurrency: storeBillingCurrency(r.country),
 				lastActAsAt,
 				...(creditAccount
 					? {

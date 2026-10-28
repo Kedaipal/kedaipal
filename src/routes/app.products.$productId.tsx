@@ -312,7 +312,11 @@ function EditProductRoute() {
 			    Breakfast" the morning of the event, "18 RSVPs · 11 Set A" is what
 			    she came for — not the name field. Absent on every other product. */}
 			{headcount ? (
-				<EventRsvpPanel headcount={headcount} productName={product.name} />
+				<EventRsvpPanel
+					headcount={headcount}
+					productId={product._id}
+					productName={product.name}
+				/>
 			) : null}
 
 			{/* Mobile header — back button, title, storefront preview + the honest
@@ -456,12 +460,14 @@ function EditProductRoute() {
 					// Labelled, and NOT tinted red — an icon-only red button here read
 					// as "delete", when archive is the reversible, gentle action. The
 					// word is the disambiguation; red is reserved for the true
-					// destructive CTA below the form.
+					// destructive CTA below the form. Opaque in dark too: the outline
+					// variant's dark fill is see-through, and the bar is sticky over
+					// the form on a phone.
 					product.active ? (
 						<Button
 							type="button"
 							variant="outline"
-							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4"
+							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4 dark:bg-background dark:hover:bg-muted"
 							disabled={locked}
 							onClick={() => void archiveProduct()}
 						>
@@ -472,7 +478,7 @@ function EditProductRoute() {
 						<Button
 							type="button"
 							variant="outline"
-							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4"
+							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4 dark:bg-background dark:hover:bg-muted"
 							disabled={locked}
 							onClick={() => void restoreProduct()}
 						>

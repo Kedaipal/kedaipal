@@ -236,6 +236,10 @@ type InboxSearch = {
 	/** Keep orders with NO frozen categories (PR #235 review) — the twin of
 	 * `munspec`. Without it, selecting every category silently drops them. */
 	catunspec?: boolean;
+	/** ONE listing's orders (`z8r3fdjv0d`) — a `products._id`, written only by
+	 * the Schedule view so a row opens exactly the orders it counted. No picker
+	 * sets it; the panel shows it as a removable token. */
+	listing?: string;
 	/** Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys. Repeated
 	 * in the URL (`?asrc=tiktok&asrc=direct`) so a filtered inbox is shareable
 	 * and survives refresh, same as `pay`/`method`. */
@@ -442,6 +446,13 @@ export const Route = createFileRoute("/app/orders/")({
 		// An order number or phone is all digits, and `?q=60123…` parses as a
 		// NUMBER — `searchText` reads it back as the text (z8r3fdtk87).
 		const q = searchText(search.q);
+		// A Convex id is short lowercase base32; anything else can't name a
+		// listing, so it is dropped here rather than sent to match nothing.
+		const listingRaw = searchText(search.listing);
+		const listing =
+			listingRaw !== undefined && /^[a-z0-9]{1,64}$/.test(listingRaw)
+				? listingRaw
+				: undefined;
 		return {
 			// Never written back: it folded into `st` above. Keeping it out of the
 			// returned object is what makes the old param disappear from the URL
@@ -473,6 +484,7 @@ export const Route = createFileRoute("/app/orders/")({
 				search.catunspec === true || search.catunspec === "true"
 					? true
 					: undefined,
+			listing,
 			asrc: asrc.length > 0 ? asrc : undefined,
 			period: period.length > 0 ? period : undefined,
 			// Only the non-default ("due") is stored; "recent" stays out of the URL.
@@ -561,6 +573,7 @@ function OrdersRoute() {
 		st = [],
 		cat = [],
 		catunspec = false,
+		listing,
 		sort = "recent",
 		view: urlView,
 		pin: urlPin,
@@ -694,6 +707,7 @@ function OrdersRoute() {
 		stKey,
 		catKey,
 		catunspec,
+		listing,
 		// Re-sorting is a view change too — jump back to the top of the new order.
 		sort,
 		// Changing the pin mode changes which rows are in the set.
@@ -716,6 +730,15 @@ function OrdersRoute() {
 		convexQuery(
 			api.bookingBlocks.hasBookingListings,
 			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
+	// Stores with events or bookings get Schedule (`z8r3fdjv0d`) — registered
+	// vs paid per date. Behind the same inbox gate as the rest of the header
+	// actions, because it is a Pro inbox lens.
+	const hasDatedListings = useQuery(
+		convexQuery(
+			api.schedule.hasDatedListings,
+			retailer && inboxEnabled ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
 
@@ -752,6 +775,7 @@ function OrdersRoute() {
 							statuses: st.length > 0 ? st : undefined,
 							categories: cat.length > 0 ? cat : undefined,
 							categoriesUnspecified: catunspec || undefined,
+							listing,
 							attributionSources: asrc.length > 0 ? asrc : undefined,
 							bookingPeriods: period.length > 0 ? period : undefined,
 							searchText: debounced || undefined,
@@ -966,6 +990,7 @@ function OrdersRoute() {
 		ful,
 		cat,
 		catunspec,
+		listing,
 		asrc,
 	});
 
@@ -1191,6 +1216,7 @@ function OrdersRoute() {
 					next.bookingPeriods.length > 0 ? next.bookingPeriods : undefined,
 				cat: next.categories.length > 0 ? next.categories : undefined,
 				catunspec: next.categoriesUnspecified ? true : undefined,
+				listing: next.listing,
 			}),
 		});
 	}
@@ -1439,6 +1465,7 @@ function OrdersRoute() {
 					statuses: st.length > 0 ? st : undefined,
 					categories: cat.length > 0 ? cat : undefined,
 					categoriesUnspecified: catunspec || undefined,
+					listing,
 					attributionSources: asrc.length > 0 ? asrc : undefined,
 					// The export MUST send this too, or "what the seller sees" and
 					// "what they export" diverge — the one invariant
@@ -1486,6 +1513,7 @@ function OrdersRoute() {
 			<OrdersViewToggle
 				active={view}
 				showCalendar={hasBookingListings === true}
+				showSchedule={hasDatedListings === true}
 				onSelectView={setView}
 			/>
 			{/* View-only (z8r3fdeub2): select mode exists only to run a bulk
@@ -1740,12 +1768,14 @@ function OrdersRoute() {
 								bookingPeriods: period,
 								categories: cat,
 								categoriesUnspecified: catunspec,
+								listing,
 								attributionSources: asrc,
 							}}
 							onChange={setFilters}
 							country={retailer.country}
 							availableSources={result?.availableSources}
 							availableCategories={result?.availableCategories}
+							listingName={result?.listingName}
 							facets={result?.facets}
 							// One resolver for both surfaces, so the panel and the Status
 							// column can never call the same state two different things.

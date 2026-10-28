@@ -22,7 +22,7 @@ import {
 	isMoveOffContractBill,
 } from "./lib/enterprise";
 import type { BillingCurrency, BillingCycle } from "./lib/plans";
-import { renewalCurrency } from "./lib/plans";
+import { storeBillingCurrency } from "./lib/plans";
 import { isUnclaimed } from "./lib/unclaimedStore";
 import { seatRows } from "./lib/seats";
 
@@ -89,12 +89,6 @@ export const getContractContext = query({
 			.order("desc")
 			.filter((q) => q.eq(q.field("status"), "pending"))
 			.first();
-		const paid = await ctx.db
-			.query("invoices")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
-			.order("desc")
-			.filter((q) => q.eq(q.field("status"), "paid"))
-			.first();
 		return {
 			_id: retailer._id,
 			storeName: retailer.storeName,
@@ -104,10 +98,7 @@ export const getContractContext = query({
 			// A NEW contract is frozen in the store's billing currency — the
 			// same answer `setContract` writes, from the same helper, so the
 			// label on the fee and the stored fee can never disagree.
-			billingCurrency: renewalCurrency({
-				lastPaidCurrency: paid?.currency,
-				country: retailer.country,
-			}),
+			billingCurrency: storeBillingCurrency(retailer.country),
 			billingCycle: sub?.billingCycle,
 			subscriptionStatus: sub?.status,
 			comped: sub?.comped === true,
@@ -217,14 +208,10 @@ export const setContract = mutation({
 		const now = Date.now();
 		// The contract's currency is agreed once and frozen — an SG deal stays
 		// SGD, never converted. A new contract takes the store's billing
-		// currency (its last paid invoice's, else its country's).
+		// currency — its country's.
 		const currency =
 			sub.enterprise?.currency ??
-			renewalCurrency({
-				lastPaidCurrency: invoices.find((inv) => inv.status === "paid")
-					?.currency,
-				country: retailer.country,
-			});
+			storeBillingCurrency(retailer.country);
 		const notes = args.notes?.trim();
 		// The tier's caps with this deal's overrides applied — written on EVERY
 		// save, not only on entry: an admin raising a live contract's seat

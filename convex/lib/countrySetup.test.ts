@@ -11,6 +11,8 @@ function input(overrides: Partial<CountrySetupInput> = {}): CountrySetupInput {
 	return {
 		country: "SG",
 		countryChangedAt: 1_700_000_000_000,
+		countryChangedFrom: "MY",
+		billedByKedaipal: false,
 		acked: undefined,
 		businessAddress: undefined,
 		pickupLocations: [],
@@ -148,6 +150,54 @@ describe("resolveCountrySetup", () => {
 			}),
 		);
 		expect(acked).toEqual([]);
+	});
+});
+
+describe("the store's own bill changes with its country (86eyp7hn7)", () => {
+	test("a store Kedaipal bills is told its subscription currency moved", () => {
+		const items = resolveCountrySetup(input({ billedByKedaipal: true }));
+		expect(items).toEqual([
+			{ key: "billing_currency", severity: "money", verifiable: false },
+		]);
+	});
+
+	test("a comped store or an Enterprise contract gets no such row — nothing it pays changed", () => {
+		expect(resolveCountrySetup(input({ billedByKedaipal: false }))).toEqual([]);
+	});
+
+	test("an older row with no `countryChangedFrom` stamp still raises it — fail loud on money", () => {
+		const items = resolveCountrySetup(
+			input({ billedByKedaipal: true, countryChangedFrom: undefined }),
+		);
+		expect(items.map((i) => i.key)).toEqual(["billing_currency"]);
+	});
+
+	test("it sits after the buyer's money rows, before anything cosmetic", () => {
+		const items = resolveCountrySetup(
+			input({
+				billedByKedaipal: true,
+				hasPaymentMethods: true,
+				hasHitpay: true,
+				waPhone: "60123456789",
+			}),
+		);
+		expect(items.map((i) => i.key)).toEqual([
+			"payment_methods",
+			"hitpay",
+			"billing_currency",
+			"wa_phone",
+		]);
+	});
+
+	test("the seller confirms it and it retires — it is a fact about the future, not a fault", () => {
+		expect(
+			ackableKeys(resolveCountrySetup(input({ billedByKedaipal: true }))),
+		).toEqual(["billing_currency"]);
+		expect(
+			resolveCountrySetup(
+				input({ billedByKedaipal: true, acked: ["billing_currency"] }),
+			),
+		).toEqual([]);
 	});
 });
 

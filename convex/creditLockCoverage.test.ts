@@ -221,6 +221,9 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 // `orderClaims` joined with it: its list grew an `order.total` read.
 // `deliveries` (86eye9xd4, 6A) lists bookings and parcels by order, with
 // destinations and tracking links that lead back to the buyer.
+// `schedule` (`z8r3fdjv0d`) counts registered vs paid per programme date, so
+// it reads every order in its window — a waiting order is counted as waiting
+// and nothing else about it is read.
 const READ_MODULES = [
 	"orders",
 	"customers",
@@ -230,6 +233,7 @@ const READ_MODULES = [
 	"vouchers",
 	"orderClaims",
 	"deliveries",
+	"schedule",
 ];
 
 const OPEN_READS: Record<string, string> = {
@@ -244,6 +248,8 @@ const OPEN_READS: Record<string, string> = {
 		"per-day counts only, no order data — and like the nav badge, a waiting order SHOULD be counted: Home is what tells the seller Saturday is heavy, and hiding the work would misstate the week",
 	"bookingBlocks.hasBookingListings":
 		"a boolean — does this store sell bookings at all; reads products, never an order",
+	"schedule.hasDatedListings":
+		"a boolean — does this store sell events or bookings at all; reads products, never an order",
 	"orderClaims.getByToken":
 		"buyer door only (unguessable claim token, never enumerable) — the credit gate withholds an order from the SELLER, never from the buyer who placed it, so redacting here would hide a buyer's own ticket from them",
 };

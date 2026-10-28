@@ -1,4 +1,5 @@
 import { Check, Loader2, Snowflake, Truck } from "lucide-react";
+import type { ReactNode } from "react";
 import type { BillingCurrency } from "../../../convex/lib/plans";
 import type {
 	Courier,
@@ -9,6 +10,7 @@ import { formatPrice } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { AppImage } from "../ui/app-image";
+import { DelyvaLogo } from "../ui/delyva-logo";
 import { LogoMarqueeRow, logoPillClass } from "./landing-ui";
 
 /**
@@ -56,31 +58,21 @@ const SKELETON_ROWS = 3;
 
 /**
  * The integration badge on the mock card follows the quoted row's provider.
- * Delyva's emblem is square and needs the name beside it; Lalamove's mark is a
- * wordmark and IS the name. No `src` = name-only pill — the honest state for
- * a provider whose brand-approved mark isn't in `public/img/` yet (EasyParcel
- * today; no landing row carries it until the SG rows go visible).
+ * Delyva and Lalamove marks are wordmarks, so each IS the name — no text label
+ * beside it. EasyParcel is a name-only pill: its brand-approved mark isn't in
+ * `public/img/` yet, and no landing row carries it until the SG rows go visible.
  */
-const PROVIDER_BADGE: Record<
-	CourierProvider,
-	{ name: string; src?: string; markClass?: string; wordmark: boolean }
-> = {
-	easyparcel: {
-		name: "EasyParcel",
-		wordmark: false,
-	},
-	delyva: {
-		name: "Delyva",
-		src: "/img/delyva-logo.png",
-		markClass: "size-3.5",
-		wordmark: false,
-	},
-	lalamove: {
-		name: "Lalamove",
-		src: "/img/lalamove-logo.svg",
-		markClass: "h-3 w-auto",
-		wordmark: true,
-	},
+const PROVIDER_BADGE: Record<CourierProvider, ReactNode> = {
+	easyparcel: "EasyParcel",
+	delyva: <DelyvaLogo heightClass="h-3" alt="Delyva" />,
+	lalamove: (
+		<AppImage
+			src="/img/lalamove-logo.svg"
+			alt="Lalamove"
+			aspect="h-3 w-auto"
+			fill={false}
+		/>
+	),
 };
 
 /** Two-letter mark — the real dispatch card's fallback for a courier with no logo. */
@@ -243,15 +235,7 @@ export function DispatchCard({
 					data-testid="dispatch-provider"
 					data-provider={cheapest?.provider ?? "delyva"}
 				>
-					{badge.src ? (
-						<AppImage
-							src={badge.src}
-							alt=""
-							aspect={badge.markClass}
-							fill={false}
-						/>
-					) : null}
-					{badge.wordmark && badge.src ? null : badge.name}
+					{badge}
 				</span>
 			</div>
 

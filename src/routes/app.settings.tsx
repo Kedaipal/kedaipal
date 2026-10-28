@@ -20,8 +20,6 @@ import {
 	Store,
 	Trash2,
 	UsersRound,
-	UtensilsCrossed,
-	Wrench,
 } from "lucide-react";
 import {
 	type FormEvent,
@@ -47,6 +45,7 @@ import {
 	type DeliveryConfig,
 	deliveryModeAllowed,
 } from "../../convex/lib/delivery";
+import { storeBillingCurrency } from "../../convex/lib/plans";
 import { STORE_NAME_MAX, STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
 import type { Locale } from "../../convex/lib/whatsappCopy";
@@ -113,6 +112,7 @@ import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
 import {
+	autoRenewMethodPhrase,
 	type CardTarget,
 	type FixHighlight,
 	highlightFor,
@@ -282,13 +282,6 @@ const SETTINGS_GROUPS: ReadonlyArray<{
 	// it looks, and this is the only group that changes nothing a buyer sees.
 	{ label: "App", tabs: ["appearance"] },
 ];
-
-/** The store type as a glance word ("Set · Food & goods"). */
-const STORE_TYPE_SHORT: Record<"physical" | "service" | "booking", string> = {
-	physical: "Food & goods",
-	service: "Service",
-	booking: "Booking",
-};
 
 const SETTINGS_TAB_LABELS = Object.fromEntries(
 	SETTINGS_TABS.map((t) => [t.id, t.label]),
@@ -853,39 +846,21 @@ function SettingsRoute() {
 													/>
 												</Card>
 												{slugRenameForm}
+												{/* One field, so the form owns the card heading — the
+												    Business name card's posture. The "What does your store
+												    sell?" picker shared this card until z8r3fdxt99; its one
+												    job was pre-selecting the wizard's kind card, retired
+												    because the kind is fixed once published and a store
+												    sells more than one (single meals AND meal plans).
+												    `retailers.storeType` is unread until the field is
+												    dropped. */}
 												<Card>
-													<SectionHeading
-														title="Description & store type"
-														description="What buyers read under your name, and the type new products start as."
-														glance={
-															<Glance tone="grey">
-																{[
-																	retailer.storeDescription?.trim()
-																		? "Set"
-																		: "No description",
-																	retailer.storeType
-																		? STORE_TYPE_SHORT[retailer.storeType]
-																		: null,
-																]
-																	.filter(Boolean)
-																	.join(" · ")}
-															</Glance>
-														}
-													/>
 													<StoreDescriptionForm
 														current={retailer.storeDescription ?? ""}
 														onSave={(storeDescription) =>
 															updateSettings({ storeDescription })
 														}
 													/>
-													<div className="border-t border-border/60 pt-4">
-														<StoreTypeForm
-															current={retailer.storeType}
-															onSave={(storeType) =>
-																updateSettings({ storeType })
-															}
-														/>
-													</div>
 												</Card>
 												{/* The directory card is built from the name, description
 										    and area above — it belongs with them. */}
@@ -1001,6 +976,9 @@ function SettingsRoute() {
 																deliveryBooking={retailer.deliveryBooking}
 																waPhone={retailer.waPhone}
 																notifyWaPhone={retailer.notifyWaPhone}
+																autoRenewOn={
+																	retailer.subscription?.autoRenew !== undefined
+																}
 																onSave={(patch) => updateSettings(patch)}
 															/>
 															{/* Directly under the picker, so "what did that just
@@ -1526,9 +1504,13 @@ function StoreDescriptionForm({
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<SectionHeading
-				level="sub"
 				title="Store description"
 				description="Shown under your store name — what you sell, your lead time or area. Leave blank to hide it."
+				glance={
+					<Glance tone="grey">
+						{current.trim() ? "Set" : "No description"}
+					</Glance>
+				}
 			/>
 			<div className="flex flex-col gap-1.5">
 				<textarea
@@ -1551,110 +1533,6 @@ function StoreDescriptionForm({
 				{saving ? "Saving…" : "Save description"}
 			</Button>
 		</form>
-	);
-}
-
-/**
- * "What does your store sell?" (86eyj70z1 decision 5) — sets the DEFAULT kind
- * pre-selected for NEW products in the wizard, nothing else: existing products
- * never re-type, and every kind stays pickable per product. Four cards mirror
- * the wizard's step 0 exactly (Food stores as `physical` — it's a vocabulary
- * router, never a stored value). Tap to save; tap the selected card again to
- * clear.
- */
-function StoreTypeForm({
-	current,
-	onSave,
-}: {
-	current: "physical" | "service" | "booking" | undefined;
-	onSave: (
-		storeType: "physical" | "service" | "booking" | null,
-	) => Promise<unknown>;
-}) {
-	const [saving, setSaving] = useState(false);
-	// Three cards, not the wizard's four: Food is a wizard-session router that
-	// stores as `physical`, so here (where only the stored default matters) the
-	// two share one card — two lit cards for one saved value would read broken.
-	const cards = [
-		{
-			value: "physical" as const,
-			icon: <UtensilsCrossed className="size-4" aria-hidden />,
-			label: "Food & physical goods",
-			hint: "Cakes, kuih, frozen, gear, packaged items",
-		},
-		{
-			value: "service" as const,
-			icon: <Wrench className="size-4" aria-hidden />,
-			label: "Service",
-			hint: "Cleaning, wash, repair",
-		},
-		{
-			value: "booking" as const,
-			icon: <CalendarRange className="size-4" aria-hidden />,
-			label: "Booking",
-			hint: "Campsite, venue, homestay, rental",
-		},
-	];
-	async function pick(value: "physical" | "service" | "booking") {
-		setSaving(true);
-		try {
-			// Tapping the selected type again clears it (back to no default).
-			await onSave(current === value ? null : value);
-			toast.success(
-				current === value ? "Store type cleared." : "Store type saved.",
-			);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSaving(false);
-		}
-	}
-	return (
-		<div className="flex flex-col gap-4">
-			<SectionHeading
-				level="sub"
-				title="What does your store sell?"
-				description="Pre-selects the type when you add a product — tap the selected one again to clear."
-			/>
-			<InfoDisclosure summary="How store type works">
-				<HelperBullets
-					items={[
-						"Only a starting point — you can still pick another type on any product",
-						"Existing products never change",
-					]}
-				/>
-			</InfoDisclosure>
-			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-				{cards.map((card) => {
-					const selected = current === card.value;
-					return (
-						<button
-							key={card.label}
-							type="button"
-							disabled={saving}
-							aria-pressed={selected}
-							onClick={() => pick(card.value)}
-							className={cn(
-								"flex min-h-11 items-center gap-3 rounded-xl border p-3 text-left transition-colors disabled:opacity-60",
-								selected
-									? "border-accent bg-accent/10"
-									: "border-border hover:border-accent/60",
-							)}
-						>
-							<span className="text-accent-emphasis">{card.icon}</span>
-							<span className="min-w-0">
-								<span className="block text-sm font-semibold">
-									{card.label}
-								</span>
-								<span className="block truncate text-xs text-muted-foreground">
-									{card.hint}
-								</span>
-							</span>
-						</button>
-					);
-				})}
-			</div>
-		</div>
 	);
 }
 
@@ -2530,10 +2408,15 @@ function CountryForm({
 	deliveryBooking,
 	waPhone,
 	notifyWaPhone,
+	autoRenewOn,
 	onSave,
 }: {
 	current: Country;
 	currency: string;
+	/** A saved auto-renew method is attached. A real country change detaches
+	 * it (86eyp7hn7: the card was authorised in the old billing currency), so
+	 * the card says so BEFORE the save and the toast confirms it after. */
+	autoRenewOn: boolean;
 	/** Read only to warn BEFORE the save about what will need updating after
 	 * it. None of these block the switch any more, and none are cleared by it
 	 * (86eyqgujv) — the checklist below the card tracks them until fixed. */
@@ -2544,17 +2427,21 @@ function CountryForm({
 	deliveryBooking?: { enabled: boolean; vehicleType: "MOTORCYCLE" | "CAR" };
 	waPhone?: string;
 	notifyWaPhone?: string;
-	onSave: (patch: { country: Country }) => Promise<unknown>;
+	onSave: (patch: {
+		country: Country;
+	}) => Promise<{ autoRenewDetached: boolean }>;
 }) {
 	const form = useAppForm({
 		defaultValues: { country: current as string },
 		onSubmit: async ({ value }) => {
 			try {
-				await onSave({ country: value.country as Country });
+				const result = await onSave({ country: value.country as Country });
 				toast.success(
 					value.country === current
 						? "Country saved."
-						: `Country saved — check the list below for anything that still needs updating.`,
+						: result.autoRenewDetached
+							? `Country saved — auto-renewal is now off. Set it up again on Billing with ${autoRenewMethodPhrase(storeBillingCurrency(value.country as Country))}, and check the list below.`
+							: `Country saved — check the list below for anything that still needs updating.`,
 				);
 			} catch (err) {
 				toast.error(convexErrorMessage(err));
@@ -2601,6 +2488,15 @@ function CountryForm({
 					// turns "why is my delivery not quoting?" a week later into a
 					// decision made now, with the same list waiting underneath the
 					// card afterwards.
+					// The store's own money is NOT a carried-over thing that "only
+					// works in" the old country — it is the one thing the switch
+					// changes (86eyp7hn7), so it gets its own sentence above the
+					// carried list rather than a bullet under that list's frame.
+					const billingLine = `Your Kedaipal subscription bills in ${storeBillingCurrency(picked)} from your next invoice.${
+						autoRenewOn
+							? ` Auto-renewal turns off — your saved method was authorised in ${storeBillingCurrency(current)} — so set it up again on Billing with ${autoRenewMethodPhrase(storeBillingCurrency(picked))} afterwards.`
+							: ""
+					}`;
 					const carried = [
 						...(deliveryConfig &&
 						!deliveryModeAllowed(picked, deliveryConfig.mode)
@@ -2636,6 +2532,7 @@ function CountryForm({
 										Switching to {COUNTRY_LABELS[picked]} keeps everything you
 										have set up.
 									</p>
+									<p className="text-muted-foreground">{billingLine}</p>
 									{carried.length > 0 ? (
 										<>
 											<p className="text-muted-foreground">

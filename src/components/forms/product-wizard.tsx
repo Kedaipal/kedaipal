@@ -1,16 +1,19 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import {
+	BedDouble,
 	CalendarClock,
-	CalendarRange,
+	CalendarSync,
 	ChefHat,
 	ChevronLeft,
 	EyeOff,
 	ImagePlus,
+	Infinity as InfinityIcon,
+	ListChecks,
+	MessageSquareQuote,
 	Package,
 	PackageCheck,
 	Plus,
-	Sparkles,
 	Store,
 	UtensilsCrossed,
 	Wrench,
@@ -171,25 +174,50 @@ import { WeekdayPicker } from "./weekday-picker";
  */
 export type ProductShape = "single" | "choices" | "made_to_order";
 
-/** Card → stored kind. Food and Event are routers: they store as physical. */
+/** Card → stored kind. Food and Event are routers that store as physical;
+ * Plan and Stay are two doors onto the one booking kind. */
 export function kindFromCard(card: KindCard): ProductKind {
-	return card === "food" || card === "event" ? "physical" : card;
+	switch (card) {
+		case "food":
+		case "physical":
+		case "event":
+			return "physical";
+		case "service":
+			return "service";
+		case "plan":
+		case "stay":
+			return "booking";
+	}
 }
 
-/** Stored kind → the card to light. `physical` lights "Physical goods" —
- * the food and event identities are wizard-session affordances, not stored
- * (a form draft coming back with `event.on` keeps the DRAWER flow, which
- * edits the same state — no dead end, just a different door). */
-export function cardFromKind(kind: ProductKind): KindCard {
-	return kind;
+/** Stored kind → the card to light. `physical` lights "Goods" — the food and
+ * event identities are wizard-session affordances, not stored (a form draft
+ * coming back with `event.on` keeps the DRAWER flow, which edits the same
+ * state — no dead end, just a different door). A booking lights **Plan** when
+ * it sells a fixed length counted in days or months, and **Stay** otherwise —
+ * a night-counted package is a stay sold as a deal ("3D2N"), still a stay. */
+export function cardFromKind(
+	kind: ProductKind,
+	booking: { packageLength: string; packageUnit: PackageUnit } = {
+		packageLength: "",
+		packageUnit: "month",
+	},
+): KindCard {
+	if (kind !== "booking") return kind;
+	return booking.packageLength.trim().length > 0 &&
+		booking.packageUnit !== "night"
+		? "plan"
+		: "stay";
 }
 
 export type WizardState = {
 	name: string;
 	description: string;
 	images: ProductImage[];
-	/** Step 0 — "What are you selling?" null until answered (pre-answered when
-	 * the store's `storeType` is set — see `emptyWizardState`). */
+	/** Step 0 — "What are you selling?" null until answered — never
+	 * pre-answered: the kind is fixed once published and a store routinely
+	 * sells more than one (single meals AND meal plans), so the seller picks it
+	 * deliberately for every product (z8r3fdxt99). */
 	kindCard: KindCard | null;
 	/** Booking kind only — per-night capacity, as typed. Prefilled "1";
 	 * blank = unlimited (S7). */
@@ -215,7 +243,7 @@ export type WizardState = {
 	 * rate) and the nights it covers, 0 = Sunday (S13). Free range only. */
 	weekendPrice: string;
 	weekendDays: number[];
-	/** Step 2 — "What kind of product is it?" null until answered. */
+	/** Step 2 — "Does the buyer choose anything?" null until answered. */
 	shape: ProductShape | null;
 	/** The shared draft substrate (options + rows + custom line). */
 	editor: VariantEditorState;
@@ -251,18 +279,17 @@ export type WizardState = {
 	buyerQuestions: BuyerQuestionsDraft;
 };
 
-export function emptyWizardState(defaultKind?: ProductKind): WizardState {
-	// A set storeType pre-answers the kind card — the step still SHOWS (never a
-	// silently skipped question), ringed with a "Your store type" badge, and one
-	// tap picks something else. A booking default also seeds the booking row
-	// shape (capacity governs availability, stock never blocks).
-	const kindCard = defaultKind ? cardFromKind(defaultKind) : null;
+/** A stay's starting capacity — one plot, one room (S1). A plan starts
+ * unlimited instead (see `withKindCard`). */
+const STAY_DEFAULT_CAPACITY = "1";
+
+export function emptyWizardState(): WizardState {
 	return {
 		name: "",
 		description: "",
 		images: [],
-		kindCard,
-		capacityPerNight: "1",
+		kindCard: null,
+		capacityPerNight: STAY_DEFAULT_CAPACITY,
 		packageLength: "",
 		packageUnit: "month",
 		autoAccept: false,
@@ -274,14 +301,10 @@ export function emptyWizardState(defaultKind?: ProductKind): WizardState {
 		shape: null,
 		editor: {
 			options: [],
-			rows: [
-				defaultKind === "booking"
-					? { ...emptyRow([]), blockWhenOutOfStock: false }
-					: emptyRow([]),
-			],
+			rows: [emptyRow([])],
 			customLine: null,
 		},
-		fulfilmentAnswered: defaultKind === "booking",
+		fulfilmentAnswered: false,
 		hidden: false,
 		categoryIds: [],
 		minQuantity: "",
@@ -338,6 +361,34 @@ export const EVENTS_LOCKED_ISSUE: WizardIssue = {
  */
 export function withKindCard(state: WizardState, card: KindCard): WizardState {
 	if (state.kindCard === card) return state;
+	// Plan and Stay count their length in their own trade's word — a plan by
+	// the month, a stay by the night — but only while no length is typed: a
+	// unit the seller already paired with a number is theirs (the EventDraft
+	// posture). Plan ⇄ Stay is otherwise a pure relabel, like Food ⇄ Goods.
+	const packageUnit: PackageUnit =
+		(card === "plan" || card === "stay") &&
+		state.packageLength.trim().length === 0
+			? card === "plan"
+				? "month"
+				: "night"
+			: card === "plan" && state.packageUnit === "night"
+				? // A plan has no "nights" option. Same arithmetic, the plan's word.
+					"day"
+				: state.packageUnit;
+	// Capacity's starting value follows the card: one plot for a stay, but a
+	// plan defaults to UNLIMITED — a meal plan or gym capped at one customer at
+	// a time by a default nobody chose is a silent sales ceiling. A number the
+	// seller typed is never overwritten. BLANK is the one value the swap can't
+	// tell from the plan default, so a stay blanked on purpose, switched to Plan
+	// and back, returns at 1 — kept that way deliberately: the opposite error
+	// (a stay silently unlimited after a Plan detour) oversells one plot, and
+	// step 3 shows the value with its consequence either way (#421 review).
+	const capacityPerNight =
+		card === "plan" && state.capacityPerNight === STAY_DEFAULT_CAPACITY
+			? ""
+			: card === "stay" && state.capacityPerNight === ""
+				? STAY_DEFAULT_CAPACITY
+				: state.capacityPerNight;
 	const event =
 		card === "event"
 			? { ...state.event, on: true }
@@ -346,7 +397,7 @@ export function withKindCard(state: WizardState, card: KindCard): WizardState {
 				: state.event;
 	const nextBooking = kindFromCard(card) === "booking";
 	if (nextBooking === (wizardKind(state) === "booking")) {
-		return { ...state, kindCard: card, event };
+		return { ...state, kindCard: card, event, packageUnit, capacityPerNight };
 	}
 	const rows = state.editor.rows;
 	if (nextBooking) {
@@ -354,6 +405,8 @@ export function withKindCard(state: WizardState, card: KindCard): WizardState {
 			...state,
 			kindCard: card,
 			event,
+			packageUnit,
+			capacityPerNight,
 			shape: null,
 			fulfilmentAnswered: true,
 			editor: {
@@ -392,23 +445,20 @@ export function withKindCard(state: WizardState, card: KindCard): WizardState {
  * How a fresh wizard opens: blank, pre-answered by the store type, then — for
  * a `?card=` deep link (`z8r3fdhkr7`) — that card applied through the same
  * `withKindCard` a tap runs. A What's-new note that says "Create an event"
- * lands with Event already selected instead of on a page ringing the store's
- * Food or Booking card.
+ * lands with Event already selected instead of on an unanswered step 0.
  *
  * A link to a card the plan can't publish is refused exactly like the tap:
- * the store-type default stays, and the reason is on screen from the first
- * paint — never a silently ignored link, never a flow that can't publish.
+ * step 0 stays unanswered, and the reason is on screen from the first paint —
+ * never a silently ignored link, never a flow that can't publish.
  */
 export function openingWizard({
-	defaultKind,
 	card,
 	eventsLocked,
 }: {
-	defaultKind?: ProductKind;
 	card?: KindCard;
 	eventsLocked: boolean;
 }): { state: WizardState; issues: WizardIssue[] } {
-	const blank = emptyWizardState(defaultKind);
+	const blank = emptyWizardState();
 	if (card === undefined) return { state: blank, issues: [] };
 	if (card === "event" && eventsLocked) {
 		return { state: blank, issues: [EVENTS_LOCKED_ISSUE] };
@@ -579,9 +629,12 @@ export function wizardStepIssues(
 		if (state.name.trim().length === 0) {
 			issues.push({
 				field: "name",
-				message: booking
-					? "Give your listing a name."
-					: "Give your product a name.",
+				message:
+					state.kindCard === "plan"
+						? "Give your plan a name."
+						: booking
+							? "Give your listing a name."
+							: "Give your product a name.",
 			});
 		}
 	}
@@ -601,13 +654,22 @@ export function wizardStepIssues(
 			});
 		}
 		const pkgRaw = state.packageLength.trim();
-		if (pkgRaw.length > 0) {
+		// A PLAN is a fixed length by definition — it's what the seller picked
+		// the card for — so its length is asked, never optional. A stay's is
+		// optional: blank = guests pick their own check-in and check-out.
+		const isPlan = state.kindCard === "plan";
+		if (isPlan && pkgRaw.length === 0) {
+			issues.push({
+				field: "packageLength",
+				message: "Enter how long the plan runs — e.g. 1 month or 20 days.",
+			});
+		} else if (pkgRaw.length > 0) {
 			const pkg = Number(pkgRaw);
 			const pkgMax = packageUnitMax(state.packageUnit);
 			if (!Number.isInteger(pkg) || pkg < 1 || pkg > pkgMax) {
 				issues.push({
 					field: "packageLength",
-					message: `Enter a whole number of ${state.packageUnit}s between 1 and ${pkgMax}, or leave blank.`,
+					message: `Enter a whole number of ${state.packageUnit}s between 1 and ${pkgMax}${isPlan ? "" : ", or leave blank"}.`,
 				});
 			}
 		}
@@ -1050,9 +1112,13 @@ export function formDraftToWizardState(draft: ProductFormDraft): WizardState {
 		description: draft.description,
 		images: draft.images,
 		// The card re-lights from the STORED kind — a food seller's Food tap
-		// round-trips as "Physical goods" (same stored kind, wizard-session
-		// affordance only; locked in 86eyj70z1).
-		kindCard: cardFromKind(draft.kind),
+		// round-trips as "Goods" (same stored kind, wizard-session affordance
+		// only; locked in 86eyj70z1), and a booking re-lights Plan or Stay from
+		// its package (see `cardFromKind`).
+		kindCard: cardFromKind(draft.kind, {
+			packageLength: draft.packageLength ?? "",
+			packageUnit: draft.packageUnit ?? "month",
+		}),
 		promo: draft.promoDraft ?? { ...EMPTY_PROMO_DRAFT },
 		capacityPerNight: draft.capacityPerNight,
 		packageLength: draft.packageLength ?? "",
@@ -1159,7 +1225,7 @@ const STEP_TITLES: Record<number, string> = {
 	0: "Selling",
 	1: "Name it",
 	6: "The date",
-	2: "Type",
+	2: "Choices",
 	3: "Price",
 	4: "Preparation",
 	5: "Review",
@@ -1176,7 +1242,230 @@ function IssueText({ message }: { message: string | undefined }) {
 	);
 }
 
-/** Big answer card for the two branching questions. */
+/**
+ * Step 0's six cards, in their two groups (z8r3fdxt99). The group is the
+ * question a seller can't skip: "do buyers just order this, or is a date or
+ * period part of what they buy?" — so a food seller selling a meal plan meets
+ * "Buyers book a date or a period" before they meet a card that merely names
+ * their trade. Each description is a list of real trades, because sellers
+ * recognise their business in examples faster than in category names.
+ */
+const KIND_CARD_GROUPS: {
+	id: string;
+	title: string;
+	helper: string;
+	cards: {
+		card: KindCard;
+		icon: ReactNode;
+		title: string;
+		description: string;
+	}[];
+}[] = [
+	{
+		id: "order",
+		title: "Buyers order it",
+		helper: "Delivered, picked up, or done for them",
+		cards: [
+			{
+				card: "food",
+				icon: <UtensilsCrossed className="size-5" aria-hidden />,
+				title: "Food",
+				description: "Cakes, kuih, frozen food, catering trays",
+			},
+			{
+				card: "physical",
+				icon: <Package className="size-5" aria-hidden />,
+				title: "Goods",
+				description: "Gear, packaged items, merchandise",
+			},
+			{
+				card: "service",
+				icon: <Wrench className="size-5" aria-hidden />,
+				title: "A service",
+				description: "Cleaning, wash, repair — done for them",
+			},
+		],
+	},
+	{
+		id: "time",
+		title: "Buyers book a date or a period",
+		// The nudge that names the case this layout exists for — generic on
+		// purpose: nothing on the store says which trade it is.
+		helper: "Including meal plans, memberships and class passes",
+		cards: [
+			{
+				card: "plan",
+				icon: <CalendarSync className="size-5" aria-hidden />,
+				title: "A plan or package",
+				description:
+					"Meal plan, gym membership, class pass, monthly tuition — runs a set length from the start date they pick",
+			},
+			{
+				card: "stay",
+				icon: <BedDouble className="size-5" aria-hidden />,
+				title: "A stay or rental",
+				description:
+					"Homestay, campsite, venue, rental — they pick check-in and check-out dates",
+			},
+			{
+				card: "event",
+				icon: <CalendarClock className="size-5" aria-hidden />,
+				title: "An event on one date",
+				description:
+					"Workshop, one-off class, breakfast — guests RSVP to the date you set",
+			},
+		],
+	},
+];
+
+/**
+ * Step 4's two answers, in the step-0 card's words — ONE author for the step's
+ * cards, its header, the review chip and the review row. The same two flags
+ * sit under every trade; only the words change. Split authors let Review say
+ * "Made fresh" about a car wash whose step 4 had just asked "How many can you
+ * take?" (z8r3fdxt99 hands-on test).
+ */
+export function preparationWords(card: KindCard | null): {
+	/** Step 4's header + the review row's label. */
+	step: string;
+	/** Never stock-blocked. */
+	untracked: string;
+	/** Stops when the count runs out. */
+	tracked: string;
+	/** What a seller "does" per order — the prep-time pointer's verb. */
+	verb: string;
+} {
+	switch (card) {
+		case "service":
+			return {
+				step: "Limits",
+				untracked: "Take every order",
+				tracked: "Limit how many",
+				verb: "do",
+			};
+		case "physical":
+			return {
+				step: "Preparation",
+				untracked: "Made when ordered",
+				tracked: "From stock",
+				verb: "make",
+			};
+		case "event":
+			return {
+				step: "Preparation",
+				untracked: "No per-choice cap",
+				tracked: "Cap each choice",
+				verb: "make",
+			};
+		default:
+			return {
+				step: "Preparation",
+				untracked: "Made fresh",
+				tracked: "From stock",
+				verb: "make",
+			};
+	}
+}
+
+/** A step-0 card's own title — the review's "Selling" row repeats it. */
+function kindCardTitle(card: KindCard): string {
+	for (const group of KIND_CARD_GROUPS) {
+		const found = group.cards.find((c) => c.card === card);
+		if (found) return found.title;
+	}
+	return card;
+}
+
+/** Step 2's per-trade examples (z8r3fdxt99) — Food's are the default, since
+ * the step is only walked by the three "Buyers order it" cards and events. */
+const CHOICE_EXAMPLES: Record<
+	"food" | "physical" | "service",
+	{ single: string; choices: string; madeToOrder: string; quoteHow: string }
+> = {
+	food: {
+		single: "e.g. Nasi lemak bungkus",
+		choices: "e.g. Small / Medium / Large, or Chocolate / Pandan",
+		madeToOrder: "e.g. a custom birthday cake",
+		quoteHow:
+			"The buyer tells you what they want, you quote it and get a mockup approved.",
+	},
+	physical: {
+		single: "e.g. A camping chair",
+		choices: "e.g. 2-man / 4-man, or Red / Blue",
+		madeToOrder: "e.g. a custom-printed banner",
+		quoteHow:
+			"The buyer tells you what they want, you quote it and get a mockup approved.",
+	},
+	service: {
+		single: "e.g. Car wash",
+		choices: "e.g. Basic / Deep clean, or 2-man / 4-man tent",
+		madeToOrder: "e.g. a repair you price after seeing it",
+		// No "mockup" — a service has nothing to draw. The same approval step,
+		// in a service's words.
+		quoteHow:
+			"The buyer tells you what they need, you quote it and they approve before you start.",
+	},
+};
+
+/** "What happens next" for a chosen step-0 card — the questions the card
+ * routes to, in the seller's words, so the pick is never a leap of faith. */
+function kindCardHint(card: KindCard, currency: string): ReactNode {
+	const em = (text: string) => (
+		<span className="font-medium text-foreground">{text}</span>
+	);
+	switch (card) {
+		case "food":
+			return (
+				<>
+					Next you&apos;ll tell us whether it&apos;s {em("made fresh")} when
+					ordered or {em("ready stock")} (frozen or packaged).
+				</>
+			);
+		case "physical":
+			return (
+				<>
+					Next: does the buyer pick a size or colour, and do you{" "}
+					{em("keep stock")} of it?
+				</>
+			);
+		case "service":
+			return (
+				<>
+					Next: does the buyer pick an option (e.g. Basic / Deep clean), and do
+					you {em("limit how many")} you take?
+				</>
+			);
+		case "plan":
+			return (
+				<>
+					Buyers pick a {em("start date")} and the plan runs a set length — e.g.
+					20 days of lunches or 1 month of gym — at one price. You approve each
+					booking, or turn on instant book. Count it in days and it can skip the
+					days you&apos;re closed.
+				</>
+			);
+		case "stay":
+			return (
+				<>
+					Guests pick dates on a calendar and {em("request to book")} — you
+					approve each booking before anything is paid. No stock to set up;
+					you&apos;ll set a price per night (or one price for a fixed deal like
+					3D2N) and how many spots each night holds.
+				</>
+			);
+		case "event":
+			return (
+				<>
+					Guests {em("RSVP to one date you fix")} — no calendar, no approval.
+					They pick a food set or package if you offer choices, seats cap the
+					room, and the listing takes itself off your storefront after the
+					event. {currencySymbol(currency)} 0 makes it a free RSVP.
+				</>
+			);
+	}
+}
+
+/** Big answer card for the branching questions. */
 function AnswerCard({
 	selected,
 	icon,
@@ -1219,7 +1508,6 @@ export function ProductWizard({
 	eventsLocked,
 	promoLocked,
 	currency,
-	defaultKind,
 	onSubmit,
 	onSkipToFullForm,
 	onOpenFullForm,
@@ -1253,9 +1541,6 @@ export function ProductWizard({
 	 * the Price step disables with the Pro hint. Server enforces it. */
 	promoLocked: boolean;
 	currency: string;
-	/** The store's `storeType`, when set — pre-answers step 0's kind card
-	 * ("Your store type" badge); the seller can still tap another. */
-	defaultKind?: ProductKind;
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
 	/** "Skip — use the full form" on step 1: hands off the whole draft. */
 	onSkipToFullForm: (handoff: ReturnType<typeof wizardHandoff>) => void;
@@ -1291,7 +1576,7 @@ export function ProductWizard({
 	const [opening] = useState(() =>
 		initialState
 			? { state: initialState, issues: [] }
-			: openingWizard({ defaultKind, card: linkedCard, eventsLocked }),
+			: openingWizard({ card: linkedCard, eventsLocked }),
 	);
 	const [state, setStateRaw] = useState<WizardState>(opening.state);
 	const [issues, setIssues] = useState<WizardIssue[]>(opening.issues);
@@ -1300,7 +1585,7 @@ export function ProductWizard({
 	// it (see the adjustment just above the render).
 	const [appliedLink, setAppliedLink] = useState(linkedCard);
 	// A card a link just chose, waiting to be scrolled into view. On a phone
-	// step 0's fifth card sits under the sticky Continue (#297 review: 610–686
+	// step 0's lower cards sit under the sticky Continue (#297 review: 610–686
 	// under 628–700 at 360×780), so an arrival that only SETS the answer
 	// looks like nothing happened. The first paint is already the right state;
 	// this only moves the scroll position, once.
@@ -1309,8 +1594,8 @@ export function ProductWizard({
 	);
 	const revealRef = useRef<HTMLElement | null>(null);
 	const wizardRef = useRef<HTMLDivElement | null>(null);
-	// One callback ref for whichever element is the target (a card's wrapper
-	// or the event hint) — a RefObject would be typed to a single tag.
+	// One callback ref for whichever card wrapper is the target — a RefObject
+	// would be typed to a single tag.
 	const setRevealTarget = (el: HTMLElement | null) => {
 		revealRef.current = el;
 	};
@@ -1465,8 +1750,20 @@ export function ProductWizard({
 		: undefined;
 	const isPackageListing =
 		packageLengthNum !== undefined && packageLengthNum > 0;
+	// Plan vs Stay — one stored kind, two doors (see `kindFromCard`).
+	const isPlan = state.kindCard === "plan";
+	// Step 4's words for this trade — read by the step, its header and Review.
+	const prep = preparationWords(state.kindCard);
 	const showAxes = shape === "choices";
 	const madeToOrder = shape === "made_to_order";
+	// Step 2's examples speak the trade the seller picked on step 0, so a car
+	// wash isn't shown "Nasi lemak bungkus" as what a single item looks like.
+	const choiceExamples =
+		CHOICE_EXAMPLES[
+			state.kindCard === "physical" || state.kindCard === "service"
+				? state.kindCard
+				: "food"
+		];
 	const variantCount = cartesian(options).length;
 	const allTrack = rows.length > 0 && rows.every((r) => r.blockWhenOutOfStock);
 	const allMto = rows.length > 0 && rows.every((r) => !r.blockWhenOutOfStock);
@@ -1917,7 +2214,7 @@ export function ProductWizard({
 		}
 	}
 
-	const title = STEP_TITLES[step];
+	const title = step === 4 ? prep.step : STEP_TITLES[step];
 	const sub = `Step ${stepPos + 1} of ${steps.length}`;
 
 	/** Axis block: presets + name + value chips (axisIndex 0 or 1). */
@@ -2029,16 +2326,12 @@ export function ProductWizard({
 		}
 	}
 
-	// What a link's reveal scrolls to: the refusal under the Event card when
-	// the plan is locked, the event hint (just under the Event card) on the
-	// event route, else the chosen card itself.
-	const revealKey: KindCard | "event-hint" | null = issueFor(
-		EVENTS_LOCKED_ISSUE.field,
-	)
+	// What a link's reveal scrolls to: the Event card (with the refusal under
+	// it) when the plan is locked, else the chosen card — whose wrapper holds
+	// its hint, so the reveal lands on "what happens next" too.
+	const revealKey: KindCard | null = issueFor(EVENTS_LOCKED_ISSUE.field)
 		? "event"
-		: state.kindCard === "event"
-			? "event-hint"
-			: state.kindCard;
+		: state.kindCard;
 	// Phone-only: the sticky Continue and the bottom nav cover the bottom of
 	// the screen there; from `lg` the CTA is static and nothing is covered.
 	const revealMargin = "scroll-mb-56 lg:scroll-mb-0";
@@ -2117,123 +2410,79 @@ export function ProductWizard({
 							What are you selling?
 						</h3>
 						<p className="-mt-2 text-sm text-muted-foreground">
-							Picks the words and questions you&apos;ll see — buyers never see
-							this.
+							Pick the closest match for this one product. You can switch until
+							you publish.
 						</p>
-						<div className="flex flex-col gap-2.5">
-							{(
-								[
-									{
-										card: "food" as const,
-										icon: <UtensilsCrossed className="size-5" aria-hidden />,
-										title: "Food",
-										description: "Cakes, kuih, frozen, catering",
-									},
-									{
-										card: "physical" as const,
-										icon: <Package className="size-5" aria-hidden />,
-										title: "Physical goods",
-										description: "Gear, packaged items, merchandise",
-									},
-									{
-										card: "service" as const,
-										icon: <Wrench className="size-5" aria-hidden />,
-										title: "Service",
-										description: "Cleaning, wash, repair",
-									},
-									{
-										card: "booking" as const,
-										icon: <CalendarRange className="size-5" aria-hidden />,
-										title: "Booking",
-										description: "Campsite, venue, homestay, rental",
-									},
-									{
-										card: "event" as const,
-										icon: <CalendarClock className="size-5" aria-hidden />,
-										title: "Event",
-										description: "Class, workshop, camp — guests RSVP",
-									},
-								] satisfies {
-									card: KindCard;
-									icon: ReactNode;
-									title: string;
-									description: string;
-								}[]
-							).map(({ card, icon, title, description }) => (
-								<div
-									key={card}
-									ref={revealKey === card ? setRevealTarget : undefined}
-									className={cn("relative", revealMargin)}
-								>
-									<AnswerCard
-										selected={state.kindCard === card}
-										icon={icon}
-										title={title}
-										description={description}
-										onClick={() => pickCard(card)}
-									/>
-									{card === "event" && eventsLocked ? (
-										<span className="pointer-events-none absolute right-3 top-3 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-bold text-accent-emphasis">
-											Pro
-										</span>
-									) : null}
-									{/* Why this card is pre-ringed — the storeType default. */}
-									{defaultKind !== undefined &&
-									cardFromKind(defaultKind) === card &&
-									state.kindCard === card ? (
-										<span className="pointer-events-none absolute right-3 top-3 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-bold text-accent-emphasis">
-											Your store type
-										</span>
-									) : null}
-									{/* The refusal sits UNDER the card it refuses, with the
-									    way forward — not below the list, where a phone's
-									    sticky Continue hid it. */}
-									{card === "event" && issueFor(EVENTS_LOCKED_ISSUE.field) ? (
-										<div role="alert" className="mt-2">
-											<ProFeatureTease message={EVENTS_LOCKED_ISSUE.message} />
-										</div>
-									) : null}
-								</div>
-							))}
-						</div>
-						{state.kindCard === "food" ? (
-							<p className="rounded-xl bg-accent/5 px-3 py-2 text-xs text-muted-foreground">
-								Next you&apos;ll tell us whether it&apos;s{" "}
-								<span className="font-medium text-foreground">made fresh</span>{" "}
-								when ordered or{" "}
-								<span className="font-medium text-foreground">ready stock</span>{" "}
-								(frozen or packaged).
-							</p>
-						) : null}
-						{isBooking ? (
-							<p className="rounded-xl bg-accent/5 px-3 py-2 text-xs text-muted-foreground">
-								Guests pick dates on a calendar and{" "}
-								<span className="font-medium text-foreground">
-									request to book
-								</span>{" "}
-								— you approve each booking before anything is paid. No stock to
-								set up; you&apos;ll set a price per night and how many spots
-								each night holds.
-							</p>
-						) : null}
-						{state.kindCard === "event" ? (
-							<p
-								ref={revealKey === "event-hint" ? setRevealTarget : undefined}
+						{/* Two groups, because step 0 answers two things: what changes
+						    hands, and whether a DATE is part of the sale. A seller whose
+						    product is both (a meal plan is food AND a package) reads the
+						    group heading, not just the first card that names their
+						    trade (z8r3fdxt99). */}
+						{KIND_CARD_GROUPS.map((group, gi) => (
+							// A real fieldset (the house `ModeRowGroup` posture): the
+							// legend names the group for assistive tech, the visible
+							// heading is the same words styled as a section label.
+							<fieldset
+								key={group.id}
 								className={cn(
-									"rounded-xl bg-accent/5 px-3 py-2 text-xs text-muted-foreground",
-									revealMargin,
+									"flex min-w-0 flex-col gap-2.5",
+									gi > 0 && "border-t border-border pt-4",
 								)}
 							>
-								Guests{" "}
-								<span className="font-medium text-foreground">
-									RSVP to one date you fix
-								</span>{" "}
-								— no calendar, no approval. They pick a food set or package if
-								you offer choices, seats cap the room, and the listing takes
-								itself off your storefront after the event.{" "}
-								{currencySymbol(currency)} 0 makes it a free RSVP.
-							</p>
-						) : null}
+								<legend className="sr-only">{group.title}</legend>
+								<div className="flex flex-col gap-0.5 px-1">
+									<span
+										aria-hidden="true"
+										className="text-xs font-bold uppercase tracking-wide text-muted-foreground"
+									>
+										{group.title}
+									</span>
+									<span className="text-xs text-muted-foreground">
+										{group.helper}
+									</span>
+								</div>
+								{group.cards.map(({ card, icon, title, description }) => (
+									<div
+										key={card}
+										ref={revealKey === card ? setRevealTarget : undefined}
+										className={cn(
+											"relative flex flex-col gap-2.5",
+											revealMargin,
+										)}
+									>
+										<AnswerCard
+											selected={state.kindCard === card}
+											icon={icon}
+											title={title}
+											description={description}
+											onClick={() => pickCard(card)}
+										/>
+										{card === "event" && eventsLocked ? (
+											<span className="pointer-events-none absolute right-3 top-3 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-bold text-accent-emphasis">
+												Pro
+											</span>
+										) : null}
+										{/* The refusal sits UNDER the card it refuses, with the
+										    way forward — not below the list, where a phone's
+										    sticky Continue hid it. */}
+										{card === "event" && issueFor(EVENTS_LOCKED_ISSUE.field) ? (
+											<div role="alert">
+												<ProFeatureTease
+													message={EVENTS_LOCKED_ISSUE.message}
+												/>
+											</div>
+										) : null}
+										{/* What happens next, under the card that causes it — on
+										    a phone a hint below a six-card list is off-screen. */}
+										{state.kindCard === card ? (
+											<p className="rounded-xl bg-accent/5 px-3 py-2 text-xs text-muted-foreground">
+												{kindCardHint(card, currency)}
+											</p>
+										) : null}
+									</div>
+								))}
+							</fieldset>
+						))}
 						<IssueText message={issueFor("kind")} />
 					</>
 				) : null}
@@ -2241,26 +2490,30 @@ export function ProductWizard({
 				{step === 1 ? (
 					<>
 						<h3 className="text-xl font-bold leading-tight">
-							{isBooking
-								? "Name this listing"
-								: state.kindCard === "event"
-									? "Name your event"
-									: kind === "service"
-										? "Name your service"
-										: "Name your product"}
+							{state.kindCard === "plan"
+								? "Name this plan"
+								: isBooking
+									? "Name this listing"
+									: state.kindCard === "event"
+										? "Name your event"
+										: kind === "service"
+											? "Name your service"
+											: "Name your product"}
 						</h3>
 						<label className="flex flex-col gap-1.5 text-sm font-medium">
 							Name
 							<Input
 								variant="field"
 								placeholder={
-									isBooking
-										? "e.g. Riverside Standard Plot"
-										: state.kindCard === "event"
-											? "e.g. BNI Breakfast · October"
-											: kind === "service"
-												? "e.g. Tent deep-clean (2-man)"
-												: "e.g. Chocolate fudge brownies"
+									state.kindCard === "plan"
+										? "e.g. 20-day lunch plan"
+										: isBooking
+											? "e.g. Riverside Standard Plot"
+											: state.kindCard === "event"
+												? "e.g. BNI Breakfast · October"
+												: kind === "service"
+													? "e.g. Tent deep-clean (2-man)"
+													: "e.g. Chocolate fudge brownies"
 								}
 								value={state.name}
 								maxLength={120}
@@ -2327,10 +2580,10 @@ export function ProductWizard({
 						<h3 className="text-xl font-bold leading-tight">
 							{state.kindCard === "event"
 								? "Do guests pick an option?"
-								: "What kind of product is it?"}
+								: "Does the buyer choose anything?"}
 						</h3>
 						<p className="-mt-2 text-sm text-muted-foreground">
-							This decides what we ask you for next.
+							This decides what we ask you next.
 						</p>
 						<div className="flex flex-col gap-2.5">
 							<AnswerCard
@@ -2339,27 +2592,27 @@ export function ProductWizard({
 								title={
 									state.kindCard === "event"
 										? "One ticket for everyone"
-										: "Just one item"
+										: "No — one item, one price"
 								}
 								description={
 									state.kindCard === "event"
 										? "Every guest gets the same thing at one price."
-										: "One name, one price. e.g. Nasi lemak bungkus"
+										: choiceExamples.single
 								}
 								onClick={switchToSingle}
 							/>
 							<AnswerCard
 								selected={showAxes}
-								icon={<ChefHat className="size-5" aria-hidden />}
+								icon={<ListChecks className="size-5" aria-hidden />}
 								title={
 									state.kindCard === "event"
 										? "Guests pick a choice"
-										: "Buyer picks a choice"
+										: "Yes — they pick an option"
 								}
 								description={
 									state.kindCard === "event"
 										? "A food set, package or tent type — each with its own price. e.g. Set A / Set B"
-										: "A size, flavour or weight — each with its own price. e.g. Small / Medium / Large"
+										: `A size, flavour, pack or tier — each with its own price. ${choiceExamples.choices}`
 								}
 								onClick={switchToChoices}
 							/>
@@ -2371,9 +2624,9 @@ export function ProductWizard({
 							{state.kindCard === "event" ? null : (
 								<AnswerCard
 									selected={madeToOrder}
-									icon={<Sparkles className="size-5" aria-hidden />}
-									title="Made to order"
-									description="Buyer tells you what they want; you quote a price and get a mockup approved. e.g. a custom cake"
+									icon={<MessageSquareQuote className="size-5" aria-hidden />}
+									title="They describe it, you quote"
+									description={`Made to order — no set price. ${choiceExamples.quoteHow} ${choiceExamples.madeToOrder}`}
 									onClick={switchToMadeToOrder}
 								/>
 							)}
@@ -2437,7 +2690,7 @@ export function ProductWizard({
 				{step === 3 && isBooking ? (
 					<>
 						<h3 className="text-xl font-bold leading-tight">
-							Price and capacity
+							{isPlan ? "Length and price" : "Price and capacity"}
 						</h3>
 						{/* Fixed-length package (S7) — the membership/package shape.
 						    FIRST on the step, ahead of the price, because it decides what
@@ -2445,20 +2698,26 @@ export function ProductWizard({
 						    "Price per night", typed their monthly fee into it, and only
 						    then scrolled down to say "1 month" — the field above still
 						    claiming per-night while holding a monthly number. */}
+						{/* A PLAN must say its length — it is the product (z8r3fdxt99).
+						    A stay asks it as an optional fixed deal (3D2N). */}
 						<label className="flex flex-col gap-1.5 text-sm font-medium">
-							<span>
-								Package length{" "}
-								<span className="font-normal text-muted-foreground">
-									(optional)
+							{isPlan ? (
+								<span>How long does it run?</span>
+							) : (
+								<span>
+									Sell as a fixed package?{" "}
+									<span className="font-normal text-muted-foreground">
+										(optional)
+									</span>
 								</span>
-							</span>
+							)}
 							<span className="flex items-center gap-2">
 								<Input
 									type="number"
 									inputMode="numeric"
 									min={1}
 									max={packageUnitMax(state.packageUnit)}
-									placeholder="e.g. 30"
+									placeholder={isPlan ? "e.g. 1" : "e.g. 2"}
 									value={state.packageLength}
 									onChange={(e) => patch({ packageLength: e.target.value })}
 									variant="field"
@@ -2478,8 +2737,10 @@ export function ProductWizard({
 									{/* "nights" and "days" are the SAME span — a 2-night stay and
 									    a 2-day pass both run two days. The seller picks the word
 									    their buyers use: accommodation sells by the night (a
-									    3D2N deal is two nights), a gym or class by the day. */}
-									<option value="night">nights</option>
+									    3D2N deal is two nights), a gym or class by the day. A
+									    plan is never counted in nights — that's a stay's word,
+									    and `cardFromKind` reads a night package as a stay. */}
+									{isPlan ? null : <option value="night">nights</option>}
 									<option value="day">days</option>
 								</Select>
 							</span>
@@ -2489,7 +2750,9 @@ export function ProductWizard({
 									? state.packageUnit === "month"
 										? `Buyers pick a start date only — starting the 12th runs to the 11th, ${bookingSpanCounted(Number(state.packageLength.trim()), "month")} later, at one flat price.`
 										: `Buyers pick a start date only — the booking runs ${bookingSpanCounted(Number(state.packageLength.trim()), state.packageUnit)} from there, at one flat price.`
-									: "Leave blank and buyers pick their own check-in and check-out, priced per night. Set it (e.g. 1 month, or 2 nights) to sell a fixed-length package at one flat price."}
+									: isPlan
+										? "e.g. 1 month for a membership, or 20 days for a lunch plan. Buyers pick a start date and it runs that long, at one flat price."
+										: "Leave blank and guests pick their own check-in and check-out, priced per night. Set it (e.g. 2 nights for a 3D2N deal) to sell a fixed stay at one flat price."}
 							</span>
 						</label>
 						{/* A DAY package decides what a store closure does to it
@@ -2512,7 +2775,11 @@ export function ProductWizard({
 							    they type is unambiguous: "Price per month", not "per night"
 							    on a monthly membership. */}
 							<span className="min-w-0 flex-1">
-								Price per {bookingSpanNoun(packageLengthNum, state.packageUnit)}
+								{/* A plan with no length typed yet has no span to name — and
+								    "per night" (the free-range word) would be wrong for it. */}
+								{isPlan && !isPackageListing
+									? "Price for the whole plan"
+									: `Price per ${bookingSpanNoun(packageLengthNum, state.packageUnit)}`}
 							</span>
 							<span className="text-sm text-muted-foreground">
 								{moneySymbol}
@@ -2529,7 +2796,7 @@ export function ProductWizard({
 						    the seller picks. Directly under the base price because it IS
 						    a price; hidden on a package (one flat price) with the reason
 						    in its place, so the seller never wonders where it went. */}
-						{isPackageListing ? (
+						{isPlan ? null : isPackageListing ? (
 							<p className="text-xs text-muted-foreground">
 								<span className="font-medium text-foreground">
 									Weekend rate
@@ -2589,7 +2856,7 @@ export function ProductWizard({
 						)}
 						<label className="flex flex-col gap-1.5 text-sm font-medium">
 							<span>
-								{isPackageListing
+								{isPlan || isPackageListing
 									? "Spots available at a time"
 									: "Spots available each night"}{" "}
 								<span className="font-normal text-muted-foreground">
@@ -2612,7 +2879,7 @@ export function ProductWizard({
 							<span className="text-xs font-normal text-muted-foreground">
 								{state.capacityPerNight.trim().length === 0
 									? "Anyone can book any date — nothing sells out. Right for a gym or class with no daily limit."
-									: isPackageListing
+									: isPlan || isPackageListing
 										? "How many bookings can run at the same time — e.g. 20 members on a package at once. We stop taking bookings once they're all taken."
 										: "How many bookings can share the same night — e.g. 5 identical plots = 5. We stop taking requests for a night once they're all booked."}
 							</span>
@@ -2653,8 +2920,9 @@ export function ProductWizard({
 							</span>
 							<IssueText message={issueFor("securityDeposit")} />
 							<span className="text-xs font-normal text-muted-foreground">
-								A refundable hold collected with the booking payment and
-								returned after check-out. Guests see it before they request.
+								{isPlan
+									? "A refundable hold collected with the payment and returned when the plan ends. Buyers see it before they request."
+									: "A refundable hold collected with the booking payment and returned after check-out. Guests see it before they request."}
 							</span>
 						</label>
 						<label className="flex flex-col gap-1 text-sm font-medium">
@@ -2685,8 +2953,9 @@ export function ProductWizard({
 							</span>
 							<IssueText message={issueFor("minNoticeDays")} />
 							<span className="text-xs font-normal text-muted-foreground">
-								Lead time you need — guests can&apos;t request a check-in sooner
-								than this.
+								{isPlan
+									? "Lead time you need — buyers can't pick a start date sooner than this."
+									: "Lead time you need — guests can't request a check-in sooner than this."}
 							</span>
 						</label>
 					</>
@@ -2960,7 +3229,9 @@ export function ProductWizard({
 						<h3 className="text-xl font-bold leading-tight">
 							{state.kindCard === "event"
 								? "Cap each choice separately?"
-								: "How do you prepare orders?"}
+								: state.kindCard === "service"
+									? "How many can you take?"
+									: "How do you prepare orders?"}
 						</h3>
 						{state.kindCard === "event" ? (
 							<p className="-mt-2 text-sm text-muted-foreground">
@@ -2973,18 +3244,27 @@ export function ProductWizard({
 							{/* "Made fresh", not "Made to order" — that names a product TYPE
 							    in step 2 now, and two differently-meaning controls with one
 							    label is what 86eyfq04j was filed about. */}
+							{/* Same two flags for every trade — only the words follow the
+							    step-0 card, so a tent wash isn't asked if it's "made fresh"
+							    (z8r3fdxt99; productKind.ts forbids a behaviour fork). */}
 							<AnswerCard
 								selected={state.fulfilmentAnswered && allMto}
-								icon={<ChefHat className="size-5" aria-hidden />}
-								title={
-									state.kindCard === "event"
-										? "No per-choice cap"
-										: "Made fresh"
+								icon={
+									state.kindCard === "food" ? (
+										<ChefHat className="size-5" aria-hidden />
+									) : (
+										<InfinityIcon className="size-5" aria-hidden />
+									)
 								}
+								title={prep.untracked}
 								description={
 									state.kindCard === "event"
 										? "Any choice can go to any guest — only the seat limit caps RSVPs."
-										: "You make each order fresh. Never marked sold out."
+										: state.kindCard === "service"
+											? "No limit — buyers can always order it. Never marked sold out."
+											: state.kindCard === "physical"
+												? "You make or source each one per order. Never marked sold out."
+												: "You make each order fresh. Never marked sold out."
 								}
 								onClick={() => {
 									bulkFlag("blockWhenOutOfStock", false);
@@ -2994,13 +3274,13 @@ export function ProductWizard({
 							<AnswerCard
 								selected={state.fulfilmentAnswered && allTrack}
 								icon={<PackageCheck className="size-5" aria-hidden />}
-								title={
-									state.kindCard === "event" ? "Cap each choice" : "From stock"
-								}
+								title={prep.tracked}
 								description={
 									state.kindCard === "event"
 										? "e.g. only 20 tent slots for Set A — that choice closes when they're gone."
-										: "You have ready items. Orders stop when you run out."
+										: state.kindCard === "service"
+											? "Set how many you can take — e.g. 10 washes. Orders stop when they're used up."
+											: "You have ready items. Orders stop when you run out."
 								}
 								onClick={() => {
 									bulkFlag("blockWhenOutOfStock", true);
@@ -3065,7 +3345,7 @@ export function ProductWizard({
 							<p className="rounded-xl bg-accent/10 px-3 py-2.5 text-sm leading-relaxed text-accent-emphasis">
 								{state.kindCard === "event"
 									? "Nice — no counting per choice. The seat limit (if you set one) is the only ceiling, and you'll see every RSVP in your inbox."
-									: "Nice — buyers can always order. No stock counting, nothing ever shows \"sold out\". You'll see the day's orders in your inbox. If each one takes time to make, set a prep time under More options on the last step — buyers then can't pick a time sooner."}
+									: `Nice — buyers can always order. No stock counting, nothing ever shows "sold out". You'll see the day's orders in your inbox. If each one takes time to ${prep.verb}, set a prep time under More options on the last step — buyers then can't pick a time sooner.`}
 							</p>
 						) : null}
 						{state.fulfilmentAnswered && anyTrack ? (
@@ -3208,7 +3488,7 @@ export function ProductWizard({
 												: "Booking — request to book"
 											: madeToOrder
 												? "Made to order"
-												: "Made fresh"}
+												: prep.untracked}
 									</span>
 								) : null}
 							</div>
@@ -3216,20 +3496,29 @@ export function ProductWizard({
 						{/* Summary rows — Edit jumps back to the step, state intact. */}
 						<div className="flex flex-col divide-y divide-border rounded-2xl border border-border px-3">
 							{[
+								// The one answer that can't change after publishing — said
+								// here, last chance, in the card's own words (z8r3fdxt99).
 								{
-									label: "Type",
-									value: isBooking
-										? "Booking"
-										: showAxes
-											? `${variantCount} by ${options
-													.map((a) => a.name.trim())
-													.filter(Boolean)
-													.join(" × ")}`
-											: madeToOrder
-												? "Made to order"
-												: "Just one item",
-									step: isBooking ? 0 : 2,
+									label: "Selling",
+									value: state.kindCard ? kindCardTitle(state.kindCard) : "",
+									step: 0,
 								},
+								...(isBooking
+									? []
+									: [
+											{
+												label: "Choices",
+												value: showAxes
+													? `${variantCount} by ${options
+															.map((a) => a.name.trim())
+															.filter(Boolean)
+															.join(" × ")}`
+													: madeToOrder
+														? "Made to order — you quote it"
+														: "One item, one price",
+												step: 2,
+											},
+										]),
 								{
 									label: "Price",
 									value: wizardPriceLabel(state, currency),
@@ -3303,11 +3592,12 @@ export function ProductWizard({
 									? []
 									: [
 											{
-												label: "Preparing",
+												label:
+													prep.step === "Preparation" ? "Preparing" : prep.step,
 												value: allMto
-													? "Made fresh"
+													? prep.untracked
 													: allTrack
-														? "From stock"
+														? prep.tracked
 														: "Varies per choice",
 												step: 4,
 											},
@@ -3824,8 +4114,12 @@ export function ProductWizard({
 				) : null}
 			</section>
 
-			{/* Sticky CTA — Continue/Publish must never scroll away (mobile rule). */}
-			<div className="sticky bottom-20 z-10 flex flex-col gap-2 lg:static">
+			{/* Sticky CTA — Continue/Publish must never scroll away (mobile rule).
+			    Backed by the page colour: a DISABLED button is 50% opaque, and
+			    without a solid layer the cards scrolling under it read through
+			    its label — on step 0, which now always opens unanswered, that
+			    was every seller's first screen (z8r3fdxt99 hands-on test). */}
+			<div className="sticky bottom-20 z-10 flex flex-col gap-2 rounded-lg bg-background lg:static lg:bg-transparent">
 				{step !== REVIEW_STEP ? (
 					<Button
 						type="button"
@@ -3856,21 +4150,30 @@ export function ProductWizard({
 								: "Publish product"}
 					</Button>
 				)}
-				{step === 0 ? (
-					<button
-						type="button"
-						onClick={() => onSkipToFullForm(wizardHandoff(state))}
-						className="self-center text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-					>
-						Know the full editor? Skip — use the full form
-					</button>
-				) : null}
-				{(step === 0 || step === 2 || step === 4) && !structurallyAnswered ? (
-					<p className="text-center text-xs text-muted-foreground">
-						Pick one to continue — you can change it any time.
-					</p>
-				) : null}
 			</div>
+			{/* Outside the sticky block on purpose: only the button sticks. These
+			    lines have no background, so inside it they floated over the
+			    cards on a phone as the seller scrolled (z8r3fdxt99). */}
+			{step === 0 || ((step === 2 || step === 4) && !structurallyAnswered) ? (
+				<div className="-mt-2 flex flex-col gap-2">
+					{step === 0 ? (
+						<button
+							type="button"
+							onClick={() => onSkipToFullForm(wizardHandoff(state))}
+							className="self-center text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+						>
+							Know the full editor? Skip — use the full form
+						</button>
+					) : null}
+					{!structurallyAnswered ? (
+						<p className="text-center text-xs text-muted-foreground">
+							{step === 0
+								? "Pick one to continue."
+								: "Pick one to continue — you can change it any time."}
+						</p>
+					) : null}
+				</div>
+			) : null}
 			<ConfirmDialog
 				open={pendingConfirm !== null}
 				onOpenChange={(open) => {

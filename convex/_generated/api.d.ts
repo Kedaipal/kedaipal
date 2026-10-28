@@ -9,6 +9,7 @@
  */
 
 import type * as admin from "../admin.js";
+import type * as adminAccess from "../adminAccess.js";
 import type * as analytics from "../analytics.js";
 import type * as awb from "../awb.js";
 import type * as billing from "../billing.js";
@@ -44,6 +45,7 @@ import type * as lalamove from "../lalamove.js";
 import type * as lib_accountDeletion from "../lib/accountDeletion.js";
 import type * as lib_activation from "../lib/activation.js";
 import type * as lib_address from "../lib/address.js";
+import type * as lib_adminAreas from "../lib/adminAreas.js";
 import type * as lib_adminDirectory from "../lib/adminDirectory.js";
 import type * as lib_appVersion from "../lib/appVersion.js";
 import type * as lib_attribution from "../lib/attribution.js";
@@ -162,6 +164,7 @@ import type * as lib_referral from "../lib/referral.js";
 import type * as lib_referralEmailCopy from "../lib/referralEmailCopy.js";
 import type * as lib_reservedSlugs from "../lib/reservedSlugs.js";
 import type * as lib_retention from "../lib/retention.js";
+import type * as lib_scheduleRows from "../lib/scheduleRows.js";
 import type * as lib_seasonalHold from "../lib/seasonalHold.js";
 import type * as lib_seats from "../lib/seats.js";
 import type * as lib_sellerAlerts from "../lib/sellerAlerts.js";
@@ -199,6 +202,7 @@ import type * as promotions from "../promotions.js";
 import type * as referrals from "../referrals.js";
 import type * as releases from "../releases.js";
 import type * as retailers from "../retailers.js";
+import type * as schedule from "../schedule.js";
 import type * as seed from "../seed.js";
 import type * as showcases from "../showcases.js";
 import type * as storeAvailability from "../storeAvailability.js";
@@ -219,6 +223,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   admin: typeof admin;
+  adminAccess: typeof adminAccess;
   analytics: typeof analytics;
   awb: typeof awb;
   billing: typeof billing;
@@ -254,6 +259,7 @@ declare const fullApi: ApiFromModules<{
   "lib/accountDeletion": typeof lib_accountDeletion;
   "lib/activation": typeof lib_activation;
   "lib/address": typeof lib_address;
+  "lib/adminAreas": typeof lib_adminAreas;
   "lib/adminDirectory": typeof lib_adminDirectory;
   "lib/appVersion": typeof lib_appVersion;
   "lib/attribution": typeof lib_attribution;
@@ -372,6 +378,7 @@ declare const fullApi: ApiFromModules<{
   "lib/referralEmailCopy": typeof lib_referralEmailCopy;
   "lib/reservedSlugs": typeof lib_reservedSlugs;
   "lib/retention": typeof lib_retention;
+  "lib/scheduleRows": typeof lib_scheduleRows;
   "lib/seasonalHold": typeof lib_seasonalHold;
   "lib/seats": typeof lib_seats;
   "lib/sellerAlerts": typeof lib_sellerAlerts;
@@ -409,6 +416,7 @@ declare const fullApi: ApiFromModules<{
   referrals: typeof referrals;
   releases: typeof releases;
   retailers: typeof retailers;
+  schedule: typeof schedule;
   seed: typeof seed;
   showcases: typeof showcases;
   storeAvailability: typeof storeAvailability;
