@@ -13,6 +13,7 @@ import {
 	isEnterpriseLead,
 	isSellerFilter,
 	isSellerSort,
+	isUntaggedPayer,
 	matchesSellerSearch,
 	reopenedToast,
 	SELLER_FILTERS,
@@ -53,6 +54,8 @@ function row(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		createdAt: at(-180),
 		unclaimed: false,
 		referralEditable: true,
+		hasPaidInvoice: false,
+		acquisition: { suggested: null },
 		purging: false,
 		marketplace: { internal: false },
 		country: "MY",
@@ -547,6 +550,58 @@ describe("search + filter", () => {
 			"kuih-mak-su",
 		]);
 		expect(filterSellers(rows, "active", "kuih")).toEqual([]);
+	});
+});
+
+describe("untagged payers (86eye3eyp)", () => {
+	const paidUntagged = row({ hasPaidInvoice: true });
+	const paidSellerClaim = row({
+		_id: "r2" as AdminSellerRow["_id"],
+		slug: "claimed",
+		hasPaidInvoice: true,
+		acquisition: {
+			channel: "inbound_social",
+			setBy: "seller",
+			suggested: null,
+		},
+	});
+	const paidTagged = row({
+		_id: "r3" as AdminSellerRow["_id"],
+		slug: "tagged",
+		hasPaidInvoice: true,
+		acquisition: { channel: "walk_in", setBy: "admin", suggested: null },
+	});
+	const neverPaid = row({ _id: "r4" as AdminSellerRow["_id"], slug: "trial" });
+	const adminStore = row({
+		_id: "r5" as AdminSellerRow["_id"],
+		slug: "admin",
+		hasPaidInvoice: true,
+		ownerIsAdmin: true,
+	});
+
+	it("is a paying store without an admin-confirmed channel", () => {
+		expect(isUntaggedPayer(paidUntagged)).toBe(true);
+		// A seller's own answer is a claim — still on the to-do list.
+		expect(isUntaggedPayer(paidSellerClaim)).toBe(true);
+		expect(isUntaggedPayer(paidTagged)).toBe(false);
+		expect(isUntaggedPayer(neverPaid)).toBe(false);
+		expect(isUntaggedPayer(adminStore)).toBe(false);
+	});
+
+	it("filters and counts, whatever the billing status", () => {
+		const rows = [
+			paidUntagged,
+			paidSellerClaim,
+			paidTagged,
+			neverPaid,
+			adminStore,
+		];
+		expect(countSellerBuckets(rows).untagged_payers).toBe(2);
+		expect(
+			filterSellers(rows, "untagged_payers", "").map((r) => r._id),
+		).toEqual(["r1", "r2"]);
+		expect(isSellerFilter("untagged_payers")).toBe(true);
+		expect(sellerFilterEmptyNoun("untagged_payers")).toBe("untagged payers");
 	});
 });
 
