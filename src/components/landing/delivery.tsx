@@ -11,6 +11,7 @@ import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
 import { AppImage } from "../ui/app-image";
 import { DelyvaLogo } from "../ui/delyva-logo";
+import { EasyparcelLogo } from "../ui/easyparcel-logo";
 import { LogoMarqueeRow, logoPillClass } from "./landing-ui";
 
 /**
@@ -58,12 +59,10 @@ const SKELETON_ROWS = 3;
 
 /**
  * The integration badge on the mock card follows the quoted row's provider.
- * Delyva and Lalamove marks are wordmarks, so each IS the name — no text label
- * beside it. EasyParcel is a name-only pill: its brand-approved mark isn't in
- * `public/img/` yet, and no landing row carries it until the SG rows go visible.
+ * All three marks are wordmarks, so each IS the name — no text label beside it.
  */
 const PROVIDER_BADGE: Record<CourierProvider, ReactNode> = {
-	easyparcel: "EasyParcel",
+	easyparcel: <EasyparcelLogo heightClass="h-3" alt="EasyParcel" />,
 	delyva: <DelyvaLogo heightClass="h-3" alt="Delyva" />,
 	lalamove: (
 		<AppImage
