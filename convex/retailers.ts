@@ -305,7 +305,15 @@ import {
 	type CountrySetupItem,
 	resolveCountrySetup,
 } from "./lib/countrySetup";
-import { hasLalamoveCredentials, inferLalamoveEnv } from "./lib/lalamove";
+import {
+	checkLalamoveKeyShape,
+	hasLalamoveCredentials,
+	inferLalamoveEnv,
+} from "./lib/lalamove";
+import {
+	lalamovePricingBlock,
+	lalamoveRiderOutBlock,
+} from "./lib/lalamoveDisconnect";
 import {
 	type HitpayConfig,
 	inferHitpayMode,
@@ -3139,18 +3147,30 @@ export const updateSettings = mutation({
 		}
 		if (args.deliveryBooking !== undefined) {
 			if (args.deliveryBooking === null) {
-				// Clearing is always allowed — but never leave a live-quote pricing
-				// mode pointing at a booking config that no longer exists.
+				// Disconnect (z8r3fdy5ht). Never plan-gated — refused only where
+				// removing the keys would break something the seller can't see: a
+				// delivery charge Lalamove prices, or a rider still on the road.
+				// One author with the card's disabled-with-reason read.
 				const effectiveConfig =
 					args.deliveryConfig !== undefined
 						? patch.deliveryConfig
 						: (retailer.deliveryConfig as DeliveryConfig | undefined);
-				if (effectiveConfig?.mode === "lalamove") {
-					throw new ConvexError(
-						"Live Lalamove pricing uses this booking setup — switch the delivery charge to another mode first.",
-					);
-				}
-				patch.deliveryBooking = undefined;
+				const block =
+					lalamovePricingBlock(retailer, effectiveConfig?.mode) ??
+					(await lalamoveRiderOutBlock(ctx, retailer._id));
+				if (block) throw new ConvexError(block.message);
+				// The keys (and everything learned from them — env, hint, webhook
+				// stamp) go; the seller's rider preferences stay, so reconnecting
+				// is one paste, not a re-setup (the Delyva posture).
+				const prev = retailer.deliveryBooking as DeliveryBooking | undefined;
+				patch.deliveryBooking = prev
+					? {
+							enabled: false,
+							vehicleType: prev.vehicleType,
+							promptBookOnPacked: prev.promptBookOnPacked,
+							deliveryDirection: prev.deliveryDirection,
+						}
+					: undefined;
 				// No key, no wallet to report (86eye9xd4, 6A).
 				await syncLalamoveWallet(ctx, retailer._id, null);
 			} else {
@@ -3221,6 +3241,17 @@ export const updateSettings = mutation({
 					throw new ConvexError(
 						"Enter both the Lalamove API key and API secret (or clear both).",
 					);
+				}
+				// A NEW paste must look like a Lalamove pair (z8r3fdy5ht) — the
+				// lock behind the card's live check and `lalamove.verifyKeys`.
+				// Stored keys are never re-judged.
+				const typedKey = args.deliveryBooking.apiKey?.trim();
+				if (typedKey) {
+					const shape = checkLalamoveKeyShape(
+						typedKey,
+						args.deliveryBooking.apiSecret ?? "",
+					);
+					if (!shape.ok) throw new ConvexError(shape.message);
 				}
 				if (clean.enabled) {
 					// Country allowlist FIRST, mirroring the deliveryConfig branch
