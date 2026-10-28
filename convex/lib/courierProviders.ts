@@ -20,7 +20,7 @@
 import { type Infer, v } from "convex/values";
 import type { Country } from "./country";
 
-export const COURIER_PROVIDER_IDS = ["lalamove", "delyva"] as const;
+export const COURIER_PROVIDER_IDS = ["lalamove", "delyva", "easyparcel"] as const;
 
 /** Which booking integration ran/runs a job — `deliveryJobs.provider` et al. */
 export type CourierProviderId = (typeof COURIER_PROVIDER_IDS)[number];
@@ -33,6 +33,7 @@ export type CourierProviderId = (typeof COURIER_PROVIDER_IDS)[number];
 export const courierProviderValidator = v.union(
 	v.literal("lalamove"),
 	v.literal("delyva"),
+	v.literal("easyparcel"),
 );
 
 type MutuallyAssignable<A, B> = [A] extends [B]
@@ -65,21 +66,31 @@ true satisfies MutuallyAssignable<
  * as dispatch, so a broken state is visible BEFORE a seller reaches for it
  * (the 86eypncfy lesson).
  *
- * delyva — SG is true because the API takes SG addresses unchanged (verified
- * 2 Sep 2026: a country:"SG" quote with a 6-digit postal code returns a
- * well-formed 200), but the SG tenant ships an EMPTY service catalogue, has
- * no SG sandbox, and delyva.com/sg redirects away — bring-your-own-courier
- * in practice. It stays true only because it costs nothing and works for a
- * seller who brings their own courier; no SG launch should depend on it, and
- * it flips FALSE when EasyParcel SG lands (z8r3fdcje2 PR2) so SG sellers
- * stop being shown a dead integration.
+ * delyva — SG flipped FALSE with EasyParcel SG (z8r3fdcje2 PR2, Oct 2026).
+ * It had been true only because the API takes SG addresses unchanged
+ * (verified 2 Sep 2026), but the SG tenant ships an EMPTY service catalogue,
+ * has no SG sandbox, and delyva.com/sg redirects away — an SG store could
+ * connect it and quote nothing. With a real SG parcel lane live, showing the
+ * dead integration stopped being harmless. The existing
+ * `country_unsupported` plumbing hides every Delyva surface for SG stores;
+ * a finished SG job from before stays on the order timeline (the
+ * dispatch-surface rule keeps history visible, it only stops NEW bookings).
+ *
+ * easyparcel — the SG parcel lane (z8r3fdcje2): J&T/SingPost/Qxpress/Ninja
+ * Van/Teleport and more through the seller's own EasyParcel SG account.
+ * MY stays FALSE on purpose: EasyParcel MY was evaluated and dropped
+ * 29 Jul 2026 (frozen/perishable prohibition + indemnity clause —
+ * docs/delivery-delyva.md) and MY domestic incl. cold-chain is already
+ * served by Delyva. The MY column exists for the cross-border lane
+ * (z8r3fdr5yy): flipping it is a one-line decision, not a build.
  */
 export const COUNTRY_COURIER_BOOKING: Record<
 	CourierProviderId,
 	Record<Country, boolean>
 > = {
 	lalamove: { MY: true, SG: true },
-	delyva: { MY: true, SG: true },
+	delyva: { MY: true, SG: false },
+	easyparcel: { MY: false, SG: true },
 };
 
 export function courierBookingAllowed(

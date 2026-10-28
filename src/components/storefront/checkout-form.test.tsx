@@ -220,7 +220,7 @@ function typePhone(text: string) {
 // parseBuyerWaPhone's rejection when the digits fit the OTHER store country.
 const SG_UNDER_MY = /^That looks like a Singapore mobile number/;
 const OVERSEAS_NOTE =
-	"Your WhatsApp number is from outside Malaysia, so the rider will contact Kek Mama instead of you. Kek Mama can still reach you on WhatsApp, and your order page shows every update.";
+	"Your WhatsApp number is from outside Malaysia, so the courier will contact Kek Mama instead of you. Kek Mama can still reach you on WhatsApp, and your order page shows every update.";
 
 describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () => {
 	it("opens on the store's country, with the input the switch refocuses", () => {

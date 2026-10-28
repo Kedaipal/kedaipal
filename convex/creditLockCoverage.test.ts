@@ -71,6 +71,7 @@ const MIXED_MODULES = [
 	"bookings",
 	"lalamove",
 	"delyva",
+	"easyparcel",
 	"awb",
 	"vouchers",
 ];
@@ -98,6 +99,8 @@ const GATED_FUNCTIONS = [
 	"lalamove.addPriorityFee",
 	"delyva.prepareBooking",
 	"delyva.confirmBooking",
+	"easyparcel.prepareBooking",
+	"easyparcel.confirmBooking",
 	// Chasing and documents.
 	"orders.sendPaymentReminder",
 	"orders.generateReceiptPdf",
@@ -175,6 +178,12 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 		"renaming a run changes a private label, not an order — nothing to meter",
 	// Settings are always open.
 	"delyva.connect": "settings: connecting a courier account",
+	"easyparcel.startConnect": "settings: starts the courier sign-in (OAuth) for the account",
+	"easyparcel.disconnect": "settings: removing a courier account is never trapped",
+	"easyparcel.updateSettings": "settings: courier pickup address and on/off",
+	"easyparcel.refreshBalance": "settings: re-reads the prepaid wallet snapshot",
+	"easyparcel.cancelBooking": "cancelling a courier releases the order",
+	"easyparcel.refreshJobStatus": "status poll: reads provider truth, moves nothing the webhooks wouldn't",
 	"delyva.resubscribeWebhooks": "settings: re-registers the courier webhooks",
 	"lalamove.registerWebhook": "settings: registers the rider webhook",
 	"delyva.refreshEnvironment": "settings: re-reads the courier account's mode",
