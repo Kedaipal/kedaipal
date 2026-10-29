@@ -83,6 +83,14 @@ describe("the switch's reasons", () => {
 	});
 });
 
+describe("delivery off reads right whether the lane is on or off", () => {
+	test("no 'first' — the paused panel shows it with the switch already on", () => {
+		const copy = laneBlockCopy("delivery_off", "SG", "MY");
+		expect(copy).toMatch(/Turn delivery on to deliver there\.$/);
+		expect(copy).not.toMatch(/first/);
+	});
+});
+
 describe("the product form's overseas question", () => {
 	test("asked only when a lane is saved", () => {
 		expect(overseasOf({ country: "MY" })).toBeUndefined();

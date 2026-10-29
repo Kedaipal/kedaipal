@@ -120,3 +120,66 @@ describe("the saved price is shown once — in the editor", () => {
 		).toBe("12.00");
 	});
 });
+
+describe("a paused lane says its price can't change — before the click", () => {
+	// Found on the second /test-code pass: Save price stayed enabled on a
+	// paused lane and the server refused the save after the click.
+	const LANE = {
+		country: "MY" as const,
+		pricing: { kind: "flat" as const, fee: 1200 },
+	};
+	const STARTER = { features: { crossBorder: false } } as never;
+
+	it.each([
+		["plan", { subscription: STARTER }],
+		["delivery off", { offerDelivery: false }],
+		[
+			"live pricing",
+			{ deliveryConfig: { mode: "live", onUnquotable: "block" } as never },
+		],
+	] as const)("%s: the form is disabled and the reason sits by Save", (_, over) => {
+		renderPage({ lanes: [LANE], ...over });
+		expect(
+			screen
+				.getByRole("button", { name: "Save price" })
+				.hasAttribute("disabled"),
+		).toBe(true);
+		expect(
+			// Disabled by its fieldset, so the property alone doesn't say it.
+			screen.getByLabelText("Fee per order").matches(":disabled"),
+		).toBe(true);
+		expect(
+			screen.getByText(/Saving is off while delivery to Malaysia is paused/),
+		).toBeTruthy();
+	});
+
+	it("a live lane's price saves as usual", () => {
+		renderPage({ lanes: [LANE] });
+		expect(
+			screen
+				.getByRole("button", { name: "Save price" })
+				.hasAttribute("disabled"),
+		).toBe(false);
+		expect(screen.getByLabelText("Fee per order").matches(":disabled")).toBe(
+			false,
+		);
+		expect(screen.queryByText(/Saving is off/)).toBeNull();
+	});
+});
+
+describe("upgrading is one control, paused or off", () => {
+	const STARTER = { features: { crossBorder: false } } as never;
+
+	it.each([
+		["off", undefined],
+		[
+			"paused",
+			[{ country: "MY" as const, pricing: { kind: "free" as const } }],
+		],
+	])("%s: the house Upgrade button to Billing", (_, lanes) => {
+		renderPage({ subscription: STARTER, lanes });
+		const upgrade = screen.getByRole("link", { name: "Upgrade" });
+		expect(upgrade.getAttribute("href")).toBe("/app/settings");
+		expect(screen.queryByRole("link", { name: "Upgrade to Pro" })).toBeNull();
+	});
+});

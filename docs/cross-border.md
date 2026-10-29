@@ -31,6 +31,12 @@ once, without a settings write, and an upgrade brings it back untouched.
 | `delivery_off` | `offerDelivery === false` | "Turn on delivery" link |
 | `live_pricing` | Domestic pricing is a live courier quote (`live` / legacy `lalamove`) | "Change delivery pricing" shortcut |
 
+A paused lane keeps its price but can't be edited: the server refuses any
+lane save while a pause holds, so the price form is disabled (one `fieldset`)
+with "Saving is off while delivery to … is paused" by the button. The switch
+can always be turned off. Upgrading uses the house `UpgradeLink`, the same
+button whether the lane is off or paused.
+
 Live courier pricing pauses the lane because the providers behind it are
 domestic. Lalamove takes one `Market` per request. Delyva's API can't be shown to
 price an international route: dev runs on its flat-rate demo account, and the docs
@@ -60,7 +66,10 @@ filtered out of the live lanes. It stays stored and has no effect.
 The **Delivery pricing** page says the lane's price too ("Orders to Singapore have
 their own price", with a link), and its Free card says overseas orders still pay
 it. Without that, a store on Free read "no delivery charge" and could assume
-orders abroad ship free.
+orders abroad ship free. The note is judged on what's **saved**: a paused lane
+reads "Delivery to Singapore is paused", with the reason and the kept price,
+never that its price applies. The warning by the save button covers what
+saving live **would** change, so it shows only while the lane is still live.
 
 There is **no live courier quote** on a lane. EasyParcel prices at dispatch
 only. Checkout's live quotes come from Lalamove/Delyva, which are domestic, so a

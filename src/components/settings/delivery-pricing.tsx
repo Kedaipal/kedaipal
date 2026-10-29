@@ -29,6 +29,7 @@ import {
 	type CrossBorderLane,
 	countryName,
 	crossBorderPricingSummary,
+	lanePause,
 	liveQuoteCouriersDeliver,
 } from "../../../convex/lib/crossBorder";
 import {
@@ -58,6 +59,7 @@ import {
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
+import { laneBlockCopy } from "../../lib/overseas-delivery";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
 import { TONE_PANEL } from "../../lib/tone";
 import { cn } from "../../lib/utils";
@@ -462,6 +464,7 @@ export function DeliveryPricing({
 	deliveryBooking,
 	subscription,
 	crossBorderLanes,
+	offerDelivery,
 }: {
 	retailerId: Id<"retailers">;
 	country: Country;
@@ -473,6 +476,8 @@ export function DeliveryPricing({
 	/** Overseas lanes as saved (z8r3fdr5yy) — saving live pricing pauses
 	 * them, and the save block says so. */
 	crossBorderLanes?: CrossBorderLane[];
+	/** With the lanes, decides whether the overseas price is live or paused. */
+	offerDelivery?: boolean;
 }) {
 	const updateSettings = useUpdateSettings();
 	const actAsRetailerId = useActAsRetailerId();
@@ -788,7 +793,17 @@ export function DeliveryPricing({
 	// courier quotes are domestic-only, so saving live pauses the lane. Said
 	// here, before the save, with the way back.
 	const overseasLane = crossBorderLanes?.[0];
-	const pausesOverseas = liveModeSelected && overseasLane !== undefined;
+	// Judged on what's SAVED — the note at the top says what buyers get now;
+	// the warning by the save button says what saving live would change.
+	const overseasPause = overseasLane
+		? lanePause({
+				planAllows: hasFeature(subscription, "crossBorder"),
+				offerDelivery,
+				deliveryConfig: config,
+			})
+		: null;
+	const pausesOverseas =
+		liveModeSelected && overseasLane !== undefined && overseasPause === null;
 	const saveBlock = (
 		<div className="flex flex-col gap-3">
 			{pausesOverseas ? (
@@ -855,28 +870,48 @@ export function DeliveryPricing({
 			</p>
 			{/* The overseas lane has its OWN price (z8r3fdr5yy) — said here, so a
 			    store on Free doesn't read "no delivery charge" and assume orders
-			    abroad ship free too (found on the /test-code pass). */}
+			    abroad ship free too. A paused lane says it's paused, never that
+			    its price applies (both found on /test-code passes). */}
 			{overseasLane ? (
 				<div
 					className={cn(
-						"flex flex-col items-start rounded-xl border px-3.5 pt-3 pb-1 text-sm",
-						TONE_PANEL.neutral,
+						"flex flex-col items-start gap-1 rounded-xl border px-3.5 pt-3 pb-1 text-sm",
+						overseasPause ? TONE_PANEL.warn : TONE_PANEL.neutral,
 					)}
 				>
-					<p>
-						Orders to {countryName(overseasLane.country)} have their own price:{" "}
-						<span className="font-semibold whitespace-nowrap">
-							{crossBorderPricingSummary(overseasLane.pricing, (minor) =>
-								formatPrice(minor, currency),
-							)}
-						</span>
-						.
-					</p>
+					{overseasPause ? (
+						<>
+							<p className="font-semibold">
+								Delivery to {countryName(overseasLane.country)} is paused.
+							</p>
+							<p>
+								{laneBlockCopy(overseasPause, country, overseasLane.country)}{" "}
+								Your overseas price —{" "}
+								<span className="whitespace-nowrap">
+									{crossBorderPricingSummary(overseasLane.pricing, (minor) =>
+										formatPrice(minor, currency),
+									)}
+								</span>{" "}
+								— is kept.
+							</p>
+						</>
+					) : (
+						<p>
+							Orders to {countryName(overseasLane.country)} have their own
+							price:{" "}
+							<span className="font-semibold whitespace-nowrap">
+								{crossBorderPricingSummary(overseasLane.pricing, (minor) =>
+									formatPrice(minor, currency),
+								)}
+							</span>
+							.
+						</p>
+					)}
 					<Link
 						to="/app/settings/overseas-delivery"
 						className="inline-flex min-h-11 items-center font-semibold underline underline-offset-2"
 					>
-						Change overseas price
+						{overseasPause ? "Overseas delivery" : "Change overseas price"}
 					</Link>
 				</div>
 			) : null}

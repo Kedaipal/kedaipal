@@ -44,7 +44,7 @@ import {
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
 import { TONE_PANEL } from "../../lib/tone";
 import { cn } from "../../lib/utils";
-import { ProBadge, ProFeatureTease } from "../app/pro-gate";
+import { ProBadge, ProFeatureTease, UpgradeLink } from "../app/pro-gate";
 import { Button } from "../ui/button";
 import { ModeRow, ModeRowGroup } from "../ui/mode-row";
 import { ToggleSwitch } from "../ui/toggle-switch";
@@ -123,6 +123,10 @@ export function OverseasDelivery({
 
 	const on = storedLane !== undefined;
 	const editing = on || enabling;
+	// A paused lane keeps its price, but the server refuses any change to it
+	// until the pause is fixed — so the form says so instead of letting a save
+	// fail after the click (found on the /test-code pass).
+	const lanePaused = on && pause !== null;
 
 	async function save() {
 		setError(null);
@@ -267,13 +271,7 @@ export function OverseasDelivery({
 							<p>{laneBlockCopy(pause, storeCountry, destination)}</p>
 							<p>Your price is kept and comes back on its own.</p>
 							{pause === "plan" ? (
-								<Link
-									to="/app/settings"
-									search={{ tab: "billing" }}
-									className="inline-flex min-h-11 items-center font-semibold text-foreground underline underline-offset-2"
-								>
-									Upgrade to Pro
-								</Link>
+								<UpgradeLink className="mt-1 self-start" />
 							) : (
 								fixLink(pause)
 							)}
@@ -287,168 +285,174 @@ export function OverseasDelivery({
 							title={`Delivery price to ${where}`}
 							description="Shown to the buyer before they order, in your store's currency."
 						/>
-						<ModeRowGroup label={`How you charge for delivery to ${where}`}>
-							{(Object.keys(KIND_UI) as LanePriceKind[]).map((kind) => (
-								<ModeRow
-									key={kind}
-									active={draft.kind === kind}
-									onSelect={() => {
-										setError(null);
-										patch({ kind });
-									}}
-									title={KIND_UI[kind].title}
-									description={KIND_UI[kind].line}
-								/>
-							))}
-						</ModeRowGroup>
+						<fieldset
+							disabled={lanePaused}
+							className="flex min-w-0 flex-col gap-4 disabled:opacity-60"
+						>
+							<ModeRowGroup label={`How you charge for delivery to ${where}`}>
+								{(Object.keys(KIND_UI) as LanePriceKind[]).map((kind) => (
+									<ModeRow
+										key={kind}
+										active={draft.kind === kind}
+										onSelect={() => {
+											setError(null);
+											patch({ kind });
+										}}
+										title={KIND_UI[kind].title}
+										description={KIND_UI[kind].line}
+									/>
+								))}
+							</ModeRowGroup>
 
-						{draft.kind === "flat" ? (
-							<div className="flex flex-wrap items-start gap-4">
-								<div className="flex flex-col gap-1.5">
-									<label
-										htmlFor="overseas-fee"
-										className="text-xs font-medium text-muted-foreground"
-									>
-										Fee per order
-									</label>
-									<MoneyInput
-										id="overseas-fee"
-										value={draft.fee}
-										onChange={(fee) => patch({ fee })}
-										placeholder="25.00"
+							{draft.kind === "flat" ? (
+								<div className="flex flex-wrap items-start gap-4">
+									<div className="flex flex-col gap-1.5">
+										<label
+											htmlFor="overseas-fee"
+											className="text-xs font-medium text-muted-foreground"
+										>
+											Fee per order
+										</label>
+										<MoneyInput
+											id="overseas-fee"
+											value={draft.fee}
+											onChange={(fee) => patch({ fee })}
+											placeholder="25.00"
+											currency={currency}
+											className="w-36"
+										/>
+									</div>
+									<FreeAboveField
+										draft={draft}
+										patch={patch}
 										currency={currency}
-										className="w-36"
 									/>
 								</div>
-								<FreeAboveField
-									draft={draft}
-									patch={patch}
-									currency={currency}
-								/>
-							</div>
-						) : null}
+							) : null}
 
-						{draft.kind === "weight" ? (
-							<div className="flex flex-col gap-3">
-								<p className="text-xs text-muted-foreground">
-									Each band covers parcels up to its weight. A parcel heavier
-									than your last band can't be ordered to {where} — add a band
-									that fits your heaviest order.
-								</p>
-								<div className="flex flex-col gap-2">
-									{draft.bands.map((band, i) => (
-										<div
-											// biome-ignore lint/suspicious/noArrayIndexKey: rows are positional drafts with no identity of their own
-											key={i}
-											className="flex items-center gap-2"
-										>
-											<span className="text-xs text-muted-foreground">
-												Up to
-											</span>
-											<UnitInput
-												value={band.maxKg}
-												unit="kg"
-												ariaLabel={`Band ${i + 1} weight`}
-												onChange={(maxKg) =>
-													patch({
-														bands: draft.bands.map((b, j) =>
-															j === i ? { ...b, maxKg } : b,
-														),
-													})
-												}
-											/>
-											<MoneyInput
-												value={band.fee}
-												currency={currency}
-												placeholder="0.00"
-												ariaLabel={`Band ${i + 1} fee`}
-												className="w-32"
-												onChange={(fee) =>
-													patch({
-														bands: draft.bands.map((b, j) =>
-															j === i ? { ...b, fee } : b,
-														),
-													})
-												}
-											/>
-											<button
-												type="button"
-												aria-label={`Remove band ${i + 1}`}
-												disabled={draft.bands.length === 1}
-												title={
-													draft.bands.length === 1
-														? "A weight card needs at least one band"
-														: undefined
-												}
-												onClick={() =>
-													patch({
-														bands: draft.bands.filter((_, j) => j !== i),
-													})
-												}
-												className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-											>
-												<Trash2 className="size-4" />
-											</button>
-										</div>
-									))}
-								</div>
-								<Button
-									type="button"
-									variant="outline"
-									className="h-11 self-start"
-									disabled={draft.bands.length >= DELIVERY_BANDS_MAX}
-									onClick={() =>
-										patch({ bands: [...draft.bands, { maxKg: "", fee: "" }] })
-									}
-								>
-									<Plus />
-									{draft.bands.length >= DELIVERY_BANDS_MAX
-										? `${DELIVERY_BANDS_MAX} bands is the most`
-										: "Add a band"}
-								</Button>
-								<FreeAboveField
-									draft={draft}
-									patch={patch}
-									currency={currency}
-								/>
-								{missingWeights && missingWeights.count > 0 ? (
-									<p
-										className={cn(
-											"rounded-xl border px-3.5 py-3 text-xs",
-											TONE_PANEL.warn,
-										)}
-									>
-										{missingWeights.count} product
-										{missingWeights.count === 1 ? " has" : "s have"} no parcel
-										weight, so a cart with{" "}
-										{missingWeights.count === 1 ? "it" : "them"} can't be priced
-										by weight.{" "}
-										<Link
-											to="/app/products/weights"
-											className="font-semibold underline underline-offset-2"
-										>
-											Set parcel weights
-										</Link>
+							{draft.kind === "weight" ? (
+								<div className="flex flex-col gap-3">
+									<p className="text-xs text-muted-foreground">
+										Each band covers parcels up to its weight. A parcel heavier
+										than your last band can't be ordered to {where} — add a band
+										that fits your heaviest order.
 									</p>
-								) : null}
-							</div>
-						) : null}
+									<div className="flex flex-col gap-2">
+										{draft.bands.map((band, i) => (
+											<div
+												// biome-ignore lint/suspicious/noArrayIndexKey: rows are positional drafts with no identity of their own
+												key={i}
+												className="flex items-center gap-2"
+											>
+												<span className="text-xs text-muted-foreground">
+													Up to
+												</span>
+												<UnitInput
+													value={band.maxKg}
+													unit="kg"
+													ariaLabel={`Band ${i + 1} weight`}
+													onChange={(maxKg) =>
+														patch({
+															bands: draft.bands.map((b, j) =>
+																j === i ? { ...b, maxKg } : b,
+															),
+														})
+													}
+												/>
+												<MoneyInput
+													value={band.fee}
+													currency={currency}
+													placeholder="0.00"
+													ariaLabel={`Band ${i + 1} fee`}
+													className="w-32"
+													onChange={(fee) =>
+														patch({
+															bands: draft.bands.map((b, j) =>
+																j === i ? { ...b, fee } : b,
+															),
+														})
+													}
+												/>
+												<button
+													type="button"
+													aria-label={`Remove band ${i + 1}`}
+													disabled={draft.bands.length === 1}
+													title={
+														draft.bands.length === 1
+															? "A weight card needs at least one band"
+															: undefined
+													}
+													onClick={() =>
+														patch({
+															bands: draft.bands.filter((_, j) => j !== i),
+														})
+													}
+													className="flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+												>
+													<Trash2 className="size-4" />
+												</button>
+											</div>
+										))}
+									</div>
+									<Button
+										type="button"
+										variant="outline"
+										className="h-11 self-start"
+										disabled={draft.bands.length >= DELIVERY_BANDS_MAX}
+										onClick={() =>
+											patch({ bands: [...draft.bands, { maxKg: "", fee: "" }] })
+										}
+									>
+										<Plus />
+										{draft.bands.length >= DELIVERY_BANDS_MAX
+											? `${DELIVERY_BANDS_MAX} bands is the most`
+											: "Add a band"}
+									</Button>
+									<FreeAboveField
+										draft={draft}
+										patch={patch}
+										currency={currency}
+									/>
+									{missingWeights && missingWeights.count > 0 ? (
+										<p
+											className={cn(
+												"rounded-xl border px-3.5 py-3 text-xs",
+												TONE_PANEL.warn,
+											)}
+										>
+											{missingWeights.count} product
+											{missingWeights.count === 1 ? " has" : "s have"} no parcel
+											weight, so a cart with{" "}
+											{missingWeights.count === 1 ? "it" : "them"} can't be
+											priced by weight.{" "}
+											<Link
+												to="/app/products/weights"
+												className="font-semibold underline underline-offset-2"
+											>
+												Set parcel weights
+											</Link>
+										</p>
+									) : null}
+								</div>
+							) : null}
 
-						{draft.kind === "free" ? (
-							<label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl border border-border px-3.5 py-3 text-sm">
-								<input
-									type="checkbox"
-									checked={draft.freeAcknowledged}
-									onChange={(e) =>
-										patch({ freeAcknowledged: e.target.checked })
-									}
-									className="mt-0.5 size-4 accent-[var(--accent)]"
-								/>
-								<span>
-									I'll pay the courier myself for every order going to {where}.
-								</span>
-							</label>
-						) : null}
+							{draft.kind === "free" ? (
+								<label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl border border-border px-3.5 py-3 text-sm">
+									<input
+										type="checkbox"
+										checked={draft.freeAcknowledged}
+										onChange={(e) =>
+											patch({ freeAcknowledged: e.target.checked })
+										}
+										className="mt-0.5 size-4 accent-[var(--accent)]"
+									/>
+									<span>
+										I'll pay the courier myself for every order going to {where}
+										.
+									</span>
+								</label>
+							) : null}
+						</fieldset>
 
 						<div className="flex flex-col gap-3">
 							{error ? (
@@ -473,12 +477,19 @@ export function OverseasDelivery({
 								<Button
 									type="button"
 									onClick={() => void save()}
+									disabled={lanePaused}
 									isLoading={saving}
 									className={SAVE_BTN_CLASS}
 								>
 									{on ? "Save price" : `Turn on delivery to ${where}`}
 								</Button>
 							</div>
+							{lanePaused ? (
+								<p className="text-xs text-muted-foreground">
+									Saving is off while delivery to {where} is paused — your price
+									is kept as it is. Fix the pause above to change it.
+								</p>
+							) : null}
 						</div>
 					</Card>
 				) : null}

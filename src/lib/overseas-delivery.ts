@@ -182,7 +182,7 @@ export function laneBlockCopy(
 		case "plan":
 			return `Delivering to ${countryName(destination)} is part of the Pro plan.`;
 		case "delivery_off":
-			return `Delivery is switched off for your store, so there's nothing to send to ${countryName(destination)}. Turn delivery on first.`;
+			return `Delivery is switched off for your store, so there's nothing to send to ${countryName(destination)}. Turn delivery on to deliver there.`;
 		case "live_pricing":
 			return `Your delivery is priced live by courier, and ${liveQuoteCouriersDeliver(storeCountry)} within ${countryName(storeCountry)} only. Switch to your own delivery price to deliver to ${countryName(destination)}.`;
 	}
