@@ -263,6 +263,32 @@ export function strictAddressSchemaFor(country: Country) {
 	return STRICT_ADDRESS_SCHEMAS[country];
 }
 
+/** The fields that say WHERE an address is, in the order the form shows them. */
+export const ADDRESS_LOCATION_FIELDS = [
+	"line1",
+	"postcode",
+	"city",
+	"state",
+] as const;
+export type AddressLocationField = (typeof ADDRESS_LOCATION_FIELDS)[number];
+
+/**
+ * The location fields this address still fails the strict schema on, in form
+ * order. A Google pick fills them from whatever Places returned, and Places
+ * routinely omits one (an SG block with no postal code, an MY street with no
+ * locality, a state spelling `normalizeMyState` doesn't know) — the locked
+ * address card asks for exactly these instead of hiding them.
+ */
+export function addressLocationGaps(
+	address: CheckoutAddressValues,
+	country: Country,
+): AddressLocationField[] {
+	const result = strictAddressSchemaFor(country).safeParse(address);
+	if (result.success) return [];
+	const failing = new Set(result.error.issues.map((issue) => issue.path[0]));
+	return ADDRESS_LOCATION_FIELDS.filter((field) => failing.has(field));
+}
+
 // Loose form-state shape: every field is always present as a string so
 // TanStack Form can mount the inputs whether delivery or self_collect is
 // selected. Strict validation runs only when delivery is chosen.
