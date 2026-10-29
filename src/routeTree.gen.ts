@@ -55,6 +55,7 @@ import { Route as AppCustomersCustomerIdRouteImport } from './routes/app.custome
 import { Route as AppAdminWabaRouteImport } from './routes/app.admin.waba'
 import { Route as AppAdminSellersRouteImport } from './routes/app.admin.sellers'
 import { Route as AppAdminBillingRouteImport } from './routes/app.admin.billing'
+import { Route as AppAdminAcquisitionRouteImport } from './routes/app.admin.acquisition'
 import { Route as SlugPProductSlugRouteImport } from './routes/$slug_.p.$productSlug'
 import { Route as SlugCCategorySlugRouteImport } from './routes/$slug_.c.$categorySlug'
 import { Route as AppPromotionsPromotionIdIndexRouteImport } from './routes/app.promotions.$promotionId.index'
@@ -295,6 +296,11 @@ const AppAdminBillingRoute = AppAdminBillingRouteImport.update({
   path: '/admin/billing',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAdminAcquisitionRoute = AppAdminAcquisitionRouteImport.update({
+  id: '/admin/acquisition',
+  path: '/admin/acquisition',
+  getParentRoute: () => AppRoute,
+} as any)
 const SlugPProductSlugRoute = SlugPProductSlugRouteImport.update({
   id: '/$slug_/p/$productSlug',
   path: '/$slug/p/$productSlug',
@@ -363,6 +369,7 @@ export interface FileRoutesByFullPath {
   '/app/': typeof AppIndexRoute
   '/$slug/c/$categorySlug': typeof SlugCCategorySlugRoute
   '/$slug/p/$productSlug': typeof SlugPProductSlugRoute
+  '/app/admin/acquisition': typeof AppAdminAcquisitionRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
@@ -417,6 +424,7 @@ export interface FileRoutesByTo {
   '/app': typeof AppIndexRoute
   '/$slug/c/$categorySlug': typeof SlugCCategorySlugRoute
   '/$slug/p/$productSlug': typeof SlugPProductSlugRoute
+  '/app/admin/acquisition': typeof AppAdminAcquisitionRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
@@ -473,6 +481,7 @@ export interface FileRoutesById {
   '/app/': typeof AppIndexRoute
   '/$slug_/c/$categorySlug': typeof SlugCCategorySlugRoute
   '/$slug_/p/$productSlug': typeof SlugPProductSlugRoute
+  '/app/admin/acquisition': typeof AppAdminAcquisitionRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
@@ -530,6 +539,7 @@ export interface FileRouteTypes {
     | '/app/'
     | '/$slug/c/$categorySlug'
     | '/$slug/p/$productSlug'
+    | '/app/admin/acquisition'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
@@ -584,6 +594,7 @@ export interface FileRouteTypes {
     | '/app'
     | '/$slug/c/$categorySlug'
     | '/$slug/p/$productSlug'
+    | '/app/admin/acquisition'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
@@ -639,6 +650,7 @@ export interface FileRouteTypes {
     | '/app/'
     | '/$slug_/c/$categorySlug'
     | '/$slug_/p/$productSlug'
+    | '/app/admin/acquisition'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
@@ -1015,6 +1027,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminBillingRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/admin/acquisition': {
+      id: '/app/admin/acquisition'
+      path: '/admin/acquisition'
+      fullPath: '/app/admin/acquisition'
+      preLoaderRoute: typeof AppAdminAcquisitionRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/$slug_/p/$productSlug': {
       id: '/$slug_/p/$productSlug'
       path: '/$slug/p/$productSlug'
@@ -1074,6 +1093,7 @@ interface AppRouteChildren {
   AppPosterRoute: typeof AppPosterRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppAdminAcquisitionRoute: typeof AppAdminAcquisitionRoute
   AppAdminBillingRoute: typeof AppAdminBillingRoute
   AppAdminSellersRoute: typeof AppAdminSellersRoute
   AppAdminWabaRoute: typeof AppAdminWabaRoute
@@ -1109,6 +1129,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppPosterRoute: AppPosterRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
+  AppAdminAcquisitionRoute: AppAdminAcquisitionRoute,
   AppAdminBillingRoute: AppAdminBillingRoute,
   AppAdminSellersRoute: AppAdminSellersRoute,
   AppAdminWabaRoute: AppAdminWabaRoute,
