@@ -481,7 +481,8 @@ describe("categories.setProductCategories", () => {
 				productId,
 				categoryIds: ids.slice(0, 10),
 			}),
-		).resolves.toBeNull();
+			// Exactly at the cap succeeds; the product has no orders to file.
+		).resolves.toMatchObject({ filedOrders: 0, filingContinues: false });
 	});
 
 	test("rejects adding a cross-retailer or archived category", async () => {

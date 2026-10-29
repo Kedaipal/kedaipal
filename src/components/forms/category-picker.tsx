@@ -91,7 +91,7 @@ export function CategoryPicker({
 				>
 					{locked
 						? "Adding products to categories is part of the Pro plan. You can still remove this product from its current categories."
-						: "Pick where this product appears when buyers browse by category. It always stays in the “All products” view."}
+						: "Pick where this product appears when buyers browse by category. It always stays in the “All products” view. Your orders can be filtered by category too: adding one also files this product's earlier uncategorized orders."}
 				</p>
 			</div>
 

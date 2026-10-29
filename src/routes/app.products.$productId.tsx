@@ -40,6 +40,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { convexErrorMessage } from "../lib/format";
+import { pastOrderFilingMessage } from "../lib/past-order-filing";
 import type { UnsavedState } from "../lib/product-form-dirty";
 import { draftPreviewOverlay } from "../lib/product-preview";
 import { type ProductStatus, productStatus } from "../lib/product-status";
@@ -521,7 +522,7 @@ function EditProductRoute() {
 					});
 					// Category membership last — a plan-gate error here can't block
 					// the core save above. Server diffs, so unchanged = no-op.
-					await setProductCategories({
+					const filing = await setProductCategories({
 						productId: product._id,
 						categoryIds: values.categoryIds,
 					});
@@ -529,7 +530,26 @@ function EditProductRoute() {
 					// page changing — and now that stock confirms its own writes with
 					// a toast, a silent product save read as the one that didn't
 					// land. Same confirmation as delete, which already had one.
-					toast.success("Product saved.");
+					// Adding a category also filed this product's earlier
+					// uncategorized orders server-side — say so, or the inbox filter
+					// changing under the seller is behaviour they never asked for.
+					const filed = pastOrderFilingMessage(filing);
+					toast.success(
+						"Product saved.",
+						filed
+							? {
+									description: filed,
+									action: {
+										label: "View in orders",
+										onClick: () =>
+											navigate({
+												to: "/app/orders",
+												search: { cat: filing.categoryNames },
+											}),
+									},
+								}
+							: undefined,
+					);
 					// Everything just saved, so the leave guard has nothing to protect.
 					navigate({ to: "/app/products", ignoreBlocker: true });
 				}}

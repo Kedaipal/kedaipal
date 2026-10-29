@@ -13,6 +13,13 @@
  * the fallback; a verified event ticks it too, so a hand-pasted webhook
  * counts. The environment badge (86eypncfy — a sandbox key that LOOKS live
  * cost a real vendor 26 hours) rides the key step.
+ *
+ * A pasted pair is checked twice before it is stored (z8r3fdy5ht): its SHAPE
+ * as the seller types (pk_/sk_, one environment — the same rule the server
+ * enforces), then `lalamove.verifyKeys` asks Lalamove itself, so a key from
+ * another provider can never be badged "Live". Disconnect removes the pair,
+ * greyed out with its reason while removing it would break the delivery
+ * charge or strand a rider (`lalamove.getDisconnectState`).
  */
 
 import { convexQuery } from "@convex-dev/react-query";
@@ -24,12 +31,14 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { checkLalamoveKeyShape } from "../../../convex/lib/lalamove";
 import type { DeliveryBookingSummary } from "../../../convex/retailers";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { clientEnv } from "../../lib/env";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
+import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
 import {
 	Glance,
@@ -49,12 +58,13 @@ function lalamoveWebhookUrl(): string {
 }
 
 type BookingPatch = {
+	/** `null` disconnects: the keys go, rider preferences stay. */
 	deliveryBooking: {
 		enabled: boolean;
 		vehicleType: "MOTORCYCLE" | "CAR";
 		apiKey?: string;
 		apiSecret?: string;
-	};
+	} | null;
 };
 
 export function LalamoveIntegrationCard({
@@ -72,12 +82,17 @@ export function LalamoveIntegrationCard({
 }) {
 	const actAsRetailerId = useActAsRetailerId();
 	const registerWebhook = useAction(api.lalamove.registerWebhook);
+	const verifyKeys = useAction(api.lalamove.verifyKeys);
 	const [apiKey, setApiKey] = useState("");
 	const [apiSecret, setApiSecret] = useState("");
 	const [editingKeys, setEditingKeys] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [registering, setRegistering] = useState(false);
 	const [showPaste, setShowPaste] = useState(false);
+	// What Lalamove (or the server) said about the last attempt — shown under
+	// the fields until the seller edits them.
+	const [keyError, setKeyError] = useState<string | null>(null);
+	const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 
 	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
 	// The balance Lalamove last reported (86eye9xd4, 6A) — shown once, beside
@@ -88,14 +103,34 @@ export function LalamoveIntegrationCard({
 			hasStoredKey ? { retailerId } : "skip",
 		),
 	).data;
+	// Why Disconnect is greyed out right now, if it is — the server's own rule.
+	const disconnectBlock = useQuery(
+		convexQuery(
+			api.lalamove.getDisconnectState,
+			hasStoredKey ? { retailerId } : "skip",
+		),
+	).data;
 	const typedBothKeys = apiKey.trim().length > 0 && apiSecret.trim().length > 0;
+	// Judged once both are in — a half-typed key isn't wrong yet.
+	const shape = typedBothKeys ? checkLalamoveKeyShape(apiKey, apiSecret) : null;
+	const shapeError = shape && !shape.ok ? shape.message : null;
 	const webhookKnown = deliveryBooking?.webhookRegisteredAt !== undefined;
 	const doneCount =
 		(businessAddress ? 1 : 0) + (hasStoredKey ? 1 : 0) + (webhookKnown ? 1 : 0);
 
 	async function saveKeys() {
 		setSaving(true);
+		setKeyError(null);
 		try {
+			const check = await verifyKeys({
+				retailerId: actAsRetailerId,
+				apiKey: apiKey.trim(),
+				apiSecret: apiSecret.trim(),
+			});
+			if (!check.ok) {
+				setKeyError(check.message);
+				return;
+			}
 			await onSave({
 				deliveryBooking: {
 					// Keys can be stored before booking is ever switched on — the
@@ -106,14 +141,26 @@ export function LalamoveIntegrationCard({
 					apiSecret: apiSecret.trim(),
 				},
 			});
-			toast.success("Lalamove keys saved");
+			toast.success("Lalamove keys checked and saved");
 			setApiKey("");
 			setApiSecret("");
 			setEditingKeys(false);
 		} catch (err) {
-			toast.error(convexErrorMessage(err));
+			setKeyError(convexErrorMessage(err));
 		} finally {
 			setSaving(false);
+		}
+	}
+
+	// The dialog spins while this runs, closes on success and stays open on a
+	// throw — so a refusal is toasted AND rethrown.
+	async function disconnect() {
+		try {
+			await onSave({ deliveryBooking: null });
+			toast.success("Lalamove disconnected");
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			throw err;
 		}
 	}
 
@@ -301,7 +348,12 @@ export function LalamoveIntegrationCard({
 								data-lpignore="true"
 								data-form-type="other"
 								value={apiKey}
-								onChange={(e) => setApiKey(e.target.value)}
+								onChange={(e) => {
+									setApiKey(e.target.value);
+									setKeyError(null);
+								}}
+								aria-invalid={shapeError !== null || keyError !== null}
+								aria-describedby="lalamove-key-error"
 								placeholder="API key (pk_prod_…)"
 								className="h-11 font-mono text-sm"
 							/>
@@ -314,7 +366,12 @@ export function LalamoveIntegrationCard({
 								data-lpignore="true"
 								data-form-type="other"
 								value={apiSecret}
-								onChange={(e) => setApiSecret(e.target.value)}
+								onChange={(e) => {
+									setApiSecret(e.target.value);
+									setKeyError(null);
+								}}
+								aria-invalid={shapeError !== null || keyError !== null}
+								aria-describedby="lalamove-key-error"
 								placeholder="API secret (sk_prod_…)"
 								className="h-11 font-mono text-sm"
 								style={
@@ -323,15 +380,28 @@ export function LalamoveIntegrationCard({
 										: undefined
 								}
 							/>
+							{shapeError || keyError ? (
+								<p
+									id="lalamove-key-error"
+									role="alert"
+									className="text-xs font-medium text-destructive"
+								>
+									{shapeError ?? keyError}
+								</p>
+							) : null}
 							<div className="flex flex-wrap items-center gap-2">
 								<Button
 									type="button"
 									className="h-11"
 									isLoading={saving}
-									disabled={!typedBothKeys || saving}
+									disabled={!typedBothKeys || shapeError !== null || saving}
 									onClick={() => void saveKeys()}
 								>
-									{hasStoredKey ? "Save new keys" : "Save keys"}
+									{saving
+										? "Checking with Lalamove…"
+										: hasStoredKey
+											? "Save new keys"
+											: "Save keys"}
 								</Button>
 								{hasStoredKey ? (
 									<Button
@@ -342,6 +412,7 @@ export function LalamoveIntegrationCard({
 											setEditingKeys(false);
 											setApiKey("");
 											setApiSecret("");
+											setKeyError(null);
 										}}
 									>
 										Keep the stored key
@@ -397,6 +468,16 @@ export function LalamoveIntegrationCard({
 				</SetupStep>
 			</SetupChecklist>
 
+			<ConfirmDialog
+				open={confirmingDisconnect}
+				onOpenChange={setConfirmingDisconnect}
+				title="Disconnect Lalamove?"
+				description="Kedaipal deletes this store's Lalamove API key and secret and switches rider booking off, so the Book a rider button disappears from your orders. Your Lalamove account itself is untouched — its wallet stays yours, and its webhook keeps pointing at Kedaipal, which is harmless. Your vehicle and collection settings are kept, so reconnecting is just pasting the keys again."
+				confirmLabel="Disconnect"
+				destructive
+				onConfirm={disconnect}
+			/>
+
 			<InfoDisclosure summary="Lalamove's limits — good to know">
 				<HelperBullets
 					items={[
@@ -408,6 +489,47 @@ export function LalamoveIntegrationCard({
 					]}
 				/>
 			</InfoDisclosure>
+			{/* Last in the card, like every account card's Disconnect. A block
+			    reads beside the greyed button, with the page that clears it. */}
+			{hasStoredKey ? (
+				<div className="flex items-start gap-3">
+					{disconnectBlock ? (
+						<p
+							id="lalamove-disconnect-block"
+							className="min-w-0 flex-1 pt-3 text-xs text-muted-foreground"
+						>
+							{disconnectBlock.message}{" "}
+							{disconnectBlock.reason === "pricing" ? (
+								<Link
+									to="/app/settings/delivery-pricing"
+									className="font-medium text-accent-emphasis hover:underline"
+								>
+									Open Delivery pricing
+								</Link>
+							) : disconnectBlock.shortIds.length > 0 ? (
+								<Link
+									to="/app/orders/$shortId"
+									params={{ shortId: disconnectBlock.shortIds[0] }}
+									className="font-medium text-accent-emphasis hover:underline"
+								>
+									Open {disconnectBlock.shortIds[0]}
+								</Link>
+							) : null}
+						</p>
+					) : null}
+					<button
+						type="button"
+						onClick={() => setConfirmingDisconnect(true)}
+						disabled={disconnectBlock !== undefined && disconnectBlock !== null}
+						aria-describedby={
+							disconnectBlock ? "lalamove-disconnect-block" : undefined
+						}
+						className="ml-auto min-h-11 shrink-0 text-sm font-medium text-destructive hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline"
+					>
+						Disconnect
+					</button>
+				</div>
+			) : null}
 		</div>
 	);
 }

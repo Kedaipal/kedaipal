@@ -262,6 +262,16 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 4,
 	},
+	// The seller's "is this pasted Lalamove pair real?" probe (z8r3fdy5ht).
+	// Authenticated + keyed by retailer, but it answers "does this key pair
+	// work" — an oracle a stolen-key tester would hammer. A seller retyping a
+	// pair a few times never notices.
+	lalamoveKeyCheck: {
+		kind: "token bucket",
+		rate: 6,
+		period: MINUTE,
+		capacity: 3,
+	},
 	googlePlaceDetails: {
 		kind: "token bucket",
 		rate: 10,

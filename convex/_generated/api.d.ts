@@ -125,6 +125,7 @@ import type * as lib_optOutPhone from "../lib/optOutPhone.js";
 import type * as lib_order from "../lib/order.js";
 import type * as lib_orderBlobs from "../lib/orderBlobs.js";
 import type * as lib_orderBuckets from "../lib/orderBuckets.js";
+import type * as lib_orderCategoryNames from "../lib/orderCategoryNames.js";
 import type * as lib_orderClaims from "../lib/orderClaims.js";
 import type * as lib_orderCsv from "../lib/orderCsv.js";
 import type * as lib_orderDocument from "../lib/orderDocument.js";
@@ -341,6 +342,7 @@ declare const fullApi: ApiFromModules<{
   "lib/order": typeof lib_order;
   "lib/orderBlobs": typeof lib_orderBlobs;
   "lib/orderBuckets": typeof lib_orderBuckets;
+  "lib/orderCategoryNames": typeof lib_orderCategoryNames;
   "lib/orderClaims": typeof lib_orderClaims;
   "lib/orderCsv": typeof lib_orderCsv;
   "lib/orderDocument": typeof lib_orderDocument;

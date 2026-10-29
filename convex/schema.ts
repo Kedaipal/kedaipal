@@ -2922,6 +2922,11 @@ export default defineSchema({
 	})
 		.index("by_order", ["orderId"])
 		.index("by_retailer", ["retailerId"])
+		// Disconnect's rider-out guard (z8r3fdy5ht): "is any of this store's
+		// Lalamove jobs still active?" is one indexed read per active status,
+		// exact — a scheduled booking can sit in `assigning` for 30 days, so a
+		// "newest N" window over `by_retailer` would let it slip past.
+		.index("by_retailer_status", ["retailerId", "status"])
 		// Provider-qualified since Delyva (86eyjpv6z): two providers' order ids
 		// are both opaque strings, so a bare providerOrderId index + .unique()
 		// would let a cross-provider collision throw in a webhook handler.

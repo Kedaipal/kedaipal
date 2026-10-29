@@ -7,6 +7,7 @@ import {
 } from "../../../convex/lib/orderCsv";
 import {
 	buildOrderColumnFilters,
+	CATEGORY_UNCATEGORIZED,
 	METHOD_UNSPECIFIED,
 } from "./order-column-filters";
 
@@ -221,5 +222,61 @@ describe("the Fulfilment header filter only exists when there's a choice to make
 			"booking",
 		]);
 		expect(binding?.options.at(-1)?.count).toBe(0);
+	});
+});
+
+/**
+ * Dr Niki Trainings (28 Oct 2026): she filed products under a category, opened
+ * this filter, and saw only "Uncategorized 23" with nothing saying why. Each
+ * of the three empty-ish states now says which one it is.
+ */
+describe("the Categories filter says why a category isn't offered", () => {
+	const facets = {
+		...ALL_FULFILMENTS,
+		category: [
+			{ name: "Combo Books", count: 16 },
+			{ name: CATEGORY_UNCATEGORIZED, count: 7 },
+		],
+	};
+
+	it("a store with no categories gets a set-up prompt, not an 'Uncategorized: everything' option", () => {
+		const cat = filters({ storeHasCategories: false }).get("categories");
+		expect(cat?.options).toEqual([]);
+		expect(cat?.emptyHint).toMatch(/group your products into categories/i);
+		expect(cat?.emptyAction).toEqual({
+			label: "Set up categories",
+			to: "/app/products/categories",
+		});
+	});
+
+	it("categories exist but no order uses one: offer Uncategorized and say so", () => {
+		const cat = filters({ storeHasCategories: true }).get("categories");
+		expect(cat?.options.map((o) => o.label)).toEqual(["Uncategorized"]);
+		expect(cat?.note?.text).toMatch(
+			/none of these orders is for a product in a category/i,
+		);
+		expect(cat?.note?.link?.to).toBe("/app/products/categories");
+	});
+
+	it("while loading, never flashes the set-up prompt", () => {
+		const cat = filters({ storeHasCategories: undefined }).get("categories");
+		expect(cat?.emptyAction).toBeUndefined();
+		expect(cat?.options.map((o) => o.label)).toEqual(["Uncategorized"]);
+	});
+
+	it("with categories on orders, states the filing rule under the options", () => {
+		const cat = filters({
+			facets,
+			availableCategories: ["Combo Books"],
+			storeHasCategories: true,
+		}).get("categories");
+		expect(cat?.options).toEqual([
+			{ value: "Combo Books", label: "Combo Books", count: 16 },
+			{ value: CATEGORY_UNCATEGORIZED, label: "Uncategorized", count: 7 },
+		]);
+		expect(cat?.note?.text).toMatch(
+			/also files its earlier uncategorized orders/i,
+		);
+		expect(cat?.note?.link).toBeUndefined();
 	});
 });
