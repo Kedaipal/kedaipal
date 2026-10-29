@@ -447,6 +447,16 @@ country picker in Settings → Store, where "what did that just do?" gets asked,
 and as a banner on the dashboard home for the seller who switched and closed
 the tab.
 
+- **`easyparcel_pickup`** (z8r3fdr5yy) — verifiable: the EasyParcel pickup
+  address's postcode format says which country it's in (5 digits MY, 6 SG).
+  Kept, not wiped; it deep-links to the EasyParcel card.
+
+**The overseas lane is the one value the switch CLEARS** (z8r3fdr5yy, Zaki
+30 Oct). It points at what is now home, its price is in the old currency, and
+it can't price the opposite direction — so unlike a rate card there is nothing
+to keep. Carried, it leaked (a weight lane still demanded product weights).
+See [`cross-border.md`](./cross-border.md#country-switch).
+
 **Pickup points are deliberately NOT auto-hidden.** Hiding every wrong-country
 point would break the working-method invariant — a pickup-only store would lose
 checkout entirely, turning a cosmetic problem into a dead storefront. And

@@ -2947,6 +2947,17 @@ export const updateSettings = mutation({
 			if (args.country !== (retailer.country ?? DEFAULT_COUNTRY)) {
 				patch.countryChangedAt = Date.now();
 				patch.countryChangedFrom = retailer.country ?? DEFAULT_COUNTRY;
+				// The overseas lane is the one thing cleared (z8r3fdr5yy, Zaki
+				// 30 Oct). Unlike a rate card it carries nothing the new country
+				// can use: it points at what is now HOME, its price is in the old
+				// currency, and an RM price for MY→SG can't price SG→MY. Left in
+				// place it leaked — a weight lane kept demanding product weights,
+				// and Delivery pricing / the EasyParcel card read it as live or
+				// paused. Re-entering one price is the whole cost. A same-call
+				// lane (args.crossBorderLanes) is judged below as usual.
+				if (args.crossBorderLanes === undefined) {
+					patch.crossBorderLanes = undefined;
+				}
 				// A new move re-opens every question the seller previously
 				// confirmed — their bank details were checked against the OLD
 				// destination.
@@ -3819,6 +3830,12 @@ export const countrySetup = query({
 			deliveryBookingEnabled:
 				(retailer.deliveryBooking as DeliveryBooking | undefined)?.enabled ===
 				true,
+			easyparcelPickupPostcode: (
+				await ctx.db
+					.query("easyparcelConnections")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+					.unique()
+			)?.pickupAddress?.postcode,
 			waPhone: retailer.waPhone,
 			notifyWaPhone: retailer.notifyWaPhone,
 			hasPaymentMethods: (retailer.paymentMethods?.length ?? 0) > 0,
@@ -3892,6 +3909,12 @@ export const ackCountrySetup = mutation({
 			deliveryBookingEnabled:
 				(retailer.deliveryBooking as DeliveryBooking | undefined)?.enabled ===
 				true,
+			easyparcelPickupPostcode: (
+				await ctx.db
+					.query("easyparcelConnections")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+					.unique()
+			)?.pickupAddress?.postcode,
 			waPhone: retailer.waPhone,
 			notifyWaPhone: retailer.notifyWaPhone,
 			hasPaymentMethods: (retailer.paymentMethods?.length ?? 0) > 0,

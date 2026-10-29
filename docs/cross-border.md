@@ -167,6 +167,17 @@ when the city already says it ("048616 Singapore"). It's used by:
 - the Deliveries destination column
 - the CSV **Country** column
 
+## Country switch
+
+A switch **clears `crossBorderLanes`**. A lane points at the country that's now
+home, its price is in the old currency, and it can't price the other
+direction. It's the one exception to the 86eyqgujv "destroy nothing" rule. A
+carried lane also leaked: a weight lane kept demanding product weights, and the
+Delivery pricing page and the EasyParcel card read it as live or paused. Kept:
+`products.domesticOnly` (it describes the product, not the country) and every
+order's stamped address country (history). The EasyParcel pickup address
+becomes a verifiable checklist row (`easyparcel_pickup`) rather than being wiped.
+
 ## Known gaps / follow-ups
 
 - **Live courier quote on a lane** (EasyParcel at checkout) is unbuilt. Lanes are
