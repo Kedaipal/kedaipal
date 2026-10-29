@@ -514,7 +514,7 @@ export function EasyparcelDispatchCard({
 
 					{dispatch.buyerContactFallback ? (
 						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-							{courierContactFallbackCopy(dispatch.country)}
+							{courierContactFallbackCopy(dispatch.receiverCountry)}
 						</p>
 					) : null}
 

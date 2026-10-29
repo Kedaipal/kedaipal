@@ -215,16 +215,28 @@ describe("connect — start", () => {
 		);
 	});
 
-	test("refuses an unconfigured deployment, an MY store, and a foreign returnTo", async () => {
+	test("an MY store connects before its overseas lane exists — the lane is a setup step, never a refusal (Zaki, 30 Oct)", async () => {
 		const t = setup();
-		await seedRetailer(t, "MY");
+		const retailer = await seedRetailer(t, "MY");
 		const asUser = t.withIdentity({ subject: USER });
+		const before = await asUser.query(api.easyparcel.getSettings, {});
+		expect(before.available).toBe(true);
+		expect(before.destinations).toBe("abroad");
+		expect(before.overseasLane).toEqual({ destination: "SG", state: "off" });
 		const my = await asUser.mutation(api.easyparcel.startConnect, {
 			returnTo: `${APP}/app/settings`,
 		});
-		expect(my).toMatchObject({ ok: false });
-		if (!my.ok) expect(my.message).toMatch(/Delyva/);
+		expect(my).toMatchObject({ ok: true });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				crossBorderLanes: [{ country: "SG", pricing: { kind: "flat", fee: 2500 } }],
+			});
+		});
+		const after = await asUser.query(api.easyparcel.getSettings, {});
+		expect(after.overseasLane.state).not.toBe("off");
+	});
 
+	test("refuses an unconfigured deployment and a foreign returnTo", async () => {
 		const t2 = setup();
 		await seedRetailer(t2, "SG");
 		const asUser2 = t2.withIdentity({ subject: USER });
@@ -812,6 +824,39 @@ describe("dispatch state — every block names its cause", () => {
 		expect(
 			(await asUser.query(api.easyparcel.getDispatchState, { shortId }))?.blockReason,
 		).toBe("not_configured");
+	});
+
+	test("the buyer-contact notice judges the parcel's destination, like the booking (z8r3fdr5yy)", async () => {
+		// Found on the /test-code pass: an SG store's parcel to Malaysia told
+		// the seller the buyer's +60 number "isn't a Singapore number" while
+		// the booking (correctly) sent it.
+		const t = setup();
+		const retailer = await seedRetailer(t, "SG");
+		await seedConnection(t, retailer._id);
+		const asUser = t.withIdentity({ subject: USER });
+		const MY_BUYER = { name: "Aisyah", waPhone: "60123456789" };
+		const abroad = await seedOrder(t, retailer._id, {
+			customer: MY_BUYER,
+			deliveryAddress: {
+				line1: "12 Jalan Mawar 3",
+				city: "Petaling Jaya",
+				state: "Selangor",
+				postcode: "47301",
+				country: "MY",
+			},
+		});
+		const abroadState = await asUser.query(api.easyparcel.getDispatchState, {
+			shortId: abroad.shortId,
+		});
+		expect(abroadState?.receiverCountry).toBe("MY");
+		expect(abroadState?.buyerContactFallback).toBe(false);
+		// The same +60 buyer on a domestic SG parcel does fall back.
+		const home = await seedOrder(t, retailer._id, { customer: MY_BUYER });
+		const homeState = await asUser.query(api.easyparcel.getDispatchState, {
+			shortId: home.shortId,
+		});
+		expect(homeState?.receiverCountry).toBe("SG");
+		expect(homeState?.buyerContactFallback).toBe(true);
 	});
 
 	test("disconnect deletes the grant outright", async () => {

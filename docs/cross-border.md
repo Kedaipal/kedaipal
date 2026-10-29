@@ -108,7 +108,9 @@ be new work (and would need its own fallback).
   the edge geo (`useMarketplaceRegion`) when the store delivers there; the switch
   is always shown because geo is a guess. Abroad, checkout shows the
   import-tax line, and home-only items appear with a one-tap **Remove** each.
-  The ticket's fee line reads **"Delivery to Malaysia"**. The WhatsApp number's
+  The fee line reads **"Delivery to Malaysia"** on the checkout ticket, the
+  buyer's tracking page and the seller's order page — one author,
+  `overseasFeeLabel`. The WhatsApp number's
   country plate starts on the Deliver-to country and follows the switch while
   the number box is empty. It never rewrites a number already typed.
 - **Storefront** (Zaki, 28 Oct): **every product is shown to everyone.** A visitor
@@ -138,12 +140,16 @@ and `servesOrderDestination` judge each **order** by its address's country:
 - **EasyParcel on a MY store carries overseas orders only.** Delyva stays the MY
   domestic courier: it has cold chain, and it pays the 1% `source: "kedaipal"`
   commission. Frozen goods can't cross the border anyway, and the product opt-out
-  covers them. The EasyParcel card only appears on a MY store once a lane is saved.
+  covers them. The EasyParcel card is always visible on a MY store and
+  connectable before the lane exists; **Deliver to Singapore** is a step in
+  its setup list, linked to the overseas page.
 - A provider that doesn't carry an order returns `destination_unsupported`. Its
   card hides on that order, like `country_unsupported` does.
 - EasyParcel's quote and submit send the **real receiver country**. The receiver
   contact number is judged against the **destination** (`buyerContactPhone`), so
-  an SG→MY parcel keeps the buyer's +60 number.
+  an SG→MY parcel keeps the buyer's +60 number. The order card's "the courier
+  gets your store's number" notice asks the same question through the same
+  helper (`receiverCountryOf`), so it can't contradict the booking.
 - With no integrated courier, the parcel ships through the existing manual
   courier + tracking number flow.
 
@@ -157,6 +163,7 @@ when the city already says it ("048616 Singapore"). It's used by:
 - the buyer's tracking page
 - the buyer→seller WhatsApp message
 - the despatch label, where the country is the last line, uppercased
+  (pinned by `awb.test.ts`)
 - the Deliveries destination column
 - the CSV **Country** column
 

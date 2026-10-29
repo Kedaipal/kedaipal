@@ -9,6 +9,7 @@ import {
 	laneCountriesFor,
 	liveQuoteCourierNames,
 	liveQuoteCouriersDeliver,
+	overseasFeeLabel,
 	pricingModeCarriesLanes,
 	resolveCrossBorderQuote,
 	sanitizeCrossBorderLanes,
@@ -100,6 +101,15 @@ describe("which products can go", () => {
 		expect(shipsWithinLabel("MY")).toBe("Ships within Malaysia only");
 		expect(shipsFromLabel("SG")).toBe("Ships from Singapore");
 		expect(deliversToLabel("MY")).toBe("Delivers to Malaysia");
+	});
+
+	test("the overseas fee line has one spelling everywhere; home keeps its own word", () => {
+		// Checkout, the buyer's order page and the seller's all read this —
+		// they disagreed on the /test-code pass.
+		expect(overseasFeeLabel("MY", "SG")).toBe("Delivery to Malaysia");
+		expect(overseasFeeLabel("SG", "SG")).toBeUndefined();
+		// Orders from before the stamp are domestic.
+		expect(overseasFeeLabel(undefined, "MY")).toBeUndefined();
 	});
 });
 

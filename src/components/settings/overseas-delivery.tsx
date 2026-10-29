@@ -535,7 +535,20 @@ export function OverseasDelivery({
 					/>
 					<HelperBullets
 						items={[
-							`Book the courier with EasyParcel (Settings → Integrations), or send it with any courier and add the tracking number on the order. ${liveQuoteCouriersDeliver(storeCountry)} within ${countryName(storeCountry)} only.`,
+							<>
+								Book the courier with EasyParcel (
+								<Link
+									to="/app/settings"
+									search={{ tab: "integrations" }}
+									hash="settings-easyparcel"
+									className="font-medium text-foreground underline underline-offset-2"
+								>
+									Settings → Integrations
+								</Link>
+								), or send it with any courier and add the tracking number on
+								the order. {liveQuoteCouriersDeliver(storeCountry)} within{" "}
+								{countryName(storeCountry)} only.
+							</>,
 							// "What can go" only exists once the switch is on — never
 							// point at a card the seller can't see.
 							`Keep frozen, chilled and fresh food at home — couriers refuse it across the border, and food imports have their own rules. ${

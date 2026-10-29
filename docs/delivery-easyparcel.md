@@ -234,8 +234,13 @@ module); view-only stores are refused on every write
 SG: "both"}` — a MY store books EasyParcel for its OVERSEAS orders only (the
 cross-border lane, z8r3fdr5yy); MY domestic stays Delyva (the 29 Jul 2026
 frozen-prohibition finding, cold chain, commission), and a MY domestic order
-reads `destination_unsupported`. The card shows on a MY store only once an
-overseas lane is saved. See [cross-border.md](./cross-border.md). Account
+reads `destination_unsupported`. The Integrations card is **always visible on
+a MY store and connectable anytime** (Zaki, 30 Oct — hiding it until a lane
+existed left sellers unable to find it); its setup list gets a first step,
+**Deliver to Singapore** (`getSettings.overseasLane`: on / paused / off, from
+`storeLanes`), linking to the overseas page, and the "Setup N of 3" glance
+counts it. An SG store's card says it carries the Malaysia lane too. See
+[cross-border.md](./cross-border.md). Account
 deletion clears both tables.
 
 ## Why the Open API (not the legacy Individual API)

@@ -307,7 +307,7 @@ describe("CheckoutTotals", () => {
 				subtotal={1500}
 				currency="SGD"
 				pickupFee={0}
-				deliveryDestination="Malaysia"
+				overseasFeeLabel="Delivery to Malaysia"
 				quote={{ kind: "fee", fee: 1200 }}
 			/>,
 		);

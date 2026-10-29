@@ -168,8 +168,21 @@ export function EasyparcelCard({
 				})
 			: undefined;
 	const storedAddress = settings?.pickupAddress;
+	// On a MY store EasyParcel books overseas orders only, so the lane it
+	// carries is a setup step of its own — the card stays visible and
+	// connectable without it, and says what's missing (Zaki, 30 Oct).
+	// Optional-chained on purpose: during a rollout the page can be newer than
+	// the backend, and a missing field must not take the card down.
+	const lane = settings?.overseasLane as
+		| { destination: Country; state: "on" | "paused" | "off" }
+		| undefined;
+	const laneStep = settings?.destinations === "abroad" ? lane : undefined;
+	const setupTotal = laneStep ? 3 : 2;
 	const setupDone =
-		(connected && !needsReconnect ? 1 : 0) + (storedAddress ? 1 : 0);
+		(connected && !needsReconnect ? 1 : 0) +
+		(storedAddress ? 1 : 0) +
+		(laneStep?.state === "on" ? 1 : 0);
+	const accountStep = laneStep ? 2 : 1;
 	const addressDraft: PickupAddressDraft =
 		address ??
 		(storedAddress
@@ -313,8 +326,10 @@ export function EasyparcelCard({
 								<Glance tone="grey">Not connected</Glance>
 							) : needsReconnect ? (
 								<Glance tone="warn">Reconnect needed</Glance>
-							) : setupDone < 2 ? (
-								<Glance tone="warn">Setup {setupDone} of 2</Glance>
+							) : setupDone < setupTotal ? (
+								<Glance tone="warn">
+									Setup {setupDone} of {setupTotal}
+								</Glance>
 							) : settings?.environment === "sandbox" ? (
 								<Glance tone="warn">Test mode</Glance>
 							) : (
@@ -326,8 +341,14 @@ export function EasyparcelCard({
 						{settings?.destinations === "abroad"
 							? // A MY store (z8r3fdr5yy): EasyParcel carries the overseas
 								// lane only — Delyva stays the domestic courier.
-								"For your orders going to Singapore — J&T, Teleport, Aramex and more, on your own EasyParcel account. Orders within Malaysia keep booking through Delyva."
-							: "Singapore parcel couriers — J&T, SingPost, Qxpress, Ninja Van, Teleport and more — on your own EasyParcel account."}{" "}
+								`For your orders going to ${COUNTRY_LABELS[lane?.destination ?? "SG"]} — J&T, Teleport, Aramex and more, on your own EasyParcel account. Orders within ${COUNTRY_LABELS[country]} keep booking through Delyva.`
+							: `Singapore parcel couriers — J&T, SingPost, Qxpress, Ninja Van, Teleport and more — on your own EasyParcel account.${
+									// An SG store's lane rides EasyParcel too — said, so the
+									// seller knows it covers both (found on the /test-code pass).
+									lane && lane.state !== "off"
+										? ` It carries your orders to ${COUNTRY_LABELS[lane.destination]} too.`
+										: ""
+								}`}{" "}
 						Booking is switched on under{" "}
 						<Link
 							to="/app/settings/delivery-pricing"
@@ -341,8 +362,7 @@ export function EasyparcelCard({
 
 				{settings && !settings.available && connected ? (
 					<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-						EasyParcel booking isn&apos;t available for your store&apos;s
-						country — Malaysian stores book couriers through Delyva instead.
+						EasyParcel booking isn&apos;t available for your store right now.
 						Your account stays connected until you disconnect it below.
 					</p>
 				) : null}
@@ -365,8 +385,9 @@ export function EasyparcelCard({
 					<>
 						<SectionLabel>Setup</SectionLabel>
 						<SetupChecklist>
+							{laneStep ? <LaneSetupStep n={1} lane={laneStep} /> : null}
 							<SetupStep
-								n={1}
+								n={accountStep}
 								state={needsReconnect ? "action" : "done"}
 								title={
 									<>
@@ -427,7 +448,7 @@ export function EasyparcelCard({
 							{/* Its own field, not the business address: a parcel courier
 							    prices on the postal code, and this is where pickups happen. */}
 							<SetupStep
-								n={2}
+								n={accountStep + 1}
 								state={storedAddress ? "done" : "action"}
 								title="Pickup address"
 								detail={
@@ -531,7 +552,7 @@ export function EasyparcelCard({
 							<p className="text-xs text-muted-foreground">
 								{!settings.enabled
 									? "Booking is currently off."
-									: setupDone < 2
+									: setupDone < setupTotal
 										? "Booking is switched on, and starts once the setup above is done."
 										: "Booking is on — you'll see EasyParcel on your delivery orders."}{" "}
 								Manage it under{" "}
@@ -572,6 +593,13 @@ export function EasyparcelCard({
 					</>
 				) : (
 					<>
+						{/* Before connecting too: the lane is the other half of what
+						    it takes, and the order doesn't matter. */}
+						{laneStep && laneStep.state !== "on" ? (
+							<SetupChecklist>
+								<LaneSetupStep n={1} lane={laneStep} />
+							</SetupChecklist>
+						) : null}
 						<ul className="flex flex-col gap-1.5 text-sm">
 							<Bullet>
 								<strong>One tap</strong> from the order to a booked courier — no
@@ -813,5 +841,52 @@ function PickupAddressFields({
 				</div>
 			) : null}
 		</div>
+	);
+}
+
+/** The MY store's "Deliver to Singapore" step (z8r3fdr5yy): EasyParcel only
+ * books orders going there, so until the lane is on there's nothing to book —
+ * said with the way to fix it, never by hiding the card. */
+function LaneSetupStep({
+	n,
+	lane,
+}: {
+	n: number;
+	lane: { destination: Country; state: "on" | "paused" | "off" };
+}) {
+	const where = COUNTRY_LABELS[lane.destination];
+	const link = (label: string) => (
+		<Link
+			to="/app/settings/overseas-delivery"
+			className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
+		>
+			{label}
+		</Link>
+	);
+	return (
+		<SetupStep
+			n={n}
+			state={lane.state === "on" ? "done" : "action"}
+			title={`Deliver to ${where}`}
+			detail={
+				lane.state === "on" ? (
+					<>
+						On — EasyParcel books your orders going to {where}.{" "}
+						{link("Change price")}
+					</>
+				) : lane.state === "paused" ? (
+					<>
+						Paused — buyers can&apos;t choose {where} right now, so there&apos;s
+						nothing for EasyParcel to book. {link("See why")}
+					</>
+				) : (
+					<>
+						EasyParcel carries your orders to {where}. Turn on delivery there
+						and set its price — before or after connecting, either works.{" "}
+						{link(`Turn on delivery to ${where}`)}
+					</>
+				)
+			}
+		/>
 	);
 }

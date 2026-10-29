@@ -130,6 +130,32 @@ describe("addressLines", () => {
 	});
 });
 
+describe("an overseas parcel's label ends with its country (z8r3fdr5yy)", () => {
+	// The code was there, but nothing pinned it (found on the /test-code pass).
+	test("SG store → MY address: MALAYSIA is the last line, the one a courier sorts on", () => {
+		const l = orderToAwbLabelData({
+			order: order({ deliveryAddress: { ...myAddress, country: "MY" } }),
+			retailer: { ...retailer, country: "SG" },
+			config: AWB_DEFAULTS,
+		});
+		expect(l.recipient.lines.at(-1)).toBe("MALAYSIA");
+		expect(l.recipient.lines).toContain("47100 Puchong");
+	});
+
+	test("MY store → SG address: '560123 Singapore' already says it — no repeat", () => {
+		expect(addressLines({ ...sgAddress, country: "SG" }, "MY")).toEqual([
+			"Blk 123 Ang Mo Kio Ave 4, #05-678",
+			"560123 Singapore",
+		]);
+	});
+
+	test("a domestic parcel never prints its own country", () => {
+		expect(addressLines({ ...myAddress, country: "MY" }, "MY")).not.toContain(
+			"MALAYSIA",
+		);
+	});
+});
+
 describe("formatParcelWeight", () => {
 	test("under a kilo stays grams; above reads in kilos", () => {
 		expect(formatParcelWeight(850)).toBe("850 g");

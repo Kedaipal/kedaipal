@@ -76,6 +76,8 @@ import { generateTrackingToken } from "./lib/order";
 import type { PermissionLevel } from "./lib/permissions";
 import { rateLimiter } from "./lib/rateLimiter";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
+import { storeLanes } from "./crossBorder";
+import { laneCountriesFor } from "./lib/crossBorder";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 
 type Connection = Doc<"easyparcelConnections">;
@@ -209,11 +211,17 @@ export const startConnect = mutation({
 				message: "EasyParcel isn't set up on this server yet.",
 			};
 		}
-		if (!easyparcelServesStore(access.retailer)) {
+		// Connectable before the overseas lane exists (Zaki, 30 Oct): the card
+		// says what's still missing as a setup step, not a refusal here.
+		if (
+			!courierBookingAllowed(
+				"easyparcel",
+				access.retailer.country ?? DEFAULT_COUNTRY,
+			)
+		) {
 			return {
 				ok: false,
-				message:
-					"EasyParcel is for your overseas orders — turn on delivery to Singapore first (Settings → Fulfilment). Delyva books your couriers within Malaysia.",
+				message: "EasyParcel isn't available for your store's country.",
 			};
 		}
 		if (!access.actingAsAdmin) {
@@ -562,19 +570,15 @@ export const updateSettings = mutation({
 	},
 });
 
-/**
- * Does EasyParcel serve this store at all? Its country must allow it, and
- * where it carries overseas orders only (a MY store, z8r3fdr5yy) the store
- * must have an overseas lane saved — otherwise there is nothing for it to
- * book, and showing a MY domestic seller a second parcel integration beside
- * Delyva would only invite them to book frozen goods on the wrong one.
- */
-function easyparcelServesStore(retailer: Doc<"retailers">): boolean {
-	const country = retailer.country ?? DEFAULT_COUNTRY;
-	if (!courierBookingAllowed("easyparcel", country)) return false;
-	if (COURIER_DESTINATIONS.easyparcel[country] !== "abroad") return true;
-	return (retailer.crossBorderLanes?.length ?? 0) > 0;
-}
+/** The store's overseas lane as the EasyParcel card speaks of it: "on"
+ * (taking orders), "paused" (saved, but a plan/delivery/pricing pause holds)
+ * or "off" (none saved). On a MY store EasyParcel books nothing until it's
+ * on, so the card makes it a setup step — the card is never hidden for it
+ * (Zaki, 30 Oct: a seller must be able to FIND EasyParcel). */
+export type EasyparcelLaneState = {
+	destination: Country;
+	state: "on" | "paused" | "off";
+};
 
 /** Settings-card read — no tokens, ever. */
 export const getSettings = query({
@@ -583,6 +587,16 @@ export const getSettings = query({
 		const access = await resolveStoreAccess(ctx, retailerId, "read");
 		const country = access.retailer.country ?? DEFAULT_COUNTRY;
 		const conn = await connectionFor(ctx, access.retailer._id);
+		const lanes = await storeLanes(ctx, access.retailer);
+		const overseasLane: EasyparcelLaneState = {
+			destination: laneCountriesFor(country)[0],
+			state:
+				lanes.effective.length > 0
+					? "on"
+					: lanes.stored.length > 0
+						? "paused"
+						: "off",
+		};
 		const lastAttempt = await ctx.db
 			.query("courierOAuthStates")
 			.withIndex("by_retailer_provider", (q) =>
@@ -593,11 +607,15 @@ export const getSettings = query({
 		return {
 			/** The integration exists on this deployment AND serves this
 			 * country — false hides the card unless something is connected. */
-			available: isConfigured() && easyparcelServesStore(access.retailer),
+			available:
+				isConfigured() && courierBookingAllowed("easyparcel", country),
 			/** Which orders it books from this store (z8r3fdr5yy): "abroad" on
 			 * a MY store (overseas orders only — Delyva stays domestic), "both"
 			 * on an SG store. The card says so. */
 			destinations: COURIER_DESTINATIONS.easyparcel[country],
+			/** The overseas lane — a setup step on a MY store, a line on an SG
+			 * one (it carries those orders too). */
+			overseasLane,
 			connected: conn !== null,
 			needsReconnect: conn?.revokedAt !== undefined,
 			enabled: conn?.enabled === true,
@@ -957,6 +975,17 @@ function phoneDigits(waPhone: string | undefined): string {
 	return (waPhone ?? "").replace(/\D/g, "");
 }
 
+/** Where the parcel is going: the order's stamped country, else the store's
+ * (orders from before the stamp are domestic). The booking and the card's
+ * view both ask this, so the notice can never judge a different country from
+ * the one the booking sends (found on the /test-code pass, z8r3fdr5yy). */
+function receiverCountryOf(
+	order: Doc<"orders">,
+	storeCountry: Country,
+): Country {
+	return order.deliveryAddress?.country ?? storeCountry;
+}
+
 /** Same rule as Delyva/Lalamove dispatch (z8r3fdh274): a buyer number from
  * outside the country the parcel is GOING TO hands the courier the store's
  * number. Judged by the destination, not the store (z8r3fdr5yy): on an
@@ -1097,7 +1126,7 @@ export const getDispatchContext = internalQuery({
 
 		const weight = await resolveOrderWeight(ctx, order);
 		const country = retailer.country ?? DEFAULT_COUNTRY;
-		const receiverCountry = order.deliveryAddress.country ?? country;
+		const receiverCountry = receiverCountryOf(order, country);
 		const buyerPhone = phoneDigits(order.customer.waPhone);
 		const sellerPhone = phoneDigits(retailer.waPhone);
 		const buyer = buyerContactPhone(buyerPhone, sellerPhone, receiverCountry);
@@ -1999,6 +2028,7 @@ export const getDispatchState = query({
 		});
 		const weight = await resolveOrderWeight(ctx, order);
 		const country = retailer.country ?? DEFAULT_COUNTRY;
+		const receiverCountry = receiverCountryOf(order, country);
 		const pickup = conn?.pickupAddress;
 		const job: EasyparcelJobView | null = latest
 			? {
@@ -2025,10 +2055,12 @@ export const getDispatchState = query({
 				isConfigured() &&
 				courierBookingAllowed("easyparcel", country),
 			country,
+			/** The country the parcel goes to — the notice names it. */
+			receiverCountry,
 			buyerContactFallback: buyerContactPhone(
 				phoneDigits(order.customer.waPhone),
 				phoneDigits(retailer.waPhone),
-				country,
+				receiverCountry,
 			).fallback,
 			pickupSummary: pickup
 				? [

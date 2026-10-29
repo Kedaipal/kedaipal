@@ -236,6 +236,19 @@ export function deliversToLabel(destination: Country): string {
 	return `Delivers to ${countryName(destination)}`;
 }
 
+/** The fee line's name on an OVERSEAS order — "Delivery to Malaysia" — one
+ * spelling for checkout, the buyer's order page and the seller's, so the
+ * three never drift (they did, on the /test-code pass). Undefined at home:
+ * each surface keeps its own domestic word. */
+export function overseasFeeLabel(
+	destination: Country | undefined,
+	storeCountry: Country,
+): string | undefined {
+	return destination !== undefined && destination !== storeCountry
+		? `Delivery to ${countryName(destination)}`
+		: undefined;
+}
+
 /** "Ships from Malaysia" — the marketplace chip on a store listed abroad. */
 export function shipsFromLabel(storeCountry: Country): string {
 	return `Ships from ${countryName(storeCountry)}`;

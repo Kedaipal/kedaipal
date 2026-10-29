@@ -32,6 +32,7 @@ import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { attributionBucket, sourceLabel } from "../../convex/lib/attribution";
 import { DEFAULT_COUNTRY } from "../../convex/lib/country";
+import { overseasFeeLabel } from "../../convex/lib/crossBorder";
 import {
 	formatFulfilmentDate,
 	formatFulfilmentTime,
@@ -1890,7 +1891,8 @@ function OrderDetailRoute() {
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
 						<span>
-							Delivery fee
+							{overseasFeeLabel(order.deliveryAddress?.country, storeCountry) ??
+								"Delivery fee"}
 							{order.deliverySnapshot?.mode === "radius" &&
 							order.deliverySnapshot.distanceKm !== undefined
 								? ` — ${order.deliverySnapshot.distanceKm} km`

@@ -378,10 +378,10 @@ interface CheckoutTotalsProps {
 	/** Collection-service store (86eyg0n8e) — the rider fee line reads
 	 * "Collection" instead of "Delivery". */
 	collectsFromCustomer?: boolean;
-	/** The country an OVERSEAS delivery goes to (z8r3fdr5yy) — the fee line
-	 * reads "Delivery to Malaysia", so the buyer sees the overseas price is
-	 * the one being charged. Undefined at home. */
-	deliveryDestination?: string;
+	/** The fee line's name on an OVERSEAS delivery (z8r3fdr5yy) —
+	 * `overseasFeeLabel`'s "Delivery to Malaysia", so the buyer sees the
+	 * overseas price is the one being charged. Undefined at home. */
+	overseasFeeLabel?: string;
 	/** The cart holds a custom line, so this TOTAL is not the bill: a quote-only
 	 * line contributes nothing yet, and a starting-price line only contributes
 	 * its floor — the seller settles both on the mockup. Prints "+ your quote"
@@ -440,7 +440,7 @@ export function CheckoutTotals({
 	blockedCopy,
 	minRuleAlerts,
 	collectsFromCustomer = false,
-	deliveryDestination,
+	overseasFeeLabel,
 	awaitingQuote = false,
 	voucherDiscount = 0,
 	voucherCode,
@@ -456,9 +456,7 @@ export function CheckoutTotals({
 	const total = subtotal + pickupFee + deliveryFee - voucherDiscount;
 	const feeLabel = collectsFromCustomer
 		? "Collection"
-		: deliveryDestination
-			? `Delivery to ${deliveryDestination}`
-			: "Delivery";
+		: (overseasFeeLabel ?? "Delivery");
 	const pendingParts = pendingTotalParts({
 		awaitingQuote,
 		quotePending: quote?.kind === "pending",

@@ -140,6 +140,7 @@ beforeEach(() => {
 		blockReason: null,
 		bookingEnabled: true,
 		country: "SG",
+		receiverCountry: "SG",
 		buyerContactFallback: false,
 		pickupSummary: "#12-01 10 Anson Road, 079903",
 		computedWeightKg: 0.5,
@@ -148,6 +149,21 @@ beforeEach(() => {
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
+});
+
+describe("the courier-contact notice names where the parcel goes (z8r3fdr5yy)", () => {
+	it("an SG store's parcel to Malaysia speaks of a Malaysian number", () => {
+		state.dispatch = {
+			...(state.dispatch as Record<string, unknown>),
+			receiverCountry: "MY",
+			buyerContactFallback: true,
+		};
+		card();
+		expect(
+			screen.getByText(/isn't a Malaysian number, so the courier gets/),
+		).toBeTruthy();
+		expect(screen.queryByText(/Singapore number/)).toBeNull();
+	});
 });
 
 describe("pre-selection keeps the order's promise (F9)", () => {

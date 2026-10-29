@@ -29,7 +29,7 @@ import {
 	closureOn,
 } from "../../../convex/lib/closedDates";
 import { type Country, isCountry } from "../../../convex/lib/country";
-import { countryName } from "../../../convex/lib/crossBorder";
+import { countryName, overseasFeeLabel } from "../../../convex/lib/crossBorder";
 import {
 	assertValidFulfilmentDate,
 	defaultFulfilmentTimeMinutes,
@@ -1800,9 +1800,9 @@ export function CheckoutPage({
 											collectsFromCustomer={
 												deliveryMethod === "delivery" && collectsFromCustomer
 											}
-											deliveryDestination={
-												deliveryMethod === "delivery" && abroad
-													? countryName(addressCountry)
+											overseasFeeLabel={
+												deliveryMethod === "delivery"
+													? overseasFeeLabel(addressCountry, country)
 													: undefined
 											}
 											awaitingQuote={hasCustomLine}

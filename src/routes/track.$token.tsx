@@ -32,6 +32,7 @@ import {
 	paymentsPausedOrderLine,
 } from "../../convex/lib/buyerPayments";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
+import { overseasFeeLabel } from "../../convex/lib/crossBorder";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
@@ -1895,7 +1896,14 @@ function TrackingRoute() {
 				{/* Frozen delivery charge — same reconciliation rule as the pickup fee. */}
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
-						<span>{isCollection ? "Collection fee" : "Delivery fee"}</span>
+						<span>
+							{isCollection
+								? "Collection fee"
+								: (overseasFeeLabel(
+										order.deliveryAddress?.country,
+										order.retailerCountry,
+									) ?? "Delivery fee")}
+						</span>
 						<span className="tabular-nums">
 							{formatPrice(order.deliveryFee, order.currency)}
 						</span>
