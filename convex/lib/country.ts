@@ -56,17 +56,25 @@ export const COUNTRY_CURRENCY: Record<Country, SupportedCurrency> = {
 
 /**
  * The currency a store charges in: its own setting, else the one its country
- * is born with. ONE fallback for every reader that compares a courier's
- * currency against the store's — the overseas lane's readiness and the
- * checkout quote fell back to different defaults (the country's vs MYR), which
- * on an SG store with no saved currency would have held the lane in one place
- * and priced it in the other (PR #435 review).
+ * is born with. The ONE fallback for a store's own currency — every reader
+ * (orders, counter, claims, vouchers, the public payload, couriers, HitPay)
+ * goes through it. Readers had grown two defaults (the country's vs a
+ * hard-coded MYR), which on an SG store with no saved currency would price in
+ * SGD in one place and MYR in the next (PR #435 review).
+ *
+ * Every store is created with `currency` set and a country switch never clears
+ * it, so today the fallback only answers for rows older than the field — all
+ * Malaysian, which resolve to MYR either way. The stored value is validated on
+ * write (`assertSupportedCurrency`), hence the cast.
  */
 export function storeCurrencyOf(retailer: {
 	currency?: string;
 	country?: Country;
-}): string {
-	return retailer.currency ?? COUNTRY_CURRENCY[retailer.country ?? DEFAULT_COUNTRY];
+}): SupportedCurrency {
+	return (
+		(retailer.currency as SupportedCurrency | undefined) ??
+		COUNTRY_CURRENCY[retailer.country ?? DEFAULT_COUNTRY]
+	);
 }
 
 export function isCountry(value: string): value is Country {

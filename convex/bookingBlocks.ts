@@ -7,6 +7,7 @@
  * blocks to buyers (blocked ≡ full, locked).
  */
 
+import { storeCurrencyOf } from "./lib/country";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
@@ -320,7 +321,7 @@ export const sellerCalendar = query({
 				args.productId !== undefined
 					? scoped[0]?.booking?.capacityPerNight
 					: undefined,
-			currency: access.retailer.currency ?? "MYR",
+			currency: storeCurrencyOf(access.retailer),
 			blocks: visibleBlocks.map((b) => ({
 				_id: b._id,
 				productId: b.productId,

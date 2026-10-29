@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { promotionIsOpen } from "../../convex/lib/promotions";
 import {
 	FlowSkeleton,
@@ -55,7 +54,7 @@ function AddProductsRoute() {
 		<PromotionFlow
 			mode="add"
 			retailerId={retailer._id}
-			currency={retailer.currency ?? DEFAULT_CURRENCY}
+			currency={retailer.currency}
 			catalog={catalog}
 			blockedReason={blockedReason}
 			promotion={detail.promotion}

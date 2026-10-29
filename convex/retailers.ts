@@ -337,13 +337,13 @@ import { ensureCreditAccount } from "./credits";
 import { insertReferral, resolveSignupReferrer } from "./referrals";
 import {
 	assertSupportedCurrency,
-	DEFAULT_CURRENCY,
 	type SupportedCurrency,
 } from "./lib/currency";
 import {
 	type Country,
 	COUNTRY_CURRENCY,
 	DEFAULT_COUNTRY,
+	storeCurrencyOf,
 } from "./lib/country";
 import {
 	adminUserIds,
@@ -1236,7 +1236,7 @@ async function buildRetailerPublic(
 		logoUrl,
 		coverImageStorageId: row.coverImageStorageId,
 		coverImageUrl,
-		currency: (row.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
+		currency: storeCurrencyOf(row),
 		country: row.country ?? DEFAULT_COUNTRY,
 		locale: row.locale ?? DEFAULT_LOCALE,
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
@@ -1435,8 +1435,7 @@ export const getRetailerBySlug = query({
 					logoUrl,
 					coverImageStorageId: active.coverImageStorageId,
 					coverImageUrl,
-					currency:
-						(active.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
+					currency: storeCurrencyOf(active),
 					country: active.country ?? DEFAULT_COUNTRY,
 					locale: active.locale ?? DEFAULT_LOCALE,
 					messageTemplates: active.messageTemplates as
@@ -3647,8 +3646,7 @@ export const updateSettings = mutation({
 		let productsCurrencySynced = 0;
 		if (
 			patch.currency !== undefined &&
-			patch.currency !==
-				((retailer.currency as SupportedCurrency) ?? DEFAULT_CURRENCY)
+			patch.currency !== storeCurrencyOf(retailer)
 		) {
 			const products = await ctx.db
 				.query("products")
