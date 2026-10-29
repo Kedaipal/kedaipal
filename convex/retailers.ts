@@ -238,6 +238,7 @@ import {
 	type StoredAwbConfig,
 } from "./lib/awbConfig";
 import { sanitizeAttributionSource } from "./lib/attribution";
+import { isAcquisitionChannel } from "./lib/metrics";
 import { isChoosablePickupPoint } from "./lib/pickupChoice";
 import { sanitizeUnitLine, UNIT_LINE_MAX_LENGTH } from "./lib/address";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
@@ -1738,6 +1739,11 @@ export const createRetailer = mutation({
 		// server-side key events stitch to their client-side funnel. A hint like
 		// signupSource: validated here (wire format only), dropped otherwise.
 		gaClientId: v.optional(v.string()),
+		// The seller's own answer to "How did you find Kedaipal?" (86eye3eyp) —
+		// one of ACQUISITION_CHANNELS. Optional, and a CLAIM: stored with
+		// acquisitionSetBy "seller" for an admin to confirm or change. An
+		// unknown value is dropped, never stored and never a failed signup.
+		acquisitionSource: v.optional(v.string()),
 	},
 	handler: async (ctx, args): Promise<{ slug: string }> => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -1833,6 +1839,9 @@ export const createRetailer = mutation({
 			(referral ? referralSourceTag(referral.slug) : undefined);
 
 		const now = Date.now();
+		const sellerChannel = isAcquisitionChannel(args.acquisitionSource)
+			? args.acquisitionSource
+			: undefined;
 		// Consent is implied: the onboarding UI gates submission on a required,
 		// not-pre-checked "I agree" checkbox. Stamp the server-side current
 		// versions (never client-supplied) for tamper resistance.
@@ -1850,6 +1859,13 @@ export const createRetailer = mutation({
 			...(signupSource !== undefined ? { signupSource } : {}),
 			...(signupReferrerId !== undefined ? { signupReferrerId } : {}),
 			...(gaClientId !== undefined ? { gaClientId } : {}),
+			...(sellerChannel !== undefined
+				? {
+						acquisitionSource: sellerChannel,
+						acquisitionSetBy: "seller" as const,
+						acquisitionSetAt: now,
+					}
+				: {}),
 			channel: "whatsapp",
 			// Default self-collect ON so new retailers discover the pickup feature
 			// in the onboarding checklist. They can toggle it off from Settings →
