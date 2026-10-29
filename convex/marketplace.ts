@@ -74,10 +74,12 @@ export type MarketplaceStoreCard = {
  * not hidden-by-category, not a finished event — because "listed on the
  * directory, empty on arrival" is a dead end we send buyers into.
  *
- * `take(20)` bounds the read: the first 20 active rows almost always contain
- * a visible one, and a store whose first 20 active products are ALL
- * storefront-hidden (finished events / counter-only) reads as not listable —
- * which is the honest answer for what a buyer would find.
+ * Walks the index and returns on the first hit, like the sitemap's
+ * `storefrontIndex.hasVisibleProduct` — a window (`take(20)`) was wrong once
+ * a predicate ran AFTER it (PR #431 review): a frozen seller whose oldest 20
+ * visible products stay home vanished from the other country's directory
+ * though newer dry goods could make the trip. The scan is bounded by the
+ * catalogue cap, and the common case still reads ~1 document.
  */
 export async function hasVisibleProduct(
 	ctx: QueryCtx,
@@ -86,7 +88,7 @@ export async function hasVisibleProduct(
 	 * product that can also go abroad (z8r3fdr5yy). */
 	alsoRequire: (row: Doc<"products">) => boolean = () => true,
 ): Promise<boolean> {
-	const candidates = await ctx.db
+	for await (const row of ctx.db
 		.query("products")
 		.withIndex("by_retailer_active", (q) =>
 			q.eq("retailerId", retailerId).eq("active", true),
@@ -96,11 +98,10 @@ export async function hasVisibleProduct(
 				q.neq(q.field("hidden"), true),
 				q.neq(q.field("hiddenByCategory"), true),
 			),
-		)
-		.take(20);
-	return candidates.some(
-		(row) => !hiddenFromStorefront(row) && alsoRequire(row),
-	);
+		)) {
+		if (!hiddenFromStorefront(row) && alsoRequire(row)) return true;
+	}
+	return false;
 }
 
 /**

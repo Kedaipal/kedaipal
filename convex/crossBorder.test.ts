@@ -428,4 +428,51 @@ describe("/stores — listed abroad only while delivering there", () => {
 		const sg = await t.query(api.marketplace.listStores, { country: "SG" });
 		expect(sg.map((c) => c.slug)).not.toContain("lekor");
 	});
+
+	test("one shippable product behind 20+ home-only ones still lists the store (PR #431 review)", async () => {
+		// A frozen seller marks most of the shelf domestic-only; the dry goods
+		// that CAN cross are the newest rows. A fixed read window judged only
+		// the oldest ones and dropped the store from the other country's
+		// directory — the scan must reach the first shippable product.
+		const t = setup();
+		const { asOwner, retailerId, keropok, lekor } = await seedStore(t);
+		await openLane(asOwner);
+		await asOwner.mutation(api.crossBorder.setDomesticOnly, {
+			retailerId,
+			changes: [
+				{ productId: keropok, domesticOnly: true },
+				{ productId: lekor, domesticOnly: true },
+			],
+		});
+		// 20 more home-only rows, cloned straight into the table: the listing
+		// reads products only, and `products.create` is rate-limited to 20/min.
+		await t.run(async (ctx) => {
+			const { _id, _creationTime, ...template } = (await ctx.db.get(lekor))!;
+			for (let i = 0; i < 20; i++) {
+				await ctx.db.insert("products", {
+					...template,
+					name: `Frozen pack ${i}`,
+					slug: `frozen-pack-${i}`,
+					sortOrder: 2 + i,
+				});
+			}
+		});
+		expect(
+			(await t.query(api.marketplace.listStores, { country: "SG" })).map(
+				(c) => c.slug,
+			),
+		).not.toContain("lekor");
+		await asOwner.mutation(api.products.create, {
+			retailerId,
+			name: "Dried keropok (newest)",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 99,
+			blockWhenOutOfStock: false,
+			requiresProof: false,
+			variants: [{ optionValues: [], price: 1200, onHand: 50, parcelWeightG: 300 }],
+		});
+		const sg = await t.query(api.marketplace.listStores, { country: "SG" });
+		expect(sg.find((c) => c.slug === "lekor")?.shipsFrom).toBe("MY");
+	});
 });
