@@ -237,7 +237,58 @@ async function boundSession(t: ReturnType<typeof setup>, retailerId: Id<"retaile
 	return sessionId;
 }
 
+/** Files a product under a named category, straight into the tables. */
+async function fileUnder(
+	t: { run: ReturnType<typeof setup>["run"] },
+	productId: Id<"products">,
+	name: string,
+) {
+	await t.run(async (ctx) => {
+		const product = await ctx.db.get(productId);
+		if (!product) throw new Error("product missing");
+		const now = Date.now();
+		const categoryId = await ctx.db.insert("categories", {
+			retailerId: product.retailerId,
+			name,
+			slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+			active: true,
+			sortOrder: 0,
+			createdAt: now,
+			updatedAt: now,
+		});
+		await ctx.db.insert("productCategories", {
+			productId,
+			categoryId,
+			retailerId: product.retailerId,
+			sortOrder: 0,
+			createdAt: now,
+		});
+	});
+}
+
 describe("counterCheckout — createOrderFromSession", () => {
+	test("freezes the product's categories onto the line (86eyrtz74)", async () => {
+		// Every order door stamps them, or a counter sale reads "Uncategorized"
+		// in the inbox filter whatever the seller has filed it under.
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const variant = await t.run((ctx) => ctx.db.get(variantId));
+		await fileUnder(t, variant!.productId, "Kuih");
+		const sessionId = await boundSession(t, retailer._id);
+
+		const { orderId } = await t
+			.withIdentity({ subject: USER_A })
+			.mutation(api.counterCheckout.createOrderFromSession, {
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+			});
+
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0].categoryNames).toEqual(["Kuih"]);
+	});
+
 	test("creates a COMPLETED self-collect order, paid in person, and completes the session", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, USER_A);

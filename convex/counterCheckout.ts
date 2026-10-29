@@ -90,6 +90,7 @@ import {
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import { withCategoryNames } from "./lib/orderCategoryNames";
 import {
 	claimVoucherState,
 	redeemVoucher,
@@ -1219,7 +1220,9 @@ export const createOrderFromSession = mutation({
 			retailerId: retailer._id,
 			shortId,
 			trackingToken: generateTrackingToken(),
-			items: snapshotItems,
+			// Categories frozen at sale, like every order door (86eyrtz74) — without
+			// it a counter sale reads "Uncategorized" in the inbox filter.
+			items: await withCategoryNames(ctx, snapshotItems),
 			subtotal,
 			total,
 			currency,
