@@ -94,6 +94,7 @@ import {
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import { withCategoryNames } from "./lib/orderCategoryNames";
 import {
 	claimVoucherState,
 	redeemVoucher,
@@ -1264,16 +1265,23 @@ export const commit = mutation({
 			//
 			// This is the THIRD create path to need it (storefront, counter, claim)
 			// — each builds its own snapshot, so a new frozen field has to be
-			// stamped in three places. See docs/stock-adjustments.md.
-			items: claim.lines.map((line) => {
-				const pickupNote = pickupNoteByProduct.get(line.productId);
-				return {
-					...line,
-					stockReserved: requestedByVariant.get(line.variantId)?.block === true,
-					// Frozen from the live product at commit — see the header.
-					...(pickupNote !== undefined ? { pickupNote } : {}),
-				};
-			}),
+			// stamped in every door (booking included). See
+			// docs/stock-adjustments.md.
+			// Categories are frozen at COMMIT too (86eyrtz74), from the live
+			// junctions — the same moment `stockReserved` describes.
+			items: await withCategoryNames(
+				ctx,
+				claim.lines.map((line) => {
+					const pickupNote = pickupNoteByProduct.get(line.productId);
+					return {
+						...line,
+						stockReserved:
+							requestedByVariant.get(line.variantId)?.block === true,
+						// Frozen from the live product at commit — see the header.
+						...(pickupNote !== undefined ? { pickupNote } : {}),
+					};
+				}),
+			),
 			subtotal,
 			total,
 			// Only recorded when the voucher actually applied — an order that

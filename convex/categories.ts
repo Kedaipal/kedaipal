@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
@@ -14,6 +15,7 @@ import {
 	recomputeHiddenByCategoryForCategory,
 	recomputeProductHiddenByCategory,
 } from "./lib/categoryCounts";
+import { filePastOrdersPage } from "./lib/orderCategoryNames";
 import { rateLimiter } from "./lib/rateLimiter";
 import { MAX_PRODUCTS_PER_RETAILER } from "./lib/productCap";
 import { assertValidCategorySlug } from "./lib/slug";
@@ -688,13 +690,20 @@ export const reorderProducts = mutation({
  * (chargeablePickup's set-gated/clear-ungated precedent). The denormalized
  * `categories.productCount` is adjusted for each add/remove when the product is
  * storefront-visible.
+ *
+ * ADDING a category also files the product's past orders that recorded none
+ * (`filePastOrdersPage`): the newest batch here, so the save can say how many,
+ * the rest as scheduled batches. Lines that already carry a category keep it.
  */
 export const setProductCategories = mutation({
 	args: {
 		productId: v.id("products"),
 		categoryIds: v.array(v.id("categories")),
 	},
-	handler: async (ctx, { productId, categoryIds }): Promise<void> => {
+	handler: async (
+		ctx,
+		{ productId, categoryIds },
+	): Promise<PastOrderFiling> => {
 		const product = await ctx.db.get(productId);
 		if (!product) throw new Error("Product not found");
 		const access = await requireRetailerOwner(ctx, product.retailerId, "write");
@@ -799,6 +808,65 @@ export const setProductCategories = mutation({
 				"categories.setProductCategories",
 				productId,
 			);
+		}
+		if (added.length === 0) return NOTHING_FILED;
+
+		const page = await filePastOrdersPage(ctx, {
+			retailerId: product.retailerId,
+			productId,
+			cursor: null,
+		});
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.categories.filePastOrders, {
+				retailerId: product.retailerId,
+				productId,
+				cursor: page.continueCursor,
+			});
+		}
+		const categoryNames = (
+			await Promise.all(added.map((id) => ctx.db.get(id)))
+		)
+			.flatMap((c) => (c ? [c.name] : []))
+			.sort((a, b) => a.localeCompare(b));
+		return {
+			filedOrders: page.filed,
+			filingContinues: !page.isDone,
+			categoryNames,
+		};
+	},
+});
+
+/** What a category save did to past orders — the product page's toast reads it. */
+export interface PastOrderFiling {
+	/** Orders filed in the save itself (the newest batch). */
+	filedOrders: number;
+	/** Older orders are still being filed in the background. */
+	filingContinues: boolean;
+	/** The categories this save ADDED, by name — what the toast names. */
+	categoryNames: string[];
+}
+
+const NOTHING_FILED: PastOrderFiling = {
+	filedOrders: 0,
+	filingContinues: false,
+	categoryNames: [],
+};
+
+/** The scheduled continuation of `setProductCategories`' past-order filing,
+ * one batch per run until the store's history is walked. */
+export const filePastOrders = internalMutation({
+	args: {
+		retailerId: v.id("retailers"),
+		productId: v.id("products"),
+		cursor: v.string(),
+	},
+	handler: async (ctx, args): Promise<void> => {
+		const page = await filePastOrdersPage(ctx, args);
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.categories.filePastOrders, {
+				...args,
+				cursor: page.continueCursor,
+			});
 		}
 	},
 });
