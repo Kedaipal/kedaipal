@@ -17,6 +17,7 @@ import { useAction } from "convex/react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import type { Country } from "../../convex/lib/country";
 
 export type LiveDeliveryQuoteState =
 	| { state: "idle" }
@@ -73,6 +74,8 @@ export function useLiveDeliveryQuote({
 	items,
 	fulfilmentDate,
 	fulfilmentTimeMinutes,
+	country,
+	postcode,
 }: {
 	/** False while the store isn't live-priced / the surface is closed. */
 	enabled: boolean;
@@ -110,6 +113,13 @@ export function useLiveDeliveryQuote({
 	 * follow-up) — the quote then prices the exact moment instead of the noon
 	 * heuristic; a time change re-quotes exactly like a date change. */
 	fulfilmentTimeMinutes?: number;
+	/** The Deliver-to country when it's ABROAD (z8r3fdr5yy) — the lane's
+	 * EasyParcel price. Absent = a home delivery. */
+	country?: Country;
+	/** The typed postcode, watched — an overseas address is often entered by
+	 * hand with no pin, and EasyParcel prices (and the order binds) on the
+	 * postcode. Only read for an overseas quote. */
+	postcode?: string;
 }): LiveDeliveryQuoteState {
 	const quoteLalamove = useAction(api.lalamove.quoteForCheckout);
 	const quoteLive = useAction(api.liveQuote.quoteForCheckout);
@@ -143,16 +153,19 @@ export function useLiveDeliveryQuote({
 	const lastRef = useRef<{ pin: string; lines: string } | null>(null);
 
 	const hasCoords = latitude !== undefined && longitude !== undefined;
+	const lanePostcode = country !== undefined ? (postcode ?? "").trim() : "";
+	// An overseas lane quote is priced on the postcode; a home one on the pin.
+	const canQuote = country !== undefined ? lanePostcode !== "" : hasCoords;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: fires per picked pin / chosen day; the action identity is stable and the label is read fresh inside the timeout.
 	useEffect(() => {
-		if (!enabled || !retailerId || !hasCoords) {
+		if (!enabled || !retailerId || !canQuote) {
 			seq.current++;
 			setQuote({ state: "idle" });
 			return;
 		}
 		const mySeq = ++seq.current;
 		setQuote({ state: "loading" });
-		const pin = `${latitude},${longitude},${fulfilmentDate},${fulfilmentTimeMinutes}`;
+		const pin = `${country !== undefined ? `pc:${lanePostcode}` : `${latitude},${longitude}`},${fulfilmentDate},${fulfilmentTimeMinutes}`;
 		const linesOnly =
 			lastRef.current !== null &&
 			lastRef.current.pin === pin &&
@@ -164,8 +177,10 @@ export function useLiveDeliveryQuote({
 				const request = providerAware
 					? quoteLive({
 							retailerId,
-							latitude,
-							longitude,
+							// An overseas quote binds to the postcode, never a pin.
+							...(country !== undefined
+								? { country }
+								: { latitude, longitude }),
 							address: labelRef.current(),
 							city: parts.city,
 							state: parts.state,
@@ -176,8 +191,10 @@ export function useLiveDeliveryQuote({
 						})
 					: quoteLalamove({
 							retailerId,
-							latitude,
-							longitude,
+							// The legacy rider-only mode is home-only, so `canQuote`
+							// above already required the pin.
+							latitude: latitude as number,
+							longitude: longitude as number,
 							address: labelRef.current(),
 							fulfilmentDate,
 							fulfilmentTimeMinutes,
@@ -203,9 +220,11 @@ export function useLiveDeliveryQuote({
 		enabled,
 		providerAware,
 		retailerId,
-		hasCoords,
+		canQuote,
 		latitude,
 		longitude,
+		country,
+		lanePostcode,
 		fulfilmentDate,
 		fulfilmentTimeMinutes,
 		linesKey,

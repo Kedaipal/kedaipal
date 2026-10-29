@@ -1151,8 +1151,15 @@ export function CheckoutPage({
 	// answers {kind:"live"} and the real fee comes from the shared
 	// useLiveDeliveryQuote hook (quoteForCheckout action, once per picked pin).
 	const isLiveMode = rawQuote?.kind === "live";
+	const watchedPostcode = useStore(
+		form.store,
+		(s) => s.values.address.postcode,
+	);
 	const liveQuote = useLiveDeliveryQuote({
 		enabled: isLiveMode,
+		// Abroad, the live price is the lane's EasyParcel quote (z8r3fdr5yy).
+		country: abroad ? addressCountry : undefined,
+		postcode: abroad ? watchedPostcode : undefined,
 		// The STORE's mode decides which action prices it — never inferred here.
 		providerAware: rawQuote?.kind === "live" && rawQuote.providerAware,
 		retailerId,

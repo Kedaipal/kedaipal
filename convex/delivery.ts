@@ -22,7 +22,10 @@ import {
 	laneFor,
 	resolveCrossBorderQuote,
 	shipsAbroad,
+	laneNeedsLiveQuote,
 } from "./lib/crossBorder";
+import { COURIER_DESTINATIONS } from "./lib/courierProviders";
+import { loadEasyparcelQuoteBlock } from "./lib/easyparcelArming";
 import {
 	delyvaBidsAtCheckout,
 	lalamoveBookingArmed,
@@ -142,6 +145,17 @@ export const quote = query({
 					homeOnly.push({ productId: product._id, name: product.name });
 			}
 			if (homeOnly.length > 0) return { kind: "home_only", products: homeOnly };
+			// A live lane is priced by EasyParcel for this exact cart and
+			// address — the checkout fetches it (`liveQuote.quoteForCheckout`
+			// with the country), unless the cart has earned free delivery.
+			if (laneNeedsLiveQuote(lane, Math.max(0, args.subtotal))) {
+				return {
+					kind: "live",
+					providerAware: true,
+					riders: false,
+					couriers: true,
+				};
+			}
 			const resolved = resolveCrossBorderQuote({
 				pricing: lane.pricing,
 				subtotal: Math.max(0, args.subtotal),
@@ -177,7 +191,16 @@ export const quote = query({
 				providerAware,
 				// The legacy single-provider mode is riders by definition.
 				riders: providerAware ? lalamoveBookingArmed(retailer) : true,
-				couriers: providerAware && delyvaBidsAtCheckout(retailer),
+				// Delyva, or EasyParcel where it carries home parcels (SG).
+				couriers:
+					providerAware &&
+					(delyvaBidsAtCheckout(retailer) ||
+						(COURIER_DESTINATIONS.easyparcel[storeCountry] !== "abroad" &&
+							(await loadEasyparcelQuoteBlock(
+								ctx,
+								retailer,
+								retailer.currency ?? "MYR",
+							)) === null)),
 			};
 		}
 		const destination =

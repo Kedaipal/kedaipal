@@ -402,6 +402,29 @@ export const PARCEL_BOXES = {
 
 export type ParcelBox = keyof typeof PARCEL_BOXES;
 
+/** Couriers charge the greater of a parcel's real weight and its size weight
+ * (length × width × height in cm ÷ 5000) — the industry divisor. */
+export const VOLUMETRIC_DIVISOR = 5000;
+
+/** The weight a box is charged as when it's light for its size, in kg. */
+export function boxSizeWeightKg(box: ParcelBox): number {
+	const d = PARCEL_BOXES[box];
+	return (d.lengthCm * d.widthCm * d.heightCm) / VOLUMETRIC_DIVISOR;
+}
+
+/**
+ * The box a checkout quotes with, guessed from the cart's weight (Zaki, 30
+ * Oct): the smallest box whose size weight covers the parcel's real weight —
+ * a parcel that heavy rarely fits anything smaller. Small ≤ 0.6 kg, Medium
+ * ≤ 2.25 kg, else Large. The seller still picks the real box at booking.
+ */
+export function boxForWeight(kg: number): ParcelBox {
+	for (const box of ["small", "medium", "large"] as const) {
+		if (kg <= boxSizeWeightKg(box)) return box;
+	}
+	return "large";
+}
+
 /** kg → the API's double(8,2), rounded UP so a declared weight is never
  * lighter than the real one (an under-declared parcel is surcharged by the
  * courier after the fact). */

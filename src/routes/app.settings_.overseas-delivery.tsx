@@ -17,11 +17,22 @@ import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
  * there.
  */
 export const Route = createFileRoute("/app/settings_/overseas-delivery")({
+	// `start` = which way to price it, from the Delivery-at-a-glance card's two
+	// buttons (z8r3fdr5yy): the page opens with that option chosen.
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { start?: "own" | "live" } => ({
+		start:
+			search.start === "own" || search.start === "live"
+				? search.start
+				: undefined,
+	}),
 	component: OverseasDeliveryRoute,
 });
 
 function OverseasDeliveryRoute() {
 	const retailer = useDashboardRetailer();
+	const { start } = Route.useSearch();
 	if (!retailer) {
 		return (
 			<div className="flex flex-col gap-6">
@@ -63,8 +74,8 @@ function OverseasDeliveryRoute() {
 					currency={retailer.currency}
 					subscription={retailer.subscription}
 					offerDelivery={retailer.offerDelivery}
-					deliveryConfig={retailer.deliveryConfig}
 					lanes={retailer.crossBorderLanes}
+					start={start}
 				/>
 			</AreaGate>
 		</div>

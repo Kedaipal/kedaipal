@@ -46,6 +46,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
 import {
+	boxForWeight,
 	describeEasyparcelService,
 	type EasyparcelRate,
 	PARCEL_BOXES,
@@ -132,6 +133,9 @@ export function EasyparcelDispatchCard({
 		if (dispatch?.computedWeightKg != null) {
 			seededWeight.current = true;
 			setWeightInput(String(dispatch.computedWeightKg));
+			// The same box the checkout quoted with (z8r3fdr5yy), so the
+			// pre-selected booking matches what the buyer paid for.
+			setBox(boxForWeight(dispatch.computedWeightKg));
 		}
 	}, [dispatch?.computedWeightKg]);
 

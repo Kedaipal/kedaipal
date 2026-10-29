@@ -14,7 +14,8 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Globe, Plus, Trash2 } from "lucide-react";
+import { useMutation } from "convex/react";
+import { CircleCheck, ExternalLink, Globe, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -23,14 +24,13 @@ import type { Country } from "../../../convex/lib/country";
 import {
 	type CrossBorderLane,
 	countryName,
+	domesticOnlyCouriersDeliver,
+	type LanePause,
 	laneCountriesFor,
 	lanePause,
-	liveQuoteCouriersDeliver,
 } from "../../../convex/lib/crossBorder";
-import {
-	DELIVERY_BANDS_MAX,
-	type DeliveryConfig,
-} from "../../../convex/lib/delivery";
+import { DELIVERY_BANDS_MAX } from "../../../convex/lib/delivery";
+import { useActAsRetailerId } from "../../hooks/useActAs";
 import { usePermission } from "../../hooks/usePermission";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { convexErrorMessage } from "../../lib/format";
@@ -49,12 +49,14 @@ import { Button } from "../ui/button";
 import { ModeRow, ModeRowGroup } from "../ui/mode-row";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import { MoneyInput, UnitInput } from "./delivery-pricing";
+import { ParcelBoxGuide } from "./parcel-box-guide";
 import {
 	Card,
 	Glance,
 	HelperBullets,
 	SAVE_BTN_CLASS,
 	SectionHeading,
+	SourceLabel,
 } from "./settings-primitives";
 
 const KIND_UI: Record<LanePriceKind, { title: string; line: string }> = {
@@ -70,7 +72,15 @@ const KIND_UI: Record<LanePriceKind, { title: string; line: string }> = {
 		title: "Free — you cover the courier",
 		line: "Buyers pay nothing for delivery; you pay the courier on every order.",
 	},
+	live: {
+		title: "Priced live by EasyParcel",
+		line: "Each buyer pays the courier's real price for their parcel, quoted at checkout from its weight — no price to set.",
+	},
 };
+
+/** The two halves of the chooser (the Delivery pricing pattern): prices the
+ * seller sets, then the partner that prices for them. */
+const OWN_KINDS: LanePriceKind[] = ["flat", "weight", "free"];
 
 export function OverseasDelivery({
 	retailerId,
@@ -78,16 +88,18 @@ export function OverseasDelivery({
 	currency,
 	subscription,
 	offerDelivery,
-	deliveryConfig,
 	lanes,
+	start,
 }: {
 	retailerId: Id<"retailers">;
 	storeCountry: Country;
 	currency: string;
 	subscription: SubscriptionView | undefined;
 	offerDelivery: boolean | undefined;
-	deliveryConfig: DeliveryConfig | undefined;
 	lanes: CrossBorderLane[] | undefined;
+	/** Arrived from "Set your own price" / "Use EasyParcel live price" on the
+	 * Delivery-at-a-glance card: open with that option already chosen. */
+	start?: "own" | "live";
 }) {
 	const navigate = useNavigate();
 	const updateSettings = useUpdateSettings();
@@ -96,15 +108,25 @@ export function OverseasDelivery({
 	const where = countryName(destination);
 	const storedLane = lanes?.find((l) => l.country === destination);
 
-	const pause = lanePause({
+	// The store-wide half is judged here (it gates the switch); the lane's own
+	// holds — awaiting products, EasyParcel not ready — come from the server,
+	// which is the only side that can see the EasyParcel connection.
+	const storePause = lanePause({
 		planAllows: hasFeature(subscription, "crossBorder"),
 		offerDelivery,
-		deliveryConfig,
 	});
-	const [enabling, setEnabling] = useState(false);
-	const [draft, setDraft] = useState<LaneDraft>(() =>
-		draftFromLane(storedLane),
+	// Arriving to start one of the two ways opens the form on it — unless a
+	// lane already exists or the store can't take one yet (the switch says why).
+	const [enabling, setEnabling] = useState(
+		() =>
+			start !== undefined && storedLane === undefined && storePause === null,
 	);
+	const [draft, setDraft] = useState<LaneDraft>(() => {
+		const seeded = draftFromLane(storedLane);
+		return start === "live" && storedLane === undefined
+			? { ...seeded, kind: "live" }
+			: seeded;
+	});
 	const [error, setError] = useState<string | null>(null);
 	const [saving, setSaving] = useState(false);
 	const patch = (next: Partial<LaneDraft>) =>
@@ -113,7 +135,35 @@ export function OverseasDelivery({
 	const overview = useQuery(
 		convexQuery(api.crossBorder.settingsOverview, { retailerId }),
 	).data;
-	const weightMatters = draft.kind === "weight";
+	const pause: LanePause | null = storePause ?? overview?.lanes.pause ?? null;
+	// EasyParcel's state, for the live option: connected? what's missing?
+	const actAsRetailerId = useActAsRetailerId();
+	const easyparcel = useQuery(
+		convexQuery(api.easyparcel.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	const startConnect = useMutation(api.easyparcel.startConnect);
+	const [leaving, setLeaving] = useState(false);
+	async function connectEasyparcel() {
+		setLeaving(true);
+		try {
+			const here = window.location;
+			const result = await startConnect({
+				retailerId: actAsRetailerId,
+				// Back here, where the lane waiting on it turns on by itself.
+				returnTo: `${here.origin}${here.pathname}${here.search}`,
+			});
+			if (!result.ok) {
+				toast.error(result.message);
+				setLeaving(false);
+				return;
+			}
+			window.location.assign(result.url);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+			setLeaving(false);
+		}
+	}
+	const weightMatters = draft.kind === "weight" || draft.kind === "live";
 	const missingWeights = useQuery(
 		convexQuery(
 			api.products.missingParcelWeights,
@@ -123,10 +173,14 @@ export function OverseasDelivery({
 
 	const on = storedLane !== undefined;
 	const editing = on || enabling;
-	// A paused lane keeps its price, but the server refuses any change to it
-	// until the pause is fixed — so the form says so instead of letting a save
-	// fail after the click (found on the /test-code pass).
-	const lanePaused = on && pause !== null;
+	// A store-wide pause keeps the price but the server refuses any change to
+	// it until fixed — so the form says so instead of letting a save fail
+	// after the click (found on the /test-code pass). A lane HOLD (products,
+	// EasyParcel) never locks the price: switching off EasyParcel pricing is
+	// one of the ways out of it.
+	const lanePaused = on && storePause !== null;
+	const holding =
+		pause === "awaiting_products" || pause === "courier_unavailable";
 
 	async function save() {
 		setError(null);
@@ -139,7 +193,9 @@ export function OverseasDelivery({
 		try {
 			await updateSettings({ crossBorderLanes: [parsed.lane] });
 			if (!on) {
-				toast.success(`Delivery to ${where} is on. Now choose what can go.`);
+				// Saved, but not offered yet: it goes live once the products are
+				// chosen (and, for EasyParcel pricing, once EasyParcel can quote).
+				toast.success(`Saved. Now choose what can go to ${where}.`);
 				// The one-time pass (Zaki, 28 Oct): every product starts able to
 				// go; the seller unticks what can't, in one screen.
 				void navigate({
@@ -182,12 +238,14 @@ export function OverseasDelivery({
 	}
 
 	// The switch can always be turned OFF; ON needs nothing to be in the way.
-	const toggleDisabled = saving || (!on && pause !== null);
+	const toggleDisabled = saving || (!on && storePause !== null);
 	// The badge says what BUYERS get, so a flipped-but-unsaved switch reads
 	// "Not saved yet", never a stale "Off" beside a switch showing on (found
 	// on the /test-code pass). Nothing is live until the price is saved.
 	const glance = on ? (
-		pause ? (
+		pause === "awaiting_products" ? (
+			<Glance tone="warn">Almost on</Glance>
+		) : pause ? (
 			<Glance tone="warn">Paused</Glance>
 		) : (
 			<Glance>On</Glance>
@@ -198,21 +256,63 @@ export function OverseasDelivery({
 		<Glance tone="grey">Off</Glance>
 	);
 
-	const fixLink = (block: NonNullable<typeof pause>) => {
+	const linkClass =
+		"inline-flex min-h-11 items-center font-semibold text-foreground underline underline-offset-2";
+	const fixLink = (block: LanePause) => {
 		if (block === "plan") return null;
-		const to =
-			block === "live_pricing"
-				? ("/app/settings/delivery-pricing" as const)
-				: ("/app/settings" as const);
+		if (block === "delivery_off")
+			return (
+				<Link
+					to="/app/settings"
+					search={{ tab: "fulfilment" }}
+					className={linkClass}
+				>
+					Turn on delivery
+				</Link>
+			);
+		if (block === "awaiting_products")
+			return (
+				<Link
+					to="/app/products/overseas"
+					search={{ first: true }}
+					className={linkClass}
+				>
+					Choose what can go
+				</Link>
+			);
+		// courier_unavailable: the one step EasyParcel is waiting on.
+		const ep = overview?.lanes.easyparcelBlock;
+		if (ep === "not_connected" || ep === "reconnect_needed" || ep == null)
+			return (
+				<button
+					type="button"
+					disabled={leaving}
+					onClick={() => void connectEasyparcel()}
+					className={`${linkClass} self-start disabled:opacity-60`}
+				>
+					{ep === "reconnect_needed"
+						? "Reconnect EasyParcel"
+						: "Connect EasyParcel"}
+				</button>
+			);
+		if (ep === "no_sender_phone")
+			return (
+				<Link
+					to="/app/settings"
+					search={{ tab: "whatsapp" }}
+					className={linkClass}
+				>
+					Add your WhatsApp number
+				</Link>
+			);
 		return (
 			<Link
-				to={to}
-				search={block === "delivery_off" ? { tab: "fulfilment" } : undefined}
-				className="inline-flex min-h-11 items-center font-semibold text-foreground underline underline-offset-2"
+				to="/app/settings"
+				search={{ tab: "integrations" }}
+				hash="settings-easyparcel"
+				className={linkClass}
 			>
-				{block === "live_pricing"
-					? "Change delivery pricing"
-					: "Turn on delivery"}
+				Finish EasyParcel setup
 			</Link>
 		);
 	};
@@ -242,9 +342,7 @@ export function OverseasDelivery({
 					</div>
 
 					{pause === "plan" && !on ? (
-						<ProFeatureTease
-							message={laneBlockCopy("plan", storeCountry, destination)}
-						/>
+						<ProFeatureTease message={laneBlockCopy("plan", destination)} />
 					) : null}
 					{pause !== null && pause !== "plan" && !on ? (
 						<div
@@ -253,7 +351,7 @@ export function OverseasDelivery({
 								TONE_PANEL.neutral,
 							)}
 						>
-							<p>{laneBlockCopy(pause, storeCountry, destination)}</p>
+							<p>{laneBlockCopy(pause, destination)}</p>
 							{fixLink(pause)}
 						</div>
 					) : null}
@@ -265,11 +363,21 @@ export function OverseasDelivery({
 								TONE_PANEL.warn,
 							)}
 						>
-							<p className="font-semibold">
-								Paused — buyers can't choose {where} right now.
+							{pause === "awaiting_products" ? null : (
+								<p className="font-semibold">
+									Paused — buyers can't choose {where} right now.
+								</p>
+							)}
+							<p>
+								{laneBlockCopy(
+									pause,
+									destination,
+									overview?.lanes.easyparcelBlock,
+								)}
 							</p>
-							<p>{laneBlockCopy(pause, storeCountry, destination)}</p>
-							<p>Your price is kept and comes back on its own.</p>
+							{holding ? null : (
+								<p>Your price is kept and comes back on its own.</p>
+							)}
 							{pause === "plan" ? (
 								<UpgradeLink className="mt-1 self-start" />
 							) : (
@@ -290,7 +398,8 @@ export function OverseasDelivery({
 							className="flex min-w-0 flex-col gap-4 disabled:opacity-60"
 						>
 							<ModeRowGroup label={`How you charge for delivery to ${where}`}>
-								{(Object.keys(KIND_UI) as LanePriceKind[]).map((kind) => (
+								<SourceLabel source="builtin">you set the price</SourceLabel>
+								{OWN_KINDS.map((kind) => (
 									<ModeRow
 										key={kind}
 										active={draft.kind === kind}
@@ -302,7 +411,34 @@ export function OverseasDelivery({
 										description={KIND_UI[kind].line}
 									/>
 								))}
+								<SourceLabel source="partner">runs on your account</SourceLabel>
+								<ModeRow
+									active={draft.kind === "live"}
+									onSelect={() => {
+										setError(null);
+										patch({ kind: "live" });
+									}}
+									title={KIND_UI.live.title}
+									description={KIND_UI.live.line}
+								/>
 							</ModeRowGroup>
+
+							{draft.kind === "live" ? (
+								<div className="flex flex-col gap-4">
+									<EasyparcelReadiness
+										settings={easyparcel}
+										connecting={leaving}
+										onConnect={() => void connectEasyparcel()}
+										where={where}
+									/>
+									<ParcelBoxGuide />
+									<FreeAboveField
+										draft={draft}
+										patch={patch}
+										currency={currency}
+									/>
+								</div>
+							) : null}
 
 							{draft.kind === "flat" ? (
 								<div className="flex flex-wrap items-start gap-4">
@@ -546,7 +682,7 @@ export function OverseasDelivery({
 									Settings → Integrations
 								</Link>
 								), or send it with any courier and add the tracking number on
-								the order. {liveQuoteCouriersDeliver(storeCountry)} within{" "}
+								the order. {domesticOnlyCouriersDeliver(storeCountry)} within{" "}
 								{countryName(storeCountry)} only.
 							</>,
 							// "What can go" only exists once the switch is on — never
@@ -591,6 +727,94 @@ function FreeAboveField({
 				currency={currency}
 				className="w-40"
 			/>
+		</div>
+	);
+}
+
+/**
+ * Where EasyParcel stands, for the live option (z8r3fdr5yy): connected and
+ * ready, or the one thing still missing — with the fix in place. Saving
+ * never waits on it: the lane is held until EasyParcel can quote, then goes
+ * live by itself (Zaki, 30 Oct).
+ */
+function EasyparcelReadiness({
+	settings,
+	connecting,
+	onConnect,
+	where,
+}: {
+	settings:
+		| {
+				connected: boolean;
+				needsReconnect: boolean;
+				enabled: boolean;
+				pickupAddress?: unknown;
+				hasSenderPhone: boolean;
+				environment?: string;
+		  }
+		| undefined;
+	connecting: boolean;
+	onConnect: () => void;
+	where: string;
+}) {
+	if (settings === undefined) return null;
+	const ready =
+		settings.connected &&
+		!settings.needsReconnect &&
+		settings.enabled &&
+		settings.pickupAddress !== undefined &&
+		settings.hasSenderPhone;
+	if (ready) {
+		return (
+			<p className="flex items-start gap-2 rounded-xl border border-border bg-card px-3.5 py-3 text-sm">
+				<CircleCheck
+					aria-hidden
+					className="mt-0.5 size-4 shrink-0 text-accent"
+				/>
+				<span>
+					EasyParcel is connected
+					{settings.environment === "sandbox" ? " (test account)" : ""}. Orders
+					to {where} are quoted live at checkout and booked from your EasyParcel
+					wallet.
+				</span>
+			</p>
+		);
+	}
+	return (
+		<div
+			className={cn(
+				"flex flex-col gap-2 rounded-xl border px-3.5 py-3 text-sm",
+				TONE_PANEL.neutral,
+			)}
+		>
+			<p>
+				{!settings.connected || settings.needsReconnect
+					? `Connect your EasyParcel account to price orders to ${where}. You can save now — delivery to ${where} turns on by itself once EasyParcel is ready.`
+					: `EasyParcel is connected but not ready to quote yet — finish its setup on the EasyParcel card. Delivery to ${where} turns on by itself once it's done.`}
+			</p>
+			{!settings.connected || settings.needsReconnect ? (
+				<Button
+					type="button"
+					variant="outline"
+					className="h-11 self-start"
+					isLoading={connecting}
+					onClick={onConnect}
+				>
+					{settings.needsReconnect
+						? "Reconnect EasyParcel"
+						: "Connect EasyParcel"}
+					<ExternalLink className="size-3.5" />
+				</Button>
+			) : (
+				<Link
+					to="/app/settings"
+					search={{ tab: "integrations" }}
+					hash="settings-easyparcel"
+					className="inline-flex min-h-11 items-center self-start font-semibold underline underline-offset-2"
+				>
+					Finish EasyParcel setup
+				</Link>
+			)}
 		</div>
 	);
 }

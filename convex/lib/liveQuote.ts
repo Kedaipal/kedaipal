@@ -221,7 +221,8 @@ export function weightGapStamp(args: {
 	weightFloored: boolean;
 	unweighedLines: number;
 }): { weightFloored?: true; unweighedLines?: number } {
-	if (args.provider !== "delyva") return {};
+	// Couriers (Delyva, EasyParcel) price by weight; a rider doesn't.
+	if (args.provider === "lalamove") return {};
 	const lines =
 		args.weightFloored || args.unweighedLines > 0
 			? args.unweighedLines

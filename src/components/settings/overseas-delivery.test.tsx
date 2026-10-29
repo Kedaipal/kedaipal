@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OverseasDelivery } from "./overseas-delivery";
 
@@ -16,6 +17,9 @@ vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
 }));
 vi.mock("@tanstack/react-query", () => ({ useQuery: vi.fn() }));
+vi.mock("../../hooks/useActAs", () => ({
+	useActAsRetailerId: () => undefined,
+}));
 vi.mock("../../hooks/useUpdateSettings", () => ({
 	useUpdateSettings: () => vi.fn().mockResolvedValue({ ok: true }),
 }));
@@ -53,7 +57,6 @@ function renderPage(over: Partial<Props> = {}) {
 			// No features object = every feature (hasFeature's legacy default).
 			subscription={undefined}
 			offerDelivery
-			deliveryConfig={undefined}
 			lanes={undefined}
 			{...over}
 		/>,
@@ -133,10 +136,6 @@ describe("a paused lane says its price can't change — before the click", () =>
 	it.each([
 		["plan", { subscription: STARTER }],
 		["delivery off", { offerDelivery: false }],
-		[
-			"live pricing",
-			{ deliveryConfig: { mode: "live", onUnquotable: "block" } as never },
-		],
 	] as const)("%s: the form is disabled and the reason sits by Save", (_, over) => {
 		renderPage({ lanes: [LANE], ...over });
 		expect(
@@ -181,5 +180,86 @@ describe("upgrading is one control, paused or off", () => {
 		const upgrade = screen.getByRole("link", { name: "Upgrade" });
 		expect(upgrade.getAttribute("href")).toBe("/app/settings");
 		expect(screen.queryByRole("link", { name: "Upgrade to Pro" })).toBeNull();
+	});
+});
+
+/** Route each read to its own fixture — the page reads the lane overview
+ * and EasyParcel's settings. */
+function mockReads(reads: { overview?: unknown; easyparcel?: unknown }) {
+	vi.mocked(useQuery).mockImplementation(((q: { __fn: unknown }) => {
+		const name = getFunctionName(q.__fn as never);
+		return {
+			data:
+				name === "crossBorder:settingsOverview"
+					? reads.overview
+					: name === "easyparcel:getSettings"
+						? reads.easyparcel
+						: undefined,
+			isPending: false,
+		};
+	}) as never);
+}
+
+const overview = (
+	pause: string | null,
+	easyparcelBlock: string | null = null,
+) => ({
+	lanes: { pause, easyparcelBlock, stored: [], effective: [] },
+	products: { total: 2, shipsAbroad: 2, noParcel: 0 },
+});
+
+describe("EasyParcel live pricing (z8r3fdr5yy)", () => {
+	const LIVE = { country: "MY" as const, pricing: { kind: "live" as const } };
+
+	it("choosing it shows what EasyParcel still needs, the way to connect, and the box sizes", () => {
+		mockReads({
+			easyparcel: {
+				connected: false,
+				needsReconnect: false,
+				enabled: false,
+				hasSenderPhone: true,
+			},
+		});
+		renderPage();
+		fireEvent.click(toggle());
+		fireEvent.click(screen.getByText("Priced live by EasyParcel"));
+		expect(
+			screen.getByText(/turns on by itself once EasyParcel is ready/),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /Connect EasyParcel/ }),
+		).toBeTruthy();
+		// The box guide, from the same constants the quote uses.
+		expect(screen.getByText("20 × 15 × 10 cm")).toBeTruthy();
+		expect(
+			screen.getByText(/Checkout picks the box from the parcel's weight/),
+		).toBeTruthy();
+	});
+
+	it("held while EasyParcel can't quote: says why, never locks the price, offers the fix", () => {
+		mockReads({ overview: overview("courier_unavailable", "not_connected") });
+		renderPage({ lanes: [LIVE] });
+		expect(screen.getByText("Paused")).toBeTruthy();
+		expect(
+			screen.getByText(
+				/priced live by EasyParcel, and EasyParcel isn't connected yet/,
+			),
+		).toBeTruthy();
+		// A hold is not a store-wide pause: switching pricing is a way out.
+		expect(
+			screen
+				.getByRole("button", { name: "Save price" })
+				.hasAttribute("disabled"),
+		).toBe(false);
+		expect(screen.queryByText(/Your price is kept/)).toBeNull();
+	});
+
+	it("a new lane waiting on its products reads 'Almost on' and links the step", () => {
+		mockReads({ overview: overview("awaiting_products") });
+		renderPage({ lanes: [{ ...LIVE, awaitingProducts: true }] });
+		expect(screen.getByText("Almost on")).toBeTruthy();
+		expect(screen.getByText("Choose what can go").getAttribute("href")).toBe(
+			"/app/products/overseas",
+		);
 	});
 });

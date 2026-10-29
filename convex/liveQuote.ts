@@ -31,6 +31,14 @@ import {
 	resolveDelyvaCredentials,
 } from "./lib/delyva";
 import { delyvaBidsAtCheckout } from "./lib/courierBooking";
+import { storeLanes } from "./crossBorder";
+import { fetchEasyparcelCheckoutQuote } from "./easyparcel";
+import { type Country, countryValidator, DEFAULT_COUNTRY } from "./lib/country";
+import { COURIER_DESTINATIONS } from "./lib/courierProviders";
+import {
+	easyparcelConfigured,
+	easyparcelQuoteBlock,
+} from "./lib/easyparcelArming";
 import {
 	cartItemType,
 	chooseLiveQuote,
@@ -54,6 +62,9 @@ const MAX_QUOTE_ITEMS = 100;
 export const getLiveQuoteContext = internalQuery({
 	args: {
 		retailerId: v.id("retailers"),
+		/** Where the parcel is going (z8r3fdr5yy). Absent = the store's own
+		 * country. Abroad, only a live lane routes here, priced by EasyParcel. */
+		country: v.optional(countryValidator),
 		items: v.optional(
 			v.array(
 				v.object({
@@ -72,6 +83,15 @@ export const getLiveQuoteContext = internalQuery({
 		cold: boolean;
 		lalamoveArmed: boolean;
 		delyva: (DelyvaCheckoutContext & { armed: true }) | null;
+		/** EasyParcel bids: on a live lane (the only bidder abroad), or at home
+		 * on a store where it carries domestic parcels (SG). */
+		easyparcel: {
+			sender: { postcode: string; state?: string; country: Country };
+		} | null;
+		destination: Country;
+		storeCountry: Country;
+		/** Goods value in major units — EasyParcel declares it on the parcel. */
+		goodsValue: number;
 		cartWeightKg: number | null;
 		/** The cart was priced at the one-kilo floor, and how many of its
 		 * lines a product weight would have priced — stamped on the quote row
@@ -81,10 +101,47 @@ export const getLiveQuoteContext = internalQuery({
 	} | null> => {
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) return null;
+		const storeCountry = retailer.country ?? DEFAULT_COUNTRY;
+		const destination = args.country ?? storeCountry;
+		const abroad = destination !== storeCountry;
 		const config = retailer.deliveryConfig as DeliveryConfig | undefined;
-		// Only the provider-aware mode routes here; "lalamove" keeps its own
-		// single-provider action until stored rows migrate.
-		if (config?.mode !== "live") return null;
+		if (abroad) {
+			// Abroad only a LIVE lane routes here — the one EasyParcel prices.
+			const lane = (await storeLanes(ctx, retailer)).effective.find(
+				(l) => l.country === destination,
+			);
+			if (lane?.pricing.kind !== "live") return null;
+		} else if (config?.mode !== "live") {
+			// Only the provider-aware mode routes here; "lalamove" keeps its own
+			// single-provider action until stored rows migrate.
+			return null;
+		}
+
+		// EasyParcel bids abroad (the lane's courier) or at home where it
+		// carries domestic parcels — and only while it can actually quote.
+		const easyparcelConn =
+			abroad || COURIER_DESTINATIONS.easyparcel[storeCountry] !== "abroad"
+				? await ctx.db
+						.query("easyparcelConnections")
+						.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+						.unique()
+				: null;
+		const easyparcel =
+			easyparcelConn?.pickupAddress &&
+			easyparcelQuoteBlock({
+				conn: easyparcelConn,
+				configured: easyparcelConfigured(),
+				senderPhone: retailer.waPhone,
+				storeCurrency: retailer.currency ?? "MYR",
+			}) === null
+				? {
+						sender: {
+							postcode: easyparcelConn.pickupAddress.postcode,
+							state: easyparcelConn.pickupAddress.state,
+							country: storeCountry,
+						},
+					}
+				: null;
 
 		const delyvaConfig = retailer.delyva as
 			| NonNullable<Doc<"retailers">["delyva"]>
@@ -95,6 +152,7 @@ export const getLiveQuoteContext = internalQuery({
 		let cartWeightKg: number | null = null;
 		let weightFloored = false;
 		let unweighedLines = 0;
+		let goodsMinor = 0;
 		if (args.items?.length) {
 			const lines = args.items.slice(0, MAX_QUOTE_ITEMS);
 			const weightItems: CartWeightItem[] = await Promise.all(
@@ -105,6 +163,7 @@ export const getLiveQuoteContext = internalQuery({
 					if (!variant || variant.retailerId !== args.retailerId) {
 						return { parcelWeightG: 0, quantity: line.quantity };
 					}
+					goodsMinor += variant.price * line.quantity;
 					return {
 						parcelWeightG: variant.parcelWeightG,
 						quantity: line.quantity,
@@ -125,13 +184,15 @@ export const getLiveQuoteContext = internalQuery({
 			// Rider booking armed AND the country actually serves it — the same
 			// pair the dispatch surfaces use, so checkout can't quote a provider
 			// dispatch would refuse.
-			lalamoveArmed: retailer.deliveryBooking?.enabled === true,
+			// Riders and Delyva are domestic: they never bid on a parcel abroad.
+			lalamoveArmed: !abroad && retailer.deliveryBooking?.enabled === true,
 			// Armed, country-allowed AND holding the pickup address an
 			// instantQuote needs (a 400 without it) — `delyvaBidsAtCheckout`,
 			// the same predicate the public `delivery.quote` tells the checkout
 			// copy with, so "by rider or courier" can never disagree with who
 			// actually bids. The customerId is part of "credentials".
 			delyva:
+				!abroad &&
 				delyvaCredentials &&
 				delyvaConfig?.pickupAddress &&
 				delyvaBidsAtCheckout(retailer)
@@ -150,6 +211,10 @@ export const getLiveQuoteContext = internalQuery({
 							itemType,
 						}
 					: null,
+			easyparcel,
+			destination,
+			storeCountry,
+			goodsValue: goodsMinor / 100,
 			cartWeightKg,
 			weightFloored,
 			unweighedLines,
@@ -170,13 +235,17 @@ export const getLiveQuoteContext = internalQuery({
 export const quoteForCheckout = action({
 	args: {
 		retailerId: v.id("retailers"),
-		latitude: v.number(),
-		longitude: v.number(),
+		/** The buyer's pin. Optional only for an overseas lane quote, which
+		 * EasyParcel prices — and redemption binds — on the postcode. */
+		latitude: v.optional(v.number()),
+		longitude: v.optional(v.number()),
 		address: v.string(),
 		/** Structured buyer address — Delyva prices on postcode, not the pin. */
 		city: v.optional(v.string()),
 		state: v.optional(v.string()),
 		postcode: v.optional(v.string()),
+		/** The buyer's Deliver-to country (z8r3fdr5yy) — absent = home. */
+		country: v.optional(countryValidator),
 		items: v.optional(
 			v.array(
 				v.object({
@@ -205,14 +274,24 @@ export const quoteForCheckout = action({
 			key: args.retailerId,
 			throws: true,
 		});
-		if (!Number.isFinite(args.latitude) || !Number.isFinite(args.longitude)) {
-			return { status: "unavailable" };
-		}
+		const pinned =
+			args.latitude !== undefined &&
+			args.longitude !== undefined &&
+			Number.isFinite(args.latitude) &&
+			Number.isFinite(args.longitude);
 		const context = await ctx.runQuery(internal.liveQuote.getLiveQuoteContext, {
 			retailerId: args.retailerId,
+			country: args.country,
 			items: args.items,
 		});
 		if (!context) return { status: "store_unavailable" };
+		// Home deliveries stay pin-bound (riders price the pin, and one replay
+		// control covers every provider). An overseas lane quote is EasyParcel
+		// alone, priced on the postcode — so it binds to that instead.
+		const laneQuote = context.destination !== context.storeCountry;
+		if (laneQuote ? !args.postcode?.trim() : !pinned) {
+			return { status: "unavailable" };
+		}
 
 		const lalamoveContext = context.lalamoveArmed
 			? await ctx.runQuery(internal.lalamove.getQuoteContext, {
@@ -236,10 +315,13 @@ export const quoteForCheckout = action({
 					})
 				: null;
 
-		// Both providers at once: two sequential round-trips to third parties
+		// Every provider at once: sequential round-trips to third parties
 		// would show up as checkout latency the buyer feels.
-		const [lalamove, delyva] = await Promise.all([
-			lalamoveContext
+		const [lalamove, delyva, easyparcel] = await Promise.all([
+			// Riders bid at home only, where the pin was required above.
+			lalamoveContext &&
+			args.latitude !== undefined &&
+			args.longitude !== undefined
 				? fetchLalamoveQuote({
 						context: lalamoveContext,
 						retailerId: args.retailerId,
@@ -265,12 +347,28 @@ export const quoteForCheckout = action({
 						weightKg: context.cartWeightKg ?? 0,
 					})
 				: null,
+			context.easyparcel && args.postcode
+				? fetchEasyparcelCheckoutQuote(ctx, {
+						retailerId: args.retailerId,
+						sender: context.easyparcel.sender,
+						receiver: {
+							postcode: args.postcode,
+							state: args.state,
+							country: context.destination,
+						},
+						weightKg: context.cartWeightKg ?? 0,
+						parcelValue: context.goodsValue,
+						fulfilmentDate: args.fulfilmentDate,
+					})
+				: null,
 		]);
 
 		const quotes: ProviderQuote[] = [];
 		if (lalamove)
 			quotes.push({ provider: "lalamove", ...lalamove } as ProviderQuote);
 		if (delyva) quotes.push({ provider: "delyva", ...delyva } as ProviderQuote);
+		if (easyparcel)
+			quotes.push({ provider: "easyparcel", ...easyparcel } as ProviderQuote);
 
 		const outcome = chooseLiveQuote({
 			quotes,
@@ -293,8 +391,9 @@ export const quoteForCheckout = action({
 				considered: outcome.considered,
 				// The cart this price belongs to — redemption refuses any other.
 				lines: args.items,
-				latitude: args.latitude,
-				longitude: args.longitude,
+				...(laneQuote
+					? { postcode: args.postcode?.trim() }
+					: { latitude: args.latitude, longitude: args.longitude }),
 				// What the courier priced without: the floor, and any line with
 				// no weight even when the floor didn't fire (`weightGapStamp`).
 				...weightGapStamp({

@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
@@ -73,6 +73,8 @@ async function seedStore(t: T) {
 	return { asOwner, retailerId: retailer._id, keropok, lekor };
 }
 
+/** Save a lane and confirm its products — the seller's two steps. A new
+ * lane is HELD until the second (Zaki, 30 Oct). */
 async function openLane(
 	asOwner: ReturnType<T["withIdentity"]>,
 	pricing:
@@ -82,6 +84,13 @@ async function openLane(
 ) {
 	await asOwner.mutation(api.retailers.updateSettings, {
 		crossBorderLanes: [{ country: "SG", pricing }],
+	});
+	const mine = await asOwner.query(api.retailers.getMyRetailer);
+	if (!mine) throw new Error("no store");
+	await asOwner.mutation(api.crossBorder.setDomesticOnly, {
+		retailerId: mine._id,
+		changes: [],
+		confirmLane: true,
 	});
 }
 
@@ -149,7 +158,7 @@ describe("opening a lane (retailers.updateSettings)", () => {
 		await expect(openLane(asOwner)).rejects.toThrow(/Pro plan/);
 	});
 
-	test("refuses while delivery is priced by live courier quotes, naming the fix", async () => {
+	test("live courier pricing at home no longer blocks a lane — it carries its own price (Zaki, 30 Oct)", async () => {
 		const t = setup();
 		const { asOwner, retailerId } = await seedStore(t);
 		await t.run((ctx) =>
@@ -157,7 +166,32 @@ describe("opening a lane (retailers.updateSettings)", () => {
 				deliveryConfig: { mode: "live", onUnquotable: "block" },
 			}),
 		);
-		await expect(openLane(asOwner)).rejects.toThrow(/Switch Delivery pricing/);
+		await openLane(asOwner);
+		const store = await t.query(api.retailers.getRetailerBySlug, { slug: "lekor" });
+		expect(store.status === "ok" && store.retailer.shipsAbroadTo).toEqual(["SG"]);
+	});
+
+	test("a new lane is held until its products are confirmed — then offered (Zaki, 30 Oct)", async () => {
+		const t = setup();
+		const { asOwner, retailerId } = await seedStore(t);
+		await asOwner.mutation(api.retailers.updateSettings, {
+			crossBorderLanes: [{ country: "SG", pricing: { kind: "flat", fee: 2500 } }],
+		});
+		const held = await t.query(api.retailers.getRetailerBySlug, { slug: "lekor" });
+		expect(held.status === "ok" && held.retailer.shipsAbroadTo).toEqual([]);
+		await asOwner.mutation(api.crossBorder.setDomesticOnly, {
+			retailerId,
+			changes: [],
+			confirmLane: true,
+		});
+		const live = await t.query(api.retailers.getRetailerBySlug, { slug: "lekor" });
+		expect(live.status === "ok" && live.retailer.shipsAbroadTo).toEqual(["SG"]);
+		// Editing the price later never re-holds a confirmed lane.
+		await asOwner.mutation(api.retailers.updateSettings, {
+			crossBorderLanes: [{ country: "SG", pricing: { kind: "flat", fee: 3000 } }],
+		});
+		const edited = await t.query(api.retailers.getRetailerBySlug, { slug: "lekor" });
+		expect(edited.status === "ok" && edited.retailer.shipsAbroadTo).toEqual(["SG"]);
 	});
 
 	test("a zero flat fee is refused — free is its own explicit choice", async () => {
@@ -427,5 +461,176 @@ describe("/stores — listed abroad only while delivering there", () => {
 		});
 		const sg = await t.query(api.marketplace.listStores, { country: "SG" });
 		expect(sg.map((c) => c.slug)).not.toContain("lekor");
+	});
+});
+
+describe("a lane priced live by EasyParcel (z8r3fdr5yy)", () => {
+	beforeEach(() => {
+		vi.stubEnv("EASYPARCEL_CLIENT_ID", "client-id-test");
+		vi.stubEnv("EASYPARCEL_CLIENT_SECRET", "client-secret-test");
+		vi.stubEnv("CONVEX_SITE_URL", "https://dev-test.convex.site");
+	});
+	afterEach(() => {
+		vi.unstubAllEnvs();
+		vi.unstubAllGlobals();
+	});
+
+	const quotation = (service_id: string, amount: number) => ({
+		courier: {
+			service_id,
+			service_name: `${service_id} (Pick Up) (From Door to Door)`,
+			courier_id: "EP-CR0AP",
+			courier_name: "SF Express",
+			delivery_duration: null,
+			is_pickup: true,
+			is_dropoff: false,
+		},
+		pricing: { currency: "MYR", total_amount: amount + 1, seller_payable_amount: amount },
+	});
+
+	/** EasyParcel answers every quote with one door service at RM 27.31, and
+	 * records what it was asked. */
+	function mockQuotes() {
+		const asked: Array<Record<string, unknown>> = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input instanceof Request ? input.url : input);
+				if (url.endsWith("/shipment/quotations")) {
+					asked.push(JSON.parse(String(init?.body ?? "{}")));
+					return new Response(
+						JSON.stringify({
+							status_code: 200,
+							data: [{ status: "success", quotations: [quotation("EP-SF", 27.31)] }],
+						}),
+						{ status: 200 },
+					);
+				}
+				throw new Error(`unmocked fetch ${url}`);
+			}),
+		);
+		return asked;
+	}
+
+	async function seedLiveLane(t: T, opts: { revoked?: boolean } = {}) {
+		const seeded = await seedStore(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(seeded.retailerId, { waPhone: "60123456789" });
+			await ctx.db.insert("easyparcelConnections", {
+				retailerId: seeded.retailerId,
+				enabled: true,
+				accessToken: "access-live",
+				refreshToken: "refresh-live",
+				accessExpiresAt: Date.now() + 60 * 60 * 1000,
+				balanceCurrency: "MYR",
+				pickupAddress: {
+					address1: "Jalan Stesen Sentral",
+					city: "Kuala Lumpur",
+					state: "WP Kuala Lumpur",
+					postcode: "50470",
+				},
+				connectedAt: Date.now(),
+				updatedAt: Date.now(),
+				...(opts.revoked ? { revokedAt: Date.now() } : {}),
+			});
+		});
+		await seeded.asOwner.mutation(api.retailers.updateSettings, {
+			crossBorderLanes: [{ country: "SG", pricing: { kind: "live" } }],
+		});
+		await seeded.asOwner.mutation(api.crossBorder.setDomesticOnly, {
+			retailerId: seeded.retailerId,
+			changes: [],
+			confirmLane: true,
+		});
+		return seeded;
+	}
+
+	async function quote(t: T, retailerId: Id<"retailers">, variantId: Id<"productVariants">, postcode: string) {
+		return t.action(api.liveQuote.quoteForCheckout, {
+			retailerId,
+			address: "Blk 123 Bedok North Ave 3",
+			country: "SG",
+			state: "Singapore",
+			postcode,
+			items: [{ variantId, quantity: 1 }],
+		});
+	}
+
+	async function variantOf(t: T, productId: Id<"products">) {
+		const v = await t.run((ctx) =>
+			ctx.db
+				.query("productVariants")
+				.withIndex("by_product", (q) => q.eq("productId", productId))
+				.first(),
+		);
+		if (!v) throw new Error("no variant");
+		return v._id;
+	}
+
+	test("offered abroad, and checkout is told to fetch EasyParcel's price", async () => {
+		const t = setup();
+		const { retailerId, keropok } = await seedLiveLane(t);
+		const store = await t.query(api.retailers.getRetailerBySlug, { slug: "lekor" });
+		expect(store.status === "ok" && store.retailer.shipsAbroadTo).toEqual(["SG"]);
+		const preview = await t.query(api.delivery.quote, {
+			retailerId,
+			subtotal: 1500,
+			country: "SG",
+			items: [{ variantId: await variantOf(t, keropok), quantity: 1 }],
+		});
+		expect(preview).toMatchObject({ kind: "live", couriers: true, riders: false });
+	});
+
+	test("quoted on the POSTCODE with no pin, to the real receiver country, and frozen at the order door", async () => {
+		const t = setup();
+		const asked = mockQuotes();
+		const { retailerId, keropok } = await seedLiveLane(t);
+		const result = await quote(t, retailerId, await variantOf(t, keropok), "460123");
+		expect(result).toMatchObject({ status: "quoted", fee: 2731 });
+		expect(JSON.stringify(asked[0])).toMatch(/"SG"/);
+		if (result.status !== "quoted") throw new Error("not quoted");
+		const { shortId } = await t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId: keropok, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Mei Ling", waPhone: "6598765432", waDialCountry: "SG" },
+			deliveryAddress: SG_ADDRESS,
+			deliveryQuoteId: result.quoteId,
+		});
+		const order = await orderByShortId(t, shortId);
+		expect(order.deliveryFee).toBe(2731);
+		expect(order.deliverySnapshot?.quoteProvider).toBe("easyparcel");
+	});
+
+	test("a quote for one postcode never prices an order to another", async () => {
+		const t = setup();
+		mockQuotes();
+		const { retailerId, keropok } = await seedLiveLane(t);
+		const result = await quote(t, retailerId, await variantOf(t, keropok), "460123");
+		if (result.status !== "quoted") throw new Error("not quoted");
+		await expect(
+			t.mutation(api.orders.create, {
+				retailerId,
+				items: [{ productId: keropok, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Mei Ling", waPhone: "6598765432", waDialCountry: "SG" },
+				deliveryAddress: { ...SG_ADDRESS, postcode: "520123" },
+				deliveryQuoteId: result.quoteId,
+			}),
+		).rejects.toThrow();
+	});
+
+	test("held — never offered — while EasyParcel can't quote, and the seller is told why", async () => {
+		const t = setup();
+		const { asOwner, retailerId } = await seedLiveLane(t, { revoked: true });
+		const store = await t.query(api.retailers.getRetailerBySlug, { slug: "lekor" });
+		expect(store.status === "ok" && store.retailer.shipsAbroadTo).toEqual([]);
+		const overview = await asOwner.query(api.crossBorder.settingsOverview, {
+			retailerId,
+		});
+		expect(overview.lanes.pause).toBe("courier_unavailable");
+		expect(overview.lanes.easyparcelBlock).toBe("reconnect_needed");
 	});
 });

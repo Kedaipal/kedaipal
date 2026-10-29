@@ -21,9 +21,13 @@ import {
 	effectiveLanes,
 	hasParcelLeg,
 	type LanePause,
-	lanePause,
+	lanePauseFor,
 } from "./lib/crossBorder";
-import type { DeliveryConfig } from "./lib/delivery";
+import {
+	type EasyparcelQuoteBlock,
+	loadEasyparcelQuoteBlock,
+} from "./lib/easyparcelArming";
+import { COUNTRY_CURRENCY } from "./lib/country";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertSubscriptionActive, getAccess } from "./subscriptions";
 
@@ -38,6 +42,9 @@ export type StoreLanes = {
 	effective: CrossBorderLane[];
 	/** Why stored lanes aren't live; null when they are (or none are stored). */
 	pause: LanePause | null;
+	/** Only read for a live (EasyParcel-priced) lane: why EasyParcel can't
+	 * quote — the fix the seller is shown. Null otherwise. */
+	easyparcelBlock: EasyparcelQuoteBlock | null;
 };
 
 /**
@@ -53,22 +60,39 @@ export async function storeLanes(
 	const storeCountry = retailer.country ?? DEFAULT_COUNTRY;
 	const stored = (retailer.crossBorderLanes as CrossBorderLane[] | undefined) ?? [];
 	if (stored.length === 0) {
-		return { storeCountry, stored, effective: [], pause: null };
+		return {
+			storeCountry,
+			stored,
+			effective: [],
+			pause: null,
+			easyparcelBlock: null,
+		};
 	}
 	const planAllows =
 		storeOwnerIsAdmin(retailer) ||
 		(await getAccess(ctx, retailer._id)).features.crossBorder;
-	const deliveryConfig = retailer.deliveryConfig as DeliveryConfig | undefined;
+	// One indexed read, and only for a lane EasyParcel prices.
+	const easyparcelBlock = stored.some((lane) => lane.pricing.kind === "live")
+		? await loadEasyparcelQuoteBlock(
+				ctx,
+				retailer,
+				retailer.currency ?? COUNTRY_CURRENCY[storeCountry],
+			)
+		: null;
 	const facts = {
 		planAllows,
 		offerDelivery: retailer.offerDelivery,
-		deliveryConfig,
+		easyparcelQuotes: easyparcelBlock === null,
 	};
 	return {
 		storeCountry,
 		stored,
 		effective: effectiveLanes({ ...facts, lanes: stored, storeCountry }),
-		pause: lanePause(facts),
+		pause: lanePauseFor({
+			...facts,
+			lane: stored.find((lane) => lane.country !== storeCountry),
+		}),
+		easyparcelBlock,
 	};
 }
 
@@ -171,10 +195,14 @@ export const setDomesticOnly = mutation({
 		changes: v.array(
 			v.object({ productId: v.id("products"), domesticOnly: v.boolean() }),
 		),
+		/** The seller finished the "what can go" step for a new lane: clear
+		 * its `awaitingProducts` hold in the same transaction as the choices,
+		 * so the lane goes live exactly when the products are right. */
+		confirmLane: v.optional(v.boolean()),
 	},
 	handler: async (
 		ctx,
-		{ retailerId, changes },
+		{ retailerId, changes, confirmLane },
 	): Promise<{ updated: number }> => {
 		const access = await requireRetailerAccess(ctx, retailerId, {
 			area: "products",
@@ -185,6 +213,18 @@ export const setDomesticOnly = mutation({
 			throws: true,
 		});
 		if (!access.actingAsAdmin) await assertSubscriptionActive(ctx, retailerId);
+		if (confirmLane) {
+			const lanes = access.retailer.crossBorderLanes as
+				| CrossBorderLane[]
+				| undefined;
+			if (lanes?.some((lane) => lane.awaitingProducts)) {
+				await ctx.db.patch(retailerId, {
+					crossBorderLanes: lanes.map(
+						({ awaitingProducts: _done, ...lane }) => lane,
+					),
+				});
+			}
+		}
 		if (changes.length === 0) return { updated: 0 };
 		if (changes.length > LANE_PRODUCTS_BATCH_MAX)
 			throw new ConvexError(
