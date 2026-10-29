@@ -22,6 +22,10 @@
 import { v } from "convex/values";
 import { COUNTRIES, type Country, COUNTRY_LABELS } from "./country";
 import {
+	type CourierProviderId,
+	courierBookingAllowed,
+} from "./courierProviders";
+import {
 	type CartWeightSummary,
 	DELIVERY_BAND_KG_MAX,
 	DELIVERY_BANDS_MAX,
@@ -86,6 +90,34 @@ export const crossBorderLanesValidator = v.array(
 		pricing: crossBorderPricingValidator,
 	}),
 );
+
+/** The couriers that price checkout live, by display name. EasyParcel is
+ * absent on purpose: it prices at dispatch, never at checkout. */
+const LIVE_QUOTE_COURIERS = [
+	{ id: "lalamove", name: "Lalamove" },
+	{ id: "delyva", name: "Delyva" },
+] as const satisfies ReadonlyArray<{ id: CourierProviderId; name: string }>;
+
+/**
+ * The live-pricing couriers a store in `country` can actually connect —
+ * derived from the booking registry, so the copy that says "they only
+ * deliver within Singapore" never names Delyva to an SG store that was never
+ * offered it (found on the /test-code pass).
+ */
+export function liveQuoteCourierNames(country: Country): string[] {
+	return LIVE_QUOTE_COURIERS.filter((c) =>
+		courierBookingAllowed(c.id, country),
+	).map((c) => c.name);
+}
+
+/** "Lalamove and Delyva deliver" / "Lalamove delivers" — the subject of the
+ * domestic-only sentence, agreeing in number with what's connectable. */
+export function liveQuoteCouriersDeliver(country: Country): string {
+	const names = liveQuoteCourierNames(country);
+	return names.length === 1
+		? `${names[0]} delivers`
+		: `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} deliver`;
+}
 
 /** Countries a store in `store` may open a lane to. */
 export function laneCountriesFor(store: Country): Country[] {
@@ -195,6 +227,13 @@ export function domesticReason(product: {
 /** "Ships within Malaysia only" — the one spelling of the domestic label. */
 export function shipsWithinLabel(storeCountry: Country): string {
 	return `Ships within ${countryName(storeCountry)} only`;
+}
+
+/** "Delivers to Malaysia" — the storefront header line a visitor from a lane
+ * country reads before browsing, so the store's reach isn't a checkout
+ * surprise. */
+export function deliversToLabel(destination: Country): string {
+	return `Delivers to ${countryName(destination)}`;
 }
 
 /** "Ships from Malaysia" — the marketplace chip on a store listed abroad. */

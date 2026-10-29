@@ -147,7 +147,7 @@ export function OverseasProducts({
 	}
 
 	return (
-		<div className="flex flex-col gap-3 pb-24 lg:pb-0">
+		<div className="flex flex-col gap-3">
 			{first ? (
 				<div
 					className={cn(
@@ -264,7 +264,10 @@ export function OverseasProducts({
 				</>
 			)}
 
-			<div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background/95 px-4 py-3 backdrop-blur lg:static lg:border-0 lg:bg-transparent lg:p-0">
+			{/* Sticky inside the page column, above the bottom nav on a phone —
+			    the parcel-weights pattern. A `fixed` full-width bar covered the
+			    nav and ran under the sidebar (found on the /test-code pass). */}
+			<div className="sticky bottom-20 z-10 rounded-2xl border border-border bg-background p-3 shadow-lg lg:bottom-4">
 				<div className="flex items-center gap-3 lg:justify-end">
 					<p className="flex-1 text-sm text-muted-foreground lg:flex-none">
 						{goingTotal} of {allTickable.length} can go to {where}

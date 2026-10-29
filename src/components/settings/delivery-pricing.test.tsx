@@ -548,3 +548,53 @@ describe("arming weight pricing waits for the catalogue (23 Oct 2026)", () => {
 		).toBe(false);
 	});
 });
+
+describe("the overseas price is said here too (z8r3fdr5yy)", () => {
+	// Found on the /test-code pass: a Free store read "no delivery charge"
+	// while Malaysia orders paid S$12, and the live-pricing warning named
+	// Delyva to an SG store that was never offered it.
+	const LANE = {
+		country: "SG" as const,
+		pricing: { kind: "flat" as const, fee: 2500 },
+	};
+
+	it("a store with a lane sees the overseas price and the way to change it", () => {
+		// No config = Free.
+		renderPricing({ crossBorderLanes: [LANE] });
+		expect(
+			screen.getByText(/Orders to Singapore have their own price/),
+		).toBeTruthy();
+		expect(screen.getByText(/RM\s?25\.00 per order/)).toBeTruthy();
+		expect(
+			screen
+				.getByRole("link", { name: "Change overseas price" })
+				.getAttribute("href"),
+		).toBe("/app/settings/overseas-delivery");
+		expect(
+			screen.getByText(/Orders to Singapore still pay your overseas price/),
+		).toBeTruthy();
+	});
+
+	it("a store without a lane reads exactly as before", () => {
+		renderPricing();
+		expect(screen.queryByText(/have their own price/)).toBeNull();
+		expect(
+			screen.getByText("Buyers pay nothing extra for delivery — it's on you."),
+		).toBeTruthy();
+	});
+
+	it("the live-pricing pause names only the couriers the store's country offers", () => {
+		renderPricing({
+			country: "SG",
+			config: { mode: "live", onUnquotable: "block" },
+			businessAddress: HQ,
+			deliveryBooking: booking(),
+			crossBorderLanes: [{ ...LANE, country: "MY" }],
+		});
+		const warning = screen.getByText(/pauses while you use live courier/);
+		expect(warning.textContent).toMatch(
+			/Lalamove delivers within Singapore only/,
+		);
+		expect(warning.textContent).not.toMatch(/Delyva/);
+	});
+});

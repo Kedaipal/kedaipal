@@ -2,10 +2,13 @@ import { describe, expect, test } from "vitest";
 import { addressCountryLine } from "./address";
 import {
 	crossBorderPricingSummary,
+	deliversToLabel,
 	domesticReason,
 	effectiveLanes,
 	lanePause,
 	laneCountriesFor,
+	liveQuoteCourierNames,
+	liveQuoteCouriersDeliver,
 	pricingModeCarriesLanes,
 	resolveCrossBorderQuote,
 	sanitizeCrossBorderLanes,
@@ -64,6 +67,14 @@ describe("which lanes are live", () => {
 		).toBe(false);
 	});
 
+	test("the live couriers named are the ones the store's country can connect", () => {
+		// Derived from the booking registry, so SG never hears "Delyva".
+		expect(liveQuoteCourierNames("MY")).toEqual(["Lalamove", "Delyva"]);
+		expect(liveQuoteCourierNames("SG")).toEqual(["Lalamove"]);
+		expect(liveQuoteCouriersDeliver("MY")).toBe("Lalamove and Delyva deliver");
+		expect(liveQuoteCouriersDeliver("SG")).toBe("Lalamove delivers");
+	});
+
 	test("a store that switched country can't deliver 'abroad' to itself", () => {
 		expect(
 			effectiveLanes({ ...OPEN, lanes: [LANE], storeCountry: "SG" }),
@@ -88,6 +99,7 @@ describe("which products can go", () => {
 	test("one spelling of each label", () => {
 		expect(shipsWithinLabel("MY")).toBe("Ships within Malaysia only");
 		expect(shipsFromLabel("SG")).toBe("Ships from Singapore");
+		expect(deliversToLabel("MY")).toBe("Delivers to Malaysia");
 	});
 });
 

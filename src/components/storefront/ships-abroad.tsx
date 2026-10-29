@@ -13,7 +13,9 @@ import { useMarketplaceRegion } from "../../hooks/useMarketplaceRegion";
  * product can't go. The buyer reads it before adding to the cart; checkout's
  * "Deliver to" switch is the hard stop.
  */
-const HomeOnlyContext = createContext<string | null>(null);
+type AbroadVisit = { visitor: Country; label: string };
+
+const HomeOnlyContext = createContext<AbroadVisit | null>(null);
 
 export function HomeOnlyLabelProvider({
 	storeCountry,
@@ -25,12 +27,12 @@ export function HomeOnlyLabelProvider({
 	children: ReactNode;
 }) {
 	const visitor = useMarketplaceRegion();
-	const label =
+	const visit =
 		visitor !== storeCountry && (shipsAbroadTo ?? []).includes(visitor)
-			? shipsWithinLabel(storeCountry)
+			? { visitor, label: shipsWithinLabel(storeCountry) }
 			: null;
 	return (
-		<HomeOnlyContext.Provider value={label}>
+		<HomeOnlyContext.Provider value={visit}>
 			{children}
 		</HomeOnlyContext.Provider>
 	);
@@ -42,6 +44,13 @@ export function useHomeOnlyLabel(product: {
 	event?: unknown;
 	domesticOnly?: boolean;
 }): string | null {
-	const label = useContext(HomeOnlyContext);
-	return label !== null && !shipsAbroad(product) ? label : null;
+	const visit = useContext(HomeOnlyContext);
+	return visit !== null && !shipsAbroad(product) ? visit.label : null;
+}
+
+/** The visitor's country when the store delivers there from abroad — the
+ * header's "Delivers to Malaysia" line — or null at home / outside a
+ * provider. */
+export function useAbroadVisitor(): Country | null {
+	return useContext(HomeOnlyContext)?.visitor ?? null;
 }

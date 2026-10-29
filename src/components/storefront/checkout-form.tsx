@@ -578,9 +578,6 @@ export function CheckoutPage({
 	};
 	const defaultSchedule = scheduleFor(defaultMethod, "");
 	const defaultYmd = firstSelectableYmd(defaultSchedule);
-	// Typed as the form's `string`, not `Country`: the picker writes any dial
-	// country, and the form's value type is inferred from these defaults.
-	const storeDialCountry: string = country;
 	// "Deliver to" (z8r3fdr5yy): the store's own country, unless the store
 	// delivers abroad and the visitor is browsing from there — then theirs.
 	const initialDeliverTo: Country =
@@ -602,10 +599,12 @@ export function CheckoutPage({
 			// Buyer's WhatsApp number (86eyf1rck) — required: the confirmation
 			// push (or the wa.me fallback) is how the order reaches a chat at all.
 			waPhone: "",
-			// The plate's picked dial country (z8r3fdh274) — the store's own until
-			// the buyer picks another or types a `+CC`. A plain string in form
-			// state, like every other value; the schema refuses an unknown one.
-			waDialCountry: storeDialCountry,
+			// The plate's picked dial country (z8r3fdh274) — the country the
+			// parcel goes to (the store's own unless Deliver to starts abroad,
+			// z8r3fdr5yy) until the buyer picks another or types a `+CC`. Typed
+			// as the form's plain `string`, not `Country`: the picker writes any
+			// dial country; the schema refuses an unknown one.
+			waDialCountry: initialDeliverTo as string,
 			deliveryMethod: defaultMethod,
 			// Typed as the form's `string` (the schema narrows it), like
 			// waDialCountry above.
@@ -1801,6 +1800,11 @@ export function CheckoutPage({
 											collectsFromCustomer={
 												deliveryMethod === "delivery" && collectsFromCustomer
 											}
+											deliveryDestination={
+												deliveryMethod === "delivery" && abroad
+													? countryName(addressCountry)
+													: undefined
+											}
 											awaitingQuote={hasCustomLine}
 											voucherDiscount={previewDiscount(voucher, cart.total)}
 											voucherCode={voucher?.code}
@@ -2148,6 +2152,13 @@ export function CheckoutPage({
 													onChange={(next) => {
 														if (next === addressCountry) return;
 														form.setFieldValue("deliverTo", next);
+														// The phone plate follows the destination while
+														// the box is empty — a buyer delivering to
+														// Malaysia most often has a +60 number — and
+														// never rewrites a number already typed.
+														if (form.getFieldValue("waPhone").trim() === "") {
+															form.setFieldValue("waDialCountry", next);
+														}
 														// A Malaysian address can't be half-reused as a
 														// Singapore one — swap in what this buyer last
 														// used for THAT country (empty if never).

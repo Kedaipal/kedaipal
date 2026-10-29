@@ -154,6 +154,8 @@ function renderCheckout(
 		closedDates?: ClosedDateRange[];
 		cart?: UseCart;
 		paymentsPaused?: boolean;
+		shipsAbroadTo?: Country[];
+		visitorCountry?: Country;
 	} = {},
 ) {
 	const pickupOnly = opts.method === "pickup";
@@ -177,6 +179,8 @@ function renderCheckout(
 			minOrderValue={undefined}
 			pickupLocations={pickupOnly ? [PICKUP] : []}
 			paymentsPaused={opts.paymentsPaused}
+			shipsAbroadTo={opts.shipsAbroadTo}
+			visitorCountry={opts.visitorCountry}
 		/>,
 	);
 	return result;
@@ -295,6 +299,34 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 		// The button unmounted under the buyer's finger; focus goes back to
 		// the field, not to the top of the page.
 		expect(document.activeElement).toBe(phoneInput());
+	});
+});
+
+describe("CheckoutPage — the phone plate follows Deliver to (z8r3fdr5yy)", () => {
+	// Found on the /test-code pass: Deliver to Malaysia with a +65 plate.
+	const deliverTo = (name: string) =>
+		fireEvent.click(screen.getByRole("button", { name, pressed: false }));
+
+	it("starts on the destination when checkout opens abroad", () => {
+		renderCheckout({ shipsAbroadTo: ["SG"], visitorCountry: "SG" });
+		expect(plateCode()).toBe("+65");
+	});
+
+	it("moves with the switch while the number is still empty", () => {
+		renderCheckout({ shipsAbroadTo: ["SG"] });
+		expect(plateCode()).toBe("+60");
+		deliverTo("Singapore");
+		expect(plateCode()).toBe("+65");
+		deliverTo("Malaysia");
+		expect(plateCode()).toBe("+60");
+	});
+
+	it("never rewrites a number the buyer already typed", () => {
+		renderCheckout({ shipsAbroadTo: ["SG"] });
+		changePhone("12-345 6789");
+		deliverTo("Singapore");
+		expect(plateCode()).toBe("+60");
+		expect(phoneInput().value).toBe("12-345 6789");
 	});
 });
 

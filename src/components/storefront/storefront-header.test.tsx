@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DAY_MS, todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
+import { HomeOnlyLabelProvider } from "./ships-abroad";
 import {
 	fulfilmentLabel,
 	StorefrontHeader,
@@ -15,6 +16,11 @@ import {
 } from "./storefront-header";
 
 vi.mock("../../lib/share", () => ({ shareLink: vi.fn() }));
+// The visitor's market — a Malaysian buyer unless a test says otherwise.
+let visitorMarket: "MY" | "SG" = "MY";
+vi.mock("../../hooks/useMarketplaceRegion", () => ({
+	useMarketplaceRegion: () => visitorMarket,
+}));
 
 afterEach(() => {
 	cleanup();
@@ -424,5 +430,31 @@ describe("StorefrontHeader — closed dates (z8r3fdhpm7)", () => {
 			.closest("li");
 		expect(todayRow?.textContent).toContain("Closed today");
 		expect(within(dialog).getByText("Closed dates")).toBeTruthy();
+	});
+});
+
+describe("an overseas visitor is told the store delivers to them (z8r3fdr5yy)", () => {
+	function renderAbroad(shipsAbroadTo: ("MY" | "SG")[]) {
+		return render(
+			<HomeOnlyLabelProvider storeCountry="SG" shipsAbroadTo={shipsAbroadTo}>
+				<StorefrontHeader retailer={retailer} />
+			</HomeOnlyLabelProvider>,
+		);
+	}
+
+	it("a Malaysian visitor to an SG store with a live lane reads 'Delivers to Malaysia'", () => {
+		visitorMarket = "MY";
+		renderAbroad(["MY"]);
+		expect(screen.getByText("Delivers to Malaysia")).toBeTruthy();
+	});
+
+	it("says nothing at home, or when the lane isn't live", () => {
+		visitorMarket = "SG";
+		renderAbroad(["MY"]);
+		expect(screen.queryByText(/Delivers to/)).toBeNull();
+		cleanup();
+		visitorMarket = "MY";
+		renderAbroad([]);
+		expect(screen.queryByText(/Delivers to/)).toBeNull();
 	});
 });

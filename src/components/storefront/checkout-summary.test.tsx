@@ -301,6 +301,20 @@ describe("CheckoutTotals", () => {
 		expect(screen.getByText("+ collection")).toBeTruthy();
 	});
 
+	it("names the country on an overseas delivery fee (z8r3fdr5yy)", () => {
+		render(
+			<CheckoutTotals
+				subtotal={1500}
+				currency="SGD"
+				pickupFee={0}
+				deliveryDestination="Malaysia"
+				quote={{ kind: "fee", fee: 1200 }}
+			/>,
+		);
+		expect(screen.getByText("Delivery to Malaysia")).toBeTruthy();
+		expect(screen.queryByText("Delivery")).toBeNull();
+	});
+
 	it("renders blocked copy as an alert", () => {
 		render(
 			<CheckoutTotals

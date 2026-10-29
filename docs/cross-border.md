@@ -37,6 +37,10 @@ price an international route: dev runs on its flat-rate demo account, and the do
 only show MY→MY. The Delivery pricing page warns **before** a seller saves live
 pricing while a lane is stored.
 
+Every sentence that names those couriers goes through `liveQuoteCouriersDeliver`,
+which reads the booking registry: an MY store hears "Lalamove and Delyva", an SG
+store "Lalamove" only, because it can't connect Delyva at all.
+
 A lane pointing at the store's own country (left behind by a country switch) is
 filtered out of the live lanes. It stays stored and has no effect.
 
@@ -52,6 +56,11 @@ filtered out of the live lanes. It stays stored and has no effect.
   notice and the arming gate cover it.
 - **`free`**: the seller covers the courier. It needs an explicit tick in
   settings and is never inherited from domestic free delivery.
+
+The **Delivery pricing** page says the lane's price too ("Orders to Singapore have
+their own price", with a link), and its Free card says overseas orders still pay
+it. Without that, a store on Free read "no delivery charge" and could assume
+orders abroad ship free.
 
 There is **no live courier quote** on a lane. EasyParcel prices at dispatch
 only. Checkout's live quotes come from Lalamove/Delyva, which are domestic, so a
@@ -90,10 +99,15 @@ be new work (and would need its own fallback).
   the edge geo (`useMarketplaceRegion`) when the store delivers there; the switch
   is always shown because geo is a guess. Abroad, checkout shows the
   import-tax line, and home-only items appear with a one-tap **Remove** each.
+  The ticket's fee line reads **"Delivery to Malaysia"**. The WhatsApp number's
+  country plate starts on the Deliver-to country and follows the switch while
+  the number box is empty. It never rewrites a number already typed.
 - **Storefront** (Zaki, 28 Oct): **every product is shown to everyone.** A visitor
   from a country the store delivers to sees **"Ships within Malaysia only"** on a
   product that can't go: as a card chip and on the product page
-  (`HomeOnlyLabelProvider`). Nothing is hidden by geo. Geo-IP gets VPNs, carrier
+  (`HomeOnlyLabelProvider`). The same visitor reads **"Delivers to Malaysia"**
+  in the store header's facts (`useAbroadVisitor`), so the store's reach isn't a
+  checkout surprise. Nothing is hidden by geo. Geo-IP gets VPNs, carrier
   NAT and the Johor Bahru commuter wrong, a buyer in SG can order delivery to
   family in MY, and a shared link must show the same shelf to everyone.
 - **/stores**: a store is listed in the other country's directory only while its

@@ -1,5 +1,6 @@
-import { MessageCircle, Share2, Store, Truck } from "lucide-react";
+import { Globe, MessageCircle, Share2, Store, Truck } from "lucide-react";
 import type { ClosedDateRange } from "../../../convex/lib/closedDates";
+import { deliversToLabel } from "../../../convex/lib/crossBorder";
 import type { Locale } from "../../../convex/lib/locale";
 import type { OpeningHours } from "../../../convex/lib/openingHours";
 import { shareLink } from "../../lib/share";
@@ -8,6 +9,7 @@ import { AppImage } from "../ui/app-image";
 import { ThemeToggle } from "../ui/theme-toggle";
 import { FoundingMemberBadge } from "./founding-member-badge";
 import { hasHoursLine, OpeningHoursLine } from "./opening-hours-line";
+import { useAbroadVisitor } from "./ships-abroad";
 
 /** The public-safe retailer fields the header renders — a structural subset of
  * `getRetailerBySlug`'s payload so both the home and category routes can pass
@@ -227,7 +229,10 @@ export function StorefrontHeader({
 	const iconClass = `${COVER_ICON_BASE} ${hasCover ? COVER_ICON_FROSTED : COVER_ICON_OUTLINE}`;
 	const showHours = hasHoursLine(retailer.openingHours, retailer.closedDates);
 	const fulfilment = fulfilmentLabel(retailer);
-	const hasFacts = showHours || fulfilment !== null;
+	// A visitor from a country the store delivers to (z8r3fdr5yy) is told so
+	// up front — otherwise "Delivery" reads as local-only until checkout.
+	const abroadVisitor = useAbroadVisitor();
+	const hasFacts = showHours || fulfilment !== null || abroadVisitor !== null;
 
 	return (
 		<header>
@@ -380,6 +385,17 @@ export function StorefrontHeader({
 											{retailer.storeArea}
 										</span>
 									) : null}
+								</span>
+							</p>
+						) : null}
+						{abroadVisitor ? (
+							<p className="flex min-h-6 items-center gap-2 text-[13px] leading-snug lg:text-sm">
+								<Globe
+									className="size-4 shrink-0 text-muted-foreground"
+									aria-hidden
+								/>
+								<span className="font-medium">
+									{deliversToLabel(abroadVisitor)}
 								</span>
 							</p>
 						) : null}

@@ -72,8 +72,14 @@ describe("what to fix, in a sentence", () => {
 describe("the switch's reasons", () => {
 	test("live pricing names both countries and the way out", () => {
 		expect(laneBlockCopy("live_pricing", "MY", "SG")).toMatch(
-			/only deliver within Malaysia.*own delivery price to deliver to Singapore/,
+			/Lalamove and Delyva deliver within Malaysia only.*own delivery price to deliver to Singapore/,
 		);
+	});
+
+	test("an SG store is never told about Delyva, which it can't connect", () => {
+		const copy = laneBlockCopy("live_pricing", "SG", "MY");
+		expect(copy).toMatch(/Lalamove delivers within Singapore only/);
+		expect(copy).not.toMatch(/Delyva/);
 	});
 });
 

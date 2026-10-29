@@ -12,6 +12,7 @@ import {
 	type CrossBorderPricing,
 	countryName,
 	type LanePause,
+	liveQuoteCouriersDeliver,
 } from "../../convex/lib/crossBorder";
 import { parsePriceInput } from "./format";
 
@@ -183,7 +184,7 @@ export function laneBlockCopy(
 		case "delivery_off":
 			return `Delivery is switched off for your store, so there's nothing to send to ${countryName(destination)}. Turn delivery on first.`;
 		case "live_pricing":
-			return `Your delivery is priced live by Lalamove or Delyva, and they only deliver within ${countryName(storeCountry)}. Switch to your own delivery price to deliver to ${countryName(destination)}.`;
+			return `Your delivery is priced live by courier, and ${liveQuoteCouriersDeliver(storeCountry)} within ${countryName(storeCountry)} only. Switch to your own delivery price to deliver to ${countryName(destination)}.`;
 	}
 }
 

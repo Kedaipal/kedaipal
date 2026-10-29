@@ -23,9 +23,9 @@ import type { Country } from "../../../convex/lib/country";
 import {
 	type CrossBorderLane,
 	countryName,
-	crossBorderPricingSummary,
 	laneCountriesFor,
 	lanePause,
+	liveQuoteCouriersDeliver,
 } from "../../../convex/lib/crossBorder";
 import {
 	DELIVERY_BANDS_MAX,
@@ -33,7 +33,7 @@ import {
 } from "../../../convex/lib/delivery";
 import { usePermission } from "../../hooks/usePermission";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
-import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { convexErrorMessage } from "../../lib/format";
 import {
 	draftFromLane,
 	type LaneDraft,
@@ -95,7 +95,6 @@ export function OverseasDelivery({
 	const destination = laneCountriesFor(storeCountry)[0];
 	const where = countryName(destination);
 	const storedLane = lanes?.find((l) => l.country === destination);
-	const money = (minor: number) => formatPrice(minor, currency);
 
 	const pause = lanePause({
 		planAllows: hasFeature(subscription, "crossBorder"),
@@ -180,12 +179,17 @@ export function OverseasDelivery({
 
 	// The switch can always be turned OFF; ON needs nothing to be in the way.
 	const toggleDisabled = saving || (!on && pause !== null);
+	// The badge says what BUYERS get, so a flipped-but-unsaved switch reads
+	// "Not saved yet", never a stale "Off" beside a switch showing on (found
+	// on the /test-code pass). Nothing is live until the price is saved.
 	const glance = on ? (
 		pause ? (
 			<Glance tone="warn">Paused</Glance>
 		) : (
 			<Glance>On</Glance>
 		)
+	) : enabling ? (
+		<Glance tone="warn">Not saved yet</Glance>
 	) : (
 		<Glance tone="grey">Off</Glance>
 	);
@@ -274,13 +278,6 @@ export function OverseasDelivery({
 								fixLink(pause)
 							)}
 						</div>
-					) : null}
-
-					{on && storedLane && !enabling ? (
-						<p className="text-sm text-foreground">
-							<span className="text-muted-foreground">Price: </span>
-							{crossBorderPricingSummary(storedLane.pricing, money)}
-						</p>
 					) : null}
 				</Card>
 
@@ -527,10 +524,14 @@ export function OverseasDelivery({
 					/>
 					<HelperBullets
 						items={[
-							storeCountry === "MY"
-								? `Book the courier with EasyParcel (Settings → Integrations), or send it with any courier and add the tracking number on the order. Delyva and Lalamove deliver within Malaysia only.`
-								: `Book the courier with EasyParcel, or send it with any courier and add the tracking number on the order. Lalamove riders deliver within Singapore only.`,
-							"Keep frozen, chilled and fresh food at home — couriers refuse it across the border, and food imports have their own rules. Untick it under What can go.",
+							`Book the courier with EasyParcel (Settings → Integrations), or send it with any courier and add the tracking number on the order. ${liveQuoteCouriersDeliver(storeCountry)} within ${countryName(storeCountry)} only.`,
+							// "What can go" only exists once the switch is on — never
+							// point at a card the seller can't see.
+							`Keep frozen, chilled and fresh food at home — couriers refuse it across the border, and food imports have their own rules. ${
+								editing
+									? "Untick it under What can go."
+									: "Once delivery is on, you choose which products can go."
+							}`,
 							"Buyers pay in your store's currency. Any import tax or duty is the buyer's, collected by the courier — checkout tells them.",
 							`Overseas orders are marked "Overseas · ${where}" on the order page, and the label prints the country.`,
 						]}
