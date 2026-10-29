@@ -13,6 +13,7 @@ import {
 	ProductPageView,
 } from "../components/storefront/product-page";
 import { OrderingPausedProvider } from "../components/storefront/seasonal-break";
+import { HomeOnlyLabelProvider } from "../components/storefront/ships-abroad";
 import {
 	StoreUnavailable,
 	type StoreUnavailableLoaderData,
@@ -445,22 +446,27 @@ function ProductRoute() {
 			paused={retailer.orderingPaused === true}
 			pausedBy={retailer.orderingPausedBy}
 		>
-			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
-				<ProductPageView
-					product={product}
-					retailerId={retailer._id}
-					retailer={retailer}
-					storeSlug={retailer.slug}
-					cart={cart}
-					canonicalUrl={`${SITE_URL}/${retailer.slug}/p/${productSlug}`}
-				/>
-				{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
+			<HomeOnlyLabelProvider
+				storeCountry={retailer.country}
+				shipsAbroadTo={retailer.shipsAbroadTo}
+			>
+				<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
+					<ProductPageView
+						product={product}
+						retailerId={retailer._id}
+						retailer={retailer}
+						storeSlug={retailer.slug}
+						cart={cart}
+						canonicalUrl={`${SITE_URL}/${retailer.slug}/p/${productSlug}`}
+					/>
+					{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
 			    page — same placement as the store home and category pages. */}
-				<StorefrontFooter
-					slug={slug}
-					discover={retailer.marketplaceUnlisted !== true}
-				/>
-			</div>
+					<StorefrontFooter
+						slug={slug}
+						discover={retailer.marketplaceUnlisted !== true}
+					/>
+				</div>
+			</HomeOnlyLabelProvider>
 		</OrderingPausedProvider>
 	);
 }

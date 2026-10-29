@@ -148,7 +148,9 @@ export function matchesChip(
 /**
  * The visible store set for a region + chip + search. Region always applies
  * (MY and SG are never blended silently — the count fact names the region);
- * the chips are single-select refinements on top.
+ * the chips are single-select refinements on top. A store from the other
+ * country belongs to this region's set only when the server listed it HERE
+ * because it delivers here (`shipsFrom`, z8r3fdr5yy) — its card says so.
  */
 export function filterStores(
 	cards: MarketplaceStoreCard[],
@@ -156,7 +158,7 @@ export function filterStores(
 ): MarketplaceStoreCard[] {
 	return cards.filter(
 		(card) =>
-			card.country === opts.region &&
+			(card.country === opts.region || card.shipsFrom !== undefined) &&
 			matchesSearch(card, opts.search) &&
 			matchesChip(card, opts.chip, opts.now),
 	);

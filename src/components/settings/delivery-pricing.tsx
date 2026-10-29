@@ -26,6 +26,13 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import { MY_STATES } from "../../../convex/lib/address";
 import type { Country } from "../../../convex/lib/country";
 import {
+	type CrossBorderLane,
+	countryName,
+	crossBorderPricingSummary,
+	lanePause,
+	liveQuoteCouriersDeliver,
+} from "../../../convex/lib/crossBorder";
+import {
 	DELIVERY_BANDS_MAX,
 	DELIVERY_ZONES_MAX,
 	type DeliveryConfig,
@@ -48,10 +55,13 @@ import {
 	convexErrorMessage,
 	currencySymbol,
 	formatDraftPrice,
+	formatPrice,
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
+import { laneBlockCopy } from "../../lib/overseas-delivery";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
+import { TONE_PANEL } from "../../lib/tone";
 import { cn } from "../../lib/utils";
 import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
@@ -167,7 +177,7 @@ export function zoneSummary(zone: ZoneDraft, currency: string): string {
 // --- Small shared pieces ------------------------------------------------------
 
 /** A money field: the currency plate welded to a bare input. */
-function MoneyInput({
+export function MoneyInput({
 	id,
 	value,
 	onChange,
@@ -209,7 +219,7 @@ function MoneyInput({
 }
 
 /** A number with its unit welded on the right — "3 | kg". */
-function UnitInput({
+export function UnitInput({
 	value,
 	onChange,
 	unit,
@@ -453,6 +463,8 @@ export function DeliveryPricing({
 	businessAddress,
 	deliveryBooking,
 	subscription,
+	crossBorderLanes,
+	offerDelivery,
 }: {
 	retailerId: Id<"retailers">;
 	country: Country;
@@ -461,6 +473,11 @@ export function DeliveryPricing({
 	businessAddress: BusinessAddress | undefined;
 	deliveryBooking: DeliveryBookingSummary | undefined;
 	subscription: SubscriptionView | undefined;
+	/** Overseas lanes as saved (z8r3fdr5yy) — saving live pricing pauses
+	 * them, and the save block says so. */
+	crossBorderLanes?: CrossBorderLane[];
+	/** With the lanes, decides whether the overseas price is live or paused. */
+	offerDelivery?: boolean;
 }) {
 	const updateSettings = useUpdateSettings();
 	const actAsRetailerId = useActAsRetailerId();
@@ -772,8 +789,42 @@ export function DeliveryPricing({
 		(mode === "radius" && radiusLocked && config?.mode === "radius") ||
 		(liveModeSelected && lalamoveLocked && storedLiveMode);
 
+	// Overseas delivery (z8r3fdr5yy) runs on the store's OWN price; live
+	// courier quotes are domestic-only, so saving live pauses the lane. Said
+	// here, before the save, with the way back.
+	const overseasLane = crossBorderLanes?.[0];
+	// Judged on what's SAVED — the note at the top says what buyers get now;
+	// the warning by the save button says what saving live would change.
+	const overseasPause = overseasLane
+		? lanePause({
+				planAllows: hasFeature(subscription, "crossBorder"),
+				offerDelivery,
+				deliveryConfig: config,
+			})
+		: null;
+	const pausesOverseas =
+		liveModeSelected && overseasLane !== undefined && overseasPause === null;
 	const saveBlock = (
 		<div className="flex flex-col gap-3">
+			{pausesOverseas ? (
+				<p
+					className={cn(
+						"rounded-xl border px-3 py-2.5 text-xs",
+						TONE_PANEL.warn,
+					)}
+				>
+					Delivery to {countryName(overseasLane.country)} pauses while you use
+					live courier prices — {liveQuoteCouriersDeliver(country)} within{" "}
+					{countryName(country)} only. Your overseas price is kept and comes
+					back when you switch to your own price.{" "}
+					<Link
+						to="/app/settings/overseas-delivery"
+						className="font-semibold underline underline-offset-2"
+					>
+						Overseas delivery
+					</Link>
+				</p>
+			) : null}
 			{error ? (
 				<p role="alert" className="text-sm text-destructive">
 					{error}
@@ -813,9 +864,57 @@ export function DeliveryPricing({
 	const chooser = (
 		<Card>
 			<p className="text-sm text-muted-foreground">
-				What buyers pay for delivery, added at checkout. Pickup orders are never
-				charged this.
+				What buyers pay for delivery
+				{overseasLane ? ` within ${countryName(country)}` : ""}, added at
+				checkout. Pickup orders are never charged this.
 			</p>
+			{/* The overseas lane has its OWN price (z8r3fdr5yy) — said here, so a
+			    store on Free doesn't read "no delivery charge" and assume orders
+			    abroad ship free too. A paused lane says it's paused, never that
+			    its price applies (both found on /test-code passes). */}
+			{overseasLane ? (
+				<div
+					className={cn(
+						"flex flex-col items-start gap-1 rounded-xl border px-3.5 pt-3 pb-1 text-sm",
+						overseasPause ? TONE_PANEL.warn : TONE_PANEL.neutral,
+					)}
+				>
+					{overseasPause ? (
+						<>
+							<p className="font-semibold">
+								Delivery to {countryName(overseasLane.country)} is paused.
+							</p>
+							<p>
+								{laneBlockCopy(overseasPause, country, overseasLane.country)}{" "}
+								Your overseas price —{" "}
+								<span className="whitespace-nowrap">
+									{crossBorderPricingSummary(overseasLane.pricing, (minor) =>
+										formatPrice(minor, currency),
+									)}
+								</span>{" "}
+								— is kept.
+							</p>
+						</>
+					) : (
+						<p>
+							Orders to {countryName(overseasLane.country)} have their own
+							price:{" "}
+							<span className="font-semibold whitespace-nowrap">
+								{crossBorderPricingSummary(overseasLane.pricing, (minor) =>
+									formatPrice(minor, currency),
+								)}
+							</span>
+							.
+						</p>
+					)}
+					<Link
+						to="/app/settings/overseas-delivery"
+						className="inline-flex min-h-11 items-center font-semibold underline underline-offset-2"
+					>
+						{overseasPause ? "Overseas delivery" : "Change overseas price"}
+					</Link>
+				</div>
+			) : null}
 			<ModeRowGroup label="How you charge for delivery" className="gap-2.5">
 				<SourceLabel source="builtin">you set the charge</SourceLabel>
 				{builtinModes.map((m) => (
@@ -881,7 +980,11 @@ export function DeliveryPricing({
 			<Card>
 				<SectionHeading
 					title="Free delivery"
-					description="Buyers pay nothing extra for delivery — it's on you."
+					description={
+						overseasLane
+							? `Buyers in ${countryName(country)} pay nothing extra for delivery — it's on you. Orders to ${countryName(overseasLane.country)} still pay your overseas price.`
+							: "Buyers pay nothing extra for delivery — it's on you."
+					}
 				/>
 				{saveBlock}
 			</Card>

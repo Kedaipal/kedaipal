@@ -296,6 +296,14 @@ import {
 	riderBookingAllowed,
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
+import { storeLanes } from "./crossBorder";
+import {
+	type CrossBorderLane,
+	countryName,
+	crossBorderLanesValidator,
+	pricingModeCarriesLanes,
+	sanitizeCrossBorderLanes,
+} from "./lib/crossBorder";
 import { delyvaBookingArmed, storeBooksCouriers } from "./lib/courierBooking";
 import { loadEasyparcelArming } from "./lib/easyparcelArming";
 import { assertCatalogueWeighed } from "./lib/parcelWeights";
@@ -972,6 +980,16 @@ type RetailerPublic = {
 	// never re-derive it from pieces they can't all see. Only the owner read
 	// sets it; it is harmless but pointless on the storefront payload.
 	weightPricing?: WeightPricing;
+	// Cross-border lanes as SAVED (z8r3fdr5yy) — owner read only, for the
+	// Fulfilment tab's summary row; the settings page reads the paused/live
+	// verdict from `crossBorder.settingsOverview`.
+	crossBorderLanes?: CrossBorderLane[];
+	// The countries this store is TAKING cross-border orders to right now —
+	// the effective lanes (plan, delivery on, own pricing), never the prices.
+	// By-slug payload only: the storefront's "Deliver to" picker and the
+	// "Ships within Malaysia only" labels read it. Public-safe: offering
+	// delivery to a country is the point of telling buyers.
+	shipsAbroadTo?: Country[];
 	// HitPay connection summary (86eyb6z3a) — OWNER-only and secret-free like
 	// deliveryBooking. Buyers learn "gateway available" per-order through
 	// orders.getPaymentMethods, never from a retailer payload.
@@ -1235,6 +1253,7 @@ async function buildRetailerPublic(
 		businessIdentity: row.businessIdentity,
 		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
 		weightPricing: weightPricingOf(row) ?? undefined,
+		crossBorderLanes: row.crossBorderLanes as CrossBorderLane[] | undefined,
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		openingHours: row.openingHours,
@@ -1427,6 +1446,9 @@ export const getRetailerBySlug = query({
 					openingHours: active.openingHours,
 					closedDates: active.closedDates,
 					minOrderValue: active.minOrderValue,
+					shipsAbroadTo: (await storeLanes(ctx, active)).effective.map(
+						(lane) => lane.country,
+					),
 					// Founding badge is public-safe; subscription state is NOT
 					// included — beyond the one `paymentsPaused` bit.
 					isFoundingMember: active.isFoundingMember,
@@ -2576,6 +2598,11 @@ const updateSettingsArgs = {
 		// delivery — always allowed, downgrade never traps); undefined = no
 		// change. Setting radius mode is Pro-gated + requires a business address.
 		deliveryConfig: v.optional(v.union(deliveryConfigValidator, v.null())),
+		// Cross-border lanes (z8r3fdr5yy). `null` or `[]` clears — always
+		// allowed, a downgrade never traps; undefined = no change. Setting a
+		// lane is Pro-gated and needs delivery on with the store's OWN pricing
+		// (a live courier quote is domestic-only). See docs/cross-border.md.
+		crossBorderLanes: v.optional(v.union(crossBorderLanesValidator, v.null())),
 		// Business address (radius-mode origin). `null` clears — rejected while
 		// a radius config still depends on it; undefined = no change.
 		businessAddress: v.optional(v.union(businessAddressValidator, v.null())),
@@ -2654,6 +2681,7 @@ const SETTINGS_FIELD_AREA: Record<
 	offerSelfCollect: "fulfilment",
 	offerDelivery: "fulfilment",
 	deliveryConfig: "fulfilment",
+	crossBorderLanes: "fulfilment",
 	businessAddress: "fulfilment",
 	minFulfilmentNoticeDays: "fulfilment",
 	awbConfig: "fulfilment",
@@ -2793,6 +2821,7 @@ export const updateSettings = mutation({
 			offerSelfCollect: boolean;
 			offerDelivery: boolean;
 			deliveryConfig: DeliveryConfig | undefined;
+			crossBorderLanes: CrossBorderLane[] | undefined;
 			businessAddress: BusinessAddress | undefined;
 			businessIdentity: BusinessIdentity | undefined;
 			deliveryBooking: DeliveryBooking | undefined;
@@ -2918,6 +2947,17 @@ export const updateSettings = mutation({
 			if (args.country !== (retailer.country ?? DEFAULT_COUNTRY)) {
 				patch.countryChangedAt = Date.now();
 				patch.countryChangedFrom = retailer.country ?? DEFAULT_COUNTRY;
+				// The overseas lane is the one thing cleared (z8r3fdr5yy, Zaki
+				// 30 Oct). Unlike a rate card it carries nothing the new country
+				// can use: it points at what is now HOME, its price is in the old
+				// currency, and an RM price for MY→SG can't price SG→MY. Left in
+				// place it leaked — a weight lane kept demanding product weights,
+				// and Delivery pricing / the EasyParcel card read it as live or
+				// paused. Re-entering one price is the whole cost. A same-call
+				// lane (args.crossBorderLanes) is judged below as usual.
+				if (args.crossBorderLanes === undefined) {
+					patch.crossBorderLanes = undefined;
+				}
 				// A new move re-opens every question the seller previously
 				// confirmed — their bank details were checked against the OLD
 				// destination.
@@ -3159,6 +3199,65 @@ export const updateSettings = mutation({
 					}
 				}
 				patch.deliveryConfig = clean;
+			}
+		}
+		if (args.crossBorderLanes !== undefined) {
+			if (args.crossBorderLanes === null || args.crossBorderLanes.length === 0) {
+				// Turning overseas delivery off is always allowed — orders already
+				// placed keep their address and price.
+				patch.crossBorderLanes = undefined;
+			} else {
+				const effectiveCountry =
+					(args.country !== undefined ? args.country : retailer.country) ??
+					DEFAULT_COUNTRY;
+				let clean: CrossBorderLane[];
+				try {
+					clean = sanitizeCrossBorderLanes(
+						args.crossBorderLanes,
+						effectiveCountry,
+					);
+				} catch (err) {
+					throw new ConvexError((err as Error).message);
+				}
+				if (!access.actingAsAdmin) {
+					await assertPlanFeature(ctx, retailer._id, "crossBorder");
+				}
+				// The same two conditions `lanePause` reads, judged on the state
+				// this save lands in, so a lane can never be stored already paused
+				// by something the seller is changing in the same breath.
+				const effectiveOfferDelivery =
+					args.offerDelivery !== undefined
+						? args.offerDelivery
+						: retailer.offerDelivery;
+				if (effectiveOfferDelivery === false) {
+					throw new ConvexError(
+						"Turn on delivery first — overseas delivery is a delivery option.",
+					);
+				}
+				const effectiveConfig =
+					args.deliveryConfig !== undefined
+						? patch.deliveryConfig
+						: (retailer.deliveryConfig as DeliveryConfig | undefined);
+				if (!pricingModeCarriesLanes(effectiveConfig)) {
+					throw new ConvexError(
+						`Live courier prices only cover deliveries within ${countryName(effectiveCountry)}. Switch Delivery pricing to your own price first.`,
+					);
+				}
+				// A weight-banded lane refuses an unweighed cart, so arming it
+				// refuses while buyable products have no weight — the domestic
+				// rate card's rule (23 Oct 2026). Only the SWITCH is gated.
+				const storedLanes = retailer.crossBorderLanes as
+					| CrossBorderLane[]
+					| undefined;
+				const wasWeighed =
+					storedLanes?.some((lane) => lane.pricing.kind === "weight") ?? false;
+				if (
+					!wasWeighed &&
+					clean.some((lane) => lane.pricing.kind === "weight")
+				) {
+					await assertCatalogueWeighed(ctx, retailer._id, "rate_card");
+				}
+				patch.crossBorderLanes = clean;
 			}
 		}
 		if (args.deliveryBooking !== undefined) {
@@ -3731,6 +3830,12 @@ export const countrySetup = query({
 			deliveryBookingEnabled:
 				(retailer.deliveryBooking as DeliveryBooking | undefined)?.enabled ===
 				true,
+			easyparcelPickupPostcode: (
+				await ctx.db
+					.query("easyparcelConnections")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+					.unique()
+			)?.pickupAddress?.postcode,
 			waPhone: retailer.waPhone,
 			notifyWaPhone: retailer.notifyWaPhone,
 			hasPaymentMethods: (retailer.paymentMethods?.length ?? 0) > 0,
@@ -3804,6 +3909,12 @@ export const ackCountrySetup = mutation({
 			deliveryBookingEnabled:
 				(retailer.deliveryBooking as DeliveryBooking | undefined)?.enabled ===
 				true,
+			easyparcelPickupPostcode: (
+				await ctx.db
+					.query("easyparcelConnections")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+					.unique()
+			)?.pickupAddress?.postcode,
 			waPhone: retailer.waPhone,
 			notifyWaPhone: retailer.notifyWaPhone,
 			hasPaymentMethods: (retailer.paymentMethods?.length ?? 0) > 0,

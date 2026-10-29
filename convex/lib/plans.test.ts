@@ -59,6 +59,7 @@ describe("plans — feature entitlements", () => {
 			events: false,
 			promo: false,
 			vouchers: false,
+			crossBorder: false,
 		});
 	});
 
@@ -75,6 +76,7 @@ describe("plans — feature entitlements", () => {
 			events: true,
 			promo: true,
 			vouchers: true,
+			crossBorder: true,
 		});
 		expect(featuresForPlan("enterprise")).toEqual({
 			crm: true,
@@ -88,6 +90,7 @@ describe("plans — feature entitlements", () => {
 			events: true,
 			promo: true,
 			vouchers: true,
+			crossBorder: true,
 		});
 	});
 

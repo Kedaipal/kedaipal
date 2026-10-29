@@ -8,6 +8,7 @@ import {
 	COUNTRIES,
 	COUNTRY_LABELS,
 	type Country,
+	isCountry,
 } from "../../convex/lib/country";
 import { isDialIso } from "../../convex/lib/phoneDial";
 import {
@@ -331,6 +332,11 @@ function buildCheckoutFormSchema(country: Country) {
 			// table doesn't know, as the server does.
 			waDialCountry: z.string(),
 			deliveryMethod: deliveryMethodSchema,
+			// The "Deliver to" country (z8r3fdr5yy) — the store's own unless the
+			// store delivers abroad and the buyer picked the other one. Picks
+			// which address shape is enforced below. Optional so a form built
+			// before the field existed (and the claim form) still parses.
+			deliverTo: z.union([z.string(), z.undefined()]),
 			address: addressFormFieldsSchema,
 			// Convex id of the chosen pickup location when deliveryMethod is
 			// self_collect and the retailer has 2+ active locations. The
@@ -367,7 +373,16 @@ function buildCheckoutFormSchema(country: Country) {
 				});
 			}
 			if (val.deliveryMethod !== "delivery") return;
-			const result = strictAddressSchemaFor(country).safeParse(val.address);
+			// The address is judged by the country it's IN — the buyer's
+			// "Deliver to" pick on a cross-border store (z8r3fdr5yy), the
+			// store's own otherwise. An unknown value falls back, never throws.
+			const addressCountry =
+				val.deliverTo !== undefined && isCountry(val.deliverTo)
+					? val.deliverTo
+					: country;
+			const result = strictAddressSchemaFor(addressCountry).safeParse(
+				val.address,
+			);
 			if (result.success) return;
 			for (const issue of result.error.issues) {
 				ctx.addIssue({

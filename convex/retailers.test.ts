@@ -2570,6 +2570,23 @@ describe("SG delivery-mode allowlist (SG-lite, 86eynw29u)", () => {
 		).toMatchObject({ mode: "weight" });
 	});
 
+	test("a country switch clears the overseas lane — it points at the new home, in the old currency (z8r3fdr5yy)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "my-lane-flip");
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(mine!._id, {
+				crossBorderLanes: [
+					{ country: "SG", pricing: { kind: "weight", bands: [{ maxKg: 1, fee: 1800 }] } },
+				],
+			});
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		const after = await asA.query(api.retailers.getMyRetailer);
+		expect(after?.country).toBe("SG");
+		expect(after?.crossBorderLanes).toBeUndefined();
+	});
+
 	test("one save can flip to SG AND clear/replace the config together", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "my-flip-with-clear");

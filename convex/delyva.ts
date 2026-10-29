@@ -50,7 +50,10 @@ import { encryptSecret } from "./lib/credentialCrypto";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { isColdItemType } from "./lib/liveQuote";
 import { DEFAULT_COUNTRY, type Country } from "./lib/country";
-import { delyvaBookingArmed } from "./lib/courierBooking";
+import {
+	delyvaBookingArmed,
+	servesOrderDestination,
+} from "./lib/courierBooking";
 import {
 	assertCatalogueWeighed,
 	collectUnweighedChoices,
@@ -974,6 +977,10 @@ export const getSettings = query({
 /** Why the Book button is disabled for this order (null = live). */
 export type DelyvaDispatchBlock =
 	| "country_unsupported"
+	/** The order is going somewhere this provider doesn't carry from this
+	 * store (z8r3fdr5yy): a cross-border order on Lalamove/Delyva, or a
+	 * domestic one on a MY store's EasyParcel. */
+	| "destination_unsupported"
 	| "not_delivery"
 	| "bad_status"
 	| "job_active"
@@ -1109,6 +1116,8 @@ function dispatchBlockReason(args: {
 	// lesson).
 	if (!delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY))
 		return "country_unsupported";
+	if (!servesOrderDestination("delyva", order, retailer))
+		return "destination_unsupported";
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
 	// Same eligible window as Lalamove: a pending order never ships itself,
 	// shipped/delivered orders are already on their way.

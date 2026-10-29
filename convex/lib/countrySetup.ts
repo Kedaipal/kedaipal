@@ -1,3 +1,4 @@
+import { postcodeRule } from "./address";
 import { type Country, DEFAULT_COUNTRY } from "./country";
 import { storeBillingCurrency } from "./plans";
 import {
@@ -46,6 +47,7 @@ export type CountrySetupItemKey =
 	| "delivery_mode"
 	| "pickup_contacts"
 	| "delivery_booking"
+	| "easyparcel_pickup"
 	| "wa_phone"
 	| "notify_wa_phone"
 	| "message_copy";
@@ -94,6 +96,8 @@ export const VERIFIABLE: Record<CountrySetupItemKey, boolean> = {
 	// for, so only the seller can confirm. Un-dismissable here would be a
 	// permanent nag on stores whose keys are fine.
 	delivery_booking: false,
+	// The postcode's format says which country it's in (5 digits MY, 6 SG).
+	easyparcel_pickup: true,
 	wa_phone: true,
 	notify_wa_phone: true,
 };
@@ -126,6 +130,8 @@ export type CountrySetupInput = {
 	}[];
 	deliveryConfigMode: DeliveryConfig["mode"] | undefined;
 	deliveryBookingEnabled: boolean;
+	/** The EasyParcel pickup address's postcode, when connected (z8r3fdr5yy). */
+	easyparcelPickupPostcode: string | undefined;
 	waPhone: string | undefined;
 	notifyWaPhone: string | undefined;
 	hasPaymentMethods: boolean;
@@ -224,6 +230,15 @@ export function resolveCountrySetup(
 	// fail and where the fix is.
 	if (input.deliveryBookingEnabled) {
 		add("delivery_booking", riderBookingAllowed(country) ? "money" : "cosmetic");
+	}
+	// Couriers would be sent to collect from the old country — every quote
+	// and booking prices from it. Kept, never wiped (the connection and the
+	// rest of its setup are fine); the seller replaces it on the card.
+	if (
+		input.easyparcelPickupPostcode !== undefined &&
+		!postcodeRule(country).pattern.test(input.easyparcelPickupPostcode.trim())
+	) {
+		add("easyparcel_pickup", "buyer_visible");
 	}
 	if (input.waPhone && !STORED_MOBILE_PATTERN[country].test(input.waPhone)) {
 		add("wa_phone", "cosmetic");

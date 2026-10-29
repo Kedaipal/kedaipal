@@ -156,6 +156,12 @@ const COPY: Record<
 		tab: "integrations",
 		action: "Open Integrations",
 	}),
+	easyparcel_pickup: ({ to, from }) => ({
+		title: "Your EasyParcel pickup address is in the wrong country",
+		body: `EasyParcel still collects from ${placeAdjective(from)} address, so every courier price and booking starts there. Set your ${COUNTRY_LABELS[to]} pickup address on the EasyParcel card — your account stays connected.`,
+		tab: "integrations",
+		action: "Open Integrations",
+	}),
 	wa_phone: ({ to, from }) => ({
 		title: "Your store's WhatsApp number is foreign",
 		body: `Buyers see ${placeAdjective(from)} number as your store contact. It still receives messages — replace it with a ${COUNTRY_LABELS[to]} number when you have one.`,
@@ -240,6 +246,7 @@ export const SETTINGS_ANCHOR: Record<CountrySetupItemKey, string> = {
 	delivery_mode: "settings-delivery-charge",
 	pickup_contacts: "settings-pickup",
 	delivery_booking: "settings-lalamove",
+	easyparcel_pickup: "settings-easyparcel",
 	wa_phone: "settings-wa-phone",
 	notify_wa_phone: "settings-wa-alerts",
 	message_copy: "settings-message-templates",

@@ -12,6 +12,7 @@
 // bookkeeping, which is why this is NOT a PDF. No Convex imports; unit-tested
 // in orderCsv.test.ts. See docs/invoices-receipts.md + docs/order-inbox.md.
 
+import { COUNTRY_LABELS, type Country } from "./country";
 import { sourceLabel } from "./attribution";
 import { bookingLastDay, countedDays } from "./bookingAvailability";
 import { formatItemAnswers } from "./buyerQuestions";
@@ -367,6 +368,7 @@ export type CsvOrder = {
 		city: string;
 		state: string;
 		postcode: string;
+		country?: Country;
 		notes?: string;
 	};
 	/** Frozen pickup location for self-collect orders. The sibling of the address
@@ -423,6 +425,7 @@ export type OrderColumnKey =
 	| "city"
 	| "state"
 	| "postcode"
+	| "country"
 	| "addressNotes"
 	| "pickupLocation"
 	| "pickupAddress"
@@ -804,6 +807,19 @@ export const ORDER_COLUMNS: readonly OrderColumn[] = [
 		group: "fulfilment",
 		width: 100,
 		value: (o) => o.deliveryAddress?.postcode ?? "",
+	},
+	{
+		// Cross-border (z8r3fdr5yy): the address's own country, so a courier
+		// bulk upload built from this sheet sends an overseas parcel overseas.
+		// Blank on a pickup order and on orders from before the stamp.
+		key: "country",
+		label: "Country",
+		group: "fulfilment",
+		width: 110,
+		value: (o) =>
+			o.deliveryAddress?.country
+				? COUNTRY_LABELS[o.deliveryAddress.country]
+				: "",
 	},
 	{
 		key: "addressNotes",

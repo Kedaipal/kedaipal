@@ -37,6 +37,13 @@ import {
 	upcomingClosures,
 } from "../../../convex/lib/closedDates";
 import type { Country } from "../../../convex/lib/country";
+import {
+	type CrossBorderLane,
+	countryName,
+	crossBorderPricingSummary,
+	laneCountriesFor,
+	lanePause,
+} from "../../../convex/lib/crossBorder";
 import type { DeliveryConfig } from "../../../convex/lib/delivery";
 import { riderBookingAllowed } from "../../../convex/lib/delivery";
 import {
@@ -162,6 +169,9 @@ interface FulfilmentTabProps {
 	subscription: SubscriptionView | undefined;
 	/** Lalamove connection + arm switch — the Courier booking row's glance. */
 	deliveryBooking: DeliveryBookingSummary | undefined;
+	/** Overseas delivery lanes as saved (z8r3fdr5yy) — the Delivery card's
+	 * "Deliver to Singapore" row. */
+	crossBorderLanes?: CrossBorderLane[];
 }
 
 /**
@@ -299,6 +309,7 @@ export function FulfilmentTab({
 	awbConfig,
 	subscription,
 	deliveryBooking,
+	crossBorderLanes,
 }: FulfilmentTabProps) {
 	const locations = useQuery(
 		convexQuery(api.pickupLocations.listForRetailer, { retailerId }),
@@ -317,6 +328,31 @@ export function FulfilmentTab({
 	const easyparcel = useQuery(
 		convexQuery(api.easyparcel.getSettings, { retailerId: actAsRetailerId }),
 	).data;
+	// Overseas delivery (z8r3fdr5yy): the row names the OTHER country and says
+	// on / off / paused at a glance, from the same `lanePause` rule the
+	// storefront and order doors read.
+	const overseasCountry = laneCountriesFor(country)[0];
+	const overseasLane = crossBorderLanes?.find(
+		(l) => l.country === overseasCountry,
+	);
+	const overseasPause = lanePause({
+		planAllows: hasFeature(subscription, "crossBorder"),
+		offerDelivery,
+		deliveryConfig,
+	});
+	const overseasValue = !overseasLane ? (
+		overseasPause === "plan" ? (
+			<ProBadge />
+		) : (
+			<span className="font-normal text-muted-foreground">Off</span>
+		)
+	) : overseasPause ? (
+		<Glance tone="warn">Paused</Glance>
+	) : (
+		crossBorderPricingSummary(overseasLane.pricing, (minor) =>
+			formatPrice(minor, currency),
+		)
+	);
 	const courierBooking = courierBookingGlance({
 		riderBookingAvailable: riderBookingAllowed(country),
 		lalamoveArmed: deliveryBooking?.enabled === true,
@@ -592,6 +628,19 @@ export function FulfilmentTab({
 								// The row reads "Pricing" inside the Delivery card; out of
 								// that context a screen reader needs the noun and the value.
 								ariaLabel={`Delivery pricing: ${pricing}`}
+							/>
+							{/* Overseas delivery (z8r3fdr5yy) sits right under Pricing:
+							    it IS a price — the one for the other country — and the
+							    seller deciding what delivery costs looks here. */}
+							<SummaryRow
+								label={`Deliver to ${countryName(overseasCountry)}`}
+								value={overseasValue}
+								onClick={() =>
+									void navigate({ to: "/app/settings/overseas-delivery" })
+								}
+								ariaLabel={`Delivery to ${countryName(overseasCountry)}: ${
+									overseasLane ? (overseasPause ? "paused" : "on") : "off"
+								}`}
 							/>
 							{/* The arm switches live on the pricing page (3A: they ride
 							    along with pricing), but a seller looking to turn rider

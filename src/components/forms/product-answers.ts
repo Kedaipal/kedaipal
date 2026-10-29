@@ -389,6 +389,18 @@ export function pickupNoteAnswer(
 	return text.length === 0 ? off("Nothing yet") : set(`“${text}”`);
 }
 
+/** "Can it go to Singapore?" (z8r3fdr5yy) — the product's overseas switch.
+ * Off reads as a plain answer, not a warning: keeping frozen goods at home
+ * is a correct choice, never a gap. */
+export function overseasAnswer(
+	domesticOnly: boolean,
+	storeCountryName: string,
+): Answer {
+	return domesticOnly
+		? off(`No — ships within ${storeCountryName} only`)
+		: set("Yes");
+}
+
 export function whereAnswer({
 	hidden,
 	categoryNames,

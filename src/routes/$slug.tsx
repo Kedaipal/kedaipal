@@ -17,6 +17,7 @@ import {
 	OrderingPausedProvider,
 	SeasonalBreakNotice,
 } from "../components/storefront/seasonal-break";
+import { HomeOnlyLabelProvider } from "../components/storefront/ships-abroad";
 import {
 	StoreUnavailable,
 	type StoreUnavailableLoaderData,
@@ -366,57 +367,62 @@ function StorefrontRoute() {
 			paused={retailer.orderingPaused === true}
 			pausedBy={retailer.orderingPausedBy}
 		>
-			{/* pb-28 keeps ≥96px clear under the content for the floating cart
+			<HomeOnlyLabelProvider
+				storeCountry={retailer.country}
+				shipsAbroadTo={retailer.shipsAbroadTo}
+			>
+				{/* pb-28 keeps ≥96px clear under the content for the floating cart
 			    pill (z8r3fdegb5) so it never sits on the footer. */}
-			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-28">
-				{/* The full brand hero renders ONLY here (z8r3fdegb5) — subpages
+				<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-28">
+					{/* The full brand hero renders ONLY here (z8r3fdegb5) — subpages
 			    carry the compact StorefrontAppBar so deep links reach their
 			    subject on the first screen. */}
-				<StorefrontHeader retailer={retailer} slug={retailer.slug} />
-				{/* Off-Season Hold: the store is browsable, not orderable. */}
-				<SeasonalBreakNotice storeName={retailer.storeName} />
+					<StorefrontHeader retailer={retailer} slug={retailer.slug} />
+					{/* Off-Season Hold: the store is browsable, not orderable. */}
+					<SeasonalBreakNotice storeName={retailer.storeName} />
 
-				<section className="mt-2 px-5 lg:px-8">
-					{/* Search first (sticky inside the grid), then the merchandised lead:
+					<section className="mt-2 px-5 lg:px-8">
+						{/* Search first (sticky inside the grid), then the merchandised lead:
 				    the category rail + the "Popular this week" shelf, then
 				    the full grid (86eybrhrt PR3). Both lead pieces render nothing when
 				    they have nothing honest to show (no categories / no qualifying
 				    orders), so quiet stores stay search + grid. */}
-					<ProductGrid
-						retailerId={retailer._id}
-						cart={cart}
-						storeSlug={retailer.slug}
-						beforeGrid={
-							// `gap-6` owns the rhythm between the two lead sections
-							// rather than either one carrying a trailing margin: each
-							// renders null on a store with no categories / no qualifying
-							// orders, and a gap only applies between siblings that
-							// actually exist — so neither can leave a dangling space.
-							// `peer` lets the grid's "All products" heading (rendered as
-							// this wrapper's next sibling) detect whether either one
-							// rendered at all.
-							<div className="peer flex flex-col gap-6">
-								<CategoryRail
-									retailerId={retailer._id}
-									storeSlug={retailer.slug}
-								/>
-								<FeaturedProduct
-									retailerId={retailer._id}
-									storeSlug={retailer.slug}
-									cart={cart}
-								/>
-							</div>
-						}
+						<ProductGrid
+							retailerId={retailer._id}
+							cart={cart}
+							storeSlug={retailer.slug}
+							beforeGrid={
+								// `gap-6` owns the rhythm between the two lead sections
+								// rather than either one carrying a trailing margin: each
+								// renders null on a store with no categories / no qualifying
+								// orders, and a gap only applies between siblings that
+								// actually exist — so neither can leave a dangling space.
+								// `peer` lets the grid's "All products" heading (rendered as
+								// this wrapper's next sibling) detect whether either one
+								// rendered at all.
+								<div className="peer flex flex-col gap-6">
+									<CategoryRail
+										retailerId={retailer._id}
+										storeSlug={retailer.slug}
+									/>
+									<FeaturedProduct
+										retailerId={retailer._id}
+										storeSlug={retailer.slug}
+										cart={cart}
+									/>
+								</div>
+							}
+						/>
+					</section>
+
+					<StorefrontFooter
+						slug={slug}
+						discover={retailer.marketplaceUnlisted !== true}
 					/>
-				</section>
 
-				<StorefrontFooter
-					slug={slug}
-					discover={retailer.marketplaceUnlisted !== true}
-				/>
-
-				<CartBar cart={cart} storeSlug={retailer.slug} />
-			</div>
+					<CartBar cart={cart} storeSlug={retailer.slug} />
+				</div>
+			</HomeOnlyLabelProvider>
 		</OrderingPausedProvider>
 	);
 }

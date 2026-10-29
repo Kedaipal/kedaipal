@@ -32,6 +32,7 @@ import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { attributionBucket, sourceLabel } from "../../convex/lib/attribution";
 import { DEFAULT_COUNTRY } from "../../convex/lib/country";
+import { overseasFeeLabel } from "../../convex/lib/crossBorder";
 import {
 	formatFulfilmentDate,
 	formatFulfilmentTime,
@@ -77,6 +78,7 @@ import {
 	OrderItemLine,
 	SkippedDayRows,
 } from "../components/order/order-item-line";
+import { OverseasChip } from "../components/order/overseas-chip";
 import { PaymentProofList } from "../components/order/payment-proof-list";
 import { PickupNotes } from "../components/order/pickup-notes";
 import {
@@ -396,6 +398,8 @@ function OrderDetailRoute() {
 	// the inbox bulk bar so the two surfaces can't drift — this is discoverability,
 	// the server is the guard.
 	const retailer = useDashboardRetailer();
+	// An overseas address (z8r3fdr5yy) is judged against the store's country.
+	const storeCountry = retailer?.country ?? DEFAULT_COUNTRY;
 	// Settlement rails the seller may hand-pick on "Mark payment received" — the
 	// store's country decides them, so an SG seller is never made to file a
 	// PayNow transfer under "Other" (86eyph341). Undefined while the payload
@@ -1887,7 +1891,8 @@ function OrderDetailRoute() {
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
 						<span>
-							Delivery fee
+							{overseasFeeLabel(order.deliveryAddress?.country, storeCountry) ??
+								"Delivery fee"}
 							{order.deliverySnapshot?.mode === "radius" &&
 							order.deliverySnapshot.distanceKm !== undefined
 								? ` — ${order.deliverySnapshot.distanceKm} km`
@@ -2099,17 +2104,26 @@ function OrderDetailRoute() {
 			{!isSelfCollect && order.deliveryAddress ? (
 				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<div className="flex items-center justify-between">
-						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							{order.deliveryDirection === "collection"
-								? "Collect From"
-								: "Delivery Address"}
-						</p>
+						<div className="flex flex-wrap items-center gap-2">
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								{order.deliveryDirection === "collection"
+									? "Collect From"
+									: "Delivery Address"}
+							</p>
+							{order.deliveryAddress.country &&
+							order.deliveryAddress.country !== storeCountry ? (
+								<OverseasChip country={order.deliveryAddress.country} />
+							) : null}
+						</div>
 						<div className="flex items-center gap-1">
 							<button
 								type="button"
 								onClick={() => {
 									if (!order.deliveryAddress) return;
-									const text = formatAddressInline(order.deliveryAddress);
+									const text = formatAddressInline(
+										order.deliveryAddress,
+										storeCountry,
+									);
 									navigator.clipboard
 										.writeText(text)
 										.then(() => toast.success("Address copied"))
@@ -2127,7 +2141,7 @@ function OrderDetailRoute() {
 								href={
 									deriveMapsUrl(order.deliveryAddress) ??
 									`https://maps.google.com/?q=${encodeURIComponent(
-										formatAddressInline(order.deliveryAddress),
+										formatAddressInline(order.deliveryAddress, storeCountry),
 									)}`
 								}
 								target="_blank"
@@ -2140,7 +2154,10 @@ function OrderDetailRoute() {
 							</a>
 						</div>
 					</div>
-					<DeliveryAddressDisplay address={order.deliveryAddress} />
+					<DeliveryAddressDisplay
+						address={order.deliveryAddress}
+						storeCountry={storeCountry}
+					/>
 				</section>
 			) : null}
 
