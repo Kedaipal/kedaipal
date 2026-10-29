@@ -24,6 +24,7 @@ import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { type KindCard, parseKindCard } from "../lib/kind-card";
+import { overseasOf } from "../lib/overseas-delivery";
 import type { UnsavedState } from "../lib/product-form-dirty";
 import { hasFeature } from "../lib/subscription";
 
@@ -130,6 +131,7 @@ function NewProductRoute() {
 				sortOrder: Date.now(),
 				options: values.options,
 				hidden: values.hidden,
+				domesticOnly: values.domesticOnly,
 				kind: values.kind,
 				booking: values.booking,
 				minNoticeDays: values.minNoticeDays,
@@ -277,6 +279,7 @@ function NewProductRoute() {
 
 			<ProductForm
 				retailerId={retailer._id}
+				overseas={overseasOf(retailer)}
 				categoriesLocked={categoriesLocked}
 				eventsLocked={eventsLocked}
 				promoLocked={promoLocked}

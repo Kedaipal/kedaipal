@@ -105,6 +105,11 @@ truncates — and the reward keys off the `referrals` row, never off
 `signupSource`. A referral outranks a badge referrer as `signupReferrerId`.
 See [`referrals.md`](./referrals.md).
 
+**`signupSource` is a signal, not the channel (86eye3eyp).** It's null for
+walk-ins, talks and personal intros, so CAC by channel reads
+`retailers.acquisitionSource` — set by an admin, suggested from this tag. See
+[`acquisition-attribution.md`](./acquisition-attribution.md).
+
 **The badge also names its store (z8r3fdcwd0):** `?store=<slug>` is captured
 beside the tag (same last-touch rule, its own key — the pair is rewritten
 together, so a later tagged hit without `store=` clears a stale referrer),

@@ -33,7 +33,11 @@ import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { requireRetailerAccess, resolveMyRetailer } from "./lib/auth";
 import { COUNTRY_LABELS, DEFAULT_COUNTRY, type Country } from "./lib/country";
 import { toDomesticContactPhone } from "./lib/courierContact";
-import { courierBookingAllowed } from "./lib/courierProviders";
+import { servesOrderDestination } from "./lib/courierBooking";
+import {
+	COURIER_DESTINATIONS,
+	courierBookingAllowed,
+} from "./lib/courierProviders";
 import { findCourier } from "./lib/couriers";
 import { decryptSecret, encryptSecret } from "./lib/credentialCrypto";
 import { type CartWeightItem, summarizeCartWeight } from "./lib/delivery";
@@ -72,6 +76,8 @@ import { generateTrackingToken } from "./lib/order";
 import type { PermissionLevel } from "./lib/permissions";
 import { rateLimiter } from "./lib/rateLimiter";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
+import { storeLanes } from "./crossBorder";
+import { laneCountriesFor } from "./lib/crossBorder";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 
 type Connection = Doc<"easyparcelConnections">;
@@ -205,12 +211,17 @@ export const startConnect = mutation({
 				message: "EasyParcel isn't set up on this server yet.",
 			};
 		}
-		const country = access.retailer.country ?? DEFAULT_COUNTRY;
-		if (!courierBookingAllowed("easyparcel", country)) {
+		// Connectable before the overseas lane exists (Zaki, 30 Oct): the card
+		// says what's still missing as a setup step, not a refusal here.
+		if (
+			!courierBookingAllowed(
+				"easyparcel",
+				access.retailer.country ?? DEFAULT_COUNTRY,
+			)
+		) {
 			return {
 				ok: false,
-				message:
-					"EasyParcel booking is for Singapore stores — Malaysian stores book couriers through Delyva instead.",
+				message: "EasyParcel isn't available for your store's country.",
 			};
 		}
 		if (!access.actingAsAdmin) {
@@ -559,6 +570,16 @@ export const updateSettings = mutation({
 	},
 });
 
+/** The store's overseas lane as the EasyParcel card speaks of it: "on"
+ * (taking orders), "paused" (saved, but a plan/delivery/pricing pause holds)
+ * or "off" (none saved). On a MY store EasyParcel books nothing until it's
+ * on, so the card makes it a setup step — the card is never hidden for it
+ * (Zaki, 30 Oct: a seller must be able to FIND EasyParcel). */
+export type EasyparcelLaneState = {
+	destination: Country;
+	state: "on" | "paused" | "off";
+};
+
 /** Settings-card read — no tokens, ever. */
 export const getSettings = query({
 	args: { retailerId: v.optional(v.id("retailers")) },
@@ -566,6 +587,16 @@ export const getSettings = query({
 		const access = await resolveStoreAccess(ctx, retailerId, "read");
 		const country = access.retailer.country ?? DEFAULT_COUNTRY;
 		const conn = await connectionFor(ctx, access.retailer._id);
+		const lanes = await storeLanes(ctx, access.retailer);
+		const overseasLane: EasyparcelLaneState = {
+			destination: laneCountriesFor(country)[0],
+			state:
+				lanes.effective.length > 0
+					? "on"
+					: lanes.stored.length > 0
+						? "paused"
+						: "off",
+		};
 		const lastAttempt = await ctx.db
 			.query("courierOAuthStates")
 			.withIndex("by_retailer_provider", (q) =>
@@ -576,7 +607,18 @@ export const getSettings = query({
 		return {
 			/** The integration exists on this deployment AND serves this
 			 * country — false hides the card unless something is connected. */
-			available: isConfigured() && courierBookingAllowed("easyparcel", country),
+			available:
+				isConfigured() && courierBookingAllowed("easyparcel", country),
+			/** Which orders it books from this store (z8r3fdr5yy): "abroad" on
+			 * a MY store (overseas orders only — Delyva stays domestic), "both"
+			 * on an SG store. The card says so. */
+			destinations: COURIER_DESTINATIONS.easyparcel[country],
+			/** The overseas lane — a setup step on a MY store, a line on an SG
+			 * one (it carries those orders too). */
+			overseasLane,
+			/** EasyParcel hands the courier the store's WhatsApp number as the
+			 * sender's contact; without one every booking is refused. */
+			hasSenderPhone: phoneDigits(access.retailer.waPhone) !== "",
 			connected: conn !== null,
 			needsReconnect: conn?.revokedAt !== undefined,
 			enabled: conn?.enabled === true,
@@ -879,6 +921,10 @@ export const storeBalance = internalMutation({
 export type EasyparcelDispatchBlock =
 	| "not_configured"
 	| "country_unsupported"
+	/** The order is going somewhere this provider doesn't carry from this
+	 * store (z8r3fdr5yy): a cross-border order on Lalamove/Delyva, or a
+	 * domestic one on a MY store's EasyParcel. */
+	| "destination_unsupported"
 	| "not_delivery"
 	| "bad_status"
 	| "job_active"
@@ -888,6 +934,9 @@ export type EasyparcelDispatchBlock =
 	| "disabled"
 	| "plan_gated"
 	| "no_pickup_address"
+	/** EasyParcel requires a sender phone, and that's the store's WhatsApp
+	 * number — refused here, before the call, not by EasyParcel after it. */
+	| "no_sender_phone"
 	| "no_address";
 
 function dispatchBlockReason(args: {
@@ -903,6 +952,8 @@ function dispatchBlockReason(args: {
 	if (!isConfigured()) return "not_configured";
 	if (!courierBookingAllowed("easyparcel", retailer.country ?? DEFAULT_COUNTRY))
 		return "country_unsupported";
+	if (!servesOrderDestination("easyparcel", order, retailer))
+		return "destination_unsupported";
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
 	if (order.status !== "confirmed" && order.status !== "packed")
 		return "bad_status";
@@ -922,6 +973,7 @@ function dispatchBlockReason(args: {
 	if (!conn.enabled) return "disabled";
 	if (!planOk) return "plan_gated";
 	if (!conn.pickupAddress) return "no_pickup_address";
+	if (phoneDigits(retailer.waPhone) === "") return "no_sender_phone";
 	if (!order.deliveryAddress) return "no_address";
 	return null;
 }
@@ -930,8 +982,22 @@ function phoneDigits(waPhone: string | undefined): string {
 	return (waPhone ?? "").replace(/\D/g, "");
 }
 
+/** Where the parcel is going: the order's stamped country, else the store's
+ * (orders from before the stamp are domestic). The booking and the card's
+ * view both ask this, so the notice can never judge a different country from
+ * the one the booking sends (found on the /test-code pass, z8r3fdr5yy). */
+function receiverCountryOf(
+	order: Doc<"orders">,
+	storeCountry: Country,
+): Country {
+	return order.deliveryAddress?.country ?? storeCountry;
+}
+
 /** Same rule as Delyva/Lalamove dispatch (z8r3fdh274): a buyer number from
- * outside the store's country hands the courier the STORE's number. */
+ * outside the country the parcel is GOING TO hands the courier the store's
+ * number. Judged by the destination, not the store (z8r3fdr5yy): on an
+ * SG→MY parcel the Malaysian courier needs the buyer's +60 number, which is
+ * exactly the one a store-country check would have thrown away. */
 function buyerContactPhone(
 	buyerPhone: string,
 	sellerPhone: string,
@@ -987,6 +1053,9 @@ type DispatchContext =
 			retailerId: Id<"retailers">;
 			shortId: string;
 			country: Country;
+			/** Where the parcel is going — the store's country, or the other
+			 * one on a cross-border order (z8r3fdr5yy). */
+			receiverCountry: Country;
 			currency: string;
 			sender: {
 				name: string;
@@ -1064,9 +1133,10 @@ export const getDispatchContext = internalQuery({
 
 		const weight = await resolveOrderWeight(ctx, order);
 		const country = retailer.country ?? DEFAULT_COUNTRY;
+		const receiverCountry = receiverCountryOf(order, country);
 		const buyerPhone = phoneDigits(order.customer.waPhone);
 		const sellerPhone = phoneDigits(retailer.waPhone);
-		const buyer = buyerContactPhone(buyerPhone, sellerPhone, country);
+		const buyer = buyerContactPhone(buyerPhone, sellerPhone, receiverCountry);
 		const goodsTotal = order.items.reduce(
 			(sum, i) => sum + i.price * i.quantity,
 			0,
@@ -1077,6 +1147,7 @@ export const getDispatchContext = internalQuery({
 			retailerId: retailer._id,
 			shortId: order.shortId,
 			country,
+			receiverCountry,
 			currency: order.currency,
 			sender: {
 				name: retailer.storeName,
@@ -1225,7 +1296,7 @@ export const prepareBooking = action({
 								receiver: {
 									postcode: context.receiver.postcode,
 									state: context.receiver.state,
-									country: context.country,
+									country: context.receiverCountry,
 								},
 								weightKg: weight.kg,
 								dims: PARCEL_BOXES[args.box as ParcelBox],
@@ -1521,7 +1592,10 @@ export const confirmBooking = action({
 						currency: context.currency,
 						reference: context.shortId,
 						sender: { ...context.sender, country: context.country },
-						receiver: { ...context.receiver, country: context.country },
+						receiver: {
+							...context.receiver,
+							country: context.receiverCountry,
+						},
 					}),
 				);
 				return parseSubmitResponse(r.text, r.status);
@@ -1961,6 +2035,7 @@ export const getDispatchState = query({
 		});
 		const weight = await resolveOrderWeight(ctx, order);
 		const country = retailer.country ?? DEFAULT_COUNTRY;
+		const receiverCountry = receiverCountryOf(order, country);
 		const pickup = conn?.pickupAddress;
 		const job: EasyparcelJobView | null = latest
 			? {
@@ -1987,10 +2062,12 @@ export const getDispatchState = query({
 				isConfigured() &&
 				courierBookingAllowed("easyparcel", country),
 			country,
+			/** The country the parcel goes to — the notice names it. */
+			receiverCountry,
 			buyerContactFallback: buyerContactPhone(
 				phoneDigits(order.customer.waPhone),
 				phoneDigits(retailer.waPhone),
-				country,
+				receiverCountry,
 			).fallback,
 			pickupSummary: pickup
 				? [

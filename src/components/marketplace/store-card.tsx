@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
+import { shipsFromLabel } from "../../../convex/lib/crossBorder";
 import { isNewStore } from "../../../convex/lib/marketplaceListing";
 import type { MarketplaceStoreCard } from "../../../convex/marketplace";
 import { cardOpenStatus } from "../../lib/marketplace";
@@ -114,6 +115,14 @@ export function StoreStatusLine({
 				}`}
 			>
 				{status.label}
+				{/* Listed here from the other country (z8r3fdr5yy) — said before
+				    the area, so a narrow card truncates the area, never this. */}
+				{card.shipsFrom ? (
+					<span className="font-semibold text-foreground">
+						{" · "}
+						{shipsFromLabel(card.shipsFrom)}
+					</span>
+				) : null}
 				{showArea && card.storeArea ? (
 					<span className="font-normal text-muted-foreground">
 						{" · "}

@@ -154,6 +154,8 @@ function renderCheckout(
 		closedDates?: ClosedDateRange[];
 		cart?: UseCart;
 		paymentsPaused?: boolean;
+		shipsAbroadTo?: Country[];
+		visitorCountry?: Country;
 	} = {},
 ) {
 	const pickupOnly = opts.method === "pickup";
@@ -177,6 +179,8 @@ function renderCheckout(
 			minOrderValue={undefined}
 			pickupLocations={pickupOnly ? [PICKUP] : []}
 			paymentsPaused={opts.paymentsPaused}
+			shipsAbroadTo={opts.shipsAbroadTo}
+			visitorCountry={opts.visitorCountry}
 		/>,
 	);
 	return result;
@@ -295,6 +299,34 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 		// The button unmounted under the buyer's finger; focus goes back to
 		// the field, not to the top of the page.
 		expect(document.activeElement).toBe(phoneInput());
+	});
+});
+
+describe("CheckoutPage — the phone plate follows Deliver to (z8r3fdr5yy)", () => {
+	// Found on the /test-code pass: Deliver to Malaysia with a +65 plate.
+	const deliverTo = (name: string) =>
+		fireEvent.click(screen.getByRole("button", { name, pressed: false }));
+
+	it("starts on the destination when checkout opens abroad", () => {
+		renderCheckout({ shipsAbroadTo: ["SG"], visitorCountry: "SG" });
+		expect(plateCode()).toBe("+65");
+	});
+
+	it("moves with the switch while the number is still empty", () => {
+		renderCheckout({ shipsAbroadTo: ["SG"] });
+		expect(plateCode()).toBe("+60");
+		deliverTo("Singapore");
+		expect(plateCode()).toBe("+65");
+		deliverTo("Malaysia");
+		expect(plateCode()).toBe("+60");
+	});
+
+	it("never rewrites a number the buyer already typed", () => {
+		renderCheckout({ shipsAbroadTo: ["SG"] });
+		changePhone("12-345 6789");
+		deliverTo("Singapore");
+		expect(plateCode()).toBe("+60");
+		expect(phoneInput().value).toBe("12-345 6789");
 	});
 });
 
@@ -646,5 +678,80 @@ describe("price changed under the buyer", () => {
 		expect(screen.queryByRole("button", { name: /Update prices/ })).toBeNull();
 		const place = screen.getAllByRole("button", { name: "Place order" })[0];
 		expect((place as HTMLButtonElement).disabled).toBe(false);
+	});
+});
+
+describe("CheckoutPage — Place order is never disabled without a reason", () => {
+	const nameInput = () =>
+		screen.getByRole("textbox", { name: /^Your name/ }) as HTMLInputElement;
+	const placeOrder = () =>
+		screen.getAllByRole("button", {
+			name: "Place order",
+		})[0] as HTMLButtonElement;
+
+	it("an untouched form says nothing — its press reveals every error inline", () => {
+		renderCheckout({ method: "pickup" });
+		expect(placeOrder().disabled).toBe(false);
+		expect(screen.queryByText(/to continue$/)).toBeNull();
+	});
+
+	it("a name cleared after typing disables Place order AND names it, by both CTAs", () => {
+		renderCheckout({ method: "pickup" });
+		fireEvent.change(nameInput(), { target: { value: "Aisyah" } });
+		changePhone("012-345 6789");
+		expect(placeOrder().disabled).toBe(false);
+
+		fireEvent.change(nameInput(), { target: { value: "" } });
+		expect(placeOrder().disabled).toBe(true);
+		// Desktop summary footer + mobile sticky bar.
+		expect(screen.getAllByText("Add your name to continue")).toHaveLength(2);
+	});
+
+	it("a cleared WhatsApp number is named once the name is fine", () => {
+		renderCheckout({ method: "pickup" });
+		fireEvent.change(nameInput(), { target: { value: "Aisyah" } });
+		changePhone("012-345 6789");
+		changePhone("");
+		expect(placeOrder().disabled).toBe(true);
+		expect(
+			screen.getAllByText("Add your WhatsApp number to continue"),
+		).toHaveLength(2);
+	});
+
+	it("a filled-but-wrong name reads its rule", () => {
+		renderCheckout({ method: "pickup" });
+		fireEvent.change(nameInput(), { target: { value: "Al" } });
+		expect(
+			screen.getAllByText("Your name must be at least 3 characters").length,
+		).toBeGreaterThan(0);
+	});
+
+	it("a pinned SG address with no postal code: the field is on the card, and the reason names it", () => {
+		window.localStorage.setItem(
+			"kedaipal:lastAddress:SG",
+			JSON.stringify({
+				line1: "123 Bedok North Avenue 3",
+				city: "Singapore",
+				state: "Singapore",
+				postcode: "",
+				latitude: "1.33",
+				longitude: "103.93",
+				placeId: "sg-place",
+			}),
+		);
+		renderCheckout({ country: "SG" });
+		expect(screen.getByText("Location confirmed")).toBeTruthy();
+		fireEvent.change(nameInput(), { target: { value: "Aisyah" } });
+		changePhone("9123 4567");
+
+		expect(placeOrder().disabled).toBe(true);
+		expect(
+			screen.getAllByText("Add your postal code to continue"),
+		).toHaveLength(2);
+		fireEvent.change(screen.getByLabelText(/Postal code/i), {
+			target: { value: "460123" },
+		});
+		expect(screen.queryByText("Add your postal code to continue")).toBeNull();
+		expect(placeOrder().disabled).toBe(false);
 	});
 });

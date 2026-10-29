@@ -13,6 +13,7 @@ import {
 	ClipboardList,
 	Eye,
 	EyeOff,
+	Globe,
 	Hourglass,
 	Info,
 	Layers3,
@@ -42,7 +43,9 @@ import type {
 	BuyerQuestion,
 	BuyerQuestionInput,
 } from "../../../convex/lib/buyerQuestions";
+import type { Country } from "../../../convex/lib/country";
 import type { CreditLockErrorData } from "../../../convex/lib/credits";
+import { countryName } from "../../../convex/lib/crossBorder";
 import {
 	MAX_NOTICE_DAYS,
 	MAX_PREP_MINUTES,
@@ -164,6 +167,7 @@ import {
 	invalidSalePrices,
 	mockupAnswer,
 	orderRulesAnswer,
+	overseasAnswer,
 	pickupNoteAnswer,
 	promoAnswer,
 	weekendRateAnswer,
@@ -208,6 +212,9 @@ export interface ProductFormSubmitValues {
 	// Storefront visibility. true = hidden from the public store (still sellable
 	// at the counter). See docs/hidden-products.md.
 	hidden: boolean;
+	// Cross-border opt-out (z8r3fdr5yy). Sent only when the store has an
+	// overseas lane — otherwise the question isn't asked and nothing changes.
+	domesticOnly?: boolean;
 	// Product kind (86eyj70z1). Set at create by the wizard; immutable after —
 	// the edit route never sends it to `products.update` (which has no kind arg).
 	kind?: ProductKind;
@@ -302,6 +309,9 @@ export type ProductFormDraft = {
 	name: string;
 	description: string;
 	hidden: boolean;
+	/** Cross-border opt-out (z8r3fdr5yy) — in the draft so flipping it alone
+	 * makes the form dirty. */
+	domesticOnly?: boolean;
 	/** Stored kind (physical default) — round-trips to the wizard's card. */
 	kind: ProductKind;
 	/** Booking capacity, as typed (only meaningful when kind === "booking").
@@ -370,10 +380,14 @@ interface ProductFormProps {
 	/** Live (non-cancelled) RSVPs on this product — locks the date + the toggle
 	 * once > 0, matching the server's refusal. Undefined on create. */
 	eventRsvpCount?: number;
+	/** The store's overseas lane (z8r3fdr5yy), when one is saved: the form then
+	 * asks "Can it go to <country>?" of products with a parcel to send. */
+	overseas?: { destination: Country; storeCountry: Country };
 	initialValues?: {
 		name?: string;
 		description?: string;
 		hidden?: boolean;
+		domesticOnly?: boolean;
 		/** Product kind — routes the form's vocabulary + which cards render.
 		 * Absent = physical (legacy). Immutable in the form (create sets it via
 		 * the wizard; edit displays it in the summary strip only). */
@@ -1053,6 +1067,7 @@ export function ProductForm({
 	onImagesAutosave,
 	onUnsavedChange,
 	startsDirty = false,
+	overseas,
 }: ProductFormProps) {
 	// Editing an existing product vs creating a new one — the edit page leads
 	// with the summary strip; create keeps the readiness checklist. The wizard
@@ -1092,6 +1107,9 @@ export function ProductForm({
 	);
 	const [showPreview, setShowPreview] = useState(false);
 	const [hidden, setHidden] = useState(initialValues?.hidden ?? false);
+	const [domesticOnly, setDomesticOnly] = useState(
+		initialValues?.domesticOnly ?? false,
+	);
 	// Kind is IMMUTABLE in the form (86eyj70z1: set at create via the wizard;
 	// archive + recreate is the escape hatch) — read once, routes the booking
 	// rendering below. Capacity is the one booking knob that stays editable.
@@ -1335,6 +1353,7 @@ export function ProductForm({
 					name: parsed.name,
 					description: parsed.description,
 					hidden,
+					...(overseas ? { domesticOnly } : {}),
 					kind,
 					booking: isBooking
 						? {
@@ -1419,6 +1438,7 @@ export function ProductForm({
 			name: formValues.name,
 			description: formValues.description ?? "",
 			hidden,
+			domesticOnly,
 			kind,
 			capacityPerNight: capacityDraft,
 			securityDeposit: depositDraft,
@@ -2652,6 +2672,35 @@ export function ProductForm({
 						)}
 					</QuestionRow>
 				)}
+				{/* Overseas (z8r3fdr5yy): asked only when the store delivers abroad
+				    AND this product has a parcel to send — a service, booking or
+				    event never crosses a border, so the question would be noise. */}
+				{overseas && kind === "physical" && !eventDraft.on ? (
+					<QuestionRow
+						id="product-overseas"
+						icon={<Globe />}
+						question={`Can it go to ${countryName(overseas.destination)}?`}
+						{...rowAnswer(
+							overseasAnswer(domesticOnly, countryName(overseas.storeCountry)),
+							false,
+						)}
+					>
+						<div className="flex items-start justify-between gap-3">
+							<p className="text-xs leading-relaxed text-muted-foreground">
+								Your store delivers to {countryName(overseas.destination)}. Turn
+								this off for anything that can't make the trip — frozen, chilled
+								or fresh food, same-day bakes. Buyers in{" "}
+								{countryName(overseas.destination)} then see "Ships within{" "}
+								{countryName(overseas.storeCountry)} only".
+							</p>
+							<ToggleSwitch
+								on={!domesticOnly}
+								onChange={(on) => setDomesticOnly(!on)}
+								label={`Can go to ${countryName(overseas.destination)}`}
+							/>
+						</div>
+					</QuestionRow>
+				) : null}
 			</QuestionGroup>
 
 			{/* Publishing — where the product appears — comes after what the

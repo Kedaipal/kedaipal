@@ -27,6 +27,7 @@ import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { CountdownBand } from "../components/ui/countdown-strip";
 import { Skeleton } from "../components/ui/skeleton";
 import { type UseCart, useCart } from "../hooks/useCart";
+import { useMarketplaceRegion } from "../hooks/useMarketplaceRegion";
 import { usePromoClock } from "../hooks/usePromoClock";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
@@ -179,6 +180,9 @@ function CheckoutSkeleton() {
 }
 
 function CheckoutRoute() {
+	// The visitor's country from the edge — preselects "Deliver to" on a
+	// store that delivers there (z8r3fdr5yy). Geo is a guess; the switch shows.
+	const visitorCountry = useMarketplaceRegion();
 	const { slug } = Route.useParams();
 	const { booking, rsvp, voucher } = Route.useSearch();
 	// A tagged link can land straight on checkout — capture here too.
@@ -348,6 +352,8 @@ function CheckoutRoute() {
 						checkoutPhone={retailer.checkoutPhone}
 						locale={retailer.locale}
 						country={retailer.country}
+						shipsAbroadTo={retailer.shipsAbroadTo ?? []}
+						visitorCountry={visitorCountry}
 						confirmPushEnabled={retailer.confirmPushEnabled ?? false}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}

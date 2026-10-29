@@ -78,11 +78,12 @@ true satisfies MutuallyAssignable<
  *
  * easyparcel — the SG parcel lane (z8r3fdcje2): J&T/SingPost/Qxpress/Ninja
  * Van/Teleport and more through the seller's own EasyParcel SG account.
- * MY stays FALSE on purpose: EasyParcel MY was evaluated and dropped
- * 29 Jul 2026 (frozen/perishable prohibition + indemnity clause —
- * docs/delivery-delyva.md) and MY domestic incl. cold-chain is already
- * served by Delyva. The MY column exists for the cross-border lane
- * (z8r3fdr5yy): flipping it is a one-line decision, not a build.
+ * MY flipped TRUE for the cross-border lane (z8r3fdr5yy, Zaki 29 Oct 2026) —
+ * but for orders going ABROAD only (`COURIER_DESTINATIONS` below): EasyParcel
+ * MY was dropped for domestic on 29 Jul 2026 (frozen/perishable prohibition +
+ * indemnity clause — docs/delivery-delyva.md), and Delyva stays MY's domestic
+ * courier (cold chain, and its 1% `source: "kedaipal"` commission). Frozen
+ * goods can't cross the border anyway — the product opt-out covers them.
  */
 export const COUNTRY_COURIER_BOOKING: Record<
 	CourierProviderId,
@@ -90,7 +91,7 @@ export const COUNTRY_COURIER_BOOKING: Record<
 > = {
 	lalamove: { MY: true, SG: true },
 	delyva: { MY: true, SG: false },
-	easyparcel: { MY: false, SG: true },
+	easyparcel: { MY: true, SG: true },
 };
 
 export function courierBookingAllowed(
@@ -98,4 +99,41 @@ export function courierBookingAllowed(
 	country: Country,
 ): boolean {
 	return COUNTRY_COURIER_BOOKING[provider][country];
+}
+
+/**
+ * Which ORDERS a provider books for a store in a given country — by where the
+ * parcel is going (z8r3fdr5yy). `COUNTRY_COURIER_BOOKING` says whether a store
+ * can connect the provider at all; this says which of its orders it may carry:
+ *
+ *   "domestic" — orders to the store's own country only. Lalamove takes one
+ *                market per request; Delyva's API can't be shown to price an
+ *                international route (dev runs on its flat-rate demo), so
+ *                both stay home until proven otherwise — a one-cell flip.
+ *   "abroad"   — cross-border orders only (EasyParcel on a MY store).
+ *   "both"     — everything (EasyParcel on an SG store; Delyva SG offers no
+ *                courier services, so EasyParcel is SG's only parcel lane).
+ */
+export type CourierDestinations = "domestic" | "abroad" | "both";
+
+export const COURIER_DESTINATIONS: Record<
+	CourierProviderId,
+	Record<Country, CourierDestinations>
+> = {
+	lalamove: { MY: "domestic", SG: "domestic" },
+	delyva: { MY: "domestic", SG: "domestic" },
+	easyparcel: { MY: "abroad", SG: "both" },
+};
+
+/** Can `provider` carry an order from a store in `storeCountry` to an
+ * address in `destinationCountry`? */
+export function courierServesDestination(
+	provider: CourierProviderId,
+	storeCountry: Country,
+	destinationCountry: Country,
+): boolean {
+	const scope = COURIER_DESTINATIONS[provider][storeCountry];
+	if (scope === "both") return true;
+	const abroad = destinationCountry !== storeCountry;
+	return scope === "abroad" ? abroad : !abroad;
 }

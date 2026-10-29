@@ -18,6 +18,7 @@ import {
 	COUNTRY_LABELS,
 	type Country,
 } from "../../convex/lib/country";
+import type { AcquisitionChannel } from "../../convex/lib/metrics";
 import { parseReferralInput } from "../../convex/lib/referral";
 import {
 	MOBILE_EXAMPLE,
@@ -27,6 +28,7 @@ import {
 } from "../../convex/lib/slug";
 import type { ClaimRefusal } from "../../convex/lib/unclaimedStore";
 import type { ReferralInvite } from "../../convex/referrals";
+import { FoundUsQuestion } from "../components/onboarding/found-us-question";
 import { OnboardingTopBar } from "../components/onboarding/onboarding-top-bar";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -136,11 +138,15 @@ function OnboardingForm() {
 	// opened and two partners can share a prospect. A disabled input would
 	// have been that dead end.
 	const [referralSeeded, setReferralSeeded] = useState(false);
+	// "How did you find Kedaipal?" (86eye3eyp) — optional, nothing picked by
+	// default. A referral cookie IS the answer, so it pre-picks referral.
+	const [foundUs, setFoundUs] = useState<AcquisitionChannel | null>(null);
 	useEffect(() => {
 		const seeded = readReferralSlug(document.cookie);
 		if (seeded) {
 			setReferralInput(seeded);
 			setReferralSeeded(true);
+			setFoundUs("referral");
 		}
 	}, []);
 	const referralSlug = parseReferralInput(referralInput);
@@ -288,6 +294,7 @@ function OnboardingForm() {
 				...(signupReferrerSlug !== undefined ? { signupReferrerSlug } : {}),
 				...(gaClientId !== undefined ? { gaClientId } : {}),
 				...(referralSlug !== undefined ? { referralSlug } : {}),
+				...(foundUs !== null ? { acquisitionSource: foundUs } : {}),
 			});
 			// Recorded — the cookie has nothing left to do, and must not decide
 			// anything this browser does next.
@@ -453,60 +460,71 @@ function OnboardingForm() {
 					</Field>
 				) : null}
 
-				{referralSeeded && referralSlug !== undefined && invite ? (
-					<ReferredByChip
-						invite={invite}
-						onChange={() => setReferralSeeded(false)}
-					/>
-				) : (
-					<Field label="Referred by a Kedaipal seller? (optional)">
-						<InputPrefixFrame
-							prefix={<span className="text-sm">kedaipal.com/referral/</span>}
-							invalid={referralSlug !== undefined && invite === null}
-						>
-							<Input
-								type="text"
-								value={referralInput}
-								onChange={(e) => {
-									const raw = e.target.value;
-									// A pasted LINK collapses to its slug at once, so the field
-									// never reads "kedaipal.com/referral/ https://kedaipal…" —
-									// the plate already says the rest. Bare typing is left alone.
-									const slug = raw.includes("/")
-										? parseReferralInput(raw)
-										: undefined;
-									setReferralInput(slug ?? raw);
-								}}
-								placeholder="their-store"
-								variant="bare"
-								autoCapitalize="none"
-								autoCorrect="off"
-								spellCheck={false}
-								aria-invalid={referralSlug !== undefined && invite === null}
-								className="min-h-11 flex-1 px-3 font-mono text-base"
+				<FoundUsQuestion
+					value={foundUs}
+					onChange={setFoundUs}
+					referralOpen={referralInput.trim() !== ""}
+					referralField={
+						referralSeeded && referralSlug !== undefined && invite ? (
+							<ReferredByChip
+								invite={invite}
+								onChange={() => setReferralSeeded(false)}
 							/>
-						</InputPrefixFrame>
-						{referralSlug === undefined ? (
-							<span className="text-xs text-muted-foreground">
-								{referralInput.trim() === ""
-									? "Paste their referral link, or the store name from it. Filled in for you when you arrived through one."
-									: "That doesn't look like a store link."}
-							</span>
-						) : invite === undefined ? (
-							<span className="text-xs text-muted-foreground">Checking…</span>
-						) : invite === null ? (
-							<span className="text-xs font-medium text-destructive">
-								✗ No store on an active plan at that link — check it with them,
-								or leave this blank.
-							</span>
 						) : (
-							<span className="text-xs text-accent-emphasis">
-								✓ {invite.storeName} referred you — free orders for you both
-								when you pay your first invoice.
-							</span>
-						)}
-					</Field>
-				)}
+							<Field label="Which store sent you? (optional)">
+								<InputPrefixFrame
+									prefix={
+										<span className="text-sm">kedaipal.com/referral/</span>
+									}
+									invalid={referralSlug !== undefined && invite === null}
+								>
+									<Input
+										type="text"
+										value={referralInput}
+										onChange={(e) => {
+											const raw = e.target.value;
+											// A pasted LINK collapses to its slug at once, so the field
+											// never reads "kedaipal.com/referral/ https://kedaipal…" —
+											// the plate already says the rest. Bare typing is left alone.
+											const slug = raw.includes("/")
+												? parseReferralInput(raw)
+												: undefined;
+											setReferralInput(slug ?? raw);
+										}}
+										placeholder="their-store"
+										variant="bare"
+										autoCapitalize="none"
+										autoCorrect="off"
+										spellCheck={false}
+										aria-invalid={referralSlug !== undefined && invite === null}
+										className="min-h-11 flex-1 px-3 font-mono text-base"
+									/>
+								</InputPrefixFrame>
+								{referralSlug === undefined ? (
+									<span className="text-xs text-muted-foreground">
+										{referralInput.trim() === ""
+											? "Paste their referral link, or the store name from it. Filled in for you when you arrived through one."
+											: "That doesn't look like a store link."}
+									</span>
+								) : invite === undefined ? (
+									<span className="text-xs text-muted-foreground">
+										Checking…
+									</span>
+								) : invite === null ? (
+									<span className="text-xs font-medium text-destructive">
+										✗ No store on an active plan at that link — check it with
+										them, or leave this blank.
+									</span>
+								) : (
+									<span className="text-xs text-accent-emphasis">
+										✓ {invite.storeName} referred you — free orders for you both
+										when you pay your first invoice.
+									</span>
+								)}
+							</Field>
+						)
+					}
+				/>
 
 				<label className="flex items-start gap-3 text-sm text-muted-foreground">
 					<input

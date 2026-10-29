@@ -182,7 +182,11 @@ to test SG — and the card says its prices are in RM.
 - **`/shipment/submit_orders`** after reserving the order's single booking slot
   (cross-provider). `providerOrderId` = the **`shipment_number`** (ES-…),
   which details, cancel and webhooks all key on; the reference is the order
-  shortId. An item-level refusal releases with EasyParcel's own words; a
+  shortId. An item-level refusal releases with EasyParcel's own words —
+  shown **directly above the Book button** (a screen above it read as
+  "nothing happened" and the seller pressed four times, test-code 30 Oct),
+  and recorded as **"Booking didn't go through"**: "cancelled" is only for a
+  shipment that existed (has a `shipment_number`). A
   failure we can't classify AFTER the request left (timeout, 5xx) may still
   have booked, so the reservation releases with "check your EasyParcel
   dashboard for <shortId> before booking again".
@@ -195,7 +199,21 @@ to test SG — and the card says its prices are in RM.
   collection date…)") is shown verbatim.
 - Every block names its fix (`easyparcel-dispatch-block.ts`); `not_configured`
   and `country_unsupported` hide the card, `reconnect_needed` shows it with a
-  Reconnect link.
+  Reconnect link. **`no_sender_phone`**: EasyParcel requires a sender phone,
+  which is the store's WhatsApp number — without one the block (with an "Add
+  your WhatsApp number" link) stops the booking before the API call, and the
+  settings card shows **Your WhatsApp number** as a setup step
+  (`getSettings.hasSenderPhone`). Found on a pre-built handover store.
+
+### Proof of delivery — a scan, not a photo (z8r3fdytmq)
+
+Parcel couriers confirm delivery with a **tracking scan**; there is no
+drop-off photo like a Lalamove rider's. EasyParcel's parcel `/shipment/details` has no proof-of-delivery field at all; `pod` exists only on its **OnDemand** (rider) orders, a different product. The seller is told in two
+places, one author (`src/lib/parcel-courier-copy.ts`): under the card's ✓ list
+before connecting (`PARCEL_NO_PHOTO_NOTE`), and on the order's delivered state
+(`parcelDeliveredCopy`, which points at **Track parcel** when the order has a
+tracking link). Without it, a seller using Lalamove too reads the missing photo
+as a bug.
 
 ## Status — webhooks are nudges
 
@@ -230,9 +248,18 @@ disconnect, pause and cancel never are. `prepareBooking`/`confirmBooking`
 carry the per-order credit gate (`creditLockCoverage.test.ts` classifies the
 module); view-only stores are refused on every write
 (`sellerLockCoverage.test.ts`). Country: `COUNTRY_COURIER_BOOKING.easyparcel =
-{MY: false, SG: true}` — MY stays closed (the 29 Jul 2026 frozen-prohibition
-finding; Delyva serves MY incl. cold chain); the MY column exists for the
-cross-border lane (z8r3fdr5yy). Account deletion clears both tables.
+{MY: true, SG: true}` with `COURIER_DESTINATIONS.easyparcel = {MY: "abroad",
+SG: "both"}` — a MY store books EasyParcel for its OVERSEAS orders only (the
+cross-border lane, z8r3fdr5yy); MY domestic stays Delyva (the 29 Jul 2026
+frozen-prohibition finding, cold chain, commission), and a MY domestic order
+reads `destination_unsupported`. The Integrations card is **always visible on
+a MY store and connectable anytime** (Zaki, 30 Oct — hiding it until a lane
+existed left sellers unable to find it); its setup list gets a first step,
+**Deliver to Singapore** (`getSettings.overseasLane`: on / paused / off, from
+`storeLanes`), linking to the overseas page, and the "Setup N of 3" glance
+counts it. An SG store's card says it carries the Malaysia lane too. See
+[cross-border.md](./cross-border.md). Account
+deletion clears both tables.
 
 ## Why the Open API (not the legacy Individual API)
 
