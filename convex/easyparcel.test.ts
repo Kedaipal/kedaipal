@@ -859,6 +859,32 @@ describe("dispatch state — every block names its cause", () => {
 		expect(homeState?.buyerContactFallback).toBe(true);
 	});
 
+	test("no store WhatsApp number blocks booking BEFORE EasyParcel is called (test-code, z8r3fdr5yy)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await seedConnection(t, retailer._id);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { waPhone: "" });
+		});
+		const { shortId } = await seedOrder(t, retailer._id);
+		const asUser = t.withIdentity({ subject: USER });
+		expect(
+			(await asUser.query(api.easyparcel.getDispatchState, { shortId }))?.blockReason,
+		).toBe("no_sender_phone");
+		expect((await asUser.query(api.easyparcel.getSettings, {})).hasSenderPhone).toBe(
+			false,
+		);
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
+		const result = await asUser.action(api.easyparcel.prepareBooking, {
+			shortId,
+			box: "small",
+			weightKgOverride: 1,
+		});
+		expect(result).toMatchObject({ ok: false, reason: "no_sender_phone" });
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
 	test("disconnect deletes the grant outright", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);

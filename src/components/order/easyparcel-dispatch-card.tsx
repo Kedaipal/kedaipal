@@ -152,6 +152,15 @@ export function EasyparcelDispatchCard({
 	const completedJob = job?.status === "completed" ? job : null;
 	const blockReason = dispatch.blockReason;
 	const bookable = blockReason === null;
+	const errorPanel = (
+		<p
+			role="alert"
+			className={`flex items-start gap-2 rounded-xl px-3 py-2.5 text-sm border ${TONE_PANEL.warn}`}
+		>
+			<CircleAlert className="mt-0.5 size-4 shrink-0" />
+			<span>{error}</span>
+		</p>
+	);
 	const walletCurrency =
 		quotedCurrency ?? dispatch.balanceCurrency ?? order.currency;
 	const bookedService = job?.serviceName
@@ -363,19 +372,25 @@ export function EasyparcelDispatchCard({
 				</p>
 			) : null}
 
-			{failedJob && !activeJob ? (
+			{/* The same refusal is already beside Book while it's fresh. */}
+			{failedJob && !activeJob && !error ? (
 				<p
 					className={`flex items-start gap-2 rounded-xl px-3 py-2.5 text-sm border ${TONE_PANEL.warn}`}
 				>
 					<CircleAlert className="mt-0.5 size-4 shrink-0" />
 					<span>
 						<span className="font-medium">
-							{failedJob.status === "canceled"
+							{/* "Cancelled" only for a shipment that existed: a refused
+							    submit never got a shipment number. */}
+							{failedJob.status === "canceled" &&
+							failedJob.shipmentNumber !== undefined
 								? "Booking cancelled"
 								: "Booking didn't go through"}
 						</span>
-						{failedJob.failureReason ? ` — ${failedJob.failureReason}` : ""}.
-						Your buyer was not notified; the order is unchanged.
+						{failedJob.failureReason
+							? ` — ${failedJob.failureReason.trim().replace(/[.!]+$/, "")}`
+							: ""}
+						. Your buyer was not notified; the order is unchanged.
 					</span>
 				</p>
 			) : null}
@@ -599,14 +614,9 @@ export function EasyparcelDispatchCard({
 						</p>
 					</div>
 
-					{error ? (
-						<p
-							className={`flex items-start gap-2 rounded-xl px-3 py-2.5 text-sm border ${TONE_PANEL.warn}`}
-						>
-							<CircleAlert className="mt-0.5 size-4 shrink-0" />
-							<span>{error}</span>
-						</p>
-					) : null}
+					{/* Before prices exist the button sits right under this; once
+					    they do, a refusal renders beside Book instead (below). */}
+					{error && !(rates && rates.length > 0) ? errorPanel : null}
 
 					{rates === null ? (
 						<Button
@@ -622,7 +632,8 @@ export function EasyparcelDispatchCard({
 								<>
 									<Truck className="size-4" />
 									{failedJob
-										? failedJob.status === "canceled"
+										? failedJob.status === "canceled" &&
+											failedJob.shipmentNumber !== undefined
 											? "Book again"
 											: "Try again"
 										: "Get courier prices"}
@@ -863,6 +874,11 @@ export function EasyparcelDispatchCard({
 								</p>
 							) : null}
 
+							{/* A refused booking is said where the seller just pressed —
+							    a screen above it read as "nothing happened", and they
+							    pressed again (test-code, z8r3fdr5yy). */}
+							{error ? errorPanel : null}
+
 							<Button
 								type="button"
 								className="h-11 w-full"
@@ -925,6 +941,14 @@ export function EasyparcelDispatchCard({
 										className="font-medium text-accent hover:underline"
 									>
 										Reconnect EasyParcel
+									</Link>
+								) : blockReason === "no_sender_phone" ? (
+									<Link
+										to="/app/settings"
+										search={{ tab: "whatsapp" }}
+										className="font-medium text-accent hover:underline"
+									>
+										Add your WhatsApp number
 									</Link>
 								) : null}
 							</>

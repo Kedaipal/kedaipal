@@ -330,6 +330,25 @@ describe("a MY store finds EasyParcel and is told the lane it needs (z8r3fdr5yy)
 	});
 });
 
+describe("EasyParcel needs the store's WhatsApp number as the sender phone", () => {
+	it("missing: a setup step of its own, linked to Settings → WhatsApp", () => {
+		state.settings = settings({ hasSenderPhone: false });
+		render(card());
+		expect(screen.getByText("Your WhatsApp number")).toBeDefined();
+		expect(screen.getByText("Setup 2 of 3")).toBeDefined();
+		expect(
+			screen.getByText(/Add it under Settings → WhatsApp/).closest("a"),
+		).not.toBeNull();
+	});
+
+	it("present: no step, setup complete", () => {
+		state.settings = settings({ hasSenderPhone: true });
+		render(card());
+		expect(screen.queryByText("Your WhatsApp number")).toBeNull();
+		expect(screen.queryByText(/Setup \d of/)).toBeNull();
+	});
+});
+
 describe("a backend older than the page never takes the card down", () => {
 	it("no overseasLane field: the card still renders", () => {
 		state.settings = settings({ overseasLane: undefined });

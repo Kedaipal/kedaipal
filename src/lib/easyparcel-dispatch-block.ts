@@ -10,9 +10,6 @@ import type { EasyparcelDispatchBlock } from "../../convex/easyparcel";
  * then a compile error here instead of silently falling through.
  */
 const BLOCK_COPY: Record<EasyparcelDispatchBlock, string> = {
-	// The only reason with no fix to offer — the card hides itself for this
-	// one; the line is the fallback for surfaces that can't. MY is closed on
-	// purpose (Delyva serves it), so the alternative is named.
 	// Neither has a fix the seller can make — the card hides itself for both;
 	// these lines are the fallback for surfaces that can't.
 	not_configured: "EasyParcel booking isn't available right now.",
@@ -37,6 +34,8 @@ const BLOCK_COPY: Record<EasyparcelDispatchBlock, string> = {
 		"EasyParcel courier booking is a Pro feature. Upgrade to book couriers in one tap.",
 	no_pickup_address:
 		"Add your pickup address under Settings → Integrations → EasyParcel — couriers need somewhere to collect from.",
+	no_sender_phone:
+		"Add your store's WhatsApp number under Settings → WhatsApp — EasyParcel gives it to the courier as the sender's contact, and won't book without it.",
 	no_address:
 		"This order has no delivery address, so there's nowhere to send the parcel.",
 };

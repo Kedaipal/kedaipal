@@ -182,7 +182,11 @@ to test SG — and the card says its prices are in RM.
 - **`/shipment/submit_orders`** after reserving the order's single booking slot
   (cross-provider). `providerOrderId` = the **`shipment_number`** (ES-…),
   which details, cancel and webhooks all key on; the reference is the order
-  shortId. An item-level refusal releases with EasyParcel's own words; a
+  shortId. An item-level refusal releases with EasyParcel's own words —
+  shown **directly above the Book button** (a screen above it read as
+  "nothing happened" and the seller pressed four times, test-code 30 Oct),
+  and recorded as **"Booking didn't go through"**: "cancelled" is only for a
+  shipment that existed (has a `shipment_number`). A
   failure we can't classify AFTER the request left (timeout, 5xx) may still
   have booked, so the reservation releases with "check your EasyParcel
   dashboard for <shortId> before booking again".
@@ -195,7 +199,11 @@ to test SG — and the card says its prices are in RM.
   collection date…)") is shown verbatim.
 - Every block names its fix (`easyparcel-dispatch-block.ts`); `not_configured`
   and `country_unsupported` hide the card, `reconnect_needed` shows it with a
-  Reconnect link.
+  Reconnect link. **`no_sender_phone`**: EasyParcel requires a sender phone,
+  which is the store's WhatsApp number — without one the block (with an "Add
+  your WhatsApp number" link) stops the booking before the API call, and the
+  settings card shows **Your WhatsApp number** as a setup step
+  (`getSettings.hasSenderPhone`). Found on a pre-built handover store.
 
 ## Status — webhooks are nudges
 

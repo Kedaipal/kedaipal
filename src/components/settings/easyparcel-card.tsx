@@ -177,7 +177,11 @@ export function EasyparcelCard({
 		| { destination: Country; state: "on" | "paused" | "off" }
 		| undefined;
 	const laneStep = settings?.destinations === "abroad" ? lane : undefined;
-	const setupTotal = laneStep ? 3 : 2;
+	// No store WhatsApp number = no sender phone, and EasyParcel refuses every
+	// booking — so it's a step of its own while it's missing (test-code).
+	const needsPhone =
+		settings !== undefined && settings.hasSenderPhone === false;
+	const setupTotal = (laneStep ? 3 : 2) + (needsPhone ? 1 : 0);
 	const setupDone =
 		(connected && !needsReconnect ? 1 : 0) +
 		(storedAddress ? 1 : 0) +
@@ -499,6 +503,27 @@ export function EasyparcelCard({
 									/>
 								)}
 							</SetupStep>
+
+							{needsPhone ? (
+								<SetupStep
+									n={accountStep + 2}
+									state="action"
+									title="Your WhatsApp number"
+									detail={
+										<>
+											EasyParcel gives the courier your store&apos;s number as
+											the sender&apos;s contact, and won&apos;t book without it.{" "}
+											<Link
+												to="/app/settings"
+												search={{ tab: "whatsapp" }}
+												className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
+											>
+												Add it under Settings → WhatsApp
+											</Link>
+										</>
+									}
+								/>
+							) : null}
 						</SetupChecklist>
 
 						{/* Prepaid: the wallet is the thing that fails first. */}

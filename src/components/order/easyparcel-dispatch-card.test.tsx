@@ -22,6 +22,7 @@ import { DAY_MS, todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
 const state = vi.hoisted(() => ({
 	dispatch: undefined as unknown,
 	prepare: undefined as ReturnType<typeof vi.fn> | undefined,
+	confirm: undefined as ReturnType<typeof vi.fn> | undefined,
 }));
 
 vi.mock("convex/react", async () => {
@@ -32,7 +33,9 @@ vi.mock("convex/react", async () => {
 		useAction: (fn: never) =>
 			getFunctionName(fn) === "easyparcel:prepareBooking"
 				? (...args: unknown[]) => state.prepare?.(...args)
-				: vi.fn(),
+				: getFunctionName(fn) === "easyparcel:confirmBooking"
+					? (...args: unknown[]) => state.confirm?.(...args)
+					: vi.fn(),
 	};
 });
 vi.mock("@convex-dev/react-query", () => ({
@@ -286,6 +289,42 @@ describe("copy follows the picked service (F12) and the reason is attached (F14)
 	});
 });
 
+describe("a refused booking is said where the seller pressed (z8r3fdr5yy)", () => {
+	// Found on the /test-code pass: the refusal rendered a screen above Book,
+	// so it read as "nothing happened" and the seller pressed four times.
+	it("the reason sits directly above the Book button", async () => {
+		card();
+		await quote();
+		state.confirm = vi.fn().mockResolvedValue({
+			ok: false,
+			reason: "submit_failed",
+			message:
+				"EasyParcel couldn't do this: The sender phone number field is required ",
+		});
+		fireEvent.click(bookButton());
+		const alert = await screen.findByRole("alert");
+		expect(alert.textContent).toMatch(/sender phone number field is required/);
+		expect(alert.nextElementSibling).toBe(bookButton());
+		// Said once — not again under Box size.
+		expect(screen.getAllByText(/sender phone number/)).toHaveLength(1);
+	});
+
+	it("a store without a WhatsApp number is told before the click, with the way to fix it", () => {
+		state.dispatch = {
+			...(state.dispatch as object),
+			blockReason: "no_sender_phone",
+		};
+		card();
+		expect(screen.getByText(/Add your store's WhatsApp number/)).toBeTruthy();
+		expect(
+			screen
+				.getByText("Add your WhatsApp number")
+				.closest("a")
+				?.getAttribute("href"),
+		).toBe("/app/settings");
+	});
+});
+
 describe("after booking (test-code F20–F25)", () => {
 	const job = (over: Record<string, unknown>) => ({
 		_id: "j1",
@@ -340,6 +379,25 @@ describe("after booking (test-code F20–F25)", () => {
 		card();
 		expect(screen.getByRole("button", { name: /book again/i })).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+	});
+
+	it("a submit EasyParcel refused never existed — it didn't go through, not 'cancelled'", () => {
+		state.dispatch = {
+			...(state.dispatch as object),
+			job: job({
+				status: "canceled",
+				shipmentNumber: undefined,
+				failureReason:
+					"EasyParcel couldn't do this: The sender phone number field is required ",
+			}),
+		};
+		card();
+		expect(screen.getByText("Booking didn't go through")).toBeTruthy();
+		expect(screen.queryByText("Booking cancelled")).toBeNull();
+		expect(
+			screen.getByText(/field is required\. Your buyer was not notified/),
+		).toBeTruthy();
+		expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
 	});
 
 	it("the cancel dialog's way out says Keep booking", () => {

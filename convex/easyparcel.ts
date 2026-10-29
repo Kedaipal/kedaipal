@@ -616,6 +616,9 @@ export const getSettings = query({
 			/** The overseas lane — a setup step on a MY store, a line on an SG
 			 * one (it carries those orders too). */
 			overseasLane,
+			/** EasyParcel hands the courier the store's WhatsApp number as the
+			 * sender's contact; without one every booking is refused. */
+			hasSenderPhone: phoneDigits(access.retailer.waPhone) !== "",
 			connected: conn !== null,
 			needsReconnect: conn?.revokedAt !== undefined,
 			enabled: conn?.enabled === true,
@@ -931,6 +934,9 @@ export type EasyparcelDispatchBlock =
 	| "disabled"
 	| "plan_gated"
 	| "no_pickup_address"
+	/** EasyParcel requires a sender phone, and that's the store's WhatsApp
+	 * number — refused here, before the call, not by EasyParcel after it. */
+	| "no_sender_phone"
 	| "no_address";
 
 function dispatchBlockReason(args: {
@@ -967,6 +973,7 @@ function dispatchBlockReason(args: {
 	if (!conn.enabled) return "disabled";
 	if (!planOk) return "plan_gated";
 	if (!conn.pickupAddress) return "no_pickup_address";
+	if (phoneDigits(retailer.waPhone) === "") return "no_sender_phone";
 	if (!order.deliveryAddress) return "no_address";
 	return null;
 }
