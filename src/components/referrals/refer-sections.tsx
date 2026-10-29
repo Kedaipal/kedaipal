@@ -556,6 +556,15 @@ export function TrialReferNotice({
 					time a kedai you refer starts Pro ({offer.starter} on Starter) — and
 					the same to them.
 				</p>
+				{/* The way forward, like the paused notice's — a locked feature
+				    with no door is a dead end (found in the hands-on test). */}
+				<Link
+					to="/app/settings"
+					search={{ tab: "billing" }}
+					className="inline-flex min-h-11 w-fit items-center text-sm font-semibold underline-offset-4 hover:underline"
+				>
+					Start your plan in Billing
+				</Link>
 			</div>
 		</div>
 	);

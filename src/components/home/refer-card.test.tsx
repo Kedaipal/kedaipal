@@ -152,6 +152,10 @@ describe("ReferCard", () => {
 		expect(screen.getByTestId("refer-trial").textContent).toContain(
 			"60 orders",
 		);
+		// A locked feature always shows its door.
+		expect(
+			screen.getByRole("link", { name: "Start your plan in Billing" }),
+		).toBeTruthy();
 		expect(
 			screen.queryByRole("button", { name: /Copy invite link/ }),
 		).toBeNull();

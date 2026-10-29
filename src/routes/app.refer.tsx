@@ -48,7 +48,7 @@ export const Route = createFileRoute("/app/refer")({
 });
 
 const SUBTITLE =
-	"Send your link to a kedai still taking orders by hand. When they start their plan, you both get credits.";
+	"Send your link to a kedai still taking orders by hand. When they start their plan, you both get free orders.";
 
 function ReferRoute() {
 	const retailer = useDashboardRetailer();
