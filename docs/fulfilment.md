@@ -110,6 +110,25 @@ structurally impossible. `AddressFieldset` has two faces:
   the whole location (notes survive — they describe *how* to deliver, not *where*)
   and returns to the search. A restored `kedaipal:lastAddress` **with** a pin mounts
   straight into this state.
+  - **A pick missing a required field asks for it ON the card.** Places routinely
+    omits one — an SG block with no postal code, an MY street with no locality, a
+    state spelling `normalizeMyState` doesn't know. The card used to hide those too,
+    so a required field the buyer could neither see nor fill disabled Place order.
+    Now the card renders an input for each location field the strict schema still
+    fails (`addressLocationGaps` in `src/lib/schemas.ts`), prefilled with whatever
+    Places gave, under *"Google didn't include the postal code for this spot — add
+    it to finish your address."* Those inputs carry **no** pin-invalidation
+    listener: typing the missing postal code completes the pinned place, it doesn't
+    move it. The gap set is **frozen when the card mounts**, so a field doesn't
+    vanish the moment it reads valid; "Search again" unmounts the card and the next
+    pick measures its own gaps. Covers the tracking-page edit dialog and the claim
+    checkout too (same fieldset).
+  - **The edit dialog's Save says why it's disabled.** It disables on TanStack's
+    `canSubmit` like Place order does, and "Search again" (which empties the
+    location) or a gap-leaving re-pick used to grey it out silently. A reason line
+    now sits directly above Save — *"Add your postal code to save"* — from
+    `addressFieldIssueLine` (`src/lib/checkout-field-issue.ts`), the checkout's
+    helper adapted to a form whose values ARE the address.
 - **Searching** — no pin. The Google search is the only address input.
 
 **Manual entry is an explicit escape hatch**, behind a "Can't find your address?"

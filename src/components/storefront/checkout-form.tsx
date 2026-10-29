@@ -69,6 +69,7 @@ import {
 	quickPickDays,
 	windowHasUnpickableDay,
 } from "../../lib/checkout-dates";
+import { checkoutFieldIssueLine } from "../../lib/checkout-field-issue";
 import {
 	asksForTime,
 	type FulfilmentKind,
@@ -1346,6 +1347,19 @@ export function CheckoutPage({
 	const watchedLine1 = useStore(form.store, (s) => s.values.address.line1);
 	const addressIncomplete =
 		watchedMethod === "delivery" && watchedLine1.trim().length === 0;
+	// The form's own refusal: once touched, any field error turns `canSubmit`
+	// false and disables Place order, so the reason line must name the field —
+	// a blank name, or a postal code the Google pick didn't carry, used to
+	// disable the button with nothing said. No `canSubmit` gate needed: the form
+	// holds field errors only once validation has run, which is exactly when
+	// `canSubmit` drops, so an untouched form (whose press reveals every error
+	// inline) has nothing here to name.
+	const fieldIssueLine = useStore(form.store, (s) =>
+		checkoutFieldIssueLine(s.fieldMeta, s.values, {
+			country,
+			collectsFromCustomer,
+		}),
+	);
 
 	// ------------------------------------------------------------------ render
 
@@ -1423,8 +1437,8 @@ export function CheckoutPage({
 	})();
 
 	// Why the CTA is disabled, in the buyer's words. Ordered by what they'd fix
-	// first. `null` = nothing blocking (or the only gap is a field the form
-	// already marks inline, like the name).
+	// first. `null` = nothing blocking. Every reason the button can be disabled
+	// for has a rung here — a field error included (`fieldIssueLine`).
 	const blockedReason: string | null = neitherAvailable
 		? "This store isn't accepting orders right now"
 		: noCheckoutPhone
@@ -1441,15 +1455,17 @@ export function CheckoutPage({
 								: "Prices changed while you were checking out — review your order before paying"
 							: unansweredLine?.missing
 								? `${answerPrompt(unansweredLine.missing.label)} for ${unansweredLine.item.name}`
-								: addressIncomplete
-									? collectsFromCustomer
-										? "Add your collection address to continue"
-										: "Add your delivery address to continue"
-									: quoteForDelivery?.kind === "calculating"
+								: fieldIssueLine
+									? fieldIssueLine
+									: addressIncomplete
 										? collectsFromCustomer
-											? "Calculating your collection fee…"
-											: "Calculating your delivery fee…"
-										: (deliveryBlockedLine ?? null);
+											? "Add your collection address to continue"
+											: "Add your delivery address to continue"
+										: quoteForDelivery?.kind === "calculating"
+											? collectsFromCustomer
+												? "Calculating your collection fee…"
+												: "Calculating your delivery fee…"
+											: (deliveryBlockedLine ?? null);
 
 	const submitButton = (
 		<form.Subscribe
