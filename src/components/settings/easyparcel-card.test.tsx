@@ -111,6 +111,7 @@ describe("not connected — the OAuth hand-off", () => {
 		).toBeDefined();
 		expect(screen.getByText(/never sees your EasyParcel/)).toBeDefined();
 		expect(screen.queryByLabelText(/API key/i)).toBeNull();
+		expect(screen.getByText(/tracking scan, not a photo/)).toBeDefined();
 	});
 
 	it("Connect asks for the sign-in URL, returning to THIS card", async () => {

@@ -68,6 +68,7 @@ import {
 	rateFilterCounts,
 } from "../../lib/easyparcel-rates";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { parcelDeliveredCopy } from "../../lib/parcel-courier-copy";
 import { TONE_ACCENT, TONE_CHIP, TONE_PANEL } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
 import { Button } from "../ui/button";
@@ -448,7 +449,7 @@ export function EasyparcelDispatchCard({
 
 					<p className="text-muted-foreground">
 						{completedJob
-							? "Delivered — your buyer's order page shows it."
+							? parcelDeliveredCopy(!!order.carrierTrackingUrl)
 							: bookedService?.sellerHandoff === "dropoff"
 								? "Your buyer can see the tracking number on their order page. The order marks itself Shipped once the courier scans the parcel in, and Delivered on arrival."
 								: "Your buyer can see the tracking number on their order page. The order marks itself Shipped at collection and Delivered on arrival."}

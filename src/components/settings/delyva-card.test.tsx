@@ -156,6 +156,7 @@ describe("account card", () => {
 		expect(
 			screen.getByRole("button", { name: /connect delyva/i }),
 		).toBeTruthy();
+		expect(screen.getByText(/tracking scan, not a photo/)).toBeTruthy();
 	});
 
 	it("shows the account settings once connected, plus the cross-tab pointer", () => {
