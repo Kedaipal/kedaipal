@@ -185,7 +185,11 @@ describe("upgrading is one control, paused or off", () => {
 
 /** Route each read to its own fixture — the page reads the lane overview
  * and EasyParcel's settings. */
-function mockReads(reads: { overview?: unknown; easyparcel?: unknown }) {
+function mockReads(reads: {
+	overview?: unknown;
+	easyparcel?: unknown;
+	missingWeights?: unknown;
+}) {
 	vi.mocked(useQuery).mockImplementation(((q: { __fn: unknown }) => {
 		const name = getFunctionName(q.__fn as never);
 		return {
@@ -194,7 +198,9 @@ function mockReads(reads: { overview?: unknown; easyparcel?: unknown }) {
 					? reads.overview
 					: name === "easyparcel:getSettings"
 						? reads.easyparcel
-						: undefined,
+						: name === "products:missingParcelWeights"
+							? reads.missingWeights
+							: undefined,
 			isPending: false,
 		};
 	}) as never);
@@ -234,6 +240,34 @@ describe("EasyParcel live pricing (z8r3fdr5yy)", () => {
 		expect(
 			screen.getByText(/Checkout picks the box from the parcel's weight/),
 		).toBeTruthy();
+	});
+
+	it("unweighed products: Save is off BEFORE the click, with the bulk-fill link (test-code)", () => {
+		mockReads({
+			easyparcel: {
+				connected: true,
+				needsReconnect: false,
+				enabled: true,
+				pickupAddress: {},
+				hasSenderPhone: true,
+			},
+			missingWeights: { count: 2, products: [] },
+		});
+		renderPage({
+			lanes: [{ country: "MY", pricing: { kind: "flat", fee: 2500 } }],
+		});
+		fireEvent.click(screen.getByText("Priced live by EasyParcel"));
+		expect(
+			screen
+				.getByRole("button", { name: "Save price" })
+				.hasAttribute("disabled"),
+		).toBe(true);
+		expect(
+			screen.getByText(/Saving is off until every product has a parcel weight/),
+		).toBeTruthy();
+		expect(screen.getByText("Set parcel weights").getAttribute("href")).toBe(
+			"/app/products/weights",
+		);
 	});
 
 	it("held while EasyParcel can't quote: says why, never locks the price, offers the fix", () => {

@@ -38,6 +38,10 @@ const state = vi.hoisted(() => ({
 	// The live catalog `products:list` answers with — [] unless a test lists
 	// a product (buyer questions are read from here, z8r3fdkjek).
 	listed: [] as unknown[],
+	// What `delivery:quote` answers — a free store unless a test prices live.
+	deliveryQuote: { kind: "free" } as unknown,
+	// The live-quote action (`liveQuote:quoteForCheckout`).
+	quoteLive: vi.fn(),
 }));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
@@ -60,7 +64,7 @@ vi.mock("@tanstack/react-query", () => ({
 				return { data: state.listed };
 			// A free-delivery store — no quote gate in the way of the phone field.
 			case "delivery:quote":
-				return { data: { kind: "free" } };
+				return { data: state.deliveryQuote };
 			default:
 				return { data: undefined };
 		}
@@ -68,7 +72,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("convex/react", () => ({
 	useMutation: () => state.createOrder,
-	useAction: () => vi.fn(),
+	useAction: () => state.quoteLive,
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 // The address search talks to Convex (Places actions); these tests are about
@@ -98,6 +102,7 @@ beforeEach(() => {
 		trackingToken: "tok_abc",
 		confirmedAtCreate: true,
 	});
+	state.deliveryQuote = { kind: "free" };
 });
 
 afterEach(() => {
@@ -327,6 +332,60 @@ describe("CheckoutPage — the phone plate follows Deliver to (z8r3fdr5yy)", () 
 		deliverTo("Singapore");
 		expect(plateCode()).toBe("+60");
 		expect(phoneInput().value).toBe("12-345 6789");
+	});
+});
+
+describe("CheckoutPage — an overseas live price is quoted from the postal code (z8r3fdr5yy)", () => {
+	// Found on the /test-code pass: the live lane's checkout demanded a map
+	// pin abroad — no manual entry, "we price delivery from the pin" — though
+	// the lane's EasyParcel quote is bound to the postal code.
+	beforeEach(() => {
+		state.deliveryQuote = {
+			kind: "live",
+			providerAware: true,
+			riders: false,
+			couriers: true,
+		};
+		state.quoteLive.mockResolvedValue({
+			status: "quoted",
+			quoteId: "q_1",
+			fee: 3008,
+		});
+	});
+
+	function typeAddress(postcode: string) {
+		fireEvent.click(screen.getByRole("button", { name: /Enter it manually/ }));
+		fireEvent.change(screen.getByRole("textbox", { name: /Address line 1/ }), {
+			target: { value: "12 Bedok North Ave 3" },
+		});
+		fireEvent.change(screen.getByRole("textbox", { name: /Postal code/ }), {
+			target: { value: postcode },
+		});
+	}
+
+	it("offers a typed address, and a partial code asks for the rest without spending a quote", async () => {
+		renderCheckout({ shipsAbroadTo: ["SG"], visitorCountry: "SG" });
+		expect(screen.queryByText(/we price delivery from the pin/)).toBeNull();
+		typeAddress("4601");
+		expect(
+			(
+				await screen.findAllByText(
+					/Add your postal code so we can calculate your delivery fee/,
+				)
+			).length,
+		).toBeGreaterThan(0);
+		await new Promise((r) => setTimeout(r, 500));
+		expect(state.quoteLive).not.toHaveBeenCalled();
+	});
+
+	it("a complete code quotes by country and postcode — no pin — and shows the fee", async () => {
+		renderCheckout({ shipsAbroadTo: ["SG"], visitorCountry: "SG" });
+		typeAddress("460123");
+		await waitFor(() => expect(state.quoteLive).toHaveBeenCalledTimes(1));
+		const args = state.quoteLive.mock.calls[0][0];
+		expect(args).toMatchObject({ country: "SG", postcode: "460123" });
+		expect(args.latitude).toBeUndefined();
+		expect(await screen.findByText("30.08")).toBeTruthy();
 	});
 });
 

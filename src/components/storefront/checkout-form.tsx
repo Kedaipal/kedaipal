@@ -16,7 +16,7 @@ import {
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
-import { SG_STATE_LABEL } from "../../../convex/lib/address";
+import { postcodeRule, SG_STATE_LABEL } from "../../../convex/lib/address";
 import { parseBuyerWaPhone } from "../../../convex/lib/buyerPhone";
 import {
 	answerPrompt,
@@ -1210,7 +1210,12 @@ export function CheckoutPage({
 		if (rawQuote.kind === "no_lane")
 			return { kind: "blocked", reason: "no_lane" };
 		if (rawQuote.kind !== "live") return rawQuote;
-		if (!hasCoords) return { kind: "blocked", reason: "no_coords" };
+		// Abroad, the lane's EasyParcel quote is priced on the postal code, so
+		// a typed address is enough — never ask an overseas buyer for a pin.
+		if (abroad) {
+			if (liveQuote.state === "idle")
+				return { kind: "blocked", reason: "no_postcode" };
+		} else if (!hasCoords) return { kind: "blocked", reason: "no_coords" };
 		switch (liveQuote.state) {
 			case "quoted":
 				return liveQuote.fee === 0
@@ -1270,7 +1275,7 @@ export function CheckoutPage({
 			quoteForDelivery.reason === "no_cold_service" ||
 			quoteForDelivery.reason === "too_heavy");
 	const allowManualAddressEntry =
-		rawQuote !== undefined && !(!hasCoords && pinRequiredBlock);
+		rawQuote !== undefined && (abroad || !(!hasCoords && pinRequiredBlock));
 
 	// Stock eroded under a persisted cart (qty 5, seller drops to 2): the line
 	// shows "Only 2 in stock" with `+` disabled, but the order would still be
@@ -1408,6 +1413,8 @@ export function CheckoutPage({
 				return `${storeName} isn't delivering to ${countryName(addressCountry)} right now`;
 			case "no_state":
 				return `Choose your state so we can calculate your ${feeNounShort}`;
+			case "no_postcode":
+				return `Add your ${postcodeRule(addressCountry).label.toLowerCase()} so we can calculate your ${feeNounShort}`;
 			case "over_bands":
 				return "This order is too heavy for the store's delivery rates — see your order summary";
 			case "missing_weights":
@@ -1742,7 +1749,13 @@ export function CheckoutPage({
 												: "Message"
 										} the store on WhatsApp to sort it out.`;
 									case "unquotable":
-										return `We couldn't calculate the ${feeNoun} right now — re-pick your address to retry, or try again shortly.`;
+										return abroad
+											? `We couldn't get a ${feeNoun} to ${countryName(addressCountry)} for this address — check your ${postcodeRule(addressCountry).label.toLowerCase()}, or try again shortly.`
+											: `We couldn't calculate the ${feeNoun} right now — re-pick your address to retry, or try again shortly.`;
+									case "no_postcode":
+										return addressIncomplete
+											? undefined
+											: `Add your ${postcodeRule(addressCountry).label.toLowerCase()} so we can calculate your ${feeNoun}.`;
 									// Weight-mode blocks (86eyeea1n) ------------------------
 									case "unserved_state":
 										return `${storeName} doesn't ${
@@ -2219,6 +2232,9 @@ export function CheckoutPage({
 														riders: rawQuote.riders,
 														couriers: rawQuote.couriers,
 														selfCollectAvailable,
+														overseasPostcodeLabel: abroad
+															? postcodeRule(addressCountry).label.toLowerCase()
+															: undefined,
 													})}
 												</p>
 											) : null}

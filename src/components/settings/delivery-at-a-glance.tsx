@@ -111,8 +111,14 @@ export function DeliveryAtAGlance({
 					search={{ tab: "fulfilment" }}
 					hash="settings-pickup"
 					label="Pickup: manage pickup points"
-					off={!offerSelfCollect}
-					offCopy="Pickup is off."
+					// On with no point is an option buyers can't actually use —
+					// said as such, not as "Free · 0 pickup points".
+					off={!offerSelfCollect || activePickupPoints === 0}
+					offCopy={
+						offerSelfCollect
+							? "Pickup is on, but there's no pickup point yet — buyers can't choose it."
+							: "Pickup is off."
+					}
 					pays="Free, or each point's own fee"
 					carriedBy={[
 						activePickupPoints === 1

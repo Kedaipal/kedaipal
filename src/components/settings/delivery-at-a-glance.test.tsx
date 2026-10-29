@@ -95,6 +95,14 @@ describe("Delivery at a glance", () => {
 		).toBeTruthy();
 	});
 
+	it("pickup on with no point says buyers can't use it", () => {
+		renderCard({ activePickupPoints: 0 });
+		expect(
+			screen.getByText(/no pickup point yet — buyers can't choose it/),
+		).toBeTruthy();
+		expect(screen.queryByText("0 pickup points")).toBeNull();
+	});
+
 	it("delivery or pickup off reads off, not a price", () => {
 		renderCard({ offerDelivery: false, offerSelfCollect: false });
 		expect(screen.getByText(/Delivery is off/)).toBeTruthy();

@@ -164,6 +164,9 @@ export function OverseasDelivery({
 		}
 	}
 	const weightMatters = draft.kind === "weight" || draft.kind === "live";
+	// Switching INTO a weight-priced option refuses while products are
+	// unweighed (the server's arming gate) — said before the click, with the
+	// fix, not after it (found on the /test-code pass).
 	const missingWeights = useQuery(
 		convexQuery(
 			api.products.missingParcelWeights,
@@ -172,6 +175,9 @@ export function OverseasDelivery({
 	).data;
 
 	const on = storedLane !== undefined;
+	const unweighed = weightMatters ? (missingWeights?.count ?? 0) : 0;
+	const weightsBlockSave =
+		unweighed > 0 && storedLane?.pricing.kind !== draft.kind;
 	const editing = on || enabling;
 	// A store-wide pause keeps the price but the server refuses any change to
 	// it until fixed — so the form says so instead of letting a save fail
@@ -431,6 +437,24 @@ export function OverseasDelivery({
 										onConnect={() => void connectEasyparcel()}
 										where={where}
 									/>
+									{unweighed > 0 ? (
+										<p
+											className={cn(
+												"rounded-xl border px-3.5 py-3 text-xs",
+												TONE_PANEL.warn,
+											)}
+										>
+											{unweighed} product{unweighed === 1 ? " has" : "s have"}{" "}
+											no parcel weight — EasyParcel prices every parcel by
+											weight.{" "}
+											<Link
+												to="/app/products/weights"
+												className="font-semibold underline underline-offset-2"
+											>
+												Set parcel weights
+											</Link>
+										</p>
+									) : null}
 									<ParcelBoxGuide />
 									<FreeAboveField
 										draft={draft}
@@ -613,13 +637,19 @@ export function OverseasDelivery({
 								<Button
 									type="button"
 									onClick={() => void save()}
-									disabled={lanePaused}
+									disabled={lanePaused || weightsBlockSave}
 									isLoading={saving}
 									className={SAVE_BTN_CLASS}
 								>
 									{on ? "Save price" : `Turn on delivery to ${where}`}
 								</Button>
 							</div>
+							{weightsBlockSave && !lanePaused ? (
+								<p className="text-xs text-muted-foreground">
+									Saving is off until every product has a parcel weight —{" "}
+									{unweighed} still {unweighed === 1 ? "needs" : "need"} one.
+								</p>
+							) : null}
 							{lanePaused ? (
 								<p className="text-xs text-muted-foreground">
 									Saving is off while delivery to {where} is paused — your price

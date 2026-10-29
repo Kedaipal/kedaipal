@@ -17,6 +17,7 @@ import { useAction } from "convex/react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { postcodeRule } from "../../convex/lib/address";
 import type { Country } from "../../convex/lib/country";
 
 export type LiveDeliveryQuoteState =
@@ -155,7 +156,12 @@ export function useLiveDeliveryQuote({
 	const hasCoords = latitude !== undefined && longitude !== undefined;
 	const lanePostcode = country !== undefined ? (postcode ?? "").trim() : "";
 	// An overseas lane quote is priced on the postcode; a home one on the pin.
-	const canQuote = country !== undefined ? lanePostcode !== "" : hasCoords;
+	// Only a COMPLETE postcode quotes — "4", "46"… as the buyer types would
+	// each spend a courier quote and flash a refusal.
+	const canQuote =
+		country !== undefined
+			? postcodeRule(country).pattern.test(lanePostcode)
+			: hasCoords;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: fires per picked pin / chosen day; the action identity is stable and the label is read fresh inside the timeout.
 	useEffect(() => {
 		if (!enabled || !retailerId || !canQuote) {

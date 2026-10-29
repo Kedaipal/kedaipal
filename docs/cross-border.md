@@ -104,7 +104,12 @@ what the default booking costs:
   can't charge.
 - **Bound to the postcode, not a pin**: an overseas address is often typed by
   hand. The held `deliveryQuotes` row carries `postcode` instead of
-  coordinates, and redemption refuses a different postcode.
+  coordinates, and redemption refuses a different postcode. So checkout never
+  asks an overseas buyer for a map pin: manual entry always stays open, the
+  quote fires only once the postal code is complete (`postcodeRule` — 5 digits
+  MY, 6 SG, so typing "46…" spends no courier quote), and until then the
+  block reason is `no_postcode` — "Add your postal code so we can calculate
+  your delivery fee", by the fee line and by Place order.
 - Arming one runs `assertCatalogueWeighed(…, "courier")`, and `weightPricingOf`
   answers `courier` for a live lane (the Delyva posture).
 

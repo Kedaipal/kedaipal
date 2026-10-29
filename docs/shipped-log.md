@@ -21,7 +21,8 @@ This log lives here, not in [`CLAUDE.md`](../CLAUDE.md), because it is reference
   - **The `live_pricing` pause is retired** (Zaki, 30 Oct): a lane carries its own price, so home pricing never matters.
   - A **Delivery at a glance** card leads Fulfilment: per kind of order, what the buyer pays and who carries it, in the store's own countries.
   - **Traps found:**
-    - A held live quote was pin-bound, so a typed overseas address could never be quoted. Lane quotes bind to the **postcode**.
+    - A held live quote was pin-bound, so a typed overseas address could never be quoted. Lane quotes bind to the **postcode**. The `/test-code` pass then found checkout still gating on a pin abroad (no manual entry, "we price delivery from the pin"): abroad it now waits for a complete postal code (`no_postcode`), and a half-typed one spends no quote.
+    - The live option saved only to be refused for unweighed products. Save is now disabled with the count and a link to the bulk weight fill.
     - Making EasyParcel an SG home bidder would have made the overseas help say "Lalamove and EasyParcel deliver within Singapore only", which is false. It's now `domesticOnlyCouriersDeliver`.
     - Delyva's row showed on SG stores that can't connect it. Fixed in passing.
   - See [`cross-border.md`](./cross-border.md) + [`delivery-live-pricing.md`](./delivery-live-pricing.md#easyparcel-as-a-bidder-z8r3fdr5yy-follow-up).
