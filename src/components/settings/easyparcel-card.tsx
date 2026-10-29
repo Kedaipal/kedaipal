@@ -49,6 +49,7 @@ import type { FixHighlight } from "../../lib/country-setup-copy";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { parseGoogleAddress } from "../../lib/google-address";
 import { easyparcelCardShown } from "../../lib/integrations-glance";
+import { PARCEL_NO_PHOTO_NOTE } from "../../lib/parcel-courier-copy";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { TONE_PANEL } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
@@ -589,6 +590,9 @@ export function EasyparcelCard({
 								price.
 							</Bullet>
 						</ul>
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{PARCEL_NO_PHOTO_NOTE}
+						</p>
 
 						<div className="flex flex-col gap-2 rounded-xl border border-input bg-muted/30 p-3 text-sm">
 							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
