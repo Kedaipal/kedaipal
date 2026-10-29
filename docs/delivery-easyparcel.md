@@ -205,6 +205,16 @@ to test SG — and the card says its prices are in RM.
   settings card shows **Your WhatsApp number** as a setup step
   (`getSettings.hasSenderPhone`). Found on a pre-built handover store.
 
+### Proof of delivery — a scan, not a photo (z8r3fdytmq)
+
+Parcel couriers confirm delivery with a **tracking scan**; there is no
+drop-off photo like a Lalamove rider's. EasyParcel's parcel `/shipment/details` has no proof-of-delivery field at all; `pod` exists only on its **OnDemand** (rider) orders, a different product. The seller is told in two
+places, one author (`src/lib/parcel-courier-copy.ts`): under the card's ✓ list
+before connecting (`PARCEL_NO_PHOTO_NOTE`), and on the order's delivered state
+(`parcelDeliveredCopy`, which points at **Track parcel** when the order has a
+tracking link). Without it, a seller using Lalamove too reads the missing photo
+as a bug.
+
 ## Status — webhooks are nudges
 
 `POST /webhook/easyparcel` takes **only the shipment number** from the body

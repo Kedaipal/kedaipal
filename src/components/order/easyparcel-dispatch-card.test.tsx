@@ -369,6 +369,13 @@ describe("after booking (test-code F20–F25)", () => {
 		card({ ...ORDER, status: "delivered" } as Doc<"orders">);
 		expect(screen.queryByText(/notified automatically/)).toBeNull();
 		expect(screen.getByText(/your buyer's order page shows it/)).toBeTruthy();
+		// No proof-of-delivery photo on a parcel courier — said, not left to
+		// look like a bug next to Lalamove's (z8r3fdytmq).
+		expect(
+			screen.getByText(
+				/tracking scan, not a photo: the courier's tracking page/,
+			),
+		).toBeTruthy();
 	});
 
 	it("after the seller cancels, the way back reads Book again — not Try again", () => {
