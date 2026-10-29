@@ -27,7 +27,6 @@ import {
 	type EasyparcelQuoteBlock,
 	loadEasyparcelQuoteBlock,
 } from "./lib/easyparcelArming";
-import { COUNTRY_CURRENCY } from "./lib/country";
 import { rateLimiter } from "./lib/rateLimiter";
 import { assertSubscriptionActive, getAccess } from "./subscriptions";
 
@@ -73,11 +72,7 @@ export async function storeLanes(
 		(await getAccess(ctx, retailer._id)).features.crossBorder;
 	// One indexed read, and only for a lane EasyParcel prices.
 	const easyparcelBlock = stored.some((lane) => lane.pricing.kind === "live")
-		? await loadEasyparcelQuoteBlock(
-				ctx,
-				retailer,
-				retailer.currency ?? COUNTRY_CURRENCY[storeCountry],
-			)
+		? await loadEasyparcelQuoteBlock(ctx, retailer)
 		: null;
 	const facts = {
 		planAllows,

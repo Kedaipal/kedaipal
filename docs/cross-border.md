@@ -109,7 +109,14 @@ what the default booking costs:
   quote fires only once the postal code is complete (`postcodeRule` — 5 digits
   MY, 6 SG, so typing "46…" spends no courier quote), and until then the
   block reason is `no_postcode` — "Add your postal code so we can calculate
-  your delivery fee", by the fee line and by Place order.
+  your delivery fee", by the fee line and by Place order. The order door says
+  the same: a live-lane order with no matching quote (stale tab, expired or
+  other postcode) is refused with "re-enter your postal code to get a fresh
+  price", never the domestic "pick from the suggestions".
+- **One currency fallback**: the lane's readiness (`wrong_currency`) and the
+  checkout quote's currency filter both read `storeCurrencyOf` (saved
+  currency, else the country's), so they can't disagree on a store with no
+  saved currency.
 - Arming one runs `assertCatalogueWeighed(…, "courier")`, and `weightPricingOf`
   answers `courier` for a live lane (the Delyva posture).
 

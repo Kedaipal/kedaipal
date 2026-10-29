@@ -33,7 +33,11 @@ import {
 	isChoosablePickupPoint,
 	pickupChoiceRefusal,
 } from "./lib/pickupChoice";
-import { assertValidAddress, formatPickupAddress } from "./lib/address";
+import {
+	assertValidAddress,
+	formatPickupAddress,
+	postcodeRule,
+} from "./lib/address";
 import {
 	isStoredImageRenderable,
 	UNRENDERABLE_PROOF_MESSAGE,
@@ -433,6 +437,16 @@ export function resolveDeliveryForOrder(
 		liveQuote,
 	});
 	if (quote.kind === "blocked") {
+		// A live lane is quoted from the postal code and its checkout has no map,
+		// so "pick from the suggestions" would point at nothing. Reached only by
+		// a stale tab, an expired quote or a different postcode (PR #435 review).
+		if (liveLane) {
+			const where = countryName(crossBorder.lane.country);
+			const code = postcodeRule(crossBorder.lane.country).label.toLowerCase();
+			throw new ConvexError(
+				`We couldn't confirm the delivery price to ${where} for this address — re-enter your ${code} to get a fresh price, then try again.`,
+			);
+		}
 		throw new ConvexError(blockedDeliveryMessage(quote.reason, address?.state));
 	}
 	if (quote.kind === "pending") {

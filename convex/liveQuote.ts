@@ -33,7 +33,12 @@ import {
 import { delyvaBidsAtCheckout } from "./lib/courierBooking";
 import { storeLanes } from "./crossBorder";
 import { fetchEasyparcelCheckoutQuote } from "./easyparcel";
-import { type Country, countryValidator, DEFAULT_COUNTRY } from "./lib/country";
+import {
+	type Country,
+	countryValidator,
+	DEFAULT_COUNTRY,
+	storeCurrencyOf,
+} from "./lib/country";
 import { COURIER_DESTINATIONS } from "./lib/courierProviders";
 import {
 	easyparcelConfigured,
@@ -132,7 +137,7 @@ export const getLiveQuoteContext = internalQuery({
 				conn: easyparcelConn,
 				configured: easyparcelConfigured(),
 				senderPhone: retailer.waPhone,
-				storeCurrency: retailer.currency ?? "MYR",
+				storeCurrency: storeCurrencyOf(retailer),
 			}) === null
 				? {
 						sender: {
@@ -178,7 +183,7 @@ export const getLiveQuoteContext = internalQuery({
 		}
 
 		return {
-			currency: retailer.currency ?? "MYR",
+			currency: storeCurrencyOf(retailer),
 			itemType,
 			cold: isColdItemType(itemType),
 			// Rider booking armed AND the country actually serves it — the same

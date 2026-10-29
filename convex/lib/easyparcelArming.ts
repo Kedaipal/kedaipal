@@ -10,6 +10,7 @@
 
 import type { Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
+import { type Country, storeCurrencyOf } from "./country";
 
 /** Kedaipal's EasyParcel app is configured on this deployment. */
 export function easyparcelConfigured(): boolean {
@@ -88,8 +89,8 @@ export async function loadEasyparcelQuoteBlock(
 		_id: Id<"retailers">;
 		waPhone?: string;
 		currency?: string;
+		country?: Country;
 	},
-	storeCurrency: string,
 ): Promise<EasyparcelQuoteBlock | null> {
 	const conn = await ctx.db
 		.query("easyparcelConnections")
@@ -99,6 +100,6 @@ export async function loadEasyparcelQuoteBlock(
 		conn,
 		configured: easyparcelConfigured(),
 		senderPhone: retailer.waPhone,
-		storeCurrency,
+		storeCurrency: storeCurrencyOf(retailer),
 	});
 }

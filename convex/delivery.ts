@@ -196,11 +196,7 @@ export const quote = query({
 					providerAware &&
 					(delyvaBidsAtCheckout(retailer) ||
 						(COURIER_DESTINATIONS.easyparcel[storeCountry] !== "abroad" &&
-							(await loadEasyparcelQuoteBlock(
-								ctx,
-								retailer,
-								retailer.currency ?? "MYR",
-							)) === null)),
+							(await loadEasyparcelQuoteBlock(ctx, retailer)) === null)),
 			};
 		}
 		const destination =

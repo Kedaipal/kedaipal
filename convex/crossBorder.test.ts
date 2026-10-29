@@ -619,7 +619,26 @@ describe("a lane priced live by EasyParcel (z8r3fdr5yy)", () => {
 				deliveryAddress: { ...SG_ADDRESS, postcode: "520123" },
 				deliveryQuoteId: result.quoteId,
 			}),
-		).rejects.toThrow();
+		).rejects.toThrow(/re-enter your postal code/);
+	});
+
+	// PR #435 review: a stale tab reaching the door with no quote was told to
+	// "pick your address from the suggestions" — the overseas checkout has none.
+	test("no quote at all: the refusal names the postal code, never a map suggestion", async () => {
+		const t = setup();
+		mockQuotes();
+		const { retailerId, keropok } = await seedLiveLane(t);
+		const attempt = t.mutation(api.orders.create, {
+			retailerId,
+			items: [{ productId: keropok, quantity: 1 }],
+			currency: "MYR",
+			channel: "whatsapp",
+			customer: { name: "Mei Ling", waPhone: "6598765432", waDialCountry: "SG" },
+			deliveryAddress: SG_ADDRESS,
+		});
+		await expect(attempt).rejects.toThrow(
+			"We couldn't confirm the delivery price to Singapore for this address — re-enter your postal code to get a fresh price, then try again.",
+		);
 	});
 
 	test("held — never offered — while EasyParcel can't quote, and the seller is told why", async () => {
