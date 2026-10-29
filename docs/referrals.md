@@ -103,7 +103,7 @@ truncates. The referrer rides `store=` and lands on the row.
    and signs up tomorrow by typing kedaipal.com must still be a referee. The
    latest link wins. A link shared before the referrer renamed still resolves
    while the old slug is parked, and the cookie keeps the CURRENT slug.
-3. **The invite follows them.** "Invited by `<store>` · Get 60 bonus credits
+3. **The invite follows them.** "Invited by `<store>` · Get 60 free orders
    when you start Pro, or 30 on Starter" (`ReferralInvitePill`, en/ms/zh)
    appears:
    - at the top of the landing hero (the badge slot that is empty for everyone
@@ -223,7 +223,18 @@ What changed, and why each piece is where it is:
   name — a referee's store name is public, it is their storefront's) for the
   Home teaser's one line; the page's pending rows lead, amber, and carry
   **"Say hi on WhatsApp"** to the referee's public number — a word from a
-  friend converts where an email from us doesn't.
+  friend converts where an email from us doesn't. Each waiting row says
+  **where the referee actually stands** — `stage` on `MyReferralRow`, from
+  `refereeStage` (`convex/lib/referral.ts`) reading their subscription: "on
+  their free period", "free period over · first invoice due", "first invoice
+  overdue", or "not on a plan yet" — in the Billing tab's own words. The
+  first build printed "on their free trial" on every waiting row by
+  assumption; a referee whose free period ended unpaid is the commonest
+  state, and the one a nudge matters most for. How a waiting row pays out is
+  said **once**, above the list, not on every row; a started row that paid
+  this store nothing ("Same owner", "On the house") says why **on the row** —
+  a hover tooltip is invisible on a phone. The page does not repeat Home's
+  pending line: its own list leads with the same rows.
 - **Entry points.** Sidebar: "Refer & earn" after Insights, before Settings
   (the growth items together, above configuration). Phone More sheet: after
   Vouchers, above Store poster. The profile-menu row sketched in the balances
@@ -247,13 +258,37 @@ What changed, and why each piece is where it is:
 - **The share kit.** `referralShareMessage(link, storeName)` opens with the
   store's own name (a friend vouching, not an ad), says "60 free orders", and
   puts the link alone on the last line so WhatsApp renders the invite page's
-  preview card. **Copy message** and a **share image** join WhatsApp and Copy
-  link: a 1080² navy card (store name, the offer, the link, a QR of it —
-  `ShareImageDialog`, drawn on a canvas from `referralShareImageCopy`) for an
-  Instagram story, a Facebook seller group or a WhatsApp status, where a text
-  link can't travel.
+  preview card. **Copy message** and a **share image** join WhatsApp and
+  **Copy invite link** — never bare "Copy link": on Home the teaser sits under
+  the store-link card, whose own button is "Copy link", and two identical
+  labels for two different links is how a seller sends their storefront
+  instead of their invite.
+- **The share image — the invite as a voucher** (`ShareImageDialog`, drawn by
+  `src/lib/referral-share-image.ts` from `referralShareImageCopy`; mockups F1–F3
+  on the canvas). The offer on top ("Kek Mak Jah invites you", **60 orders**
+  lit, "on us."), a perforated stub below with a large QR and the link, the
+  Kedaipal mark in the corner so a stranger scrolling a status knows what it
+  is. **Two formats**, one pick-one control (`ModeButton`): **Square** 1080²
+  for posts, seller groups and chats; **Story** 1080×1920 for a WhatsApp
+  status or an Instagram/Facebook story (it adds three benefit lines where
+  there is room). The card is a **brand asset in fixed colours**, identical
+  in light and dark, and the dialog's preview **is the drawn PNG** — the first
+  build showed a DOM look-alike whose navy drifted from the file in dark
+  mode. On a device that can share files (`navigator.canShare`), **Share
+  image** is primary and hands the PNG to the system share sheet (WhatsApp,
+  Instagram) — a download strands it in Files; **Save image** and **Copy
+  link** sit below. Elsewhere the primary is **Download PNG**. A failed draw
+  shows "Try again", never a blank stage. Long store names shrink, then
+  ellipsise, never run off the card. The draw waits on the card's fonts
+  (`document.fonts.load`) — a canvas never waits on its own.
+- **One promise, referee-side.** Everything a referee sees before Billing —
+  the invite pill, the link preview, the onboarding chip and note, the Home
+  welcome card — says "free orders", the same words as the message and image
+  that brought them. Billing keeps "bonus credits": its plan rows are counted
+  in credits ("200 credits a month"), and 1 credit = 1 order.
 - **Measured.** `referral_share` (`channel` × `surface`) fires on every share
-  tap — docs/analytics.md.
+  tap — `image` for a saved PNG, `image_share` for one handed to the share
+  sheet; docs/analytics.md.
 
 Deliberately not changed: the terms (a trial store still can't refer; letting
 one refer with its half held until it subscribes is a terms decision, flagged

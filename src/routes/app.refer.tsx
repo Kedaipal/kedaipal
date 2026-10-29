@@ -13,7 +13,6 @@ import {
 	HowItWorks,
 	offerHeadline,
 	PausedReferNotice,
-	PendingLine,
 	ReferFinePrint,
 	ReferLinkLine,
 	ReferralList,
@@ -170,8 +169,8 @@ function LiveBody({
 				</h2>
 				<p className="relative text-[13px] leading-relaxed text-background/75 dark:text-foreground/75">
 					{card.earns
-						? `When a kedai you refer starts Pro, they get ${card.offer.pro} bonus credits — and so do you. On Starter it's ${card.offer.starter} each.`
-						: `When a kedai you refer starts Pro, they get ${card.offer.pro} bonus credits (${card.offer.starter} on Starter). Your account is on the house, so there's nothing for you to earn — the bonus is theirs.`}
+						? `When a kedai you refer starts Pro, you each get ${card.offer.pro} free orders. On Starter it's ${card.offer.starter} each.`
+						: `When a kedai you refer starts Pro, they get ${card.offer.pro} free orders (${card.offer.starter} on Starter). Your account is on the house, so there's nothing for you to earn — the orders are theirs.`}
 				</p>
 			</section>
 
@@ -179,8 +178,6 @@ function LiveBody({
 				<ReferLinkLine slug={card.slug} />
 				<ReferShareActions card={card} surface="page" full />
 			</section>
-
-			<PendingLine card={card} />
 
 			<section className="rounded-2xl border border-border bg-card px-4 py-3">
 				<ReferStats card={card} />

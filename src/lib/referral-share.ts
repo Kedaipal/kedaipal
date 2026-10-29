@@ -30,8 +30,3 @@ export async function copyText(text: string): Promise<boolean> {
 		return false;
 	}
 }
-
-/** The share image's file name: `refer-<slug>.png`. */
-export function shareImageFilename(slug: string): string {
-	return `refer-${slug}.png`;
-}

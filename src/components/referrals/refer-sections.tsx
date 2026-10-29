@@ -123,7 +123,16 @@ export function ReferShareActions({
 						<span className="hidden sm:inline">Share on WhatsApp</span>
 					</a>
 				</Button>
-				<Button variant="outline" className="h-11" onClick={() => copy("link")}>
+				{/* "Copy INVITE link", never bare "Copy link": on Home this card sits
+				    under the store-link card, whose own button is "Copy link" —
+				    two identical labels for two different links is how a seller
+				    sends a stranger their storefront instead of their invite. */}
+				<Button
+					variant="outline"
+					className="h-11 min-w-0"
+					onClick={() => copy("link")}
+					aria-label="Copy invite link"
+				>
 					{copied === "link" ? (
 						<>
 							<Check className="size-4" aria-hidden="true" />
@@ -132,7 +141,8 @@ export function ReferShareActions({
 					) : (
 						<>
 							<Copy className="size-4" aria-hidden="true" />
-							Copy link
+							<span className="sm:hidden">Copy invite</span>
+							<span className="hidden sm:inline">Copy invite link</span>
 						</>
 					)}
 				</Button>
@@ -142,7 +152,7 @@ export function ReferShareActions({
 					<Button
 						variant="secondary"
 						size="sm"
-						className="h-9 rounded-full px-3"
+						className="h-11 rounded-full px-4"
 						onClick={() => setImageOpen(true)}
 					>
 						<ImageIcon className="size-3.5" aria-hidden="true" />
@@ -151,7 +161,7 @@ export function ReferShareActions({
 					<Button
 						variant="secondary"
 						size="sm"
-						className="h-9 rounded-full px-3"
+						className="h-11 rounded-full px-4"
 						onClick={() => copy("message")}
 					>
 						<MessageSquareText className="size-3.5" aria-hidden="true" />
@@ -163,7 +173,7 @@ export function ReferShareActions({
 						storeName={card.storeName}
 						slug={card.slug}
 						link={card.link}
-						onDownloaded={() => trackReferralShare("image", surface)}
+						surface={surface}
 					/>
 				</div>
 			) : null}
@@ -315,16 +325,30 @@ export function ReferralList({
 	const pending = rows.filter((r) => r.status === "signed_up");
 	const started = rows.filter((r) => r.status === "started");
 	return (
-		<ul className="flex flex-col gap-2" data-testid="referral-list">
-			{[...pending, ...started].map((row) => (
-				<ReferralRow key={row.id} row={row} card={card} />
-			))}
-			{capped ? (
-				<li className="px-1 text-xs text-muted-foreground">
-					Showing your latest {rows.length} referrals.
-				</li>
+		<div className="flex flex-col gap-3">
+			{/* How a waiting row pays out — said ONCE for the list, not repeated
+			    on every row (three identical paragraphs read as a wall). */}
+			{pending.length > 0 ? (
+				<p
+					className="text-[13px] leading-snug text-muted-foreground"
+					data-testid="referral-list-note"
+				>
+					{card.earns
+						? `Your ${card.offer.pro} land the moment a kedai pays its first invoice (${card.offer.starter} if they pick Starter). A word from you helps more than any email from us.`
+						: `Their ${card.offer.pro} land the moment they pay their first invoice (${card.offer.starter} on Starter). A word from you helps more than any email from us.`}
+				</p>
 			) : null}
-		</ul>
+			<ul className="flex flex-col gap-2" data-testid="referral-list">
+				{[...pending, ...started].map((row) => (
+					<ReferralRow key={row.id} row={row} card={card} />
+				))}
+				{capped ? (
+					<li className="px-1 text-xs text-muted-foreground">
+						Showing your latest {rows.length} referrals.
+					</li>
+				) : null}
+			</ul>
+		</div>
 	);
 }
 
@@ -339,13 +363,13 @@ function ReferralRow({
 	if (row.status === "signed_up") {
 		const chat = waChatHref(row.waPhone);
 		return (
-			<li className="flex flex-col gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50">
+			<li className="flex flex-col gap-1 rounded-2xl border border-amber-200 bg-amber-50 px-4 pt-3.5 dark:border-amber-800 dark:bg-amber-950/50">
 				<div className="flex items-start justify-between gap-3">
 					<div className="flex min-w-0 flex-col gap-0.5">
 						<span className="truncate text-[15px] font-semibold">{name}</span>
-						<span className="text-xs text-amber-800/80 dark:text-amber-200/80">
-							Signed up {formatRelativeTime(row.createdAt)} · on their free
-							trial
+						<span className="text-xs text-amber-900/80 dark:text-amber-200/80">
+							Signed up {formatRelativeTime(row.createdAt)}
+							{row.stage ? ` · ${STAGE_COPY[row.stage]}` : ""}
 						</span>
 					</div>
 					<span
@@ -358,49 +382,63 @@ function ReferralRow({
 						{card.earns ? `${card.offer.pro} waiting` : "Bonus waiting"}
 					</span>
 				</div>
-				<p className="text-[13px] leading-snug text-amber-900 dark:text-amber-100">
-					{card.earns
-						? `Your ${card.offer.pro} land the moment they pay their first invoice (${card.offer.starter} if they pick Starter). A word from you helps more than any email from us.`
-						: `Their ${card.offer.pro} land the moment they pay their first invoice (${card.offer.starter} on Starter). A word from you helps more than any email from us.`}
-				</p>
 				{chat ? (
 					<a
 						href={chat}
 						target="_blank"
 						rel="noopener noreferrer"
-						className="inline-flex min-h-9 w-fit items-center gap-1.5 text-[13px] font-semibold text-accent-emphasis underline-offset-4 hover:underline"
+						className="inline-flex min-h-11 w-fit items-center gap-1.5 text-[13px] font-semibold text-accent-emphasis underline-offset-4 hover:underline"
 					>
 						<WhatsAppIcon className="size-4" />
 						Say hi on WhatsApp
 					</a>
-				) : null}
+				) : (
+					<span aria-hidden="true" className="h-3" />
+				)}
 			</li>
 		);
 	}
+	const landed = row.referrerCredits > 0;
+	const why = landed ? undefined : outcomeWhy(row.referrerOutcome);
 	return (
-		<li className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card p-4">
-			<div className="flex min-w-0 flex-col gap-0.5">
-				<span className="truncate text-[15px] font-semibold">{name}</span>
-				<span className="text-xs text-muted-foreground">
-					Started their plan
-					{row.rewardedAt ? ` · ${formatShortDate(row.rewardedAt)}` : ""}
+		<li className="flex flex-col gap-1.5 rounded-2xl border border-border bg-card p-4">
+			<div className="flex items-start justify-between gap-3">
+				<div className="flex min-w-0 flex-col gap-0.5">
+					<span className="truncate text-[15px] font-semibold">{name}</span>
+					<span className="text-xs text-muted-foreground">
+						Started their plan
+						{row.rewardedAt ? ` · ${formatShortDate(row.rewardedAt)}` : ""}
+					</span>
+				</div>
+				<span
+					className={cn(
+						"inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold",
+						landed ? TONE_CHIP.success : TONE_CHIP.neutral,
+					)}
+				>
+					{landed ? <Check className="size-3" aria-hidden="true" /> : null}
+					{landed
+						? `+${row.referrerCredits} landed`
+						: outcomeLabel(row.referrerOutcome)}
 				</span>
 			</div>
-			<span
-				className={cn(
-					"inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold",
-					row.referrerCredits > 0 ? TONE_CHIP.success : TONE_CHIP.neutral,
-				)}
-				title={outcomeTitle(row.referrerOutcome)}
-			>
-				<Check className="size-3" aria-hidden="true" />
-				{row.referrerCredits > 0
-					? `+${row.referrerCredits} landed`
-					: outcomeLabel(row.referrerOutcome)}
-			</span>
+			{/* Why nothing landed — on the row, not in a hover tooltip a phone
+			    can never show. */}
+			{why ? (
+				<p className="text-xs leading-snug text-muted-foreground">{why}</p>
+			) : null}
 		</li>
 	);
 }
+
+/** Where a waiting referee stands — the words the Billing tab uses for the
+ * same states ("Free period", "first invoice due"), so they read as one app. */
+const STAGE_COPY: Record<NonNullable<MyReferralRow["stage"]>, string> = {
+	free: "on their free period",
+	invoice_due: "free period over · first invoice due",
+	overdue: "first invoice overdue",
+	not_on_plan: "not on a plan yet",
+};
 
 /** Why a started referral paid this store nothing — said plainly. */
 function outcomeLabel(outcome: MyReferralRow["referrerOutcome"]): string {
@@ -414,7 +452,7 @@ function outcomeLabel(outcome: MyReferralRow["referrerOutcome"]): string {
 	}
 }
 
-function outcomeTitle(
+function outcomeWhy(
 	outcome: MyReferralRow["referrerOutcome"],
 ): string | undefined {
 	switch (outcome) {

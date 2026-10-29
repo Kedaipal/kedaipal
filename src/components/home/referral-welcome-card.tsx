@@ -49,9 +49,9 @@ export function ReferralWelcomeCard({
 						{who} invited you — {referral.offer.pro} orders are waiting
 					</p>
 					<p className="text-[13px] leading-snug text-muted-foreground">
-						Start Pro and {referral.offer.pro} bonus credits land with your
-						first invoice ({referral.offer.starter} on Starter). They last 12
-						months, on top of your plan's monthly credits.
+						Start Pro and {referral.offer.pro} free orders land with your first
+						invoice ({referral.offer.starter} on Starter). They last 12 months,
+						on top of your plan.
 					</p>
 				</div>
 			</div>

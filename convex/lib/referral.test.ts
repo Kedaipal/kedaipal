@@ -9,7 +9,9 @@ import {
 	referralPath,
 	referralRefereeOffer,
 	referralRewardCredits,
+	refereeStage,
 	referralShareImageCopy,
+	storeInitials,
 	referralShareMessage,
 	referralSourceTag,
 	referrerStanding,
@@ -164,12 +166,47 @@ describe("referral share message", () => {
 });
 
 describe("referral share image copy", () => {
-	test("names the store and the Pro offer in orders", () => {
+	test("names the store and the Pro offer in orders, the number on its own line", () => {
 		const copy = referralShareImageCopy("Kek Mak Jah");
 		expect(copy.eyebrow).toBe("Kek Mak Jah invites you");
-		expect(copy.headline).toBe("60 orders on us.");
-		expect(copy.body).toContain("first 60 orders are free");
+		expect(copy.initials).toBe("KM");
+		expect(copy.headlineLead).toBe("60 orders");
+		expect(copy.headlineRest).toBe("on us.");
+		expect(copy.body).toContain("60 free orders on top of your plan");
 		expect(copy.body).toContain("30 on Starter");
+		expect(copy.benefits).toHaveLength(3);
+	});
+
+	test("a blank name still reads as an invite", () => {
+		expect(referralShareImageCopy("  ").eyebrow).toBe(
+			"A Kedaipal seller invites you",
+		);
+	});
+});
+
+describe("storeInitials", () => {
+	test("two words, two letters; symbols never become a glyph", () => {
+		expect(storeInitials("Kek Mak Jah")).toBe("KM");
+		expect(storeInitials("herb")).toBe("H");
+		expect(storeInitials("✦ DRESSES")).toBe("D");
+		expect(storeInitials("Satay Api Mak Nab & Anak-Anak")).toBe("SA");
+		expect(storeInitials("✦✦")).toBe("K");
+	});
+});
+
+describe("refereeStage", () => {
+	test("free period → first invoice due → overdue; anything else can't pay out", () => {
+		expect(refereeStage({ status: "trialing" })).toBe("free");
+		expect(
+			refereeStage({ status: "trialing", freePeriodEndedAt: 1 }),
+		).toBe("invoice_due");
+		expect(refereeStage({ status: "past_due" })).toBe("overdue");
+		expect(refereeStage({ status: "cancelled" })).toBe("not_on_plan");
+		expect(refereeStage({ status: "on_hold" })).toBe("not_on_plan");
+		expect(refereeStage({ status: "trialing", comped: true })).toBe(
+			"not_on_plan",
+		);
+		expect(refereeStage(null)).toBe("not_on_plan");
 	});
 });
 

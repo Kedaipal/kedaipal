@@ -837,6 +837,8 @@ describe("referrals.myReferrals — one row per referee (the push)", () => {
 		expect(page?.rows[0]).toMatchObject({
 			storeName: "Store second-kedai",
 			status: "signed_up",
+			// createRetailer starts the free period — never assumed, read.
+			stage: "free",
 			rewardedAt: null,
 			referrerCredits: 0,
 			referrerOutcome: null,
@@ -845,10 +847,29 @@ describe("referrals.myReferrals — one row per referee (the push)", () => {
 			storeName: "Store new-kedai",
 			waPhone: "+60123456789",
 			status: "started",
+			stage: null,
 			referrerCredits: 60,
 			referrerOutcome: "granted",
 		});
 		expect(page?.rows[1].rewardedAt).toEqual(expect.any(Number));
+	});
+
+	test("a waiting row says how close the referee is to paying — read off their subscription, never assumed", async () => {
+		const t = setup();
+		const { refereeId } = await referredPair(t, { status: "active" });
+		const stage = async () =>
+			(
+				await t
+					.withIdentity({ subject: REFERRER })
+					.query(api.referrals.myReferrals, {})
+			)?.rows[0].stage;
+		expect(await stage()).toBe("free");
+		await setSub(t, refereeId, { freePeriodEndedAt: Date.now() });
+		expect(await stage()).toBe("invoice_due");
+		await setSub(t, refereeId, { status: "past_due" });
+		expect(await stage()).toBe("overdue");
+		await setSub(t, refereeId, { status: "cancelled" });
+		expect(await stage()).toBe("not_on_plan");
 	});
 
 	test("a deleted referee reads as a null name — the row and the reward stand", async () => {

@@ -64,7 +64,8 @@ export type ReferralShareChannel =
 	| "whatsapp"
 	| "copy_link"
 	| "copy_message"
-	| "image";
+	| "image"
+	| "image_share";
 export type ReferralShareSurface = "home" | "page";
 
 export function trackReferralShare(

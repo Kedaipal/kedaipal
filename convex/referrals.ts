@@ -38,12 +38,14 @@ import {
 } from "./lib/plans";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
 import {
+	type RefereeStage,
 	type ReferrerIneligibleReason,
 	type ReferrerStanding,
 	looksLikeSelfReferral,
 	referralHref,
 	referralRefereeOffer,
 	referralRewardCredits,
+	refereeStage,
 	referrerStanding,
 } from "./lib/referral";
 import {
@@ -754,6 +756,9 @@ export type MyReferralRow = {
 	/** `started` once the referee paid their first plan invoice (the reward
 	 * moment); `signed_up` while the reward waits on them. */
 	status: "signed_up" | "started";
+	/** While `signed_up`: how close the referee is to that first invoice
+	 * (`refereeStage`). `null` once started, or when the store is gone. */
+	stage: RefereeStage | null;
 	rewardedAt: number | null;
 	/** What THIS store received for the row — 0 when nothing did
 	 * (`referrerOutcome` says why), and while the reward waits. */
@@ -793,12 +798,17 @@ export const myReferrals = query({
 		const out: MyReferralRow[] = [];
 		for (const r of rows) {
 			const referee = await ctx.db.get(r.refereeId);
+			const started = r.rewardedAt !== undefined;
 			out.push({
 				id: r._id,
 				storeName: referee?.storeName ?? null,
 				waPhone: referee?.waPhone ?? null,
 				createdAt: r.createdAt,
-				status: r.rewardedAt !== undefined ? "started" : "signed_up",
+				status: started ? "started" : "signed_up",
+				stage:
+					started || !referee
+						? null
+						: refereeStage(await loadSubscription(ctx, referee._id)),
 				rewardedAt: r.rewardedAt ?? null,
 				referrerCredits: r.referrerCredits ?? 0,
 				referrerOutcome: r.referrerOutcome ?? null,

@@ -40,7 +40,7 @@ describe("onboarding referral note", () => {
 		expect(screen.getByText("Siti's Kitchen invited you")).toBeTruthy();
 		expect(
 			screen.getByText(
-				/Pay your first invoice and 60 bonus credits land on Pro, or 30 on Starter/,
+				/Pay your first invoice and 60 free orders land on Pro, or 30 on Starter/,
 			),
 		).toBeTruthy();
 		expect(screen.getByText(/last 12 months/)).toBeTruthy();

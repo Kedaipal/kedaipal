@@ -501,7 +501,7 @@ function OnboardingForm() {
 							</span>
 						) : (
 							<span className="text-xs text-accent-emphasis">
-								✓ {invite.storeName} referred you — bonus credits for you both
+								✓ {invite.storeName} referred you — free orders for you both
 								when you pay your first invoice.
 							</span>
 						)}
@@ -598,8 +598,8 @@ export function ReferralInviteNote({
 					{invite.storeName} invited you
 				</p>
 				<p className="text-xs leading-snug text-muted-foreground">
-					Pay your first invoice and {invite.offer.pro} bonus credits land on
-					Pro, or {invite.offer.starter} on Starter. They last 12 months.
+					Pay your first invoice and {invite.offer.pro} free orders land on Pro,
+					or {invite.offer.starter} on Starter. They last 12 months.
 				</p>
 			</div>
 		</div>

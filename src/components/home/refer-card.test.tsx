@@ -60,7 +60,11 @@ describe("ReferCard", () => {
 		expect(wa.getAttribute("href")).toBe(
 			`https://wa.me/?text=${encodeURIComponent(referralShareMessage(base.link, "Siti's Kitchen"))}`,
 		);
-		expect(screen.getByRole("button", { name: /Copy link/ })).toBeTruthy();
+		// "Copy INVITE link" — Home's store-link card above already has a
+		// "Copy link" for a different link.
+		expect(
+			screen.getByRole("button", { name: "Copy invite link" }),
+		).toBeTruthy();
 		expect(
 			screen.getByRole("link", { name: /See all/ }).getAttribute("href"),
 		).toBe("/app/refer");
@@ -129,7 +133,9 @@ describe("ReferCard", () => {
 		expect(
 			screen.getByRole("link", { name: "Resume in Billing" }),
 		).toBeTruthy();
-		expect(screen.queryByRole("button", { name: /Copy link/ })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /Copy invite link/ }),
+		).toBeNull();
 		expect(screen.queryByRole("link", { name: /See all/ })).toBeNull();
 		cleanup();
 		card = { ...base, standing: { canRefer: false, reason: "lapsed" } };
@@ -146,7 +152,9 @@ describe("ReferCard", () => {
 		expect(screen.getByTestId("refer-trial").textContent).toContain(
 			"60 orders",
 		);
-		expect(screen.queryByRole("button", { name: /Copy link/ })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /Copy invite link/ }),
+		).toBeNull();
 	});
 
 	test("nothing while loading, nothing without a store", () => {

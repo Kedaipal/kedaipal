@@ -92,6 +92,7 @@ const rows: MyReferralRow[] = [
 		waPhone: null,
 		createdAt: Date.now() - 10 * 86_400_000,
 		status: "started",
+		stage: null,
 		rewardedAt: Date.now() - 86_400_000,
 		referrerCredits: 60,
 		referrerOutcome: "granted",
@@ -102,6 +103,7 @@ const rows: MyReferralRow[] = [
 		waPhone: "+60 12-345 6789",
 		createdAt: Date.now() - 3 * 86_400_000,
 		status: "signed_up",
+		stage: "invoice_due",
 		rewardedAt: null,
 		referrerCredits: 0,
 		referrerOutcome: null,
@@ -118,8 +120,13 @@ describe("/app/refer", () => {
 		expect(
 			screen.getByRole("link", { name: /Share on WhatsApp/ }),
 		).toBeTruthy();
-		expect(screen.getByRole("button", { name: /Copy link/ })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Copy invite link" }),
+		).toBeTruthy();
 		expect(screen.getByRole("button", { name: /Share image/ })).toBeTruthy();
+		expect(screen.getByText(/you each get 60 free orders/)).toBeTruthy();
+		// The page's own list carries the waiting rows; no duplicate line.
+		expect(screen.queryByTestId("refer-pending")).toBeNull();
 		expect(screen.getByRole("button", { name: /Copy message/ })).toBeTruthy();
 		expect(screen.getByText("kekmakjah")).toBeTruthy();
 		expect(screen.getByText("Signed up").nextSibling?.textContent).toBe("2");
@@ -141,23 +148,52 @@ describe("/app/refer", () => {
 		expect(items).toHaveLength(2);
 		expect(items[0].textContent).toContain("Che Ta Nasi Kerabu");
 		expect(items[0].textContent).toContain("60 waiting");
-		expect(items[0].textContent).toContain("A word from you helps");
+		// The referee's real stage, never an assumed "free trial".
+		expect(items[0].textContent).toContain(
+			"free period over · first invoice due",
+		);
+		expect(items[0].textContent).not.toContain("trial");
+		// How a waiting row pays out is said once, above the list.
+		expect(items[0].textContent).not.toContain("A word from you helps");
+		expect(screen.getByTestId("referral-list-note").textContent).toContain(
+			"A word from you helps",
+		);
 		const nudge = screen.getByRole("link", { name: /Say hi on WhatsApp/ });
 		expect(nudge.getAttribute("href")).toBe("https://wa.me/60123456789");
 		expect(items[1].textContent).toContain("Kuih Lab");
 		expect(items[1].textContent).toContain("+60 landed");
 	});
 
-	test("the share image opens with the store's name and the offer", () => {
+	test("a referral that paid this store nothing says why ON the row — no hover-only reason", () => {
+		state.card = live;
+		state.list = {
+			rows: [
+				{
+					...rows[0],
+					id: "ref3" as MyReferralRow["id"],
+					storeName: "Hammock Haus",
+					referrerCredits: 0,
+					referrerOutcome: "self",
+				},
+			],
+			capped: false,
+		};
+		render(<Page />);
+		const item = within(screen.getByTestId("referral-list")).getByRole(
+			"listitem",
+		);
+		expect(item.textContent).toContain("Same owner");
+		expect(item.textContent).toContain("shares your email or WhatsApp number");
+		expect(item.querySelector("[title]")).toBeNull();
+	});
+
+	test("Share image opens the image dialog", () => {
 		state.card = live;
 		state.list = { rows: [], capped: false };
 		render(<Page />);
 		fireEvent.click(screen.getByRole("button", { name: /Share image/ }));
-		const preview = screen.getByTestId("share-image-preview");
-		expect(preview.textContent).toContain("Kek Mak Jah invites you");
-		expect(preview.textContent).toContain("60 orders on us.");
-		expect(preview.textContent).toContain("kedaipal.com/referral/kekmakjah");
-		expect(screen.getByRole("button", { name: /Download PNG/ })).toBeTruthy();
+		expect(screen.getByText("Share as an image")).toBeTruthy();
+		expect(screen.getByTestId("share-image-stage")).toBeTruthy();
 	});
 
 	test("a teammate without the Credits grant sees the kit but not the list", () => {
