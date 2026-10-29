@@ -122,6 +122,32 @@ describe("ColumnFilterMenu", () => {
 		expect(screen.getByText("No categories on these orders yet")).toBeTruthy();
 	});
 
+	it("offers the way out of an empty list under its hint", () => {
+		renderMenu({
+			options: [],
+			emptyHint: "Group your products into categories.",
+			emptyAction: <a href="/app/products/categories">Set up categories</a>,
+		});
+		open();
+		expect(
+			screen.getByRole("link", { name: "Set up categories" }),
+		).toBeTruthy();
+	});
+
+	it("states how the options are decided under the list", () => {
+		renderMenu({ note: "Orders are filed under their product's category." });
+		open();
+		expect(
+			screen.getByText("Orders are filed under their product's category."),
+		).toBeTruthy();
+	});
+
+	it("drops the note when there are no options — the empty state speaks instead", () => {
+		renderMenu({ options: [], note: "A rule about options" });
+		open();
+		expect(screen.queryByText("A rule about options")).toBeNull();
+	});
+
 	it("shows a search box only once the list is long enough to need one", () => {
 		renderMenu();
 		open();

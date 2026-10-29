@@ -41,7 +41,7 @@ Two deliberate details:
   a number from any country since `z8r3fdh274` — see
   [`phone-numbers.md`](./phone-numbers.md)). Malaysia only ever matched by luck
   — `60` ends in the trunk `0` — and Singapore has no trunk at all.
-- **Categories participate**, because they are frozen onto the order at checkout
+- **Categories participate**, because they are frozen onto the order at create by every order door (storefront, counter, claim, booking)
   (see below). That was the one column a live lookup could never have covered.
   Orders placed *before* the field existed need
   `npx convex run migrations:backfillOrderCategoryNames` — see
@@ -798,6 +798,20 @@ WhatsApp.
     inbox down for the store. The other six facets are keyed by enums we own,
     so they stay objects; the client reads the category one through
     `categoryCount(facets, name)`, never by index.
+  - **The Categories filter says why a category isn't offered** (28 Oct 2026).
+    Its options come from names frozen on orders, so a seller who files
+    products under a category AFTER taking orders saw only "Uncategorized 23"
+    and nothing explaining it (Dr Niki Trainings). `categoryFilterChoices`
+    (`order-column-filters.ts`) picks one of three states, using
+    `searchOrders.storeHasCategories` (one indexed read: any ACTIVE category):
+    no categories at all → no options, "Group your products into categories…"
+    and a **Set up categories** button; categories but none on these orders →
+    Uncategorized plus "None of these orders is for a product in a category
+    yet. **Manage categories**"; otherwise → the options plus the rule ("Orders
+    are filed under their product's category. Adding a category to a product
+    also files its earlier uncategorized orders."). `ColumnFilterMenu` gained
+    the generic `note` and `emptyAction` slots for this; bindings carry them as
+    data (`FilterNote`/`FilterLink`) and `order-table.tsx` renders the links.
   - **Two new server dimensions.** `statuses` is the status axis, multi. It
     shipped as a *separate* dimension that ANDed with `bucket`, on the reasoning
     that a bucket is the coarse stage you navigate by while this is the precise

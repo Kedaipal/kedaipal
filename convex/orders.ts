@@ -155,6 +155,7 @@ import {
 	storedDiscount,
 } from "./lib/order";
 import { deleteOrderOwnedBlobs } from "./lib/orderBlobs";
+import { withCategoryNames } from "./lib/orderCategoryNames";
 import {
 	redeemVoucher,
 	releaseOrderVoucher,
@@ -1346,18 +1347,7 @@ export const create = mutation({
 		// Freeze the categories each product was filed under at this moment
 		// (86eyrtz74). One junction read per DISTINCT product — paid once, here,
 		// instead of on every export row and every search keystroke forever.
-		const categoryNames = await resolveCategoryNames(
-			ctx,
-			snapshotItems.map((i) => i.productId),
-		);
-		for (const line of snapshotItems) {
-			// Always stamped, `[]` included: PRESENT means "we recorded what this
-			// product was filed under when it sold" — and "filed under nothing" is
-			// a real answer. Absent is reserved for orders that predate the field
-			// (and the backfill), so the two never look alike. Both render as an
-			// empty cell, so this is an internal distinction only.
-			line.categoryNames = categoryNames.get(line.productId) ?? [];
-		}
+		const stampedItems = await withCategoryNames(ctx, snapshotItems);
 
 		const itemSubtotal = snapshotItems.reduce(
 			(sum, i) => sum + i.price * i.quantity,
@@ -1876,7 +1866,7 @@ export const create = mutation({
 			retailerId: args.retailerId,
 			shortId,
 			trackingToken,
-			items: snapshotItems,
+			items: stampedItems,
 			subtotal,
 			total,
 			currency: args.currency,
@@ -3548,6 +3538,17 @@ export const searchOrders = query({
 				listing === undefined
 					? undefined
 					: await listingNameFor(ctx, retailerId, listing),
+			// Whether the store has any ACTIVE category, so the Categories filter
+			// can tell "you have none yet — set some up" apart from "none of these
+			// orders is for a categorised product". One indexed read; the filter's
+			// own options can't answer it (they come from the orders).
+			storeHasCategories:
+				(await ctx.db
+					.query("categories")
+					.withIndex("by_retailer_active", (q) =>
+						q.eq("retailerId", retailerId).eq("active", true),
+					)
+					.first()) !== null,
 		};
 	},
 });
@@ -3733,65 +3734,6 @@ function orderToCsvSource(o: Doc<"orders"> & { creditGated?: boolean }): CsvOrde
 		cancelledReason: o.cancelledReason,
 		pinnedAt: o.pinnedAt,
 	};
-}
-
-/**
- * A cache that lets `resolveCategoryNames` be called repeatedly without
- * re-reading the same products and categories. One order at checkout doesn't
- * need it (a fresh map per call is the same thing); the backfill, which walks a
- * whole store's orders over the same handful of products, very much does.
- */
-export interface CategoryNameMemo {
-	/** productId → its sorted category names. */
-	byProduct: Map<string, string[]>;
-	/** categoryId → name, so a category shared by 40 products is read once. */
-	byCategory: Map<string, string>;
-}
-
-export function createCategoryNameMemo(): CategoryNameMemo {
-	return { byProduct: new Map(), byCategory: new Map() };
-}
-
-/**
- * Category names for a set of products, resolved once per distinct id
- * (86eyrtz74). Used at ORDER CREATE to freeze `items[].categoryNames`, so every
- * later read — table, export, search — is free.
- *
- * Archived categories are included: they name a real grouping the seller was
- * using at the time, and this is a record of that moment.
- */
-export async function resolveCategoryNames(
-	ctx: MutationCtx,
-	productIds: Iterable<Id<"products">>,
-	memo: CategoryNameMemo = createCategoryNameMemo(),
-): Promise<Map<string, string[]>> {
-	const out = new Map<string, string[]>();
-	for (const productId of new Set(productIds)) {
-		const cached = memo.byProduct.get(productId);
-		if (cached) {
-			out.set(productId, cached);
-			continue;
-		}
-		const joins = await ctx.db
-			.query("productCategories")
-			.withIndex("by_product", (q) => q.eq("productId", productId))
-			.collect();
-		const names: string[] = [];
-		for (const j of joins) {
-			let name = memo.byCategory.get(j.categoryId);
-			if (name === undefined) {
-				const cat = await ctx.db.get(j.categoryId);
-				if (!cat) continue;
-				name = cat.name;
-				memo.byCategory.set(j.categoryId, name);
-			}
-			names.push(name);
-		}
-		names.sort((a, b) => a.localeCompare(b));
-		memo.byProduct.set(productId, names);
-		out.set(productId, names);
-	}
-	return out;
 }
 
 async function assertExportAccess(

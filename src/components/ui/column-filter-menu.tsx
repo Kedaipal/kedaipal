@@ -1,5 +1,5 @@
 import { ListFilter, Search, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { cn } from "../../lib/utils";
 import { FilterOptionRow } from "./filter-option-row";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover";
@@ -33,6 +33,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "./popover";
  *  - **A search box appears past `SEARCH_THRESHOLD` options**, because a
  *    seller's own category or tag list can be long and scrolling to find one
  *    known name is the slowest way to do anything.
+ *  - **A rule that shapes the options is stated in the panel** (`note`). A
+ *    filter whose options come from data — categories frozen onto orders —
+ *    otherwise leaves the seller asking "where is my category?" with no answer
+ *    on screen.
  */
 export interface ColumnFilterOption {
 	value: string;
@@ -54,6 +58,12 @@ export interface ColumnFilterMenuProps {
 	/** Shown in place of the list when there is nothing to filter by — an empty
 	 * panel is a dead end and reads as a broken control. */
 	emptyHint?: string;
+	/** The way out of the empty state (a link to where the options come from),
+	 * shown under `emptyHint`. */
+	emptyAction?: ReactNode;
+	/** One line under the options saying how they are decided, when that isn't
+	 * obvious. Shown whenever the list is. */
+	note?: ReactNode;
 	/** Extra classes for the trigger (alignment inside a header cell). */
 	className?: string;
 }
@@ -67,6 +77,8 @@ export function ColumnFilterMenu({
 	onChange,
 	mode = "multi",
 	emptyHint = "Nothing to filter by yet",
+	emptyAction,
+	note,
 	className,
 }: ColumnFilterMenuProps) {
 	const [open, setOpen] = useState(false);
@@ -165,9 +177,10 @@ export function ColumnFilterMenu({
 
 				<div className="max-h-[50vh] overflow-y-auto p-1">
 					{options.length === 0 ? (
-						<p className="px-3 py-3 text-[12.5px] text-muted-foreground">
-							{emptyHint}
-						</p>
+						<div className="flex flex-col gap-2.5 px-2 py-2">
+							<p className="text-[13px] leading-snug">{emptyHint}</p>
+							{emptyAction}
+						</div>
 					) : shown.length === 0 ? (
 						<p className="px-3 py-3 text-[12.5px] text-muted-foreground">
 							No match for “{term.trim()}”
@@ -185,6 +198,11 @@ export function ColumnFilterMenu({
 						))
 					)}
 				</div>
+				{note && options.length > 0 ? (
+					<div className="border-t border-border bg-muted/50 px-3 py-2 text-[12px] leading-snug text-muted-foreground">
+						{note}
+					</div>
+				) : null}
 			</PopoverContent>
 		</Popover>
 	);

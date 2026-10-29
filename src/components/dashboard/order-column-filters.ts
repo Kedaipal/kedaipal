@@ -108,7 +108,28 @@ export interface OrderColumnFilterBinding {
 	onChange: (next: string[]) => void;
 	mode?: "single" | "multi";
 	emptyHint?: string;
+	/** The way out of the empty state — rendered as a button under the hint. */
+	emptyAction?: FilterLink;
+	/** One line under the options stating how they're decided. */
+	note?: FilterNote;
 }
+
+/** A link inside a header filter. Data, not JSX: this module builds bindings
+ * and the table renders them, so it stays testable without a router. */
+export interface FilterLink {
+	label: string;
+	to: "/app/products/categories";
+}
+
+export interface FilterNote {
+	text: string;
+	link?: FilterLink;
+}
+
+const MANAGE_CATEGORIES: FilterLink = {
+	label: "Manage categories",
+	to: "/app/products/categories",
+};
 
 /** The sentinel the payment-method picker uses for "no method recorded". */
 export const METHOD_UNSPECIFIED = "";
@@ -131,6 +152,10 @@ export interface BuildOrderColumnFiltersArgs {
 	availableSources: string[];
 	/** Category names present in the window, same ordering rule. */
 	availableCategories: string[];
+	/** Whether the store has any ACTIVE category (from `searchOrders`), so an
+	 * empty Categories filter can say which empty it is. `undefined` while
+	 * loading, read as "has some" so nothing flashes a set-up prompt. */
+	storeHasCategories?: boolean;
 	country: Country;
 	/** Resolves a raw status to the retailer's own stage wording, so the filter
 	 * offers the same words the Status column shows. */
@@ -210,6 +235,7 @@ export function buildOrderColumnFilters({
 	facets,
 	availableSources,
 	availableCategories,
+	storeHasCategories,
 	country,
 	statusLabel,
 	onApply,
@@ -232,27 +258,14 @@ export function buildOrderColumnFilters({
 		onChange: (statuses) => onApply({ statuses }),
 	});
 
-	// Categories — only possible because they're frozen onto the order at
-	// checkout (86eyrtz74); a live junction lookup per row could never back a
-	// filter. Empty for a seller who has never made a category, which the hint
-	// has to explain rather than showing a blank panel.
-	// "Uncategorized" is one of the choices, last and named — without it,
-	// selecting every category silently drops every uncategorized order, and
-	// categories are optional so that is the common case (PR #235 review).
+	// Categories — only possible because they're frozen onto the order when it
+	// is placed (86eyrtz74); a live junction lookup per row could never back a
+	// filter. "Uncategorized" is one of the choices, last and named — without
+	// it, selecting every category silently drops every uncategorized order,
+	// and categories are optional so that is the common case (PR #235 review).
 	map.set("categories", {
 		label: "Categories",
-		options: [
-			...availableCategories.map((c) => ({
-				value: c,
-				label: c,
-				count: categoryCount(facets, c),
-			})),
-			{
-				value: CATEGORY_UNCATEGORIZED,
-				label: "Uncategorized",
-				count: categoryCount(facets, CATEGORY_UNCATEGORIZED),
-			},
-		],
+		...categoryFilterChoices(availableCategories, facets, storeHasCategories),
 		selected: state.categoriesUnspecified
 			? [...state.categories, CATEGORY_UNCATEGORIZED]
 			: state.categories,
@@ -261,7 +274,6 @@ export function buildOrderColumnFilters({
 				categories: picked.filter((c) => c !== CATEGORY_UNCATEGORIZED),
 				categoriesUnspecified: picked.includes(CATEGORY_UNCATEGORIZED),
 			}),
-		emptyHint: "No categories on these orders yet",
 	});
 
 	map.set("orderType", {
@@ -347,4 +359,63 @@ export function buildOrderColumnFilters({
 	});
 
 	return map;
+}
+
+/**
+ * The Categories filter's options plus the line that explains them. Three
+ * states, because "why isn't my category here?" has three different answers:
+ *  - the store has NO categories: an "Uncategorized: every order" option is
+ *    noise, so the panel says what categories are for and links to set-up;
+ *  - it has categories but no order in the window is for a categorised
+ *    product: offer Uncategorized and say so, with a link to manage them;
+ *  - otherwise: the options, and the rule that decides them, including that
+ *    filing a product files its earlier uncategorized orders
+ *    (`setProductCategories`).
+ */
+export function categoryFilterChoices(
+	availableCategories: readonly string[],
+	facets: OrderFilterFacets | undefined,
+	storeHasCategories: boolean | undefined,
+): Pick<
+	OrderColumnFilterBinding,
+	"options" | "emptyHint" | "emptyAction" | "note"
+> {
+	if (availableCategories.length === 0 && storeHasCategories === false) {
+		return {
+			options: [],
+			emptyHint:
+				"Group your products into categories to filter orders by them.",
+			emptyAction: {
+				label: "Set up categories",
+				to: "/app/products/categories",
+			},
+		};
+	}
+	const options = [
+		...availableCategories.map((c) => ({
+			value: c,
+			label: c,
+			count: categoryCount(facets, c),
+		})),
+		{
+			value: CATEGORY_UNCATEGORIZED,
+			label: "Uncategorized",
+			count: categoryCount(facets, CATEGORY_UNCATEGORIZED),
+		},
+	];
+	if (availableCategories.length === 0) {
+		return {
+			options,
+			note: {
+				text: "None of these orders is for a product in a category yet.",
+				link: MANAGE_CATEGORIES,
+			},
+		};
+	}
+	return {
+		options,
+		note: {
+			text: "Orders are filed under their product's category. Adding a category to a product also files its earlier uncategorized orders.",
+		},
+	};
 }
