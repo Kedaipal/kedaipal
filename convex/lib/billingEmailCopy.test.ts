@@ -14,6 +14,7 @@ import {
 	PLAN_CREDIT_GRANT,
 	TRIAL_CREDIT_GRANT,
 } from "./plans";
+import { referralReceiptFooter } from "./referralEmailCopy";
 
 const base: BillingEmailVars = {
 	storeName: "Mak Kuih",
@@ -336,6 +337,49 @@ describe("renderPaymentEmail", () => {
 	it("renders Chinese payment copy", () => {
 		const { subject } = renderPaymentEmail("zh", "welcome", pv);
 		expect(subject).toContain("欢迎");
+	});
+
+	// The referral invitation (docs/referrals.md § The push): the one email
+	// every paying store gets every month carries the link — under the CTA,
+	// and in the plain-text body.
+	it("carries the referral footer when given one, in every locale and both keys", () => {
+		for (const locale of ["en", "ms", "zh"] as const) {
+			const footer = referralReceiptFooter(locale, {
+				link: "https://kedaipal.com/referral/mak-kuih",
+				proCredits: 60,
+			});
+			for (const key of ["welcome", "thanks"] as const) {
+				const { html, text } = renderPaymentEmail(locale, key, {
+					...pv,
+					referralFooter: footer,
+				});
+				expect(html).toContain("https://kedaipal.com/referral/mak-kuih");
+				expect(html).toContain("60");
+				expect(text.endsWith("https://kedaipal.com/referral/mak-kuih")).toBe(
+					true,
+				);
+				// Under the CTA, never above the receipt's own lines.
+				expect(html.indexOf("Open dashboard") < html.indexOf("/referral/") ||
+					html.indexOf("Buka dashboard") < html.indexOf("/referral/") ||
+					html.indexOf("打开后台") < html.indexOf("/referral/")).toBe(true);
+			}
+		}
+	});
+
+	it("carries no footer without one — a hold receipt stays as it was", () => {
+		const { html, text } = renderPaymentEmail("en", "thanks", pv);
+		expect(html).not.toContain("/referral/");
+		expect(text.endsWith(pv.dashboardUrl)).toBe(true);
+	});
+
+	it("the footer escapes what it quotes and says the offer in bonus credits", () => {
+		const { html, text } = referralReceiptFooter("en", {
+			link: "https://kedaipal.com/referral/a&b",
+			proCredits: 60,
+		});
+		expect(html).toContain("a&amp;b");
+		expect(html).toContain("you both get 60 bonus credits");
+		expect(text).toContain("https://kedaipal.com/referral/a&b");
 	});
 });
 

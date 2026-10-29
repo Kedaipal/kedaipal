@@ -9,6 +9,7 @@ import {
 	referralPath,
 	referralRefereeOffer,
 	referralRewardCredits,
+	referralShareImageCopy,
 	referralShareMessage,
 	referralSourceTag,
 	referrerStanding,
@@ -134,12 +135,41 @@ describe("referrerStanding", () => {
 });
 
 describe("referral share message", () => {
-	test("carries the link and the referee's offer, never money or commission", () => {
-		const msg = referralShareMessage("https://kedaipal.com/referral/siti");
-		expect(msg).toContain("https://kedaipal.com/referral/siti");
-		expect(msg).toContain("60 bonus credits");
+	test("opens with the store's own name, says the offer in orders, never money or commission", () => {
+		const msg = referralShareMessage(
+			"https://kedaipal.com/referral/siti",
+			"Siti's Kitchen",
+		);
+		expect(msg.startsWith("Hi! I run Siti's Kitchen on Kedaipal")).toBe(true);
+		expect(msg).toContain("60 free orders");
 		expect(msg).toContain("30 on Starter");
-		expect(msg).not.toMatch(/RM|commission|affiliate|earn/i);
+		expect(msg).not.toMatch(/RM|commission|affiliate|earn|bonus credits/i);
+	});
+
+	test("the link is the LAST line, alone, so WhatsApp renders the invite card", () => {
+		const msg = referralShareMessage(
+			"https://kedaipal.com/referral/siti",
+			"Siti's Kitchen",
+		);
+		const lines = msg.split("\n");
+		expect(lines.at(-1)).toBe("https://kedaipal.com/referral/siti");
+		expect(msg.indexOf("https://")).toBe(msg.lastIndexOf("https://"));
+	});
+
+	test("a blank store name falls back, never 'I run  on Kedaipal'", () => {
+		expect(
+			referralShareMessage("https://kedaipal.com/referral/siti", "  "),
+		).toContain("I run my kedai on Kedaipal");
+	});
+});
+
+describe("referral share image copy", () => {
+	test("names the store and the Pro offer in orders", () => {
+		const copy = referralShareImageCopy("Kek Mak Jah");
+		expect(copy.eyebrow).toBe("Kek Mak Jah invites you");
+		expect(copy.headline).toBe("60 orders on us.");
+		expect(copy.body).toContain("first 60 orders are free");
+		expect(copy.body).toContain("30 on Starter");
 	});
 });
 

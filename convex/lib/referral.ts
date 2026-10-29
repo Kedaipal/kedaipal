@@ -144,15 +144,41 @@ export function referrerStanding(args: {
 }
 
 /**
- * The WhatsApp message the "Refer a kedai" card pre-fills (T3, z8r3fdfp97) —
- * one author, so copy changes never touch the component. Says what Kedaipal
- * fixes in the seller's own words, then the referee's offer and the link.
- * The house register: "refer", "kedai", bonus credits — never "commission",
+ * The WhatsApp message the Refer & earn surfaces pre-fill (T3, z8r3fdfp97;
+ * personalised in the 28 Oct 2026 push) — one author, so copy changes never
+ * touch a component. Three rules, each a lesson:
+ *  - the STORE'S OWN NAME comes first. "I run Kek Mak Jah on Kedaipal" is a
+ *    friend vouching; "I use Kedaipal" is an ad. The unfurl card below the
+ *    message already says "Kek Mak Jah invited you", so the two agree;
+ *  - the offer is said in ORDERS ("60 free orders"), the unit a seller thinks
+ *    in — "bonus credits" needed a conversion the prospect wouldn't make;
+ *  - the link is the LAST line, on its own, so WhatsApp renders the invite
+ *    page's preview card under the text instead of burying the URL.
+ * The house register: "refer", "kedai", orders — never "commission",
  * "affiliate" or a money amount.
  */
-export function referralShareMessage(link: string): string {
+export function referralShareMessage(link: string, storeName: string): string {
 	const offer = referralRefereeOffer();
-	return `I use Kedaipal for my WhatsApp orders — no more orders lost in the chat, and payments are tracked for me. Sign up through my link and you get ${offer.pro} bonus credits when you start Pro (${offer.starter} on Starter). 1 credit = 1 order:\n${link}`;
+	const name = storeName.trim() || "my kedai";
+	return `Hi! I run ${name} on Kedaipal now — no more orders lost in the WhatsApp chat, and payments are tracked for me.\n\nSign up through my link and you get ${offer.pro} free orders when you start Pro (${offer.starter} on Starter):\n${link}`;
+}
+
+/**
+ * The share IMAGE's lines (the 1080² card a seller posts to an Instagram
+ * story, a Facebook seller group or a WhatsApp status — places a text link
+ * can't travel). Same offer, same author; the canvas only draws them.
+ */
+export function referralShareImageCopy(storeName: string): {
+	eyebrow: string;
+	headline: string;
+	body: string;
+} {
+	const offer = referralRefereeOffer();
+	return {
+		eyebrow: `${storeName.trim() || "A Kedaipal seller"} invites you`,
+		headline: `${offer.pro} orders on us.`,
+		body: `Run your WhatsApp orders on Kedaipal. Start Pro through my link and your first ${offer.pro} orders are free (${offer.starter} on Starter).`,
+	};
 }
 
 /**

@@ -96,6 +96,7 @@ const THEMED_COMPONENT_DIRS = [
 	"components/products",
 	"components/promotions",
 	"components/vouchers",
+	"components/referrals",
 	"components/cost",
 	"components/landing",
 	"components/legal",

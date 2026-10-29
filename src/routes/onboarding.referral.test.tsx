@@ -58,3 +58,28 @@ describe("onboarding referral note", () => {
 		expect(container.firstChild).toBeNull();
 	});
 });
+
+describe("onboarding referred-by chip (the push)", () => {
+	test("names the store, confirmed, with one way to change it", async () => {
+		const { ReferredByChip } = await import("./onboarding");
+		const onChange = vi.fn();
+		render(
+			<ReferredByChip
+				invite={{
+					slug: "siti-kitchen",
+					storeName: "Siti's Kitchen",
+					offer: referralRefereeOffer(),
+				}}
+				onChange={onChange}
+			/>,
+		);
+		const chip = screen.getByTestId("referred-by-chip");
+		expect(chip.textContent).toContain("Siti's Kitchen");
+		expect(chip.textContent).toContain("referred you");
+		// No input to mistype into — the link already answered the question.
+		expect(screen.queryByRole("textbox")).toBeNull();
+		expect(screen.getByText(/Filled in from the link you opened/)).toBeTruthy();
+		screen.getByRole("button", { name: "Not them?" }).click();
+		expect(onChange).toHaveBeenCalledTimes(1);
+	});
+});

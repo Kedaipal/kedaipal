@@ -4,6 +4,7 @@ import {
 	ChevronRight,
 	Clapperboard,
 	GalleryHorizontalEnd,
+	Gift,
 	Home,
 	LayoutGrid,
 	LineChart,
@@ -387,6 +388,17 @@ function MoreTab({
 							onNavigate={close}
 						/>
 					) : null}
+					{/* Refer & earn (docs/referrals.md § The push): with Vouchers,
+					    the other thing here that brings business in, above the
+					    store's own print surface. Every member — the link is
+					    public, and the page explains itself to a trial store. */}
+					<MoreRow
+						to="/app/refer"
+						icon={Gift}
+						label="Refer & earn"
+						sub="Refer a kedai, both get credits"
+						onNavigate={close}
+					/>
 					<MoreRow
 						to="/app/poster"
 						icon={Printer}

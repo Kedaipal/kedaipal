@@ -776,3 +776,135 @@ describe("referrals.myCard (T3)", () => {
 		expect(await t.query(api.referrals.myCard, {})).toBeNull();
 	});
 });
+
+describe("referrals.myCard — the pending state (the push)", () => {
+	test("counts referees whose reward is still waiting, and names the newest", async () => {
+		const t = setup();
+		const { refereeId } = await referredPair(t, { status: "active" });
+		// A second referee, later — the NEWEST pending one is what the Home
+		// teaser names.
+		await new Promise((r) => setTimeout(r, 5));
+		await createStore(t, OTHER, "second-kedai", { referralSlug: "siti-kitchen" });
+		const before = await t
+			.withIdentity({ subject: REFERRER })
+			.query(api.referrals.myCard, {});
+		expect(before).toMatchObject({
+			storeName: "Store siti-kitchen",
+			signedUp: 2,
+			started: 0,
+			pending: 2,
+			latestPending: { storeName: "Store second-kedai" },
+		});
+		// The first referee pays: it leaves the pending count, and the newest
+		// pending one is still the second.
+		await payInvoice(t, refereeId, "pro");
+		const after = await t
+			.withIdentity({ subject: REFERRER })
+			.query(api.referrals.myCard, {});
+		expect(after).toMatchObject({
+			started: 1,
+			pending: 1,
+			latestPending: { storeName: "Store second-kedai" },
+		});
+	});
+
+	test("nothing pending once every referee has started", async () => {
+		const t = setup();
+		const { refereeId } = await referredPair(t, { status: "active" });
+		await payInvoice(t, refereeId, "pro");
+		const card = await t
+			.withIdentity({ subject: REFERRER })
+			.query(api.referrals.myCard, {});
+		expect(card).toMatchObject({ pending: 0, latestPending: null });
+	});
+});
+
+describe("referrals.myReferrals — one row per referee (the push)", () => {
+	test("rows carry the referee's public name and number, their status, and what this store got", async () => {
+		const t = setup();
+		const { refereeId } = await referredPair(t, { status: "active" });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(refereeId, { waPhone: "+60123456789" });
+		});
+		await createStore(t, OTHER, "second-kedai", { referralSlug: "siti-kitchen" });
+		await payInvoice(t, refereeId, "pro");
+		const page = await t
+			.withIdentity({ subject: REFERRER })
+			.query(api.referrals.myReferrals, {});
+		expect(page?.capped).toBe(false);
+		expect(page?.rows).toHaveLength(2);
+		// Newest first.
+		expect(page?.rows[0]).toMatchObject({
+			storeName: "Store second-kedai",
+			status: "signed_up",
+			rewardedAt: null,
+			referrerCredits: 0,
+			referrerOutcome: null,
+		});
+		expect(page?.rows[1]).toMatchObject({
+			storeName: "Store new-kedai",
+			waPhone: "+60123456789",
+			status: "started",
+			referrerCredits: 60,
+			referrerOutcome: "granted",
+		});
+		expect(page?.rows[1].rewardedAt).toEqual(expect.any(Number));
+	});
+
+	test("a deleted referee reads as a null name — the row and the reward stand", async () => {
+		const t = setup();
+		const { refereeId } = await referredPair(t, { status: "active" });
+		await t.run(async (ctx) => {
+			await ctx.db.delete(refereeId);
+		});
+		const page = await t
+			.withIdentity({ subject: REFERRER })
+			.query(api.referrals.myReferrals, {});
+		expect(page?.rows).toHaveLength(1);
+		expect(page?.rows[0].storeName).toBeNull();
+		expect(page?.rows[0].waPhone).toBeNull();
+	});
+
+	test("credits:read gates the list — a teammate without it is refused, with it they read", async () => {
+		const t = setup();
+		const { referrerId } = await referredPair(t, { status: "active" });
+		const seat = (permissions: Record<string, "read" | "write">) =>
+			t.run(async (ctx) => {
+				const existing = await ctx.db
+					.query("retailerMembers")
+					.withIndex("by_user", (q) => q.eq("userId", OTHER))
+					.first();
+				if (existing) await ctx.db.delete(existing._id);
+				await ctx.db.insert("retailerMembers", {
+					retailerId: referrerId,
+					userId: OTHER,
+					email: "helper@example.com",
+					status: "active",
+					permissions,
+					invitedBy: REFERRER,
+					invitedAt: Date.now(),
+					acceptedAt: Date.now(),
+				});
+			});
+		await seat({ orders: "read" });
+		await expect(
+			t.withIdentity({ subject: OTHER }).query(api.referrals.myReferrals, {}),
+		).resolves.toBeNull();
+		// The any-member card still answers for the same teammate: the link
+		// is public, and the counts name nobody's earnings.
+		const card = await t
+			.withIdentity({ subject: OTHER })
+			.query(api.referrals.myCard, {});
+		expect(card?.slug).toBe("siti-kitchen");
+		await seat({ credits: "read" });
+		const page = await t
+			.withIdentity({ subject: OTHER })
+			.query(api.referrals.myReferrals, {});
+		expect(page?.rows).toHaveLength(1);
+	});
+
+	test("null when signed out", async () => {
+		const t = setup();
+		expect(await t.query(api.referrals.myReferrals, {})).toBeNull();
+	});
+});
