@@ -130,6 +130,21 @@ export default defineSchema({
 		// dangles once the referrer is purged — readers treat a missing doc as
 		// "no referrer". Same posture as signupSource: per-row read, no index.
 		signupReferrerId: v.optional(v.id("retailers")),
+		// Which motion won this store, for CAC by channel (86eye3eyp,
+		// docs/acquisition-attribution.md). A CLOSED vocabulary validated in
+		// convex/lib/metrics.ts (ACQUISITION_CHANNELS), not here, so a channel
+		// can be added without a migration. Distinct from `signupSource`: that
+		// is the link tag captured automatically (null for walk-ins, talks and
+		// personal intros); this is the classification, set by an admin or
+		// claimed by the seller at onboarding. `acquisitionSetBy` says which —
+		// an admin tag is authoritative and a seller answer never overwrites
+		// it. Absent = untagged. Per-row read only, no index.
+		acquisitionSource: v.optional(v.string()),
+		acquisitionNote: v.optional(v.string()),
+		acquisitionSetBy: v.optional(
+			v.union(v.literal("admin"), v.literal("seller")),
+		),
+		acquisitionSetAt: v.optional(v.number()),
 		// The owner tapped "Talk to Arif" in-app (Credits T6 follow-up,
 		// z8r3fdkp8h): a signed-in Enterprise lead, stamped so the admin
 		// console can list who asked instead of trusting a WhatsApp scrollback.
@@ -4337,4 +4352,26 @@ export default defineSchema({
 		.index("by_retailer", ["retailerId"])
 		.index("by_admin", ["adminUserId"])
 		.index("by_ts", ["ts"]),
+
+	// The CAC ledger (86eye3eyp, docs/acquisition-attribution.md): what one
+	// acquisition channel cost Kedaipal in one month. One row per
+	// (periodStart, channel), upserted by `metrics.recordSpend`; a channel
+	// with no row spent nothing. Only ACTUALS live here — CAC itself is
+	// derived at read time (convex/lib/metrics.ts), so a policy change (the
+	// founder hourly rate) recomputes every month. Kedaipal's own spend, so
+	// always MYR sen, whatever the stores it won bill in.
+	acquisitionCosts: defineTable({
+		// MYT midnight on the 1st (monthStartMyt in lib/usagePeriod.ts).
+		periodStart: v.number(),
+		// ACQUISITION_CHANNELS, validated in convex/lib/metrics.ts.
+		channel: v.string(),
+		cashSpend: v.number(), // MYR sen
+		founderHours: v.optional(v.number()),
+		note: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+		updatedBy: v.optional(v.string()), // admin Clerk subject
+	})
+		.index("by_period", ["periodStart"])
+		.index("by_period_channel", ["periodStart", "channel"]),
 });

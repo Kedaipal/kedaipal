@@ -14,6 +14,7 @@ import {
 	Settings,
 	ShieldCheck,
 	ShoppingBag,
+	Signpost,
 	Siren,
 	Store,
 	Tag,
@@ -136,6 +137,7 @@ export function BottomNav({
 					: []),
 				{ to: "/app/admin/sellers", label: "Sellers", icon: Store },
 				{ to: "/app/admin/billing", label: "Billing", icon: ShieldCheck },
+				{ to: "/app/admin/acquisition", label: "Acquisition", icon: Signpost },
 				{
 					to: "/app/admin/showcases",
 					label: "Showcases",

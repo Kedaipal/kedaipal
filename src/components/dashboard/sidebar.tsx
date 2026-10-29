@@ -14,6 +14,7 @@ import {
 	Settings,
 	ShieldCheck,
 	ShoppingBag,
+	Signpost,
 	Siren,
 	Store,
 	Tag,
@@ -370,6 +371,16 @@ export function Sidebar({
 									onClick={exitActAs}
 									icon={ShieldCheck}
 									label="Billing"
+									collapsed={collapsed}
+									motion={motion}
+								/>
+								{/* Kedaipal's own spend, beside Billing (money in) and never
+								    inside it (86eye3eyp). */}
+								<SidebarLink
+									to="/app/admin/acquisition"
+									onClick={exitActAs}
+									icon={Signpost}
+									label="Acquisition"
 									collapsed={collapsed}
 									motion={motion}
 								/>
