@@ -1274,6 +1274,9 @@ export const create = mutation({
 		prepMinutes: v.optional(v.number()),
 		pickupNote: v.optional(v.string()),
 		hidden: v.optional(v.boolean()),
+		// Cross-border opt-out (z8r3fdr5yy): true = ships within the store's
+		// country only. `false` clears it back to "inherits the store's lane".
+		domesticOnly: v.optional(v.boolean()),
 		// Minimum order quantity (summed across variants). 0/1 normalize to unset.
 		minQuantity: v.optional(v.number()),
 		// Buyer questions (`z8r3fdkjek`) — asked at checkout, answers frozen on
@@ -1491,6 +1494,8 @@ export const create = mutation({
 			prepMinutes: sanitizePrepMinutes(args.prepMinutes),
 			pickupNote: sanitizePickupNote(args.pickupNote),
 			hidden: args.hidden,
+			// One spelling of the default: only "stays home" is stored.
+			domesticOnly: args.domesticOnly === true ? true : undefined,
 			minQuantity: sanitizeMinQuantity(args.minQuantity),
 			// "physical" stays UNSET (the legacy default) so pre-kind and post-kind
 			// rows read identically — one spelling for the default, minQuantity's
@@ -1719,6 +1724,9 @@ export const update = mutation({
 		prepMinutes: v.optional(v.number()),
 		pickupNote: v.optional(v.string()),
 		hidden: v.optional(v.boolean()),
+		// Cross-border opt-out (z8r3fdr5yy): true = ships within the store's
+		// country only. `false` clears it back to "inherits the store's lane".
+		domesticOnly: v.optional(v.boolean()),
 		// Minimum order quantity. 0 (or 1) clears the rule; undefined = no change.
 		minQuantity: v.optional(v.number()),
 		// Buyer questions (`z8r3fdkjek`) — asked at checkout, answers frozen on
@@ -1830,6 +1838,8 @@ export const update = mutation({
 		if (fields.pickupNote !== undefined)
 			updates.pickupNote = sanitizePickupNote(fields.pickupNote);
 		if (fields.hidden !== undefined) updates.hidden = fields.hidden;
+		if (fields.domesticOnly !== undefined)
+			updates.domesticOnly = fields.domesticOnly ? true : undefined;
 		if (fields.minQuantity !== undefined)
 			// 0/1 sanitize to undefined, which patch treats as "remove the field" —
 			// so sending 0 clears the rule (one spelling for "no minimum").

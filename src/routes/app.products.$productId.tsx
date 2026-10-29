@@ -40,6 +40,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { convexErrorMessage } from "../lib/format";
+import { overseasOf } from "../lib/overseas-delivery";
 import type { UnsavedState } from "../lib/product-form-dirty";
 import { draftPreviewOverlay } from "../lib/product-preview";
 import { type ProductStatus, productStatus } from "../lib/product-status";
@@ -352,6 +353,7 @@ function EditProductRoute() {
 			<ProductForm
 				key={product._id}
 				retailerId={product.retailerId}
+				overseas={retailer ? overseasOf(retailer) : undefined}
 				saveLock={saveLock}
 				draftRef={formDraftRef}
 				onUnsavedChange={setUnsaved}
@@ -382,6 +384,7 @@ function EditProductRoute() {
 					name: product.name,
 					description: product.description,
 					hidden: product.hidden,
+					domesticOnly: product.domesticOnly,
 					kind: product.kind,
 					capacityPerNight: product.booking
 						? capacityDraftFromListing(product.booking.capacityPerNight)
@@ -496,6 +499,7 @@ function EditProductRoute() {
 						name: values.name,
 						description: values.description ?? null,
 						hidden: values.hidden,
+						domesticOnly: values.domesticOnly,
 						minNoticeDays: values.minNoticeDays,
 						prepMinutes: values.prepMinutes ?? 0,
 						pickupNote: values.pickupNote ?? "",

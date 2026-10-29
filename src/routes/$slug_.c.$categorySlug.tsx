@@ -14,6 +14,7 @@ import {
 	OrderingPausedProvider,
 	SeasonalBreakNotice,
 } from "../components/storefront/seasonal-break";
+import { HomeOnlyLabelProvider } from "../components/storefront/ships-abroad";
 import {
 	StoreUnavailable,
 	type StoreUnavailableLoaderData,
@@ -302,57 +303,62 @@ function CategoryRoute() {
 			paused={retailer.orderingPaused === true}
 			pausedBy={retailer.orderingPausedBy}
 		>
-			{/* pb-28 keeps ≥96px clear for the floating cart pill (z8r3fdegb5). */}
-			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-28">
-				{/* Compact app bar (z8r3fdegb5): whose store this is, the way back,
+			<HomeOnlyLabelProvider
+				storeCountry={retailer.country}
+				shipsAbroadTo={retailer.shipsAbroadTo}
+			>
+				{/* pb-28 keeps ≥96px clear for the floating cart pill (z8r3fdegb5). */}
+				<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-28">
+					{/* Compact app bar (z8r3fdegb5): whose store this is, the way back,
 			    and share — the 176px cover hero stays on the store home so this
 			    deep link's first screen belongs to the category. The bar owns
 			    "back", so the old "← All products" text link is gone. */}
-				<StorefrontAppBar
-					retailer={retailer}
-					slug={retailer.slug}
-					shareUrl={`/${retailer.slug}/c/${page.category.slug}`}
-				/>
-				<SeasonalBreakNotice storeName={retailer.storeName} />
+					<StorefrontAppBar
+						retailer={retailer}
+						slug={retailer.slug}
+						shareUrl={`/${retailer.slug}/c/${page.category.slug}`}
+					/>
+					<SeasonalBreakNotice storeName={retailer.storeName} />
 
-				{/* Category identity: its own name + blurb. */}
-				<div className="flex flex-col gap-2 px-5 pt-4 lg:px-8">
-					<div className="flex flex-col gap-1">
-						{/* This page's own subject, so it owns the <h1>; the app bar
+					{/* Category identity: its own name + blurb. */}
+					<div className="flex flex-col gap-2 px-5 pt-4 lg:px-8">
+						<div className="flex flex-col gap-1">
+							{/* This page's own subject, so it owns the <h1>; the app bar
 					    above renders the store name as plain text. */}
-						<h1 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
-							{page.category.name}
-						</h1>
-						{page.category.description ? (
-							<p className="line-clamp-3 whitespace-pre-line text-sm text-muted-foreground">
-								{page.category.description}
-							</p>
-						) : null}
+							<h1 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
+								{page.category.name}
+							</h1>
+							{page.category.description ? (
+								<p className="line-clamp-3 whitespace-pre-line text-sm text-muted-foreground">
+									{page.category.description}
+								</p>
+							) : null}
+						</div>
 					</div>
-				</div>
 
-				<section className="mt-2 px-5 lg:px-8">
-					{/* No category rail here. Once a buyer is inside a category the page
+					<section className="mt-2 px-5 lg:px-8">
+						{/* No category rail here. Once a buyer is inside a category the page
 				    already names it (h1 + blurb above) and the only move that
 				    matters is browsing what's in it; a row of sibling image tiles
 				    just competes with the products it sits on top of. The app
 				    bar's back is the way out — T3 (z8r3fdegb5) adds sibling
 				    CHIPS to this page instead. */}
-					<ProductGrid
-						retailerId={retailer._id}
-						cart={cart}
-						products={page.products}
-						storeSlug={retailer.slug}
+						<ProductGrid
+							retailerId={retailer._id}
+							cart={cart}
+							products={page.products}
+							storeSlug={retailer.slug}
+						/>
+					</section>
+
+					<StorefrontFooter
+						slug={slug}
+						discover={retailer.marketplaceUnlisted !== true}
 					/>
-				</section>
 
-				<StorefrontFooter
-					slug={slug}
-					discover={retailer.marketplaceUnlisted !== true}
-				/>
-
-				<CartBar cart={cart} storeSlug={retailer.slug} />
-			</div>
+					<CartBar cart={cart} storeSlug={retailer.slug} />
+				</div>
+			</HomeOnlyLabelProvider>
 		</OrderingPausedProvider>
 	);
 }

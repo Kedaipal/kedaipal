@@ -1149,6 +1149,7 @@ function SettingsRoute() {
 								awbConfig={retailer.awbConfig}
 								subscription={retailer.subscription}
 								deliveryBooking={retailer.deliveryBooking}
+								crossBorderLanes={retailer.crossBorderLanes}
 							/>
 						</AreaGate>
 					) : null}

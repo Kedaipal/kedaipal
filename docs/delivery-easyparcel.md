@@ -230,9 +230,13 @@ disconnect, pause and cancel never are. `prepareBooking`/`confirmBooking`
 carry the per-order credit gate (`creditLockCoverage.test.ts` classifies the
 module); view-only stores are refused on every write
 (`sellerLockCoverage.test.ts`). Country: `COUNTRY_COURIER_BOOKING.easyparcel =
-{MY: false, SG: true}` — MY stays closed (the 29 Jul 2026 frozen-prohibition
-finding; Delyva serves MY incl. cold chain); the MY column exists for the
-cross-border lane (z8r3fdr5yy). Account deletion clears both tables.
+{MY: true, SG: true}` with `COURIER_DESTINATIONS.easyparcel = {MY: "abroad",
+SG: "both"}` — a MY store books EasyParcel for its OVERSEAS orders only (the
+cross-border lane, z8r3fdr5yy); MY domestic stays Delyva (the 29 Jul 2026
+frozen-prohibition finding, cold chain, commission), and a MY domestic order
+reads `destination_unsupported`. The card shows on a MY store only once an
+overseas lane is saved. See [cross-border.md](./cross-border.md). Account
+deletion clears both tables.
 
 ## Why the Open API (not the legacy Individual API)
 

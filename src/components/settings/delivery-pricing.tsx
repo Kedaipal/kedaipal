@@ -26,6 +26,10 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import { MY_STATES } from "../../../convex/lib/address";
 import type { Country } from "../../../convex/lib/country";
 import {
+	type CrossBorderLane,
+	countryName,
+} from "../../../convex/lib/crossBorder";
+import {
 	DELIVERY_BANDS_MAX,
 	DELIVERY_ZONES_MAX,
 	type DeliveryConfig,
@@ -167,7 +171,7 @@ export function zoneSummary(zone: ZoneDraft, currency: string): string {
 // --- Small shared pieces ------------------------------------------------------
 
 /** A money field: the currency plate welded to a bare input. */
-function MoneyInput({
+export function MoneyInput({
 	id,
 	value,
 	onChange,
@@ -209,7 +213,7 @@ function MoneyInput({
 }
 
 /** A number with its unit welded on the right — "3 | kg". */
-function UnitInput({
+export function UnitInput({
 	value,
 	onChange,
 	unit,
@@ -453,6 +457,7 @@ export function DeliveryPricing({
 	businessAddress,
 	deliveryBooking,
 	subscription,
+	crossBorderLanes,
 }: {
 	retailerId: Id<"retailers">;
 	country: Country;
@@ -461,6 +466,9 @@ export function DeliveryPricing({
 	businessAddress: BusinessAddress | undefined;
 	deliveryBooking: DeliveryBookingSummary | undefined;
 	subscription: SubscriptionView | undefined;
+	/** Overseas lanes as saved (z8r3fdr5yy) — saving live pricing pauses
+	 * them, and the save block says so. */
+	crossBorderLanes?: CrossBorderLane[];
 }) {
 	const updateSettings = useUpdateSettings();
 	const actAsRetailerId = useActAsRetailerId();
@@ -772,8 +780,27 @@ export function DeliveryPricing({
 		(mode === "radius" && radiusLocked && config?.mode === "radius") ||
 		(liveModeSelected && lalamoveLocked && storedLiveMode);
 
+	// Overseas delivery (z8r3fdr5yy) runs on the store's OWN price; live
+	// courier quotes are domestic-only, so saving live pauses the lane. Said
+	// here, before the save, with the way back.
+	const overseasLane = crossBorderLanes?.[0];
+	const pausesOverseas = liveModeSelected && overseasLane !== undefined;
 	const saveBlock = (
 		<div className="flex flex-col gap-3">
+			{pausesOverseas ? (
+				<p className="rounded-xl border border-amber-300 bg-amber-100 px-3 py-2.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
+					Delivery to {countryName(overseasLane.country)} pauses while you use
+					live courier prices — Lalamove and Delyva deliver within{" "}
+					{countryName(country)} only. Your overseas price is kept and comes
+					back when you switch to your own price.{" "}
+					<Link
+						to="/app/settings/overseas-delivery"
+						className="font-semibold underline underline-offset-2"
+					>
+						Overseas delivery
+					</Link>
+				</p>
+			) : null}
 			{error ? (
 				<p role="alert" className="text-sm text-destructive">
 					{error}

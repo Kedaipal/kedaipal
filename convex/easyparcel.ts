@@ -33,7 +33,11 @@ import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { requireRetailerAccess, resolveMyRetailer } from "./lib/auth";
 import { COUNTRY_LABELS, DEFAULT_COUNTRY, type Country } from "./lib/country";
 import { toDomesticContactPhone } from "./lib/courierContact";
-import { courierBookingAllowed } from "./lib/courierProviders";
+import { servesOrderDestination } from "./lib/courierBooking";
+import {
+	COURIER_DESTINATIONS,
+	courierBookingAllowed,
+} from "./lib/courierProviders";
 import { findCourier } from "./lib/couriers";
 import { decryptSecret, encryptSecret } from "./lib/credentialCrypto";
 import { type CartWeightItem, summarizeCartWeight } from "./lib/delivery";
@@ -205,12 +209,11 @@ export const startConnect = mutation({
 				message: "EasyParcel isn't set up on this server yet.",
 			};
 		}
-		const country = access.retailer.country ?? DEFAULT_COUNTRY;
-		if (!courierBookingAllowed("easyparcel", country)) {
+		if (!easyparcelServesStore(access.retailer)) {
 			return {
 				ok: false,
 				message:
-					"EasyParcel booking is for Singapore stores — Malaysian stores book couriers through Delyva instead.",
+					"EasyParcel is for your overseas orders — turn on delivery to Singapore first (Settings → Fulfilment). Delyva books your couriers within Malaysia.",
 			};
 		}
 		if (!access.actingAsAdmin) {
@@ -559,6 +562,20 @@ export const updateSettings = mutation({
 	},
 });
 
+/**
+ * Does EasyParcel serve this store at all? Its country must allow it, and
+ * where it carries overseas orders only (a MY store, z8r3fdr5yy) the store
+ * must have an overseas lane saved — otherwise there is nothing for it to
+ * book, and showing a MY domestic seller a second parcel integration beside
+ * Delyva would only invite them to book frozen goods on the wrong one.
+ */
+function easyparcelServesStore(retailer: Doc<"retailers">): boolean {
+	const country = retailer.country ?? DEFAULT_COUNTRY;
+	if (!courierBookingAllowed("easyparcel", country)) return false;
+	if (COURIER_DESTINATIONS.easyparcel[country] !== "abroad") return true;
+	return (retailer.crossBorderLanes?.length ?? 0) > 0;
+}
+
 /** Settings-card read — no tokens, ever. */
 export const getSettings = query({
 	args: { retailerId: v.optional(v.id("retailers")) },
@@ -576,7 +593,11 @@ export const getSettings = query({
 		return {
 			/** The integration exists on this deployment AND serves this
 			 * country — false hides the card unless something is connected. */
-			available: isConfigured() && courierBookingAllowed("easyparcel", country),
+			available: isConfigured() && easyparcelServesStore(access.retailer),
+			/** Which orders it books from this store (z8r3fdr5yy): "abroad" on
+			 * a MY store (overseas orders only — Delyva stays domestic), "both"
+			 * on an SG store. The card says so. */
+			destinations: COURIER_DESTINATIONS.easyparcel[country],
 			connected: conn !== null,
 			needsReconnect: conn?.revokedAt !== undefined,
 			enabled: conn?.enabled === true,
@@ -879,6 +900,10 @@ export const storeBalance = internalMutation({
 export type EasyparcelDispatchBlock =
 	| "not_configured"
 	| "country_unsupported"
+	/** The order is going somewhere this provider doesn't carry from this
+	 * store (z8r3fdr5yy): a cross-border order on Lalamove/Delyva, or a
+	 * domestic one on a MY store's EasyParcel. */
+	| "destination_unsupported"
 	| "not_delivery"
 	| "bad_status"
 	| "job_active"
@@ -903,6 +928,8 @@ function dispatchBlockReason(args: {
 	if (!isConfigured()) return "not_configured";
 	if (!courierBookingAllowed("easyparcel", retailer.country ?? DEFAULT_COUNTRY))
 		return "country_unsupported";
+	if (!servesOrderDestination("easyparcel", order, retailer))
+		return "destination_unsupported";
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
 	if (order.status !== "confirmed" && order.status !== "packed")
 		return "bad_status";
@@ -931,7 +958,10 @@ function phoneDigits(waPhone: string | undefined): string {
 }
 
 /** Same rule as Delyva/Lalamove dispatch (z8r3fdh274): a buyer number from
- * outside the store's country hands the courier the STORE's number. */
+ * outside the country the parcel is GOING TO hands the courier the store's
+ * number. Judged by the destination, not the store (z8r3fdr5yy): on an
+ * SG→MY parcel the Malaysian courier needs the buyer's +60 number, which is
+ * exactly the one a store-country check would have thrown away. */
 function buyerContactPhone(
 	buyerPhone: string,
 	sellerPhone: string,
@@ -987,6 +1017,9 @@ type DispatchContext =
 			retailerId: Id<"retailers">;
 			shortId: string;
 			country: Country;
+			/** Where the parcel is going — the store's country, or the other
+			 * one on a cross-border order (z8r3fdr5yy). */
+			receiverCountry: Country;
 			currency: string;
 			sender: {
 				name: string;
@@ -1064,9 +1097,10 @@ export const getDispatchContext = internalQuery({
 
 		const weight = await resolveOrderWeight(ctx, order);
 		const country = retailer.country ?? DEFAULT_COUNTRY;
+		const receiverCountry = order.deliveryAddress.country ?? country;
 		const buyerPhone = phoneDigits(order.customer.waPhone);
 		const sellerPhone = phoneDigits(retailer.waPhone);
-		const buyer = buyerContactPhone(buyerPhone, sellerPhone, country);
+		const buyer = buyerContactPhone(buyerPhone, sellerPhone, receiverCountry);
 		const goodsTotal = order.items.reduce(
 			(sum, i) => sum + i.price * i.quantity,
 			0,
@@ -1077,6 +1111,7 @@ export const getDispatchContext = internalQuery({
 			retailerId: retailer._id,
 			shortId: order.shortId,
 			country,
+			receiverCountry,
 			currency: order.currency,
 			sender: {
 				name: retailer.storeName,
@@ -1225,7 +1260,7 @@ export const prepareBooking = action({
 								receiver: {
 									postcode: context.receiver.postcode,
 									state: context.receiver.state,
-									country: context.country,
+									country: context.receiverCountry,
 								},
 								weightKg: weight.kg,
 								dims: PARCEL_BOXES[args.box as ParcelBox],
@@ -1521,7 +1556,10 @@ export const confirmBooking = action({
 						currency: context.currency,
 						reference: context.shortId,
 						sender: { ...context.sender, country: context.country },
-						receiver: { ...context.receiver, country: context.country },
+						receiver: {
+							...context.receiver,
+							country: context.receiverCountry,
+						},
 					}),
 				);
 				return parseSubmitResponse(r.text, r.status);

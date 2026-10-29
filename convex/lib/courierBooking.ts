@@ -12,6 +12,7 @@ import {
 	COURIER_PROVIDER_IDS,
 	courierBookingAllowed,
 	type CourierProviderId,
+	courierServesDestination,
 } from "./courierProviders";
 import { delyvaBookingAllowed, riderBookingAllowed } from "./delivery";
 import { resolveDelyvaCredentials } from "./delyva";
@@ -109,5 +110,23 @@ const PROVIDER_BOOKING_ARMED: Record<
 export function storeBooksCouriers(retailer: CourierRetailer): boolean {
 	return COURIER_PROVIDER_IDS.some((id) =>
 		PROVIDER_BOOKING_ARMED[id](retailer),
+	);
+}
+
+/**
+ * Can `provider` carry THIS order — judged by where its address is going
+ * (z8r3fdr5yy). An order with no address (self-collect) or no stamped country
+ * (every order from before cross-border) is domestic.
+ */
+export function servesOrderDestination(
+	provider: CourierProviderId,
+	order: { deliveryAddress?: { country?: Country } },
+	retailer: { country?: Country },
+): boolean {
+	const storeCountry = retailer.country ?? DEFAULT_COUNTRY;
+	return courierServesDestination(
+		provider,
+		storeCountry,
+		order.deliveryAddress?.country ?? storeCountry,
 	);
 }

@@ -354,8 +354,11 @@ function QtyStepper({
 /** The checkout form's collapsed quote view (static config + live Lalamove
  * both map onto this — see checkout-form.tsx). */
 export type CheckoutQuoteView =
-	| PublicDeliveryQuote
+	| Exclude<PublicDeliveryQuote, { kind: "home_only" } | { kind: "no_lane" }>
 	| { kind: "calculating" }
+	// Cross-border (z8r3fdr5yy): checkout folds the server's `home_only` /
+	// `no_lane` answers into a block, worded by the caller's `blockedCopy`.
+	| { kind: "blocked"; reason: "home_only" | "no_lane" }
 	| undefined;
 
 interface CheckoutTotalsProps {

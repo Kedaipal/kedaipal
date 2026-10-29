@@ -17,7 +17,10 @@ const BLOCK_COPY: Record<EasyparcelDispatchBlock, string> = {
 	// these lines are the fallback for surfaces that can't.
 	not_configured: "EasyParcel booking isn't available right now.",
 	country_unsupported:
-		"EasyParcel booking is for Singapore stores — Malaysian stores book couriers through Delyva instead.",
+		"EasyParcel booking isn't available for stores in your country.",
+	// A MY store's EasyParcel carries overseas orders only (z8r3fdr5yy).
+	destination_unsupported:
+		"EasyParcel is for your overseas orders — book this one with Delyva, or arrange the courier yourself and add the tracking number.",
 	not_delivery: "This is a self-collect order — there's no parcel to send out.",
 	bad_status:
 		"A courier can only be booked while the order is confirmed or packed.",

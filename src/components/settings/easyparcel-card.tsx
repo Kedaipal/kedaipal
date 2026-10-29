@@ -323,9 +323,12 @@ export function EasyparcelCard({
 						</span>
 					</div>
 					<p className="text-sm text-muted-foreground">
-						Singapore parcel couriers — J&amp;T, SingPost, Qxpress, Ninja Van,
-						Teleport and more — on your own EasyParcel account. Booking is
-						switched on under{" "}
+						{settings?.destinations === "abroad"
+							? // A MY store (z8r3fdr5yy): EasyParcel carries the overseas
+								// lane only — Delyva stays the domestic courier.
+								"For your orders going to Singapore — J&T, Teleport, Aramex and more, on your own EasyParcel account. Orders within Malaysia keep booking through Delyva."
+							: "Singapore parcel couriers — J&T, SingPost, Qxpress, Ninja Van, Teleport and more — on your own EasyParcel account."}{" "}
+						Booking is switched on under{" "}
 						<Link
 							to="/app/settings/delivery-pricing"
 							className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"

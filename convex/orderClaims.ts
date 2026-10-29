@@ -953,6 +953,16 @@ export const commit = mutation({
 				"Delivery orders should not include a pickup location",
 			);
 
+		// A claim link is a counter sale finished on the buyer's phone — it
+		// delivers within the store's country only (z8r3fdr5yy); the lane, its
+		// price and the home-only check are the storefront checkout's.
+		if (
+			args.deliveryAddress?.country !== undefined &&
+			args.deliveryAddress.country !== retailerCountry
+		)
+			throw new ConvexError(
+				"This order can only be delivered within the store's country — message the store to arrange overseas delivery.",
+			);
 		let sanitizedAddress: ReturnType<typeof assertValidAddress> | undefined;
 		if (args.deliveryAddress) {
 			try {

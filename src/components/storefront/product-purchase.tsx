@@ -3,6 +3,7 @@ import {
 	ArrowRight,
 	CalendarClock,
 	Clock,
+	Globe,
 	ImagePlus,
 	Link as LinkIcon,
 	Loader2,
@@ -38,6 +39,7 @@ import { ClampedNote } from "../ui/clamped-note";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
 import { ORDERING_PAUSED_CTA, useOrderingPaused } from "./seasonal-break";
+import { useHomeOnlyLabel } from "./ships-abroad";
 
 export type StorefrontVariant = StorefrontProduct["variants"][number];
 
@@ -644,6 +646,10 @@ export function EventNotice({ pp }: { pp: ProductPurchase }) {
 /** Stock hint + minimum-order hint/unreachable alert — surfaced on the product
  * (not only at checkout) so neither rule is ever a surprise. */
 export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
+	// Cross-border (z8r3fdr5yy): an overseas visitor learns a product stays
+	// home HERE, before the add — never at checkout. Called before the early
+	// return below (a hook).
+	const homeOnly = useHomeOnlyLabel(pp.product ?? {});
 	// "Ready in ~2 hours" is only TRUE when same-day is possible. A product that
 	// needs a day or more of notice can never be ready two hours from now, so
 	// the chip would promise something checkout then refuses — the buyer-side
@@ -674,6 +680,15 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
 		promo?.phase === "live" ? promo.payWithinMinutes : undefined;
 	return (
 		<>
+			{homeOnly ? (
+				<p className="mt-3 flex items-center gap-2 rounded-xl bg-muted px-3 py-2.5 text-sm text-foreground">
+					<Globe
+						className="size-4 shrink-0 text-muted-foreground"
+						aria-hidden
+					/>
+					{homeOnly}
+				</p>
+			) : null}
 			{saleUnitsLeft !== undefined ? (
 				<div className="mt-3 flex flex-col gap-1.5 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2.5">
 					<p className="text-sm font-semibold text-accent-emphasis">

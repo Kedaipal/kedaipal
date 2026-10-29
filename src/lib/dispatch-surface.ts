@@ -74,7 +74,12 @@ export function lalamoveSurface(
 	// completed or failed trip from before (e.g. a store that switched country) belongs on the timeline, not under a live dispatch card
 	// that would re-offer a booking (86eyqgujv). Never while one is still out:
 	// cancel lives on that card.
-	if (blockReason === "country_unsupported" && !activeJob) return "none";
+	if (
+		(blockReason === "country_unsupported" ||
+			blockReason === "destination_unsupported") &&
+		!activeJob
+	)
+		return "none";
 	if (!job && !bookableStatus(order)) return "none";
 	if (!job && blockReason === "booking_disabled") return "hint";
 	return "card";
@@ -86,7 +91,14 @@ export function delyvaSurface(
 ): DispatchSurface {
 	if (!shipsAsParcel(order.deliveryMethod) || !dispatch) return "none";
 	const { job, blockReason } = dispatch;
-	if (blockReason === "country_unsupported" && !job) return "none";
+	// Same for an order going where this provider doesn't carry
+	// (z8r3fdr5yy) — the hub's overseas note says how it ships instead.
+	if (
+		(blockReason === "country_unsupported" ||
+			blockReason === "destination_unsupported") &&
+		!job
+	)
+		return "none";
 	if ((blockReason === "not_delivery" || blockReason === "no_address") && !job)
 		return "none";
 	// A set-up nudge belongs on orders the seller could still act on. On a
@@ -111,6 +123,7 @@ export function easyparcelSurface(
 	// seller can fix, so no card — unless a booking from before is still out.
 	if (
 		(blockReason === "country_unsupported" ||
+			blockReason === "destination_unsupported" ||
 			blockReason === "not_configured") &&
 		!job
 	)

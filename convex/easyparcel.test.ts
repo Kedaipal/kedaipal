@@ -771,15 +771,43 @@ describe("dispatch state — every block names its cause", () => {
 		).toBeNull();
 	});
 
-	test("MY store → country_unsupported; unconfigured deployment → not_configured", async () => {
+	test("MY store: overseas orders only (z8r3fdr5yy); unconfigured deployment → not_configured", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, "MY");
 		await seedConnection(t, retailer._id);
-		const { shortId } = await seedOrder(t, retailer._id, { currency: "MYR" });
 		const asUser = t.withIdentity({ subject: USER });
+		// A domestic MY order stays with Delyva — EasyParcel doesn't carry it.
+		const domestic = await seedOrder(t, retailer._id, {
+			currency: "MYR",
+			deliveryAddress: {
+				line1: "1 Jalan Ampang",
+				city: "Kuala Lumpur",
+				state: "WP Kuala Lumpur",
+				postcode: "50450",
+				country: "MY",
+			},
+		});
+		expect(
+			(
+				await asUser.query(api.easyparcel.getDispatchState, {
+					shortId: domestic.shortId,
+				})
+			)?.blockReason,
+		).toBe("destination_unsupported");
+		// A parcel going to Singapore gets past the destination rule.
+		const { shortId } = await seedOrder(t, retailer._id, {
+			currency: "MYR",
+			deliveryAddress: {
+				line1: "Blk 123 Bedok North Ave 3",
+				city: "Singapore",
+				state: "Singapore",
+				postcode: "460123",
+				country: "SG",
+			},
+		});
 		expect(
 			(await asUser.query(api.easyparcel.getDispatchState, { shortId }))?.blockReason,
-		).toBe("country_unsupported");
+		).not.toBe("destination_unsupported");
 		vi.stubEnv("EASYPARCEL_CLIENT_ID", "");
 		expect(
 			(await asUser.query(api.easyparcel.getDispatchState, { shortId }))?.blockReason,

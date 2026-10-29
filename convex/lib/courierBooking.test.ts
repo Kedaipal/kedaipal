@@ -5,6 +5,7 @@ import {
 	easyparcelBookingArmed,
 	lalamoveBookingArmed,
 	storeBooksCouriers,
+	servesOrderDestination,
 } from "./courierBooking";
 import { COUNTRY_COURIER_BOOKING } from "./courierProviders";
 
@@ -105,19 +106,41 @@ describe("easyparcelBookingArmed", () => {
 	// its own table, never on the retailer row.
 	const EASYPARCEL_CONNECTED = { connected: true, enabled: true };
 
-	test("connected and switched on, in SG only (MY is registry-closed)", () => {
+	test("connected and switched on, in either country", () => {
 		expect(
 			easyparcelBookingArmed({ country: "SG", easyparcel: EASYPARCEL_CONNECTED }),
 		).toBe(true);
-		// MY is deliberately closed (frozen-prohibition finding, 29 Jul 2026);
-		// an MY store stays un-armed until the cross-border lane flips the
-		// registry.
+		// MY opened for the cross-border lane (z8r3fdr5yy). WHICH orders it may
+		// book is the destination rule's job (`servesOrderDestination` below) —
+		// armed only says the account is usable.
 		expect(
 			easyparcelBookingArmed({ country: "MY", easyparcel: EASYPARCEL_CONNECTED }),
-		).toBe(false);
+		).toBe(true);
 		expect(easyparcelBookingArmed({ easyparcel: EASYPARCEL_CONNECTED })).toBe(
-			false,
+			true,
 		);
+	});
+
+	test("which orders each provider carries is judged by the address's country", () => {
+		const domestic = { deliveryAddress: { country: "MY" as const } };
+		const toSg = { deliveryAddress: { country: "SG" as const } };
+		const legacy = { deliveryAddress: {} };
+		const my = { country: "MY" as const };
+		const sg = { country: "SG" as const };
+		// A MY store's EasyParcel carries overseas orders only — Delyva stays
+		// the domestic courier (cold chain + the commission).
+		expect(servesOrderDestination("easyparcel", toSg, my)).toBe(true);
+		expect(servesOrderDestination("easyparcel", domestic, my)).toBe(false);
+		expect(servesOrderDestination("easyparcel", legacy, my)).toBe(false);
+		// An SG store's EasyParcel is its whole parcel lane.
+		expect(servesOrderDestination("easyparcel", { deliveryAddress: { country: "SG" as const } }, sg)).toBe(true);
+		expect(servesOrderDestination("easyparcel", domestic, sg)).toBe(true);
+		// Riders and Delyva never cross the border.
+		expect(servesOrderDestination("lalamove", toSg, my)).toBe(false);
+		expect(servesOrderDestination("delyva", toSg, my)).toBe(false);
+		expect(servesOrderDestination("delyva", domestic, my)).toBe(true);
+		// An order from before the stamp is domestic.
+		expect(servesOrderDestination("lalamove", legacy, my)).toBe(true);
 	});
 
 	test("a dead grant, a paused switch, or an unloaded summary is not armed", () => {

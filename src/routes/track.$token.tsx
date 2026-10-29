@@ -1693,7 +1693,10 @@ function TrackingRoute() {
 							</button>
 						) : null}
 					</div>
-					<DeliveryAddressDisplay address={order.deliveryAddress} />
+					<DeliveryAddressDisplay
+						address={order.deliveryAddress}
+						storeCountry={order.retailerCountry}
+					/>
 					{(() => {
 						const mapsUrl = deriveMapsUrl(order.deliveryAddress);
 						return mapsUrl ? (
@@ -1804,7 +1807,9 @@ function TrackingRoute() {
 				token={token}
 				currentAddress={order.deliveryAddress}
 				retailerId={order.retailerId}
-				country={order.retailerCountry}
+				// An overseas order is edited within ITS country (z8r3fdr5yy) — the
+				// address form follows the address, not the store.
+				country={order.deliveryAddress?.country ?? order.retailerCountry}
 				subtotal={order.subtotal}
 				orderItems={order.items}
 				currency={order.currency}
@@ -2361,6 +2366,7 @@ function SendOrderCard({
 	const message = buildOrderWaMessage({
 		shortId: order.shortId,
 		storeName: order.storeName,
+		storeCountry: order.retailerCountry,
 		items: order.items,
 		currency: order.currency,
 		total: order.total,

@@ -282,6 +282,13 @@ export type PlanFeatures = {
 	 * its seller nor strands a buyer holding a code it already sent. Already
 	 * -issued history stays readable on every plan (decided 8 Oct 2026). */
 	vouchers: boolean;
+	/** Cross-border delivery MY ↔ SG (`z8r3fdr5yy`): taking orders delivered to
+	 * the other country, at the seller's own price for it. Gated at the
+	 * ADDRESS, not the courier, so a flat-fee or free store can't take a
+	 * foreign address on Starter either. A downgrade PAUSES the lane at read
+	 * time (stored lanes are kept and revive on upgrade) and never touches an
+	 * order already placed — it ships at the price it was sold at. */
+	crossBorder: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
@@ -299,6 +306,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		events: false,
 		promo: false,
 		vouchers: false,
+		crossBorder: false,
 	},
 	pro: {
 		crm: true,
@@ -312,6 +320,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		events: true,
 		promo: true,
 		vouchers: true,
+		crossBorder: true,
 	},
 	// Enterprise gets everything Pro has. Its extras are seats (above) and
 	// terms (the contract); multi-outlet and priority support are sold as
@@ -329,6 +338,7 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		events: true,
 		promo: true,
 		vouchers: true,
+		crossBorder: true,
 	},
 };
 

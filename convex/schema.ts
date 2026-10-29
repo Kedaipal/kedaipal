@@ -7,6 +7,7 @@ import {
 } from "./lib/buyerQuestions";
 import { countryValidator } from "./lib/country";
 import { courierProviderValidator } from "./lib/courierProviders";
+import { crossBorderLanesValidator } from "./lib/crossBorder";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { showcaseThemeValidator } from "./lib/showcase";
 import { memberPermissionsValidator } from "./lib/permissions";
@@ -360,6 +361,16 @@ export default defineSchema({
 		// settings invariant guarantee a store always keeps ≥1 WORKING fulfilment
 		// method (delivery, or self-collect with ≥1 active pickup location).
 		offerDelivery: v.optional(v.boolean()),
+		// Cross-border delivery lanes (z8r3fdr5yy): "this store also delivers to
+		// <country>", each with the SELLER'S OWN price for that country (flat,
+		// weight bands, or free — never the domestic price). Absent / empty =
+		// domestic only. A list so a future corridor is a new entry, not a
+		// migration; v1 holds at most one (the other country). Stored ≠ live:
+		// `effectiveLanes` (convex/lib/crossBorder.ts) pauses a lane at read time
+		// when the plan lacks `crossBorder`, delivery is off, or domestic pricing
+		// is a live courier quote — so a downgrade or a pricing change never
+		// deletes it. See docs/cross-border.md.
+		crossBorderLanes: v.optional(crossBorderLanesValidator),
 		// Seller's business address — the ORIGIN for radius-based delivery
 		// pricing (straight-line distance to the buyer's address). Captured via
 		// Google autocomplete in Settings → Fulfilment; `label` is the formatted
@@ -1151,6 +1162,13 @@ export default defineSchema({
 		// lists online. undefined/false = visible (legacy default; no backfill).
 		// See docs/hidden-products.md.
 		hidden: v.optional(v.boolean()),
+		// Cross-border opt-out (z8r3fdr5yy). Products INHERIT the store's
+		// overseas lane; true = "Ships within <store country> only" (frozen
+		// goods, same-day cakes, anything that can't survive the trip or the
+		// courier's prohibited list). A product can only opt OUT — with no lane
+		// on the store nothing ships abroad whatever this says. Undefined =
+		// inherit (no backfill).
+		domesticOnly: v.optional(v.boolean()),
 		// Minimum order quantity (86ey9unyx) — buyers must order at least this many
 		// units of this product per storefront order, SUMMED across the product's
 		// variants (10 + 10 of two flavours satisfies min 20 — deliberately
@@ -1919,6 +1937,12 @@ export default defineSchema({
 				// Google Place ID — when set, maps URLs deep-link to the
 				// named place page instead of raw lat/lng search.
 				placeId: v.optional(v.string()),
+				// The address's own country (z8r3fdr5yy). Stamped on every order
+				// created after cross-border shipped; absent = the store's country
+				// (every older order, zero migration). Differs from the store's
+				// country only on a cross-border order — the one thing every
+				// address renderer, the label and the courier booking key off.
+				country: v.optional(countryValidator),
 			}),
 		),
 		// Reference to the retailer's pickup location when deliveryMethod ===

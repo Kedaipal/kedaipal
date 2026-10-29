@@ -39,9 +39,11 @@ import { Route as AppPromotionsIndexRouteImport } from './routes/app.promotions.
 import { Route as AppProductsIndexRouteImport } from './routes/app.products.index'
 import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
 import { Route as AppCustomersIndexRouteImport } from './routes/app.customers.index'
+import { Route as AppSettingsOverseasDeliveryRouteImport } from './routes/app.settings_.overseas-delivery'
 import { Route as AppSettingsDeliveryPricingRouteImport } from './routes/app.settings_.delivery-pricing'
 import { Route as AppPromotionsNewRouteImport } from './routes/app.promotions.new'
 import { Route as AppProductsWeightsRouteImport } from './routes/app.products.weights'
+import { Route as AppProductsOverseasRouteImport } from './routes/app.products.overseas'
 import { Route as AppProductsNewRouteImport } from './routes/app.products.new'
 import { Route as AppProductsImportRouteImport } from './routes/app.products.import'
 import { Route as AppProductsCategoriesRouteImport } from './routes/app.products.categories'
@@ -211,6 +213,12 @@ const AppCustomersIndexRoute = AppCustomersIndexRouteImport.update({
   path: '/customers/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSettingsOverseasDeliveryRoute =
+  AppSettingsOverseasDeliveryRouteImport.update({
+    id: '/settings_/overseas-delivery',
+    path: '/settings/overseas-delivery',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppSettingsDeliveryPricingRoute =
   AppSettingsDeliveryPricingRouteImport.update({
     id: '/settings_/delivery-pricing',
@@ -225,6 +233,11 @@ const AppPromotionsNewRoute = AppPromotionsNewRouteImport.update({
 const AppProductsWeightsRoute = AppProductsWeightsRouteImport.update({
   id: '/products/weights',
   path: '/products/weights',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppProductsOverseasRoute = AppProductsOverseasRouteImport.update({
+  id: '/products/overseas',
+  path: '/products/overseas',
   getParentRoute: () => AppRoute,
 } as any)
 const AppProductsNewRoute = AppProductsNewRouteImport.update({
@@ -361,9 +374,11 @@ export interface FileRoutesByFullPath {
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/products/overseas': typeof AppProductsOverseasRoute
   '/app/products/weights': typeof AppProductsWeightsRoute
   '/app/promotions/new': typeof AppPromotionsNewRoute
   '/app/settings/delivery-pricing': typeof AppSettingsDeliveryPricingRoute
+  '/app/settings/overseas-delivery': typeof AppSettingsOverseasDeliveryRoute
   '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
@@ -413,9 +428,11 @@ export interface FileRoutesByTo {
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/products/overseas': typeof AppProductsOverseasRoute
   '/app/products/weights': typeof AppProductsWeightsRoute
   '/app/promotions/new': typeof AppPromotionsNewRoute
   '/app/settings/delivery-pricing': typeof AppSettingsDeliveryPricingRoute
+  '/app/settings/overseas-delivery': typeof AppSettingsOverseasDeliveryRoute
   '/app/customers': typeof AppCustomersIndexRoute
   '/app/orders': typeof AppOrdersIndexRoute
   '/app/products': typeof AppProductsIndexRoute
@@ -467,9 +484,11 @@ export interface FileRoutesById {
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/products/overseas': typeof AppProductsOverseasRoute
   '/app/products/weights': typeof AppProductsWeightsRoute
   '/app/promotions/new': typeof AppPromotionsNewRoute
   '/app/settings_/delivery-pricing': typeof AppSettingsDeliveryPricingRoute
+  '/app/settings_/overseas-delivery': typeof AppSettingsOverseasDeliveryRoute
   '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
@@ -522,9 +541,11 @@ export interface FileRouteTypes {
     | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/products/overseas'
     | '/app/products/weights'
     | '/app/promotions/new'
     | '/app/settings/delivery-pricing'
+    | '/app/settings/overseas-delivery'
     | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
@@ -574,9 +595,11 @@ export interface FileRouteTypes {
     | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/products/overseas'
     | '/app/products/weights'
     | '/app/promotions/new'
     | '/app/settings/delivery-pricing'
+    | '/app/settings/overseas-delivery'
     | '/app/customers'
     | '/app/orders'
     | '/app/products'
@@ -627,9 +650,11 @@ export interface FileRouteTypes {
     | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/products/overseas'
     | '/app/products/weights'
     | '/app/promotions/new'
     | '/app/settings_/delivery-pricing'
+    | '/app/settings_/overseas-delivery'
     | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
@@ -878,6 +903,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCustomersIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/settings_/overseas-delivery': {
+      id: '/app/settings_/overseas-delivery'
+      path: '/settings/overseas-delivery'
+      fullPath: '/app/settings/overseas-delivery'
+      preLoaderRoute: typeof AppSettingsOverseasDeliveryRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/settings_/delivery-pricing': {
       id: '/app/settings_/delivery-pricing'
       path: '/settings/delivery-pricing'
@@ -897,6 +929,13 @@ declare module '@tanstack/react-router' {
       path: '/products/weights'
       fullPath: '/app/products/weights'
       preLoaderRoute: typeof AppProductsWeightsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/products/overseas': {
+      id: '/app/products/overseas'
+      path: '/products/overseas'
+      fullPath: '/app/products/overseas'
+      preLoaderRoute: typeof AppProductsOverseasRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/products/new': {
@@ -1046,9 +1085,11 @@ interface AppRouteChildren {
   AppProductsCategoriesRoute: typeof AppProductsCategoriesRoute
   AppProductsImportRoute: typeof AppProductsImportRoute
   AppProductsNewRoute: typeof AppProductsNewRoute
+  AppProductsOverseasRoute: typeof AppProductsOverseasRoute
   AppProductsWeightsRoute: typeof AppProductsWeightsRoute
   AppPromotionsNewRoute: typeof AppPromotionsNewRoute
   AppSettingsDeliveryPricingRoute: typeof AppSettingsDeliveryPricingRoute
+  AppSettingsOverseasDeliveryRoute: typeof AppSettingsOverseasDeliveryRoute
   AppCustomersIndexRoute: typeof AppCustomersIndexRoute
   AppOrdersIndexRoute: typeof AppOrdersIndexRoute
   AppProductsIndexRoute: typeof AppProductsIndexRoute
@@ -1079,9 +1120,11 @@ const AppRouteChildren: AppRouteChildren = {
   AppProductsCategoriesRoute: AppProductsCategoriesRoute,
   AppProductsImportRoute: AppProductsImportRoute,
   AppProductsNewRoute: AppProductsNewRoute,
+  AppProductsOverseasRoute: AppProductsOverseasRoute,
   AppProductsWeightsRoute: AppProductsWeightsRoute,
   AppPromotionsNewRoute: AppPromotionsNewRoute,
   AppSettingsDeliveryPricingRoute: AppSettingsDeliveryPricingRoute,
+  AppSettingsOverseasDeliveryRoute: AppSettingsOverseasDeliveryRoute,
   AppCustomersIndexRoute: AppCustomersIndexRoute,
   AppOrdersIndexRoute: AppOrdersIndexRoute,
   AppProductsIndexRoute: AppProductsIndexRoute,
