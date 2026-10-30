@@ -102,6 +102,7 @@ import {
 	type AppliedVoucher,
 	previewDiscount,
 	VoucherField,
+	voucherCodeForOrder,
 } from "../components/vouchers/voucher-field";
 import {
 	type CounterClosed,
@@ -1472,7 +1473,7 @@ function BuildOrderScreen({
 				windowMinutes,
 				attributionSource: claimSource,
 				// Explicit, for the same reason as the create path above.
-				voucherCode: voucher?.code,
+				voucherCode: voucherCodeForOrder(voucher, itemsTotal),
 			});
 			toast.success(
 				`WhatsApp link sent to ${buyer.displayName ?? "the buyer"} — you'll see the order the moment they complete it.`,
@@ -1656,6 +1657,8 @@ function BuildOrderScreen({
 				fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
 				paidInPerson: paid,
 				paymentMethod: paid ? method : undefined,
+				// The draft only restores the FIELD after a refresh, so it keeps
+				// the code as keyed even while it is below its minimum spend.
 				voucherCode: voucher?.code,
 			};
 		},
@@ -1697,7 +1700,7 @@ function BuildOrderScreen({
 				// Explicit, like `items` — the draft's copy is a DEBOUNCED
 				// autosave and would lose a code applied seconds ago, after the
 				// review modal had already shown the discount (`z8r3fdr617`).
-				voucherCode: voucher?.code,
+				voucherCode: voucherCodeForOrder(voucher, itemsTotal),
 				paidInPerson: effectivePaid,
 				paymentMethod: effectivePaid ? method : undefined,
 				fulfilmentDate: Number.isNaN(fulfilmentEpoch)
@@ -2443,6 +2446,18 @@ function BuildOrderScreen({
 									onRemove={() => setVoucher(null)}
 									initialCode={draftVoucherCode}
 									label="Add a voucher"
+									// The bound buyer's number, so a per-buyer code is
+									// judged for them before the sale (`z8r3fdz0pw`). The
+									// session stores E.164 digits; the parser reads `+`.
+									buyer={
+										buyer.waPhone
+											? {
+													waPhone: `+${buyer.waPhone}`,
+													digits: buyer.waPhone,
+												}
+											: undefined
+									}
+									anonymousBuyer={anonymous}
 								/>
 							</div>
 						) : null}

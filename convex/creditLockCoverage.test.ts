@@ -176,6 +176,8 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 		"withdrawing a whole run is like cancel: always open, never trapped",
 	"vouchers.renameBatch":
 		"renaming a run changes a private label, not an order — nothing to meter",
+	"vouchers.extendShared":
+		"giving a live code more room is marketing like issuing it — the orders it is spent on pay their own credits",
 	// Settings are always open.
 	"delyva.connect": "settings: connecting a courier account",
 	"easyparcel.startConnect": "settings: starts the courier sign-in (OAuth) for the account",

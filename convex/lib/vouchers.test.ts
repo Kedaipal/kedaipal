@@ -2,13 +2,16 @@ import { describe, expect, test } from "vitest";
 import { DAY_MS, mytMidnightFromYmd } from "./fulfilmentDate";
 import {
 	formatSharedUses,
-	formatVoucherEnd,
+	formatVoucherMoney,
+	formatVoucherMoment,
 	formatVoucherExpiry,
 	formatVoucherTerms,
 	generateVoucherCode,
 	isVoucherExpired,
 	isVoucherRedeemable,
 	isVoucherRefusalErrorData,
+	minSpendError,
+	minSpendShortfall,
 	normalizeSharedCode,
 	normalizeVoucherCode,
 	parseVoucherCode,
@@ -18,11 +21,13 @@ import {
 	SHARED_CODE_MIN,
 	SHARED_USES_MAX,
 	sharedCodeError,
+	sharedExtendError,
 	sharedLimitsError,
 	suggestSharedCodes,
 	VOUCHER_FIXED_MAX,
 	VOUCHER_PERCENT_MAX,
 	voucherDiscountFor,
+	voucherFinePrint,
 	voucherRefusalErrorData,
 	voucherRefusalMessage,
 	voucherValueError,
@@ -469,8 +474,182 @@ describe("shared codes — display", () => {
 	});
 
 	test("the end instant prints in store time", () => {
-		expect(formatVoucherEnd(Date.parse("2026-10-31T18:00:00+08:00"))).toBe(
+		expect(formatVoucherMoment(Date.parse("2026-10-31T18:00:00+08:00"))).toBe(
 			"31 Oct 2026, 6:00 PM",
 		);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Shared codes v2 (`z8r3fdz0pw`)
+// ---------------------------------------------------------------------------
+
+describe("the per-order discount cap", () => {
+	test("clamps a percentage before the subtotal clamp, and composes with it", () => {
+		const terms = { kind: "percent" as const, value: 50, maxDiscount: 2000 };
+		expect(voucherDiscountFor(terms, 10_000)).toBe(2000);
+		expect(voucherDiscountFor(terms, 3000)).toBe(1500);
+		expect(voucherDiscountFor({ ...terms, maxDiscount: 9999 }, 1000)).toBe(500);
+	});
+
+	test("a non-finite cap floors to 0 — it can never make a voucher ADD", () => {
+		expect(
+			voucherDiscountFor({ kind: "percent", value: 20, maxDiscount: Number.NaN }, 5000),
+		).toBe(0);
+	});
+
+	test("is validated: percent only, whole, positive, under the fat-finger ceiling", () => {
+		expect(voucherValueError({ kind: "percent", value: 20, maxDiscount: 2000 })).toBeNull();
+		expect(voucherValueError({ kind: "fixed", value: 1000, maxDiscount: 500 })).toMatch(
+			/already its own limit/,
+		);
+		expect(voucherValueError({ kind: "percent", value: 20, maxDiscount: 0 })).toMatch(
+			/most it can take off/,
+		);
+		expect(
+			voucherValueError({ kind: "percent", value: 20, maxDiscount: VOUCHER_FIXED_MAX + 1 }),
+		).toMatch(/limit/);
+	});
+});
+
+describe("the minimum spend", () => {
+	test("shortfall is against the gross subtotal, boundary inclusive", () => {
+		expect(minSpendShortfall(5000, 3000)).toBe(2000);
+		expect(minSpendShortfall(5000, 5000)).toBe(0);
+		expect(minSpendShortfall(undefined, 0)).toBe(0);
+	});
+
+	test("validation", () => {
+		expect(minSpendError(undefined)).toBeNull();
+		expect(minSpendError(5000)).toBeNull();
+		expect(minSpendError(0)).toMatch(/least a buyer/);
+		expect(minSpendError(12.5)).toMatch(/least a buyer/);
+		expect(minSpendError(1_000_001)).toMatch(/limit/);
+	});
+});
+
+describe("a scheduled start", () => {
+	const now = Date.parse("2026-10-30T12:00:00+08:00");
+	const shared = { status: "active" as const, usage: "shared" as const, maxRedemptions: 5 };
+
+	test("resolves scheduled before it starts, active from the instant it does", () => {
+		expect(resolveVoucherStatus({ ...shared, startsAt: now + 1 }, now)).toBe("scheduled");
+		expect(resolveVoucherStatus({ ...shared, startsAt: now }, now)).toBe("active");
+		expect(isVoucherRedeemable({ ...shared, startsAt: now + 1 }, now)).toBe(false);
+	});
+
+	test("the buyer's refusal is not_started and names the moment", () => {
+		expect(refusalForVoucher({ ...shared, startsAt: now + DAY_MS }, now)).toBe("not_started");
+		expect(
+			voucherRefusalMessage("not_started", {
+				startsAt: Date.parse("2026-11-01T09:00:00+08:00"),
+			}),
+		).toBe("This code starts on 1 Nov 2026, 9:00 AM — try again then.");
+	});
+
+	test("must be ahead, and before the end", () => {
+		expect(sharedLimitsError({ maxRedemptions: 5, startsAt: now - 1 }, now)).toMatch(
+			/already passed/,
+		);
+		expect(
+			sharedLimitsError({ endsAt: now + DAY_MS, startsAt: now + DAY_MS }, now),
+		).toMatch(/start before it ends/);
+		expect(
+			sharedLimitsError({ endsAt: now + 2 * DAY_MS, startsAt: now + DAY_MS }, now),
+		).toBeNull();
+	});
+});
+
+describe("the per-buyer limit", () => {
+	const now = Date.now();
+	test("whole, at least 1, at most the total and the fat-finger ceiling", () => {
+		expect(sharedLimitsError({ maxRedemptions: 5, perBuyerLimit: 1 }, now)).toBeNull();
+		expect(sharedLimitsError({ maxRedemptions: 5, perBuyerLimit: 0 }, now)).toMatch(/whole/);
+		expect(sharedLimitsError({ maxRedemptions: 5, perBuyerLimit: 6 }, now)).toMatch(
+			/more than the total/,
+		);
+		expect(sharedLimitsError({ endsAt: now + DAY_MS, perBuyerLimit: 100 }, now)).toMatch(
+			/At most 99/,
+		);
+	});
+
+	test("refusal copy never names an order", () => {
+		expect(voucherRefusalMessage("buyer_limit", { perBuyerLimit: 1 })).toBe(
+			"This WhatsApp number has already used this code — it's 1 per buyer.",
+		);
+		expect(voucherRefusalMessage("buyer_phone_required")).toMatch(/add your WhatsApp number/);
+	});
+});
+
+describe("extending a live code", () => {
+	const now = Date.parse("2026-10-30T12:00:00+08:00");
+	const current = { maxRedemptions: 10, endsAt: now + DAY_MS };
+
+	test("only ever more generous", () => {
+		expect(sharedExtendError(current, { maxRedemptions: 20, endsAt: now + DAY_MS }, now)).toBeNull();
+		expect(sharedExtendError(current, { maxRedemptions: 10, endsAt: now + 2 * DAY_MS }, now)).toBeNull();
+		expect(sharedExtendError(current, { maxRedemptions: 9, endsAt: now + DAY_MS }, now)).toMatch(
+			/only raise/,
+		);
+		expect(sharedExtendError(current, { maxRedemptions: 10, endsAt: now + 1 }, now)).toMatch(
+			/only move the end later/,
+		);
+		expect(sharedExtendError(current, current, now)).toMatch(/Nothing has changed/);
+	});
+
+	test("dropping one bound is the widest widening; dropping both or adding one is not", () => {
+		expect(sharedExtendError(current, { maxRedemptions: 10 }, now)).toBeNull();
+		expect(sharedExtendError(current, {}, now)).toMatch(/can't run forever/);
+		expect(
+			sharedExtendError({ maxRedemptions: 10 }, { maxRedemptions: 10, endsAt: now + DAY_MS }, now),
+		).toMatch(/cut it short/);
+	});
+
+	test("a dead code can't be 'extended' along the bound that didn't kill it", () => {
+		// Ran out: a later end alone would save and revive nothing.
+		const ranOut = { maxRedemptions: 10, endsAt: now + DAY_MS, redeemedCount: 10 };
+		expect(sharedExtendError(ranOut, { maxRedemptions: 10, endsAt: now + 2 * DAY_MS }, now)).toMatch(
+			/ran out at 10 uses — raise the total/,
+		);
+		expect(sharedExtendError(ranOut, { maxRedemptions: 11, endsAt: now + DAY_MS }, now)).toBeNull();
+		expect(sharedExtendError(ranOut, { endsAt: now + DAY_MS }, now)).toBeNull();
+		// Ended: a higher total alone would do the same.
+		const ended = { maxRedemptions: 10, endsAt: now - DAY_MS, redeemedCount: 4 };
+		expect(sharedExtendError(ended, { maxRedemptions: 20, endsAt: now - DAY_MS }, now)).toMatch(
+			/has ended — move the end later/,
+		);
+		expect(sharedExtendError(ended, { maxRedemptions: 20 }, now)).toBeNull();
+		expect(sharedExtendError(ended, { maxRedemptions: 10, endsAt: now + DAY_MS }, now)).toBeNull();
+	});
+});
+
+describe("the fine print", () => {
+	test("reads what it's worth, whether my basket counts, whether I can come back", () => {
+		expect(
+			voucherFinePrint({ maxDiscount: 2000, minSpend: 5000, perBuyerLimit: 1 }, sen),
+		).toEqual(["up to RM20.00 off", "min. spend RM50.00", "1 per buyer"]);
+		expect(voucherFinePrint({}, sen)).toEqual([]);
+	});
+
+	test("the server's money spelling", () => {
+		expect(formatVoucherMoney(5000, "MYR")).toBe("RM 50.00");
+		expect(formatVoucherMoney(5000, "SGD")).toBe("S$ 50.00");
+		expect(
+			voucherRefusalMessage("below_min_spend", {
+				minSpend: 5000,
+				shortfall: 1200,
+				currency: "MYR",
+			}),
+		).toBe("This code needs RM 50.00 of items — add RM 12.00 more.");
+	});
+
+	test("a typed refusal carries no undefined keys", () => {
+		const data = voucherRefusalErrorData("buyer_limit", { perBuyerLimit: 1 });
+		expect(data).toEqual({
+			kind: "voucher_refused",
+			refusal: "buyer_limit",
+			message: "This WhatsApp number has already used this code — it's 1 per buyer.",
+			detail: { perBuyerLimit: 1 },
+		});
 	});
 });

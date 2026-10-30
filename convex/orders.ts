@@ -1923,6 +1923,16 @@ export const create = mutation({
 				retailerId: args.retailerId,
 				code: args.voucherCode,
 				now,
+				// The entry rules (`z8r3fdz0pw`): the minimum spend against the
+				// same GROSS subtotal the min-order rules judged, and the
+				// per-buyer limit against the number this order will carry. A
+				// per-buyer code with no number is refused — the form requires
+				// one, so only a stale or direct client reaches that.
+				entry: {
+					itemSubtotal,
+					waPhone: sanitizedCustomer.waPhone,
+					phoneless: "refuse",
+				},
 			});
 			voucherTerms = terms;
 			redeemedVoucherId = voucher._id;
@@ -2086,7 +2096,12 @@ export const create = mutation({
 		// Two checkouts racing one voucher conflict on OCC here and exactly one
 		// wins; the loser retries, re-reads a `redeemed` row and is refused.
 		if (redeemedVoucherId)
-			await redeemVoucher(ctx, { voucherId: redeemedVoucherId, orderId, now });
+			await redeemVoucher(ctx, {
+				voucherId: redeemedVoucherId,
+				orderId,
+				now,
+				waPhone: sanitizedCustomer.waPhone,
+			});
 
 		await ctx.db.insert("orderEvents", {
 			orderId,

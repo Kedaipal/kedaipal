@@ -50,6 +50,9 @@ const emptyCounts = (): Record<VoucherStatus, number> => ({
 	redeemed: 0,
 	voided: 0,
 	expired: 0,
+	// A batch is single-use and can't be scheduled — counted for the type's
+	// sake, never non-zero (`z8r3fdz0pw`).
+	scheduled: 0,
 });
 
 /**

@@ -1,11 +1,13 @@
 import { Link } from "@tanstack/react-router";
 import {
 	Ban,
+	CalendarClock,
 	CalendarX,
 	CheckCircle2,
 	PauseCircle,
 	Share2,
 	Ticket,
+	TimerReset,
 	Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -17,8 +19,9 @@ import type {
 } from "../../../convex/lib/vouchers";
 import {
 	formatSharedUses,
-	formatVoucherEnd,
+	formatVoucherMoment,
 	formatVoucherTerms,
+	voucherFinePrint,
 } from "../../../convex/lib/vouchers";
 import { formatPrice } from "../../lib/format";
 import { Button } from "../ui/button";
@@ -48,6 +51,24 @@ export interface VoucherRowView {
 	maxRedemptions?: number;
 	redeemedCount?: number;
 	endsAt?: number;
+	/** v2 (`z8r3fdz0pw`). */
+	startsAt?: number;
+	perBuyerLimit?: number;
+	minSpend?: number;
+	maxDiscount?: number;
+}
+
+/** Can this row take an Extend? A shared code that hasn't been voided — an
+ * ended or run-out one included, because "it sold out by lunch, add 20 more"
+ * is the commonest reason to reach for it (`z8r3fdz0pw`). */
+export function canExtend(voucher: VoucherRowView): boolean {
+	return voucher.usage === "shared" && voucher.status !== "voided";
+}
+
+/** Is the code still in play — spendable now, or waiting for its start?
+ * What decides whether Share and Void are offered. */
+function isLive(voucher: VoucherRowView): boolean {
+	return voucher.status === "active" || voucher.status === "scheduled";
 }
 
 /**
@@ -70,6 +91,7 @@ export function VoucherList({
 	onShare,
 	onVoid,
 	onShowUses,
+	onExtend,
 	canWrite,
 	paused = false,
 	/** Rendered nested under a batch parent: the card loses its own border and
@@ -83,6 +105,9 @@ export function VoucherList({
 	 * question its count can't answer. A read, so it is offered to every
 	 * grant that can see the list, not only to writers. */
 	onShowUses?: (voucher: VoucherRowView) => void;
+	/** Give a shared code more room — a later end or a higher cap
+	 * (`z8r3fdz0pw`). Absent = not offered. */
+	onExtend?: (voucher: VoucherRowView) => void;
 	/** A teammate with read-only on `vouchers` sees the book and no actions. */
 	canWrite: boolean;
 	/**
@@ -110,7 +135,7 @@ export function VoucherList({
 						<div className="flex min-w-0 flex-wrap items-center gap-2">
 							<code
 								className={`font-mono text-sm font-bold tracking-wider ${
-									voucher.status === "active"
+									isLive(voucher)
 										? "text-foreground"
 										: "text-muted-foreground line-through"
 								}`}
@@ -138,6 +163,9 @@ export function VoucherList({
 						<p className="text-xs text-muted-foreground">
 							<OutcomeLine voucher={voucher} />
 						</p>
+						{/* The conditions a buyer meets at checkout (`z8r3fdz0pw`),
+						    so the seller can see on the row what they promised. */}
+						<FinePrint voucher={voucher} />
 						{/* Nested, the note is the BATCH's name and the parent card is
 						    already titled with it — printing it again on all six rows
 						    says the same word six times inside the thing it names. */}
@@ -148,9 +176,10 @@ export function VoucherList({
 						) : null}
 					</div>
 
-					{(canWrite && voucher.status === "active") ||
+					{(canWrite && isLive(voucher)) ||
+					(canWrite && onExtend && canExtend(voucher)) ||
 					(onShowUses && hasUses(voucher)) ? (
-						<div className="flex shrink-0 gap-2">
+						<div className="flex shrink-0 flex-wrap gap-2">
 							{/* "Who used it" is a READ and stays available after the code
 							    has run out or ended — that is exactly when the seller
 							    wants to see where the money went. */}
@@ -165,24 +194,34 @@ export function VoucherList({
 									{voucher.redeemedCount === 1 ? "order" : "orders"}
 								</Button>
 							) : null}
-							{canWrite && voucher.status === "active" ? (
-								<>
-									<Button
-										variant="outline"
-										className="tap-target flex-1 gap-1.5 sm:flex-none"
-										onClick={() => onShare(voucher)}
-									>
-										<Share2 className="size-4" aria-hidden />
-										Share
-									</Button>
-									<Button
-										variant="ghost"
-										className="tap-target flex-1 text-muted-foreground hover:text-destructive sm:flex-none"
-										onClick={() => onVoid(voucher)}
-									>
-										Void
-									</Button>
-								</>
+							{canWrite && isLive(voucher) ? (
+								<Button
+									variant="outline"
+									className="tap-target flex-1 gap-1.5 sm:flex-none"
+									onClick={() => onShare(voucher)}
+								>
+									<Share2 className="size-4" aria-hidden />
+									Share
+								</Button>
+							) : null}
+							{canWrite && onExtend && canExtend(voucher) ? (
+								<Button
+									variant={isLive(voucher) ? "ghost" : "outline"}
+									className="tap-target flex-1 gap-1.5 sm:flex-none"
+									onClick={() => onExtend(voucher)}
+								>
+									<TimerReset className="size-4" aria-hidden />
+									Extend
+								</Button>
+							) : null}
+							{canWrite && isLive(voucher) ? (
+								<Button
+									variant="ghost"
+									className="tap-target flex-1 text-muted-foreground hover:text-destructive sm:flex-none"
+									onClick={() => onVoid(voucher)}
+								>
+									Void
+								</Button>
 							) : null}
 						</div>
 					) : null}
@@ -190,6 +229,15 @@ export function VoucherList({
 			))}
 		</ul>
 	);
+}
+
+/** "up to RM 20.00 off · min. spend RM 50.00 · 1 per buyer" — or nothing. */
+function FinePrint({ voucher }: { voucher: VoucherRowView }) {
+	const lines = voucherFinePrint(voucher, (sen) =>
+		formatPrice(sen, voucher.currency),
+	);
+	if (lines.length === 0) return null;
+	return <p className="text-xs text-muted-foreground">{lines.join(" · ")}</p>;
 }
 
 /** Has a shared code been spent at least once? Gates the "N orders" read. */
@@ -232,6 +280,10 @@ function OutcomeLine({ voucher }: { voucher: VoucherRowView }): ReactNode {
 			return voucher.expiresAt
 				? `Works until ${formatDay(voucher.expiresAt)}`
 				: "No expiry · one use";
+		case "scheduled":
+			// Unreachable today — only a shared code can be scheduled — but the
+			// status type is shared, and a blank would be worse than a sentence.
+			return "Not started yet";
 	}
 }
 
@@ -246,11 +298,13 @@ function sharedOutcomeLine(voucher: VoucherRowView): string {
 	switch (voucher.status) {
 		case "redeemed":
 			return `All ${voucher.maxRedemptions ?? voucher.redeemedCount ?? 0} uses taken${
-				voucher.endsAt ? ` · had until ${formatVoucherEnd(voucher.endsAt)}` : ""
+				voucher.endsAt
+					? ` · had until ${formatVoucherMoment(voucher.endsAt)}`
+					: ""
 			}`;
 		case "expired":
 			return voucher.endsAt
-				? `Ended ${formatVoucherEnd(voucher.endsAt)} · ${uses}`
+				? `Ended ${formatVoucherMoment(voucher.endsAt)} · ${uses}`
 				: `Ended · ${uses}`;
 		case "voided":
 			return `${
@@ -261,8 +315,18 @@ function sharedOutcomeLine(voucher: VoucherRowView): string {
 		case "active":
 			return `${uses} · ${
 				voucher.endsAt
-					? `ends ${formatVoucherEnd(voucher.endsAt)}`
+					? `ends ${formatVoucherMoment(voucher.endsAt)}`
 					: "no end time"
+			}`;
+		case "scheduled":
+			// The start leads: it is what the seller set it up for, and the
+			// one thing about the code that hasn't happened yet.
+			return `Starts ${
+				voucher.startsAt ? formatVoucherMoment(voucher.startsAt) : "later"
+			}${voucher.endsAt ? ` · ends ${formatVoucherMoment(voucher.endsAt)}` : ""}${
+				voucher.maxRedemptions !== undefined
+					? ` · ${voucher.maxRedemptions} uses`
+					: ""
 			}`;
 	}
 }
@@ -276,7 +340,7 @@ function StatusPill({
 }) {
 	// Only an ACTIVE row changes: a spent or voided code is unaffected by the
 	// store's plan, and relabelling those would overstate what the gate does.
-	if (paused && status === "active")
+	if (paused && (status === "active" || status === "scheduled"))
 		return (
 			<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
 				<PauseCircle className="size-3" aria-hidden />
@@ -306,6 +370,13 @@ function StatusPill({
 			label: "Voided",
 			className: "bg-destructive/10 text-destructive",
 			icon: <Ban className="size-3" aria-hidden />,
+		},
+		// Live-in-waiting, not dead: the accent's outline rather than the muted
+		// fill the ended states wear (`z8r3fdz0pw`).
+		scheduled: {
+			label: "Scheduled",
+			className: "border border-accent/40 text-accent-emphasis",
+			icon: <CalendarClock className="size-3" aria-hidden />,
 		},
 	};
 	const { label, className, icon } = look[status];

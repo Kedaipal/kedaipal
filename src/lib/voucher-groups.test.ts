@@ -90,6 +90,7 @@ describe("the parent tells the truth under a filter", () => {
 			redeemed: 1,
 			voided: 1,
 			expired: 0,
+			scheduled: 0,
 		});
 	});
 
@@ -105,6 +106,7 @@ describe("the summary line", () => {
 		redeemed: 0,
 		voided: 0,
 		expired: 0,
+		scheduled: 0,
 		...over,
 	});
 
@@ -136,13 +138,20 @@ describe("what is still voidable", () => {
 				expired: 1,
 				redeemed: 5,
 				voided: 3,
+				scheduled: 0,
 			}),
 		).toBe(3);
 	});
 
 	it("is 0 for a run with nothing left to call off", () => {
 		expect(
-			batchVoidableCount({ active: 0, expired: 0, redeemed: 4, voided: 1 }),
+			batchVoidableCount({
+				active: 0,
+				expired: 0,
+				redeemed: 4,
+				voided: 1,
+				scheduled: 0,
+			}),
 		).toBe(0);
 	});
 });

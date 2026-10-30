@@ -65,9 +65,9 @@ time, or both — whichever comes first ends it**.
   `single`: no backfill.
 - **Scope follows Zaki's ask, not the draft ticket.** Per-buyer limit, min
   spend, max-discount clamp, a scheduled start and "extend a live code" were
-  in Arif's sketch and are **not built** (per-buyer in particular would force
-  the storefront to ask for a phone before applying). Named as follow-ups on
-  the ticket; none of them changes the model here.
+  in Arif's sketch and were left out of this first build. They shipped next,
+  on the same model, as `z8r3fdz0pw`: see
+  [Shared codes v2](#shared-codes-v2--who-qualifies-the-cap-the-start-extending-z8r3fdz0pw).
 - **At least one bound is required.** A public code with no cap and no end
   is an open-ended liability. `sharedLimitsError` refuses it on the server
   and the form says why beside the disabled button ("a shared code can't run
@@ -157,6 +157,210 @@ canonical; past the cap they read "This code has run out — every use has
 been taken"; past the end, "This voucher has expired". A claim link whose
 word ran out between send and open **drops** the discount with that sentence
 rather than dead-ending, exactly as a spent single-use code does.
+
+## Shared codes v2 — who qualifies, the cap, the start, extending (`z8r3fdz0pw`)
+
+The rest of Arif's sketch, built on the model above without changing it:
+every rule is a field on the same `vouchers` row, judged on the same resolve
+path, at the same three doors. Nothing here is enforced only in `checkCode`;
+the field's check is for the tick, and the order door decides.
+
+| Rule | Field | Kind | Usages |
+|---|---|---|---|
+| Per-buyer limit | `perBuyerLimit` | entry rule | shared only |
+| Minimum spend | `minSpend` | entry rule | single-use and shared |
+| Per-order discount cap | `maxDiscount` | **term** (frozen) | percent vouchers, either usage |
+| Scheduled start | `startsAt` | status | shared only |
+| Extend a live code | `vouchers.extendShared` | mutation | shared only |
+
+### Entry rules vs terms: the one distinction that matters
+
+An **entry rule** decides whether this buyer and this basket may use the
+code. It is judged **once, at redemption**, by `entryRefusal`
+(`convex/lib/voucherRedemption.ts`), and never again. A **term** decides
+what the code takes off, so it rides `voucherSnapshot` and every recompute
+re-applies it. The minimum spend is an entry rule and the cap is a term.
+Mixing them up produces the two failures this design prevents: a minimum
+re-judged on a recompute would silently strip a discount the buyer was
+given (the custom-decline shrinks the basket, and the buyer loses the
+code); a cap that wasn't frozen would stop clamping the moment a recompute
+re-read the terms. `sharedVouchersV2.test.ts` pins both: "NEVER re-judged
+on a recompute" raises the row's minimum past the order and re-prices the
+address, and the cap test re-prices the address and sets a delivery fee.
+
+### The per-buyer limit
+
+- **Counted off `voucherRedemptions.waPhone`** with the `by_voucher_phone`
+  index: "how many orders has this number placed with this code" is one
+  bounded range read inside the order mutation. The number is the one the
+  order stores (E.164 digits, `parseBuyerWaPhone`), so `012-345 6789` and
+  `+60 12 345 6789` are the same buyer.
+- **Race-safe for free.** Two checkouts from one number both read the range
+  and both patch the voucher row's `redeemedCount`, so they conflict on OCC
+  and the retry is refused `buyer_limit`. `redeemVoucher` re-asserts the
+  count from a fresh read too.
+- **A cancel gives the buyer's use back**, not just the code's: the hand-back
+  deletes the redemption row, which is what the count reads.
+- **What a missing number means depends on the door** (`VoucherEntry.phoneless`):
+  - **storefront** refuses (`buyer_phone_required`). The form requires the
+    number anyway, so only a stale or direct client reaches this.
+  - **counter**: an anonymous walk-in's use **counts toward the code's total
+    only** (`total_only`). Refusing would turn away a buyer standing at the
+    till. The counter panel says so on the applied code ("This sale has no
+    buyer number, so it counts toward the code's total only") so the seller
+    doesn't assume the limit protected them.
+  - **claim** always has a number. The send refuses if that number has used
+    the code, and the claim page **drops** the discount (the usual degrade)
+    if the buyer used it at the storefront between send and open.
+- **Never names the earlier order.** The number is typed, not proven, so
+  "This WhatsApp number has already used this code — it's 1 per buyer." is
+  the least a per-buyer limit can reveal. The check spends the per-store
+  `voucherCheck` budget, so it can't be used to sweep numbers.
+- **Known residual: a TARGETED lookup is possible.** Anyone holding a public
+  1-per-buyer code can type a specific person's number into `checkCode` and
+  learn one bit: "this number has ordered from this store with this code".
+  That bit is inherent to a per-buyer limit (the order door would reveal the
+  same thing at Place order), and the limiter caps volume, not intent. It was
+  accepted for v2 because the bit is narrow (one store, one code, no order,
+  no name, no date). Revisit it at the next PDPA review, or if per-buyer
+  limits come to cover anything more sensitive than a promo.
+- **On by default (1 per buyer) in the New voucher dialog.** Without it a
+  public code is reusable by one buyer until the cap. That is the abuse
+  case, and the safe answer is the one a seller gets without reading
+  anything. Turning it off states the consequence ("one buyer can use it
+  again and again until it stops working").
+
+#### The storefront flow: apply now, check when the number arrives (Zaki, 30 Oct 2026)
+
+The ticket sits above "Who's ordering?" on mobile, so most buyers type the
+code before their number. Three flows were mocked at 375px and desktop:
+**A** apply now and re-check, **B** ask for the number first, **C** hold the
+discount struck through. Zaki picked **A**:
+
+1. The code applies at once. A note under the voucher line says
+   "1 per buyer · checked against your WhatsApp number".
+2. Once step 1's number parses (debounced 600 ms, so finishing a number
+   doesn't spend the store's check budget per keystroke), `checkCode` is
+   asked again **with the number**. A first use reads
+   "✓ 1 per buyer · checked for 012-345 6789". "Checked" only ever names the
+   number currently on the page; an edited number reads as not yet checked.
+3. A number that has used it takes the code **off**, with the reason under
+   the field, before Place order. The code stays typed in the box, and it is
+   *held*: if the buyer corrects a mistyped number, the held code is
+   re-checked for the new one and comes back without retyping.
+
+**Trap found while rendering it:** the re-check was first written inside
+`VoucherField`, but on the storefront that field is mounted only while the
+buyer has the voucher line open. A re-check living there would never run
+for a buyer who didn't tap it. It is now `usePerBuyerRecheck`, a hook the
+checkout page owns, and the notes are `VoucherNotes`, rendered by the ticket
+directly under the voucher line (`CheckoutTotals.voucherNote`) where they
+show without opening it.
+
+### The minimum spend
+
+- Judged against the **gross item subtotal**, boundary inclusive, like every
+  other threshold in the app. It never sees fees or the discount itself.
+- Available on **single-use vouchers too**: it is judged on the shared
+  resolve path, so restricting it to shared codes would be an arbitrary
+  gap with nothing to save.
+- **Below the minimum, the code stays applied but reads "not yet".** The
+  ticket gives it its own muted voucher line, and the note says exactly
+  how much more is needed ("Add RM 10.10 more to use SALE345 — it needs
+  RM 30.00 of items."). `previewDiscount` takes nothing off, and
+  `voucherCodeForOrder` does not send the code, so the total on screen is
+  the total charged. The seller at the counter usually keys the code
+  before finishing the cart, and refusing it there would be the wrong
+  answer. The panel skin drops its tick and accent for the same state.
+- A door that does receive a code below its minimum refuses
+  `below_min_spend` with the shortfall in the sentence.
+
+### The per-order cap
+
+`voucherDiscountFor` clamps by `maxDiscount` **before** the subtotal clamp,
+so the two compose: 50% up to RM 20 takes RM 3 off a RM 6 basket and RM 20
+off a RM 500 one, and never more than the goods. It is offered on a
+percentage only. A fixed amount is already its own cap, so the server
+refuses one (`voucherValueError`). The form's helper does the arithmetic
+("20% off, up to RM 15.00. A basket over RM 75.00 gets the full
+RM 15.00."), and buyers see "up to RM 20.00 off" as fine print on the code.
+
+### The percent ceiling: decided as a caution, not a refusal
+
+Arif suggested capping a shared percentage at 50%. **Not adopted.** "First
+10 orders free" is a real promotion, and a public code's exposure is limited
+by its bounds, the per-buyer limit and the per-order cap, not by its
+percentage. A 50% ceiling would block the legitimate case and leave the
+abusive one (an unlimited 49% code) untouched. Instead, a shared percentage
+at or above `SHARED_PERCENT_CAUTION` (50) with no per-order cap shows an
+amber caution under the value that names the control that actually limits
+it. Single-use vouchers keep the 100% ceiling they always had.
+
+### The scheduled start
+
+- `startsAt` is an exact instant, like `endsAt`. Until then the row
+  resolves `scheduled` at read time (no cron, the same posture as
+  `expired`), asked after the cap and the end, since a code can't be spent
+  before it starts.
+- **A scheduled code holds its word.** `liveSharedVoucher` prefers a
+  spendable row, then a scheduled one, then the newest dead one, and
+  `holdsSharedWord` is the one meaning of "taken" for create, the live
+  availability line and extend.
+- The buyer who types it early is told **when**: "This code starts on
+  1 Nov 2026, 9:00 AM — try again then." A claim carrying one drops it with
+  that sentence.
+- Seller: "When it starts" (Right away / Later…) sits before the bounds,
+  in the order a sale runs. The row wears an outlined **Scheduled** pill
+  and leads with the start. The **Scheduled** chip sits next to Active and
+  appears only while a code is waiting (or while it is the chip in use), so
+  a store that never schedules one doesn't carry a permanently empty chip.
+  The share sheet opens the message with "Starts …".
+
+### Extending a live code
+
+`vouchers.extendShared` takes only `maxRedemptions` and `endsAt`, so a value
+change is impossible by construction: there is no argument for it. The rule
+(`sharedExtendError`) is "only ever more generous": the cap goes up, the end
+moves later, and either bound may be dropped while the other stays. Adding a
+bound that wasn't there would cut a public promise short, so it is refused.
+It works on a code that **ran out or ended**, because "it sold out by lunch,
+add 20 more" is the commonest reason to reach for it. The dialog then reads
+"Bring SALE345 back". A revival has to move the bound that **stopped** it:
+a code that ran out needs a total above what it has used ("It ran out at 10
+uses — raise the total to bring it back"), and an ended code needs a later
+end. Without that rule, a later end on a sold-out code saved "fine" and left
+it dead (PR #440 review). A revival is refused if a newer code has taken the
+word since, and a voided code stays voided. It is Pro-gated like `create`,
+because a raised cap gives more away.
+
+**Trap found by its test:** the dialog's pickers speak whole minutes, but a
+stored end can carry seconds. Rebuilding an untouched end from the pickers
+read as "moved earlier" and refused a cap-only raise, so an end the seller
+hasn't touched is now the stored instant.
+
+### Placement: Vouchers, not a Promotions tab
+
+Arif's sketch put codes under a Promotions home tab. Judged by meaning, they
+stay in **Vouchers**. A shared code is a voucher: the same table, the same
+three doors, and the same `vouchers` permission area (issuing gives money
+away, so it is its own grant). Promotions (`z8r3fducfd`) is **catalogue
+pricing** under the `products` area: a sale price changes a product before
+checkout, while a code is redeemed at it. That boundary was already drawn
+when Promotions shipped as its own nav entry rather than a tab of Vouchers.
+Moving shared codes would split one object across two pages and two grants.
+
+### What each side sees
+
+| State | Seller | Buyer |
+|---|---|---|
+| Per-buyer, no number yet | "1 per buyer" fine print on the row | "1 per buyer · checked against your WhatsApp number" |
+| Per-buyer, checked | — | "✓ 1 per buyer · checked for 012-345 6789" |
+| Per-buyer, used up | "N orders" lists each use | Code comes off: "This WhatsApp number has already used this code — it's 1 per buyer." |
+| Anonymous counter sale | "…counts toward the code's total only" on the panel | — |
+| Under the minimum | "min. spend RM 50.00" on the row | Voucher line reads "not yet" + "Add RM X more…" |
+| Capped | "up to RM 20.00 off" on the row | "up to RM 20.00 off" under the voucher line |
+| Scheduled | Scheduled pill, "Starts …", own chip | "This code starts on … — try again then." |
+| Extended / revived | Row shows the new bounds; toast states them | The code works again |
 
 ## The code, the QR and the link — what each is for
 
@@ -434,7 +638,11 @@ file's own test).
 |---|---|
 | Code, value, status, refusal copy, `ClaimVoucherState` + `claimVoucherDiscount` (pure — the claim page loads it in the browser); shared-code parser, bounds rule and status precedence | `convex/lib/vouchers.ts` |
 | Shared-code lookup (`liveSharedVoucher`), the count-not-flip redeem and the idempotent hand-back | `convex/lib/voucherRedemption.ts` |
-| Shared-code create (`insertSharedCode`), `sharedCodeAvailable`, `listRedemptions` | `convex/vouchers.ts` |
+| Shared-code create (`insertSharedCode`), `sharedCodeAvailable`, `listRedemptions`, `extendShared` | `convex/vouchers.ts` |
+| v2 rules — `sharedLimitsError` (start, per-buyer), `sharedExtendError`, `minSpendError`, `voucherFinePrint`, the cap in `voucherDiscountFor` | `convex/lib/vouchers.ts` |
+| v2 entry rules — `entryRefusal`, `VoucherEntry`, `holdsSharedWord`, `voucherTermsOf` | `convex/lib/voucherRedemption.ts` |
+| Flow A re-check + the ticket's notes — `usePerBuyerRecheck`, `VoucherNotes`, `voucherCodeForOrder` | `src/components/vouchers/voucher-field.tsx` |
+| Extend dialog; the shared switch row | `src/components/vouchers/extend-shared-dialog.tsx`, `limit-row.tsx` |
 | "Who used it" dialog | `src/components/vouchers/voucher-uses-dialog.tsx` |
 | Resolve / redeem / release / claim state (ctx) | `convex/lib/voucherRedemption.ts` |
 | Totals seam + `orderExtras` | `convex/lib/order.ts` |
