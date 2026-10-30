@@ -119,7 +119,9 @@ describe("CourierWalletRow", () => {
 		expect(
 			screen.getByRole("button", { name: "Top up Lalamove" }),
 		).toBeTruthy();
-		expect(el.textContent).toMatch(/Business account your keys belong to/);
+		expect(el.textContent).toMatch(
+			/Partner Portal, the account your API keys come from/,
+		);
 	});
 
 	it("a test account never asks for money", () => {
@@ -215,7 +217,7 @@ describe("CourierWalletRow", () => {
 		);
 		expect(
 			screen.getByRole("link", { name: /Open Lalamove/ }).getAttribute("href"),
-		).toBe("https://web.lalamove.com");
+		).toBe("https://partnerportal.lalamove.com/wallet");
 		expect(screen.queryByRole("button", { name: /I've topped up/ })).toBeNull();
 	});
 
@@ -351,15 +353,17 @@ describe("DispatchWalletLine", () => {
 		expect(el.getAttribute("data-verdict")).toBe("warn");
 		expect(el.textContent).toMatch(/Lalamove has the final say/);
 		// A live key: the Business-account trap is worth saying.
-		expect(el.textContent).toMatch(/Business account your keys belong to/);
+		expect(el.textContent).toMatch(
+			/Partner Portal, the account your API keys come from/,
+		);
 	});
 
-	it("a sandbox key's warn never says to top up the Business account", () => {
+	it("a sandbox key's warn never says to top up in the Partner Portal", () => {
 		// Regression (test-code, 31 Oct): it contradicted the sandbox banner.
 		s.wallets = [v({ balanceMinor: 840, state: "low", isTest: true })];
 		const el = line("lalamove", 1270);
 		expect(el.getAttribute("data-verdict")).toBe("warn");
-		expect(el.textContent).not.toMatch(/Business account/);
+		expect(el.textContent).not.toMatch(/Partner Portal/);
 		expect(screen.queryByRole("button", { name: /Top up/ })).toBeNull();
 	});
 

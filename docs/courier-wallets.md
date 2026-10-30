@@ -94,7 +94,7 @@ disables Book too. Only the words change: "*Your EasyParcel test wallet has
 RM 19.80 … Add test credit in your EasyParcel sandbox first*", never "Top up".
 (The first build exempted test wallets; the hands-on test caught it as a
 regression of the old EasyParcel card, which blocked on any short quote.)
-On a sandbox key the warn also drops Lalamove's "top up the Business account"
+On a sandbox key the warn also drops Lalamove's "top up in the Partner Portal"
 note: there's no real wallet behind play money, and the dialog's own banner
 already says so.
 
@@ -154,8 +154,9 @@ menu carries Kedaipal credits only.
 
 No provider has a top-up API, so Top up is always a guided trip out: what the
 wallet holds now, three steps at the courier, the courier's own guide when it
-publishes one, and **Open <Courier>**. Lalamove's steps name the Business
-account (the personal app is a different wallet). Only EasyParcel gets
+publishes one, and **Open <Courier>**. Lalamove's steps name the
+Partner Portal account the API keys come from, and say to check its
+Sandbox/Production switch (the Lalamove app is a different wallet). Only EasyParcel gets
 "I've topped up — check again", because it is the one wallet we can ask;
 Lalamove pushes on its own and Delyva never shares.
 
@@ -188,7 +189,7 @@ article):
 
 | Courier | Opens | Guide |
 | --- | --- | --- |
-| Lalamove | `web.lalamove.com` | MY / SG blog guides |
+| Lalamove | `partnerportal.lalamove.com/wallet` — the **Partner Portal** wallet API bookings spend (checked 31 Oct on Zaki's own portal: its Wallet page lists the API orders' debits and holds the Top Up button). The first build linked `web.lalamove.com` and the Business-app steps, which is a different wallet | none (the blog guides were for the consumer app) |
 | Delyva (MY) | `my.delyva.app` | none published |
 | EasyParcel | `app.easyparcel.com/sg/en/` (SG) · `/my/en/` (MY) — the bare root redirects every account to the Malaysian site | SG help-centre article; auto top-up `…/<country>/en/account/auto-topup/` (checked 31 Oct) |
 

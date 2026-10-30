@@ -152,11 +152,17 @@ export const WALLET_PROVIDERS: Record<CourierProviderId, WalletProvider> = {
 	lalamove: {
 		name: "Lalamove",
 		model: "push",
-		appUrl: { MY: "https://web.lalamove.com", SG: "https://web.lalamove.com" },
-		guideUrl: {
-			MY: "https://www.lalamove.com/en-my/blog/how-to-top-up-lalamove-wallet",
-			SG: "https://www.lalamove.com/en-sg/blog/how-to-use-the-lalamove-wallet",
+		// API bookings are paid from the PARTNER PORTAL wallet — the account the
+		// API keys come from — not the Lalamove app's or web's wallet (checked on
+		// Zaki's own portal 31 Oct 2026: its Wallet page lists the API orders'
+		// debits and has the Top Up button). One portal serves both countries;
+		// its city picker and Sandbox/Production switch sit inside it. The
+		// Lalamove blog guides were for the consumer app's wallet, so none.
+		appUrl: {
+			MY: "https://partnerportal.lalamove.com/wallet",
+			SG: "https://partnerportal.lalamove.com/wallet",
 		},
+		guideUrl: { MY: null, SG: null },
 		autoTopUpUrl: { MY: null, SG: null },
 	},
 	delyva: {

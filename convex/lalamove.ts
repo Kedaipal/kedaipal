@@ -1659,7 +1659,7 @@ function friendlyBookingError(
 			case "wallet":
 				return env === "sandbox"
 					? "These are Lalamove TEST keys, so this booking is hitting the sandbox — its balance is play money and topping up your real wallet can't change it. Paste your live keys (they start with pk_prod_) in Settings → Fulfilment to book real riders."
-					: "Your Lalamove wallet doesn't have enough balance. Top it up in the Lalamove Business account these API keys belong to — a top-up in the personal Lalamove app credits a different wallet — then book again.";
+					: "Your Lalamove wallet doesn't have enough balance. Top it up in Lalamove's Partner Portal, the account these API keys come from — a top-up in the Lalamove app credits a different wallet — then book again.";
 			case "quote_expired":
 				return "The price quote expired — get a fresh price and confirm within 5 minutes.";
 			case "bad_phone":

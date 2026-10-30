@@ -184,10 +184,11 @@ export function presentWallet(
 	}
 }
 
-/** The Lalamove-only trap (86eypncfy): a top-up in the personal app credits a
- * different wallet. Said wherever a Lalamove wallet asks for money. */
+/** The Lalamove-only trap (86eypncfy): API bookings spend the Partner Portal
+ * wallet, so a top-up in the Lalamove app credits a different wallet. Said
+ * wherever a Lalamove wallet asks for money. */
 export const LALAMOVE_BUSINESS_NOTE =
-	"Top up the Lalamove Business account your keys belong to — the personal Lalamove app is a different wallet.";
+	"Top up in Lalamove's Partner Portal, the account your API keys come from — the Lalamove app's wallet is a different one.";
 
 /** What a dispatch card says about paying for THIS booking. */
 export type DispatchWalletLine = {

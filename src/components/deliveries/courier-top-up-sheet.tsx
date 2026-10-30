@@ -60,8 +60,8 @@ export function topUpSteps(provider: CourierProviderId): string[] {
 	switch (provider) {
 		case "lalamove":
 			return [
-				"Open Lalamove and sign in to the Business account your API keys belong to — not the personal app, which is a different wallet.",
-				"Go to Wallet, tap Top up, pick an amount and pay.",
+				"Open Lalamove's Partner Portal and sign in to the account your API keys come from — not the Lalamove app, which has a different wallet.",
+				"Check the switch at the top right says Production, then go to Wallet and tap Top Up.",
 				"Come back here. Lalamove tells Kedaipal the new balance as soon as it lands.",
 			];
 		case "easyparcel":

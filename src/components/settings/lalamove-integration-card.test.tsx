@@ -227,7 +227,7 @@ describe("LalamoveIntegrationCard — setup checklist", () => {
 			screen.getByRole("button", { name: "Top up Lalamove" }),
 		).toBeTruthy();
 		expect(
-			screen.getByText(/Business account your keys belong to/),
+			screen.getByText(/Partner Portal, the account your API keys come from/),
 		).toBeTruthy();
 	});
 

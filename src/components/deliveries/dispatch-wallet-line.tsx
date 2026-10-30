@@ -108,7 +108,7 @@ export function DispatchWalletLine({
 					) : null}
 				</span>
 			</p>
-			{/* Play money has no Business account to top up — the dialog's
+			{/* Play money has no Partner Portal wallet to top up — the dialog's
 			    sandbox banner already says so (test-code, 31 Oct). */}
 			{loud && provider === "lalamove" && canTopUp ? (
 				<p className="pl-5 opacity-80">{LALAMOVE_BUSINESS_NOTE}</p>

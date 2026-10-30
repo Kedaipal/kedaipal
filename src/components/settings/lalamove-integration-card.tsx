@@ -476,7 +476,7 @@ export function LalamoveIntegrationCard({
 						"Serves the city zone around your pickup (e.g. Klang Valley) — roughly 40–70 km, never across zones",
 						"Bike and car cover the same area — the difference is parcel size and price",
 						"Cancel free until a rider accepts; after that Lalamove's cancel fee applies",
-						"Bookings fail on an empty wallet — top up the Lalamove Business account these keys belong to",
+						"Bookings fail on an empty wallet — top up in Lalamove's Partner Portal, the account these keys come from",
 						"You pay Lalamove directly — Kedaipal never books or pays on your behalf",
 					]}
 				/>
