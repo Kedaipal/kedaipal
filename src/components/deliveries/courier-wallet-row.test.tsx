@@ -258,7 +258,17 @@ describe("CourierWalletRow", () => {
 		expect(screen.getByTestId("wallet-awaiting-top-up").textContent).toMatch(
 			/Waiting for Lalamove to report your top-up/,
 		);
-		// Lalamove's webhook lands a newer balance: waiting ends by itself.
+		// A booking's spend is a newer reading too — still waiting.
+		rerender(
+			<CourierWalletList
+				wallets={[{ ...view, balanceMinor: 80, at: Date.now() + 500 }]}
+				retailerId={"r1" as never}
+				country="MY"
+				editable={false}
+			/>,
+		);
+		expect(screen.getByTestId("wallet-awaiting-top-up")).toBeTruthy();
+		// Lalamove's webhook lands a newer, higher balance: waiting ends by itself.
 		rerender(
 			<CourierWalletList
 				wallets={[{ ...view, balanceMinor: 9240, at: Date.now() + 1_000 }]}
@@ -268,6 +278,10 @@ describe("CourierWalletRow", () => {
 			/>,
 		);
 		expect(screen.queryByTestId("wallet-awaiting-top-up")).toBeNull();
+		// …and the open sheet says it landed, rather than going quiet.
+		expect(screen.getByTestId("top-up-landed").textContent).toMatch(
+			/Lalamove reported your top-up — the wallet holds RM\s?92\.40 now/,
+		);
 	});
 
 	it("EasyParcel: the auto top-up way out, and coming back re-reads the balance once", async () => {

@@ -20,7 +20,7 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { useAction } from "convex/react";
-import { Clock, ExternalLink, RefreshCw } from "lucide-react";
+import { CheckCircle2, Clock, ExternalLink, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -41,8 +41,9 @@ import { TONE_ACCENT } from "../../lib/tone";
 import {
 	awaitingTopUp,
 	markTopUpStarted,
+	topUpLanded,
 	topUpWaitingLine,
-	useTopUpStartedAt,
+	useTopUpTrip,
 } from "../../lib/top-up-awaiting";
 import { Button } from "../ui/button";
 import {
@@ -97,8 +98,9 @@ export function CourierTopUpSheet({
 	const { appUrl, guideUrl, autoTopUpUrl } = walletTopUpLinks(view, country);
 	const p = presentWallet(view, now);
 	const steps = topUpSteps(view.provider);
-	const startedAt = useTopUpStartedAt(view.provider);
-	const waiting = awaitingTopUp(startedAt, view, now);
+	const trip = useTopUpTrip(view.provider);
+	const waiting = awaitingTopUp(trip, view, now);
+	const landed = topUpLanded(trip, view, now);
 	const suggestion = useQuery(
 		convexQuery(
 			api.courierWallets.topUpSuggestion,
@@ -111,7 +113,10 @@ export function CourierTopUpSheet({
 	return (
 		<>
 			{waiting && view.provider === "easyparcel" && view.isTest !== true ? (
-				<RecheckOnReturn view={view} />
+				<RecheckOnReturn
+					view={view}
+					balanceBefore={trip?.balanceBefore ?? null}
+				/>
 			) : null}
 			<Dialog open={open} onOpenChange={onOpenChange}>
 				<DialogContent className="sm:max-w-md">
@@ -150,6 +155,16 @@ export function CourierTopUpSheet({
 						>
 							<Clock aria-hidden className="size-3.5 shrink-0" />
 							{topUpWaitingLine(view)}
+						</p>
+					) : null}
+
+					{landed ? (
+						<p
+							className={`-mt-2 flex items-center gap-1.5 text-xs leading-5 font-medium ${TONE_ACCENT.success}`}
+							data-testid="top-up-landed"
+						>
+							<CheckCircle2 aria-hidden className="size-3.5 shrink-0" />
+							{name} reported your top-up — the wallet holds {p.figure} now.
 						</p>
 					) : null}
 
@@ -253,7 +268,9 @@ export function CourierTopUpSheet({
 									href={appUrl}
 									target="_blank"
 									rel="noopener noreferrer"
-									onClick={() => markTopUpStarted(view.provider)}
+									onClick={() =>
+										markTopUpStarted(view.provider, view.balanceMinor)
+									}
 								>
 									Open {name}
 									<ExternalLink className="size-4" aria-hidden />
@@ -321,10 +338,17 @@ const lastRecheck = new Map<string, number>();
  * newer observation ends "waiting" on its own (`awaitingTopUp`), whether or
  * not the money has landed yet; the toast says which.
  */
-function RecheckOnReturn({ view }: { view: CourierWalletView }) {
+function RecheckOnReturn({
+	view,
+	balanceBefore,
+}: {
+	view: CourierWalletView;
+	/** The balance the seller left at — what "topped up" is measured from. */
+	balanceBefore: number | null;
+}) {
 	const actAsRetailerId = useActAsRetailerId();
 	const refresh = useAction(api.easyparcel.refreshBalance);
-	const before = view.balanceMinor;
+	const before = balanceBefore;
 	useEffect(() => {
 		const onVisible = async () => {
 			if (document.visibilityState !== "visible") return;

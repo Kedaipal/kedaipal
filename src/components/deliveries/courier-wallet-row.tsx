@@ -41,7 +41,7 @@ import { TONE_ACCENT, type Tone } from "../../lib/tone";
 import {
 	awaitingTopUp,
 	topUpWaitingLine,
-	useTopUpStartedAt,
+	useTopUpTrip,
 } from "../../lib/top-up-awaiting";
 import { cn } from "../../lib/utils";
 import { Glance } from "../settings/settings-primitives";
@@ -125,7 +125,7 @@ export function CourierWalletRow({
 		p.tone === "danger" ? "danger" : p.tone === "warn" ? "warn" : "neutral";
 	// The seller went to top up from this or another surface: say we're
 	// waiting for it, until a newer balance lands (Arif, 24 Oct).
-	const waiting = awaitingTopUp(useTopUpStartedAt(view.provider), view, now);
+	const waiting = awaitingTopUp(useTopUpTrip(view.provider), view, now);
 
 	return (
 		<li

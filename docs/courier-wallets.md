@@ -173,8 +173,11 @@ Three more pieces from Arif's 24 Oct scope comment (built 31 Oct):
 - **The trip out is remembered.** "Open <Courier>" marks that wallet as
   waiting (`src/lib/top-up-awaiting.ts`), and every surface showing it says
   "Waiting for Lalamove to report your top-up — this updates by itself" until
-  a NEWER balance lands; it's derived, so a landed top-up ends it, and it
-  lapses after 30 minutes. For EasyParcel, coming back to the tab re-reads the
+  a balance lands that is newer AND higher than the one the seller left at
+  (Lalamove's webhook also fires on every deduction, and EasyParcel's re-read
+  lands a fresh reading whether or not anything was paid). It's derived, so
+  a landed top-up ends it, the open sheet then says "Lalamove reported your
+  top-up", and it lapses after 30 minutes. For EasyParcel, coming back to the tab re-reads the
   balance by itself (once a minute at most, across every open surface) and
   says whether the top-up has landed yet. Delyva never reports, so it never
   waits.

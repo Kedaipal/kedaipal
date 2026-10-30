@@ -1,15 +1,22 @@
 /**
  * "I went to top up" (Arif, 24 Oct — z8r3fdx34j): when the seller opens a
  * courier's site from the top-up sheet, every surface showing that wallet
- * says it is waiting for the top-up to land, until a NEWER balance arrives —
- * Lalamove's webhook, or EasyParcel's re-read when the seller comes back.
+ * says it is waiting for the top-up to land, until a newer AND HIGHER balance
+ * arrives — Lalamove's webhook, or EasyParcel's re-read when the seller comes
+ * back.
+ *
+ * Higher, not just newer: Lalamove's webhook also fires on every deduction,
+ * and EasyParcel's re-read lands a fresh reading whether or not anything was
+ * paid. Either would otherwise end "waiting" — or announce a top-up — for
+ * money that never came in. So the trip out remembers the balance it left
+ * at.
  *
  * Remembered per courier for this tab (module state behind
  * `useSyncExternalStore`), so the Home row, the Deliveries row and the
- * dispatch line all agree. "Waiting" is DERIVED from the start time and the
- * wallet's own observation time (`awaitingTopUp`), never synced, so a landed
- * top-up ends it by itself. It lapses after 30 minutes: a seller who never
- * paid shouldn't read "waiting" for the rest of the day.
+ * dispatch line all agree. Both states are DERIVED from that memory and the
+ * wallet's own observation (`awaitingTopUp`, `topUpLanded`), never synced.
+ * It lapses after 30 minutes: a seller who never paid shouldn't read
+ * "waiting" for the rest of the day.
  */
 
 import { useSyncExternalStore } from "react";
@@ -19,7 +26,10 @@ import type { CourierWalletView } from "./courier-wallets";
 
 export const AWAIT_TOP_UP_MS = 30 * 60 * 1000;
 
-const started = new Map<CourierProviderId, number>();
+/** The trip out: when the seller left, and the balance they left at. */
+export type TopUpTrip = { at: number; balanceBefore: number | null };
+
+const trips = new Map<CourierProviderId, TopUpTrip>();
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -29,19 +39,20 @@ function emit() {
 /** The seller just left for this courier's top-up page. */
 export function markTopUpStarted(
 	provider: CourierProviderId,
+	balanceBefore: number | null,
 	at: number = Date.now(),
 ): void {
-	started.set(provider, at);
+	trips.set(provider, { at, balanceBefore });
 	emit();
 }
 
 /** Test seam: forget every pending top-up. */
 export function resetTopUpAwaiting(): void {
-	started.clear();
+	trips.clear();
 	emit();
 }
 
-export function useTopUpStartedAt(provider: CourierProviderId): number | null {
+export function useTopUpTrip(provider: CourierProviderId): TopUpTrip | null {
 	return useSyncExternalStore(
 		(listener) => {
 			listeners.add(listener);
@@ -49,25 +60,50 @@ export function useTopUpStartedAt(provider: CourierProviderId): number | null {
 				listeners.delete(listener);
 			};
 		},
-		() => started.get(provider) ?? null,
+		() => trips.get(provider) ?? null,
 		() => null,
 	);
 }
 
-/**
- * Is this wallet still waiting on a top-up the seller went to make? Only a
- * courier that tells us its balance can be waited on — Delyva never does, so
- * its sheet says so instead of promising an update.
- */
+type Seen = Pick<CourierWalletView, "provider" | "at" | "balanceMinor">;
+
+/** A trip still worth speaking about: one we can hear back on, not lapsed. */
+function live(trip: TopUpTrip | null, view: Seen, now: number): boolean {
+	return (
+		trip !== null &&
+		// Delyva never reports its balance, so there is nothing to wait for.
+		WALLET_PROVIDERS[view.provider].model !== "refusal" &&
+		now - trip.at <= AWAIT_TOP_UP_MS
+	);
+}
+
+/** A balance newer than the trip out and higher than where it left. */
+function landed(trip: TopUpTrip, view: Seen): boolean {
+	return (
+		view.at !== null &&
+		view.at >= trip.at &&
+		view.balanceMinor !== null &&
+		(trip.balanceBefore === null || view.balanceMinor > trip.balanceBefore)
+	);
+}
+
+/** Is this wallet still waiting on a top-up the seller went to make? */
 export function awaitingTopUp(
-	startedAt: number | null,
-	view: Pick<CourierWalletView, "provider" | "at">,
+	trip: TopUpTrip | null,
+	view: Seen,
 	now: number,
 ): boolean {
-	if (startedAt === null) return false;
-	if (WALLET_PROVIDERS[view.provider].model === "refusal") return false;
-	if (now - startedAt > AWAIT_TOP_UP_MS) return false;
-	return view.at === null || view.at < startedAt;
+	return trip !== null && live(trip, view, now) && !landed(trip, view);
+}
+
+/** The other side of waiting — said in the sheet, so a top-up never lands in
+ * silence. */
+export function topUpLanded(
+	trip: TopUpTrip | null,
+	view: Seen,
+	now: number,
+): boolean {
+	return trip !== null && live(trip, view, now) && landed(trip, view);
 }
 
 /** What a waiting wallet says, per how its courier reports. */

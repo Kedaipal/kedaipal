@@ -2,49 +2,56 @@ import { describe, expect, it } from "vitest";
 import {
 	AWAIT_TOP_UP_MS,
 	awaitingTopUp,
+	topUpLanded,
 	topUpWaitingLine,
 } from "./top-up-awaiting";
 
 /**
- * "Waiting for your top-up" (z8r3fdx34j, Arif 24 Oct): derived from when the
- * seller left for the courier and when the wallet last heard from it.
+ * "Waiting for your top-up" (z8r3fdx34j, Arif 24 Oct): derived from the trip
+ * out (when, and the balance it left at) and the wallet's latest reading.
  */
 
 const NOW = 1_800_000_000_000;
+const trip = { at: NOW - 60_000, balanceBefore: 1240 };
+const seen = (at: number | null, balanceMinor: number | null) => ({
+	provider: "lalamove" as const,
+	at,
+	balanceMinor,
+});
 
-describe("awaitingTopUp", () => {
-	it("waits from the trip out until a NEWER balance lands", () => {
-		const startedAt = NOW - 60_000;
-		expect(
-			awaitingTopUp(
-				startedAt,
-				{ provider: "lalamove", at: NOW - 120_000 },
-				NOW,
-			),
-		).toBe(true);
-		expect(
-			awaitingTopUp(startedAt, { provider: "lalamove", at: null }, NOW),
-		).toBe(true);
-		// The webhook came in after the seller left: the top-up landed.
-		expect(
-			awaitingTopUp(startedAt, { provider: "lalamove", at: NOW - 1_000 }, NOW),
-		).toBe(false);
+describe("awaitingTopUp / topUpLanded", () => {
+	it("waits from the trip out until a newer, HIGHER balance lands", () => {
+		expect(awaitingTopUp(trip, seen(NOW - 120_000, 1240), NOW)).toBe(true);
+		expect(awaitingTopUp(trip, seen(null, null), NOW)).toBe(true);
+		expect(awaitingTopUp(trip, seen(NOW - 1_000, 5240), NOW)).toBe(false);
+		expect(topUpLanded(trip, seen(NOW - 1_000, 5240), NOW)).toBe(true);
+	});
+
+	it("a deduction, or a re-read with nothing paid, is not a top-up", () => {
+		// Lalamove's webhook fires on a booking's spend too.
+		expect(awaitingTopUp(trip, seen(NOW - 1_000, 80), NOW)).toBe(true);
+		expect(topUpLanded(trip, seen(NOW - 1_000, 80), NOW)).toBe(false);
+		// EasyParcel re-read on return: same balance, fresher reading.
+		expect(awaitingTopUp(trip, seen(NOW - 1_000, 1240), NOW)).toBe(true);
 	});
 
 	it("never for a courier that doesn't tell us (Delyva), nor once it lapses", () => {
 		expect(
-			awaitingTopUp(NOW - 60_000, { provider: "delyva", at: null }, NOW),
-		).toBe(false);
-		expect(
 			awaitingTopUp(
-				NOW - AWAIT_TOP_UP_MS - 1,
-				{ provider: "lalamove", at: null },
+				trip,
+				{ provider: "delyva", at: null, balanceMinor: null },
 				NOW,
 			),
 		).toBe(false);
-		expect(awaitingTopUp(null, { provider: "lalamove", at: null }, NOW)).toBe(
-			false,
-		);
+		const old = { at: NOW - AWAIT_TOP_UP_MS - 1, balanceBefore: 1240 };
+		expect(awaitingTopUp(old, seen(null, null), NOW)).toBe(false);
+		expect(topUpLanded(old, seen(NOW - 1_000, 9999), NOW)).toBe(false);
+		expect(awaitingTopUp(null, seen(null, null), NOW)).toBe(false);
+	});
+
+	it("with no balance before (never reported), any reported balance is the landing", () => {
+		const blind = { at: NOW - 60_000, balanceBefore: null };
+		expect(topUpLanded(blind, seen(NOW - 1_000, 500), NOW)).toBe(true);
 	});
 });
 
