@@ -101,6 +101,7 @@ const THEMED_COMPONENT_DIRS = [
 	"components/legal",
 	"components/onboarding",
 	"components/marketplace",
+	"components/not-found",
 ];
 
 // Every route. Only the blog is outside the theme, and it is another repo.
