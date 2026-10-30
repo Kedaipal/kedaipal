@@ -91,6 +91,14 @@ export function presentWallet(
 	const updated =
 		view.at !== null ? `updated ${formatRelativeTime(view.at, now)}` : null;
 	const needsTopUp = !isTest && walletNeedsTopUp(view.state);
+	// A push wallet (Lalamove) has no balance API: we only learn the balance
+	// when the provider tells us money moved. Until then the seller is told
+	// WHY there is no figure — and the line goes the moment one arrives
+	// (Zaki, 31 Oct 2026).
+	const awaitingPush =
+		amount === null &&
+		view.state === "unreported" &&
+		WALLET_PROVIDERS[view.provider].model === "push";
 
 	if (isTest) {
 		return {
@@ -105,7 +113,9 @@ export function presentWallet(
 						: "Not reported yet"),
 			figureIsAmount: amount !== null,
 			tone: "neutral",
-			detail: "Test account — play money. Nothing here needs a top-up.",
+			detail: awaitingPush
+				? `Test account — play money. ${name} has no balance check, so it shows here once money moves in the wallet.`
+				: "Test account — play money. Nothing here needs a top-up.",
 			isTest,
 			needsTopUp: false,
 			stale: false,
@@ -118,10 +128,9 @@ export function presentWallet(
 				figure: "Not reported yet",
 				figureIsAmount: false,
 				tone: "neutral",
-				detail:
-					WALLET_PROVIDERS[view.provider].model === "pull"
-						? `${name} hasn't been asked yet — refresh to check.`
-						: `${name} reports it after your next top-up or booking.`,
+				detail: awaitingPush
+					? `${name} has no balance check — your balance shows here the next time money moves in the wallet (a top-up or a booking).`
+					: `${name} hasn't been asked yet — refresh to check.`,
 				isTest,
 				needsTopUp,
 				stale,

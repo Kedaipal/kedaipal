@@ -63,7 +63,7 @@ how much.
 | `low` | Under the line | amber, "Low", Top up |
 | `empty` | Zero or below | red, "Empty — the next booking will fail", Top up |
 | `short` | A refusal newer than the last balance, with no number | red "Too low", when it was refused, Top up |
-| `unreported` | Nothing seen yet (Lalamove until money moves; EasyParcel before its first read) | "Not reported yet" — **never RM 0** |
+| `unreported` | Nothing seen yet (Lalamove until money moves; EasyParcel before its first read) | "Not reported yet" — **never RM 0**. Lalamove says why: "Lalamove has no balance check — your balance shows here the next time money moves in the wallet (a top-up or a booking)", test accounts included; the line goes the moment a balance arrives (Zaki, 31 Oct). A pull wallet says "refresh to check" |
 | `unshared` | A refusal-model courier with nothing seen | "Not shared", Top up. No courier is refusal-only since Delyva became askable (31 Oct); the state stays for one that hides its balance |
 
 Two modifiers sit across every state. A **test account** (Lalamove `pk_test`,

@@ -57,14 +57,41 @@ describe("presentWallet — every state the row can be in", () => {
 		expect(p.detail).toMatch(/^Empty — the next booking will fail/);
 	});
 
-	it("not reported yet is never RM 0, and says when it will appear", () => {
+	it("not reported yet is never RM 0, and Lalamove says WHY there's no figure", () => {
+		// Lalamove has no balance API — the figure only arrives when money
+		// moves, so the seller is told that rather than left wondering.
 		const p = presentWallet(
 			v({ state: "unreported", balanceMinor: null, at: null, source: null }),
 			NOW,
 		);
 		expect(p.figure).toBe("Not reported yet");
 		expect(p.figureIsAmount).toBe(false);
-		expect(p.detail).toMatch(/after your next top-up or booking/);
+		expect(p.detail).toBe(
+			"Lalamove has no balance check — your balance shows here the next time money moves in the wallet (a top-up or a booking).",
+		);
+	});
+
+	it("the no-balance-check line goes the moment Lalamove reports a balance", () => {
+		expect(presentWallet(v(), NOW).detail).not.toMatch(/no balance check/);
+		expect(presentWallet(v({ isTest: true }), NOW).detail).toBe(
+			"Test account — play money. Nothing here needs a top-up.",
+		);
+	});
+
+	it("a Lalamove TEST wallet with nothing seen says why, too", () => {
+		const p = presentWallet(
+			v({
+				isTest: true,
+				state: "unreported",
+				balanceMinor: null,
+				at: null,
+				source: null,
+			}),
+			NOW,
+		);
+		expect(p.detail).toBe(
+			"Test account — play money. Lalamove has no balance check, so it shows here once money moves in the wallet.",
+		);
 	});
 
 	it("an EasyParcel wallet not yet read says to refresh, not to wait", () => {
@@ -79,6 +106,7 @@ describe("presentWallet — every state the row can be in", () => {
 			NOW,
 		);
 		expect(p.detail).toMatch(/refresh to check/);
+		expect(p.detail).not.toMatch(/no balance check/);
 	});
 
 	it("Delyva: 'Not shared', then the last balance a refusal showed", () => {
