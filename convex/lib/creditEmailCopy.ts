@@ -3,7 +3,7 @@
 // `low` (into the last 20% of the month's credits, once a period), `locked` (out
 // of credits), `stillLocked`
 // (a monthly refresh left the store below zero), `unlocked` (back above zero)
-// and `expiring` (bought credits expire in 14 days).
+// and `expiring` (extra credits — top-ups, bonuses, grants — expire in 14 days).
 //
 // Rules the copy keeps (register item 7): order counts only — never an RM
 // balance, "wallet", "fee", "commission", a percentage or "pay as you go"; a
@@ -148,15 +148,15 @@ const copy: Record<
 			expiring: (v) => {
 				const c = v.expiring?.credits ?? 0;
 				const on = escapeHtml(v.expiring?.onFormatted ?? "soon");
-				const subject = `⏳ ${c} bought credits expire on ${v.expiring?.onFormatted ?? "soon"}`;
+				const subject = `⏳ ${c} extra credits expire on ${v.expiring?.onFormatted ?? "soon"}`;
 				const lines = [
-					`Hi ${escapeHtml(v.storeName)}, <strong>${c} of the credits you bought expire on ${on}</strong>.`,
-					"Credits you buy last 12 months. Your plan's monthly credits are always used first, then your oldest bought credits — so these are next in line once this month's plan credits run out.",
+					`Hi ${escapeHtml(v.storeName)}, <strong>${c} of your extra credits expire on ${on}</strong>.`,
+					"Extra credits — top-ups and bonuses — last 12 months. Your plan's monthly credits are always used first, then your oldest extra credits — so these are next in line once this month's plan credits run out.",
 				];
 				return {
 					subject,
 					html: wrapHtml("⏳", `${c} credits expire on ${on}`, lines, v.billingUrl, copy.en.cta.open),
-					text: `⏳ ${c} of the credits you bought expire on ${v.expiring?.onFormatted ?? "soon"}.\nBought credits last 12 months; plan credits are used first, then your oldest bought credits.\n\n${v.billingUrl}`,
+					text: `⏳ ${c} of your extra credits expire on ${v.expiring?.onFormatted ?? "soon"}.\nExtra credits (top-ups and bonuses) last 12 months; plan credits are used first, then your oldest extra credits.\n\n${v.billingUrl}`,
 				};
 			},
 		},
@@ -247,15 +247,15 @@ const copy: Record<
 			expiring: (v) => {
 				const c = v.expiring?.credits ?? 0;
 				const on = escapeHtml(v.expiring?.onFormatted ?? "tidak lama lagi");
-				const subject = `⏳ ${c} kredit yang dibeli tamat tempoh pada ${v.expiring?.onFormatted ?? "tidak lama lagi"}`;
+				const subject = `⏳ ${c} kredit tambahan tamat tempoh pada ${v.expiring?.onFormatted ?? "tidak lama lagi"}`;
 				const lines = [
-					`Hai ${escapeHtml(v.storeName)}, <strong>${c} kredit yang anda beli akan tamat tempoh pada ${on}</strong>.`,
-					"Kredit yang dibeli sah selama 12 bulan. Kredit bulanan pelan anda sentiasa digunakan dahulu, kemudian kredit yang dibeli paling awal — jadi kredit ini yang seterusnya digunakan sebaik kredit pelan bulan ini habis.",
+					`Hai ${escapeHtml(v.storeName)}, <strong>${c} kredit tambahan anda akan tamat tempoh pada ${on}</strong>.`,
+					"Kredit tambahan — tambah nilai dan bonus — sah selama 12 bulan. Kredit bulanan pelan anda sentiasa digunakan dahulu, kemudian kredit tambahan paling awal — jadi kredit ini yang seterusnya digunakan sebaik kredit pelan bulan ini habis.",
 				];
 				return {
 					subject,
 					html: wrapHtml("⏳", `${c} kredit tamat tempoh pada ${on}`, lines, v.billingUrl, copy.ms.cta.open),
-					text: `⏳ ${c} kredit yang anda beli tamat tempoh pada ${v.expiring?.onFormatted ?? "tidak lama lagi"}.\nKredit yang dibeli sah 12 bulan; kredit pelan digunakan dahulu, kemudian kredit yang dibeli paling awal.\n\n${v.billingUrl}`,
+					text: `⏳ ${c} kredit tambahan anda tamat tempoh pada ${v.expiring?.onFormatted ?? "tidak lama lagi"}.\nKredit tambahan (tambah nilai dan bonus) sah 12 bulan; kredit pelan digunakan dahulu, kemudian kredit tambahan paling awal.\n\n${v.billingUrl}`,
 				};
 			},
 		},
@@ -349,15 +349,15 @@ const copy: Record<
 			expiring: (v) => {
 				const c = v.expiring?.credits ?? 0;
 				const on = escapeHtml(v.expiring?.onFormatted ?? "即将");
-				const subject = `⏳ 您购买的 ${c} 点将于 ${v.expiring?.onFormatted ?? "即将"} 到期`;
+				const subject = `⏳ 您的 ${c} 点额外点数将于 ${v.expiring?.onFormatted ?? "即将"} 到期`;
 				const lines = [
-					`${escapeHtml(v.storeName)} 您好，<strong>您购买的 ${c} 点将于 ${on} 到期</strong>。`,
-					"购买的点数有效期为 12 个月。系统总是先使用套餐的每月点数，再使用最早购买的点数 —— 因此本月套餐点数用完后，会先使用这部分。",
+					`${escapeHtml(v.storeName)} 您好，<strong>您的 ${c} 点额外点数将于 ${on} 到期</strong>。`,
+					"额外点数（充值和奖励）有效期为 12 个月。系统总是先使用套餐的每月点数，再使用最早的额外点数 —— 因此本月套餐点数用完后，会先使用这部分。",
 				];
 				return {
 					subject,
 					html: wrapHtml("⏳", `${c} 点将于 ${on} 到期`, lines, v.billingUrl, copy.zh.cta.open),
-					text: `⏳ 您购买的 ${c} 点将于 ${v.expiring?.onFormatted ?? "即将"} 到期。\n购买的点数有效期 12 个月；先用套餐点数，再用最早购买的点数。\n\n${v.billingUrl}`,
+					text: `⏳ 您的 ${c} 点额外点数将于 ${v.expiring?.onFormatted ?? "即将"} 到期。\n额外点数（充值和奖励）有效期 12 个月；先用套餐点数，再用最早的额外点数。\n\n${v.billingUrl}`,
 				};
 			},
 		},

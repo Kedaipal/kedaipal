@@ -29,6 +29,7 @@ import { Route as ReferralSlugRouteImport } from './routes/referral.$slug'
 import { Route as JoinTokenRouteImport } from './routes/join.$token'
 import { Route as ClaimTokenRouteImport } from './routes/claim.$token'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
+import { Route as AppReferRouteImport } from './routes/app.refer'
 import { Route as AppPosterRouteImport } from './routes/app.poster'
 import { Route as AppInsightsRouteImport } from './routes/app.insights'
 import { Route as AppDeliveriesRouteImport } from './routes/app.deliveries'
@@ -162,6 +163,11 @@ const ClaimTokenRoute = ClaimTokenRouteImport.update({
 const AppSettingsRoute = AppSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppReferRoute = AppReferRouteImport.update({
+  id: '/refer',
+  path: '/refer',
   getParentRoute: () => AppRoute,
 } as any)
 const AppPosterRoute = AppPosterRouteImport.update({
@@ -359,6 +365,7 @@ export interface FileRoutesByFullPath {
   '/app/deliveries': typeof AppDeliveriesRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
+  '/app/refer': typeof AppReferRoute
   '/app/settings': typeof AppSettingsRoute
   '/claim/$token': typeof ClaimTokenRoute
   '/join/$token': typeof JoinTokenRoute
@@ -414,6 +421,7 @@ export interface FileRoutesByTo {
   '/app/deliveries': typeof AppDeliveriesRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
+  '/app/refer': typeof AppReferRoute
   '/app/settings': typeof AppSettingsRoute
   '/claim/$token': typeof ClaimTokenRoute
   '/join/$token': typeof JoinTokenRoute
@@ -471,6 +479,7 @@ export interface FileRoutesById {
   '/app/deliveries': typeof AppDeliveriesRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
+  '/app/refer': typeof AppReferRoute
   '/app/settings': typeof AppSettingsRoute
   '/claim/$token': typeof ClaimTokenRoute
   '/join/$token': typeof JoinTokenRoute
@@ -529,6 +538,7 @@ export interface FileRouteTypes {
     | '/app/deliveries'
     | '/app/insights'
     | '/app/poster'
+    | '/app/refer'
     | '/app/settings'
     | '/claim/$token'
     | '/join/$token'
@@ -584,6 +594,7 @@ export interface FileRouteTypes {
     | '/app/deliveries'
     | '/app/insights'
     | '/app/poster'
+    | '/app/refer'
     | '/app/settings'
     | '/claim/$token'
     | '/join/$token'
@@ -640,6 +651,7 @@ export interface FileRouteTypes {
     | '/app/deliveries'
     | '/app/insights'
     | '/app/poster'
+    | '/app/refer'
     | '/app/settings'
     | '/claim/$token'
     | '/join/$token'
@@ -843,6 +855,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/app/settings'
       preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/refer': {
+      id: '/app/refer'
+      path: '/refer'
+      fullPath: '/app/refer'
+      preLoaderRoute: typeof AppReferRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/poster': {
@@ -1091,6 +1110,7 @@ interface AppRouteChildren {
   AppDeliveriesRoute: typeof AppDeliveriesRoute
   AppInsightsRoute: typeof AppInsightsRoute
   AppPosterRoute: typeof AppPosterRoute
+  AppReferRoute: typeof AppReferRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
   AppAdminAcquisitionRoute: typeof AppAdminAcquisitionRoute
@@ -1127,6 +1147,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppDeliveriesRoute: AppDeliveriesRoute,
   AppInsightsRoute: AppInsightsRoute,
   AppPosterRoute: AppPosterRoute,
+  AppReferRoute: AppReferRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
   AppAdminAcquisitionRoute: AppAdminAcquisitionRoute,

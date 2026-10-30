@@ -103,7 +103,7 @@ truncates. The referrer rides `store=` and lands on the row.
    and signs up tomorrow by typing kedaipal.com must still be a referee. The
    latest link wins. A link shared before the referrer renamed still resolves
    while the old slug is parked, and the cookie keeps the CURRENT slug.
-3. **The invite follows them.** "Invited by `<store>` · Get 60 bonus credits
+3. **The invite follows them.** "Invited by `<store>` · Get 60 free orders
    when you start Pro, or 30 on Starter" (`ReferralInvitePill`, en/ms/zh)
    appears:
    - at the top of the landing hero (the badge slot that is empty for everyone
@@ -173,23 +173,129 @@ above once approved (`referrals.sendRewardWhatsApp`, WABA-gated, retried on
 a transient failure). The referee's billing note goes quiet once the invoice
 is paid; `referrals.mine.reward` carries what landed.
 
-## The card (T3)
+## The card (T3) — now a teaser
 
 `src/components/home/refer-card.tsx`, read from `referrals.myCard` (any
-member: the link is public and the card shows counts, never a referee's name).
-Its **own section at the foot of Home** — not inside the "Your store" card,
-which shares the store with buyers; this refers another seller, and it is
-never urgent.
+member: the link is public and the card shows counts, never a referee's
+earnings). Its **own section at the foot of Home** — not inside the "Your
+store" card, which shares the store with buyers; this refers another seller,
+and it is never urgent.
+
+Since the push (below) the card is a **teaser**: the headline in orders, the
+pending line when a referee is waiting, WhatsApp + Copy link, a one-line
+count, and "See all" into `/app/refer`. Half the T3 card's height; the page
+carries what it dropped.
 
 | Store | Card |
 | --- | --- |
-| Active paid | The offer ("they get 60 on Pro, 30 on Starter — and so do you"), the link, Copy + Share on WhatsApp (`referralShareMessage`, one author), and Signed up / Started their plan / Credits earned |
-| Comped / Kedaipal-owned | The same, minus earnings, with "your account is on the house — but every kedai you refer still gets their bonus" |
+| Active paid | "60 orders on us. For both of you.", the pending line, WhatsApp + Copy, "2 signed up · 1 started · 60 orders earned" |
+| Comped / Kedaipal-owned | "60 orders on us, for every kedai you refer.", told plainly it earns nothing; the pending chip reads "waiting", never "60 waiting" |
 | On hold / lapsed | **Paused**, saying why and linking to Billing — a link that silently stopped counting would be hidden behaviour |
-| Trial | Nothing (Zaki: refer once the plan is paid) |
+| Trial | A dashed **"Refer & earn unlocks with your plan"** card (was: nothing). The rule is unchanged — refer once the plan is paid — it is now *said*, because a feature a seller can't see is one they never plan around |
 
 Zero sign-ups is a sentence, not a row of zeros. The counts read
 `referrals.by_referrer_created`, capped at 500 ("500+").
+
+## The push (28 Oct 2026)
+
+The programme was well built and invisible. Eight days after it shipped, the
+only seller-side surface was the T3 card at the very foot of Home, below
+Deliveries, the checklist and Your store; the offer was phrased in "bonus
+credits"; the card showed counts and no *pending* state; the WhatsApp message
+was generic with the link mid-paragraph; nothing fired when credits ran low
+or an invoice was paid; a trial store saw nothing at all; and Copy / Share
+fired no analytics event. Mockups for the discussion: the
+[Referral UX push](https://claude.ai/artifact/51CanAFAhgCj4mhQvRm8wC) canvas.
+
+What changed, and why each piece is where it is:
+
+- **A page of its own — `/app/refer`, "Refer & earn"** (`src/routes/app.refer.tsx`,
+  pieces in `src/components/referrals/refer-sections.tsx`). The hero says the
+  offer in orders; the share kit holds all four channels; the three numbers;
+  **one row per referee** (`referrals.myReferrals`, credits:read — the rows say
+  what the store *earned*, so a teammate without the grant gets the
+  NeedsAccessNote in the list's place); how it works; the fine print. A trial
+  or paused store still gets the page: the notice, then how it works, so the
+  rule is never a surprise. Not plan-walled and not in `RouteAreaGuard`.
+- **The pending state is the engine.** A referee who signed up and hasn't
+  paid is a reward *waiting*, and the one thing the referrer can still act
+  on. `myCard` now carries `pending` and `latestPending` (the newest, by
+  name — a referee's store name is public, it is their storefront's) for the
+  Home teaser's one line; the page's pending rows lead, amber, and carry
+  **"Say hi on WhatsApp"** to the referee's public number — a word from a
+  friend converts where an email from us doesn't. Each waiting row says
+  **where the referee actually stands** — `stage` on `MyReferralRow`, from
+  `refereeStage` (`convex/lib/referral.ts`) reading their subscription: "on
+  their free period", "free period over · first invoice due", "first invoice
+  overdue", or "not on a plan yet" — in the Billing tab's own words. The
+  first build printed "on their free trial" on every waiting row by
+  assumption; a referee whose free period ended unpaid is the commonest
+  state, and the one a nudge matters most for. How a waiting row pays out is
+  said **once**, above the list, not on every row; a started row that paid
+  this store nothing ("Same owner", "On the house") says why **on the row** —
+  a hover tooltip is invisible on a phone. The page does not repeat Home's
+  pending line: its own list leads with the same rows.
+- **Entry points.** Sidebar: "Refer & earn" after Insights, before Settings
+  (the growth items together, above configuration). Phone More sheet: after
+  Vouchers, above Store poster. The profile-menu row sketched in the balances
+  mockup (z8r3fdx34j) should link here when that menu lands.
+- **Moments.** The credit meter's LOW and OUT states carry one line under the
+  top-up — "Or earn 60 free orders: refer a kedai that starts Pro" — only for
+  a store that earns the referrer half, never on a healthy meter. Every
+  paid-**plan** receipt email (`notifyPaymentReceived`) carries the invitation
+  under its CTA (`referralReceiptFooter`, en/ms/zh, in orders like every share
+  surface); a hold receipt does not — a paused store's link is paused too.
+- **The referee's side.** Home shows a **referral welcome card** above the
+  welcome card for a referred store until its first invoice is paid — who
+  invited them, the 60, and "Start your plan" into Billing. Built as a card,
+  not a post-onboarding redirect into Billing: a paywall before any value is
+  the classic trial killer, and the trial exists so value comes first.
+  Onboarding's "Referred by" field, when the cookie seeded it and the invite
+  resolved, is a **confirmed chip** ("Kuih Lab referred you ✓ · Not them?")
+  rather than an input — no slug to mistype — and never a *disabled* input,
+  because the cookie keeps the *last* link opened and two partners can share
+  a prospect.
+- **The share kit.** `referralShareMessage(link, storeName)` opens with the
+  store's own name (a friend vouching, not an ad), says "60 free orders", and
+  puts the link alone on the last line so WhatsApp renders the invite page's
+  preview card. **Copy message** and a **share image** join WhatsApp and
+  **Copy invite link** — never bare "Copy link": on Home the teaser sits under
+  the store-link card, whose own button is "Copy link", and two identical
+  labels for two different links is how a seller sends their storefront
+  instead of their invite.
+- **The share image — the invite as a voucher** (`ShareImageDialog`, drawn by
+  `src/lib/referral-share-image.ts` from `referralShareImageCopy`; mockups F1–F3
+  on the canvas). The offer on top ("Kek Mak Jah invites you", **60 orders**
+  lit, "on us."), a perforated stub below with a large QR and the link, the
+  Kedaipal mark in the corner so a stranger scrolling a status knows what it
+  is. **Two formats**, one pick-one control (`ModeButton`): **Square** 1080²
+  for posts, seller groups and chats; **Story** 1080×1920 for a WhatsApp
+  status or an Instagram/Facebook story (it adds three benefit lines where
+  there is room). The card is a **brand asset in fixed colours**, identical
+  in light and dark, and the dialog's preview **is the drawn PNG** — the first
+  build showed a DOM look-alike whose navy drifted from the file in dark
+  mode. On a device that can share files (`navigator.canShare`), **Share
+  image** is primary and hands the PNG to the system share sheet (WhatsApp,
+  Instagram) — a download strands it in Files; **Save image** and **Copy
+  link** sit below. Elsewhere the primary is **Download PNG**. A failed draw
+  shows "Try again", never a blank stage. Long store names shrink, then
+  ellipsise, never run off the card. The draw waits on the card's fonts
+  (`document.fonts.load`) — a canvas never waits on its own.
+- **One promise, referee-side.** Everything a referee sees before Billing —
+  the invite pill, the link preview, the onboarding chip and note, the Home
+  welcome card — says "free orders", the same words as the message and image
+  that brought them, and so does the receipt footer. Billing keeps "bonus
+  credits": its plan rows are counted in credits ("200 credits a month"), and
+  1 credit = 1 order. The referee welcome card reads `referrals.mine` only
+  with billing:read in hand (the query refuses without it), the way Home
+  skips its other gated reads — never fired and left to error.
+- **Measured.** `referral_share` (`channel` × `surface`) fires on every share
+  tap — `image` for a saved PNG, `image_share` for one handed to the share
+  sheet; docs/analytics.md.
+
+Deliberately not changed: the terms (a trial store still can't refer; letting
+one refer with its half held until it subscribes is a terms decision, flagged
+for Zaki), and the T2 reward path.
 
 ## Admin
 

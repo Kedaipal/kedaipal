@@ -31,6 +31,7 @@ import { ExceptionRows } from "../components/home/exception-rows";
 import { HomeSkeleton } from "../components/home/home-skeleton";
 import { PlanAheadCard } from "../components/home/plan-ahead-card";
 import { ReferCard } from "../components/home/refer-card";
+import { ReferralWelcomeCard } from "../components/home/referral-welcome-card";
 import { SalesSection } from "../components/home/sales-section";
 import {
 	type ChecklistItem,
@@ -497,6 +498,12 @@ function DashboardHome() {
 			/>
 			{/* Before the next booking fails, not after (86eye9xd4, 6A). */}
 			<LowWalletBanner wallet={deliveries?.wallet ?? null} />
+
+			{/* A REFERRED store, until its first invoice is paid: who invited it
+			    and what starting the plan brings — above the welcome card and
+			    the checklist, the first thing it reads (docs/referrals.md § The
+			    push). Renders nothing for everyone else. */}
+			<ReferralWelcomeCard retailerId={retailer._id} />
 
 			{phase === "new" ? <WelcomeCard slug={retailer.slug} /> : null}
 

@@ -114,6 +114,7 @@ beforeEach(() => {
 		lots: [
 			{
 				_id: "lot1",
+				source: "purchase",
 				credits: 50,
 				remaining: 50,
 				expiresAt: NOW + 300 * DAY,
@@ -157,7 +158,7 @@ describe("CreditLedgerBody — balances", () => {
 	it("reads the balance, the month's grant and the open lots", () => {
 		renderBody();
 		expect(screen.getByText("130 left")).toBeTruthy();
-		expect(screen.getByText(/Plan 80 · bought 50/)).toBeTruthy();
+		expect(screen.getByText(/Plan 80 · extra 50/)).toBeTruthy();
 		expect(screen.getByText(/Oct 2026 · 200 granted/)).toBeTruthy();
 		expect(screen.getByText("50 of 50")).toBeTruthy();
 	});
@@ -197,7 +198,7 @@ describe("CreditLedgerBody — balances", () => {
 		expect(screen.queryByText(/set a custom monthly grant below/)).toBeNull();
 	});
 
-	it("a sponsored store's PRESERVED bought lots are visible to the admin (PR #353 review)", () => {
+	it("a sponsored store's PRESERVED extra-credit lots are visible to the admin (PR #353 review)", () => {
 		// The narrower purge exists to protect exactly these, so an admin
 		// weighing "end this comp" or "purge this" has to be able to SEE them.
 		// Before this they were invisible until the comp was already off —
@@ -208,6 +209,7 @@ describe("CreditLedgerBody — balances", () => {
 			lots: [
 				{
 					_id: "lot9",
+					source: "referral",
 					credits: 200,
 					remaining: 150,
 					expiresAt: NOW + 200 * DAY,
@@ -216,15 +218,19 @@ describe("CreditLedgerBody — balances", () => {
 			unmetered: true,
 		};
 		renderBody(undefined, compedSeller);
-		expect(screen.getByText(/Bought credits held for later/)).toBeTruthy();
-		expect(screen.getByText("150 of 200")).toBeTruthy();
+		expect(screen.getByText(/Extra credits held for later/)).toBeTruthy();
+		expect(screen.getByText(/150 of 200/)).toBeTruthy();
+		// The pot mixes packs with bonuses and grants — a lot says which it is,
+		// and a bonus is never described as paid for.
+		expect(screen.getByText(/referral bonus/)).toBeTruthy();
+		expect(screen.queryByText(/Paid for before/)).toBeNull();
 		expect(screen.getByText(/nothing here is deleted/)).toBeTruthy();
 	});
 
 	it("…and says nothing about lots when there are none", () => {
 		state.account = { view: null, account: null, lots: [], unmetered: true };
 		renderBody(undefined, compedSeller);
-		expect(screen.queryByText(/Bought credits held for later/)).toBeNull();
+		expect(screen.queryByText(/Extra credits held for later/)).toBeNull();
 	});
 
 	it("a SPONSORED store says so too, and says the comp is what to turn off (z8r3fdrph7)", () => {
@@ -307,18 +313,18 @@ describe("CreditLedgerBody — adjust by hand", () => {
 		expect((button as HTMLButtonElement).disabled).toBe(true);
 	});
 
-	it("never offers to take away more bought credits than the store holds", () => {
+	it("never offers to take away more extra credits than the store holds", () => {
 		renderBody();
-		fireEvent.click(screen.getByRole("button", { name: "Bought credits" }));
+		fireEvent.click(screen.getByRole("button", { name: "Extra credits" }));
 		fireEvent.change(screen.getByLabelText("Credits"), {
 			target: { value: "-80" },
 		});
-		expect(screen.getByText(/holds 50 bought credits/)).toBeTruthy();
+		expect(screen.getByText(/holds 50 extra credits/)).toBeTruthy();
 	});
 
 	it("sends bucket, whole amount and note — and names the action by its consequence", async () => {
 		renderBody();
-		fireEvent.click(screen.getByRole("button", { name: "Bought credits" }));
+		fireEvent.click(screen.getByRole("button", { name: "Extra credits" }));
 		fireEvent.change(screen.getByLabelText("Credits"), {
 			target: { value: "50" },
 		});
@@ -326,7 +332,7 @@ describe("CreditLedgerBody — adjust by hand", () => {
 			target: { value: "Goodwill for the outage" },
 		});
 		fireEvent.click(
-			screen.getByRole("button", { name: "Add 50 bought credits" }),
+			screen.getByRole("button", { name: "Add 50 extra credits" }),
 		);
 		expect(state.adjust).toHaveBeenCalledWith({
 			retailerId: "r_lekor",

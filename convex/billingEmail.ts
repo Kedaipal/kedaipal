@@ -25,6 +25,8 @@ import { monthlyCreditGrant } from "./lib/credits";
 import { sendEmail } from "./lib/email";
 import { gatewayPaymentMethodLabel } from "./lib/hitpayBilling";
 import { formatDocDate } from "./lib/pdf/document";
+import { referralHref, referralRewardCredits } from "./lib/referral";
+import { referralReceiptFooter } from "./lib/referralEmailCopy";
 import { HOLD_LABEL } from "./lib/seasonalHold";
 import type { Locale } from "./lib/emailCopy";
 import {
@@ -93,6 +95,8 @@ type InvoiceEmailMeta = {
 	// Kedaipal Credits (T5): what the billed plan gives THIS store a month —
 	// undefined for a hold invoice, which grants nothing.
 	includedCredits: number | undefined;
+	// The store's slug — the receipt's referral footer builds the link from it.
+	slug: string;
 };
 
 /** Loads everything the billing-email action needs in one roundtrip: invoice +
@@ -168,6 +172,7 @@ export const getInvoiceForEmail = internalQuery({
 			crossBorder,
 			payNowUrl: invoice.gatewayPayment?.url,
 			includedCredits,
+			slug: retailer.slug,
 		};
 	},
 });
@@ -664,6 +669,18 @@ export const notifyPaymentReceived = internalAction({
 			planLabel: invoicePlanLabel(meta.plan, meta.billingCycle, meta.kind),
 			totalFormatted: formatMoney(meta.total, meta.currency),
 			dashboardUrl: billingPageUrl(),
+			// A paid PLAN invoice makes the store active, so its referral link
+			// counts from this moment — the one email every paying store gets
+			// every month carries the invitation (docs/referrals.md, the push).
+			// A hold receipt doesn't: a paused store's link is paused too.
+			...(meta.kind === "plan"
+				? {
+						referralFooter: referralReceiptFooter(meta.locale, {
+							link: referralHref(meta.slug),
+							proCredits: referralRewardCredits("pro"),
+						}),
+					}
+				: {}),
 		});
 		try {
 			await sendEmail(meta.notifyEmail, subject, html, text);

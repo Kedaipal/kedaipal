@@ -50,7 +50,30 @@ export type FunnelEvent =
 	// tapped; `placement` names the surface. The counterpart of
 	// `cta_signup_click` now that the demo is the page's primary ask —
 	// without it the flip can't be read in GA4.
-	| "demo_cta";
+	| "demo_cta"
+	// Referral push (28 Oct 2026, docs/referrals.md): a seller shared their
+	// referral link — `channel` = `whatsapp` | `copy_link` | `copy_message` |
+	// `image`, `surface` = `home` | `page`. The card shipped with NO event, so
+	// nobody could tell whether anyone had ever tapped Share; this is the
+	// first half of "did the push work", the second being `store_created`
+	// with a `referral-<slug>` src.
+	| "referral_share";
+
+/** Where a referral share was tapped from, and through what. */
+export type ReferralShareChannel =
+	| "whatsapp"
+	| "copy_link"
+	| "copy_message"
+	| "image"
+	| "image_share";
+export type ReferralShareSurface = "home" | "page";
+
+export function trackReferralShare(
+	channel: ReferralShareChannel,
+	surface: ReferralShareSurface,
+): void {
+	trackEvent("referral_share", { channel, surface });
+}
 
 let gaInitialized = false;
 
