@@ -176,7 +176,7 @@ export function Sidebar({
 						collapsed
 							? "max-h-0 py-0 opacity-0"
 							: stub?.ticket
-								? "max-h-32 pt-4 pb-3 opacity-100"
+								? "max-h-32 pt-3 pb-3 opacity-100"
 								: "max-h-12 py-2 opacity-100",
 						motion,
 					)}

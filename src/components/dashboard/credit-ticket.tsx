@@ -94,10 +94,12 @@ export function CreditTicket({
 	return (
 		<div className="relative">
 			{plan ? (
-				// The card-coloured gap "cuts" the tear where the pill lies on it.
+				// The tear runs right up to the pill's own border. The card-coloured
+				// backing is the pill's exact shape, so a translucent pill (trial,
+				// unclaimed) never shows the teeth through it.
 				<div
 					data-testid="credit-ticket-plan"
-					className="absolute -top-2 left-2 z-10 flex max-w-[calc(100%-1rem)] bg-card px-1"
+					className="absolute -top-1 left-2.5 z-10 flex max-w-[calc(100%-1.25rem)] rounded-full bg-card"
 				>
 					{plan}
 				</div>
