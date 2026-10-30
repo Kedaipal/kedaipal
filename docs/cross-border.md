@@ -21,34 +21,46 @@ The database-backed read lives in [`convex/crossBorder.ts`](../convex/crossBorde
 
 ## Stored vs live: a lane pauses, it is never deleted
 
-`effectiveLanes` / `lanePause` decide at **read time** whether a stored lane is
-taking orders. That way a downgrade or a pricing change pauses it everywhere at
-once, without a settings write, and an upgrade brings it back untouched.
+`effectiveLanes` / `lanePauseFor` decide at **read time** whether a stored lane
+is taking orders. That way a downgrade, a disconnected courier or a pending
+products step pauses it everywhere at once, without a settings write, and the
+lane comes back untouched once the cause clears. **A buyer is never offered a
+country nothing can price.**
 
-| Pause | Why | What the seller sees |
-|---|---|---|
-| `plan` | Not on Pro/Enterprise (`PLAN_FEATURES.crossBorder`) | Pro badge + Upgrade on the switch |
-| `delivery_off` | `offerDelivery === false` | "Turn on delivery" link |
-| `live_pricing` | Domestic pricing is a live courier quote (`live` / legacy `lalamove`) | "Change delivery pricing" shortcut |
+| Pause | Kind | Why | What the seller sees |
+|---|---|---|---|
+| `plan` | store-wide | Not on Pro/Enterprise (`PLAN_FEATURES.crossBorder`) | Pro badge + Upgrade on the switch |
+| `delivery_off` | store-wide | `offerDelivery === false` | "Turn on delivery" link |
+| `awaiting_products` | lane hold | A NEW lane, products not yet confirmed (`lane.awaitingProducts`) | "Almost on" + "Choose what can go" |
+| `courier_unavailable` | lane hold | A `live` lane, and EasyParcel can't quote (`easyparcelQuoteBlock`) | The missing step + its fix (Connect / Add your WhatsApp number / Finish setup) |
 
-A paused lane keeps its price but can't be edited: the server refuses any
-lane save while a pause holds, so the price form is disabled (one `fieldset`)
-with "Saving is off while delivery to … is paused" by the button. The switch
-can always be turned off. Upgrading uses the house `UpgradeLink`, the same
-button whether the lane is off or paused.
+**Home pricing no longer pauses a lane** (Zaki, 30 Oct): a lane always carries
+its own price, so a store on live courier pricing at home delivers abroad at the
+lane's price. The old `live_pricing` pause is gone.
 
-Live courier pricing pauses the lane because the providers behind it are
-domestic. Lalamove takes one `Market` per request. Delyva's API can't be shown to
-price an international route: dev runs on its flat-rate demo account, and the docs
-only show MY→MY. The Delivery pricing page warns **before** a seller saves live
-pricing while a lane is stored.
+A store-wide pause keeps the price but locks it (the server refuses any lane
+save while it holds): the form is one disabled `fieldset` with "Saving is off
+while delivery to … is paused" by the button. A **lane hold never locks the
+price**: switching away from EasyParcel pricing is one way out of it. The switch
+can always be turned off. Upgrading uses the house `UpgradeLink`.
 
-Every sentence that names those couriers goes through `liveQuoteCouriersDeliver`,
-which reads the booking registry: an MY store hears "Lalamove and Delyva", an SG
-store "Lalamove" only, because it can't connect Delyva at all.
+**Turning on is two doors, one switch.** The switch opens one price chooser in
+two halves (the Delivery pricing pattern): *Kedaipal built-in — you set the
+price* (flat, weight, free) and *Partner integration* (**Priced live by
+EasyParcel**). Saving stores the lane HELD (`awaitingProducts: true`) and opens
+the products step; confirming it (`setDomesticOnly({ confirmLane })`) clears the
+hold in the same transaction as the choices. A live lane saved before EasyParcel
+is ready is held as `courier_unavailable` and **goes live by itself** once
+EasyParcel can quote. No callback, nothing to remember. On a MY store, the
+**first EasyParcel connect opens the lane** (live, held for products):
+EasyParcel only carries overseas orders there, so connecting it means
+overseas. It's skipped if a lane exists, the plan or delivery is off, or
+products need weights. Never on an SG store, where EasyParcel also carries
+home parcels.
 
-A lane pointing at the store's own country (left behind by a country switch) is
-filtered out of the live lanes. It stays stored and has no effect.
+`domesticOnlyCouriersDeliver` names the couriers that ONLY deliver at home
+(never EasyParcel, which also goes abroad), so the help line can't claim an SG
+store's overseas courier stays home.
 
 ## Pricing: the buyer always sees a price
 
@@ -71,18 +83,58 @@ reads "Delivery to Singapore is paused", with the reason and the kept price,
 never that its price applies. The warning by the save button covers what
 saving live **would** change, so it shows only while the lane is still live.
 
-There is **no live courier quote** on a lane. EasyParcel prices at dispatch
-only. Checkout's live quotes come from Lalamove/Delyva, which are domestic, so a
-lane is always seller-priced. Pricing a buyer from EasyParcel at checkout would
-be new work (and would need its own fallback).
+**`live`** (z8r3fdr5yy follow-up): **priced live by EasyParcel** at checkout,
+optional free-above. It's the courier that carries the parcel, so the buyer pays
+what the default booking costs:
+
+- `delivery.quote` answers `{ kind: "live" }` for the cart, and checkout calls
+  `liveQuote.quoteForCheckout` with the **destination country**. EasyParcel is
+  the only bidder abroad (`getLiveQuoteContext`).
+- **The box is picked from the cart's weight** (`boxForWeight`: the smallest box
+  whose size weight, L×W×H ÷ 5000, covers it. Small ≤ 0.6 kg, Medium ≤ 2.25 kg,
+  else Large). The dispatch card pre-selects the same box, and the seller can
+  change it at booking. The guide (`ParcelBoxGuide`) shows on the live option.
+- **The service priced is the dispatch card's pre-selection** (`checkoutRate` =
+  `defaultRateId`, moved to `convex/lib/easyparcelRates.ts` so there's one
+  author).
+- **No currency conversion.** The buyer always pays in the store's currency, and
+  a live EasyParcel account quotes in it (connect refuses a live account from the
+  other country). An account in another currency (the MYR sandbox on an SG
+  store) holds the lane as `wrong_currency` instead of offering a price it
+  can't charge.
+- **Bound to the postcode, not a pin**: an overseas address is often typed by
+  hand. The held `deliveryQuotes` row carries `postcode` instead of
+  coordinates, and redemption refuses a different postcode. So checkout never
+  asks an overseas buyer for a map pin: manual entry always stays open, the
+  quote fires only once the postal code is complete (`postcodeRule` — 5 digits
+  MY, 6 SG, so typing "46…" spends no courier quote), and until then the
+  block reason is `no_postcode` — "Add your postal code so we can calculate
+  your delivery fee", by the fee line and by Place order. The order door says
+  the same: a live-lane order with no matching quote (stale tab, expired or
+  other postcode) is refused with "re-enter your postal code to get a fresh
+  price", never the domestic "pick from the suggestions".
+- **One currency fallback**: the lane's readiness (`wrong_currency`) and the
+  checkout quote's currency filter both read `storeCurrencyOf` (saved
+  currency, else the country's), so they can't disagree on a store with no
+  saved currency.
+- Arming one runs `assertCatalogueWeighed(…, "courier")`, and `weightPricingOf`
+  answers `courier` for a live lane (the Delyva posture).
+
+## Delivery at a glance
+
+The top of Settings → Fulfilment (`delivery-at-a-glance.tsx`) has one row per
+kind of order (*Within Singapore*, *To Malaysia*, *Pickup*), always in the
+store's own countries. Each row says what the buyer pays and who carries it,
+and links to its settings. With no lane, the overseas row offers both doors
+(`?start=own` / `?start=live`); while a lane is held or paused, it says why.
 
 ## The doors
 
 | Door | Rule |
 |---|---|
-| `retailers.updateSettings({ crossBorderLanes })` | Pro, delivery on, own pricing, not the store's own country; arming a weight lane runs `assertCatalogueWeighed`. `null` / `[]` always clears. |
-| `delivery.quote({ country })` | Abroad: `no_lane`, `home_only` (the blocking products **named**), or the lane's fee. Domestic: unchanged. |
-| `orders.create` | `deliveryAddress.country` ≠ store country → `crossBorderLaneForOrder` (live lane or refuse) → address judged against the **destination**'s format → every line must `shipsAbroad` (refusal names them; the order is **never split**) → priced by the lane. Every new order's address is stamped with its country. |
+| `retailers.updateSettings({ crossBorderLanes })` | Pro, delivery on, not the store's own country; arming a weight or live lane runs `assertCatalogueWeighed`. A NEW lane is stored `awaitingProducts`. `null` / `[]` always clears. |
+| `delivery.quote({ country })` | Abroad: `no_lane`, `home_only` (the blocking products **named**), the lane's fee, or `live` (fetch EasyParcel's quote). Domestic: unchanged (EasyParcel bids on SG home deliveries too). |
+| `orders.create` | `deliveryAddress.country` ≠ store country → `crossBorderLaneForOrder` (live lane or refuse) → address judged against the **destination**'s format → every line must `shipsAbroad` (refusal names them; the order is **never split**) → priced by the lane; a `live` lane redeems the held EasyParcel quote (`loadCheckoutDeliveryQuote`, postcode-bound) or refuses. Every new order's address is stamped with its country. |
 | `orders.updateDeliveryAddress` | The order's country is fixed at checkout. An edit moves the address within it and re-prices on the lane; it refuses if the lane has closed. |
 | `orderClaims.commit` | Claim links (a counter sale finished on the buyer's phone) deliver within the store's country only. |
 
@@ -180,8 +232,10 @@ becomes a verifiable checklist row (`easyparcel_pickup`) rather than being wiped
 
 ## Known gaps / follow-ups
 
-- **Live courier quote on a lane** (EasyParcel at checkout) is unbuilt. Lanes are
-  seller-priced.
+- **EasyParcel live pricing on an SG store** can only be exercised with an SGD
+  EasyParcel account: the MYR sandbox holds the lane as `wrong_currency`.
+- The checkout quotes the dispatch card's DEFAULT service; a seller who books a
+  pricier one absorbs the difference ("Buyer paid X" is shown beside every price).
 - **Delyva international**: its API support is unconfirmed (Zaki is asking
   Delyva). Turning it on is one cell in `COURIER_DESTINATIONS` once support confirms.
 - **EasyParcel SG sandbox**: the only sandbox available is the MY login's.

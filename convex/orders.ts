@@ -33,7 +33,11 @@ import {
 	isChoosablePickupPoint,
 	pickupChoiceRefusal,
 } from "./lib/pickupChoice";
-import { assertValidAddress, formatPickupAddress } from "./lib/address";
+import {
+	assertValidAddress,
+	formatPickupAddress,
+	postcodeRule,
+} from "./lib/address";
 import {
 	isStoredImageRenderable,
 	UNRENDERABLE_PROOF_MESSAGE,
@@ -212,6 +216,7 @@ import {
 	type CrossBorderLane,
 	countryName,
 	laneFor,
+	laneNeedsLiveQuote,
 	resolveCrossBorderQuote,
 	shipsAbroad,
 } from "./lib/crossBorder";
@@ -365,7 +370,13 @@ export function resolveDeliveryForOrder(
 	pending: boolean;
 	pendingReason?: DeliveryQuoteReason;
 } {
-	if (crossBorder) {
+	// A live lane (z8r3fdr5yy) is priced exactly like a live home delivery —
+	// by the held EasyParcel quote for this cart — so it takes the live path
+	// below, with the live config standing in for the domestic one.
+	const liveLane =
+		crossBorder !== undefined &&
+		laneNeedsLiveQuote(crossBorder.lane, subtotal);
+	if (crossBorder && !liveLane) {
 		const quote = resolveCrossBorderQuote({
 			pricing: crossBorder.lane.pricing,
 			subtotal,
@@ -390,12 +401,15 @@ export function resolveDeliveryForOrder(
 				}
 			: { snapshot: undefined, pending: false };
 	}
-	const config = retailer.deliveryConfig as DeliveryConfig | undefined;
+	const config: DeliveryConfig | undefined = liveLane
+		? { mode: "live", onUnquotable: "block" }
+		: (retailer.deliveryConfig as DeliveryConfig | undefined);
 	// Country/mode mismatch (SG-lite belt-and-braces — updateSettings refuses
 	// storing this): resolving would either throw a nonsense state error or
 	// silently strand the order fee-pending, so refuse with the same
 	// seller-side framing the checkout preview shows for this store.
 	if (
+		!liveLane &&
 		config &&
 		!deliveryModeAllowed(retailer.country ?? DEFAULT_COUNTRY, config.mode)
 	) {
@@ -423,6 +437,16 @@ export function resolveDeliveryForOrder(
 		liveQuote,
 	});
 	if (quote.kind === "blocked") {
+		// A live lane is quoted from the postal code and its checkout has no map,
+		// so "pick from the suggestions" would point at nothing. Reached only by
+		// a stale tab, an expired quote or a different postcode (PR #435 review).
+		if (liveLane) {
+			const where = countryName(crossBorder.lane.country);
+			const code = postcodeRule(crossBorder.lane.country).label.toLowerCase();
+			throw new ConvexError(
+				`We couldn't confirm the delivery price to ${where} for this address — re-enter your ${code} to get a fresh price, then try again.`,
+			);
+		}
 		throw new ConvexError(blockedDeliveryMessage(quote.reason, address?.state));
 	}
 	if (quote.kind === "pending") {
@@ -502,11 +526,17 @@ export function homeOnlyRefusal(
  * (a cheap-nearby-pin quote can't be replayed against a far delivery
  * address; ~11 m tolerance absorbs float noise, not geography).
  */
+function normalizePostcode(raw: string | undefined): string {
+	return (raw ?? "").replace(/\s/g, "").toUpperCase();
+}
+
 export async function loadCheckoutDeliveryQuote(
 	ctx: MutationCtx,
 	retailerId: Id<"retailers">,
 	quoteId: Id<"deliveryQuotes"> | undefined,
-	address: { latitude?: number; longitude?: number } | undefined,
+	address:
+		| { latitude?: number; longitude?: number; postcode?: string }
+		| undefined,
 	/** The ORDER's line items, for cart-bound rows (PR #253 review): a
 	 * provider-aware quote priced a specific cart's weight, so redeeming it
 	 * against different lines would let a light quote pay for a heavy cart.
@@ -520,11 +550,21 @@ export async function loadCheckoutDeliveryQuote(
 	if (row.lines !== undefined && !sameQuotedLines(row.lines, orderLines ?? []))
 		return undefined;
 	const COORD_TOLERANCE = 1e-4; // ≈11 m
-	if (
-		address?.latitude === undefined ||
-		address.longitude === undefined ||
-		Math.abs(address.latitude - row.latitude) > COORD_TOLERANCE ||
-		Math.abs(address.longitude - row.longitude) > COORD_TOLERANCE
+	if (row.latitude !== undefined && row.longitude !== undefined) {
+		if (
+			address?.latitude === undefined ||
+			address.longitude === undefined ||
+			Math.abs(address.latitude - row.latitude) > COORD_TOLERANCE ||
+			Math.abs(address.longitude - row.longitude) > COORD_TOLERANCE
+		) {
+			return undefined;
+		}
+	} else if (
+		// A postcode-priced lane quote (z8r3fdr5yy): the order must go to the
+		// postcode it was priced for. Never neither — no pin AND no postcode
+		// redeems nothing.
+		row.postcode === undefined ||
+		normalizePostcode(address?.postcode) !== normalizePostcode(row.postcode)
 	) {
 		return undefined;
 	}
@@ -1826,11 +1866,12 @@ export const create = mutation({
 		let deliveryFeePendingReason: Doc<"orders">["deliveryFeePendingReason"];
 		if (effectiveDeliveryMethod === "delivery") {
 			// itemSubtotal is hoisted above (shared with the min-order rules).
-			// A cross-border order is priced by its lane alone — a live courier
-			// quote (domestic by definition) never applies to it.
-			const liveQuote = crossBorderLane
-				? undefined
-				: await loadCheckoutDeliveryQuote(
+			// A cross-border order is priced by its lane — which reads a held
+			// quote only when the lane is EasyParcel-priced (z8r3fdr5yy).
+			const liveQuote =
+				crossBorderLane && !laneNeedsLiveQuote(crossBorderLane, itemSubtotal)
+					? undefined
+					: await loadCheckoutDeliveryQuote(
 						ctx,
 						retailer._id,
 						args.deliveryQuoteId,
@@ -5423,9 +5464,10 @@ export const updateDeliveryAddress = mutation({
 		// drop the buyer onto a seller-calculates path. Pending-only gate above
 		// means no payment has been asked for yet, so the total is still safe to
 		// move.
-		const liveQuote = crossBorderLane
-			? undefined
-			: await loadCheckoutDeliveryQuote(
+		const liveQuote =
+			crossBorderLane && !laneNeedsLiveQuote(crossBorderLane, order.subtotal)
+				? undefined
+				: await loadCheckoutDeliveryQuote(
 					ctx,
 					order.retailerId,
 					deliveryQuoteId,

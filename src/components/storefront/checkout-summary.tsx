@@ -358,7 +358,8 @@ export type CheckoutQuoteView =
 	| { kind: "calculating" }
 	// Cross-border (z8r3fdr5yy): checkout folds the server's `home_only` /
 	// `no_lane` answers into a block, worded by the caller's `blockedCopy`.
-	| { kind: "blocked"; reason: "home_only" | "no_lane" }
+	// An overseas live quote waits on a complete postal code (`no_postcode`).
+	| { kind: "blocked"; reason: "home_only" | "no_lane" | "no_postcode" }
 	| undefined;
 
 interface CheckoutTotalsProps {

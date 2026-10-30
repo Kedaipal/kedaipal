@@ -10,6 +10,17 @@ import {
 // every saved lane a draft that round-trips.
 
 describe("draft ⇄ lane", () => {
+	test("an EasyParcel-priced lane round-trips, threshold included", () => {
+		const lane = {
+			country: "SG" as const,
+			pricing: { kind: "live" as const, freeAbove: 30000 },
+		};
+		expect(laneFromDraft(draftFromLane(lane), "SG")).toEqual({
+			ok: true,
+			lane,
+		});
+	});
+
 	test("flat round-trips, threshold included", () => {
 		const lane = {
 			country: "SG" as const,
@@ -70,24 +81,28 @@ describe("what to fix, in a sentence", () => {
 });
 
 describe("the switch's reasons", () => {
-	test("live pricing names both countries and the way out", () => {
-		expect(laneBlockCopy("live_pricing", "MY", "SG")).toMatch(
-			/Lalamove and Delyva deliver within Malaysia only.*own delivery price to deliver to Singapore/,
+	test("an EasyParcel-priced lane says what EasyParcel is missing, and that it comes back by itself", () => {
+		expect(laneBlockCopy("courier_unavailable", "SG", "not_connected")).toMatch(
+			/priced live by EasyParcel, and EasyParcel isn't connected yet.*once EasyParcel can quote/,
 		);
+		expect(
+			laneBlockCopy("courier_unavailable", "SG", "no_sender_phone"),
+		).toMatch(/no WhatsApp number/);
+		expect(
+			laneBlockCopy("courier_unavailable", "MY", "wrong_currency"),
+		).toMatch(/another currency/);
 	});
 
-	test("an SG store is never told about Delyva, which it can't connect", () => {
-		const copy = laneBlockCopy("live_pricing", "SG", "MY");
-		expect(copy).toMatch(/Lalamove delivers within Singapore only/);
-		expect(copy).not.toMatch(/Delyva/);
-	});
-});
-
-describe("delivery off reads right whether the lane is on or off", () => {
-	test("no 'first' — the paused panel shows it with the switch already on", () => {
-		const copy = laneBlockCopy("delivery_off", "SG", "MY");
+	test("delivery off reads right whether the lane is on or off — no 'first'", () => {
+		const copy = laneBlockCopy("delivery_off", "MY");
 		expect(copy).toMatch(/Turn delivery on to deliver there\.$/);
 		expect(copy).not.toMatch(/first/);
+	});
+
+	test("a new lane waiting on products says it's almost on", () => {
+		expect(laneBlockCopy("awaiting_products", "SG")).toMatch(
+			/^Almost on — choose which products can go to Singapore/,
+		);
 	});
 });
 

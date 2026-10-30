@@ -12,8 +12,8 @@ import {
 	type CrossBorderPricing,
 	countryName,
 	type LanePause,
-	liveQuoteCouriersDeliver,
 } from "../../convex/lib/crossBorder";
+import type { EasyparcelQuoteBlock } from "../../convex/lib/easyparcelArming";
 import { parsePriceInput } from "./format";
 
 export type LanePriceKind = CrossBorderPricing["kind"];
@@ -48,6 +48,16 @@ export function draftFromLane(lane: CrossBorderLane | undefined): LaneDraft {
 			fee: pricing ? toMajor(pricing.fee) : "",
 			freeAbove:
 				pricing?.freeAbove !== undefined ? toMajor(pricing.freeAbove) : "",
+			bands: blankBands(),
+			freeAcknowledged: false,
+		};
+	}
+	if (pricing.kind === "live") {
+		return {
+			kind: "live",
+			fee: "",
+			freeAbove:
+				pricing.freeAbove !== undefined ? toMajor(pricing.freeAbove) : "",
 			bands: blankBands(),
 			freeAcknowledged: false,
 		};
@@ -105,6 +115,12 @@ export function laneFromDraft(
 		return {
 			ok: false,
 			error: "The free-delivery threshold isn't a valid amount.",
+		};
+	}
+	if (draft.kind === "live") {
+		return {
+			ok: true,
+			lane: { country, pricing: { kind: "live", freeAbove: freeAbove.minor } },
 		};
 	}
 	if (draft.kind === "flat") {
@@ -175,16 +191,37 @@ export function laneFromDraft(
  * storefront and the order doors. */
 export function laneBlockCopy(
 	block: LanePause,
-	storeCountry: Country,
 	destination: Country,
+	easyparcelBlock?: EasyparcelQuoteBlock | null,
 ): string {
+	const where = countryName(destination);
 	switch (block) {
 		case "plan":
-			return `Delivering to ${countryName(destination)} is part of the Pro plan.`;
+			return `Delivering to ${where} is part of the Pro plan.`;
 		case "delivery_off":
-			return `Delivery is switched off for your store, so there's nothing to send to ${countryName(destination)}. Turn delivery on to deliver there.`;
-		case "live_pricing":
-			return `Your delivery is priced live by courier, and ${liveQuoteCouriersDeliver(storeCountry)} within ${countryName(storeCountry)} only. Switch to your own delivery price to deliver to ${countryName(destination)}.`;
+			return `Delivery is switched off for your store, so there's nothing to send to ${where}. Turn delivery on to deliver there.`;
+		case "awaiting_products":
+			return `Almost on — choose which products can go to ${where}. Buyers see it the moment you're done.`;
+		case "courier_unavailable":
+			return `Orders to ${where} are priced live by EasyParcel, and ${easyparcelWhy(easyparcelBlock)}. Buyers see it again once EasyParcel can quote.`;
+	}
+}
+
+/** Why EasyParcel can't quote, as the middle of a sentence. */
+function easyparcelWhy(block: EasyparcelQuoteBlock | null | undefined): string {
+	switch (block) {
+		case "reconnect_needed":
+			return "your EasyParcel account needs reconnecting";
+		case "disabled":
+			return "EasyParcel booking is switched off";
+		case "no_pickup_address":
+			return "EasyParcel has no pickup address yet";
+		case "no_sender_phone":
+			return "your store has no WhatsApp number for EasyParcel to give couriers";
+		case "wrong_currency":
+			return "the connected EasyParcel account prices in another currency";
+		default:
+			return "EasyParcel isn't connected yet";
 	}
 }
 

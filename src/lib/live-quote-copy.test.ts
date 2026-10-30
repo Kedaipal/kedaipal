@@ -68,4 +68,18 @@ describe("liveQuoteAddressHint", () => {
 			"Collection is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be collected from.",
 		);
 	});
+
+	it("an overseas address is priced from its postal code, not a suggestion (z8r3fdr5yy)", () => {
+		expect(
+			liveQuoteAddressHint({
+				collectsFromCustomer: false,
+				riders: false,
+				couriers: true,
+				selfCollectAvailable: true,
+				overseasPostcodeLabel: "postal code",
+			}),
+		).toBe(
+			"Delivery is by courier, so the fee depends on your address — you'll see it here once you've entered your postal code.",
+		);
+	});
 });

@@ -4,13 +4,15 @@ import {
 	crossBorderPricingSummary,
 	deliversToLabel,
 	domesticReason,
+	domesticOnlyCouriersDeliver,
 	effectiveLanes,
-	lanePause,
 	laneCountriesFor,
+	laneHold,
+	laneNeedsLiveQuote,
+	lanePause,
+	lanePauseFor,
 	liveQuoteCourierNames,
-	liveQuoteCouriersDeliver,
 	overseasFeeLabel,
-	pricingModeCarriesLanes,
 	resolveCrossBorderQuote,
 	sanitizeCrossBorderLanes,
 	shipsAbroad,
@@ -25,8 +27,9 @@ const LANE = { country: "SG" as const, pricing: { kind: "flat" as const, fee: 25
 const OPEN = {
 	planAllows: true,
 	offerDelivery: true,
-	deliveryConfig: { mode: "flat" as const, fee: 800 },
+	easyparcelQuotes: true,
 };
+const LIVE_LANE = { country: "SG" as const, pricing: { kind: "live" as const } };
 
 describe("which lanes are live", () => {
 	test("a lane is only ever to ANOTHER country", () => {
@@ -34,21 +37,15 @@ describe("which lanes are live", () => {
 		expect(laneCountriesFor("SG")).toEqual(["MY"]);
 	});
 
-	test("live with the plan, delivery on and the store's own pricing", () => {
+	test("live with the plan and delivery on — whatever home delivery is priced by", () => {
 		expect(
 			effectiveLanes({ ...OPEN, lanes: [LANE], storeCountry: "MY" }),
 		).toEqual([LANE]);
 	});
 
-	test("paused — never deleted — by plan, delivery off, or live courier pricing", () => {
+	test("paused — never deleted — by plan or delivery off; home live pricing no longer pauses it", () => {
 		expect(lanePause({ ...OPEN, planAllows: false })).toBe("plan");
 		expect(lanePause({ ...OPEN, offerDelivery: false })).toBe("delivery_off");
-		expect(
-			lanePause({
-				...OPEN,
-				deliveryConfig: { mode: "live", onUnquotable: "block" },
-			}),
-		).toBe("live_pricing");
 		expect(lanePause(OPEN)).toBeNull();
 		for (const facts of [
 			{ ...OPEN, planAllows: false },
@@ -60,20 +57,64 @@ describe("which lanes are live", () => {
 		}
 	});
 
-	test("free / flat / distance / weight carry a lane; live and legacy lalamove don't", () => {
-		expect(pricingModeCarriesLanes(undefined)).toBe(true);
-		expect(pricingModeCarriesLanes({ mode: "flat", fee: 800 })).toBe(true);
+	test("a new lane is HELD until its products are chosen — never offered before (Zaki, 30 Oct)", () => {
+		const awaiting = { ...LANE, awaitingProducts: true };
+		expect(laneHold(awaiting, OPEN)).toBe("awaiting_products");
 		expect(
-			pricingModeCarriesLanes({ mode: "lalamove", onUnquotable: "block" }),
-		).toBe(false);
+			effectiveLanes({ ...OPEN, lanes: [awaiting], storeCountry: "MY" }),
+		).toEqual([]);
+		// Absent = reviewed: every lane saved before the field existed.
+		expect(laneHold(LANE, OPEN)).toBeNull();
+	});
+
+	test("an EasyParcel-priced lane is held while EasyParcel can't quote, and lives the moment it can", () => {
+		const facts = { ...OPEN, easyparcelQuotes: false };
+		expect(laneHold(LIVE_LANE, facts)).toBe("courier_unavailable");
+		expect(
+			effectiveLanes({ ...facts, lanes: [LIVE_LANE], storeCountry: "MY" }),
+		).toEqual([]);
+		// A seller-priced lane never waits on EasyParcel.
+		expect(laneHold(LANE, facts)).toBeNull();
+		expect(
+			effectiveLanes({ ...OPEN, lanes: [LIVE_LANE], storeCountry: "MY" }),
+		).toEqual([LIVE_LANE]);
+		// The store-wide pause outranks the lane's own hold.
+		expect(
+			lanePauseFor({ ...facts, planAllows: false, lane: LIVE_LANE }),
+		).toBe("plan");
+		expect(lanePauseFor({ ...facts, lane: LIVE_LANE })).toBe(
+			"courier_unavailable",
+		);
+	});
+
+	test("a live lane asks for a quote until the cart earns its free-above", () => {
+		const withFree = {
+			...LIVE_LANE,
+			pricing: { kind: "live" as const, freeAbove: 30000 },
+		};
+		expect(laneNeedsLiveQuote(withFree, 29999)).toBe(true);
+		expect(laneNeedsLiveQuote(withFree, 30000)).toBe(false);
+		expect(laneNeedsLiveQuote(LANE, 0)).toBe(false);
+		// Reaching the pure resolver without a quote refuses, never invents.
+		expect(
+			resolveCrossBorderQuote({
+				pricing: { kind: "live" },
+				subtotal: 0,
+				country: "SG",
+			}),
+		).toEqual({ kind: "blocked", reason: "unquotable" });
 	});
 
 	test("the live couriers named are the ones the store's country can connect", () => {
-		// Derived from the booking registry, so SG never hears "Delyva".
+		// Derived from the booking registry: SG never hears "Delyva", and
+		// EasyParcel bids at home only where it carries home parcels (SG).
 		expect(liveQuoteCourierNames("MY")).toEqual(["Lalamove", "Delyva"]);
-		expect(liveQuoteCourierNames("SG")).toEqual(["Lalamove"]);
-		expect(liveQuoteCouriersDeliver("MY")).toBe("Lalamove and Delyva deliver");
-		expect(liveQuoteCouriersDeliver("SG")).toBe("Lalamove delivers");
+		expect(liveQuoteCourierNames("SG")).toEqual(["Lalamove", "EasyParcel"]);
+		// "…within X only" never names EasyParcel, which also goes abroad.
+		expect(domesticOnlyCouriersDeliver("MY")).toBe(
+			"Lalamove and Delyva deliver",
+		);
+		expect(domesticOnlyCouriersDeliver("SG")).toBe("Lalamove delivers");
 	});
 
 	test("a store that switched country can't deliver 'abroad' to itself", () => {
@@ -167,6 +208,9 @@ describe("pricing a cross-border order", () => {
 		expect(
 			crossBorderPricingSummary({ kind: "flat", fee: 2500 }, money),
 		).toBe("RM25.00 per order");
+		expect(crossBorderPricingSummary({ kind: "live" }, money)).toBe(
+			"Priced live by EasyParcel",
+		);
 		expect(crossBorderPricingSummary({ kind: "free" }, money)).toBe(
 			"Free — you cover the courier",
 		);

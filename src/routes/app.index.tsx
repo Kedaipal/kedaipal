@@ -16,7 +16,6 @@ import {
 import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Country } from "../../convex/lib/country";
-import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { todayMytMidnight } from "../../convex/lib/fulfilmentDate";
 import { CreditMeter } from "../components/credits/credit-meter";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
@@ -190,7 +189,7 @@ function DashboardHome() {
 	if (products === undefined) return <HomeSkeleton />;
 
 	const storefrontUrl = buildStorefrontUrl(retailer.slug);
-	const currency = retailer.currency ?? DEFAULT_CURRENCY;
+	const currency = retailer.currency;
 
 	function stampShare() {
 		void markLinkShared().catch(() => {

@@ -2694,8 +2694,12 @@ export default defineSchema({
 		// Destination coords the quote priced — orders.create verifies the order's
 		// delivery address matches (a quote for a near/cheap pin can't be replayed
 		// against a far delivery address).
-		latitude: v.number(),
-		longitude: v.number(),
+		// The buyer's pin — the replay control for a pin-priced quote. A lane
+		// quote EasyParcel priced on the POSTCODE (z8r3fdr5yy: an overseas
+		// address is often typed, with no pin) carries the postcode instead.
+		latitude: v.optional(v.number()),
+		longitude: v.optional(v.number()),
+		postcode: v.optional(v.string()),
 		quotedAt: v.number(),
 		// The cart was quoted at the one-kilo floor (`liveQuoteWeightFacts`) and
 		// how many of its lines had no product weight — copied onto the order's

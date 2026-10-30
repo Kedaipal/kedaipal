@@ -115,6 +115,7 @@ import {
 	courierBookingGlance,
 	easyparcelBookingOn,
 } from "./courier-booking-section";
+import { DeliveryAtAGlance } from "./delivery-at-a-glance";
 import type { BusinessAddress } from "./delivery-pricing";
 import { DespatchLabelCard } from "./despatch-label-card";
 import { PickupLocationEditDialog } from "./pickup-location-edit-dialog";
@@ -338,7 +339,6 @@ export function FulfilmentTab({
 	const overseasPause = lanePause({
 		planAllows: hasFeature(subscription, "crossBorder"),
 		offerDelivery,
-		deliveryConfig,
 	});
 	const overseasValue = !overseasLane ? (
 		overseasPause === "plan" ? (
@@ -353,6 +353,11 @@ export function FulfilmentTab({
 			formatPrice(minor, currency),
 		)
 	);
+	// The lane's full state (holds included) and how much of the catalogue
+	// goes — the server's read, for the Delivery-at-a-glance card.
+	const laneOverview = useQuery(
+		convexQuery(api.crossBorder.settingsOverview, { retailerId }),
+	).data;
 	const courierBooking = courierBookingGlance({
 		riderBookingAvailable: riderBookingAllowed(country),
 		lalamoveArmed: deliveryBooking?.enabled === true,
@@ -584,6 +589,42 @@ export function FulfilmentTab({
 	// Pickup, Event venues) and `xl:order-none` hands the order back to them.
 	return (
 		<div className="flex flex-col gap-6 pt-2 xl:grid xl:grid-cols-2 xl:items-start">
+			{/* First, and full width: which price and which courier apply to
+			    which orders (Zaki, 30 Oct) — the summary the cards below
+			    each own a part of. */}
+			<div className="order-first min-w-0 xl:col-span-2">
+				<DeliveryAtAGlance
+					country={country}
+					offerDelivery={offerDelivery}
+					homePricing={pricing}
+					couriers={{
+						lalamove: deliveryBooking?.enabled === true,
+						delyva:
+							delyva?.countryAllowed !== false &&
+							delyva?.connected === true &&
+							delyva.enabled === true,
+						easyparcelAtHome:
+							easyparcel?.destinations === "both" &&
+							easyparcelBookingOn(easyparcel),
+						easyparcelReady: easyparcelBookingOn(easyparcel),
+					}}
+					destination={overseasCountry}
+					lane={overseasLane}
+					lanePause={laneOverview?.lanes.pause ?? overseasPause}
+					easyparcelBlock={laneOverview?.lanes.easyparcelBlock}
+					productsAbroad={
+						laneOverview
+							? {
+									going: laneOverview.products.shipsAbroad,
+									total: laneOverview.products.total,
+								}
+							: undefined
+					}
+					offerSelfCollect={offerSelfCollect}
+					activePickupPoints={active.length}
+					money={(minor) => formatPrice(minor, currency)}
+				/>
+			</div>
 			<div className="contents xl:flex xl:min-w-0 xl:flex-col xl:gap-6">
 				<div className="order-3 min-w-0 xl:order-none">
 					<Card

@@ -299,12 +299,10 @@ import {
 import { storeLanes } from "./crossBorder";
 import {
 	type CrossBorderLane,
-	countryName,
 	crossBorderLanesValidator,
-	pricingModeCarriesLanes,
 	sanitizeCrossBorderLanes,
 } from "./lib/crossBorder";
-import { delyvaBookingArmed, storeBooksCouriers } from "./lib/courierBooking";
+import { storeBooksCouriers } from "./lib/courierBooking";
 import { loadEasyparcelArming } from "./lib/easyparcelArming";
 import { assertCatalogueWeighed } from "./lib/parcelWeights";
 import { type WeightPricing, weightPricingOf } from "./lib/weightPricing";
@@ -339,13 +337,13 @@ import { ensureCreditAccount } from "./credits";
 import { insertReferral, resolveSignupReferrer } from "./referrals";
 import {
 	assertSupportedCurrency,
-	DEFAULT_CURRENCY,
 	type SupportedCurrency,
 } from "./lib/currency";
 import {
 	type Country,
 	COUNTRY_CURRENCY,
 	DEFAULT_COUNTRY,
+	storeCurrencyOf,
 } from "./lib/country";
 import {
 	adminUserIds,
@@ -1238,7 +1236,7 @@ async function buildRetailerPublic(
 		logoUrl,
 		coverImageStorageId: row.coverImageStorageId,
 		coverImageUrl,
-		currency: (row.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
+		currency: storeCurrencyOf(row),
 		country: row.country ?? DEFAULT_COUNTRY,
 		locale: row.locale ?? DEFAULT_LOCALE,
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
@@ -1252,7 +1250,11 @@ async function buildRetailerPublic(
 		businessAddress: row.businessAddress,
 		businessIdentity: row.businessIdentity,
 		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
-		weightPricing: weightPricingOf(row) ?? undefined,
+		weightPricing:
+			weightPricingOf({
+				...row,
+				easyparcel: await loadEasyparcelArming(ctx, row._id),
+			}) ?? undefined,
 		crossBorderLanes: row.crossBorderLanes as CrossBorderLane[] | undefined,
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
@@ -1433,8 +1435,7 @@ export const getRetailerBySlug = query({
 					logoUrl,
 					coverImageStorageId: active.coverImageStorageId,
 					coverImageUrl,
-					currency:
-						(active.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
+					currency: storeCurrencyOf(active),
 					country: active.country ?? DEFAULT_COUNTRY,
 					locale: active.locale ?? DEFAULT_LOCALE,
 					messageTemplates: active.messageTemplates as
@@ -3173,8 +3174,14 @@ export const updateSettings = mutation({
 				if (
 					clean.mode === "live" &&
 					storedMode !== "live" &&
-					delyvaBookingArmed(retailer)
+					weightPricingOf({
+						...retailer,
+						deliveryConfig: clean,
+						crossBorderLanes: undefined,
+						easyparcel: await loadEasyparcelArming(ctx, retailer._id),
+					}) === "courier"
 				) {
+					// Delyva, or EasyParcel on an SG store — both price by weight.
 					await assertCatalogueWeighed(ctx, retailer._id, "courier");
 				}
 				if (clean.mode === "lalamove") {
@@ -3222,9 +3229,10 @@ export const updateSettings = mutation({
 				if (!access.actingAsAdmin) {
 					await assertPlanFeature(ctx, retailer._id, "crossBorder");
 				}
-				// The same two conditions `lanePause` reads, judged on the state
+				// The store-wide conditions `lanePause` reads, judged on the state
 				// this save lands in, so a lane can never be stored already paused
-				// by something the seller is changing in the same breath.
+				// by something the seller is changing in the same breath. Home
+				// pricing no longer matters (Zaki, 30 Oct): a lane carries its own.
 				const effectiveOfferDelivery =
 					args.offerDelivery !== undefined
 						? args.offerDelivery
@@ -3234,30 +3242,32 @@ export const updateSettings = mutation({
 						"Turn on delivery first — overseas delivery is a delivery option.",
 					);
 				}
-				const effectiveConfig =
-					args.deliveryConfig !== undefined
-						? patch.deliveryConfig
-						: (retailer.deliveryConfig as DeliveryConfig | undefined);
-				if (!pricingModeCarriesLanes(effectiveConfig)) {
-					throw new ConvexError(
-						`Live courier prices only cover deliveries within ${countryName(effectiveCountry)}. Switch Delivery pricing to your own price first.`,
-					);
-				}
-				// A weight-banded lane refuses an unweighed cart, so arming it
-				// refuses while buyable products have no weight — the domestic
-				// rate card's rule (23 Oct 2026). Only the SWITCH is gated.
+				// A weight-banded lane refuses an unweighed cart, and an EasyParcel
+				// live lane prices by weight — so arming either refuses while
+				// buyable products have no weight (the 23 Oct rule, Delyva's
+				// posture). Only the SWITCH into one is gated.
 				const storedLanes = retailer.crossBorderLanes as
 					| CrossBorderLane[]
 					| undefined;
-				const wasWeighed =
-					storedLanes?.some((lane) => lane.pricing.kind === "weight") ?? false;
-				if (
-					!wasWeighed &&
-					clean.some((lane) => lane.pricing.kind === "weight")
-				) {
+				const weighs = (lanes: CrossBorderLane[] | undefined, kind: string) =>
+					lanes?.some((lane) => lane.pricing.kind === kind) ?? false;
+				if (weighs(clean, "weight") && !weighs(storedLanes, "weight")) {
 					await assertCatalogueWeighed(ctx, retailer._id, "rate_card");
 				}
-				patch.crossBorderLanes = clean;
+				if (weighs(clean, "live") && !weighs(storedLanes, "live")) {
+					await assertCatalogueWeighed(ctx, retailer._id, "courier");
+				}
+				// A NEW lane waits for the "what can go" step before any buyer
+				// sees it (Zaki, 30 Oct) — every product starts allowed, so frozen
+				// goods must be unticked first. An edited lane keeps its state.
+				patch.crossBorderLanes = clean.map((lane) => {
+					const before = storedLanes?.find((s) => s.country === lane.country);
+					return before
+						? before.awaitingProducts
+							? { ...lane, awaitingProducts: true }
+							: lane
+						: { ...lane, awaitingProducts: true };
+				});
 			}
 		}
 		if (args.deliveryBooking !== undefined) {
@@ -3636,8 +3646,7 @@ export const updateSettings = mutation({
 		let productsCurrencySynced = 0;
 		if (
 			patch.currency !== undefined &&
-			patch.currency !==
-				((retailer.currency as SupportedCurrency) ?? DEFAULT_CURRENCY)
+			patch.currency !== storeCurrencyOf(retailer)
 		) {
 			const products = await ctx.db
 				.query("products")

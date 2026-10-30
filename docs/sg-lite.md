@@ -98,6 +98,21 @@ CSV, HitPay mint — all read `order.currency`). Three real gaps got fixed here:
    the Intl path. Also fixed in passing: the track-page address-edit dialog
    hardcoded `"MYR"` on the live rider-price line — it now takes the order's
    frozen currency.
+4. **One fallback for a store's own currency: `storeCurrencyOf`**
+   (`convex/lib/country.ts`) — the saved currency, else the country's. Every
+   server reader goes through it (owner read + storefront payload, which new
+   products are stamped from; counter, claims, vouchers, booking blocks,
+   Deliveries, HitPay probe, admin directory, the currency-change product sync,
+   and the EasyParcel/overseas readers). They had grown a hard-coded `"MYR"`
+   default beside a country-based one, which on an SG store with no saved
+   currency would price in SGD in one place and MYR in the next. No store hits
+   the fallback today (every store is born with a currency, a country switch
+   never clears it, and pre-field rows are Malaysian), so this changes nothing
+   live — it removes the second rule. The payload types `currency` as
+   required, so the dashboard's `retailer.currency ?? DEFAULT_CURRENCY` reads
+   were dead and are gone; three `retailer?.currency ?? …` loading-frame
+   placeholders (insights, customers) stay, since those pages render nothing
+   until the store loads.
 
 ## Address (SG variant) — `86eynw29u`
 
