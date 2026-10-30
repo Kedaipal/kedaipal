@@ -29,7 +29,7 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
-import { ChevronRight, Gift, LogOut, UserRound } from "lucide-react";
+import { ChevronRight, LogOut, UserRound } from "lucide-react";
 import type { ReactNode } from "react";
 import { api } from "../../../convex/_generated/api";
 import { TOP_UP_VIEW_ONLY_MESSAGE } from "../../../convex/lib/creditPurchases";
@@ -39,6 +39,10 @@ import { useCreditGateFor } from "../../hooks/useCreditGate";
 import { usePermission, useStoreRole } from "../../hooks/usePermission";
 import { type CreditStub, creditStub, STUB_DOTS } from "../../lib/credit-stub";
 import { cn } from "../../lib/utils";
+import {
+	REFER_ROW_CLASS,
+	ReferEntryRowContent,
+} from "../referrals/refer-entry";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -378,7 +382,9 @@ export function CreditStubBlock({ stub }: { stub: CreditStub }) {
  * in, and the stub above it is the order balance. Same name, same words and
  * same destination as the sidebar's Refer & earn (`/app/refer`, the 28 Oct
  * referral push): one idea, one control. Never greyed — that page explains
- * itself to a trial or paused store, so the row only changes its line.
+ * itself to a trial or paused store, so the row only changes its line. The
+ * look and the words are `ReferEntryRowContent` — the same row Home shows a
+ * phone under its greeting (src/components/referrals/refer-entry.tsx).
  * `w-auto` beats the menu-item primitive's `w-full`: with `mx-1` a full width
  * pushes the row past the right edge instead of insetting it, so its right
  * gap read narrower than its left (test-code, 31 Oct).
@@ -390,29 +396,17 @@ function ReferRow({ retailer }: { retailer: Retailer }) {
 		}),
 	).data;
 	if (!card) return null;
-	const offer = card.offer.pro;
-	const line = !card.standing.canRefer
-		? "Starts once your plan is active"
-		: card.earns
-			? `Refer a kedai, you both get ${offer} free orders`
-			: `Refer a kedai, they get ${offer} free orders`;
 	return (
 		<DropdownMenuItem
 			asChild
-			className="mx-1 my-1 min-h-12 w-auto gap-2.5 rounded-[10px] border border-dashed border-accent/35 bg-accent/10 px-2.5 py-2 data-[highlighted]:bg-accent/15"
+			className={cn(
+				"mx-1 my-1 w-auto data-[highlighted]:bg-accent/15",
+				REFER_ROW_CLASS,
+			)}
 			data-testid="refer-row"
 		>
 			<Link to="/app/refer">
-				<span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-card text-accent-emphasis">
-					<Gift className="size-4" />
-				</span>
-				<span className="flex min-w-0 flex-1 flex-col leading-tight">
-					<span className="text-xs font-semibold text-foreground">
-						Refer &amp; earn
-					</span>
-					<span className="text-[11px] text-accent-emphasis">{line}</span>
-				</span>
-				<ChevronRight className="size-3.5 text-accent-emphasis" />
+				<ReferEntryRowContent card={card} />
 			</Link>
 		</DropdownMenuItem>
 	);

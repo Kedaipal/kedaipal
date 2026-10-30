@@ -3,7 +3,6 @@ import {
 	Check,
 	Clock,
 	Copy,
-	Gift,
 	ImageIcon,
 	Lock,
 	MessageSquareText,
@@ -28,7 +27,7 @@ import { ShareImageDialog } from "./share-image-dialog";
 /**
  * The Refer & earn building blocks (the 28 Oct 2026 push, docs/referrals.md
  * § The push). ONE set of pieces for the two surfaces that show the
- * programme — the Home teaser and `/app/refer` — so the link, the buttons,
+ * programme — `/app/refer` and, before 31 Oct, the Home teaser — so the link, the buttons,
  * the pending state and the paused/trial notices can never drift apart
  * ("one idea, one control").
  *
@@ -36,32 +35,6 @@ import { ShareImageDialog } from "./share-image-dialog";
  * credits" needed a conversion the card asked them to make (1 credit = 1
  * order is said once, in the fine print).
  */
-
-/** The heading every referral surface wears. */
-export function ReferHeading({
-	id,
-	children = "Refer & earn",
-	className,
-}: {
-	id?: string;
-	children?: React.ReactNode;
-	className?: string;
-}) {
-	return (
-		<h2
-			id={id}
-			className={cn(
-				"flex items-center gap-2 font-heading text-lg font-extrabold tracking-tight lg:text-xl",
-				className,
-			)}
-		>
-			<span className="flex size-[26px] shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent-emphasis">
-				<Gift className="size-3.5" aria-hidden="true" />
-			</span>
-			{children}
-		</h2>
-	);
-}
 
 /** "60 orders on us. For both of you." — the headline, by who earns. */
 export function offerHeadline(card: Pick<MyReferralCard, "offer" | "earns">) {
@@ -191,53 +164,6 @@ export function ReferLinkLine({ slug }: { slug: string }) {
 			<span className="flex min-w-0 font-mono text-sm font-medium">
 				<span className="shrink-0">kedaipal.com/referral/</span>
 				<span className="kp-highlight truncate">{slug}</span>
-			</span>
-		</div>
-	);
-}
-
-/**
- * The pending line — the state that gets a card opened: a kedai signed up,
- * the reward is waiting on their first invoice. Amber because something is
- * in flight, not because something is wrong.
- */
-export function PendingLine({
-	card,
-	className,
-}: {
-	card: Pick<MyReferralCard, "latestPending" | "pending" | "offer" | "earns">;
-	className?: string;
-}) {
-	const latest = card.latestPending;
-	if (!latest || card.pending === 0) return null;
-	const who = latest.storeName;
-	const more = card.pending - 1;
-	return (
-		<div
-			className={cn(
-				"flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[13px] dark:border-amber-800 dark:bg-amber-950/50",
-				className,
-			)}
-			data-testid="refer-pending"
-		>
-			<span className="min-w-0 leading-snug text-amber-900 dark:text-amber-100">
-				<span className="font-semibold">{who}</span> signed up{" "}
-				{formatRelativeTime(latest.createdAt)}
-				{more > 0 ? (
-					<span className="text-amber-800/80 dark:text-amber-200/80">
-						{" "}
-						· {more} more waiting
-					</span>
-				) : null}
-			</span>
-			<span
-				className={cn(
-					"inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold",
-					TONE_CHIP.warn,
-				)}
-			>
-				<Clock className="size-3" aria-hidden="true" />
-				{card.earns ? `${card.offer.pro} waiting` : "waiting"}
 			</span>
 		</div>
 	);

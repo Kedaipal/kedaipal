@@ -781,8 +781,7 @@ describe("referrals.myCard — the pending state (the push)", () => {
 	test("counts referees whose reward is still waiting, and names the newest", async () => {
 		const t = setup();
 		const { refereeId } = await referredPair(t, { status: "active" });
-		// A second referee, later — the NEWEST pending one is what the Home
-		// teaser names.
+		// A second referee, later — both are waiting until each pays.
 		await new Promise((r) => setTimeout(r, 5));
 		await createStore(t, OTHER, "second-kedai", { referralSlug: "siti-kitchen" });
 		const before = await t
@@ -793,10 +792,8 @@ describe("referrals.myCard — the pending state (the push)", () => {
 			signedUp: 2,
 			started: 0,
 			pending: 2,
-			latestPending: { storeName: "Store second-kedai" },
 		});
-		// The first referee pays: it leaves the pending count, and the newest
-		// pending one is still the second.
+		// The first referee pays: it leaves the pending count.
 		await payInvoice(t, refereeId, "pro");
 		const after = await t
 			.withIdentity({ subject: REFERRER })
@@ -804,7 +801,6 @@ describe("referrals.myCard — the pending state (the push)", () => {
 		expect(after).toMatchObject({
 			started: 1,
 			pending: 1,
-			latestPending: { storeName: "Store second-kedai" },
 		});
 	});
 
@@ -822,7 +818,6 @@ describe("referrals.myCard — the pending state (the push)", () => {
 			signedUp: 1,
 			started: 0,
 			pending: 0,
-			latestPending: null,
 		});
 	});
 
@@ -833,7 +828,7 @@ describe("referrals.myCard — the pending state (the push)", () => {
 		const card = await t
 			.withIdentity({ subject: REFERRER })
 			.query(api.referrals.myCard, {});
-		expect(card).toMatchObject({ pending: 0, latestPending: null });
+		expect(card).toMatchObject({ pending: 0 });
 	});
 });
 
