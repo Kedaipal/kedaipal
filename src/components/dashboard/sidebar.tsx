@@ -6,6 +6,7 @@ import {
 	ChevronLeft,
 	Clapperboard,
 	GalleryHorizontalEnd,
+	Gift,
 	Home,
 	LineChart,
 	type LucideIcon,
@@ -14,6 +15,7 @@ import {
 	Settings,
 	ShieldCheck,
 	ShoppingBag,
+	Signpost,
 	Siren,
 	Store,
 	Tag,
@@ -328,6 +330,19 @@ export function Sidebar({
 								}
 							/>
 						) : null}
+						{/* Refer & earn (docs/referrals.md § The push) — last of the
+						    growth items, above Settings: it brings another SELLER in,
+						    so it sits with Vouchers and Insights (what grows the
+						    store), not with the operational tabs. Every member: the
+						    link is public, and the page explains itself to a trial or
+						    paused store rather than hiding. */}
+						<SidebarLink
+							to="/app/refer"
+							icon={Gift}
+							label="Refer & earn"
+							collapsed={collapsed}
+							motion={motion}
+						/>
 						<SidebarLink
 							to="/app/settings"
 							search={{ tab: "store" }}
@@ -378,6 +393,16 @@ export function Sidebar({
 									onClick={exitActAs}
 									icon={ShieldCheck}
 									label="Billing"
+									collapsed={collapsed}
+									motion={motion}
+								/>
+								{/* Kedaipal's own spend, beside Billing (money in) and never
+								    inside it (86eye3eyp). */}
+								<SidebarLink
+									to="/app/admin/acquisition"
+									onClick={exitActAs}
+									icon={Signpost}
+									label="Acquisition"
 									collapsed={collapsed}
 									motion={motion}
 								/>

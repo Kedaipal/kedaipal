@@ -2,14 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
 	describeEasyparcelService,
 	type EasyparcelRate,
-} from "../../convex/lib/easyparcel";
-import { DAY_MS, todayMytMidnight } from "../../convex/lib/fulfilmentDate";
+} from "./easyparcel";
+import { DAY_MS, todayMytMidnight } from "./fulfilmentDate";
 import {
+	checkoutRate,
 	defaultRateId,
 	filterRates,
 	rateDateFit,
 	rateFilterCounts,
-} from "./easyparcel-rates";
+} from "./easyparcelRates";
 
 /** Built from the REAL service names a Singapore quote returned on 28 Oct
  * 2026 (z8r3fdcje2 /test-code) — price-sorted, as the parser hands them over. */
@@ -125,5 +126,19 @@ describe("door vs point filter (F10)", () => {
 			"pnp-p2p",
 		]);
 		expect(filterRates(all, "door")).toHaveLength(6);
+	});
+});
+
+describe("checkoutRate — the service the checkout prices (z8r3fdr5yy)", () => {
+	it("is exactly the dispatch card's pre-selection, so the buyer pays the default booking", () => {
+		const rates = [
+			rate("pnp-p2p", "Park N Parcel (Drop Off) (From Point to Point)", 324),
+			rate("sp-econ", "Speedpost - Economy (Pick Up) (From Door to Door)", 379),
+		];
+		expect(checkoutRate(rates, undefined)?.serviceId).toBe(
+			defaultRateId(rates, undefined),
+		);
+		expect(checkoutRate(rates, undefined)?.serviceId).toBe("sp-econ");
+		expect(checkoutRate([], undefined)).toBeNull();
 	});
 });

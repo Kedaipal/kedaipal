@@ -1,10 +1,16 @@
 import { MapPin, Search } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { postcodeRule } from "../../../convex/lib/address";
 import { type Country, DEFAULT_COUNTRY } from "../../../convex/lib/country";
 import { displayAddressState } from "../../lib/address-display";
 import { parseGoogleAddress } from "../../lib/google-address";
-import { type CheckoutAddressValues, MY_STATES } from "../../lib/schemas";
+import {
+	type AddressLocationField,
+	addressLocationGaps,
+	type CheckoutAddressValues,
+	MY_STATES,
+} from "../../lib/schemas";
 import { withFieldGroup } from "../forms/form";
 import {
 	GoogleAddressAutocomplete,
@@ -44,9 +50,11 @@ const LOCATION_FIELDS = [
  * fieldset has two faces:
  *
  * - **Locked** (a pin is set) — the street/postcode/city/state collapse into a
- *   read-only "confirmed address" card. Only unit/floor and delivery notes stay
- *   editable, because neither can move the building. "Wrong address? Search
- *   again" clears the location and returns to the search.
+ *   read-only "confirmed address" card. Unit/floor and delivery notes stay
+ *   editable, because neither can move the building — and so does any location
+ *   field the pick left blank or invalid (Places often has no postal code), or
+ *   the card would hide a required field the buyer can't fill. "Wrong address?
+ *   Search again" clears the location and returns to the search.
  * - **Searching** (no pin) — the Google search is the *only* address input, so
  *   there aren't two competing address bars. Manual entry is an explicit
  *   escape hatch behind a disclosure, for addresses Google genuinely doesn't
@@ -186,62 +194,50 @@ export const AddressFieldset = withFieldGroup({
 			</group.AppField>
 		);
 
-		// SG addresses have no state tier and one city — line1 + a 6-digit
-		// postal code IS the whole manual form (submit stamps city/state as
-		// "Singapore"). MY keeps the postcode/city pair + state select.
-		const manualFields =
-			country === "SG" ? (
-				<>
-					<group.AppField name="line1" listeners={pinInvalidation}>
-						{(field) => (
-							<field.TextField
-								label="Address line 1"
-								placeholder="12 Bedok North Ave 3"
-								autoComplete="address-line1"
-								required
-							/>
-						)}
-					</group.AppField>
-
-					<group.AppField name="postcode" listeners={pinInvalidation}>
-						{(field) => (
-							<field.TextField
-								label="Postal code"
-								placeholder="238859"
-								inputMode="numeric"
-								autoComplete="postal-code"
-								required
-							/>
-						)}
-					</group.AppField>
-				</>
-			) : (
-				<>
-					<group.AppField name="line1" listeners={pinInvalidation}>
-						{(field) => (
-							<field.TextField
-								label="Address line 1"
-								placeholder="12 Jln Mawar 3, Taman Mawar"
-								autoComplete="address-line1"
-								required
-							/>
-						)}
-					</group.AppField>
-
-					<div className="grid grid-cols-2 gap-3">
-						<group.AppField name="postcode" listeners={pinInvalidation}>
+		// One input per location field, shared by manual entry and the locked
+		// card's gaps. `listeners` is the only difference: manual entry passes
+		// `pinInvalidation`; the locked card passes nothing, because typing the
+		// postal code Google left out completes the pinned place, it doesn't
+		// move it.
+		const locationInput = (
+			name: AddressLocationField,
+			listeners?: typeof pinInvalidation,
+		) => {
+			switch (name) {
+				case "line1":
+					return (
+						<group.AppField key={name} name="line1" listeners={listeners}>
 							{(field) => (
 								<field.TextField
-									label="Postcode"
-									placeholder="47301"
+									label="Address line 1"
+									placeholder={
+										country === "SG"
+											? "12 Bedok North Ave 3"
+											: "12 Jln Mawar 3, Taman Mawar"
+									}
+									autoComplete="address-line1"
+									required
+								/>
+							)}
+						</group.AppField>
+					);
+				case "postcode":
+					return (
+						<group.AppField key={name} name="postcode" listeners={listeners}>
+							{(field) => (
+								<field.TextField
+									label={postcodeRule(country).label}
+									placeholder={country === "SG" ? "238859" : "47301"}
 									inputMode="numeric"
 									autoComplete="postal-code"
 									required
 								/>
 							)}
 						</group.AppField>
-
-						<group.AppField name="city" listeners={pinInvalidation}>
+					);
+				case "city":
+					return (
+						<group.AppField key={name} name="city" listeners={listeners}>
 							{(field) => (
 								<field.TextField
 									label="City"
@@ -251,17 +247,39 @@ export const AddressFieldset = withFieldGroup({
 								/>
 							)}
 						</group.AppField>
-					</div>
+					);
+				case "state":
+					return (
+						<group.AppField key={name} name="state" listeners={listeners}>
+							{(field) => (
+								<field.SelectField
+									label="State"
+									options={stateOptions}
+									required
+								/>
+							)}
+						</group.AppField>
+					);
+			}
+		};
 
-					<group.AppField name="state" listeners={pinInvalidation}>
-						{(field) => (
-							<field.SelectField
-								label="State"
-								options={stateOptions}
-								required
-							/>
-						)}
-					</group.AppField>
+		// SG addresses have no state tier and one city — line1 + a 6-digit
+		// postal code IS the whole manual form (submit stamps city/state as
+		// "Singapore"). MY keeps the postcode/city pair + state select.
+		const manualFields =
+			country === "SG" ? (
+				<>
+					{locationInput("line1", pinInvalidation)}
+					{locationInput("postcode", pinInvalidation)}
+				</>
+			) : (
+				<>
+					{locationInput("line1", pinInvalidation)}
+					<div className="grid grid-cols-2 gap-3">
+						{locationInput("postcode", pinInvalidation)}
+						{locationInput("city", pinInvalidation)}
+					</div>
+					{locationInput("state", pinInvalidation)}
 				</>
 			);
 
@@ -285,10 +303,10 @@ export const AddressFieldset = withFieldGroup({
 							return (
 								<>
 									<ConfirmedAddressCard
-										line1={values.line1}
-										city={values.city}
-										state={values.state}
-										postcode={values.postcode}
+										values={values}
+										country={country}
+										initialGaps={addressLocationGaps(values, country)}
+										renderGap={(name) => locationInput(name)}
 										onSearchAgain={clearLocation}
 									/>
 									{unitField}
@@ -330,26 +348,64 @@ export const AddressFieldset = withFieldGroup({
 	},
 });
 
-/** The read-only "this is where it's going" card shown once a pin is set. */
+const GAP_NOUNS: Record<AddressLocationField, (country: Country) => string> = {
+	line1: () => "street address",
+	postcode: (country) => postcodeRule(country).label.toLowerCase(),
+	city: () => "city",
+	state: () => "state",
+};
+
+/** "the postal code" / "the postcode and city" / "the postcode, city and state". */
+function gapList(gaps: AddressLocationField[], country: Country): string {
+	const nouns = gaps.map((gap) => GAP_NOUNS[gap](country));
+	const last = nouns.pop();
+	return nouns.length > 0
+		? `the ${nouns.join(", ")} and ${last}`
+		: `the ${last}`;
+}
+
+/**
+ * The "this is where it's going" card shown once a pin is set — read-only,
+ * EXCEPT for the location fields the pick left blank or invalid (`gaps`).
+ * Those are asked for in place: hiding them made a required field the buyer
+ * could neither see nor fill, and Place order disabled for a reason that
+ * pointed nowhere.
+ *
+ * The gap set is FROZEN when the card mounts (a pick, or a restored pinned
+ * address): a postal-code input that vanished the moment it read valid would
+ * yank the field out from under the buyer mid-typo. "Search again" unmounts
+ * the card, so the next pick measures its own gaps.
+ */
 function ConfirmedAddressCard({
-	line1,
-	city,
-	state,
-	postcode,
+	values,
+	country,
+	initialGaps,
+	renderGap,
 	onSearchAgain,
 }: {
-	line1: string;
-	city: string;
-	state: string;
-	postcode: string;
+	values: CheckoutAddressValues;
+	country: Country;
+	initialGaps: AddressLocationField[];
+	renderGap: (name: AddressLocationField) => ReactNode;
 	onSearchAgain: () => void;
 }) {
-	const locality = [postcode, city].filter(Boolean).join(" ").trim();
+	const [gaps] = useState(initialGaps);
+	// A field the buyer is typing below isn't echoed in the summary as well.
+	const shown = (name: AddressLocationField) =>
+		gaps.includes(name) ? "" : values[name];
+	const city = shown("city");
+	const locality = [shown("postcode"), city].filter(Boolean).join(" ").trim();
 	// The state line is dropped when it just repeats the city — SG addresses
 	// hold "Singapore" in both (src/lib/address-display.ts).
-	const region = [locality, displayAddressState({ city, state })]
+	const region = [
+		locality,
+		displayAddressState({ city, state: shown("state") }),
+	]
 		.filter(Boolean)
 		.join(", ");
+	// Postcode + city side by side when both are asked for (the manual form's
+	// shape); a lone field, or line1/state, takes the full row.
+	const pairsPostcodeCity = gaps.includes("postcode") && gaps.includes("city");
 	return (
 		// Tinted fill, no border — inside an already-bordered section a second
 		// outline just boxes a box; the accent wash carries "confirmed" on its own.
@@ -363,12 +419,36 @@ function ConfirmedAddressCard({
 					<span className="text-[11px] font-semibold uppercase tracking-wide text-accent-emphasis">
 						Location confirmed
 					</span>
-					<span className="text-sm font-medium leading-snug">{line1}</span>
+					<span className="text-sm font-medium leading-snug">
+						{shown("line1")}
+					</span>
 					{region ? (
 						<span className="text-xs text-muted-foreground">{region}</span>
 					) : null}
 				</div>
 			</div>
+			{gaps.length > 0 ? (
+				<div className="flex flex-col gap-3 pt-1">
+					<p className="text-xs text-muted-foreground">
+						Google didn&apos;t include {gapList(gaps, country)} for this spot —
+						add {gaps.length === 1 ? "it" : "them"} to finish your address.
+					</p>
+					<div className="grid grid-cols-2 gap-3">
+						{gaps.map((gap) => (
+							<div
+								key={gap}
+								className={
+									pairsPostcodeCity && (gap === "postcode" || gap === "city")
+										? undefined
+										: "col-span-2"
+								}
+							>
+								{renderGap(gap)}
+							</div>
+						))}
+					</div>
+				</div>
+			) : null}
 			<button
 				type="button"
 				onClick={onSearchAgain}

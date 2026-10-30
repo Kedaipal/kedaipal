@@ -17,7 +17,11 @@
  *    2026) stored every tee at 0 g and nobody was told.
  *
  * Lalamove riders price by distance, so a live store with riders alone does
- * not price by weight — and a flat/radius/free store never does.
+ * not price by weight — and a flat/radius/free store never does, UNLESS its
+ * cross-border lane (z8r3fdr5yy) is priced by weight bands: that card refuses
+ * an unweighed cart exactly like the domestic rate card, so it answers
+ * `rate_card` too. Read off the STORED lane, not the effective one — a paused
+ * lane comes back on with its card intact, and asking early costs nothing.
  *
  * "Delyva armed" here is `delyvaBookingArmed` (credentials + the Courier
  * booking toggle on + country allowed), the same bit the dispatch card
@@ -28,7 +32,13 @@
  * prevent.
  */
 
-import { type CourierRetailer, delyvaBookingArmed } from "./courierBooking";
+import {
+	type CourierRetailer,
+	delyvaBookingArmed,
+	easyparcelBookingArmed,
+} from "./courierBooking";
+import { COURIER_DESTINATIONS } from "./courierProviders";
+import { DEFAULT_COUNTRY } from "./country";
 import { LIVE_QUOTE_WEIGHT_FLOOR_G } from "./liveQuote";
 
 export type WeightPricing = "rate_card" | "courier";
@@ -36,6 +46,7 @@ export type WeightPricing = "rate_card" | "courier";
 /** The slice of a retailer row the rule reads. */
 export type WeightPricingRetailer = CourierRetailer & {
 	deliveryConfig?: { mode?: string };
+	crossBorderLanes?: ReadonlyArray<{ pricing: { kind: string } }>;
 };
 
 /**
@@ -48,7 +59,21 @@ export function weightPricingOf(
 ): WeightPricing | null {
 	const mode = retailer.deliveryConfig?.mode;
 	if (mode === "weight") return "rate_card";
+	if (retailer.crossBorderLanes?.some((lane) => lane.pricing.kind === "weight"))
+		return "rate_card";
+	// An EasyParcel-priced lane quotes by the cart's weight (z8r3fdr5yy).
+	if (retailer.crossBorderLanes?.some((lane) => lane.pricing.kind === "live"))
+		return "courier";
 	if (mode === "live" && delyvaBookingArmed(retailer)) return "courier";
+	// EasyParcel bids on home deliveries only where it carries them (an SG
+	// store) — read only when the caller loaded its arming (`easyparcel`).
+	if (
+		mode === "live" &&
+		easyparcelBookingArmed(retailer) &&
+		COURIER_DESTINATIONS.easyparcel[retailer.country ?? DEFAULT_COUNTRY] !==
+			"abroad"
+	)
+		return "courier";
 	return null;
 }
 

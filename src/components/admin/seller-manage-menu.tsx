@@ -16,6 +16,7 @@ import {
 	PauseCircle,
 	PlayCircle,
 	PowerOff,
+	Signpost,
 	Store,
 	Trash2,
 	UserPlus,
@@ -26,6 +27,7 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { AdminSellerRow } from "../../../convex/admin";
 import { HIDDEN_NOTE_MAX } from "../../../convex/lib/marketplaceListing";
+import { channelLabel } from "../../../convex/lib/metrics";
 import { STORE_PAUSE_NOTE_MAX } from "../../../convex/lib/storeAvailability";
 import { useActAs } from "../../hooks/useActAs";
 import {
@@ -44,6 +46,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { AcquisitionDialog } from "./acquisition-dialog";
 import { CompDialog } from "./comp-dialog";
 import { HandoverDialog } from "./handover-dialog";
 import { HighlightDialog } from "./highlight-dialog";
@@ -110,6 +113,7 @@ export function SellerManageMenu({
 	const [purgeOpen, setPurgeOpen] = useState(false);
 	const [hideOpen, setHideOpen] = useState(false);
 	const [compOpen, setCompOpen] = useState(false);
+	const [acquisitionOpen, setAcquisitionOpen] = useState(false);
 	const [handoverOpen, setHandoverOpen] = useState(false);
 	const [transferOpen, setTransferOpen] = useState(false);
 	// Title/subtitle/tone for the comp item — one pure author in
@@ -354,6 +358,36 @@ export function SellerManageMenu({
 							</span>
 						</DropdownMenuItem>
 					)}
+					{/* How the store arrived (86eye3eyp) — beside who owns it, before
+					    the commercial items: both are facts about the store, not
+					    about what it pays. Amber while a paying store is untagged,
+					    because CAC can't count it. */}
+					<DropdownMenuItem
+						onSelect={() => setAcquisitionOpen(true)}
+						className="items-start"
+					>
+						<Signpost
+							className={cn(
+								"mt-0.5 size-4",
+								seller.acquisition.setBy !== "admin" && seller.hasPaidInvoice
+									? "text-amber-600 dark:text-amber-400"
+									: "text-muted-foreground",
+							)}
+							aria-hidden="true"
+						/>
+						<span className="flex min-w-0 flex-col">
+							<span className="font-medium">Acquisition channel</span>
+							<span className="text-xs text-muted-foreground">
+								{seller.acquisition.channel === undefined
+									? seller.hasPaidInvoice
+										? "Untagged — this payer is missing from CAC"
+										: "Untagged — how did they find us?"
+									: seller.acquisition.setBy === "seller"
+										? `${channelLabel(seller.acquisition.channel)} — the seller's answer, unconfirmed`
+										: channelLabel(seller.acquisition.channel)}
+							</span>
+						</span>
+					</DropdownMenuItem>
 					{/* Disabled-with-reason IN the item — a disabled menu row can't
 					    show a hover title, so the reason is the subtitle.
 
@@ -534,6 +568,12 @@ export function SellerManageMenu({
 				<TransferOwnershipDialog
 					seller={seller}
 					onClose={() => setTransferOpen(false)}
+				/>
+			) : null}
+			{acquisitionOpen ? (
+				<AcquisitionDialog
+					seller={seller}
+					onClose={() => setAcquisitionOpen(false)}
 				/>
 			) : null}
 			{compOpen ? (

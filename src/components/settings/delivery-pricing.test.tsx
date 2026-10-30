@@ -548,3 +548,64 @@ describe("arming weight pricing waits for the catalogue (23 Oct 2026)", () => {
 		).toBe(false);
 	});
 });
+
+describe("the overseas price is said here too (z8r3fdr5yy)", () => {
+	// Found on the /test-code pass: a Free store read "no delivery charge"
+	// while Malaysia orders paid S$12, and the live-pricing warning named
+	// Delyva to an SG store that was never offered it.
+	const LANE = {
+		country: "SG" as const,
+		pricing: { kind: "flat" as const, fee: 2500 },
+	};
+
+	it("a store with a lane sees the overseas price and the way to change it", () => {
+		// No config = Free.
+		renderPricing({ crossBorderLanes: [LANE] });
+		expect(
+			screen.getByText(/Orders to Singapore have their own price/),
+		).toBeTruthy();
+		expect(screen.getByText(/RM\s?25\.00 per order/)).toBeTruthy();
+		expect(
+			screen
+				.getByRole("link", { name: "Change overseas price" })
+				.getAttribute("href"),
+		).toBe("/app/settings/overseas-delivery");
+		expect(
+			screen.getByText(/Orders to Singapore still pay your overseas price/),
+		).toBeTruthy();
+	});
+
+	it("a store without a lane reads exactly as before", () => {
+		renderPricing();
+		expect(screen.queryByText(/have their own price/)).toBeNull();
+		expect(
+			screen.getByText("Buyers pay nothing extra for delivery — it's on you."),
+		).toBeTruthy();
+	});
+
+	it("live pricing at home never pauses the overseas lane — it keeps its own price (Zaki, 30 Oct)", () => {
+		renderPricing({
+			country: "SG",
+			config: { mode: "live", onUnquotable: "block" },
+			businessAddress: HQ,
+			deliveryBooking: booking(),
+			crossBorderLanes: [{ ...LANE, country: "MY" }],
+		});
+		expect(
+			screen.getByText(/Orders to Malaysia have their own price/),
+		).toBeTruthy();
+		expect(screen.queryByText(/is paused/)).toBeNull();
+		expect(screen.queryByText(/pauses while you use live courier/)).toBeNull();
+	});
+
+	it("paused by plan or delivery off reads paused too", () => {
+		renderPricing({
+			crossBorderLanes: [LANE],
+			subscription: { features: { crossBorder: false } } as never,
+		});
+		expect(screen.getByText("Delivery to Singapore is paused.")).toBeTruthy();
+		cleanup();
+		renderPricing({ crossBorderLanes: [LANE], offerDelivery: false });
+		expect(screen.getByText("Delivery to Singapore is paused.")).toBeTruthy();
+	});
+});

@@ -276,7 +276,7 @@ describe("the picker", () => {
 		renderDialog();
 		expect(screen.getByText("37 orders left")).toBeTruthy();
 		// Always both balances, in the meter's words.
-		expect(screen.getByText(/12 monthly · 25 bought/)).toBeTruthy();
+		expect(screen.getByText(/12 monthly · 25 extra/)).toBeTruthy();
 		// Priced like the /pricing cards: whole amounts, what a credit costs,
 		// and what the bigger pack saves — in money, never a percentage.
 		expect(packCard(50)).toMatch(/RM\s45(?!\.)/);
@@ -307,7 +307,7 @@ describe("the picker", () => {
 		mockReads({ balance: { ...BALANCE, plan: -15, purchased: 0, total: -15 } });
 		renderDialog();
 		expect(screen.getByText("15 orders owed")).toBeTruthy();
-		expect(screen.getByText(/15 owed on monthly · 0 bought/)).toBeTruthy();
+		expect(screen.getByText(/15 owed on monthly · 0 extra/)).toBeTruthy();
 		// A pack pays the debt first — said before the tap — and the lock
 		// lifts the moment it's paid (T3).
 		expect(

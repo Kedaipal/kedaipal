@@ -64,9 +64,10 @@ describe("spotlight registry", () => {
 
 	test("every Home anchor is rendered as a section id by a Home component", () => {
 		// Same rule as the settings cards: a Home key nothing renders scrolls
-		// nowhere. The Refer card renders two sections (live and paused) and
-		// both must carry the anchor, or the deep link works for one standing
-		// and dead-ends for the other.
+		// nowhere. The Refer card renders every standing (live, trial, paused)
+		// through ONE shell that carries the anchor, so the deep link can never
+		// work for one standing and dead-end for another — pinned below as
+		// "exactly one shell, and it is the anchored one".
 		const source = readdirSync(HOME_COMPONENTS)
 			.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
 			.map((f) => readFileSync(join(HOME_COMPONENTS, f), "utf8"))
@@ -79,8 +80,10 @@ describe("spotlight registry", () => {
 		}
 		const refer = readFileSync(join(HOME_COMPONENTS, "refer-card.tsx"), "utf8");
 		expect(refer.split("id={SPOTLIGHT_ANCHOR.refer.anchor}").length - 1).toBe(
-			2,
+			1,
 		);
+		// Every standing renders through that shell: no `<section` outside it.
+		expect(refer.split("<section").length - 1).toBe(1);
 	});
 
 	test("every anchor is rendered as a card id somewhere under settings", () => {

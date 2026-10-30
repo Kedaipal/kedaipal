@@ -11,6 +11,7 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type MutationCtx, mutation, query } from "./_generated/server";
 import { logAdminAction, requireRetailerAccess } from "./lib/auth";
+import { storeCurrencyOf } from "./lib/country";
 import { rateLimiter } from "./lib/rateLimiter";
 import { creditGateFor, forSeller } from "./creditLock";
 import {
@@ -303,7 +304,7 @@ export const create = mutation({
 		}
 
 		const retailer = access.retailer;
-		const currency = retailer.currency ?? "MYR";
+		const currency = storeCurrencyOf(retailer);
 		const cleanNote = note?.trim().slice(0, VOUCHER_NOTE_MAX) || undefined;
 		// One id for the whole run; absent on a single voucher.
 		const batchId = howMany > 1 ? `vb_${now.toString(36)}_${userId.slice(-6)}` : undefined;

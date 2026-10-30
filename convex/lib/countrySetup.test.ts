@@ -18,6 +18,7 @@ function input(overrides: Partial<CountrySetupInput> = {}): CountrySetupInput {
 		pickupLocations: [],
 		deliveryConfigMode: undefined,
 		deliveryBookingEnabled: false,
+		easyparcelPickupPostcode: undefined,
 		waPhone: undefined,
 		notifyWaPhone: undefined,
 		hasPaymentMethods: false,
@@ -28,6 +29,20 @@ function input(overrides: Partial<CountrySetupInput> = {}): CountrySetupInput {
 }
 
 describe("resolveCountrySetup", () => {
+	test("an EasyParcel pickup address left in the old country is listed — and can't be dismissed (z8r3fdr5yy)", () => {
+		// MY postcode on a store that's now SG: couriers would collect in MY.
+		const items = resolveCountrySetup(
+			input({ easyparcelPickupPostcode: "50470", acked: ["easyparcel_pickup"] }),
+		);
+		expect(items).toEqual([
+			{ key: "easyparcel_pickup", severity: "buyer_visible", verifiable: true },
+		]);
+		// An SG postal code is fixed — the row clears itself.
+		expect(
+			resolveCountrySetup(input({ easyparcelPickupPostcode: "048616" })),
+		).toEqual([]);
+	});
+
 	test("a store that never switched is never asked anything", () => {
 		// The single most important case: this is every store. The query
 		// short-circuits on the same condition before reading any other table.

@@ -6,6 +6,7 @@ import {
 	COUNTRY_LABELS,
 	DEFAULT_COUNTRY,
 	isCountry,
+	storeCurrencyOf,
 } from "./country";
 import { isSupportedCurrency } from "./currency";
 
@@ -32,5 +33,14 @@ describe("country", () => {
 		}
 		expect(COUNTRY_CURRENCY.MY).toBe("MYR");
 		expect(COUNTRY_CURRENCY.SG).toBe("SGD");
+	});
+
+	// PR #435 review: the lane's readiness fell back to the country's currency
+	// and the checkout quote to MYR — one fallback now.
+	test("storeCurrencyOf: the saved currency wins, else the store's country's", () => {
+		expect(storeCurrencyOf({ currency: "MYR", country: "SG" })).toBe("MYR");
+		expect(storeCurrencyOf({ country: "SG" })).toBe("SGD");
+		expect(storeCurrencyOf({ country: "MY" })).toBe("MYR");
+		expect(storeCurrencyOf({})).toBe(COUNTRY_CURRENCY[DEFAULT_COUNTRY]);
 	});
 });

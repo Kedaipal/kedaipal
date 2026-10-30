@@ -2570,6 +2570,23 @@ describe("SG delivery-mode allowlist (SG-lite, 86eynw29u)", () => {
 		).toMatchObject({ mode: "weight" });
 	});
 
+	test("a country switch clears the overseas lane — it points at the new home, in the old currency (z8r3fdr5yy)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "my-lane-flip");
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(mine!._id, {
+				crossBorderLanes: [
+					{ country: "SG", pricing: { kind: "weight", bands: [{ maxKg: 1, fee: 1800 }] } },
+				],
+			});
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		const after = await asA.query(api.retailers.getMyRetailer);
+		expect(after?.country).toBe("SG");
+		expect(after?.crossBorderLanes).toBeUndefined();
+	});
+
 	test("one save can flip to SG AND clear/replace the config together", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "my-flip-with-clear");
@@ -3870,5 +3887,48 @@ describe("storefront chat action (z8r3fdvwcy)", () => {
 		});
 		if (pub.status !== "ok") throw new Error("expected ok");
 		expect(pub.retailer.storefrontChatEnabled).toBe(true);
+	});
+});
+
+// One fallback for a store's own currency (PR #435 review): the owner read and
+// the public payload — which new products are stamped from — answer the
+// store's country's currency, never a hard-coded MYR.
+describe("a store with no saved currency reads its country's", () => {
+	async function clearCurrency(
+		t: ReturnType<typeof setup>,
+		slug: string,
+		country?: "SG",
+	) {
+		await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.unique();
+			if (!r) throw new Error("no store");
+			await ctx.db.patch(r._id, { currency: undefined, country });
+		});
+	}
+
+	test("an SG store reads SGD on the owner read and the storefront payload", async () => {
+		const t = setup();
+		const asSg = await seedSg(t, "sg-no-currency");
+		await clearCurrency(t, "sg-no-currency", "SG");
+		expect((await asSg.query(api.retailers.getMyRetailer))?.currency).toBe(
+			"SGD",
+		);
+		const store = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "sg-no-currency",
+		});
+		if (store.status !== "ok") throw new Error(`store ${store.status}`);
+		expect(store.retailer.currency).toBe("SGD");
+	});
+
+	test("a row older than both fields (no country, no currency) stays MYR", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "legacy-my");
+		await clearCurrency(t, "legacy-my");
+		expect((await asA.query(api.retailers.getMyRetailer))?.currency).toBe(
+			"MYR",
+		);
 	});
 });

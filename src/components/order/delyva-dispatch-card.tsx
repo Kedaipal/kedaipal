@@ -41,6 +41,7 @@ import {
 } from "../../lib/delyva-dispatch-block";
 import { delyvaSurface } from "../../lib/dispatch-surface";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { parcelDeliveredCopy } from "../../lib/parcel-courier-copy";
 import { ProBadge } from "../app/pro-gate";
 import { DispatchWalletLine } from "../deliveries/dispatch-wallet-line";
 import { Button } from "../ui/button";
@@ -334,7 +335,7 @@ export function DelyvaDispatchCard({
 
 					<p className="text-muted-foreground">
 						{completedJob
-							? "Delivered. Your buyer was notified automatically."
+							? parcelDeliveredCopy(!!order.carrierTrackingUrl)
 							: "Your buyer already has this — the tracking number is on their order page. The order marks itself Shipped at collection and Delivered on arrival."}
 					</p>
 

@@ -25,9 +25,9 @@ import {
 	requireAdmin,
 } from "./lib/auth";
 import {
-	COUNTRY_CURRENCY,
 	type Country,
 	DEFAULT_COUNTRY,
+	storeCurrencyOf,
 } from "./lib/country";
 import {
 	BUSINESS_REPORT_ORDER_SCAN_CAP,
@@ -55,6 +55,11 @@ import { referralForReferee } from "./referrals";
 import { storeIsInternal } from "./marketplace";
 import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
 import { contractForAdmin } from "./lib/enterprise";
+import {
+	type AcquisitionChannel,
+	type AcquisitionSetBy,
+	suggestChannel,
+} from "./lib/metrics";
 import { isUnclaimed } from "./lib/unclaimedStore";
 import {
 	cleanAvailabilityNote,
@@ -161,6 +166,20 @@ export type AdminSellerRow = {
 	/** Whether an admin can still set, change or remove the referral: the
 	 * store hasn't paid its first plan invoice (the reward's moment). */
 	referralEditable: boolean;
+	/** Any invoice has ever been paid — a paying store, churned ones
+	 * included. Drives the "Untagged payers" filter. */
+	hasPaidInvoice: boolean;
+	/** Which motion won this store (86eye3eyp): the channel, who set it
+	 * (an admin tag is authoritative; a seller's onboarding answer waits for
+	 * confirmation) and the channel the captured signals point at, for the
+	 * tag dialog to pre-select. `channel` absent = untagged. */
+	acquisition: {
+		channel?: string;
+		setBy?: AcquisitionSetBy;
+		note?: string;
+		at?: number;
+		suggested: AcquisitionChannel | null;
+	};
 	createdAt: number;
 	/** Pre-built store, not yet handed over (docs/prebuilt-stores.md). An admin
 	 * built it before the vendor had an account, so it has no owner: every
@@ -509,6 +528,25 @@ export const listSellersForAdmin = query({
 				// `referrals.hasPaidPlanInvoice` gives the mutations that
 				// enforce it.
 				referralEditable: !hasPaidInvoice,
+				hasPaidInvoice,
+				acquisition: {
+					...(r.acquisitionSource !== undefined
+						? {
+								channel: r.acquisitionSource,
+								setBy: r.acquisitionSetBy ?? "admin",
+								...(r.acquisitionNote !== undefined
+									? { note: r.acquisitionNote }
+									: {}),
+								...(r.acquisitionSetAt !== undefined
+									? { at: r.acquisitionSetAt }
+									: {}),
+							}
+						: {}),
+					suggested: suggestChannel({
+						signupSource: r.signupSource,
+						hasReferral: referral !== null,
+					}),
+				},
 				createdAt: r._creationTime,
 				unclaimed: isUnclaimed(r),
 				pendingOwnerEmail: r.pendingOwnerEmail,
@@ -539,7 +577,7 @@ export const listSellersForAdmin = query({
 				waPhone: r.waPhone,
 				notifyWaPhone: r.notifyWaPhone,
 				country,
-				currency: r.currency ?? COUNTRY_CURRENCY[country],
+				currency: storeCurrencyOf(r),
 				billingCycle: sub?.billingCycle,
 				trialEndsAt: sub?.trialEndsAt,
 				freePeriodEndedAt: sub?.freePeriodEndedAt,

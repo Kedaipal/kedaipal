@@ -16,7 +16,7 @@ import {
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
-import { SG_STATE_LABEL } from "../../../convex/lib/address";
+import { postcodeRule, SG_STATE_LABEL } from "../../../convex/lib/address";
 import { parseBuyerWaPhone } from "../../../convex/lib/buyerPhone";
 import {
 	answerPrompt,
@@ -28,7 +28,8 @@ import {
 	type ClosedDateRange,
 	closureOn,
 } from "../../../convex/lib/closedDates";
-import type { Country } from "../../../convex/lib/country";
+import { type Country, isCountry } from "../../../convex/lib/country";
+import { countryName, overseasFeeLabel } from "../../../convex/lib/crossBorder";
 import {
 	assertValidFulfilmentDate,
 	defaultFulfilmentTimeMinutes,
@@ -68,6 +69,7 @@ import {
 	quickPickDays,
 	windowHasUnpickableDay,
 } from "../../lib/checkout-dates";
+import { checkoutFieldIssueLine } from "../../lib/checkout-field-issue";
 import {
 	asksForTime,
 	type FulfilmentKind,
@@ -131,10 +133,16 @@ import {
 import { AddressFieldset } from "./address-fieldset";
 import { CheckoutHint } from "./checkout-hint";
 import {
+	type CheckoutQuoteView,
 	CheckoutSummary,
 	CheckoutTotals,
 	pendingTotalParts,
 } from "./checkout-summary";
+import {
+	DeliverToSwitch,
+	HomeOnlyItems,
+	OverseasDeliveryNote,
+} from "./deliver-to-switch";
 import { PaymentsPausedNotice } from "./payments-paused-notice";
 import {
 	PickupLocationRadioList,
@@ -167,6 +175,14 @@ interface CheckoutPageProps {
 	 * resolves it to MY); must match what the server enforces in orders.create,
 	 * which reads the same retailer field. */
 	country: Country;
+	/** Countries the store is taking cross-border orders to right now
+	 * (z8r3fdr5yy) — empty for a domestic-only store, which then never sees
+	 * the "Deliver to" switch. */
+	shipsAbroadTo?: readonly Country[];
+	/** The visitor's country from the edge (CF-IPCountry) — preselects
+	 * "Deliver to" when the store delivers there. A guess, so the switch is
+	 * always shown beside it. */
+	visitorCountry?: Country;
 	/** Confirmation-push path active (86eyf1rck): the CTA promises a WhatsApp
 	 * confirmation FROM Kedaipal instead of the wa.me send-it-yourself step. */
 	confirmPushEnabled: boolean;
@@ -283,6 +299,8 @@ export function CheckoutPage({
 	checkoutPhone,
 	locale,
 	country,
+	shipsAbroadTo = [],
+	visitorCountry,
 	confirmPushEnabled,
 	offerSelfCollect,
 	offerDelivery,
@@ -561,9 +579,20 @@ export function CheckoutPage({
 	};
 	const defaultSchedule = scheduleFor(defaultMethod, "");
 	const defaultYmd = firstSelectableYmd(defaultSchedule);
-	// Typed as the form's `string`, not `Country`: the picker writes any dial
-	// country, and the form's value type is inferred from these defaults.
-	const storeDialCountry: string = country;
+	// "Deliver to" (z8r3fdr5yy): the store's own country, unless the store
+	// delivers abroad and the visitor is browsing from there — then theirs.
+	const initialDeliverTo: Country =
+		visitorCountry !== undefined && shipsAbroadTo.includes(visitorCountry)
+			? visitorCountry
+			: country;
+	// The pick, narrowed to a country this store delivers to RIGHT NOW — a
+	// lane that paused since the page loaded falls back to the store's own.
+	const deliverToOf = (raw: string | undefined): Country =>
+		raw !== undefined &&
+		isCountry(raw) &&
+		(raw === country || shipsAbroadTo.includes(raw))
+			? raw
+			: country;
 
 	const form = useAppForm({
 		defaultValues: {
@@ -571,14 +600,19 @@ export function CheckoutPage({
 			// Buyer's WhatsApp number (86eyf1rck) — required: the confirmation
 			// push (or the wa.me fallback) is how the order reaches a chat at all.
 			waPhone: "",
-			// The plate's picked dial country (z8r3fdh274) — the store's own until
-			// the buyer picks another or types a `+CC`. A plain string in form
-			// state, like every other value; the schema refuses an unknown one.
-			waDialCountry: storeDialCountry,
+			// The plate's picked dial country (z8r3fdh274) — the country the
+			// parcel goes to (the store's own unless Deliver to starts abroad,
+			// z8r3fdr5yy) until the buyer picks another or types a `+CC`. Typed
+			// as the form's plain `string`, not `Country`: the picker writes any
+			// dial country; the schema refuses an unknown one.
+			waDialCountry: initialDeliverTo as string,
 			deliveryMethod: defaultMethod,
+			// Typed as the form's `string` (the schema narrows it), like
+			// waDialCountry above.
+			deliverTo: initialDeliverTo as string | undefined,
 			// Saved per country (SG-lite) — an MY address can't leak a state or a
 			// 5-digit postcode into an SG form, and vice versa.
-			address: loadSavedAddress(country),
+			address: loadSavedAddress(initialDeliverTo),
 			// Empty when delivery, the chosen id when self-collect with 2+ options,
 			// unused when self-collect with exactly 1 option (auto-resolved at submit).
 			pickupLocationId: "",
@@ -630,9 +664,14 @@ export function CheckoutPage({
 				return;
 			}
 			const effectiveMethod: "delivery" | "self_collect" = value.deliveryMethod;
+			const destination = deliverToOf(value.deliverTo);
 			const sanitizedAddress =
 				effectiveMethod === "delivery"
-					? sanitizeAddress(value.address, country)
+					? {
+							...sanitizeAddress(value.address, destination),
+							// Stamped only when abroad — a domestic payload is unchanged.
+							...(destination !== country ? { country: destination } : {}),
+						}
 					: undefined;
 
 			// Resolve the chosen pickup location id. For the single-location case
@@ -782,7 +821,8 @@ export function CheckoutPage({
 				// re-applies a redeemed voucher and is refused for no visible
 				// reason.
 				if (voucher) clearVoucherParam(storeSlug);
-				if (effectiveMethod === "delivery") saveAddress(country, value.address);
+				if (effectiveMethod === "delivery")
+					saveAddress(deliverToOf(value.deliverTo), value.address);
 				setSubmitted(true);
 				cart.clearCart();
 				form.reset();
@@ -860,6 +900,11 @@ export function CheckoutPage({
 		form.store,
 		(s) => s.values.waDialCountry,
 	);
+	// "Deliver to" (z8r3fdr5yy) — the address form, its schema arm, the Places
+	// region and the quote all follow the country the address is IN.
+	const watchedDeliverTo = useStore(form.store, (s) => s.values.deliverTo);
+	const addressCountry = deliverToOf(watchedDeliverTo);
+	const abroad = addressCountry !== country;
 	const dialCountry: DialIso = isDialIso(watchedDialCountry)
 		? watchedDialCountry
 		: country;
@@ -877,7 +922,8 @@ export function CheckoutPage({
 	const overseasNote = overseasCourierNote({
 		booksCouriers,
 		deliveryMethod: watchedMethod,
-		localNumber: dialCountry === country,
+		// The courier is in the country the parcel goes TO (z8r3fdr5yy).
+		localNumber: dialCountry === addressCountry,
 		collectsFromCustomer,
 		storeCountry: country,
 		storeName,
@@ -1089,6 +1135,9 @@ export function CheckoutPage({
 							quantity: item.quantity,
 						})),
 						subtotal: cart.total,
+						// Abroad: priced by the store's lane, never its domestic
+						// config (z8r3fdr5yy). Domestic carts send nothing new.
+						...(abroad ? { country: addressCountry } : {}),
 					}
 				: "skip",
 		),
@@ -1103,8 +1152,15 @@ export function CheckoutPage({
 	// answers {kind:"live"} and the real fee comes from the shared
 	// useLiveDeliveryQuote hook (quoteForCheckout action, once per picked pin).
 	const isLiveMode = rawQuote?.kind === "live";
+	const watchedPostcode = useStore(
+		form.store,
+		(s) => s.values.address.postcode,
+	);
 	const liveQuote = useLiveDeliveryQuote({
 		enabled: isLiveMode,
+		// Abroad, the live price is the lane's EasyParcel quote (z8r3fdr5yy).
+		country: abroad ? addressCountry : undefined,
+		postcode: abroad ? watchedPostcode : undefined,
 		// The STORE's mode decides which action prices it — never inferred here.
 		providerAware: rawQuote?.kind === "live" && rawQuote.providerAware,
 		retailerId,
@@ -1145,13 +1201,22 @@ export function CheckoutPage({
 	// below stays a single code path. No pin / no quote is a HARD stop (strict
 	// since 27 Jul): a Lalamove buyer always sees the real rider price before
 	// sending — exactly what orders.create enforces server-side.
-	const quoteForDelivery:
-		| PublicDeliveryQuote
-		| { kind: "calculating" }
-		| undefined = (() => {
+	// Cross-border (z8r3fdr5yy) folds in as two more blocks: the cart holds
+	// home-only products (named in `homeOnly` below, each with a Remove), or
+	// the lane closed since the page loaded.
+	const quoteForDelivery: CheckoutQuoteView = (() => {
 		if (!rawQuote) return undefined;
+		if (rawQuote.kind === "home_only")
+			return { kind: "blocked", reason: "home_only" };
+		if (rawQuote.kind === "no_lane")
+			return { kind: "blocked", reason: "no_lane" };
 		if (rawQuote.kind !== "live") return rawQuote;
-		if (!hasCoords) return { kind: "blocked", reason: "no_coords" };
+		// Abroad, the lane's EasyParcel quote is priced on the postal code, so
+		// a typed address is enough — never ask an overseas buyer for a pin.
+		if (abroad) {
+			if (liveQuote.state === "idle")
+				return { kind: "blocked", reason: "no_postcode" };
+		} else if (!hasCoords) return { kind: "blocked", reason: "no_coords" };
 		switch (liveQuote.state) {
 			case "quoted":
 				return liveQuote.fee === 0
@@ -1187,6 +1252,7 @@ export function CheckoutPage({
 	const deliveryBlocked =
 		quoteForDelivery?.kind === "blocked" ||
 		quoteForDelivery?.kind === "calculating";
+	const homeOnly = rawQuote?.kind === "home_only" ? rawQuote.products : null;
 
 	// --- Can this store accept a hand-typed address? (86eye50qv) ------------
 	// While the buyer has NO pin, the live quote already answers exactly that
@@ -1210,7 +1276,7 @@ export function CheckoutPage({
 			quoteForDelivery.reason === "no_cold_service" ||
 			quoteForDelivery.reason === "too_heavy");
 	const allowManualAddressEntry =
-		rawQuote !== undefined && !(!hasCoords && pinRequiredBlock);
+		rawQuote !== undefined && (abroad || !(!hasCoords && pinRequiredBlock));
 
 	// Stock eroded under a persisted cart (qty 5, seller drops to 2): the line
 	// shows "Only 2 in stock" with `+` disabled, but the order would still be
@@ -1293,6 +1359,19 @@ export function CheckoutPage({
 	const watchedLine1 = useStore(form.store, (s) => s.values.address.line1);
 	const addressIncomplete =
 		watchedMethod === "delivery" && watchedLine1.trim().length === 0;
+	// The form's own refusal: once touched, any field error turns `canSubmit`
+	// false and disables Place order, so the reason line must name the field —
+	// a blank name, or a postal code the Google pick didn't carry, used to
+	// disable the button with nothing said. No `canSubmit` gate needed: the form
+	// holds field errors only once validation has run, which is exactly when
+	// `canSubmit` drops, so an untouched form (whose press reveals every error
+	// inline) has nothing here to name.
+	const fieldIssueLine = useStore(form.store, (s) =>
+		checkoutFieldIssueLine(s.fieldMeta, s.values, {
+			country,
+			collectsFromCustomer,
+		}),
+	);
 
 	// ------------------------------------------------------------------ render
 
@@ -1342,8 +1421,14 @@ export function CheckoutPage({
 	const deliveryBlockedLine = (() => {
 		if (quoteForDelivery?.kind !== "blocked") return null;
 		switch (quoteForDelivery.reason) {
+			case "home_only":
+				return `Some items can't go to ${countryName(addressCountry)} — see the delivery step`;
+			case "no_lane":
+				return `${storeName} isn't delivering to ${countryName(addressCountry)} right now`;
 			case "no_state":
 				return `Choose your state so we can calculate your ${feeNounShort}`;
+			case "no_postcode":
+				return `Add your ${postcodeRule(addressCountry).label.toLowerCase()} so we can calculate your ${feeNounShort}`;
 			case "over_bands":
 				return "This order is too heavy for the store's delivery rates — see your order summary";
 			case "missing_weights":
@@ -1366,8 +1451,8 @@ export function CheckoutPage({
 	})();
 
 	// Why the CTA is disabled, in the buyer's words. Ordered by what they'd fix
-	// first. `null` = nothing blocking (or the only gap is a field the form
-	// already marks inline, like the name).
+	// first. `null` = nothing blocking. Every reason the button can be disabled
+	// for has a rung here — a field error included (`fieldIssueLine`).
 	const blockedReason: string | null = neitherAvailable
 		? "This store isn't accepting orders right now"
 		: noCheckoutPhone
@@ -1384,15 +1469,17 @@ export function CheckoutPage({
 								: "Prices changed while you were checking out — review your order before paying"
 							: unansweredLine?.missing
 								? `${answerPrompt(unansweredLine.missing.label)} for ${unansweredLine.item.name}`
-								: addressIncomplete
-									? collectsFromCustomer
-										? "Add your collection address to continue"
-										: "Add your delivery address to continue"
-									: quoteForDelivery?.kind === "calculating"
+								: fieldIssueLine
+									? fieldIssueLine
+									: addressIncomplete
 										? collectsFromCustomer
-											? "Calculating your collection fee…"
-											: "Calculating your delivery fee…"
-										: (deliveryBlockedLine ?? null);
+											? "Add your collection address to continue"
+											: "Add your delivery address to continue"
+										: quoteForDelivery?.kind === "calculating"
+											? collectsFromCustomer
+												? "Calculating your collection fee…"
+												: "Calculating your delivery fee…"
+											: (deliveryBlockedLine ?? null);
 
 	const submitButton = (
 		<form.Subscribe
@@ -1622,6 +1709,12 @@ export function CheckoutPage({
 							const blockedCopy = (() => {
 								if (quote?.kind !== "blocked") return undefined;
 								switch (quote.reason) {
+									// Cross-border (z8r3fdr5yy): the delivery step names
+									// the items with a Remove each; the summary just says so.
+									case "home_only":
+										return `Some items can't go to ${countryName(addressCountry)}. Remove them on the delivery step, or deliver to ${countryName(country)}.`;
+									case "no_lane":
+										return `${storeName} isn't delivering to ${countryName(addressCountry)} right now. Deliver to ${countryName(country)}${selfCollectAvailable ? ", or choose pickup" : ""}.`;
 									case "out_of_range":
 										// Live-quote stores: the COURIER doesn't reach here, and
 										// retrying the same address never will — say so, and point
@@ -1672,7 +1765,13 @@ export function CheckoutPage({
 												: "Message"
 										} the store on WhatsApp to sort it out.`;
 									case "unquotable":
-										return `We couldn't calculate the ${feeNoun} right now — re-pick your address to retry, or try again shortly.`;
+										return abroad
+											? `We couldn't get a ${feeNoun} to ${countryName(addressCountry)} for this address — check your ${postcodeRule(addressCountry).label.toLowerCase()}, or try again shortly.`
+											: `We couldn't calculate the ${feeNoun} right now — re-pick your address to retry, or try again shortly.`;
+									case "no_postcode":
+										return addressIncomplete
+											? undefined
+											: `Add your ${postcodeRule(addressCountry).label.toLowerCase()} so we can calculate your ${feeNoun}.`;
 									// Weight-mode blocks (86eyeea1n) ------------------------
 									case "unserved_state":
 										return `${storeName} doesn't ${
@@ -1736,6 +1835,11 @@ export function CheckoutPage({
 											minRuleAlerts={minRuleAlerts}
 											collectsFromCustomer={
 												deliveryMethod === "delivery" && collectsFromCustomer
+											}
+											overseasFeeLabel={
+												deliveryMethod === "delivery"
+													? overseasFeeLabel(addressCountry, country)
+													: undefined
 											}
 											awaitingQuote={hasCustomLine}
 											voucherDiscount={previewDiscount(voucher, cart.total)}
@@ -2076,11 +2180,48 @@ export function CheckoutPage({
 													items up at this address and brings them to the store.
 												</p>
 											) : null}
+											{shipsAbroadTo.length > 0 && !collectsFromCustomer ? (
+												<DeliverToSwitch
+													storeCountry={country}
+													countries={shipsAbroadTo}
+													value={addressCountry}
+													onChange={(next) => {
+														if (next === addressCountry) return;
+														form.setFieldValue("deliverTo", next);
+														// The phone plate follows the destination while
+														// the box is empty — a buyer delivering to
+														// Malaysia most often has a +60 number — and
+														// never rewrites a number already typed.
+														if (form.getFieldValue("waPhone").trim() === "") {
+															form.setFieldValue("waDialCountry", next);
+														}
+														// A Malaysian address can't be half-reused as a
+														// Singapore one — swap in what this buyer last
+														// used for THAT country (empty if never).
+														form.setFieldValue(
+															"address",
+															loadSavedAddress(next),
+														);
+													}}
+												/>
+											) : null}
+											{homeOnly ? (
+												<HomeOnlyItems
+													storeCountry={country}
+													destination={addressCountry}
+													products={homeOnly}
+													lines={cart.items}
+													onRemove={cart.removeItem}
+												/>
+											) : null}
 											<AddressFieldset
+												// Remount on a country switch: the Places session,
+												// the region lock and the manual fields all follow it.
+												key={addressCountry}
 												form={form}
 												fields="address"
 												retailerId={retailerId}
-												country={country}
+												country={addressCountry}
 												allowManualEntry={allowManualAddressEntry}
 												// Only when the section heading is the method question
 												// ("How do you want to get it?") — a delivery-only store
@@ -2107,8 +2248,17 @@ export function CheckoutPage({
 														riders: rawQuote.riders,
 														couriers: rawQuote.couriers,
 														selfCollectAvailable,
+														overseasPostcodeLabel: abroad
+															? postcodeRule(addressCountry).label.toLowerCase()
+															: undefined,
 													})}
 												</p>
+											) : null}
+											{abroad ? (
+												<OverseasDeliveryNote
+													storeCountry={country}
+													destination={addressCountry}
+												/>
 											) : null}
 											{/* Overseas WhatsApp number at a courier-booking store
 											    (z8r3fdh274): the rider is handed the store's number,

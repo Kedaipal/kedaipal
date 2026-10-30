@@ -26,7 +26,7 @@ import {
 	internalQuery,
 } from "./_generated/server";
 import { paymentsPausedRefusal } from "./lib/buyerPayments";
-import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import { type Country, DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
 import {
 	buildPaymentRequestParams,
 	decimalStringToSen,
@@ -221,7 +221,7 @@ export const getRefreshContext = internalQuery({
 		const retailer = await ctx.db.get(retailerId);
 		const credentials = resolveHitpayCredentials(retailer?.hitpay);
 		if (!retailer || !credentials) return null;
-		return { credentials, currency: retailer.currency ?? "MYR" };
+		return { credentials, currency: storeCurrencyOf(retailer) };
 	},
 });
 

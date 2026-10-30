@@ -75,7 +75,7 @@ describe("CreditTotals", () => {
 		expect(screen.getAllByText("...")).toHaveLength(3);
 	});
 
-	it("counts unused bought credits and orders owed, across how many stores", () => {
+	it("counts unused extra credits and orders owed, across how many stores", () => {
 		state.totals = totals({
 			purchasedUnused: 1250,
 			storesWithPurchased: 4,
@@ -85,7 +85,7 @@ describe("CreditTotals", () => {
 		render(<CreditTotals />);
 		expect(screen.getByText("1,250")).toBeTruthy();
 		expect(
-			screen.getByText("Across 4 stores — service still owed"),
+			screen.getByText("Across 4 stores — top-ups, bonuses and grants"),
 		).toBeTruthy();
 		expect(screen.getByText("37")).toBeTruthy();
 		expect(
@@ -94,7 +94,7 @@ describe("CreditTotals", () => {
 			),
 		).toBeTruthy();
 		// Credits, never money: no currency on either credit tile.
-		for (const label of [/Unused bought credits/, /Orders owed/])
+		for (const label of [/Unused extra credits/, /Orders owed/])
 			expect(tileText(label)).not.toMatch(/RM|S\$|MYR|SGD/);
 	});
 
@@ -138,7 +138,7 @@ describe("CreditTotals", () => {
 		state.totals = totals({ purchasedUnused: 50, storesWithPurchased: 1 });
 		render(<CreditTotals />);
 		expect(
-			screen.getByText("Across 1 store — service still owed"),
+			screen.getByText("Across 1 store — top-ups, bonuses and grants"),
 		).toBeTruthy();
 		expect(screen.getByText("0")).toBeTruthy();
 		// Never "across 0 stores".

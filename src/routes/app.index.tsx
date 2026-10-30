@@ -16,7 +16,6 @@ import {
 import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Country } from "../../convex/lib/country";
-import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { todayMytMidnight } from "../../convex/lib/fulfilmentDate";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
@@ -34,6 +33,7 @@ import { ExceptionRows } from "../components/home/exception-rows";
 import { HomeSkeleton } from "../components/home/home-skeleton";
 import { PlanAheadCard } from "../components/home/plan-ahead-card";
 import { ReferCard } from "../components/home/refer-card";
+import { ReferralWelcomeCard } from "../components/home/referral-welcome-card";
 import { SalesSection } from "../components/home/sales-section";
 import {
 	type ChecklistItem,
@@ -192,7 +192,7 @@ function DashboardHome() {
 	if (products === undefined) return <HomeSkeleton />;
 
 	const storefrontUrl = buildStorefrontUrl(retailer.slug);
-	const currency = retailer.currency ?? DEFAULT_CURRENCY;
+	const currency = retailer.currency;
 
 	function stampShare() {
 		void markLinkShared().catch(() => {
@@ -506,6 +506,12 @@ function DashboardHome() {
 					navigate({ to: "/app/settings", search: { tab, fix: key } })
 				}
 			/>
+
+			{/* A REFERRED store, until its first invoice is paid: who invited it
+			    and what starting the plan brings — above the welcome card and
+			    the checklist, the first thing it reads (docs/referrals.md § The
+			    push). Renders nothing for everyone else. */}
+			<ReferralWelcomeCard retailerId={retailer._id} />
 
 			{phase === "new" ? <WelcomeCard slug={retailer.slug} /> : null}
 

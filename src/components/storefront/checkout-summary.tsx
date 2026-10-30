@@ -354,8 +354,12 @@ function QtyStepper({
 /** The checkout form's collapsed quote view (static config + live Lalamove
  * both map onto this — see checkout-form.tsx). */
 export type CheckoutQuoteView =
-	| PublicDeliveryQuote
+	| Exclude<PublicDeliveryQuote, { kind: "home_only" } | { kind: "no_lane" }>
 	| { kind: "calculating" }
+	// Cross-border (z8r3fdr5yy): checkout folds the server's `home_only` /
+	// `no_lane` answers into a block, worded by the caller's `blockedCopy`.
+	// An overseas live quote waits on a complete postal code (`no_postcode`).
+	| { kind: "blocked"; reason: "home_only" | "no_lane" | "no_postcode" }
 	| undefined;
 
 interface CheckoutTotalsProps {
@@ -375,6 +379,10 @@ interface CheckoutTotalsProps {
 	/** Collection-service store (86eyg0n8e) — the rider fee line reads
 	 * "Collection" instead of "Delivery". */
 	collectsFromCustomer?: boolean;
+	/** The fee line's name on an OVERSEAS delivery (z8r3fdr5yy) —
+	 * `overseasFeeLabel`'s "Delivery to Malaysia", so the buyer sees the
+	 * overseas price is the one being charged. Undefined at home. */
+	overseasFeeLabel?: string;
 	/** The cart holds a custom line, so this TOTAL is not the bill: a quote-only
 	 * line contributes nothing yet, and a starting-price line only contributes
 	 * its floor — the seller settles both on the mockup. Prints "+ your quote"
@@ -433,6 +441,7 @@ export function CheckoutTotals({
 	blockedCopy,
 	minRuleAlerts,
 	collectsFromCustomer = false,
+	overseasFeeLabel,
 	awaitingQuote = false,
 	voucherDiscount = 0,
 	voucherCode,
@@ -446,7 +455,9 @@ export function CheckoutTotals({
 	// The discount is CLAMPED to the item subtotal upstream, so it can never
 	// drive this below the fees — the same invariant the server holds.
 	const total = subtotal + pickupFee + deliveryFee - voucherDiscount;
-	const feeLabel = collectsFromCustomer ? "Collection" : "Delivery";
+	const feeLabel = collectsFromCustomer
+		? "Collection"
+		: (overseasFeeLabel ?? "Delivery");
 	const pendingParts = pendingTotalParts({
 		awaitingQuote,
 		quotePending: quote?.kind === "pending",

@@ -98,6 +98,21 @@ CSV, HitPay mint — all read `order.currency`). Three real gaps got fixed here:
    the Intl path. Also fixed in passing: the track-page address-edit dialog
    hardcoded `"MYR"` on the live rider-price line — it now takes the order's
    frozen currency.
+4. **One fallback for a store's own currency: `storeCurrencyOf`**
+   (`convex/lib/country.ts`) — the saved currency, else the country's. Every
+   server reader goes through it (owner read + storefront payload, which new
+   products are stamped from; counter, claims, vouchers, booking blocks,
+   Deliveries, HitPay probe, admin directory, the currency-change product sync,
+   and the EasyParcel/overseas readers). They had grown a hard-coded `"MYR"`
+   default beside a country-based one, which on an SG store with no saved
+   currency would price in SGD in one place and MYR in the next. No store hits
+   the fallback today (every store is born with a currency, a country switch
+   never clears it, and pre-field rows are Malaysian), so this changes nothing
+   live — it removes the second rule. The payload types `currency` as
+   required, so the dashboard's `retailer.currency ?? DEFAULT_CURRENCY` reads
+   were dead and are gone; three `retailer?.currency ?? …` loading-frame
+   placeholders (insights, customers) stay, since those pages render nothing
+   until the store loads.
 
 ## Address (SG variant) — `86eynw29u`
 
@@ -446,6 +461,16 @@ Rendered in two places by one component (`country-setup-panel.tsx`): under the
 country picker in Settings → Store, where "what did that just do?" gets asked,
 and as a banner on the dashboard home for the seller who switched and closed
 the tab.
+
+- **`easyparcel_pickup`** (z8r3fdr5yy) — verifiable: the EasyParcel pickup
+  address's postcode format says which country it's in (5 digits MY, 6 SG).
+  Kept, not wiped; it deep-links to the EasyParcel card.
+
+**The overseas lane is the one value the switch CLEARS** (z8r3fdr5yy, Zaki
+30 Oct). It points at what is now home, its price is in the old currency, and
+it can't price the opposite direction — so unlike a rate card there is nothing
+to keep. Carried, it leaked (a weight lane still demanded product weights).
+See [`cross-border.md`](./cross-border.md#country-switch).
 
 **Pickup points are deliberately NOT auto-hidden.** Hiding every wrong-country
 point would break the working-method invariant — a pickup-only store would lose

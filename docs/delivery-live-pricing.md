@@ -203,6 +203,27 @@ no SG store was ever on it, so there is nothing to migrate. An SG store's
 Delyva side simply never bids while its catalogue is empty; Lalamove prices
 alone, which is the single-provider case the rule already handles.
 
+## EasyParcel as a bidder (z8r3fdr5yy follow-up)
+
+EasyParcel is the third provider, under the same rule (higher quote across
+providers wins; the default service within one):
+
+- **At home on an SG store**, where it carries domestic parcels
+  (`COURIER_DESTINATIONS.easyparcel.SG === "both"`), beside Lalamove. Never at
+  home on a MY store, where it's the overseas courier only.
+- **Abroad, as the only bidder** on an overseas lane priced `live`
+  ([cross-border.md](./cross-border.md#pricing-the-buyer-always-sees-a-price)).
+- It quotes with the box the cart's weight suggests (`boxForWeight`) and prices
+  the dispatch card's own pre-selection (`checkoutRate`), so the fee the buyer
+  pays is the default booking's cost. It bids only while it can actually quote
+  (`easyparcelQuoteBlock`: connected, booking on, pickup address, store number,
+  the store's currency).
+- Weights: like Delyva, `weightPricingOf` answers `courier`, the readiness
+  notice and bulk fill apply, and switching into a mode where it bids refuses
+  while products are unweighed. `weightGapStamp` records gaps for any courier,
+  not only Delyva.
+- Cold carts stay Delyva's alone: EasyParcel couriers are ambient-only.
+
 ## Audit trail
 
 The quote row is consumed at create, so the order keeps the evidence:

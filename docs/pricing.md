@@ -756,11 +756,11 @@ once it's paid an admin lands it with `credits.adminAdjust` into the
 **purchased** bucket with reason **`enterprise_block`** (contract stores only,
 positive amounts only). The reason is what keeps a block apart from an ordinary
 adjustment: the seller's activity list reads "Enterprise block — extra credits
-under your contract", and the admin tile's "Unused bought credits" counts it as
+under your contract", and the admin tile's "Unused extra credits" counts it as
 service still owed, like any pack. The tile does **not** sum blocks as revenue —
 the money is invoiced outside the system, and totalling block credits needs a
 counter rather than a ledger scan (follow-up, once there is a second contract to
-count). Blocks are bought credits like any pack: 12 months, spent after the
+count). Blocks are extra credits like any pack: 12 months, spent after the
 monthly credits. A **self-serve block
 purchase is not built**. What the seller is told: their contract card states
 "Blocks of 5,000 at RM0.60 a credit — RM3,000 a block", and the top-up dialog

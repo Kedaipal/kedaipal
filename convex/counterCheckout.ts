@@ -47,7 +47,7 @@ import {
 	assertValidBuyerWaPhone,
 	resolveBuyerDialCountry,
 } from "./lib/buyerPhone";
-import { DEFAULT_COUNTRY } from "./lib/country";
+import { DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { recordOrderCreated } from "./subscriptionUsage";
 import {
@@ -90,6 +90,7 @@ import {
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import { withCategoryNames } from "./lib/orderCategoryNames";
 import {
 	claimVoucherState,
 	redeemVoucher,
@@ -906,7 +907,7 @@ export const createOrderFromSession = mutation({
 			}
 		}
 
-		const currency = retailer.currency ?? "MYR";
+		const currency = storeCurrencyOf(retailer);
 		const now = Date.now();
 
 		// Resolve variants server-side — price + stock are authoritative here.
@@ -1219,7 +1220,9 @@ export const createOrderFromSession = mutation({
 			retailerId: retailer._id,
 			shortId,
 			trackingToken: generateTrackingToken(),
-			items: snapshotItems,
+			// Categories frozen at sale, like every order door (86eyrtz74) — without
+			// it a counter sale reads "Uncategorized" in the inbox filter.
+			items: await withCategoryNames(ctx, snapshotItems),
 			subtotal,
 			total,
 			currency,

@@ -10,6 +10,7 @@ import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { SG_STATE_LABEL } from "../../../convex/lib/address";
 import type { Country } from "../../../convex/lib/country";
 import { displayAddressState } from "../../lib/address-display";
+import { addressFieldIssueLine } from "../../lib/checkout-field-issue";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import {
 	addressEditFormSchemaFor,
@@ -206,6 +207,16 @@ export function AddressEditDialog({
 	// A live-priced store can only save a PRICED address — the buyer sees the
 	// new rider fee before confirming, mirroring checkout.
 	const liveSaveBlocked = isLiveMode && liveQuote.state !== "quoted";
+	// Any field error disables Save (TanStack's `canSubmit`) — "Search again"
+	// empties the location, a pick can leave a postcode blank — so the reason
+	// sits directly above the button, the way checkout's does above Place order.
+	const fieldIssueLine = useStore(form.store, (s) =>
+		addressFieldIssueLine(s.fieldMeta, s.values, {
+			country,
+			collectsFromCustomer,
+			goal: "save",
+		}),
+	);
 
 	function handleSubmit(e: FormEvent) {
 		submitThenFocusError(form, e);
@@ -355,7 +366,12 @@ export function AddressEditDialog({
 							) : null}
 						</div>
 
-						<div className="border-t border-border bg-background px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+						<div className="flex flex-col gap-2 border-t border-border bg-background px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+							{fieldIssueLine ? (
+								<p className="text-center text-xs font-medium text-destructive">
+									{fieldIssueLine}
+								</p>
+							) : null}
 							<form.Subscribe
 								selector={(s) => ({
 									canSubmit: s.canSubmit,

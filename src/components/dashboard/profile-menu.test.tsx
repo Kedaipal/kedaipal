@@ -158,7 +158,7 @@ describe("ProfileMenu", () => {
 		expect(screen.getByText("∞ orders")).toBeTruthy();
 	});
 
-	it("Refer a kedai is offered with the reward, or greyed with why", () => {
+	it("Refer & earn opens the referral page with the reward — and still opens it before the plan is active", () => {
 		q.data["credits:getBalance"] = balance();
 		q.data["referrals:myCard"] = {
 			standing: { canRefer: true },
@@ -167,8 +167,9 @@ describe("ProfileMenu", () => {
 		};
 		openMenu();
 		const row = screen.getByTestId("refer-row");
-		expect(row.textContent).toMatch(/You both get 60 credits/);
-		expect(row.getAttribute("href")).toMatch(/spot=refer/);
+		expect(row.textContent).toMatch(/Refer & earn/);
+		expect(row.textContent).toMatch(/you both get 60 free orders/);
+		expect(row.getAttribute("href")).toBe("/app/refer");
 		cleanup();
 
 		q.data["referrals:myCard"] = {
@@ -177,9 +178,10 @@ describe("ProfileMenu", () => {
 			earns: false,
 		};
 		openMenu();
-		const greyed = screen.getByTestId("refer-row");
-		expect(greyed.getAttribute("aria-disabled")).toBe("true");
-		expect(greyed.textContent).toMatch(/Once your plan is active/);
+		const trial = screen.getByTestId("refer-row");
+		// The page explains itself to a trial store, so the row stays a link.
+		expect(trial.getAttribute("href")).toBe("/app/refer");
+		expect(trial.textContent).toMatch(/Starts once your plan is active/);
 	});
 
 	it("Manage account opens Clerk's profile; Sign out signs out", () => {

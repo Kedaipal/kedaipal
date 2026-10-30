@@ -379,6 +379,16 @@ There is no SG demo/sandbox tenant under any obvious name (`demosg`,
 tenants (`demo`, `trydx`) are both Malaysian. If a sandbox is wanted for SG
 it has to come from Delyva support.
 
+### Proof of delivery — a scan, not a photo (z8r3fdytmq)
+
+Parcel couriers confirm delivery with a **tracking scan**; there is no
+drop-off photo like a Lalamove rider's. Delyva sends none, and Kedaipal stores none for it — only `convex/lalamove.ts` writes `deliveryJobs.podImageStorageIds`. The seller is told in two
+places, one author (`src/lib/parcel-courier-copy.ts`): under the card's ✓ list
+before connecting (`PARCEL_NO_PHOTO_NOTE`), and on the order's delivered state
+(`parcelDeliveredCopy`, which points at **Track parcel** when the order has a
+tracking link). Without it, a seller using Lalamove too reads the missing photo
+as a bug.
+
 ## Seller UI
 
 Two surfaces, both vendor-side. **The buyer never sees Delyva** — they pay the

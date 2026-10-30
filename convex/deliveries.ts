@@ -22,8 +22,9 @@ import type { CourierProviderId } from "./lib/courierProviders";
 import { readCourierWallets } from "./courierWallets";
 import type { CourierWalletView } from "./lib/courierWallet";
 import { creditGateFor, isOrderGated } from "./creditLock";
+import { addressCountryLine, displayAddressState } from "./lib/address";
 import { requireRetailerAccess } from "./lib/auth";
-import { DEFAULT_CURRENCY } from "./lib/currency";
+import { DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
 import { resolveDelyvaCredentials } from "./lib/delyva";
 import {
 	type DeliveryJobStatus,
@@ -237,7 +238,19 @@ export const overview = query({
 				destination:
 					gated || !address
 						? undefined
-						: [address.city, address.state].filter(Boolean).join(", "),
+						: [
+								address.city,
+								// "Singapore, Singapore" read as a bug; the state is
+								// dropped when it repeats the city, and an overseas
+								// parcel names its country (z8r3fdr5yy).
+								displayAddressState(address),
+								addressCountryLine(
+									address,
+									retailer.country ?? DEFAULT_COUNTRY,
+								),
+							]
+								.filter(Boolean)
+								.join(", "),
 				deliveryFee: order.deliveryFee,
 				courierName: order.courierName,
 				trackingNo: gated ? undefined : order.trackingNo,
@@ -288,7 +301,7 @@ export const overview = query({
 				mode !== "lalamove");
 
 		return {
-			currency: retailer.currency ?? DEFAULT_CURRENCY,
+			currency: storeCurrencyOf(retailer),
 			wallets,
 			booksCouriers,
 			bookingArmed: storeBooksCouriers({

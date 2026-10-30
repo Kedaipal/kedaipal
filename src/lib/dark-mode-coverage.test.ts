@@ -96,11 +96,13 @@ const THEMED_COMPONENT_DIRS = [
 	"components/products",
 	"components/promotions",
 	"components/vouchers",
+	"components/referrals",
 	"components/cost",
 	"components/landing",
 	"components/legal",
 	"components/onboarding",
 	"components/marketplace",
+	"components/not-found",
 ];
 
 // Every route. Only the blog is outside the theme, and it is another repo.

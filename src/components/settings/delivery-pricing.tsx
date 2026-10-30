@@ -26,6 +26,13 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import { MY_STATES } from "../../../convex/lib/address";
 import type { Country } from "../../../convex/lib/country";
 import {
+	type CrossBorderLane,
+	countryName,
+	crossBorderPricingSummary,
+	lanePause,
+	liveQuoteCourierNames,
+} from "../../../convex/lib/crossBorder";
+import {
 	DELIVERY_BANDS_MAX,
 	DELIVERY_ZONES_MAX,
 	type DeliveryConfig,
@@ -48,10 +55,13 @@ import {
 	convexErrorMessage,
 	currencySymbol,
 	formatDraftPrice,
+	formatPrice,
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
+import { laneBlockCopy } from "../../lib/overseas-delivery";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
+import { TONE_PANEL } from "../../lib/tone";
 import { cn } from "../../lib/utils";
 import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
@@ -59,6 +69,7 @@ import { MissingWeightsNotice } from "../products/missing-weights-notice";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { DelyvaLogo } from "../ui/delyva-logo";
+import { EasyparcelLogo } from "../ui/easyparcel-logo";
 import { FilterChip } from "../ui/filter-chip";
 import { Input } from "../ui/input";
 import { InputPrefixFrame } from "../ui/input-prefix-frame";
@@ -69,6 +80,7 @@ import {
 	COURIER_BOOKING_ANCHOR,
 	CourierBookingSection,
 } from "./courier-booking-section";
+import { ParcelBoxGuide } from "./parcel-box-guide";
 import {
 	Card,
 	Glance,
@@ -167,7 +179,7 @@ export function zoneSummary(zone: ZoneDraft, currency: string): string {
 // --- Small shared pieces ------------------------------------------------------
 
 /** A money field: the currency plate welded to a bare input. */
-function MoneyInput({
+export function MoneyInput({
 	id,
 	value,
 	onChange,
@@ -209,7 +221,7 @@ function MoneyInput({
 }
 
 /** A number with its unit welded on the right — "3 | kg". */
-function UnitInput({
+export function UnitInput({
 	value,
 	onChange,
 	unit,
@@ -453,6 +465,8 @@ export function DeliveryPricing({
 	businessAddress,
 	deliveryBooking,
 	subscription,
+	crossBorderLanes,
+	offerDelivery,
 }: {
 	retailerId: Id<"retailers">;
 	country: Country;
@@ -461,6 +475,11 @@ export function DeliveryPricing({
 	businessAddress: BusinessAddress | undefined;
 	deliveryBooking: DeliveryBookingSummary | undefined;
 	subscription: SubscriptionView | undefined;
+	/** Overseas lanes as saved (z8r3fdr5yy) — saving live pricing pauses
+	 * them, and the save block says so. */
+	crossBorderLanes?: CrossBorderLane[];
+	/** With the lanes, decides whether the overseas price is live or paused. */
+	offerDelivery?: boolean;
 }) {
 	const updateSettings = useUpdateSettings();
 	const actAsRetailerId = useActAsRetailerId();
@@ -529,7 +548,22 @@ export function DeliveryPricing({
 	).data;
 	// What BIDS at checkout is the Courier-booking toggle, not mere keys.
 	const delyvaArmed =
-		delyvaSettings?.connected === true && delyvaSettings.enabled === true;
+		delyvaSettings?.countryAllowed !== false &&
+		delyvaSettings?.connected === true &&
+		delyvaSettings.enabled === true;
+	// EasyParcel bids on HOME deliveries only where it carries them (an SG
+	// store, z8r3fdr5yy) — on a MY store it's the overseas courier only.
+	const easyparcelSettings = useQuery(
+		convexQuery(api.easyparcel.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	const easyparcelAtHome = easyparcelSettings?.destinations === "both";
+	const easyparcelArmed =
+		easyparcelAtHome &&
+		easyparcelSettings?.connected === true &&
+		!easyparcelSettings.needsReconnect &&
+		easyparcelSettings.enabled &&
+		easyparcelSettings.pickupAddress !== undefined &&
+		easyparcelSettings.hasSenderPhone;
 	const lalamoveArmed = hasStoredKey && deliveryBooking?.enabled === true;
 	const liveModeSelected = mode === "live";
 	const storedLiveMode = config?.mode === "live" || config?.mode === "lalamove";
@@ -550,7 +584,8 @@ export function DeliveryPricing({
 	// where they chose that courier). Only for a reader who may see product
 	// names.
 	const productsPerm = usePermission("products");
-	const weightMatters = mode === "weight" || (liveModeSelected && delyvaArmed);
+	const weightMatters =
+		mode === "weight" || (liveModeSelected && (delyvaArmed || easyparcelArmed));
 	const missingWeights = useQuery(
 		convexQuery(
 			api.products.missingParcelWeights,
@@ -668,8 +703,13 @@ export function DeliveryPricing({
 				onUnpriceable,
 			};
 		} else if (mode === "live") {
-			// Mirrors the server gates so the failure is a helpful message.
-			if (!businessAddress) {
+			// Mirrors the server gates so the failure is a helpful message. An
+			// EasyParcel-only store collects from EasyParcel's own pickup
+			// address, so it isn't asked for a business address here.
+			if (
+				!businessAddress &&
+				!(easyparcelArmed && !lalamoveArmed && !delyvaArmed)
+			) {
 				setError(
 					!lalamoveArmed && delyvaArmed
 						? "Set your business address first — it anchors your store's delivery setup."
@@ -680,11 +720,11 @@ export function DeliveryPricing({
 				return;
 			}
 			// At least ONE provider must be ARMED, or every checkout would block.
-			if (!lalamoveArmed && !delyvaArmed) {
+			if (!lalamoveArmed && !delyvaArmed && !easyparcelArmed) {
 				setError(
 					hasStoredKey || delyvaSettings?.connected
 						? "Turn on at least one service under Courier booking below — live pricing quotes whatever is switched on."
-						: "Connect Lalamove or Delyva under Settings → Integrations first — live prices run on your own accounts.",
+						: `Connect ${liveQuoteCourierNames(country).join(" or ")} under Settings → Integrations first — live prices run on your own accounts.`,
 				);
 				return;
 			}
@@ -772,6 +812,16 @@ export function DeliveryPricing({
 		(mode === "radius" && radiusLocked && config?.mode === "radius") ||
 		(liveModeSelected && lalamoveLocked && storedLiveMode);
 
+	// Overseas delivery (z8r3fdr5yy) carries its OWN price, whatever this page
+	// sets — home pricing never pauses it (Zaki, 30 Oct). The note at the top
+	// says what overseas buyers pay; only a store-wide pause is shown here.
+	const overseasLane = crossBorderLanes?.[0];
+	const overseasPause = overseasLane
+		? lanePause({
+				planAllows: hasFeature(subscription, "crossBorder"),
+				offerDelivery,
+			})
+		: null;
 	const saveBlock = (
 		<div className="flex flex-col gap-3">
 			{error ? (
@@ -813,9 +863,57 @@ export function DeliveryPricing({
 	const chooser = (
 		<Card>
 			<p className="text-sm text-muted-foreground">
-				What buyers pay for delivery, added at checkout. Pickup orders are never
-				charged this.
+				What buyers pay for delivery
+				{overseasLane ? ` within ${countryName(country)}` : ""}, added at
+				checkout. Pickup orders are never charged this.
 			</p>
+			{/* The overseas lane has its OWN price (z8r3fdr5yy) — said here, so a
+			    store on Free doesn't read "no delivery charge" and assume orders
+			    abroad ship free too. A paused lane says it's paused, never that
+			    its price applies (both found on /test-code passes). */}
+			{overseasLane ? (
+				<div
+					className={cn(
+						"flex flex-col items-start gap-1 rounded-xl border px-3.5 pt-3 pb-1 text-sm",
+						overseasPause ? TONE_PANEL.warn : TONE_PANEL.neutral,
+					)}
+				>
+					{overseasPause ? (
+						<>
+							<p className="font-semibold">
+								Delivery to {countryName(overseasLane.country)} is paused.
+							</p>
+							<p>
+								{laneBlockCopy(overseasPause, overseasLane.country)} Your
+								overseas price —{" "}
+								<span className="whitespace-nowrap">
+									{crossBorderPricingSummary(overseasLane.pricing, (minor) =>
+										formatPrice(minor, currency),
+									)}
+								</span>{" "}
+								— is kept.
+							</p>
+						</>
+					) : (
+						<p>
+							Orders to {countryName(overseasLane.country)} have their own
+							price:{" "}
+							<span className="font-semibold whitespace-nowrap">
+								{crossBorderPricingSummary(overseasLane.pricing, (minor) =>
+									formatPrice(minor, currency),
+								)}
+							</span>
+							.
+						</p>
+					)}
+					<Link
+						to="/app/settings/overseas-delivery"
+						className="inline-flex min-h-11 items-center font-semibold underline underline-offset-2"
+					>
+						{overseasPause ? "Overseas delivery" : "Change overseas price"}
+					</Link>
+				</div>
+			) : null}
 			<ModeRowGroup label="How you charge for delivery" className="gap-2.5">
 				<SourceLabel source="builtin">you set the charge</SourceLabel>
 				{builtinModes.map((m) => (
@@ -881,7 +979,11 @@ export function DeliveryPricing({
 			<Card>
 				<SectionHeading
 					title="Free delivery"
-					description="Buyers pay nothing extra for delivery — it's on you."
+					description={
+						overseasLane
+							? `Buyers in ${countryName(country)} pay nothing extra for delivery — it's on you. Orders to ${countryName(overseasLane.country)} still pay your overseas price.`
+							: "Buyers pay nothing extra for delivery — it's on you."
+					}
 				/>
 				{saveBlock}
 			</Card>
@@ -1274,22 +1376,47 @@ export function DeliveryPricing({
 										: "off"
 							}
 						/>
-						<ProviderPricingRow
-							logo={<DelyvaLogo heightClass="h-2.5" alt="Delyva" />}
-							name="Couriers"
-							detail="Nationwide parcels, cheapest service"
-							status={
-								delyvaArmed
-									? delyvaSettings?.isDemo
-										? "test"
-										: "live"
-									: delyvaSettings?.connected
-										? "paused"
-										: "off"
-							}
-						/>
+						{/* Delyva can't be connected outside Malaysia — never offered
+						    where it can't bid (fixed in passing, z8r3fdr5yy). */}
+						{delyvaSettings?.countryAllowed !== false ? (
+							<ProviderPricingRow
+								logo={<DelyvaLogo heightClass="h-2.5" alt="Delyva" />}
+								name="Couriers"
+								detail="Nationwide parcels, cheapest service"
+								status={
+									delyvaArmed
+										? delyvaSettings?.isDemo
+											? "test"
+											: "live"
+										: delyvaSettings?.connected
+											? "paused"
+											: "off"
+								}
+							/>
+						) : null}
+						{easyparcelAtHome ? (
+							<ProviderPricingRow
+								logo={<EasyparcelLogo heightClass="h-3" alt="EasyParcel" />}
+								name="Couriers"
+								detail="J&T, SingPost, Ninja Van and more"
+								status={
+									easyparcelArmed
+										? easyparcelSettings?.environment === "sandbox"
+											? "test"
+											: "live"
+										: easyparcelSettings?.connected
+											? "paused"
+											: "off"
+								}
+							/>
+						) : null}
 					</div>
-					{!lalamoveArmed && !delyvaArmed ? (
+					{easyparcelArmed ? (
+						<InfoDisclosure summary="Box sizes EasyParcel quotes with">
+							<ParcelBoxGuide />
+						</InfoDisclosure>
+					) : null}
+					{!lalamoveArmed && !delyvaArmed && !easyparcelArmed ? (
 						<p className="rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
 							Nothing can quote yet, so delivery checkout would be refused —
 							connect a courier in{" "}
@@ -1303,14 +1430,15 @@ export function DeliveryPricing({
 							and switch it on under Courier booking below.
 						</p>
 					) : null}
-					{delyvaArmed ? (
+					{delyvaArmed || easyparcelArmed ? (
 						<MissingWeightsNotice
 							missingWeights={missingWeights}
 							reason="courier"
 						/>
 					) : null}
 					{(lalamoveArmed && deliveryBooking?.env === "sandbox") ||
-					(delyvaArmed && delyvaSettings?.isDemo) ? (
+					(delyvaArmed && delyvaSettings?.isDemo) ||
+					(easyparcelArmed && easyparcelSettings?.environment === "sandbox") ? (
 						<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
 							<FlaskConical aria-hidden className="mt-0.5 size-3.5 shrink-0" />
 							<span>

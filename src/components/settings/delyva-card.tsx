@@ -37,6 +37,7 @@ import { useActAsRetailerId } from "../../hooks/useActAs";
 import type { FixHighlight } from "../../lib/country-setup-copy";
 import { convexErrorMessage } from "../../lib/format";
 import { parseGoogleAddress } from "../../lib/google-address";
+import { PARCEL_NO_PHOTO_NOTE } from "../../lib/parcel-courier-copy";
 import { ProBadge } from "../app/pro-gate";
 import { IntegrationWalletBlock } from "../deliveries/courier-wallets-section";
 import { GoogleAddressAutocomplete } from "../forms/google-address-autocomplete";
@@ -669,6 +670,9 @@ export function DelyvaCard({
 								rates. <strong>Kedaipal adds nothing</strong> to your price.
 							</Bullet>
 						</ul>
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{PARCEL_NO_PHOTO_NOTE}
+						</p>
 
 						<div className="flex flex-col gap-2 rounded-xl border border-input bg-muted/30 p-3 text-sm">
 							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">

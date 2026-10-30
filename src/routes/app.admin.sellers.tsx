@@ -355,7 +355,9 @@ export function SellerDirectory({
 							selected={filter === f}
 							count={counts[f]}
 							countTone={
-								f === "past_due" && counts[f] > 0 ? "attention" : "muted"
+								(f === "past_due" || f === "untagged_payers") && counts[f] > 0
+									? "attention"
+									: "muted"
 							}
 							onClick={() => setFilter(f)}
 						>
@@ -386,9 +388,11 @@ export function SellerDirectory({
 							? "Stores appear here once a seller finishes onboarding."
 							: filter === "wants_enterprise"
 								? "Nobody's waiting. Sellers land here when they tap “Talk to Arif” in the app, and leave when a contract lands or you dismiss the ask."
-								: filter !== "all"
-									? "They may be in another status — clear the filter to search every store."
-									: "Try the store name, its slug, the owner's email or their phone."}
+								: filter === "untagged_payers" && !q.trim()
+									? "Every paying store has a channel. New payers land here until you tag how they arrived."
+									: filter !== "all"
+										? "They may be in another status — clear the filter to search every store."
+										: "Try the store name, its slug, the owner's email or their phone."}
 					</p>
 					{filtered ? (
 						<Button

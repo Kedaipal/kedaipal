@@ -225,7 +225,7 @@ function PickerView({
 		</DialogHeader>
 	);
 	const header = headerFor(
-		"1 credit = 1 order. Bought credits kick in once your monthly credits run out, and carry over for 12 months — nothing goes to waste.",
+		"1 credit = 1 order. Credits you buy join your extra credits: they kick in once your monthly credits run out, and carry over for 12 months — nothing goes to waste.",
 	);
 
 	if (options === undefined || balance === undefined)
@@ -894,7 +894,7 @@ function BalanceStrip({ balance }: { balance: Balance }) {
 					{balance.plan < 0
 						? `${-balance.plan} owed on monthly`
 						: `${balance.plan} monthly`}{" "}
-					· {balance.purchased} bought
+					· {balance.purchased} extra
 				</p>
 			</div>
 		</div>

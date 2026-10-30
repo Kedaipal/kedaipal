@@ -8,6 +8,7 @@ import { Nav } from "#/components/landing/nav";
 import { useMarketingLanding } from "#/hooks/useMarketingLanding";
 import type { CostInputs } from "#/lib/calculator";
 import { trackEvent } from "#/lib/ga-events";
+import { pageHead } from "../lib/not-found";
 
 const SEO_TITLE = "What is WhatsApp-only ordering costing you? — Kedaipal";
 const SEO_DESC =
@@ -35,22 +36,23 @@ const searchSchema = z.object({
 
 export const Route = createFileRoute("/cost")({
 	validateSearch: searchSchema,
-	head: () => ({
-		meta: [
-			{ title: SEO_TITLE },
-			{ name: "description", content: SEO_DESC },
-			{ property: "og:type", content: "website" },
-			{ property: "og:url", content: PAGE_URL },
-			{ property: "og:title", content: SEO_TITLE },
-			{ property: "og:description", content: SEO_DESC },
-			{ property: "og:image", content: OG_IMAGE },
-			{ name: "twitter:card", content: "summary_large_image" },
-			{ name: "twitter:title", content: SEO_TITLE },
-			{ name: "twitter:description", content: SEO_DESC },
-			{ name: "twitter:image", content: OG_IMAGE },
-		],
-		links: [{ rel: "canonical", href: PAGE_URL }],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, () => ({
+			meta: [
+				{ title: SEO_TITLE },
+				{ name: "description", content: SEO_DESC },
+				{ property: "og:type", content: "website" },
+				{ property: "og:url", content: PAGE_URL },
+				{ property: "og:title", content: SEO_TITLE },
+				{ property: "og:description", content: SEO_DESC },
+				{ property: "og:image", content: OG_IMAGE },
+				{ name: "twitter:card", content: "summary_large_image" },
+				{ name: "twitter:title", content: SEO_TITLE },
+				{ name: "twitter:description", content: SEO_DESC },
+				{ name: "twitter:image", content: OG_IMAGE },
+			],
+			links: [{ rel: "canonical", href: PAGE_URL }],
+		})),
 	component: CostPage,
 });
 

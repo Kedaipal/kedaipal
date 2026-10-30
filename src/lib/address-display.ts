@@ -7,4 +7,7 @@
  * `src/lib/phone.ts` re-export precedent). This module stays as the client's
  * import path so no call site had to move.
  */
-export { displayAddressState } from "../../convex/lib/address";
+export {
+	addressCountryLine,
+	displayAddressState,
+} from "../../convex/lib/address";

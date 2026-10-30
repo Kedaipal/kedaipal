@@ -21,6 +21,9 @@ const BLOCK_COPY: Record<DispatchBlock, string> = {
 	// do; this line is the fallback for the ones that can't.
 	country_unsupported:
 		"Lalamove rider booking isn't available for stores in your country yet — mark this order shipped yourself once it's on its way.",
+	// Cross-border (z8r3fdr5yy): a rider never crosses the border.
+	destination_unsupported:
+		"Lalamove riders deliver within one city — send this overseas order with a courier and add the tracking number.",
 	not_delivery:
 		"This is a self-collect order — there's nothing to send a rider for.",
 	bad_status:

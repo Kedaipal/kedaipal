@@ -33,7 +33,11 @@ import {
 	isChoosablePickupPoint,
 	pickupChoiceRefusal,
 } from "./lib/pickupChoice";
-import { assertValidAddress, formatPickupAddress } from "./lib/address";
+import {
+	assertValidAddress,
+	formatPickupAddress,
+	postcodeRule,
+} from "./lib/address";
 import {
 	isStoredImageRenderable,
 	UNRENDERABLE_PROOF_MESSAGE,
@@ -155,6 +159,7 @@ import {
 	storedDiscount,
 } from "./lib/order";
 import { deleteOrderOwnedBlobs } from "./lib/orderBlobs";
+import { withCategoryNames } from "./lib/orderCategoryNames";
 import {
 	redeemVoucher,
 	releaseOrderVoucher,
@@ -202,7 +207,20 @@ import {
 } from "./lib/orderStatus";
 import { type PaymentMethod, resolvePaymentMethods } from "./lib/payment";
 import { paymentsPausedClaimRefusal } from "./lib/buyerPayments";
-import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import {
+	type Country,
+	countryValidator,
+	DEFAULT_COUNTRY,
+} from "./lib/country";
+import {
+	type CrossBorderLane,
+	countryName,
+	laneFor,
+	laneNeedsLiveQuote,
+	resolveCrossBorderQuote,
+	shipsAbroad,
+} from "./lib/crossBorder";
+import { storeLanes } from "./crossBorder";
 import type { CourierProviderId } from "./lib/courierProviders";
 import {
 	type OrderReceiptData,
@@ -246,6 +264,11 @@ export const addressValidator = v.object({
 	latitude: v.optional(v.number()),
 	longitude: v.optional(v.number()),
 	placeId: v.optional(v.string()),
+	// The country the buyer picked on checkout's "Deliver to" switch
+	// (z8r3fdr5yy). Absent = the store's country. A different country is a
+	// cross-border order: it needs the store's lane and every line able to
+	// ship abroad, and is priced by the lane, never the domestic config.
+	country: v.optional(countryValidator),
 });
 
 const MAX_ITEMS_PER_ORDER = 100;
@@ -338,17 +361,55 @@ export function resolveDeliveryForOrder(
 	// Live Lalamove quote loaded from its server-side deliveryQuotes row
 	// (pricing mode "lalamove" only) — see loadCheckoutDeliveryQuote.
 	liveQuote?: LiveProviderQuote,
+	// A cross-border order (z8r3fdr5yy): the lane it travels on. Priced by
+	// the lane's own price, never the domestic config — and a lane always
+	// names a price, so it can block (with the reason) but never land pending.
+	crossBorder?: { lane: CrossBorderLane },
 ): {
 	snapshot: DeliverySnapshot | undefined;
 	pending: boolean;
 	pendingReason?: DeliveryQuoteReason;
 } {
-	const config = retailer.deliveryConfig as DeliveryConfig | undefined;
+	// A live lane (z8r3fdr5yy) is priced exactly like a live home delivery —
+	// by the held EasyParcel quote for this cart — so it takes the live path
+	// below, with the live config standing in for the domestic one.
+	const liveLane =
+		crossBorder !== undefined &&
+		laneNeedsLiveQuote(crossBorder.lane, subtotal);
+	if (crossBorder && !liveLane) {
+		const quote = resolveCrossBorderQuote({
+			pricing: crossBorder.lane.pricing,
+			subtotal,
+			cartWeight,
+			country: crossBorder.lane.country,
+		});
+		if (quote.kind === "blocked" || quote.kind === "pending") {
+			throw new ConvexError(
+				blockedDeliveryMessage(quote.reason, address?.state),
+			);
+		}
+		return quote.kind === "fee"
+			? {
+					snapshot: {
+						fee: quote.fee,
+						mode: quote.mode,
+						zoneName: quote.zoneName,
+						chargeableKg: quote.chargeableKg,
+						bandMaxKg: quote.bandMaxKg,
+					},
+					pending: false,
+				}
+			: { snapshot: undefined, pending: false };
+	}
+	const config: DeliveryConfig | undefined = liveLane
+		? { mode: "live", onUnquotable: "block" }
+		: (retailer.deliveryConfig as DeliveryConfig | undefined);
 	// Country/mode mismatch (SG-lite belt-and-braces — updateSettings refuses
 	// storing this): resolving would either throw a nonsense state error or
 	// silently strand the order fee-pending, so refuse with the same
 	// seller-side framing the checkout preview shows for this store.
 	if (
+		!liveLane &&
 		config &&
 		!deliveryModeAllowed(retailer.country ?? DEFAULT_COUNTRY, config.mode)
 	) {
@@ -376,6 +437,16 @@ export function resolveDeliveryForOrder(
 		liveQuote,
 	});
 	if (quote.kind === "blocked") {
+		// A live lane is quoted from the postal code and its checkout has no map,
+		// so "pick from the suggestions" would point at nothing. Reached only by
+		// a stale tab, an expired quote or a different postcode (PR #435 review).
+		if (liveLane) {
+			const where = countryName(crossBorder.lane.country);
+			const code = postcodeRule(crossBorder.lane.country).label.toLowerCase();
+			throw new ConvexError(
+				`We couldn't confirm the delivery price to ${where} for this address — re-enter your ${code} to get a fresh price, then try again.`,
+			);
+		}
 		throw new ConvexError(blockedDeliveryMessage(quote.reason, address?.state));
 	}
 	if (quote.kind === "pending") {
@@ -407,6 +478,46 @@ export function resolveDeliveryForOrder(
 }
 
 /**
+ * The lane a delivery to `destinationCountry` travels on, or undefined for a
+ * domestic delivery. Refuses when the address is abroad and the store isn't
+ * taking orders to that country RIGHT NOW (no lane, or it's paused by plan /
+ * pricing / delivery off) — checkout never offers that country then, so this
+ * is the stale-tab and direct-call backstop (z8r3fdr5yy).
+ */
+export async function crossBorderLaneForOrder(
+	ctx: QueryCtx | MutationCtx,
+	retailer: Doc<"retailers">,
+	destinationCountry: Country,
+): Promise<CrossBorderLane | undefined> {
+	const storeCountry = retailer.country ?? DEFAULT_COUNTRY;
+	if (destinationCountry === storeCountry) return undefined;
+	const lane = laneFor(
+		(await storeLanes(ctx, retailer)).effective,
+		destinationCountry,
+	);
+	if (!lane) {
+		throw new ConvexError(
+			`${retailer.storeName} isn't delivering to ${countryName(destinationCountry)} right now — use an address in ${countryName(storeCountry)}, or choose pickup.`,
+		);
+	}
+	return lane;
+}
+
+/** The sentence for a cross-border cart holding products that stay home. */
+export function homeOnlyRefusal(
+	names: readonly string[],
+	storeCountry: Country,
+	destinationCountry: Country,
+): string {
+	const listed =
+		names.length <= 3
+			? names.join(", ")
+			: `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
+	const verb = names.length === 1 ? "ships" : "ship";
+	return `${listed} ${verb} within ${countryName(storeCountry)} only — remove ${names.length === 1 ? "it" : "them"} to deliver to ${countryName(destinationCountry)}, or use an address in ${countryName(storeCountry)}.`;
+}
+
+/**
  * Load + validate the checkout's live Lalamove quote (86eyb5hrf). The client
  * only ever passes the deliveryQuotes ROW ID — the fee comes from our own
  * record, so it can't be tampered with. Returns undefined (→ the order falls
@@ -415,11 +526,17 @@ export function resolveDeliveryForOrder(
  * (a cheap-nearby-pin quote can't be replayed against a far delivery
  * address; ~11 m tolerance absorbs float noise, not geography).
  */
+function normalizePostcode(raw: string | undefined): string {
+	return (raw ?? "").replace(/\s/g, "").toUpperCase();
+}
+
 export async function loadCheckoutDeliveryQuote(
 	ctx: MutationCtx,
 	retailerId: Id<"retailers">,
 	quoteId: Id<"deliveryQuotes"> | undefined,
-	address: { latitude?: number; longitude?: number } | undefined,
+	address:
+		| { latitude?: number; longitude?: number; postcode?: string }
+		| undefined,
 	/** The ORDER's line items, for cart-bound rows (PR #253 review): a
 	 * provider-aware quote priced a specific cart's weight, so redeeming it
 	 * against different lines would let a light quote pay for a heavy cart.
@@ -433,11 +550,21 @@ export async function loadCheckoutDeliveryQuote(
 	if (row.lines !== undefined && !sameQuotedLines(row.lines, orderLines ?? []))
 		return undefined;
 	const COORD_TOLERANCE = 1e-4; // ≈11 m
-	if (
-		address?.latitude === undefined ||
-		address.longitude === undefined ||
-		Math.abs(address.latitude - row.latitude) > COORD_TOLERANCE ||
-		Math.abs(address.longitude - row.longitude) > COORD_TOLERANCE
+	if (row.latitude !== undefined && row.longitude !== undefined) {
+		if (
+			address?.latitude === undefined ||
+			address.longitude === undefined ||
+			Math.abs(address.latitude - row.latitude) > COORD_TOLERANCE ||
+			Math.abs(address.longitude - row.longitude) > COORD_TOLERANCE
+		) {
+			return undefined;
+		}
+	} else if (
+		// A postcode-priced lane quote (z8r3fdr5yy): the order must go to the
+		// postcode it was priced for. Never neither — no pin AND no postcode
+		// redeems nothing.
+		row.postcode === undefined ||
+		normalizePostcode(address?.postcode) !== normalizePostcode(row.postcode)
 	) {
 		return undefined;
 	}
@@ -1033,15 +1160,24 @@ export const create = mutation({
 		await assertTakesBuyerOrders(ctx, retailer);
 		const retailerCountry = retailer.country ?? DEFAULT_COUNTRY;
 
-		// Address shape follows the STORE's country — SG stores take 6-digit
-		// postal codes with "Singapore" as the state; MY keeps the 5-digit +
-		// MY_STATES shape.
+		// Address shape follows the country the address is IN — the store's
+		// own by default (SG stores take 6-digit postal codes with "Singapore"
+		// as the state; MY keeps the 5-digit + MY_STATES shape), the other
+		// country on a cross-border order (z8r3fdr5yy), which first needs the
+		// store to be taking orders on that lane right now.
+		const destinationCountry =
+			args.deliveryAddress?.country ?? retailerCountry;
+		const crossBorderLane = await crossBorderLaneForOrder(
+			ctx,
+			retailer,
+			destinationCountry,
+		);
 		let sanitizedAddress: ReturnType<typeof assertValidAddress> | undefined;
 		if (args.deliveryAddress) {
 			try {
 				sanitizedAddress = assertValidAddress(
 					args.deliveryAddress,
-					retailerCountry,
+					destinationCountry,
 				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
@@ -1160,6 +1296,9 @@ export const create = mutation({
 		// Parcel-weight inputs (86eyeea1n, pricing mode "weight") — collected from
 		// the same resolved variants so the fee weighs exactly what was ordered.
 		const weightItems: CartWeightItem[] = [];
+		// Cross-border (z8r3fdr5yy): products in this cart that can't leave the
+		// store's country — named in the refusal below.
+		const homeOnlyProducts: string[] = [];
 
 		// ── Promo pricing context (z8r3fdcw72) ────────────────────────────────
 		// Resolved ONCE per create: the store's plan gates whether any promo
@@ -1209,6 +1348,12 @@ export const create = mutation({
 				throw new ConvexError("Variant does not belong to this retailer");
 			const product = await ctx.db.get(variant.productId);
 			if (!product) throw new ConvexError("Product not found");
+			if (
+				crossBorderLane &&
+				!shipsAbroad(product) &&
+				!homeOnlyProducts.includes(product.name)
+			)
+				homeOnlyProducts.push(product.name);
 			// Per-variant flags fall back to the (deprecated) product-level defaults
 			// so legacy variants behave unchanged. Lets a mixed product gate only its
 			// made-to-order "Custom" variant, not the fixed sizes.
@@ -1346,18 +1491,7 @@ export const create = mutation({
 		// Freeze the categories each product was filed under at this moment
 		// (86eyrtz74). One junction read per DISTINCT product — paid once, here,
 		// instead of on every export row and every search keystroke forever.
-		const categoryNames = await resolveCategoryNames(
-			ctx,
-			snapshotItems.map((i) => i.productId),
-		);
-		for (const line of snapshotItems) {
-			// Always stamped, `[]` included: PRESENT means "we recorded what this
-			// product was filed under when it sold" — and "filed under nothing" is
-			// a real answer. Absent is reserved for orders that predate the field
-			// (and the backfill), so the two never look alike. Both render as an
-			// empty cell, so this is an internal distinction only.
-			line.categoryNames = categoryNames.get(line.productId) ?? [];
-		}
+		const stampedItems = await withCategoryNames(ctx, snapshotItems);
 
 		const itemSubtotal = snapshotItems.reduce(
 			(sum, i) => sum + i.price * i.quantity,
@@ -1399,6 +1533,14 @@ export const create = mutation({
 							})),
 					});
 			}
+		}
+		// A cross-border cart ships whole or not at all — one order, one
+		// fulfilment contract, so a home-only item is never split off silently.
+		// Checkout names these before submit; this is the stale-tab backstop.
+		if (homeOnlyProducts.length > 0) {
+			throw new ConvexError(
+				homeOnlyRefusal(homeOnlyProducts, retailerCountry, destinationCountry),
+			);
 		}
 		// The buyer never pays a number they weren't shown: when the client said
 		// what subtotal it rendered and the server resolves a different one
@@ -1724,19 +1866,25 @@ export const create = mutation({
 		let deliveryFeePendingReason: Doc<"orders">["deliveryFeePendingReason"];
 		if (effectiveDeliveryMethod === "delivery") {
 			// itemSubtotal is hoisted above (shared with the min-order rules).
-			const liveQuote = await loadCheckoutDeliveryQuote(
-				ctx,
-				retailer._id,
-				args.deliveryQuoteId,
-				sanitizedAddress,
-				snapshotItems,
-			);
+			// A cross-border order is priced by its lane — which reads a held
+			// quote only when the lane is EasyParcel-priced (z8r3fdr5yy).
+			const liveQuote =
+				crossBorderLane && !laneNeedsLiveQuote(crossBorderLane, itemSubtotal)
+					? undefined
+					: await loadCheckoutDeliveryQuote(
+						ctx,
+						retailer._id,
+						args.deliveryQuoteId,
+						sanitizedAddress,
+						snapshotItems,
+					);
 			const resolved = resolveDeliveryForOrder(
 				retailer,
 				itemSubtotal,
 				sanitizedAddress,
 				summarizeCartWeight(weightItems),
 				liveQuote,
+				crossBorderLane ? { lane: crossBorderLane } : undefined,
 			);
 			deliverySnapshot = resolved.snapshot;
 			deliveryFeePending = resolved.pending;
@@ -1876,7 +2024,7 @@ export const create = mutation({
 			retailerId: args.retailerId,
 			shortId,
 			trackingToken,
-			items: snapshotItems,
+			items: stampedItems,
 			subtotal,
 			total,
 			currency: args.currency,
@@ -3548,6 +3696,17 @@ export const searchOrders = query({
 				listing === undefined
 					? undefined
 					: await listingNameFor(ctx, retailerId, listing),
+			// Whether the store has any ACTIVE category, so the Categories filter
+			// can tell "you have none yet — set some up" apart from "none of these
+			// orders is for a categorised product". One indexed read; the filter's
+			// own options can't answer it (they come from the orders).
+			storeHasCategories:
+				(await ctx.db
+					.query("categories")
+					.withIndex("by_retailer_active", (q) =>
+						q.eq("retailerId", retailerId).eq("active", true),
+					)
+					.first()) !== null,
 		};
 	},
 });
@@ -3714,6 +3873,7 @@ function orderToCsvSource(o: Doc<"orders"> & { creditGated?: boolean }): CsvOrde
 					state: o.deliveryAddress.state,
 					postcode: o.deliveryAddress.postcode,
 					notes: o.deliveryAddress.notes,
+					country: o.deliveryAddress.country,
 				}
 			: undefined,
 		pickupSnapshot: o.pickupSnapshot
@@ -3733,65 +3893,6 @@ function orderToCsvSource(o: Doc<"orders"> & { creditGated?: boolean }): CsvOrde
 		cancelledReason: o.cancelledReason,
 		pinnedAt: o.pinnedAt,
 	};
-}
-
-/**
- * A cache that lets `resolveCategoryNames` be called repeatedly without
- * re-reading the same products and categories. One order at checkout doesn't
- * need it (a fresh map per call is the same thing); the backfill, which walks a
- * whole store's orders over the same handful of products, very much does.
- */
-export interface CategoryNameMemo {
-	/** productId → its sorted category names. */
-	byProduct: Map<string, string[]>;
-	/** categoryId → name, so a category shared by 40 products is read once. */
-	byCategory: Map<string, string>;
-}
-
-export function createCategoryNameMemo(): CategoryNameMemo {
-	return { byProduct: new Map(), byCategory: new Map() };
-}
-
-/**
- * Category names for a set of products, resolved once per distinct id
- * (86eyrtz74). Used at ORDER CREATE to freeze `items[].categoryNames`, so every
- * later read — table, export, search — is free.
- *
- * Archived categories are included: they name a real grouping the seller was
- * using at the time, and this is a record of that moment.
- */
-export async function resolveCategoryNames(
-	ctx: MutationCtx,
-	productIds: Iterable<Id<"products">>,
-	memo: CategoryNameMemo = createCategoryNameMemo(),
-): Promise<Map<string, string[]>> {
-	const out = new Map<string, string[]>();
-	for (const productId of new Set(productIds)) {
-		const cached = memo.byProduct.get(productId);
-		if (cached) {
-			out.set(productId, cached);
-			continue;
-		}
-		const joins = await ctx.db
-			.query("productCategories")
-			.withIndex("by_product", (q) => q.eq("productId", productId))
-			.collect();
-		const names: string[] = [];
-		for (const j of joins) {
-			let name = memo.byCategory.get(j.categoryId);
-			if (name === undefined) {
-				const cat = await ctx.db.get(j.categoryId);
-				if (!cat) continue;
-				name = cat.name;
-				memo.byCategory.set(j.categoryId, name);
-			}
-			names.push(name);
-		}
-		names.sort((a, b) => a.localeCompare(b));
-		memo.byProduct.set(productId, names);
-		out.set(productId, names);
-	}
-	return out;
 }
 
 async function assertExportAccess(
@@ -5325,12 +5426,30 @@ export const updateDeliveryAddress = mutation({
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
 
+		// The order's country is fixed at checkout (z8r3fdr5yy): an edit moves
+		// the address within it, never across the border — that would be a
+		// different order (different lane, different price, maybe items that
+		// can't go). A cross-border edit re-prices on the store's lane as it
+		// stands, and refuses if the store has stopped delivering there.
+		const storeCountry = retailer.country ?? DEFAULT_COUNTRY;
+		const orderCountry = order.deliveryAddress?.country ?? storeCountry;
+		if (
+			deliveryAddress.country !== undefined &&
+			deliveryAddress.country !== orderCountry
+		) {
+			throw new ConvexError(
+				`This order is going to ${countryName(orderCountry)} — the delivery country can't change after ordering. Message the store to arrange it.`,
+			);
+		}
+		const crossBorderLane = await crossBorderLaneForOrder(
+			ctx,
+			retailer,
+			orderCountry,
+		);
+
 		let sanitized: ReturnType<typeof assertValidAddress>;
 		try {
-			sanitized = assertValidAddress(
-				deliveryAddress,
-				retailer.country ?? DEFAULT_COUNTRY,
-			);
+			sanitized = assertValidAddress(deliveryAddress, orderCountry);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
 		}
@@ -5345,13 +5464,16 @@ export const updateDeliveryAddress = mutation({
 		// drop the buyer onto a seller-calculates path. Pending-only gate above
 		// means no payment has been asked for yet, so the total is still safe to
 		// move.
-		const liveQuote = await loadCheckoutDeliveryQuote(
-			ctx,
-			order.retailerId,
-			deliveryQuoteId,
-			sanitized,
-			order.items,
-		);
+		const liveQuote =
+			crossBorderLane && !laneNeedsLiveQuote(crossBorderLane, order.subtotal)
+				? undefined
+				: await loadCheckoutDeliveryQuote(
+					ctx,
+					order.retailerId,
+					deliveryQuoteId,
+					sanitized,
+					order.items,
+				);
 		// Weight-mode re-price (86eyeea1n) weighs the ORDER's frozen lines against
 		// live variant weights — a state change can move the order to another
 		// zone's bands, so the weight must be summed again, not read off the old
@@ -5359,7 +5481,10 @@ export const updateDeliveryAddress = mutation({
 		// reads weightless and resolves per onUnpriceable — never a silent
 		// underweigh.
 		let cartWeight: CartWeightSummary | undefined;
-		if (retailer.deliveryConfig?.mode === "weight") {
+		const weighs = crossBorderLane
+			? crossBorderLane.pricing.kind === "weight"
+			: retailer.deliveryConfig?.mode === "weight";
+		if (weighs) {
 			const weightItems: CartWeightItem[] = await Promise.all(
 				order.items.map(async (item): Promise<CartWeightItem> => {
 					const variant = item.variantId
@@ -5380,6 +5505,7 @@ export const updateDeliveryAddress = mutation({
 			sanitized,
 			cartWeight,
 			liveQuote,
+			crossBorderLane ? { lane: crossBorderLane } : undefined,
 		);
 		const { subtotal, discount, total } = computeOrderTotals(order.items, {
 			...orderExtras(order),

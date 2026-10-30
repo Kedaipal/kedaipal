@@ -58,7 +58,10 @@ import { priorityFeeWire, TIP_OPTIONS } from "./lib/lalamoveTip";
 import { formatBusinessAddress } from "./lib/address";
 import { COUNTRY_LABELS, type Country, DEFAULT_COUNTRY } from "./lib/country";
 import { courierProviderValidator } from "./lib/courierProviders";
-import { lalamoveBookingArmed } from "./lib/courierBooking";
+import {
+	lalamoveBookingArmed,
+	servesOrderDestination,
+} from "./lib/courierBooking";
 import { type CartWeightItem, riderBookingAllowed } from "./lib/delivery";
 import {
 	chooseRiderVehicle,
@@ -467,8 +470,9 @@ export const saveCheckoutQuote = internalMutation({
 				}),
 			),
 		),
-		latitude: v.number(),
-		longitude: v.number(),
+		latitude: v.optional(v.number()),
+		longitude: v.optional(v.number()),
+		postcode: v.optional(v.string()),
 		// The one-kilo floor stamp (`liveQuoteWeightFacts`) — Delyva-won
 		// provider-aware quotes only; a rider quote never carries it.
 		weightFloored: v.optional(v.boolean()),
@@ -1336,6 +1340,10 @@ export const applyWebhookEvent = internalMutation({
  * on order detail (never a dead end; each reason maps to copy + a fix path). */
 export type DispatchBlock =
 	| "country_unsupported"
+	/** The order is going somewhere this provider doesn't carry from this
+	 * store (z8r3fdr5yy): a cross-border order on Lalamove/Delyva, or a
+	 * domestic one on a MY store's EasyParcel. */
+	| "destination_unsupported"
 	| "not_delivery"
 	| "bad_status"
 	| "job_active"
@@ -1365,6 +1373,8 @@ function dispatchBlockReason(args: {
 	// country switch itself refuses to let them take (86eyqgujv).
 	if (!riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY))
 		return "country_unsupported";
+	if (!servesOrderDestination("lalamove", order, retailer))
+		return "destination_unsupported";
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
 	if (order.status !== "confirmed" && order.status !== "packed")
 		return "bad_status";

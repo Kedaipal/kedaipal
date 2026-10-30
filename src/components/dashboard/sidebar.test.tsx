@@ -348,7 +348,13 @@ describe("Admin group — the Blog videos shortcut (admin areas, z8r3fdwwpe)", (
 		);
 		expect(getByText("Admin")).toBeTruthy();
 		expect(blogLink(container)?.textContent).toContain("Blog videos");
-		for (const label of ["All sellers", "Billing", "Showcases", "WABA Safety"])
+		for (const label of [
+			"All sellers",
+			"Billing",
+			"Acquisition",
+			"Showcases",
+			"WABA Safety",
+		])
 			expect(queryByText(label)).toBeNull();
 	});
 
@@ -361,6 +367,12 @@ describe("Admin group — the Blog videos shortcut (admin areas, z8r3fdwwpe)", (
 			a.textContent?.trim(),
 		);
 		expect(labels[0]).toBe("All sellers");
+		// Acquisition (money out) sits beside Billing (money in), 86eye3eyp.
+		expect(labels.slice(0, 3)).toEqual([
+			"All sellers",
+			"Billing",
+			"Acquisition",
+		]);
 		expect(labels.at(-1)).toBe("Blog videos");
 	});
 

@@ -464,6 +464,37 @@ describe("booked states", () => {
 		expect(screen.getByText(/track parcel/i)).toBeTruthy();
 	});
 
+	it("delivered says scan-not-photo and never claims the buyer was messaged (z8r3fdytmq)", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: {
+				status: "completed",
+				providerOrderId: "delyva-1",
+				costActual: 1850,
+				serviceCode: "NINJA-COLD",
+				serviceName: "Ninja Cold",
+				itemType: "CHILLED",
+				awb: "MY0012345678",
+				createdAt: Date.now(),
+			},
+		});
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={
+					{
+						...order,
+						status: "delivered",
+						carrierTrackingUrl: "https://track.example/MY0012345678",
+					} as Doc<"orders">
+				}
+			/>,
+		);
+		expect(container.textContent).toContain(
+			"tracking scan, not a photo: Track parcel shows it",
+		);
+		expect(container.textContent).not.toMatch(/notified automatically/);
+	});
+
 	it("says the tracking number is still coming rather than showing a blank", () => {
 		state.dispatch = dispatchState({
 			blockReason: "job_active",

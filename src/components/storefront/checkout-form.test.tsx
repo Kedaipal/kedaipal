@@ -38,6 +38,10 @@ const state = vi.hoisted(() => ({
 	// The live catalog `products:list` answers with — [] unless a test lists
 	// a product (buyer questions are read from here, z8r3fdkjek).
 	listed: [] as unknown[],
+	// What `delivery:quote` answers — a free store unless a test prices live.
+	deliveryQuote: { kind: "free" } as unknown,
+	// The live-quote action (`liveQuote:quoteForCheckout`).
+	quoteLive: vi.fn(),
 }));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
@@ -60,7 +64,7 @@ vi.mock("@tanstack/react-query", () => ({
 				return { data: state.listed };
 			// A free-delivery store — no quote gate in the way of the phone field.
 			case "delivery:quote":
-				return { data: { kind: "free" } };
+				return { data: state.deliveryQuote };
 			default:
 				return { data: undefined };
 		}
@@ -68,7 +72,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("convex/react", () => ({
 	useMutation: () => state.createOrder,
-	useAction: () => vi.fn(),
+	useAction: () => state.quoteLive,
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 // The address search talks to Convex (Places actions); these tests are about
@@ -98,6 +102,7 @@ beforeEach(() => {
 		trackingToken: "tok_abc",
 		confirmedAtCreate: true,
 	});
+	state.deliveryQuote = { kind: "free" };
 });
 
 afterEach(() => {
@@ -154,6 +159,8 @@ function renderCheckout(
 		closedDates?: ClosedDateRange[];
 		cart?: UseCart;
 		paymentsPaused?: boolean;
+		shipsAbroadTo?: Country[];
+		visitorCountry?: Country;
 	} = {},
 ) {
 	const pickupOnly = opts.method === "pickup";
@@ -177,6 +184,8 @@ function renderCheckout(
 			minOrderValue={undefined}
 			pickupLocations={pickupOnly ? [PICKUP] : []}
 			paymentsPaused={opts.paymentsPaused}
+			shipsAbroadTo={opts.shipsAbroadTo}
+			visitorCountry={opts.visitorCountry}
 		/>,
 	);
 	return result;
@@ -295,6 +304,88 @@ describe("CheckoutPage — WhatsApp number from any country (z8r3fdh274)", () =>
 		// The button unmounted under the buyer's finger; focus goes back to
 		// the field, not to the top of the page.
 		expect(document.activeElement).toBe(phoneInput());
+	});
+});
+
+describe("CheckoutPage — the phone plate follows Deliver to (z8r3fdr5yy)", () => {
+	// Found on the /test-code pass: Deliver to Malaysia with a +65 plate.
+	const deliverTo = (name: string) =>
+		fireEvent.click(screen.getByRole("button", { name, pressed: false }));
+
+	it("starts on the destination when checkout opens abroad", () => {
+		renderCheckout({ shipsAbroadTo: ["SG"], visitorCountry: "SG" });
+		expect(plateCode()).toBe("+65");
+	});
+
+	it("moves with the switch while the number is still empty", () => {
+		renderCheckout({ shipsAbroadTo: ["SG"] });
+		expect(plateCode()).toBe("+60");
+		deliverTo("Singapore");
+		expect(plateCode()).toBe("+65");
+		deliverTo("Malaysia");
+		expect(plateCode()).toBe("+60");
+	});
+
+	it("never rewrites a number the buyer already typed", () => {
+		renderCheckout({ shipsAbroadTo: ["SG"] });
+		changePhone("12-345 6789");
+		deliverTo("Singapore");
+		expect(plateCode()).toBe("+60");
+		expect(phoneInput().value).toBe("12-345 6789");
+	});
+});
+
+describe("CheckoutPage — an overseas live price is quoted from the postal code (z8r3fdr5yy)", () => {
+	// Found on the /test-code pass: the live lane's checkout demanded a map
+	// pin abroad — no manual entry, "we price delivery from the pin" — though
+	// the lane's EasyParcel quote is bound to the postal code.
+	beforeEach(() => {
+		state.deliveryQuote = {
+			kind: "live",
+			providerAware: true,
+			riders: false,
+			couriers: true,
+		};
+		state.quoteLive.mockResolvedValue({
+			status: "quoted",
+			quoteId: "q_1",
+			fee: 3008,
+		});
+	});
+
+	function typeAddress(postcode: string) {
+		fireEvent.click(screen.getByRole("button", { name: /Enter it manually/ }));
+		fireEvent.change(screen.getByRole("textbox", { name: /Address line 1/ }), {
+			target: { value: "12 Bedok North Ave 3" },
+		});
+		fireEvent.change(screen.getByRole("textbox", { name: /Postal code/ }), {
+			target: { value: postcode },
+		});
+	}
+
+	it("offers a typed address, and a partial code asks for the rest without spending a quote", async () => {
+		renderCheckout({ shipsAbroadTo: ["SG"], visitorCountry: "SG" });
+		expect(screen.queryByText(/we price delivery from the pin/)).toBeNull();
+		typeAddress("4601");
+		expect(
+			(
+				await screen.findAllByText(
+					/Add your postal code so we can calculate your delivery fee/,
+				)
+			).length,
+		).toBeGreaterThan(0);
+		await new Promise((r) => setTimeout(r, 500));
+		expect(state.quoteLive).not.toHaveBeenCalled();
+	});
+
+	it("a complete code quotes by country and postcode — no pin — and shows the fee", async () => {
+		renderCheckout({ shipsAbroadTo: ["SG"], visitorCountry: "SG" });
+		typeAddress("460123");
+		await waitFor(() => expect(state.quoteLive).toHaveBeenCalledTimes(1));
+		const args = state.quoteLive.mock.calls[0][0];
+		expect(args).toMatchObject({ country: "SG", postcode: "460123" });
+		expect(args.latitude).toBeUndefined();
+		expect(await screen.findByText("30.08")).toBeTruthy();
 	});
 });
 
@@ -646,5 +737,80 @@ describe("price changed under the buyer", () => {
 		expect(screen.queryByRole("button", { name: /Update prices/ })).toBeNull();
 		const place = screen.getAllByRole("button", { name: "Place order" })[0];
 		expect((place as HTMLButtonElement).disabled).toBe(false);
+	});
+});
+
+describe("CheckoutPage — Place order is never disabled without a reason", () => {
+	const nameInput = () =>
+		screen.getByRole("textbox", { name: /^Your name/ }) as HTMLInputElement;
+	const placeOrder = () =>
+		screen.getAllByRole("button", {
+			name: "Place order",
+		})[0] as HTMLButtonElement;
+
+	it("an untouched form says nothing — its press reveals every error inline", () => {
+		renderCheckout({ method: "pickup" });
+		expect(placeOrder().disabled).toBe(false);
+		expect(screen.queryByText(/to continue$/)).toBeNull();
+	});
+
+	it("a name cleared after typing disables Place order AND names it, by both CTAs", () => {
+		renderCheckout({ method: "pickup" });
+		fireEvent.change(nameInput(), { target: { value: "Aisyah" } });
+		changePhone("012-345 6789");
+		expect(placeOrder().disabled).toBe(false);
+
+		fireEvent.change(nameInput(), { target: { value: "" } });
+		expect(placeOrder().disabled).toBe(true);
+		// Desktop summary footer + mobile sticky bar.
+		expect(screen.getAllByText("Add your name to continue")).toHaveLength(2);
+	});
+
+	it("a cleared WhatsApp number is named once the name is fine", () => {
+		renderCheckout({ method: "pickup" });
+		fireEvent.change(nameInput(), { target: { value: "Aisyah" } });
+		changePhone("012-345 6789");
+		changePhone("");
+		expect(placeOrder().disabled).toBe(true);
+		expect(
+			screen.getAllByText("Add your WhatsApp number to continue"),
+		).toHaveLength(2);
+	});
+
+	it("a filled-but-wrong name reads its rule", () => {
+		renderCheckout({ method: "pickup" });
+		fireEvent.change(nameInput(), { target: { value: "Al" } });
+		expect(
+			screen.getAllByText("Your name must be at least 3 characters").length,
+		).toBeGreaterThan(0);
+	});
+
+	it("a pinned SG address with no postal code: the field is on the card, and the reason names it", () => {
+		window.localStorage.setItem(
+			"kedaipal:lastAddress:SG",
+			JSON.stringify({
+				line1: "123 Bedok North Avenue 3",
+				city: "Singapore",
+				state: "Singapore",
+				postcode: "",
+				latitude: "1.33",
+				longitude: "103.93",
+				placeId: "sg-place",
+			}),
+		);
+		renderCheckout({ country: "SG" });
+		expect(screen.getByText("Location confirmed")).toBeTruthy();
+		fireEvent.change(nameInput(), { target: { value: "Aisyah" } });
+		changePhone("9123 4567");
+
+		expect(placeOrder().disabled).toBe(true);
+		expect(
+			screen.getAllByText("Add your postal code to continue"),
+		).toHaveLength(2);
+		fireEvent.change(screen.getByLabelText(/Postal code/i), {
+			target: { value: "460123" },
+		});
+		expect(screen.queryByText("Add your postal code to continue")).toBeNull();
+		expect(placeOrder().disabled).toBe(false);
 	});
 });

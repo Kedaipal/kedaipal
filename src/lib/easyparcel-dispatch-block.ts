@@ -10,14 +10,14 @@ import type { EasyparcelDispatchBlock } from "../../convex/easyparcel";
  * then a compile error here instead of silently falling through.
  */
 const BLOCK_COPY: Record<EasyparcelDispatchBlock, string> = {
-	// The only reason with no fix to offer — the card hides itself for this
-	// one; the line is the fallback for surfaces that can't. MY is closed on
-	// purpose (Delyva serves it), so the alternative is named.
 	// Neither has a fix the seller can make — the card hides itself for both;
 	// these lines are the fallback for surfaces that can't.
 	not_configured: "EasyParcel booking isn't available right now.",
 	country_unsupported:
-		"EasyParcel booking is for Singapore stores — Malaysian stores book couriers through Delyva instead.",
+		"EasyParcel booking isn't available for stores in your country.",
+	// A MY store's EasyParcel carries overseas orders only (z8r3fdr5yy).
+	destination_unsupported:
+		"EasyParcel is for your overseas orders — book this one with Delyva, or arrange the courier yourself and add the tracking number.",
 	not_delivery: "This is a self-collect order — there's no parcel to send out.",
 	bad_status:
 		"A courier can only be booked while the order is confirmed or packed.",
@@ -34,6 +34,8 @@ const BLOCK_COPY: Record<EasyparcelDispatchBlock, string> = {
 		"EasyParcel courier booking is a Pro feature. Upgrade to book couriers in one tap.",
 	no_pickup_address:
 		"Add your pickup address under Settings → Integrations → EasyParcel — couriers need somewhere to collect from.",
+	no_sender_phone:
+		"Add your store's WhatsApp number under Settings → WhatsApp — EasyParcel gives it to the courier as the sender's contact, and won't book without it.",
 	no_address:
 		"This order has no delivery address, so there's nowhere to send the parcel.",
 };

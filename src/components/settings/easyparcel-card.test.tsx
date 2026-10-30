@@ -101,6 +101,8 @@ function settings(overrides: Record<string, unknown> = {}) {
 		},
 		connectedAt: Date.now() - 60_000,
 		country: "SG",
+		destinations: "both",
+		overseasLane: { destination: "MY", state: "off" },
 		lastAttempt: undefined,
 		...overrides,
 	};
@@ -132,6 +134,7 @@ describe("not connected — the OAuth hand-off", () => {
 		).toBeDefined();
 		expect(screen.getByText(/never sees your EasyParcel/)).toBeDefined();
 		expect(screen.queryByLabelText(/API key/i)).toBeNull();
+		expect(screen.getByText(/tracking scan, not a photo/)).toBeDefined();
 	});
 
 	it("Connect asks for the sign-in URL, returning to THIS card", async () => {
@@ -290,12 +293,157 @@ describe("availability", () => {
 		expect(container.innerHTML).toBe("");
 	});
 
-	it("unavailable but still CONNECTED keeps the unwind path, with the Delyva pointer", () => {
-		state.settings = settings({ available: false, country: "MY" });
+	it("unavailable but still CONNECTED keeps the unwind path", () => {
+		state.settings = settings({ available: false });
+		render(card());
+		expect(screen.getByText(/isn't available for your store/)).toBeDefined();
+		expect(screen.getByRole("button", { name: "Disconnect" })).toBeDefined();
+	});
+});
+
+describe("a MY store finds EasyParcel and is told the lane it needs (z8r3fdr5yy)", () => {
+	// Found on the /test-code pass: the card was hidden on a MY store until a
+	// Singapore lane existed, while the overseas page pointed at it.
+	const MY = {
+		country: "MY",
+		destinations: "abroad",
+		balanceCurrency: "MYR",
+		pickupAddress: {
+			address1: "Jalan Stesen Sentral",
+			city: "Kuala Lumpur",
+			state: "WP Kuala Lumpur",
+			postcode: "50470",
+		},
+	};
+
+	it("not connected, no lane: the card shows, with the lane step and Connect", () => {
+		state.settings = settings({
+			...MY,
+			...NOT_CONNECTED,
+			overseasLane: { destination: "SG", state: "off" },
+		});
+		render(card({ country: "MY" }));
+		expect(screen.getByText("Deliver to Singapore")).toBeDefined();
+		expect(
+			screen
+				.getByText("Turn on delivery to Singapore")
+				.closest("a")
+				?.getAttribute("to"),
+		).toBe("/app/settings/overseas-delivery");
+		expect(
+			screen.getByRole("button", { name: /Connect EasyParcel/ }),
+		).toBeDefined();
+	});
+
+	it("connected, no lane: the lane is step 1 of 3 and booking waits for it", () => {
+		state.settings = settings({
+			...MY,
+			overseasLane: { destination: "SG", state: "off" },
+		});
+		render(card({ country: "MY" }));
+		expect(screen.getByText("Setup 2 of 3")).toBeDefined();
+		expect(
+			screen.getByText(/starts once the setup above is done/),
+		).toBeDefined();
+	});
+
+	it("a lane paused store-wide says so, with the way to see why", () => {
+		state.settings = settings({
+			...MY,
+			overseasLane: { destination: "SG", state: "paused", pause: "plan" },
+		});
 		render(card({ country: "MY" }));
 		expect(
-			screen.getByText(/book couriers through Delyva instead/),
+			screen.getByText(/Paused — buyers can't choose Singapore/),
 		).toBeDefined();
-		expect(screen.getByRole("button", { name: "Disconnect" })).toBeDefined();
+		expect(screen.getByText("See why").closest("a")).not.toBeNull();
+	});
+
+	it("a lane waiting on EasyParcel says it turns on by itself once the steps below are done", () => {
+		state.settings = settings({
+			...MY,
+			overseasLane: {
+				destination: "SG",
+				state: "paused",
+				pause: "courier_unavailable",
+			},
+		});
+		render(card({ country: "MY" }));
+		expect(
+			screen.getByText(/Turns on by itself once EasyParcel is ready/),
+		).toBeDefined();
+	});
+
+	it("a new lane waiting on its products links the products step", () => {
+		state.settings = settings({
+			...MY,
+			overseasLane: {
+				destination: "SG",
+				state: "paused",
+				pause: "awaiting_products",
+			},
+		});
+		render(card({ country: "MY" }));
+		expect(screen.getByText(/Almost on — choose which products/)).toBeDefined();
+		expect(
+			screen.getByText("Choose products").closest("a")?.getAttribute("to"),
+		).toBe("/app/products/overseas");
+	});
+
+	it("lane on: every step done", () => {
+		state.settings = settings({
+			...MY,
+			overseasLane: { destination: "SG", state: "on" },
+		});
+		render(card({ country: "MY" }));
+		expect(screen.queryByText(/Setup \d of 3/)).toBeNull();
+		expect(
+			screen.getByText(/books your orders going to Singapore/),
+		).toBeDefined();
+	});
+});
+
+describe("EasyParcel needs the store's WhatsApp number as the sender phone", () => {
+	it("missing: a setup step of its own, linked to Settings → WhatsApp", () => {
+		state.settings = settings({ hasSenderPhone: false });
+		render(card());
+		expect(screen.getByText("Your WhatsApp number")).toBeDefined();
+		expect(screen.getByText("Setup 2 of 3")).toBeDefined();
+		expect(
+			screen.getByText(/Add it under Settings → WhatsApp/).closest("a"),
+		).not.toBeNull();
+	});
+
+	it("present: no step, setup complete", () => {
+		state.settings = settings({ hasSenderPhone: true });
+		render(card());
+		expect(screen.queryByText("Your WhatsApp number")).toBeNull();
+		expect(screen.queryByText(/Setup \d of/)).toBeNull();
+	});
+});
+
+describe("a backend older than the page never takes the card down", () => {
+	it("no overseasLane field: the card still renders", () => {
+		state.settings = settings({ overseasLane: undefined });
+		render(card());
+		expect(screen.getByText("Connected")).toBeDefined();
+	});
+});
+
+describe("an SG store's card says it carries the Malaysia lane too", () => {
+	it("with a lane, the description names Malaysia; without, it doesn't", () => {
+		state.settings = settings({
+			overseasLane: { destination: "MY", state: "on" },
+		});
+		render(card());
+		expect(
+			screen.getByText(/It carries your orders to Malaysia too/),
+		).toBeDefined();
+		// No lane step on an SG store — EasyParcel books its domestic orders too.
+		expect(screen.queryByText("Deliver to Malaysia")).toBeNull();
+		cleanup();
+		state.settings = settings();
+		render(card());
+		expect(screen.queryByText(/Malaysia too/)).toBeNull();
 	});
 });

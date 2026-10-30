@@ -7,6 +7,7 @@ import {
 } from "./lib/buyerQuestions";
 import { countryValidator } from "./lib/country";
 import { courierProviderValidator } from "./lib/courierProviders";
+import { crossBorderLanesValidator } from "./lib/crossBorder";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { showcaseThemeValidator } from "./lib/showcase";
 import { memberPermissionsValidator } from "./lib/permissions";
@@ -130,6 +131,21 @@ export default defineSchema({
 		// dangles once the referrer is purged — readers treat a missing doc as
 		// "no referrer". Same posture as signupSource: per-row read, no index.
 		signupReferrerId: v.optional(v.id("retailers")),
+		// Which motion won this store, for CAC by channel (86eye3eyp,
+		// docs/acquisition-attribution.md). A CLOSED vocabulary validated in
+		// convex/lib/metrics.ts (ACQUISITION_CHANNELS), not here, so a channel
+		// can be added without a migration. Distinct from `signupSource`: that
+		// is the link tag captured automatically (null for walk-ins, talks and
+		// personal intros); this is the classification, set by an admin or
+		// claimed by the seller at onboarding. `acquisitionSetBy` says which —
+		// an admin tag is authoritative and a seller answer never overwrites
+		// it. Absent = untagged. Per-row read only, no index.
+		acquisitionSource: v.optional(v.string()),
+		acquisitionNote: v.optional(v.string()),
+		acquisitionSetBy: v.optional(
+			v.union(v.literal("admin"), v.literal("seller")),
+		),
+		acquisitionSetAt: v.optional(v.number()),
 		// The owner tapped "Talk to Arif" in-app (Credits T6 follow-up,
 		// z8r3fdkp8h): a signed-in Enterprise lead, stamped so the admin
 		// console can list who asked instead of trusting a WhatsApp scrollback.
@@ -360,6 +376,16 @@ export default defineSchema({
 		// settings invariant guarantee a store always keeps ≥1 WORKING fulfilment
 		// method (delivery, or self-collect with ≥1 active pickup location).
 		offerDelivery: v.optional(v.boolean()),
+		// Cross-border delivery lanes (z8r3fdr5yy): "this store also delivers to
+		// <country>", each with the SELLER'S OWN price for that country (flat,
+		// weight bands, or free — never the domestic price). Absent / empty =
+		// domestic only. A list so a future corridor is a new entry, not a
+		// migration; v1 holds at most one (the other country). Stored ≠ live:
+		// `effectiveLanes` (convex/lib/crossBorder.ts) pauses a lane at read time
+		// when the plan lacks `crossBorder`, delivery is off, or domestic pricing
+		// is a live courier quote — so a downgrade or a pricing change never
+		// deletes it. See docs/cross-border.md.
+		crossBorderLanes: v.optional(crossBorderLanesValidator),
 		// Seller's business address — the ORIGIN for radius-based delivery
 		// pricing (straight-line distance to the buyer's address). Captured via
 		// Google autocomplete in Settings → Fulfilment; `label` is the formatted
@@ -1151,6 +1177,13 @@ export default defineSchema({
 		// lists online. undefined/false = visible (legacy default; no backfill).
 		// See docs/hidden-products.md.
 		hidden: v.optional(v.boolean()),
+		// Cross-border opt-out (z8r3fdr5yy). Products INHERIT the store's
+		// overseas lane; true = "Ships within <store country> only" (frozen
+		// goods, same-day cakes, anything that can't survive the trip or the
+		// courier's prohibited list). A product can only opt OUT — with no lane
+		// on the store nothing ships abroad whatever this says. Undefined =
+		// inherit (no backfill).
+		domesticOnly: v.optional(v.boolean()),
 		// Minimum order quantity (86ey9unyx) — buyers must order at least this many
 		// units of this product per storefront order, SUMMED across the product's
 		// variants (10 + 10 of two flavours satisfies min 20 — deliberately
@@ -1919,6 +1952,12 @@ export default defineSchema({
 				// Google Place ID — when set, maps URLs deep-link to the
 				// named place page instead of raw lat/lng search.
 				placeId: v.optional(v.string()),
+				// The address's own country (z8r3fdr5yy). Stamped on every order
+				// created after cross-border shipped; absent = the store's country
+				// (every older order, zero migration). Differs from the store's
+				// country only on a cross-border order — the one thing every
+				// address renderer, the label and the courier booking key off.
+				country: v.optional(countryValidator),
 			}),
 		),
 		// Reference to the retailer's pickup location when deliveryMethod ===
@@ -2655,8 +2694,12 @@ export default defineSchema({
 		// Destination coords the quote priced — orders.create verifies the order's
 		// delivery address matches (a quote for a near/cheap pin can't be replayed
 		// against a far delivery address).
-		latitude: v.number(),
-		longitude: v.number(),
+		// The buyer's pin — the replay control for a pin-priced quote. A lane
+		// quote EasyParcel priced on the POSTCODE (z8r3fdr5yy: an overseas
+		// address is often typed, with no pin) carries the postcode instead.
+		latitude: v.optional(v.number()),
+		longitude: v.optional(v.number()),
+		postcode: v.optional(v.string()),
 		quotedAt: v.number(),
 		// The cart was quoted at the one-kilo floor (`liveQuoteWeightFacts`) and
 		// how many of its lines had no product weight — copied onto the order's
@@ -4364,4 +4407,26 @@ export default defineSchema({
 		.index("by_retailer", ["retailerId"])
 		.index("by_admin", ["adminUserId"])
 		.index("by_ts", ["ts"]),
+
+	// The CAC ledger (86eye3eyp, docs/acquisition-attribution.md): what one
+	// acquisition channel cost Kedaipal in one month. One row per
+	// (periodStart, channel), upserted by `metrics.recordSpend`; a channel
+	// with no row spent nothing. Only ACTUALS live here — CAC itself is
+	// derived at read time (convex/lib/metrics.ts), so a policy change (the
+	// founder hourly rate) recomputes every month. Kedaipal's own spend, so
+	// always MYR sen, whatever the stores it won bill in.
+	acquisitionCosts: defineTable({
+		// MYT midnight on the 1st (monthStartMyt in lib/usagePeriod.ts).
+		periodStart: v.number(),
+		// ACQUISITION_CHANNELS, validated in convex/lib/metrics.ts.
+		channel: v.string(),
+		cashSpend: v.number(), // MYR sen
+		founderHours: v.optional(v.number()),
+		note: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+		updatedBy: v.optional(v.string()), // admin Clerk subject
+	})
+		.index("by_period", ["periodStart"])
+		.index("by_period_channel", ["periodStart", "channel"]),
 });

@@ -201,7 +201,7 @@ export function creditStub(input: CreditStubInput): CreditStub {
 				? { label: capitalise(runway), value: resets.date }
 				: resets
 					? { label: resets.label, value: resets.value }
-					: { label: "Bought", value: `${balance.purchased} orders` },
+					: { label: "Extra", value: `${balance.purchased} orders` },
 		button: topUp(tone === "out" ? "Top up credits" : "Top up"),
 		triggerLine: runway
 			? `${ordersBalanceLabel(balance.total)} · ${runway}`

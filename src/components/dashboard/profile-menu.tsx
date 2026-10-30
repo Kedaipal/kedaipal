@@ -405,10 +405,11 @@ export function CreditStubBlock({ stub }: { stub: CreditStub }) {
 }
 
 /**
- * Refer a kedai — featured, because credits are what a referral pays out in.
- * Opens Home's refer section (its share link + counts). Greyed with the
- * reason while this store's link wouldn't count, rather than hidden: the
- * feature exists, the store just isn't there yet.
+ * Refer & earn — featured, because free orders are what a referral pays out
+ * in, and the stub above it is the order balance. Same name, same words and
+ * same destination as the sidebar's Refer & earn (`/app/refer`, the 28 Oct
+ * referral push): one idea, one control. Never greyed — that page explains
+ * itself to a trial or paused store, so the row only changes its line.
  */
 function ReferRow({ retailer }: { retailer: Retailer }) {
 	const card = useQuery(
@@ -417,39 +418,29 @@ function ReferRow({ retailer }: { retailer: Retailer }) {
 		}),
 	).data;
 	if (!card) return null;
-	const live = card.standing.canRefer;
 	const offer = card.offer.pro;
-	const line = !live
-		? "Once your plan is active, you both get credits"
+	const line = !card.standing.canRefer
+		? "Starts once your plan is active"
 		: card.earns
-			? `You both get ${offer} credits when they subscribe`
-			: `They get ${offer} bonus credits when they subscribe`;
-	const inner = (
-		<>
-			<span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-card text-accent-emphasis">
-				<Gift className="size-4" />
-			</span>
-			<span className="flex min-w-0 flex-1 flex-col leading-tight">
-				<span className="text-xs font-semibold text-foreground">
-					Refer a kedai
-				</span>
-				<span className="text-[11px] text-accent-emphasis">{line}</span>
-			</span>
-			<ChevronRight className="size-3.5 text-accent-emphasis" />
-		</>
-	);
-	const frame =
-		"mx-1 my-1 min-h-12 gap-2.5 rounded-[10px] border border-dashed border-accent/35 bg-accent/10 px-2.5 py-2 data-[highlighted]:bg-accent/15";
-	if (!live)
-		return (
-			<DropdownMenuItem disabled className={frame} data-testid="refer-row">
-				{inner}
-			</DropdownMenuItem>
-		);
+			? `Refer a kedai, you both get ${offer} free orders`
+			: `Refer a kedai, they get ${offer} free orders`;
 	return (
-		<DropdownMenuItem asChild className={frame} data-testid="refer-row">
-			<Link to="/app" search={{ spot: "refer" }}>
-				{inner}
+		<DropdownMenuItem
+			asChild
+			className="mx-1 my-1 min-h-12 gap-2.5 rounded-[10px] border border-dashed border-accent/35 bg-accent/10 px-2.5 py-2 data-[highlighted]:bg-accent/15"
+			data-testid="refer-row"
+		>
+			<Link to="/app/refer">
+				<span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-card text-accent-emphasis">
+					<Gift className="size-4" />
+				</span>
+				<span className="flex min-w-0 flex-1 flex-col leading-tight">
+					<span className="text-xs font-semibold text-foreground">
+						Refer &amp; earn
+					</span>
+					<span className="text-[11px] text-accent-emphasis">{line}</span>
+				</span>
+				<ChevronRight className="size-3.5 text-accent-emphasis" />
 			</Link>
 		</DropdownMenuItem>
 	);

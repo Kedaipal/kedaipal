@@ -5,7 +5,7 @@ import { m } from "../../paraglide/messages";
 import { Skeleton } from "../ui/skeleton";
 
 /**
- * "Invited by <store> · bonus credits when you start" — the referral promise
+ * "Invited by <store> · free orders when you start" — the referral promise
  * (z8r3fdetf5) at the top of the landing hero and the `/pricing` hero, where a
  * referred visitor decides. The offer is the referee's own: what THEY get on
  * each tier, never a claim about the referrer's reward (a comped partner's

@@ -25,6 +25,7 @@ import {
 	isClosedDate,
 	upcomingClosures,
 } from "./lib/closedDates";
+import { storeCurrencyOf } from "./lib/country";
 import { DAY_MS, isMytMidnight } from "./lib/fulfilmentDate";
 import { closedWeekdays } from "./lib/openingHours";
 import {
@@ -320,7 +321,7 @@ export const sellerCalendar = query({
 				args.productId !== undefined
 					? scoped[0]?.booking?.capacityPerNight
 					: undefined,
-			currency: access.retailer.currency ?? "MYR",
+			currency: storeCurrencyOf(access.retailer),
 			blocks: visibleBlocks.map((b) => ({
 				_id: b._id,
 				productId: b.productId,
