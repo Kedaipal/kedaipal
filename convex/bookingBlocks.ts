@@ -7,7 +7,6 @@
  * blocks to buyers (blocked ≡ full, locked).
  */
 
-import { storeCurrencyOf } from "./lib/country";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
@@ -26,6 +25,7 @@ import {
 	isClosedDate,
 	upcomingClosures,
 } from "./lib/closedDates";
+import { storeCurrencyOf } from "./lib/country";
 import { DAY_MS, isMytMidnight } from "./lib/fulfilmentDate";
 import { closedWeekdays } from "./lib/openingHours";
 import {
