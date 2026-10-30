@@ -223,7 +223,7 @@ const CREDITS_TONE: Record<CreditsTone, string> = {
 };
 
 /**
- * A store's credits (Kedaipal Credits T5): "130 left" over "plan 80 · bought
+ * A store's credits (Kedaipal Credits T5): "130 left" over "plan 80 · extra
  * 50", red with "out since 3 Oct" once the total reaches zero — the fact the
  * seller lock keys off. Comped and admin stores read muted: they can be at
  * zero but are never locked.
@@ -246,7 +246,7 @@ export function CreditsText({
 				{credits.headline}
 			</span>
 			{/* Wraps rather than truncates: the breakdown is the point of the
-			    column, and "plan 10 · bought 0 · custom 1000/mo" must read whole. */}
+			    column, and "plan 10 · extra 0 · custom 1000/mo" must read whole. */}
 			<span className="text-[11px] leading-snug text-pretty break-words text-muted-foreground">
 				{credits.outSince !== undefined
 					? `Out since ${formatShortDate(credits.outSince)}`

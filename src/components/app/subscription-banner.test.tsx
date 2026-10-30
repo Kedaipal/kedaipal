@@ -130,7 +130,7 @@ describe("SubscriptionBanner — running low (the last 20% of the month)", () =>
 		render(<SubscriptionBanner subscription={sub()} slug="kedai" />);
 		expect(screen.getByText("Running low: 40 orders left.")).toBeTruthy();
 		expect(
-			screen.getByText(/bought credits carry over for 12 months/),
+			screen.getByText(/credits you buy carry over for 12 months/),
 		).toBeTruthy();
 		const cta = screen.getByRole("link", { name: "Top up credits" });
 		expect(cta.getAttribute("href")).toContain("topup=1");
