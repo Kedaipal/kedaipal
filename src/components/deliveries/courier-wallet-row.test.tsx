@@ -13,6 +13,12 @@ const s = vi.hoisted(() => ({
 	lock: { readOnly: false, reason: "", cause: null as string | null },
 	canReadIntegrations: true,
 	wallets: [] as unknown[],
+	suggestion: null as unknown,
+	refresh: vi.fn(async () => ({
+		ok: true,
+		balanceMinor: 5000,
+		currency: "SGD",
+	})),
 }));
 
 vi.mock("@convex-dev/react-query", () => ({
@@ -23,12 +29,13 @@ vi.mock("@tanstack/react-query", () => ({
 		data:
 			getFunctionName(o.fn as never) === "courierWallets:list"
 				? s.wallets
-				: undefined,
+				: getFunctionName(o.fn as never) === "courierWallets:topUpSuggestion"
+					? s.suggestion
+					: undefined,
 	}),
 }));
 vi.mock("convex/react", () => ({
-	useAction: () =>
-		vi.fn(async () => ({ ok: true, balanceMinor: 5000, currency: "SGD" })),
+	useAction: () => s.refresh,
 	useMutation: () => vi.fn(),
 }));
 vi.mock("../../hooks/usePermission", () => ({
@@ -44,8 +51,12 @@ vi.mock("../../hooks/useStoreLock", () => ({
 vi.mock("../../hooks/useActAs", () => ({
 	useActAsRetailerId: () => undefined,
 }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("sonner", () => ({
+	toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
+}));
 
+import { act } from "@testing-library/react";
+import { resetTopUpAwaiting } from "../../lib/top-up-awaiting";
 import { CourierWalletList } from "./courier-wallets-section";
 import { DispatchWalletLine } from "./dispatch-wallet-line";
 
@@ -86,6 +97,9 @@ afterEach(() => {
 	s.lock = { readOnly: false, reason: "", cause: null };
 	s.canReadIntegrations = true;
 	s.wallets = [];
+	s.suggestion = null;
+	s.refresh.mockClear();
+	resetTopUpAwaiting();
 });
 
 describe("CourierWalletRow", () => {
@@ -203,6 +217,83 @@ describe("CourierWalletRow", () => {
 			screen.getByRole("link", { name: /Open Lalamove/ }).getAttribute("href"),
 		).toBe("https://web.lalamove.com");
 		expect(screen.queryByRole("button", { name: /I've topped up/ })).toBeNull();
+	});
+
+	it("suggests an amount from the store's own bookings — a guide, not a charge", () => {
+		s.suggestion = {
+			currency: "MYR",
+			bookings: 9,
+			options: [
+				{ label: "~1 week", trips: 2, minor: 2500 },
+				{ label: "~4 trips", trips: 4, minor: 5000 },
+			],
+		};
+		row(v({ state: "low", balanceMinor: 1240 }));
+		fireEvent.click(screen.getByRole("button", { name: "Top up Lalamove" }));
+		const box = screen.getByTestId("top-up-suggestion");
+		expect(box.textContent).toMatch(/RM\s?25~1 week/);
+		expect(box.textContent).toMatch(/RM\s?50~4 trips/);
+		expect(box.textContent).toMatch(/From your last 9 Lalamove bookings/);
+		// Lalamove has no auto top-up of its own to offer.
+		expect(screen.queryByText(/Never run dry/)).toBeNull();
+	});
+
+	it("leaving for the courier marks the wallet as waiting, until a newer balance lands", () => {
+		const view = v({
+			state: "low",
+			balanceMinor: 1240,
+			at: Date.now() - 60_000,
+		});
+		const { rerender } = render(
+			<CourierWalletList
+				wallets={[view]}
+				retailerId={"r1" as never}
+				country="MY"
+				editable={false}
+			/>,
+		);
+		expect(screen.queryByTestId("wallet-awaiting-top-up")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Top up Lalamove" }));
+		fireEvent.click(screen.getByRole("link", { name: /Open Lalamove/ }));
+		expect(screen.getByTestId("wallet-awaiting-top-up").textContent).toMatch(
+			/Waiting for Lalamove to report your top-up/,
+		);
+		// Lalamove's webhook lands a newer balance: waiting ends by itself.
+		rerender(
+			<CourierWalletList
+				wallets={[{ ...view, balanceMinor: 9240, at: Date.now() + 1_000 }]}
+				retailerId={"r1" as never}
+				country="MY"
+				editable={false}
+			/>,
+		);
+		expect(screen.queryByTestId("wallet-awaiting-top-up")).toBeNull();
+	});
+
+	it("EasyParcel: the auto top-up way out, and coming back re-reads the balance once", async () => {
+		row(
+			v({
+				provider: "easyparcel",
+				state: "low",
+				balanceMinor: 1500,
+				source: "pull",
+				at: Date.now() - 60_000,
+			}),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Top up EasyParcel" }));
+		expect(
+			screen.getByRole("link", { name: /Never run dry/ }).getAttribute("href"),
+		).toBe("https://app.easyparcel.com/my/en/account/auto-topup/");
+		fireEvent.click(screen.getByRole("link", { name: /Open EasyParcel/ }));
+		await act(async () => {
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		expect(s.refresh).toHaveBeenCalledTimes(1);
+		// A second return within the minute doesn't ask EasyParcel again.
+		await act(async () => {
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		expect(s.refresh).toHaveBeenCalledTimes(1);
 	});
 
 	it("EasyParcel's hand-off can re-check the balance after a top-up", () => {

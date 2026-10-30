@@ -119,6 +119,7 @@ export function DispatchWalletLine({
 				view={view}
 				country={country}
 				now={now}
+				retailerId={retailerId}
 			/>
 		</div>
 	);

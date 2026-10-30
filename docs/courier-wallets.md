@@ -159,6 +159,26 @@ account (the personal app is a different wallet). Only EasyParcel gets
 "I've topped up — check again", because it is the one wallet we can ask;
 Lalamove pushes on its own and Delyva never shares.
 
+Three more pieces from Arif's 24 Oct scope comment (built 31 Oct):
+
+- **Suggested top-up.** "RM 50 · ~4 trips", "~1 week", "~2 weeks" from the
+  store's OWN bookings with that courier over the last 30 days
+  (`courierWallets.topUpSuggestion`, `topUpSuggestions`): the average charged
+  booking × trips, rounded up to a whole 5. Hidden below 5 bookings, for a test
+  wallet, and when the wallet isn't in the store's currency. A guide, never a
+  charge: the seller types the amount at the courier.
+- **Never run dry.** EasyParcel offers card auto top-up on its own side, so
+  its sheet links straight to the account's Auto Topup page, per country
+  (`autoTopUpUrl`). Lalamove and Delyva have none.
+- **The trip out is remembered.** "Open <Courier>" marks that wallet as
+  waiting (`src/lib/top-up-awaiting.ts`), and every surface showing it says
+  "Waiting for Lalamove to report your top-up — this updates by itself" until
+  a NEWER balance lands; it's derived, so a landed top-up ends it, and it
+  lapses after 30 minutes. For EasyParcel, coming back to the tab re-reads the
+  balance by itself (once a minute at most, across every open surface) and
+  says whether the top-up has landed yet. Delyva never reports, so it never
+  waits.
+
 Destinations (`WALLET_PROVIDERS`, checked 29–30 Oct 2026 — no provider
 publishes a deep top-up URL, so these are each provider's web app plus its own
 article):
@@ -167,7 +187,7 @@ article):
 | --- | --- | --- |
 | Lalamove | `web.lalamove.com` | MY / SG blog guides |
 | Delyva (MY) | `my.delyva.app` | none published |
-| EasyParcel | `app.easyparcel.com/sg/en/` (SG) · `/my/en/` (MY) — the bare root redirects every account to the Malaysian site | SG help-centre article |
+| EasyParcel | `app.easyparcel.com/sg/en/` (SG) · `/my/en/` (MY) — the bare root redirects every account to the Malaysian site | SG help-centre article; auto top-up `…/<country>/en/account/auto-topup/` (checked 31 Oct) |
 
 ## Deliberately not built
 

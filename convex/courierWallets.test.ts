@@ -4,7 +4,7 @@ import { convexTest } from "convex-test";
 import type { FunctionArgs } from "convex/server";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { resetWalletsForCountrySwitch } from "./courierWallets";
 import { keyFingerprint, parseWalletBalance } from "./lib/courierWallet";
 import { computeLalamoveWebhookSignature } from "./lib/lalamoveSignature";
@@ -605,3 +605,83 @@ describe("a country switch resets every wallet", () => {
 		expect(rows[0]?.balance).toBeUndefined();
 	});
 });
+
+describe("topUpSuggestion — from this store's own bookings with the courier", () => {
+	let n = 0;
+	async function bookings(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		jobs: Partial<Doc<"deliveryJobs">>[],
+	) {
+		await t.run(async (ctx) => {
+			for (const over of jobs) {
+				const orderId = await ctx.db.insert("orders", {
+					retailerId,
+					shortId: `ORD-S${n++}`,
+					items: [],
+					subtotal: 2500,
+					total: 2500,
+					currency: "MYR",
+					status: "delivered",
+					channel: "whatsapp",
+					customer: { name: "Aisha" },
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+				} as never);
+				await ctx.db.insert("deliveryJobs", {
+					orderId,
+					retailerId,
+					provider: "lalamove",
+					status: "completed",
+					costActual: 1160,
+					quotationId: "q",
+					vehicleType: "MOTORCYCLE",
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+					...over,
+				});
+			}
+		});
+	}
+	const suggest = (t: ReturnType<typeof setup>, retailerId: Id<"retailers">) =>
+		t
+			.withIdentity({ subject: USER })
+			.query(api.courierWallets.topUpSuggestion, {
+				retailerId,
+				provider: "lalamove",
+			});
+
+	test("averages the charged bookings only — never a cancelled one, an old one or another courier's", async () => {
+		const t = setup();
+		const { retailerId } = await seedArmedStore(t);
+		const old = Date.now() - 40 * 24 * 60 * 60 * 1000;
+		await bookings(t, retailerId, [
+			{},
+			{},
+			{ status: "ongoing" },
+			{},
+			{},
+			{ status: "canceled", costActual: 99_900 },
+			{ createdAt: old, costActual: 99_900 },
+			{ provider: "delyva", costActual: 99_900 },
+		]);
+		const s = await suggest(t, retailerId);
+		expect(s?.bookings).toBe(5);
+		expect(s?.currency).toBe("MYR");
+		// Five RM 11.60 trips: "~4 trips" is RM 46.40, rounded up to RM 50.
+		expect(s?.options.find((o) => o.label === "~4 trips")?.minor).toBe(5000);
+	});
+
+	test("too few bookings, or a sandbox key's play money, suggest nothing", async () => {
+		const t = setup();
+		const { retailerId } = await seedArmedStore(t);
+		await bookings(t, retailerId, [{}, {}, {}, {}]);
+		expect(await suggest(t, retailerId)).toBeNull();
+
+		const sandbox = setup();
+		const keyed = await seedKeyedStore(sandbox); // pk_test key: a test wallet
+		await bookings(sandbox, keyed.retailerId, [{}, {}, {}, {}, {}, {}]);
+		expect(await suggest(sandbox, keyed.retailerId)).toBeNull();
+	});
+});
+

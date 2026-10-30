@@ -137,6 +137,9 @@ export type WalletProvider = {
 	appUrl: CountryUrls;
 	/** The provider's own top-up guide, when it publishes one. */
 	guideUrl: CountryUrls;
+	/** The provider's own auto top-up setting, when it has one — the way
+	 * a wallet never runs dry at all. */
+	autoTopUpUrl: CountryUrls;
 };
 
 /**
@@ -154,12 +157,14 @@ export const WALLET_PROVIDERS: Record<CourierProviderId, WalletProvider> = {
 			MY: "https://www.lalamove.com/en-my/blog/how-to-top-up-lalamove-wallet",
 			SG: "https://www.lalamove.com/en-sg/blog/how-to-use-the-lalamove-wallet",
 		},
+		autoTopUpUrl: { MY: null, SG: null },
 	},
 	delyva: {
 		name: "Delyva",
 		model: "refusal",
 		appUrl: { MY: "https://my.delyva.app", SG: null },
 		guideUrl: { MY: null, SG: null },
+		autoTopUpUrl: { MY: null, SG: null },
 	},
 	easyparcel: {
 		name: "EasyParcel",
@@ -173,6 +178,12 @@ export const WALLET_PROVIDERS: Record<CourierProviderId, WalletProvider> = {
 		guideUrl: {
 			MY: null,
 			SG: "https://helpcentre-sg.easyparcel.com/support/solutions/articles/9000224683-how-to-add-or-top-up-credit-to-my-account-on-easyparcel-",
+		},
+		// Card auto top-up on EasyParcel's side (Arif, 24 Oct). Both land on
+		// the account's own Auto Topup page (checked 31 Oct 2026).
+		autoTopUpUrl: {
+			MY: "https://app.easyparcel.com/my/en/account/auto-topup/",
+			SG: "https://app.easyparcel.com/sg/en/account/auto-topup/",
 		},
 	},
 };
@@ -353,3 +364,48 @@ export function lowWalletNotice(args: {
 		return "notify";
 	return null;
 }
+
+/** Bookings below this tell us too little to suggest an amount. */
+export const TOP_UP_SUGGESTION_MIN_BOOKINGS = 5;
+/** The window the suggestion averages over. */
+export const TOP_UP_SUGGESTION_WINDOW_DAYS = 30;
+
+export type TopUpSuggestion = {
+	/** "~4 trips", "~1 week", "~2 weeks". */
+	label: string;
+	/** Bookings this amount covers at the store's average cost. */
+	trips: number;
+	/** Rounded UP to a whole 5 of the currency — a number to type, not a
+	 * calculation to copy. */
+	minor: number;
+};
+
+/**
+ * What to top up, from the store's OWN bookings with this courier
+ * (Arif, 24 Oct): the average booking cost × a few trips, a week, two weeks
+ * at this pace. `null` below `TOP_UP_SUGGESTION_MIN_BOOKINGS` — a guess from
+ * two trips is worse than none. A suggestion only: the seller types the
+ * amount at the courier. Options that come out the same are said once.
+ */
+export function topUpSuggestions(
+	costsMinor: readonly number[],
+	windowDays: number = TOP_UP_SUGGESTION_WINDOW_DAYS,
+): TopUpSuggestion[] | null {
+	if (costsMinor.length < TOP_UP_SUGGESTION_MIN_BOOKINGS) return null;
+	const avg = costsMinor.reduce((a, b) => a + b, 0) / costsMinor.length;
+	const perWeek = (costsMinor.length / windowDays) * 7;
+	const roundUp = (minor: number) => Math.ceil(minor / 500) * 500;
+	const raw = [
+		{ label: "~4 trips", trips: 4 },
+		{ label: "~1 week", trips: Math.max(1, Math.round(perWeek)) },
+		{ label: "~2 weeks", trips: Math.max(1, Math.round(perWeek * 2)) },
+	];
+	const out: TopUpSuggestion[] = [];
+	for (const r of raw) {
+		const minor = roundUp(avg * r.trips);
+		if (minor <= 0 || out.some((o) => o.minor === minor)) continue;
+		out.push({ ...r, minor });
+	}
+	return out.sort((a, b) => a.minor - b.minor);
+}
+

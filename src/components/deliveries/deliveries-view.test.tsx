@@ -30,6 +30,13 @@ vi.mock("convex/react", () => ({
 	useAction: () => vi.fn(),
 	useMutation: () => vi.fn(),
 }));
+// The wallet rows' top-up sheet reads its suggestion through the adapter.
+vi.mock("@convex-dev/react-query", () => ({
+	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
+}));
+vi.mock("@tanstack/react-query", () => ({
+	useQuery: () => ({ data: undefined }),
+}));
 vi.mock("../../hooks/useStoreLock", () => ({
 	useAreaLock: () => ({ readOnly: false, reason: "", cause: null }),
 }));

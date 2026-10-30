@@ -49,6 +49,9 @@ import {
 	LOW_ALERT_MIN_MINOR,
 	lowWalletNotice,
 	parseDelyvaRefusal,
+	TOP_UP_SUGGESTION_WINDOW_DAYS,
+	type TopUpSuggestion,
+	topUpSuggestions,
 	WALLET_PROVIDERS,
 	type WalletSnapshot,
 	walletMoney,
@@ -57,6 +60,7 @@ import {
 } from "./lib/courierWallet";
 import { renderLowWalletEmail } from "./lib/courierWalletEmailCopy";
 import { decryptSecret } from "./lib/credentialCrypto";
+import { isActiveJobStatus } from "./lib/deliveryJobs";
 import { resolveDelyvaCredentials } from "./lib/delyva";
 import { sendEmail } from "./lib/email";
 import { loadEasyparcelArming } from "./lib/easyparcelArming";
@@ -524,6 +528,62 @@ export const list = query({
 			level: "read",
 		});
 		return readCourierWallets(ctx, retailer);
+	},
+});
+
+/** How far back the suggestion looks for this store's bookings. */
+const SUGGESTION_JOB_SCAN = 300;
+
+/**
+ * What to top up this courier's wallet by, from the store's own bookings
+ * with it over the last 30 days (`topUpSuggestions`, Arif 24 Oct). Same gate
+ * as the wallets themselves. `null` when there's too little to go on, for a
+ * test wallet (play money needs no plan), and when the wallet isn't in the
+ * store's currency — booking costs are, and an RM average is no suggestion
+ * for an S$ wallet.
+ */
+export const topUpSuggestion = query({
+	args: { retailerId: v.id("retailers"), provider: courierProviderValidator },
+	handler: async (
+		ctx,
+		{ retailerId, provider },
+	): Promise<{
+		currency: string;
+		bookings: number;
+		options: TopUpSuggestion[];
+	} | null> => {
+		const { retailer } = await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
+		const view = (await readCourierWallets(ctx, retailer)).find(
+			(w) => w.provider === provider,
+		);
+		if (!view || view.isTest === true) return null;
+		if (view.currency !== COUNTRY_CURRENCY[retailer.country ?? DEFAULT_COUNTRY])
+			return null;
+		const since =
+			Date.now() - TOP_UP_SUGGESTION_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.order("desc")
+			.take(SUGGESTION_JOB_SCAN);
+		// Bookings that went through and cost money — a cancelled, expired or
+		// rejected one was never charged.
+		const costs = jobs
+			.filter(
+				(j) =>
+					j.provider === provider &&
+					j.createdAt >= since &&
+					j.costActual > 0 &&
+					(j.status === "completed" || isActiveJobStatus(j.status)),
+			)
+			.map((j) => j.costActual);
+		const options = topUpSuggestions(costs);
+		return options
+			? { currency: view.currency, bookings: costs.length, options }
+			: null;
 	},
 });
 

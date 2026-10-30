@@ -254,9 +254,17 @@ export function dispatchWalletLine(
 export function walletTopUpLinks(
 	view: Pick<CourierWalletView, "provider">,
 	country: Country,
-): { appUrl: string | null; guideUrl: string | null } {
+): {
+	appUrl: string | null;
+	guideUrl: string | null;
+	autoTopUpUrl: string | null;
+} {
 	const p = WALLET_PROVIDERS[view.provider];
-	return { appUrl: p.appUrl[country], guideUrl: p.guideUrl[country] };
+	return {
+		appUrl: p.appUrl[country],
+		guideUrl: p.guideUrl[country],
+		autoTopUpUrl: p.autoTopUpUrl[country],
+	};
 }
 
 function capitalise(s: string): string {

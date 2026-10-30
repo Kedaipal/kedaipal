@@ -50,7 +50,9 @@ vi.mock("@tanstack/react-query", async () => {
 			data:
 				getFunctionName(q.fn as never) === "courierWallets:list"
 					? walletState.wallets
-					: state.dispatch,
+					: getFunctionName(q.fn as never) === "courierWallets:topUpSuggestion"
+						? undefined
+						: state.dispatch,
 		}),
 	};
 });

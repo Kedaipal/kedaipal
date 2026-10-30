@@ -13,7 +13,7 @@
  */
 
 import { useAction, useMutation } from "convex/react";
-import { Pencil, RefreshCw } from "lucide-react";
+import { Clock, Pencil, RefreshCw } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -38,6 +38,11 @@ import {
 } from "../../lib/courier-wallets";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { TONE_ACCENT, type Tone } from "../../lib/tone";
+import {
+	awaitingTopUp,
+	topUpWaitingLine,
+	useTopUpStartedAt,
+} from "../../lib/top-up-awaiting";
 import { cn } from "../../lib/utils";
 import { Glance } from "../settings/settings-primitives";
 import { AppImage } from "../ui/app-image";
@@ -118,6 +123,9 @@ export function CourierWalletRow({
 		(p.needsTopUp || topUp === "always" || view.state === "unshared");
 	const detailTone: Tone =
 		p.tone === "danger" ? "danger" : p.tone === "warn" ? "warn" : "neutral";
+	// The seller went to top up from this or another surface: say we're
+	// waiting for it, until a newer balance lands (Arif, 24 Oct).
+	const waiting = awaitingTopUp(useTopUpStartedAt(view.provider), view, now);
 
 	return (
 		<li
@@ -162,6 +170,15 @@ export function CourierWalletRow({
 							</>
 						) : null}
 					</p>
+					{waiting ? (
+						<p
+							className={`flex items-center gap-1.5 text-xs leading-5 font-medium ${TONE_ACCENT.info}`}
+							data-testid="wallet-awaiting-top-up"
+						>
+							<Clock aria-hidden className="size-3.5 shrink-0" />
+							{topUpWaitingLine(view)}
+						</p>
+					) : null}
 					{p.needsTopUp && view.provider === "lalamove" ? (
 						<p className="text-xs leading-5 text-muted-foreground">
 							{LALAMOVE_BUSINESS_NOTE}
@@ -212,6 +229,7 @@ export function CourierWalletRow({
 				view={view}
 				country={country}
 				now={now}
+				retailerId={retailerId}
 			/>
 		</li>
 	);

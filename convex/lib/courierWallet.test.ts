@@ -6,6 +6,8 @@ import {
 	FRESH_WALLET_MS,
 	lowWalletNotice,
 	parseDelyvaRefusal,
+	TOP_UP_SUGGESTION_MIN_BOOKINGS,
+	topUpSuggestions,
 	WALLET_PROVIDERS,
 	walletMoney,
 	walletState,
@@ -236,3 +238,44 @@ describe("WALLET_PROVIDERS — where a seller tops up", () => {
 		expect(walletMoney(1500, "SGD")).toBe("S$ 15.00");
 	});
 });
+
+describe("topUpSuggestions — what to top up, from the store's own bookings", () => {
+	test("too few bookings to go on says nothing", () => {
+		expect(
+			topUpSuggestions(Array(TOP_UP_SUGGESTION_MIN_BOOKINGS - 1).fill(1160)),
+		).toBeNull();
+	});
+
+	test("average × trips, rounded UP to a whole 5, cheapest first", () => {
+		// 10 bookings of RM 11.60 in 30 days: ~2.3 a week → 2 trips, 5 for two weeks.
+		const out = topUpSuggestions(Array(10).fill(1160), 30);
+		expect(out).toEqual([
+			{ label: "~1 week", trips: 2, minor: 2500 },
+			{ label: "~4 trips", trips: 4, minor: 5000 },
+			{ label: "~2 weeks", trips: 5, minor: 6000 },
+		]);
+	});
+
+	test("options that come out the same are said once", () => {
+		// 30 bookings a month ≈ 7 a week — '~4 trips' and the weeks all differ;
+		// 5 bookings ≈ 1 a week, so '~1 week' (1 trip) and '~2 weeks' (2) stay
+		// distinct from '~4 trips' — but equal amounts collapse.
+		const out = topUpSuggestions([500, 500, 500, 500, 500], 30) ?? [];
+		const amounts = out.map((o) => o.minor);
+		expect(new Set(amounts).size).toBe(amounts.length);
+	});
+});
+
+describe("auto top-up — only where the courier has one", () => {
+	test("EasyParcel links its own Auto Topup page per country; the others have none", () => {
+		expect(WALLET_PROVIDERS.easyparcel.autoTopUpUrl.MY).toMatch(
+			/app\.easyparcel\.com\/my\/en\/account\/auto-topup/,
+		);
+		expect(WALLET_PROVIDERS.easyparcel.autoTopUpUrl.SG).toMatch(
+			/app\.easyparcel\.com\/sg\/en\/account\/auto-topup/,
+		);
+		expect(WALLET_PROVIDERS.lalamove.autoTopUpUrl).toEqual({ MY: null, SG: null });
+		expect(WALLET_PROVIDERS.delyva.autoTopUpUrl).toEqual({ MY: null, SG: null });
+	});
+});
+
