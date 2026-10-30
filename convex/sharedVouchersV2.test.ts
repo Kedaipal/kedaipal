@@ -822,6 +822,14 @@ describe("extending a live code", () => {
 		const code = await mintShared(t, retailer._id, { maxRedemptions: 1 });
 		await placeOrder(t, retailer._id, productId, { code: code.code });
 		const asOwner = t.withIdentity({ subject: OWNER });
+		// A later end alone would save and leave it run out — refused, by name.
+		await expect(
+			asOwner.mutation(api.vouchers.extendShared, {
+				voucherId: code.id,
+				maxRedemptions: 1,
+				endsAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+			}),
+		).rejects.toThrow(/raise the total to bring it back/);
 		const revived = await asOwner.mutation(api.vouchers.extendShared, {
 			voucherId: code.id,
 			maxRedemptions: 3,

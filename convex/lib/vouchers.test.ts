@@ -604,6 +604,23 @@ describe("extending a live code", () => {
 			sharedExtendError({ maxRedemptions: 10 }, { maxRedemptions: 10, endsAt: now + DAY_MS }, now),
 		).toMatch(/cut it short/);
 	});
+
+	test("a dead code can't be 'extended' along the bound that didn't kill it", () => {
+		// Ran out: a later end alone would save and revive nothing.
+		const ranOut = { maxRedemptions: 10, endsAt: now + DAY_MS, redeemedCount: 10 };
+		expect(sharedExtendError(ranOut, { maxRedemptions: 10, endsAt: now + 2 * DAY_MS }, now)).toMatch(
+			/ran out at 10 uses — raise the total/,
+		);
+		expect(sharedExtendError(ranOut, { maxRedemptions: 11, endsAt: now + DAY_MS }, now)).toBeNull();
+		expect(sharedExtendError(ranOut, { endsAt: now + DAY_MS }, now)).toBeNull();
+		// Ended: a higher total alone would do the same.
+		const ended = { maxRedemptions: 10, endsAt: now - DAY_MS, redeemedCount: 4 };
+		expect(sharedExtendError(ended, { maxRedemptions: 20, endsAt: now - DAY_MS }, now)).toMatch(
+			/has ended — move the end later/,
+		);
+		expect(sharedExtendError(ended, { maxRedemptions: 20 }, now)).toBeNull();
+		expect(sharedExtendError(ended, { maxRedemptions: 10, endsAt: now + DAY_MS }, now)).toBeNull();
+	});
 });
 
 describe("the fine print", () => {

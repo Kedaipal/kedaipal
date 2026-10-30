@@ -703,6 +703,10 @@ export function usePerBuyerRecheck({
 					waPhone: buyer.waPhone,
 					waDialCountry: buyer.waDialCountry,
 				});
+				// The buyer edited the number while this was in flight: its answer
+				// is about a number that is no longer on the form, so it must not
+				// take the code off (or stamp "checked for" the old number).
+				if (lastRecheck.current !== key) return;
 				if (result.ok) {
 					onApply({
 						code: result.code,

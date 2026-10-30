@@ -327,6 +327,11 @@ export function sharedExtendError(
 			return `You can only raise the total — it's ${current.maxRedemptions} now`;
 		if (next.maxRedemptions > SHARED_USES_MAX)
 			return `At most ${SHARED_USES_MAX.toLocaleString("en-MY")} uses — check the number`;
+		// A code that ran out stays out unless the total rises past what it has
+		// used — a later end alone would save "fine" and revive nothing.
+		const used = current.redeemedCount ?? 0;
+		if (next.maxRedemptions <= used)
+			return `It ran out at ${used} ${used === 1 ? "use" : "uses"} — raise the total to bring it back`;
 	}
 	if (next.endsAt !== undefined) {
 		if (current.endsAt === undefined)
@@ -334,7 +339,10 @@ export function sharedExtendError(
 		if (!Number.isFinite(next.endsAt)) return "Pick when it ends";
 		if (next.endsAt < current.endsAt)
 			return "You can only move the end later";
-		if (next.endsAt <= now) return "That end time has already passed";
+		if (next.endsAt <= now)
+			return next.endsAt === current.endsAt
+				? "It has ended — move the end later to bring it back"
+				: "That end time has already passed";
 	}
 	return null;
 }

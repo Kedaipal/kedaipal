@@ -514,6 +514,45 @@ describe("the per-buyer limit — flow A (Zaki, 30 Oct 2026)", () => {
 		);
 	});
 
+	it("an answer about a number the buyer has since edited is dropped", async () => {
+		const BOB = {
+			...ALI,
+			waPhone: "+60198765432",
+			digits: "60198765432",
+			label: "019-876 5432",
+		};
+		let answerForAli: (value: unknown) => void = () => {};
+		checkCode
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						answerForAli = resolve;
+					}),
+			)
+			.mockResolvedValueOnce({
+				ok: true,
+				code: "SALE345",
+				terms: { kind: "percent", value: 20 },
+				conditions: { perBuyerLimit: 1 },
+				checkedFor: BOB.digits,
+			});
+		const { rerender } = render(<Page buyer={ALI} />);
+		await waitFor(() => expect(checkCode).toHaveBeenCalledTimes(1));
+		rerender(<Page buyer={BOB} />);
+		await waitFor(() =>
+			expect(screen.getByTestId("checked").textContent).toBe(BOB.digits),
+		);
+		// The first number's refusal lands late — the code stays on for Bob.
+		answerForAli({
+			ok: false,
+			refusal: "buyer_limit",
+			detail: { perBuyerLimit: 1 },
+		});
+		await new Promise((r) => setTimeout(r, 0));
+		expect(screen.getByTestId("applied").textContent).toBe("SALE345");
+		expect(screen.getByTestId("refusal").textContent).toBe("");
+	});
+
 	it("the field puts a refused code back in the box, so the sentence is about it", () => {
 		renderField({
 			variant: "receipt",

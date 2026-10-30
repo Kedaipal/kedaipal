@@ -216,6 +216,14 @@ address, and the cap test re-prices the address and sets a delivery fee.
   "This WhatsApp number has already used this code — it's 1 per buyer." is
   the least a per-buyer limit can reveal. The check spends the per-store
   `voucherCheck` budget, so it can't be used to sweep numbers.
+- **Known residual: a TARGETED lookup is possible.** Anyone holding a public
+  1-per-buyer code can type a specific person's number into `checkCode` and
+  learn one bit: "this number has ordered from this store with this code".
+  That bit is inherent to a per-buyer limit (the order door would reveal the
+  same thing at Place order), and the limiter caps volume, not intent. It was
+  accepted for v2 because the bit is narrow (one store, one code, no order,
+  no name, no date). Revisit it at the next PDPA review, or if per-buyer
+  limits come to cover anything more sensitive than a promo.
 - **On by default (1 per buyer) in the New voucher dialog.** Without it a
   public code is reusable by one buyer until the cap. That is the abuse
   case, and the safe answer is the one a seller gets without reading
@@ -317,7 +325,11 @@ moves later, and either bound may be dropped while the other stays. Adding a
 bound that wasn't there would cut a public promise short, so it is refused.
 It works on a code that **ran out or ended**, because "it sold out by lunch,
 add 20 more" is the commonest reason to reach for it. The dialog then reads
-"Bring SALE345 back". A revival is refused if a newer code has taken the
+"Bring SALE345 back". A revival has to move the bound that **stopped** it:
+a code that ran out needs a total above what it has used ("It ran out at 10
+uses — raise the total to bring it back"), and an ended code needs a later
+end. Without that rule, a later end on a sold-out code saved "fine" and left
+it dead (PR #440 review). A revival is refused if a newer code has taken the
 word since, and a voided code stays voided. It is Pro-gated like `create`,
 because a raised cap gives more away.
 
