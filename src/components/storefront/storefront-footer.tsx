@@ -34,14 +34,14 @@ export function StorefrontFooter({
 	locale = "en",
 }: {
 	/** The store whose page this is. Omit only where none is in scope yet
-	 * (a loading skeleton, a not-found page for an unknown slug). */
+	 * (a loading skeleton). */
 	slug?: string;
 	/** Which buyer surface the badge sits on — picks the `?src=` tag. */
 	surface?: PoweredBySurface;
 	/**
 	 * Show "Discover more stores" — the buyer's door to the /stores directory
 	 * (z8r3fdkmyp). Opt-in per page: ON where a buyer is BROWSING (store home,
-	 * category, product, store-not-found) AND on the order page, in every
+	 * category, product) AND on the order page, in every
 	 * state, unpaid included (Arif, 14 Oct 2026, z8r3fducgw: the order page was
 	 * a dead end, and below every payment card it doesn't compete with one).
 	 * Still OFF at checkout and on a claim page, where it would only pull a

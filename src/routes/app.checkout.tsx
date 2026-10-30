@@ -130,12 +130,14 @@ import {
 import { TOP_UP_SEARCH } from "../lib/credit-top-up";
 import { lockCta } from "../lib/credits-ui";
 import { convexErrorMessage, currencySymbol, formatPrice } from "../lib/format";
+import { pageHead } from "../lib/not-found";
 import { priceDelta } from "../lib/price-delta";
 import { effectiveVariantPrice, type PromoState } from "../lib/promo";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/checkout")({
-	head: () => ({ meta: [{ title: "Counter Checkout — Kedaipal" }] }),
+	head: (ctx) =>
+		pageHead(ctx, () => ({ meta: [{ title: "Counter Checkout — Kedaipal" }] })),
 	// The active checkout lives in the URL so a refresh / reconnect lands the
 	// vendor right back on it instead of losing the order.
 	validateSearch: (search: Record<string, unknown>): { session?: string } => ({

@@ -40,6 +40,7 @@ import {
 	partitionStores,
 	SEARCH_QUERY_MAX,
 } from "../lib/marketplace";
+import { pageHead } from "../lib/not-found";
 import {
 	joinShowcaseMembers,
 	matchShowcases,
@@ -125,54 +126,55 @@ export const Route = createFileRoute("/stores")({
 				: {}),
 		};
 	},
-	head: ({ loaderData }) => {
-		const canonicalUrl = `${SITE_URL}/stores`;
-		const focused = loaderData?.focusedShowcase;
-		// A shared showcase link unfurls as the EVENT ("Malaysia Campfest 2026
-		// on Kedaipal"), cover and all; the canonical stays the bare directory.
-		const title = focused ? `${focused.title} on Kedaipal` : PAGE_TITLE;
-		const description = focused?.tagline ?? PAGE_DESCRIPTION;
-		const meta = [
-			{ title },
-			{ name: "description", content: description },
-			{ name: "robots", content: "index, follow" },
-			{ property: "og:type", content: "website" },
-			{ property: "og:site_name", content: "Kedaipal" },
-			{ property: "og:title", content: title },
-			{ property: "og:description", content: description },
-			{ property: "og:url", content: canonicalUrl },
-			...(focused?.coverImageUrl
-				? [{ property: "og:image", content: focused.coverImageUrl }]
-				: []),
-			{
-				name: "twitter:card",
-				content: focused?.coverImageUrl ? "summary_large_image" : "summary",
-			},
-			{ name: "twitter:title", content: title },
-			{ name: "twitter:description", content: description },
-		];
-		const scripts =
-			loaderData && loaderData.stores.length > 0
-				? [
-						jsonLdScript({
-							"@context": "https://schema.org",
-							"@type": "ItemList",
-							name: PAGE_TITLE,
-							itemListElement: loaderData.stores.map((store, i) => ({
-								"@type": "ListItem",
-								position: i + 1,
-								name: store.storeName,
-								url: `${SITE_URL}/${store.slug}`,
-							})),
-						}),
-					]
-				: [];
-		return {
-			meta,
-			links: [{ rel: "canonical", href: canonicalUrl }],
-			scripts,
-		};
-	},
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData }) => {
+			const canonicalUrl = `${SITE_URL}/stores`;
+			const focused = loaderData?.focusedShowcase;
+			// A shared showcase link unfurls as the EVENT ("Malaysia Campfest 2026
+			// on Kedaipal"), cover and all; the canonical stays the bare directory.
+			const title = focused ? `${focused.title} on Kedaipal` : PAGE_TITLE;
+			const description = focused?.tagline ?? PAGE_DESCRIPTION;
+			const meta = [
+				{ title },
+				{ name: "description", content: description },
+				{ name: "robots", content: "index, follow" },
+				{ property: "og:type", content: "website" },
+				{ property: "og:site_name", content: "Kedaipal" },
+				{ property: "og:title", content: title },
+				{ property: "og:description", content: description },
+				{ property: "og:url", content: canonicalUrl },
+				...(focused?.coverImageUrl
+					? [{ property: "og:image", content: focused.coverImageUrl }]
+					: []),
+				{
+					name: "twitter:card",
+					content: focused?.coverImageUrl ? "summary_large_image" : "summary",
+				},
+				{ name: "twitter:title", content: title },
+				{ name: "twitter:description", content: description },
+			];
+			const scripts =
+				loaderData && loaderData.stores.length > 0
+					? [
+							jsonLdScript({
+								"@context": "https://schema.org",
+								"@type": "ItemList",
+								name: PAGE_TITLE,
+								itemListElement: loaderData.stores.map((store, i) => ({
+									"@type": "ListItem",
+									position: i + 1,
+									name: store.storeName,
+									url: `${SITE_URL}/${store.slug}`,
+								})),
+							}),
+						]
+					: [];
+			return {
+				meta,
+				links: [{ rel: "canonical", href: canonicalUrl }],
+				scripts,
+			};
+		}),
 	component: MarketplacePage,
 });
 

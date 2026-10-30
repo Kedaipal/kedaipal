@@ -7,6 +7,7 @@ import { DEMO_DURATION_ISO, DEMO_VIDEO } from "../lib/demo-video";
 import { jsonLdScript } from "../lib/json-ld";
 import { faqJsonLd } from "../lib/landing-faq";
 import { SEO_DESC, SEO_TITLE } from "../lib/landing-seo";
+import { pageHead } from "../lib/not-found";
 import {
 	AREA_SERVED,
 	AVAILABLE_LANGUAGES,
@@ -120,31 +121,32 @@ const jsonLd = [
 ];
 
 export const Route = createFileRoute("/")({
-	head: () => ({
-		meta: [
-			{ title: SEO_TITLE },
-			{ name: "description", content: SEO_DESC },
-			{ property: "og:type", content: "website" },
-			{ property: "og:url", content: SITE_URL },
-			{ property: "og:title", content: SEO_TITLE },
-			{ property: "og:description", content: SEO_DESC },
-			{ property: "og:image", content: OG_IMAGE },
-			{ property: "og:image:width", content: "1200" },
-			{ property: "og:image:height", content: "630" },
-			{
-				property: "og:image:alt",
-				content:
-					"Kedaipal — Stop losing orders buried in WhatsApp chat. Storefront + order pipeline for sellers on WhatsApp.",
-			},
-			{ property: "og:locale", content: "en_MY" },
-			{ name: "twitter:card", content: "summary_large_image" },
-			{ name: "twitter:title", content: SEO_TITLE },
-			{ name: "twitter:description", content: SEO_DESC },
-			{ name: "twitter:image", content: OG_IMAGE },
-		],
-		links: [{ rel: "canonical", href: SITE_URL }],
-		scripts: [jsonLdScript(jsonLd)],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, () => ({
+			meta: [
+				{ title: SEO_TITLE },
+				{ name: "description", content: SEO_DESC },
+				{ property: "og:type", content: "website" },
+				{ property: "og:url", content: SITE_URL },
+				{ property: "og:title", content: SEO_TITLE },
+				{ property: "og:description", content: SEO_DESC },
+				{ property: "og:image", content: OG_IMAGE },
+				{ property: "og:image:width", content: "1200" },
+				{ property: "og:image:height", content: "630" },
+				{
+					property: "og:image:alt",
+					content:
+						"Kedaipal — Stop losing orders buried in WhatsApp chat. Storefront + order pipeline for sellers on WhatsApp.",
+				},
+				{ property: "og:locale", content: "en_MY" },
+				{ name: "twitter:card", content: "summary_large_image" },
+				{ name: "twitter:title", content: SEO_TITLE },
+				{ name: "twitter:description", content: SEO_DESC },
+				{ name: "twitter:image", content: OG_IMAGE },
+			],
+			links: [{ rel: "canonical", href: SITE_URL }],
+			scripts: [jsonLdScript(jsonLd)],
+		})),
 	component: Landing,
 });
 

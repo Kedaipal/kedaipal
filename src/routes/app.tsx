@@ -26,11 +26,17 @@ import { useDashboardRetailerRead } from "../hooks/useDashboardRetailer";
 import { useExitActAs } from "../hooks/useExitActAs";
 import { OrderNotificationsBridge } from "../hooks/useOrderNotifications";
 import { useOrderToastNotifications } from "../hooks/useOrderToastNotifications";
+import { NOT_FOUND_TITLE, rendersNotFound } from "../lib/not-found";
 import { hasFeature } from "../lib/subscription";
 
 export const Route = createFileRoute("/app")({
-	head: () => ({
-		meta: [{ name: "robots", content: "noindex, nofollow" }],
+	head: ({ match }) => ({
+		meta: [
+			{ name: "robots", content: "noindex, nofollow" },
+			// A dead `/app/...` link renders the not-found page in this layout's
+			// outlet, so this layout titles the tab for it.
+			...(rendersNotFound(match) ? [{ title: NOT_FOUND_TITLE.app }] : []),
+		],
 	}),
 	component: AppLayout,
 });
