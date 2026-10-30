@@ -8,8 +8,8 @@ import {
 } from "./credit-stub";
 
 /**
- * The Kedaipal-credits stub in the profile menu and the avatar row's line
- * (z8r3fdx34j, the 2A torn receipt). Orders, never money.
+ * The Kedaipal-credits stub in the profile menu and the always-on ticket torn
+ * from it (z8r3fdx34j, the 2A torn receipt). Orders, never money.
  */
 
 const NOV_1 = Date.UTC(2026, 9, 31, 16); // 1 Nov 00:00 MYT
@@ -45,7 +45,7 @@ const input = (o: Partial<CreditStubInput> = {}): CreditStubInput => ({
 });
 
 describe("creditStub", () => {
-	it("healthy: orders left, the reset on the leader line, one Top up, no dot", () => {
+	it("healthy: orders left, the reset on the leader line, one Top up, a plain ticket", () => {
 		const s = creditStub(input());
 		expect(s).toMatchObject({
 			tone: "ok",
@@ -53,21 +53,33 @@ describe("creditStub", () => {
 			headline: "54 orders left",
 			leader: { label: "Resets", value: "1 Nov · 200" },
 			button: { label: "Top up", disabledReason: null },
-			triggerLine: "54 orders left",
-			dot: null,
+			ticket: {
+				figure: "54",
+				word: "left",
+				short: "54 left",
+				stamp: null,
+				label: "Kedaipal credits: 54 orders left. Open billing.",
+			},
 		});
 		// Dots are the MONTH's grant: 54 of 200 → 5 of 20.
 		expect(s.filled).toBe(5);
 	});
 
-	it("low: amber stamp, the runway on the leader and the trigger, an amber dot", () => {
+	it("low: amber stamp on the stub AND the ticket, the runway on the leader and in the ticket's spoken name", () => {
 		const s = creditStub(input({ balance: bal({ plan: 38, total: 38 }) }));
 		expect(s).toMatchObject({
 			tone: "low",
 			stamp: "Low",
 			leader: { label: "About 6 days", value: "1 Nov" },
-			triggerLine: "38 orders left · about 6 days",
-			dot: "low",
+			ticket: {
+				figure: "38",
+				word: "low",
+				short: "38 left",
+				// The stamp, so low never rests on the amber alone.
+				stamp: "Low",
+				label:
+					"Kedaipal credits: 38 orders left, running low — about 6 days. Open billing.",
+			},
 		});
 	});
 
@@ -85,7 +97,13 @@ describe("creditStub", () => {
 			headline: "3 orders waiting",
 			filled: 0,
 			button: { label: "Pay invoice" },
-			dot: "out",
+			ticket: {
+				figure: "3",
+				word: "wait",
+				short: "3 waiting",
+				stamp: "Waiting",
+				label: "Kedaipal credits: 3 orders waiting on credits. Open billing.",
+			},
 		});
 		// The next refresh pays the debt first: 200 − 3.
 		expect(s.leader.value).toBe("1 Nov · 197");
@@ -124,9 +142,50 @@ describe("creditStub", () => {
 			filled: STUB_DOTS,
 			leader: { label: "Plan", value: "Sponsored" },
 			button: null,
-			dot: null,
+			// A permanent "∞" in the chrome says nothing the menu doesn't.
+			ticket: null,
 		});
 		expect(creditStub(input({ balance: null })).leader.value).toBe("Unlimited");
+	});
+
+	it("the ticket never prints a negative: an owed balance reads 'owed'", () => {
+		const s = creditStub(input({ balance: bal({ plan: -4, total: -4 }) }));
+		expect(s.tone).toBe("out");
+		expect(s.ticket).toMatchObject({
+			figure: "4",
+			word: "owed",
+			short: "4 owed",
+			stamp: null,
+		});
+		expect(s.ticket?.label).toBe(
+			"Kedaipal credits: 4 orders owed. Open billing.",
+		);
+	});
+
+	it("big numbers fit the collapsed rail's 44px; the phone line keeps the whole count", () => {
+		const big = creditStub(
+			input({
+				balance: bal({ plan: 2000, total: 2400, periodGrant: 2000 }),
+			}),
+		);
+		expect(big.ticket).toMatchObject({ figure: "999+", short: "2,400 left" });
+		const queue = creditStub(input({ ordersWaiting: 120 }));
+		expect(queue.ticket).toMatchObject({ figure: "99+", short: "99+ waiting" });
+	});
+
+	it("trial: the ticket follows the balance tone, without the TRIAL stamp", () => {
+		const s = creditStub(
+			input({
+				balance: bal({
+					plan: 163,
+					total: 163,
+					regime: "trial",
+					nextGrant: null,
+					refreshesAt: null,
+				}),
+			}),
+		);
+		expect(s.ticket).toMatchObject({ word: "left", stamp: null });
 	});
 
 	it("a reader who can't buy sees the button greyed with T2's reason", () => {

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./sidebar";
@@ -75,17 +75,29 @@ vi.mock("./whats-new", () => ({
 }));
 // The profile menu reads credits + Clerk; here only its TRIGGER matters (the
 // sidebar's job is the row), so the menu renders its trigger and the stub is
-// whatever the test sets.
+// whatever the test sets. The ticket draws itself (credit-ticket.test.tsx);
+// here it only has to land in the right place.
 const profile = vi.hoisted(() => ({
-	stub: null as null | { triggerLine: string; dot: "low" | "out" | null },
+	stub: null as null | { ticket: { figure: string } | null },
 }));
 vi.mock("./profile-menu", () => ({
 	useCreditStub: () => profile.stub,
-	profileTriggerLabel: () => "Account menu",
 	ProfileMenu: ({ trigger }: { trigger: ReactNode }) => trigger,
-	ProfileAvatar: ({ dot }: { dot: string | null }) => (
-		<span data-slot="avatar" data-dot={dot ?? ""} />
-	),
+	ProfileAvatar: () => <span data-slot="avatar" />,
+}));
+vi.mock("./credit-ticket", () => ({
+	CreditTicket: ({
+		stub,
+		variant,
+	}: {
+		stub: { ticket: unknown };
+		variant: string;
+	}) =>
+		stub.ticket ? (
+			<a href="/billing" data-ticket={variant}>
+				ticket
+			</a>
+		) : null,
 }));
 vi.mock("./app-version-row", () => ({
 	AppVersionRow: () => <div data-slot="app-version" />,
@@ -397,48 +409,53 @@ describe("Admin group — the Blog videos shortcut (admin areas, z8r3fdwwpe)", (
 	});
 });
 
-describe("the profile row carries the credits balance (z8r3fdx34j)", () => {
+describe("the credits ticket rides the top of the rail (z8r3fdx34j)", () => {
 	afterEach(() => {
 		profile.stub = null;
 	});
+	const ticketBox = (container: HTMLElement, variant: string) =>
+		container.querySelector(`[data-ticket="${variant}"]`)?.parentElement;
 
-	it("expanded: the row's second line is the balance, coloured by tone, and the avatar wears no dot", () => {
+	it("expanded: the ticket sits under the plan pill, and the profile row is just the person", () => {
 		collapsed = false;
-		profile.stub = { triggerLine: "38 orders left · about 6 days", dot: "low" };
+		profile.stub = { ticket: { figure: "254" } };
 		const { container } = render(
 			<Sidebar retailer={STORE} newOrdersCount={0} />,
 		);
-		const line = container.querySelector(
-			'[data-testid="profile-trigger-credits"]',
-		);
-		expect(line?.textContent).toBe("38 orders left · about 6 days");
-		expect(line?.className).toMatch(/text-amber-700/);
-		// The words already say it — a dot too would be the same fact twice.
-		expect(
-			container.querySelector('[data-slot="avatar"]')?.getAttribute("data-dot"),
-		).toBe("");
-	});
-
-	it("collapsed: the 68px rail has no room for the line, so the avatar carries the dot", () => {
-		collapsed = true;
-		profile.stub = { triggerLine: "3 orders waiting on credits", dot: "out" };
-		const { container } = render(
-			<Sidebar retailer={STORE} newOrdersCount={0} />,
-		);
-		expect(
-			container.querySelector('[data-slot="avatar"]')?.getAttribute("data-dot"),
-		).toBe("out");
-	});
-
-	it("a reader without the credits grant sees their email instead — never a balance", () => {
-		collapsed = false;
-		profile.stub = null;
-		const { container } = render(
-			<Sidebar retailer={STORE} newOrdersCount={0} />,
-		);
-		expect(
-			container.querySelector('[data-testid="profile-trigger-credits"]'),
-		).toBeNull();
+		const band = ticketBox(container, "rail");
+		expect(band?.textContent).toContain("Pro");
+		expect(band?.hasAttribute("inert")).toBe(false);
+		// The collapsed copy is out of the focus order while the rail is wide.
+		expect(ticketBox(container, "collapsed")?.hasAttribute("inert")).toBe(true);
+		// Said once per rail: the foot row is name + email, never the balance.
 		expect(container.textContent).toContain("zaki@example.com");
+		expect(
+			screen.getByTestId("profile-trigger").getAttribute("aria-label"),
+		).toBe("Account menu");
+	});
+
+	it("collapsed: the pill goes, the ticket stays — as its figure", () => {
+		collapsed = true;
+		profile.stub = { ticket: { figure: "3" } };
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(ticketBox(container, "collapsed")?.hasAttribute("inert")).toBe(
+			false,
+		);
+		expect(ticketBox(container, "rail")?.hasAttribute("inert")).toBe(true);
+	});
+
+	it("no ticket for a reader without the credits grant, or an unmetered store", () => {
+		collapsed = true;
+		profile.stub = null;
+		const first = render(<Sidebar retailer={STORE} newOrdersCount={0} />);
+		expect(first.container.querySelector("[data-ticket]")).toBeNull();
+		first.unmount();
+		profile.stub = { ticket: null };
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(container.querySelector("[data-ticket]")).toBeNull();
 	});
 });

@@ -528,8 +528,9 @@ html[data-theme-transition] .kp-theme-glyph {
 	position: absolute;
 	inset-inline: 0;
 	height: 8px;
-	background-repeat: repeat-x;
-	background-position: left top;
+	/* `round`: whole teeth at any width — repeat-x cut the last one off. */
+	background-size: 14px 8px;
+	background-repeat: round no-repeat;
 	pointer-events: none;
 }
 .kp-credit-stub::before {
@@ -548,6 +549,75 @@ html[data-theme-transition] .kp-theme-glyph {
 }
 .dark .kp-credit-stub::after {
 	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8'%3E%3Cpolyline points='0,0.75 7,7.25 14,0.75' fill='none' stroke='%2339475f' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* The always-on credits TICKET (z8r3fdx34j, Zaki 31 Oct): the menu stub's torn
+   edge at chrome size — under the plan pill in the rail (`.kp-credit-ticket`,
+   torn top and bottom) and beside it in the phone header
+   (`.kp-credit-ticket-side`, torn left and right, because there it reads as a
+   ticket lying on its side next to the pill). `round` scales the tile so the
+   edge always ends on a whole tooth, whatever the width. */
+.kp-credit-ticket {
+	--stub-edge: hsl(214 20% 78%);
+	position: relative;
+	padding-block: 6px;
+}
+.kp-credit-ticket::before,
+.kp-credit-ticket::after {
+	content: "";
+	position: absolute;
+	inset-inline: 0;
+	height: 6px;
+	background-size: 10px 6px;
+	background-repeat: round no-repeat;
+	pointer-events: none;
+}
+.kp-credit-ticket::before {
+	top: 0;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpolyline points='0,5.25 5,0.75 10,5.25' fill='none' stroke='%23c3cbd6' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.kp-credit-ticket::after {
+	bottom: 0;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpolyline points='0,0.75 5,5.25 10,0.75' fill='none' stroke='%23c3cbd6' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.kp-credit-ticket-side {
+	--stub-edge: hsl(214 20% 78%);
+	position: relative;
+	padding-inline: 5px;
+}
+.kp-credit-ticket-side::before,
+.kp-credit-ticket-side::after {
+	content: "";
+	position: absolute;
+	inset-block: 0;
+	width: 5px;
+	background-size: 5px 6px;
+	background-repeat: no-repeat round;
+	pointer-events: none;
+}
+.kp-credit-ticket-side::before {
+	left: 0;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='6' viewBox='0 0 5 6'%3E%3Cpolyline points='4.25,0 0.75,3 4.25,6' fill='none' stroke='%23c3cbd6' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.kp-credit-ticket-side::after {
+	right: 0;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='6' viewBox='0 0 5 6'%3E%3Cpolyline points='0.75,0 4.25,3 0.75,6' fill='none' stroke='%23c3cbd6' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.dark .kp-credit-ticket,
+.dark .kp-credit-ticket-side {
+	--stub-edge: hsl(217 25% 30%);
+}
+.dark .kp-credit-ticket::before {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpolyline points='0,5.25 5,0.75 10,5.25' fill='none' stroke='%2339475f' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.dark .kp-credit-ticket::after {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpolyline points='0,0.75 5,5.25 10,0.75' fill='none' stroke='%2339475f' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.dark .kp-credit-ticket-side::before {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='6' viewBox='0 0 5 6'%3E%3Cpolyline points='4.25,0 0.75,3 4.25,6' fill='none' stroke='%2339475f' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.dark .kp-credit-ticket-side::after {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='6' viewBox='0 0 5 6'%3E%3Cpolyline points='0.75,0 4.25,3 0.75,6' fill='none' stroke='%2339475f' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 /* =============================================

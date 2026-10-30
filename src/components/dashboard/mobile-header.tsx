@@ -4,12 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import type { api } from "../../../convex/_generated/api";
 import { AppImage } from "../ui/app-image";
 import { ThemeToggle } from "../ui/theme-toggle";
-import {
-	ProfileAvatar,
-	ProfileMenu,
-	profileTriggerLabel,
-	useCreditStub,
-} from "./profile-menu";
+import { CreditTicket } from "./credit-ticket";
+import { ProfileAvatar, ProfileMenu, useCreditStub } from "./profile-menu";
 import { TierPill } from "./tier-pill";
 
 type Retailer = NonNullable<
@@ -31,8 +27,9 @@ export function MobileHeader({ retailer, adminBadge }: MobileHeaderProps) {
 	// display:none at `lg` reports 0 — fine, those consumers go static on desktop.
 	const headerRef = useRef<HTMLElement>(null);
 	const [menuOpen, setMenuOpen] = useState(false);
-	// The number waits in the menu; the avatar carries the tone dot.
-	const stub = useCreditStub(retailer, { menuOpen });
+	// The balance rides beside the plan pill as a small torn ticket
+	// (z8r3fdx34j), so it's on every page; the full stub is in the menu.
+	const stub = useCreditStub(retailer);
 	useEffect(() => {
 		const el = headerRef.current;
 		if (!el) return;
@@ -72,14 +69,17 @@ export function MobileHeader({ retailer, adminBadge }: MobileHeaderProps) {
 							<span className="max-w-full truncate font-mono text-xs text-muted-foreground">
 								kedaipal.com/{retailer.slug}
 							</span>
-							<TierPill
-								subscription={retailer.subscription}
-								foundingRank={retailer.foundingMemberRank}
-								admin={adminBadge}
-								compact
-								className="py-0 text-[9px]"
-								unclaimed={retailer?.unclaimed === true}
-							/>
+							<div className="flex max-w-full items-center gap-2">
+								<TierPill
+									subscription={retailer.subscription}
+									foundingRank={retailer.foundingMemberRank}
+									admin={adminBadge}
+									compact
+									className="py-0 text-[9px]"
+									unclaimed={retailer?.unclaimed === true}
+								/>
+								{stub ? <CreditTicket stub={stub} variant="phone" /> : null}
+							</div>
 						</div>
 					</div>
 				) : (
@@ -108,11 +108,11 @@ export function MobileHeader({ retailer, adminBadge }: MobileHeaderProps) {
 					trigger={
 						<button
 							type="button"
-							aria-label={profileTriggerLabel(stub)}
+							aria-label="Account menu"
 							data-testid="profile-trigger"
 							className="flex size-11 items-center justify-center rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
 						>
-							<ProfileAvatar dot={stub?.dot ?? null} />
+							<ProfileAvatar />
 						</button>
 					}
 				/>

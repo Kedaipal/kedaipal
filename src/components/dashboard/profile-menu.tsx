@@ -18,10 +18,10 @@
  * Courier wallets are deliberately NOT here (Zaki, 29 Oct): they're money at
  * each courier, and live on Home and Settings → Integrations.
  *
- * The trigger carries the balance too: the sidebar row's second line, and a
- * tone dot on the avatar (collapsed rail, phone) — nothing when healthy,
- * amber when low, red when orders wait. Not dismissable: it's a fact, not a
- * nag. All words come from `creditStub` (src/lib/credit-stub.ts).
+ * The trigger is just the person (name + email in the rail, the avatar on the
+ * phone): the always-on balance is the `CreditTicket` under the plan pill
+ * (Zaki, 31 Oct), so it's said once per rail, and nothing needs a tone dot.
+ * All words come from `creditStub` (src/lib/credit-stub.ts).
  */
 
 import { useClerk, useUser } from "@clerk/tanstack-react-start";
@@ -46,23 +46,12 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { STUB_DOT, STUB_INK } from "./credit-stub-tones";
 
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
 >;
 
-const INK: Record<CreditStub["tone"], string> = {
-	ok: "text-foreground",
-	onus: "text-foreground",
-	low: "text-amber-700 dark:text-amber-300",
-	out: "text-red-600 dark:text-red-400",
-};
-const DOT: Record<CreditStub["tone"], string> = {
-	ok: "bg-accent",
-	onus: "bg-accent",
-	low: "bg-amber-500",
-	out: "bg-red-500",
-};
 const STAMP: Record<NonNullable<CreditStub["stamp"]>, string> = {
 	Low: "text-amber-700 dark:text-amber-300",
 	Waiting: "text-red-600 dark:text-red-400",
@@ -136,14 +125,8 @@ export function useCreditStub(
 	});
 }
 
-/** The person's avatar, with the credits tone dot when the store needs one. */
-export function ProfileAvatar({
-	dot,
-	size = "md",
-}: {
-	dot: CreditStub["dot"];
-	size?: "sm" | "md" | "lg";
-}) {
+/** The person's avatar. */
+export function ProfileAvatar({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
 	const { user } = useUser();
 	const initials =
 		(user?.firstName?.[0] ?? "") + (user?.lastName?.[0] ?? "") ||
@@ -168,27 +151,8 @@ export function ProfileAvatar({
 					{initials.toUpperCase()}
 				</span>
 			)}
-			{dot ? (
-				<span
-					aria-hidden
-					data-testid="profile-dot"
-					data-tone={dot}
-					className={cn(
-						"absolute -top-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-card",
-						dot === "out" ? "bg-red-500" : "bg-amber-500",
-					)}
-				/>
-			) : null}
 		</span>
 	);
-}
-
-/** The trigger's accessible name — the dot is aria-hidden, so its meaning
- * rides here. */
-export function profileTriggerLabel(
-	stub: CreditStub | null | undefined,
-): string {
-	return stub ? `Account menu — credits: ${stub.triggerLine}` : "Account menu";
 }
 
 /**
@@ -246,7 +210,7 @@ function ProfileMenuBody({
 	return (
 		<>
 			<div className="flex items-center gap-2.5 px-2.5 py-2">
-				<ProfileAvatar dot={null} size="lg" />
+				<ProfileAvatar size="lg" />
 				<div className="flex min-w-0 flex-1 flex-col leading-tight">
 					<span className="truncate text-sm font-semibold">{name}</span>
 					{email ? (
@@ -348,7 +312,7 @@ export function CreditStubBlock({ stub }: { stub: CreditStub }) {
 						<span
 							className={cn(
 								"text-center text-[22px] leading-tight font-bold tabular-nums tracking-tight",
-								INK[stub.tone],
+								STUB_INK[stub.tone],
 							)}
 							data-testid="credit-stub-headline"
 						>
@@ -362,7 +326,7 @@ export function CreditStubBlock({ stub }: { stub: CreditStub }) {
 									className={cn(
 										"block size-2 shrink-0 rounded-full",
 										i < stub.filled
-											? DOT[stub.tone]
+											? STUB_DOT[stub.tone]
 											: "shadow-[inset_0_0_0_1.5px_var(--stub-edge)]",
 									)}
 								/>

@@ -1,8 +1,10 @@
 /**
- * The Kedaipal-credits stub in the profile menu, and the balance line on the
- * avatar row that opens it (z8r3fdx34j, Zaki's 29 Oct picks: the 2A outlined
- * torn receipt). Pure, so every state is pinned by a test: the menu renders
- * whatever this returns and decides nothing itself.
+ * The Kedaipal-credits stub in the profile menu (z8r3fdx34j, Zaki's 29 Oct
+ * picks: the 2A outlined torn receipt), and the small always-on TICKET torn
+ * from it that sits under the plan pill in the rail and beside it in the
+ * phone header (Zaki, 31 Oct — the balance at a glance on every page, without
+ * opening a menu). Pure, so every state is pinned by a test: the menu and the
+ * ticket render whatever this returns and decide nothing themselves.
  *
  * What it reuses rather than restates — one rule, one author:
  *  - `ordersBalanceLabel` for the headline ("54 orders left" / "3 orders owed");
@@ -52,6 +54,25 @@ export type StubButton = {
 	disabledReason: string | null;
 };
 
+/**
+ * The always-on ticket: the stub torn down to its number. `null` for an
+ * unmetered store — a permanent "∞" in the chrome says nothing the menu's
+ * "On us" doesn't, and a fact that never changes isn't worth the pixels.
+ */
+export type CreditTicket = {
+	/** The collapsed rail's figure: "254", "3", "999+". */
+	figure: string;
+	/** The one word under it — what the figure counts. */
+	word: "left" | "low" | "owed" | "wait";
+	/** The phone header's line: "254 left", "3 waiting". */
+	short: string;
+	/** Low and waiting carry a stamp so the state never rests on colour
+	 * alone; healthy and owed say it in words. */
+	stamp: "Low" | "Waiting" | null;
+	/** The whole fact for a screen reader, the link's accessible name. */
+	label: string;
+};
+
 export type CreditStub = {
 	tone: StubTone;
 	/** The rotated rubber stamp, when the state needs one. */
@@ -62,10 +83,7 @@ export type CreditStub = {
 	/** The dotted-leader line: "Resets ........ 1 Nov · 200". */
 	leader: { label: string; value: string };
 	button: StubButton | null;
-	/** The avatar row's second line. */
-	triggerLine: string;
-	/** The avatar's tone dot — none when healthy. */
-	dot: "low" | "out" | null;
+	ticket: CreditTicket | null;
 };
 
 export type CreditStubInput = {
@@ -106,8 +124,7 @@ export function creditStub(input: CreditStubInput): CreditStub {
 				? { label: "Plan", value: "Sponsored" }
 				: { label: "Orders", value: "Unlimited" },
 			button: null,
-			triggerLine: "Unlimited orders",
-			dot: null,
+			ticket: null,
 		};
 	}
 
@@ -163,10 +180,13 @@ export function creditStub(input: CreditStubInput): CreditStub {
 					? null
 					: "Only the store owner can do this — ask them.",
 			},
-			triggerLine:
-				ordersWaitingLabel(input.ordersWaiting) ??
-				ordersBalanceLabel(balance.total),
-			dot: "out",
+			ticket: {
+				figure: input.ordersWaiting > 99 ? "99+" : String(input.ordersWaiting),
+				word: "wait",
+				short: `${input.ordersWaiting > 99 ? "99+" : input.ordersWaiting} waiting`,
+				stamp: "Waiting",
+				label: `Kedaipal credits: ${ordersWaitingLabel(input.ordersWaiting)}. Open billing.`,
+			},
 		};
 	}
 
@@ -182,8 +202,7 @@ export function creditStub(input: CreditStubInput): CreditStub {
 				search: { tab: "billing" },
 				disabledReason: null,
 			},
-			triggerLine: ordersBalanceLabel(balance.total),
-			dot: tone === "low" ? "low" : tone === "out" ? "out" : null,
+			ticket: balanceTicket(balance.total, tone),
 		};
 	}
 
@@ -203,10 +222,28 @@ export function creditStub(input: CreditStubInput): CreditStub {
 					? { label: resets.label, value: resets.value }
 					: { label: "Extra", value: `${balance.purchased} orders` },
 		button: topUp(tone === "out" ? "Top up credits" : "Top up"),
-		triggerLine: runway
-			? `${ordersBalanceLabel(balance.total)} · ${runway}`
-			: ordersBalanceLabel(balance.total),
-		dot: tone === "low" ? "low" : tone === "out" ? "out" : null,
+		ticket: balanceTicket(balance.total, tone, runway),
+	};
+}
+
+/** The ticket for a balance (no orders waiting). Owed reads as owed, never
+ * as a negative number. */
+function balanceTicket(
+	total: number,
+	tone: "ok" | "low" | "out",
+	runway: string | null = null,
+): CreditTicket {
+	const n = Math.abs(total);
+	const figure = n > 999 ? "999+" : String(n);
+	const owed = total < 0;
+	const low = tone === "low";
+	const spoken = `${ordersBalanceLabel(total)}${low ? `, running low${runway ? ` — ${runway}` : ""}` : ""}`;
+	return {
+		figure,
+		word: owed ? "owed" : low ? "low" : "left",
+		short: `${n.toLocaleString("en-MY")} ${owed ? "owed" : "left"}`,
+		stamp: low ? "Low" : null,
+		label: `Kedaipal credits: ${spoken}. Open billing.`,
 	};
 }
 

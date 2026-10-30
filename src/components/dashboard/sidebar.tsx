@@ -40,12 +40,8 @@ import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { ThemeToggle } from "../ui/theme-toggle";
 import { AppVersionRow } from "./app-version-row";
-import {
-	ProfileAvatar,
-	ProfileMenu,
-	profileTriggerLabel,
-	useCreditStub,
-} from "./profile-menu";
+import { CreditTicket } from "./credit-ticket";
+import { ProfileAvatar, ProfileMenu, useCreditStub } from "./profile-menu";
 import { TierPill } from "./tier-pill";
 import { WhatsNewNavItem } from "./whats-new";
 
@@ -101,7 +97,7 @@ export function Sidebar({
 		: "";
 	const { user } = useUser();
 	const [menuOpen, setMenuOpen] = useState(false);
-	const stub = useCreditStub(retailer, { menuOpen });
+	const stub = useCreditStub(retailer);
 	const userEmail = user?.primaryEmailAddress?.emailAddress ?? null;
 	const userName =
 		user?.fullName ||
@@ -165,7 +161,8 @@ export function Sidebar({
 
 			{/* Subscription tier pill — always-visible chrome (links to billing).
 			    Hidden for a storeless admin (no subscription to show). Reads "Admin"
-			    on an admin's own store. */}
+			    on an admin's own store. Under it, the credits ticket (z8r3fdx34j):
+			    the balance on every page, beside the plan it belongs to. */}
 			{retailer ? (
 				// `inert`, not just hidden: the pill is a link (billing / admin
 				// console), so a clipped, invisible copy would still be a Tab stop
@@ -175,7 +172,9 @@ export function Sidebar({
 					inert={collapsed}
 					className={cn(
 						"shrink-0 overflow-hidden border-b border-border px-4",
-						collapsed ? "max-h-0 py-0 opacity-0" : "max-h-12 py-2 opacity-100",
+						"flex flex-col gap-2.5",
+						collapsed ? "max-h-0 py-0 opacity-0" : "max-h-40 py-2 opacity-100",
+						stub?.ticket && !collapsed && "pb-3",
 						motion,
 					)}
 				>
@@ -185,6 +184,23 @@ export function Sidebar({
 						admin={adminBadge}
 						unclaimed={retailer?.unclaimed === true}
 					/>
+					{stub ? <CreditTicket stub={stub} variant="rail" /> : null}
+				</div>
+			) : null}
+			{/* Collapsed, the pill goes but the balance stays: the ticket shrinks
+			    to its figure and the one word it counts. */}
+			{retailer && stub?.ticket ? (
+				<div
+					inert={!collapsed}
+					className={cn(
+						"shrink-0 overflow-hidden border-border",
+						collapsed
+							? "max-h-20 border-b py-2.5 opacity-100"
+							: "max-h-0 py-0 opacity-0",
+						motion,
+					)}
+				>
+					<CreditTicket stub={stub} variant="collapsed" />
 				</div>
 			) : null}
 
@@ -496,10 +512,9 @@ export function Sidebar({
 						motion,
 					)}
 				>
-					{/* The profile menu (z8r3fdx34j): the avatar row IS its trigger,
-					    and its second line is the Kedaipal-credits balance — the
-					    email moved into the menu header. Collapsed, the avatar alone
-					    carries a tone dot (amber low, red orders waiting). */}
+					{/* The profile menu (z8r3fdx34j): the avatar row IS its trigger —
+					    name and email; the balance is the ticket at the top of the
+					    rail, said once. */}
 					<ProfileMenu
 						retailer={retailer}
 						side="right"
@@ -509,14 +524,11 @@ export function Sidebar({
 						trigger={
 							<button
 								type="button"
-								aria-label={profileTriggerLabel(stub)}
+								aria-label="Account menu"
 								data-testid="profile-trigger"
 								className="-my-1 -ml-1 flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg py-1 pl-1 text-left outline-none hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50"
 							>
-								<ProfileAvatar
-									dot={collapsed ? (stub?.dot ?? null) : null}
-									size="sm"
-								/>
+								<ProfileAvatar size="sm" />
 								<span
 									aria-hidden={collapsed || undefined}
 									className={cn(
@@ -530,21 +542,7 @@ export function Sidebar({
 											{userName}
 										</span>
 									) : null}
-									{stub ? (
-										<span
-											data-testid="profile-trigger-credits"
-											className={cn(
-												"truncate text-[10px] tabular-nums",
-												stub.dot === "out"
-													? "font-medium text-red-600 dark:text-red-400"
-													: stub.dot === "low"
-														? "font-medium text-amber-700 dark:text-amber-300"
-														: "text-muted-foreground",
-											)}
-										>
-											{stub.triggerLine}
-										</span>
-									) : userEmail ? (
+									{userEmail ? (
 										<span className="truncate text-[10px] text-muted-foreground">
 											{userEmail}
 										</span>

@@ -1325,14 +1325,34 @@ One `CreditMeter`, two places (one control, one rule):
   shows no meter at all; the Sponsored card in Settings → Billing is where a
   comped seller is told their limits are off instead.
 
-### The profile menu stub (z8r3fdx34j)
+### The always-on ticket and the profile menu stub (z8r3fdx34j)
 
-The avatar row in the sidebar foot **is** the profile menu's trigger, and its
-second line is the balance ("54 orders left", "38 orders left · about 6
-days", "3 orders waiting on credits"), coloured by tone. On the 68px rail and
-the phone header there's no room for the words, so the avatar wears a **dot**
-instead: none when healthy, amber when low, red when orders wait. Not
-dismissable — it's a fact, not a nag.
+**The balance is on every page** as a small torn ticket (`CreditTicket`,
+`src/components/dashboard/credit-ticket.tsx`), the menu stub torn down to its
+number (Zaki, 31 Oct: see it at a glance without opening a menu). It opens
+Billing, is never dismissable (a fact, not a nag), and comes in three sizes:
+
+| Where | Shows | Torn |
+| --- | --- | --- |
+| Rail, under the plan pill | the stub's headline + its row of 20 dots | top and bottom (`.kp-credit-ticket`) |
+| Collapsed 68px rail, under the logo | the figure + one word: `254 LEFT`, `18 LOW`, `4 OWED`, `3 WAIT` | top and bottom, 44px wide |
+| Phone header, beside the plan pill | `254 left` / `3 waiting` | left and right (`.kp-credit-ticket-side`), 18px drawn, 44px to tap |
+
+Healthy is plain ink; **low is amber with a LOW stamp and orders waiting red
+with a WAITING stamp**, so the state never rests on colour alone. An owed
+balance reads "owed", never a negative number. The collapsed figure caps at
+`999+` (orders waiting at `99+`) so it fits 44px; the phone line keeps the
+whole count. Words come from `creditStub(...).ticket`; colours from
+`credit-stub-tones.ts`, shared with the menu stub so the two can't drift.
+**No ticket** for a teammate without the credits grant, nor for an
+**unmetered** store: a permanent "∞" in the chrome says nothing the menu's
+"On us" doesn't. The torn edges use `background-repeat: round`, so they end
+on a whole tooth at any width (the menu stub now does too).
+
+The ticket **replaced** the first build's balance line on the avatar row and
+the avatar's tone dot: the number is said once per screen, and the foot row
+is back to name and email. Trade-off: the rail's top band is ~70px taller,
+so on a short laptop window the nav list starts scrolling one link sooner.
 
 The menu (`src/components/dashboard/profile-menu.tsx`, replacing Clerk's
 `UserButton`) holds, in order: who you are (name, email, your role in this
@@ -1353,8 +1373,7 @@ Every state is `creditStub` (`src/lib/credit-stub.ts`):
 | Unmetered | ∞ orders | Plan · Sponsored / Orders · Unlimited | none | ON US |
 
 A reader who can't buy sees the button greyed with T2's own sentence under it.
-**A teammate without the credits grant gets no stub** — the trigger shows
-their email. Unmetered stores DO get the stub (Zaki, 29 Oct): "on us" is
+**A teammate without the credits grant gets no stub** (and no ticket). Unmetered stores DO get the stub (Zaki, 29 Oct): "on us" is
 worth seeing. Courier wallets are never in this menu.
 
 **The reset reads as a reset** (Zaki's test round): "300 more on 1 Oct" read as
