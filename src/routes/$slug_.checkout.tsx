@@ -10,6 +10,7 @@ import { ArrowLeft, Zap } from "lucide-react";
 import { useMemo } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { NotFoundPage } from "../components/not-found/not-found-page";
 import { BookingCheckoutForm } from "../components/storefront/booking-checkout-form";
 import { CheckoutPage } from "../components/storefront/checkout-form";
 import { EventRsvpCheckoutForm } from "../components/storefront/event-rsvp-checkout-form";
@@ -32,6 +33,11 @@ import { usePromoClock } from "../hooks/usePromoClock";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient } from "../lib/convex-server";
+import {
+	missOwnedElsewhere,
+	notFoundHeadMeta,
+	rendersNotFound,
+} from "../lib/not-found";
 import type { PromoState } from "../lib/promo";
 import { searchText } from "../lib/search-params";
 import { ssrRead } from "../lib/ssr-read";
@@ -123,7 +129,10 @@ export const Route = createFileRoute("/$slug_/checkout")({
 			slug: result.retailer.slug,
 		};
 	},
-	head: ({ loaderData }) => {
+	head: ({ loaderData, match, matches }) => {
+		// Matched only on the way to a URL nothing claims: the root's head.
+		if (missOwnedElsewhere(matches, match)) return {};
+		if (rendersNotFound(match)) return { meta: notFoundHeadMeta("store") };
 		if (!loaderData) return {};
 		if ("unavailable" in loaderData)
 			return storeUnavailableHead(loaderData.storeName);
@@ -140,18 +149,9 @@ export const Route = createFileRoute("/$slug_/checkout")({
 
 function CheckoutNotFound() {
 	const { slug } = Route.useParams();
-	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
-			<div className="flex flex-1 flex-col items-center justify-center gap-3">
-				<h1 className="text-3xl font-bold">Store not found</h1>
-				<p className="text-sm text-muted-foreground">
-					No retailer uses <span className="font-mono">/{slug}</span>.
-				</p>
-			</div>
-			{/* No store to attribute to — the slug names nobody. */}
-			<StorefrontFooter />
-		</main>
-	);
+	// The slug is what's wrong, so the page prints `/<slug>`, not the checkout
+	// path — and reads exactly as the store home's miss does.
+	return <NotFoundPage context="store" path={`/${slug}`} />;
 }
 
 function CheckoutSkeleton() {

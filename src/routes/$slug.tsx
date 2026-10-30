@@ -9,6 +9,7 @@ import {
 	type OpeningHours,
 	openingHoursSpecification,
 } from "../../convex/lib/openingHours";
+import { NotFoundPage } from "../components/not-found/not-found-page";
 import { CartBar } from "../components/storefront/cart-bar";
 import { CategoryRail } from "../components/storefront/category-rail";
 import { FeaturedProduct } from "../components/storefront/featured-product";
@@ -36,6 +37,11 @@ import {
 	proxiedImageUrl,
 } from "../lib/image-proxy";
 import { jsonLdScript } from "../lib/json-ld";
+import {
+	missOwnedElsewhere,
+	notFoundHeadMeta,
+	rendersNotFound,
+} from "../lib/not-found";
 import { seoDescription } from "../lib/seo-text";
 import { ssrRead } from "../lib/ssr-read";
 
@@ -161,7 +167,11 @@ export const Route = createFileRoute("/$slug")({
 			indexable: retailer.indexable ?? true,
 		};
 	},
-	head: ({ loaderData }) => {
+	head: ({ loaderData, match, matches }) => {
+		// `/foo/bar` still runs this route (slug "foo") on the way to the
+		// root's "Page not found" — that page's head is the root's, not ours.
+		if (missOwnedElsewhere(matches, match)) return {};
+		if (rendersNotFound(match)) return { meta: notFoundHeadMeta("store") };
 		if (!loaderData) return {};
 		if ("unavailable" in loaderData)
 			return storeUnavailableHead(loaderData.storeName);
@@ -285,20 +295,9 @@ export const Route = createFileRoute("/$slug")({
 
 function StoreNotFound() {
 	const { slug } = Route.useParams();
-	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
-			<div className="flex flex-1 flex-col items-center justify-center gap-3">
-				<h1 className="text-3xl font-bold">Store not found</h1>
-				<p className="text-sm text-muted-foreground">
-					No retailer uses <span className="font-mono">/{slug}</span>.
-				</p>
-			</div>
-			{/* No store to attribute to — the slug names nobody. The directory
-			    link turns the dead end into a next step; the badge stays the
-			    way to Kedaipal itself. */}
-			<StorefrontFooter discover />
-		</main>
-	);
+	// The shared not-found page in its store context, so a dead store link
+	// reads the same here, at /<slug>/checkout and from the router's default.
+	return <NotFoundPage context="store" path={`/${slug}`} />;
 }
 
 function StorefrontSkeleton() {

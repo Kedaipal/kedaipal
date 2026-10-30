@@ -1,4 +1,5 @@
 import { createRouter as createTanStackRouter } from "@tanstack/react-router";
+import { RouteNotFound } from "./components/not-found/not-found-page";
 import { PageLoader } from "./components/page-loader";
 import { RouteErrorCard } from "./components/route-error";
 import { routeTree } from "./routeTree.gen";
@@ -19,6 +20,12 @@ export function getRouter() {
 		// Buyers must never see a raw framework error page (86eyheqzv) — every
 		// route without its own errorComponent falls back to the branded card.
 		defaultErrorComponent: RouteErrorCard,
+		// Same rule for a URL nothing claims: a designed page with a way out,
+		// never TanStack's bare "Not Found" — and never a redirect home, which
+		// would hide the typo and answer a dead URL with a success. It renders
+		// in the deepest matched layout (fuzzy mode), so a dead `/app/...` link
+		// keeps the dashboard shell around it. See docs/not-found.md.
+		defaultNotFoundComponent: RouteNotFound,
 	});
 
 	return router;

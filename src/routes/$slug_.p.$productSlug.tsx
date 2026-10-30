@@ -32,6 +32,7 @@ import {
 	proxiedImageUrl,
 } from "../lib/image-proxy";
 import { jsonLdScript } from "../lib/json-ld";
+import { missOwnedElsewhere } from "../lib/not-found";
 import { seoDescription } from "../lib/seo-text";
 import { ssrRead } from "../lib/ssr-read";
 import { hasStartingPrice } from "../lib/variant";
@@ -185,7 +186,10 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			firstImageUrl: product.imageUrls[0],
 		};
 	},
-	head: ({ loaderData }) => {
+	head: ({ loaderData, match, matches }) => {
+		// Matched only on the way to a URL nothing claims (`/x/p/y/extra`):
+		// the page is the root's "Page not found", so this head stays out.
+		if (missOwnedElsewhere(matches, match)) return {};
 		if (!loaderData) return {};
 		if ("unavailable" in loaderData)
 			return storeUnavailableHead(loaderData.storeName);
