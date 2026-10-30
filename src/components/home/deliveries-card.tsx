@@ -9,7 +9,9 @@
  * that hands parcels over sees what still needs a consignment number and
  * what's in transit. A store that does both sees both, urgent rows first.
  * Renders nothing for a store with no deliveries at all — Home doesn't carry
- * empty cards.
+ * empty cards. Courier WALLETS are not here: they sit in Home's Balances card
+ * beside the Kedaipal credits (z8r3fdx34j), the one place Home answers "can I
+ * take and ship today's orders?".
  */
 
 import { Link } from "@tanstack/react-router";
@@ -17,7 +19,6 @@ import { ChevronRight, Truck } from "lucide-react";
 import type { DeliveriesOverview } from "../../../convex/deliveries";
 import { formatPrice } from "../../lib/format";
 import { cn } from "../../lib/utils";
-import { WalletGlance } from "../deliveries/deliveries-view";
 
 type Row = { label: string; value: string; tone?: "warn" };
 
@@ -61,7 +62,7 @@ export function DeliveriesHomeCard({
 	overview: DeliveriesOverview;
 }) {
 	const rows = deliveriesHomeRows(overview);
-	if (rows.length === 0 && !overview.wallet) return null;
+	if (rows.length === 0) return null;
 	return (
 		<article className="flex flex-col gap-3 rounded-[20px] border border-border bg-card p-4 shadow-[0_1px_2px_rgb(15_23_41/0.04)]">
 			<div className="flex items-center gap-2">
@@ -71,9 +72,6 @@ export function DeliveriesHomeCard({
 				<h2 className="font-heading text-[17px] font-extrabold tracking-tight">
 					Deliveries
 				</h2>
-				<span className="ml-auto">
-					<WalletGlance wallet={overview.wallet} />
-				</span>
 			</div>
 			{rows.length > 0 ? (
 				<dl className="flex flex-col divide-y divide-border">

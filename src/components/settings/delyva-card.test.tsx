@@ -34,11 +34,31 @@ vi.mock("convex/react", async () => {
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
-vi.mock("@tanstack/react-query", () => ({
-	useQuery: () => ({ data: state.settings }),
+vi.mock("@tanstack/react-query", async () => {
+	const { getFunctionName } = await import("convex/server");
+	return {
+		// The courier-wallet line (z8r3fdx34j) reads its own query; everything
+		// else answers with this card's own state.
+		useQuery: (q: { fn: unknown }) => ({
+			data:
+				getFunctionName(q.fn as never) === "courierWallets:list"
+					? walletState.wallets
+					: state.settings,
+		}),
+	};
+});
+const walletState = vi.hoisted(() => ({
+	wallets: [] as unknown[],
 }));
 vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
+}));
+// The shared wallet row asks whether this reader can refresh / edit it.
+vi.mock("../../hooks/useStoreLock", () => ({
+	useAreaLock: () => ({ readOnly: false, reason: "", cause: null }),
+}));
+vi.mock("../../hooks/usePermission", () => ({
+	usePermission: () => ({ canRead: true, canWrite: true, role: "owner" }),
 }));
 vi.mock("../../hooks/useActAs", () => ({
 	useActAsRetailerId: () => undefined,

@@ -1,4 +1,4 @@
-import { UserButton, useUser } from "@clerk/tanstack-react-start";
+import { useUser } from "@clerk/tanstack-react-start";
 import { Link, type LinkProps } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import {
@@ -38,6 +38,12 @@ import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { ThemeToggle } from "../ui/theme-toggle";
 import { AppVersionRow } from "./app-version-row";
+import {
+	ProfileAvatar,
+	ProfileMenu,
+	profileTriggerLabel,
+	useCreditStub,
+} from "./profile-menu";
 import { TierPill } from "./tier-pill";
 import { WhatsNewNavItem } from "./whats-new";
 
@@ -92,6 +98,8 @@ export function Sidebar({
 		? "transition-[width,max-width,max-height,padding,opacity,transform,color,background-color] duration-200 motion-reduce:transition-none"
 		: "";
 	const { user } = useUser();
+	const [menuOpen, setMenuOpen] = useState(false);
+	const stub = useCreditStub(retailer, { menuOpen });
 	const userEmail = user?.primaryEmailAddress?.emailAddress ?? null;
 	const userName =
 		user?.fullName ||
@@ -463,26 +471,63 @@ export function Sidebar({
 						motion,
 					)}
 				>
-					<UserButton />
-					{userName || userEmail ? (
-						<div
-							aria-hidden={collapsed || undefined}
-							className={cn(
-								"flex min-w-0 flex-1 flex-col overflow-hidden",
-								collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
-								motion,
-							)}
-						>
-							{userName ? (
-								<span className="truncate text-xs font-medium">{userName}</span>
-							) : null}
-							{userEmail ? (
-								<span className="truncate text-[10px] text-muted-foreground">
-									{userEmail}
+					{/* The profile menu (z8r3fdx34j): the avatar row IS its trigger,
+					    and its second line is the Kedaipal-credits balance — the
+					    email moved into the menu header. Collapsed, the avatar alone
+					    carries a tone dot (amber low, red orders waiting). */}
+					<ProfileMenu
+						retailer={retailer}
+						side="right"
+						align="end"
+						open={menuOpen}
+						onOpenChange={setMenuOpen}
+						trigger={
+							<button
+								type="button"
+								aria-label={profileTriggerLabel(stub)}
+								data-testid="profile-trigger"
+								className="-my-1 -ml-1 flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg py-1 pl-1 text-left outline-none hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50"
+							>
+								<ProfileAvatar
+									dot={collapsed ? (stub?.dot ?? null) : null}
+									size="sm"
+								/>
+								<span
+									aria-hidden={collapsed || undefined}
+									className={cn(
+										"flex min-w-0 flex-1 flex-col overflow-hidden",
+										collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
+										motion,
+									)}
+								>
+									{userName ? (
+										<span className="truncate text-xs font-medium">
+											{userName}
+										</span>
+									) : null}
+									{stub ? (
+										<span
+											data-testid="profile-trigger-credits"
+											className={cn(
+												"truncate text-[10px] tabular-nums",
+												stub.dot === "out"
+													? "font-medium text-red-600 dark:text-red-400"
+													: stub.dot === "low"
+														? "font-medium text-amber-700 dark:text-amber-300"
+														: "text-muted-foreground",
+											)}
+										>
+											{stub.triggerLine}
+										</span>
+									) : userEmail ? (
+										<span className="truncate text-[10px] text-muted-foreground">
+											{userEmail}
+										</span>
+									) : null}
 								</span>
-							) : null}
-						</div>
-					) : null}
+							</button>
+						}
+					/>
 					{/* The expanded home. `-my-2` keeps the row at the avatar's
 					    height, and `-mr-4` lands the glyph's right edge on the version
 					    pill's below — one right-hand edge for the foot — while giving

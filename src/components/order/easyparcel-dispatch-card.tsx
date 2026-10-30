@@ -38,12 +38,12 @@ import {
 	Package,
 	RefreshCw,
 	Truck,
-	Wallet,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { walletVerdict } from "../../../convex/lib/courierWallet";
 import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
 import {
 	describeEasyparcelService,
@@ -68,8 +68,9 @@ import {
 	rateFilterCounts,
 } from "../../lib/easyparcel-rates";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
-import { TONE_ACCENT, TONE_CHIP, TONE_PANEL } from "../../lib/tone";
+import { TONE_CHIP, TONE_PANEL } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
+import { DispatchWalletLine } from "../deliveries/dispatch-wallet-line";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { CopyButton } from "../ui/copy-button";
@@ -103,6 +104,9 @@ export function EasyparcelDispatchCard({
 		convexQuery(api.easyparcel.getDispatchState, { shortId: order.shortId }),
 	).data;
 
+	const wallets = useQuery(
+		convexQuery(api.courierWallets.list, { retailerId: order.retailerId }),
+	).data;
 	const prepareBooking = useAction(api.easyparcel.prepareBooking);
 	const confirmBooking = useAction(api.easyparcel.confirmBooking);
 	const cancelBooking = useAction(api.easyparcel.cancelBooking);
@@ -115,6 +119,7 @@ export function EasyparcelDispatchCard({
 	 * prices are from one moment. */
 	const [quotedBalance, setQuotedBalance] = useState<number | undefined>();
 	const [quotedCurrency, setQuotedCurrency] = useState<string | undefined>();
+	const [quotedAt, setQuotedAt] = useState<number | null>(null);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [filter, setFilter] = useState<RateFilter>("door");
 	const [showAll, setShowAll] = useState(false);
@@ -222,6 +227,7 @@ export function EasyparcelDispatchCard({
 			}
 			setRates(result.rates);
 			setQuotedBalance(result.balanceMinor);
+			setQuotedAt(Date.now());
 			setQuotedCurrency(result.balanceCurrency);
 			// The cheapest that keeps the order's promise — never just the
 			// cheapest, which can leave a delivery at a locker.
@@ -285,10 +291,16 @@ export function EasyparcelDispatchCard({
 	}
 
 	const selected = rates?.find((r) => r.serviceId === selectedId) ?? null;
+	// The shared rule (z8r3fdx34j): a balance PULLED moments ago that can't pay
+	// refuses the booking; the wallet view is the one the line beside Book
+	// reads, so a top-up re-checked from that line re-enables Book too. Before
+	// the view lands, the read that came back with these rates decides.
+	const walletView = wallets?.find((w) => w.provider === "easyparcel");
 	const selectedUnaffordable =
 		selected !== null &&
-		quotedBalance !== undefined &&
-		selected.priceMinor > quotedBalance;
+		(walletView
+			? walletVerdict(walletView, selected.priceMinor, Date.now()) === "block"
+			: quotedBalance !== undefined && selected.priceMinor > quotedBalance);
 	const counts = rates ? rateFilterCounts(rates) : { door: 0, point: 0 };
 	const bothModes = counts.door > 0 && counts.point > 0;
 	const filtered = rates
@@ -838,30 +850,31 @@ export function EasyparcelDispatchCard({
 								</p>
 							) : null}
 
-							{quotedBalance !== undefined ? (
-								<p
-									id={`easyparcel-wallet-${order.shortId}`}
-									className={`flex items-center gap-1.5 text-xs ${
-										selectedUnaffordable
-											? `font-medium ${TONE_ACCENT.warn}`
-											: "text-muted-foreground"
-									}`}
-								>
-									<Wallet className="size-3.5 shrink-0" />
-									{selectedUnaffordable ? (
-										<>
-											Wallet {formatPrice(quotedBalance, walletCurrency)} — not
-											enough for this courier. Top up in EasyParcel, then
-											refresh prices.
-										</>
-									) : (
-										<>
-											EasyParcel wallet:{" "}
-											{formatPrice(quotedBalance, walletCurrency)}
-										</>
-									)}
-								</p>
-							) : null}
+							<DispatchWalletLine
+								id={`easyparcel-wallet-${order.shortId}`}
+								provider="easyparcel"
+								priceMinor={selected ? selected.priceMinor : null}
+								retailerId={order.retailerId}
+								country={dispatch.country}
+								fallback={
+									quotedBalance !== undefined && quotedAt !== null
+										? {
+												provider: "easyparcel",
+												armed: true,
+												isTest: null,
+												state: quotedBalance <= 0 ? "empty" : "ok",
+												balanceMinor: quotedBalance,
+												currency: walletCurrency,
+												at: quotedAt,
+												lowAlertMinor: 0,
+												lowAlertCustom: false,
+												source: "pull",
+												refusedAt: null,
+												refusedPriceMinor: null,
+											}
+										: undefined
+								}
+							/>
 
 							<Button
 								type="button"

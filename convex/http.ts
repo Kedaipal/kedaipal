@@ -23,7 +23,10 @@ import {
 import { keyFingerprint, parseWalletBalance } from "./lib/courierWallet";
 import { completeConnect } from "./easyparcel";
 import { parseWebhookShipmentNumber } from "./lib/easyparcel";
-import { extractWebhookOrderId } from "./lib/lalamove";
+import {
+	extractWebhookOrderId,
+	parseLalamoveEventTime,
+} from "./lib/lalamove";
 import {
 	type LalamoveWebhookEnvelope,
 	parseLalamoveWebhookEnvelope,
@@ -218,11 +221,20 @@ async function recordLalamoveWallet(
 			apiSecret: await decryptSecret(wallet.apiSecret),
 		});
 		if (!result.valid) continue;
-		await ctx.runMutation(internal.courierWallets.recordBalance, {
-			walletId: wallet.walletId,
-			balance: parsed.balance,
-			currency: parsed.currency,
-			at: args.envelope.timestamp,
+		await ctx.runMutation(internal.courierWallets.record, {
+			retailerId: wallet.retailerId,
+			provider: "lalamove",
+			// Normalised to ms like every other Lalamove event: the envelope's
+			// signing timestamp can arrive in SECONDS, which stored raw would
+			// read as 1970 to "updated … ago" and lose every newer-wins
+			// comparison against a millisecond observation.
+			at: parseLalamoveEventTime(args.envelope.data, args.envelope.timestamp),
+			observation: {
+				kind: "balance",
+				balanceMinor: parsed.balance,
+				currency: parsed.currency,
+				source: "webhook",
+			},
 		});
 		applied++;
 	}

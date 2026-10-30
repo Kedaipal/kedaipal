@@ -1,10 +1,15 @@
-import { UserButton } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { api } from "../../../convex/_generated/api";
 import { AppImage } from "../ui/app-image";
 import { ThemeToggle } from "../ui/theme-toggle";
+import {
+	ProfileAvatar,
+	ProfileMenu,
+	profileTriggerLabel,
+	useCreditStub,
+} from "./profile-menu";
 import { TierPill } from "./tier-pill";
 
 type Retailer = NonNullable<
@@ -25,6 +30,9 @@ export function MobileHeader({ retailer, adminBadge }: MobileHeaderProps) {
 	// pin itself just BELOW it instead of hardcoding a fragile pixel offset.
 	// display:none at `lg` reports 0 — fine, those consumers go static on desktop.
 	const headerRef = useRef<HTMLElement>(null);
+	const [menuOpen, setMenuOpen] = useState(false);
+	// The number waits in the menu; the avatar carries the tone dot.
+	const stub = useCreditStub(retailer, { menuOpen });
 	useEffect(() => {
 		const el = headerRef.current;
 		if (!el) return;
@@ -91,7 +99,23 @@ export function MobileHeader({ retailer, adminBadge }: MobileHeaderProps) {
 			<div className="flex shrink-0 items-center gap-1">
 				{/* Quick flip; the three-way picker lives in Settings → App → Appearance. */}
 				<ThemeToggle variant="ghost" />
-				<UserButton />
+				<ProfileMenu
+					retailer={retailer}
+					side="bottom"
+					align="end"
+					open={menuOpen}
+					onOpenChange={setMenuOpen}
+					trigger={
+						<button
+							type="button"
+							aria-label={profileTriggerLabel(stub)}
+							data-testid="profile-trigger"
+							className="flex size-11 items-center justify-center rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+						>
+							<ProfileAvatar dot={stub?.dot ?? null} />
+						</button>
+					}
+				/>
 			</div>
 		</header>
 	);

@@ -19,7 +19,8 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query } from "./_generated/server";
 import type { CourierProviderId } from "./lib/courierProviders";
-import { readLalamoveWallet, type WalletView } from "./courierWallets";
+import { readCourierWallets } from "./courierWallets";
+import type { CourierWalletView } from "./lib/courierWallet";
 import { creditGateFor, isOrderGated } from "./creditLock";
 import { requireRetailerAccess } from "./lib/auth";
 import { DEFAULT_CURRENCY } from "./lib/currency";
@@ -93,7 +94,9 @@ export type ParcelRow = {
 
 export type DeliveriesOverview = {
 	currency: string;
-	wallet: WalletView;
+	/** Every connected courier account's wallet (courierWallets.list's
+	 * read model) — one row each on this page and on Home. */
+	wallets: CourierWalletView[];
 	/** Has this store ever booked, or set up, a courier account? */
 	booksCouriers: boolean;
 	/** A rider or courier can be booked from an order right now (Lalamove or
@@ -268,8 +271,10 @@ export const overview = query({
 		const inTransitAll = shipped.filter((o) => isParcel(o) && !!o.trackingNo);
 
 		const mode = retailer.deliveryConfig?.mode ?? "free";
+		const wallets = await readCourierWallets(ctx, retailer);
 		const booksCouriers =
 			jobs.length > 0 ||
+			wallets.length > 0 ||
 			hasLalamoveCredentials(retailer.deliveryBooking) ||
 			resolveDelyvaCredentials(retailer.delyva) !== null;
 		// Radius sellers drive their own deliveries — there is no consignment
@@ -284,7 +289,7 @@ export const overview = query({
 
 		return {
 			currency: retailer.currency ?? DEFAULT_CURRENCY,
-			wallet: await readLalamoveWallet(ctx, retailerId),
+			wallets,
 			booksCouriers,
 			bookingArmed: storeBooksCouriers({
 				...retailer,

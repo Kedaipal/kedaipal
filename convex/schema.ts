@@ -2781,25 +2781,52 @@ export default defineSchema({
 	// failed/cancelled jobs stay as history and a rebook inserts a new row.
 	// `by_provider_order` is the webhook lookup; `by_retailer` keeps per-store
 	// range reads cheap.
-	// A seller's courier WALLET as the courier reports it (86eye9xd4, 6A).
-	// Lalamove pushes the balance on a WALLET_BALANCE_CHANGED webhook — there
-	// is no endpoint to poll — and that event carries no order, only the
-	// sender's API key. Stored keys are encrypted at rest (86eyn25gk), so the
-	// key can't be matched against them: `keyFingerprint` (SHA-256 of the
-	// plaintext key, stamped when the key is saved) is what attributes the
-	// event to a store, whose own secret then verifies it. Own table rather
-	// than fields on `retailers`: a balance moves on every booking, and a
-	// retailer patch re-runs every open storefront tab.
+	// A seller's courier WALLET as the courier reports it (86eye9xd4 6A,
+	// widened to every provider by z8r3fdrgxc/z8r3fdx34j). The courier, not
+	// Kedaipal, holds this money — the row is the last balance the provider
+	// told us, so every surface can warn before a booking fails instead of
+	// after. One row per (store, provider), written ONLY through
+	// `courierWallets.recordObservation` (monotonic on observation time, so a
+	// late webhook can't overwrite a newer pull). How each provider reports is
+	// `WALLET_PROVIDERS[provider].model` in convex/lib/courierWallet.ts:
+	// Lalamove PUSHES (webhook), EasyParcel is PULLED, Delyva only reveals it
+	// in an insufficient-credit REFUSAL. Own table rather than fields on
+	// `retailers`: a balance moves on every booking, and a retailer patch
+	// re-runs every open storefront tab.
 	courierWallets: defineTable({
 		retailerId: v.id("retailers"),
-		provider: v.literal("lalamove"),
-		keyFingerprint: v.string(),
-		// Minor units (sen / cents) in `currency`, as of `balanceAt` — the
-		// courier's own event time, so a late event can't overwrite a newer one.
-		// Undefined until the first event arrives.
+		provider: courierProviderValidator,
+		// Lalamove only. Its wallet event carries no order, only the sender's
+		// API key, and stored keys are encrypted at rest (86eyn25gk) so they
+		// can't be matched: this SHA-256 of the plaintext key, stamped when the
+		// key is saved, attributes the event; the store's own secret then
+		// verifies it. A different key = a different account = a fresh row.
+		keyFingerprint: v.optional(v.string()),
+		// Minor units (sen / cents) in `currency` — the PROVIDER's currency —
+		// as of `balanceAt` (ms; the provider's own event time where it gives
+		// one). Undefined until the provider first reports a number.
 		balance: v.optional(v.number()),
 		currency: v.optional(v.string()),
 		balanceAt: v.optional(v.number()),
+		// How `balance` arrived. Only a fresh `pull` may REFUSE a booking
+		// (`walletVerdict`); pushed and refusal-parsed numbers only warn.
+		// Undefined on rows written before z8r3fdrgxc (all Lalamove webhooks).
+		source: v.optional(
+			v.union(v.literal("webhook"), v.literal("pull"), v.literal("refusal")),
+		),
+		// The latest booking the provider refused for lack of funds, when the
+		// refusal named no balance (Lalamove) — the wallet is known to be
+		// short, not by how much. Superseded by any newer balance.
+		refusedAt: v.optional(v.number()),
+		refusedPriceMinor: v.optional(v.number()),
+		// The seller's own "low alert" line for this wallet, minor units in its
+		// currency. Undefined = the currency default (RM 30 / S$ 15,
+		// `defaultLowAlertMinor`). Set on the Courier wallets section.
+		lowAlertMinor: v.optional(v.number()),
+		// When the owner was emailed that this wallet needs a top-up. Set on
+		// the crossing, cleared when the wallet is healthy again — once per
+		// crossing, never once per webhook.
+		lowNotifiedAt: v.optional(v.number()),
 		updatedAt: v.number(),
 	})
 		.index("by_retailer_provider", ["retailerId", "provider"])

@@ -38,6 +38,7 @@ import type { FixHighlight } from "../../lib/country-setup-copy";
 import { convexErrorMessage } from "../../lib/format";
 import { parseGoogleAddress } from "../../lib/google-address";
 import { ProBadge } from "../app/pro-gate";
+import { IntegrationWalletBlock } from "../deliveries/courier-wallets-section";
 import { GoogleAddressAutocomplete } from "../forms/google-address-autocomplete";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -519,6 +520,15 @@ export function DelyvaCard({
 								) : null}
 							</SetupStep>
 						</SetupChecklist>
+
+						{/* Delyva shares no balance, so this row is honest about it:
+						    "Not shared", or the last balance a refusal showed us
+						    (z8r3fdrgxc). Same row as every other surface. */}
+						<IntegrationWalletBlock
+							retailerId={retailerId}
+							country={country}
+							provider="delyva"
+						/>
 
 						<SectionLabel>Defaults</SectionLabel>
 						<div className="flex flex-col gap-1.5">

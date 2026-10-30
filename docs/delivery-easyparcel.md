@@ -176,9 +176,15 @@ to test SG — and the card says its prices are in RM.
   that the buyer was "notified" (one message per order). A seller-cancelled
   booking offers **Book again**; the cancel dialog's way out reads **Keep
   booking**.
-- **The wallet rides the quote**: a pick it can't cover is amber and Book is
-  disabled-with-reason. `confirmBooking` re-reads the wallet and refuses
-  server-side too.
+- **The wallet rides the quote**: every quote's `GET /wallet` is recorded
+  through the shared courier-wallet writer, and the dispatch card draws the
+  shared `DispatchWalletLine` above Book. A pick a balance read moments ago
+  can't cover is red and Book is disabled with that line as its reason — the
+  one courier allowed to BLOCK, because it is the one we can ask
+  ([`courier-wallets.md`](./courier-wallets.md#block-or-warn-walletverdict)).
+  `confirmBooking` re-reads the wallet and refuses server-side too. The
+  settings card's Wallet block is the same shared row (Refresh, Top up, the
+  seller's low line).
 - **`/shipment/submit_orders`** after reserving the order's single booking slot
   (cross-provider). `providerOrderId` = the **`shipment_number`** (ES-…),
   which details, cancel and webhooks all key on; the reference is the order

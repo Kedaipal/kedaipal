@@ -38,8 +38,21 @@ vi.mock("convex/react", async () => {
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
-vi.mock("@tanstack/react-query", () => ({
-	useQuery: () => ({ data: state.dispatch }),
+vi.mock("@tanstack/react-query", async () => {
+	const { getFunctionName } = await import("convex/server");
+	return {
+		// The courier-wallet line (z8r3fdx34j) reads its own query; everything
+		// else answers with this card's own state.
+		useQuery: (q: { fn: unknown }) => ({
+			data:
+				getFunctionName(q.fn as never) === "courierWallets:list"
+					? walletState.wallets
+					: state.dispatch,
+		}),
+	};
+});
+const walletState = vi.hoisted(() => ({
+	wallets: [] as unknown[],
 }));
 vi.mock("@tanstack/react-router", () => ({
 	Link: ({ to, search: _s, hash: _h, ...props }: Record<string, unknown>) => (
@@ -264,8 +277,10 @@ describe("copy follows the picked service (F12) and the reason is attached (F14)
 		expect(book.hasAttribute("disabled")).toBe(true);
 		const id = book.getAttribute("aria-describedby");
 		expect(id).toBeTruthy();
+		// The shared wallet line (z8r3fdx34j) — present before the stored
+		// wallet catches up, because Book names it as its reason.
 		expect(document.getElementById(id ?? "")?.textContent).toMatch(
-			/not enough for this courier/,
+			/this booking costs .* Top up first/,
 		);
 	});
 });

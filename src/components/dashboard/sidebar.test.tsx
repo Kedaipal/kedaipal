@@ -73,6 +73,20 @@ vi.mock("./whats-new", () => ({
 		</button>
 	),
 }));
+// The profile menu reads credits + Clerk; here only its TRIGGER matters (the
+// sidebar's job is the row), so the menu renders its trigger and the stub is
+// whatever the test sets.
+const profile = vi.hoisted(() => ({
+	stub: null as null | { triggerLine: string; dot: "low" | "out" | null },
+}));
+vi.mock("./profile-menu", () => ({
+	useCreditStub: () => profile.stub,
+	profileTriggerLabel: () => "Account menu",
+	ProfileMenu: ({ trigger }: { trigger: ReactNode }) => trigger,
+	ProfileAvatar: ({ dot }: { dot: string | null }) => (
+		<span data-slot="avatar" data-dot={dot ?? ""} />
+	),
+}));
 vi.mock("./app-version-row", () => ({
 	AppVersionRow: () => <div data-slot="app-version" />,
 }));
@@ -279,9 +293,9 @@ describe("a short window scrolls the link list; the chrome never squashes", () =
 			).filter((b) => !b.closest("[inert]"));
 		expect(open.container.textContent).not.toMatch(/Dark mode|Light mode/);
 		expect(live()).toHaveLength(1);
-		// Expanded: it lives in the profile row, after the user button.
+		// Expanded: it lives in the profile row, after the profile trigger.
 		const profileRow = open.container
-			.querySelector('[data-slot="user-button"]')
+			.querySelector('[data-testid="profile-trigger"]')
 			?.closest("div.flex");
 		expect(profileRow?.contains(live()[0])).toBe(true);
 		cleanup();
@@ -297,7 +311,7 @@ describe("a short window scrolls the link list; the chrome never squashes", () =
 		).filter((b) => !b.closest("[inert]"));
 		expect(railLive).toHaveLength(1);
 		const railProfile = rail.container
-			.querySelector('[data-slot="user-button"]')
+			.querySelector('[data-testid="profile-trigger"]')
 			?.closest("div.flex");
 		// Collapsed: the live one is the row above the avatar, not the profile one.
 		expect(railProfile?.contains(railLive[0])).toBe(false);
@@ -368,5 +382,51 @@ describe("Admin group — the Blog videos shortcut (admin areas, z8r3fdwwpe)", (
 			"Blog videos — Opens admin.kedaipal.com",
 		);
 		expect(link?.querySelector('[aria-hidden="true"]')).not.toBeNull();
+	});
+});
+
+describe("the profile row carries the credits balance (z8r3fdx34j)", () => {
+	afterEach(() => {
+		profile.stub = null;
+	});
+
+	it("expanded: the row's second line is the balance, coloured by tone, and the avatar wears no dot", () => {
+		collapsed = false;
+		profile.stub = { triggerLine: "38 orders left · about 6 days", dot: "low" };
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		const line = container.querySelector(
+			'[data-testid="profile-trigger-credits"]',
+		);
+		expect(line?.textContent).toBe("38 orders left · about 6 days");
+		expect(line?.className).toMatch(/text-amber-700/);
+		// The words already say it — a dot too would be the same fact twice.
+		expect(
+			container.querySelector('[data-slot="avatar"]')?.getAttribute("data-dot"),
+		).toBe("");
+	});
+
+	it("collapsed: the 68px rail has no room for the line, so the avatar carries the dot", () => {
+		collapsed = true;
+		profile.stub = { triggerLine: "3 orders waiting on credits", dot: "out" };
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(
+			container.querySelector('[data-slot="avatar"]')?.getAttribute("data-dot"),
+		).toBe("out");
+	});
+
+	it("a reader without the credits grant sees their email instead — never a balance", () => {
+		collapsed = false;
+		profile.stub = null;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(
+			container.querySelector('[data-testid="profile-trigger-credits"]'),
+		).toBeNull();
+		expect(container.textContent).toContain("zaki@example.com");
 	});
 });

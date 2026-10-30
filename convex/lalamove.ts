@@ -1963,6 +1963,23 @@ export const confirmBooking = action({
 				message: err instanceof Error ? err.message : String(err),
 			});
 			const message = friendlyBookingError(err, context.env);
+			// An insufficient-balance refusal is news about the WALLET too: the
+			// seller's other surfaces should say "short" before the next tap,
+			// not just this order's failed card. Lalamove names no amount, so it
+			// records a refusal, never a balance. Sandbox refusals are play
+			// money and say nothing about the real wallet.
+			if (
+				err instanceof LalamoveApiError &&
+				classifyBookingFailure(err.body) === "wallet" &&
+				context.env !== "sandbox"
+			) {
+				await ctx.runMutation(internal.courierWallets.record, {
+					retailerId: context.retailerId,
+					provider: "lalamove",
+					at: Date.now(),
+					observation: { kind: "refused" },
+				});
+			}
 			// Free the slot so the seller can rebook immediately; the released row
 			// doubles as the amber failed card.
 			await ctx.runMutation(internal.lalamove.releaseReservation, {

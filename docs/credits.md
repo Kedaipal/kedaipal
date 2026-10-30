@@ -729,6 +729,16 @@ live in `src/lib/credit-packs.ts` (`packOffers`, `afterTopUpLine`), pinned by
 tests. The default pick stays the smaller pack: the badge and the saving do the
 persuading, not a pre-selection.
 
+
+**"Enough to 1 Nov" (z8r3fdx34j).** At this week's pace (`getUsagePace`),
+the picker says how many more orders the store needs before its reset and
+badges the **smallest pack that covers it** (`recommendedPack`,
+`src/lib/credit-packs.ts`) — and pre-selects it, so a seller who taps Buy
+straight away gets the pack that lasts. A debt is part of the gap. Nothing is
+recommended when there's no reset to aim at (a trial), no measurable pace,
+a balance that already lasts, or a gap bigger than any pack (the upgrade hint
+says that instead).
+
 ### Receipts and history
 
 - **Email** (`billingEmail.notifyCreditPurchaseReceipt`, en/ms/zh): to the
@@ -1271,7 +1281,9 @@ tracking page at +50 and −50 and asserts they're identical).
 
 One `CreditMeter`, two places (one control, one rule):
 
-- **Dashboard home** (`card`) — "42 orders left", the monthly bar, both
+- **Dashboard home** (`section`, inside the **Balances** card since
+  z8r3fdx34j, with the courier wallets under it under their own label — see
+  [`courier-wallets.md`](./courier-wallets.md)) — "42 orders left", the monthly bar, both
   balances in one line ("120 of 200 monthly · 25 bought"), the reset ("Back to
   200 on 1 Nov"), and a way into Billing. One button by urgency: when locked,
   the one that puts credits back; once running low, **Top up credits** straight
@@ -1289,6 +1301,38 @@ One `CreditMeter`, two places (one control, one rule):
   trial) shows the one tile. An UNMETERED store — admin-owned or **comped** —
   shows no meter at all; the Sponsored card in Settings → Billing is where a
   comped seller is told their limits are off instead.
+
+### The profile menu stub (z8r3fdx34j)
+
+The avatar row in the sidebar foot **is** the profile menu's trigger, and its
+second line is the balance ("54 orders left", "38 orders left · about 6
+days", "3 orders waiting on credits"), coloured by tone. On the 68px rail and
+the phone header there's no room for the words, so the avatar wears a **dot**
+instead: none when healthy, amber when low, red when orders wait. Not
+dismissable — it's a fact, not a nag.
+
+The menu (`src/components/dashboard/profile-menu.tsx`, replacing Clerk's
+`UserButton`) holds, in order: who you are (name, email, your role in this
+store), **the credits stub**, **Refer a kedai**, then Manage account and Sign
+out. The stub is option **2A** from the 29 Oct mockups: an outlined torn
+receipt on the menu's own surface (`.kp-credit-stub` in `styles.css`) —
+masthead, month, the headline, one row of 20 dots for the month's grant,
+a dotted-leader line, ONE outline button. The whole receipt opens Billing; the
+button opens the pack picker, or the lock's own way back when orders wait.
+Every state is `creditStub` (`src/lib/credit-stub.ts`):
+
+| State | Headline | Leader | Button | Stamp |
+| --- | --- | --- | --- | --- |
+| Healthy | 54 orders left | Resets · 1 Nov · 200 | Top up | — |
+| Low (last 20%) | 38 orders left | About 6 days · 1 Nov | Top up | LOW |
+| Orders waiting | 3 orders waiting (every dot torn) | Resets · 1 Nov · 197 | the lock's CTA | WAITING |
+| Trial | 163 orders left | Trial · 200 orders | Pick a plan | TRIAL |
+| Unmetered | ∞ orders | Plan · Sponsored / Orders · Unlimited | none | ON US |
+
+A reader who can't buy sees the button greyed with T2's own sentence under it.
+**A teammate without the credits grant gets no stub** — the trigger shows
+their email. Unmetered stores DO get the stub (Zaki, 29 Oct): "on us" is
+worth seeing. Courier wallets are never in this menu.
 
 **The reset reads as a reset** (Zaki's test round): "300 more on 1 Oct" read as
 300 ADDED; monthly credits go BACK to the allowance. `creditRefreshLabel`

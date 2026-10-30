@@ -29,6 +29,7 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
+import { clearCourierWallet, recordObservation } from "./courierWallets";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { requireRetailerAccess, resolveMyRetailer } from "./lib/auth";
 import { COUNTRY_LABELS, DEFAULT_COUNTRY, type Country } from "./lib/country";
@@ -325,6 +326,20 @@ export const storeConnection = internalMutation({
 	handler: async (ctx, args) => {
 		const prev = await connectionFor(ctx, args.retailerId);
 		const now = Date.now();
+		// A (re)connect may be a different EasyParcel account: its wallet starts
+		// from what this sign-in just read, never from the old account's.
+		await clearCourierWallet(ctx, args.retailerId, "easyparcel");
+		if (args.balanceMinor !== undefined && args.balanceCurrency) {
+			await recordObservation(ctx, {
+				retailerId: args.retailerId,
+				provider: "easyparcel",
+				at: now,
+				kind: "balance",
+				balanceMinor: args.balanceMinor,
+				currency: args.balanceCurrency,
+				source: "pull",
+			});
+		}
 		const fields = {
 			accessToken: args.accessToken,
 			refreshToken: args.refreshToken,
@@ -498,6 +513,7 @@ export const disconnect = mutation({
 			await assertSubscriptionActive(ctx, access.retailer._id);
 		const conn = await connectionFor(ctx, access.retailer._id);
 		if (conn) await ctx.db.delete(conn._id);
+		await clearCourierWallet(ctx, access.retailer._id, "easyparcel");
 	},
 });
 
@@ -796,7 +812,7 @@ function friendlyError(err: unknown): string {
 	if (err instanceof EasyparcelApiError) {
 		switch (classifyEasyparcelFailure(err)) {
 			case "credit":
-				return "Your EasyParcel wallet doesn't have enough credit for this shipment. Top up in EasyParcel, then book again — nothing was booked and your buyer wasn't notified.";
+				return "Your EasyParcel wallet doesn't have enough in it for this shipment. Top up in EasyParcel, then book again — nothing was booked and your buyer wasn't notified.";
 			case "invalid_address":
 				return `EasyParcel rejected an address on this shipment: ${err.detail}. Check the buyer's postcode and your pickup address, then try again.`;
 			case "rate_limited":
@@ -864,10 +880,23 @@ export const storeBalance = internalMutation({
 	handler: async (ctx, args) => {
 		const conn = await connectionFor(ctx, args.retailerId);
 		if (!conn) return;
+		const now = Date.now();
 		await ctx.db.patch(conn._id, {
 			balanceMinor: args.balanceMinor,
 			balanceCurrency: args.currency,
-			balanceCheckedAt: Date.now(),
+			balanceCheckedAt: now,
+		});
+		// The wallet every surface reads (courierWallets). The connection's own
+		// snapshot above stays for the account-country check and dispatch,
+		// which read it today; both are written here, together.
+		await recordObservation(ctx, {
+			retailerId: args.retailerId,
+			provider: "easyparcel",
+			at: now,
+			kind: "balance",
+			balanceMinor: args.balanceMinor,
+			currency: args.currency,
+			source: "pull",
 		});
 	},
 });

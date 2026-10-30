@@ -50,6 +50,7 @@ import { encryptSecret } from "./lib/credentialCrypto";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { isColdItemType } from "./lib/liveQuote";
 import { DEFAULT_COUNTRY, type Country } from "./lib/country";
+import { clearCourierWallet } from "./courierWallets";
 import { delyvaBookingArmed } from "./lib/courierBooking";
 import {
 	assertCatalogueWeighed,
@@ -249,6 +250,10 @@ export const storeConnection = internalMutation({
 		// booking is already ON is maintenance, not an arming gesture: it keeps
 		// booking on, or a key rotation would silently stop Delyva quoting at
 		// checkout (PR #416 review).
+		// A key for a DIFFERENT Delyva account (customer id) describes a
+		// different wallet: forget the old one's last-seen balance.
+		if (prev?.customerId !== args.customerId)
+			await clearCourierWallet(ctx, args.retailerId, "delyva");
 		const alreadyArmed = prev?.enabled === true;
 		const unweighed =
 			!alreadyArmed &&
@@ -728,7 +733,8 @@ export const clearConnection = internalMutation({
 		if (!retailer || !config) return;
 		// Keep the seller's own setup (pickup address, parcel-type default) so
 		// a reconnect is one key-paste, not a re-setup; drop everything the old
-		// key owned.
+		// key owned — its wallet balance included.
+		await clearCourierWallet(ctx, retailerId, "delyva");
 		await ctx.db.patch(retailerId, {
 			delyva: {
 				enabled: false,
@@ -1274,7 +1280,7 @@ function friendlyBookingError(err: unknown): string {
 		const detail = parseDelyvaErrorMessage(err.body);
 		switch (classifyDelyvaFailure(err.body)) {
 			case "credit":
-				return `Your Delyva account doesn't have enough credit${detail ? ` (Delyva says: “${detail}”)` : ""}. Top up in the Delyva app, then book again — nothing was booked and your buyer wasn't notified.`;
+				return `Your Delyva wallet doesn't have enough in it${detail ? ` (Delyva says: “${detail}”)` : ""}. Top up in Delyva, then book again — nothing was booked and your buyer wasn't notified.`;
 			case "not_activated":
 				return "Delyva hasn't activated your pickup address for this parcel type yet (cold chain needs a one-time activation). We can chase it with Delyva — nothing was booked.";
 			case "no_service":
@@ -1326,6 +1332,10 @@ export const prepareBooking = action({
 				 * of which covers this shipment. undefined = the extra lookup
 				 * failed, so the card stays with its generic wording. */
 				accountHasNoCouriers?: boolean;
+				/** How many couriers are switched on in the seller's Delyva
+				 * account (`GET /service`), for the "N couriers on" footer;
+				 * undefined = Delyva didn't say. */
+				activeCourierCount?: number;
 				/** Only set when a CHILLED/FROZEN quote came back empty: true means
 				 * the identical route quotes fine as an ordinary parcel, so this is
 				 * a cold-chain gap on the Delyva account rather than anything about
@@ -1377,12 +1387,21 @@ export const prepareBooking = action({
 					weightKg: weight.kg,
 					itemType: forItemType,
 				});
-			const response = await callDelyva(
-				context.credentials,
-				"POST",
-				"/service/instantQuote",
-				quoteBody(itemType),
-			);
+			// The account's switched-on courier count rides alongside the quote
+			// (z8r3fdx34j): a fresh Delyva account has NONE on, and the seller
+			// only learns couriers are opt-in if the card says "N couriers on".
+			// In parallel, and it can never fail the quote.
+			const [response, activeCourierCount] = await Promise.all([
+				callDelyva(
+					context.credentials,
+					"POST",
+					"/service/instantQuote",
+					quoteBody(itemType),
+				),
+				callDelyva(context.credentials, "GET", "/service")
+					.then((json) => countActiveDelyvaServices(json))
+					.catch(() => null),
+			]);
 			const services = parseInstantQuoteResponse(response).sort(
 				(a, b) => a.price - b.price,
 			);
@@ -1395,14 +1414,8 @@ export const prepareBooking = action({
 			let accountHasNoCouriers: boolean | undefined;
 			let coldChainUnavailable: boolean | undefined;
 			if (services.length === 0) {
-				try {
-					const active = countActiveDelyvaServices(
-						await callDelyva(context.credentials, "GET", "/service"),
-					);
-					accountHasNoCouriers = active === null ? undefined : active === 0;
-				} catch {
-					accountHasNoCouriers = undefined;
-				}
+				accountHasNoCouriers =
+					activeCourierCount === null ? undefined : activeCourierCount === 0;
 				// Cold chain is the ICP's whole reason for being here (frozen and
 				// kuih sellers), and it fails in a way that reads as an address
 				// problem: Delyva filters by item type SERVER-side, so a chilled
@@ -1436,6 +1449,7 @@ export const prepareBooking = action({
 				buyerPaidFee: context.buyerPaidFee,
 				accountHasNoCouriers,
 				coldChainUnavailable,
+				activeCourierCount: activeCourierCount ?? undefined,
 			};
 		} catch (err) {
 			console.warn("[delyva] dispatch quote failed", {
@@ -1706,6 +1720,17 @@ export const confirmBooking = action({
 				message: err instanceof Error ? err.message : String(err),
 			});
 			const message = friendlyBookingError(err);
+			// A credit refusal carries the wallet's balance — the only way Delyva
+			// ever tells us — so every other surface learns it before the next tap.
+			if (
+				err instanceof DelyvaApiError &&
+				classifyDelyvaFailure(err.body) === "credit"
+			) {
+				await ctx.runMutation(internal.courierWallets.recordDelyvaRefusal, {
+					retailerId: context.retailerId,
+					message: parseDelyvaErrorMessage(err.body),
+				});
+			}
 			// A draft that was created but never processed is an orphan in the
 			// seller's Delyva dashboard — cancel it best-effort.
 			if (delyvaOrderId) {

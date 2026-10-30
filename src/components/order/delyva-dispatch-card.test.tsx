@@ -31,8 +31,21 @@ vi.mock("convex/react", async () => {
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
-vi.mock("@tanstack/react-query", () => ({
-	useQuery: () => ({ data: state.dispatch }),
+vi.mock("@tanstack/react-query", async () => {
+	const { getFunctionName } = await import("convex/server");
+	return {
+		// The courier-wallet line (z8r3fdx34j) reads its own query; everything
+		// else answers with this card's own state.
+		useQuery: (q: { fn: unknown }) => ({
+			data:
+				getFunctionName(q.fn as never) === "courierWallets:list"
+					? walletState.wallets
+					: state.dispatch,
+		}),
+	};
+});
+const walletState = vi.hoisted(() => ({
+	wallets: [] as unknown[],
 }));
 vi.mock("@tanstack/react-router", () => ({
 	Link: ({ to, search, ...props }: Record<string, unknown>) => (

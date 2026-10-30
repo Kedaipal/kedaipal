@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
 import { resolveAwbConfig } from "../../convex/lib/awbConfig";
+import { DEFAULT_COUNTRY } from "../../convex/lib/country";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -10,7 +11,6 @@ import {
 import {
 	DeliveriesView,
 	monthGlance,
-	WalletGlance,
 } from "../components/deliveries/deliveries-view";
 import { Glance } from "../components/settings/settings-primitives";
 import { Skeleton } from "../components/ui/skeleton";
@@ -55,13 +55,8 @@ function DeliveriesRoute() {
 				title="Deliveries"
 				subtitle="Parcels to send, couriers on the road, and what delivery cost you this month."
 				actions={
-					overview.booksCouriers || overview.wallet ? (
-						<div className="flex flex-wrap items-center justify-end gap-2">
-							{overview.booksCouriers ? (
-								<Glance tone="grey">{monthGlance(overview)}</Glance>
-							) : null}
-							<WalletGlance wallet={overview.wallet} />
-						</div>
+					overview.booksCouriers ? (
+						<Glance tone="grey">{monthGlance(overview)}</Glance>
 					) : null
 				}
 			/>
@@ -71,18 +66,16 @@ function DeliveriesRoute() {
 				<h1 className="font-heading text-[22px] font-extrabold leading-tight tracking-tight">
 					Deliveries
 				</h1>
-				{overview.booksCouriers || overview.wallet ? (
+				{overview.booksCouriers ? (
 					<div className="flex flex-wrap items-center gap-2">
-						{overview.booksCouriers ? (
-							<Glance tone="grey">{monthGlance(overview)}</Glance>
-						) : null}
-						<WalletGlance wallet={overview.wallet} />
+						<Glance tone="grey">{monthGlance(overview)}</Glance>
 					</div>
 				) : null}
 			</div>
 			<DeliveriesView
 				overview={overview}
 				retailerId={retailer._id}
+				country={retailer.country ?? DEFAULT_COUNTRY}
 				paperLabel={describeAwbPaper(
 					resolveAwbConfig(retailer.awbConfig).paperSize,
 				)}

@@ -349,7 +349,10 @@ import {
 	requireRetailerAccess,
 	storeOwnerIsAdmin,
 } from "./lib/auth";
-import { syncLalamoveWallet } from "./courierWallets";
+import {
+	resetWalletsForCountrySwitch,
+	syncLalamoveWallet,
+} from "./courierWallets";
 import {
 	hasPermission,
 	type MemberPermissions,
@@ -2902,6 +2905,10 @@ export const updateSettings = mutation({
 			if (args.country !== (retailer.country ?? DEFAULT_COUNTRY)) {
 				patch.countryChangedAt = Date.now();
 				patch.countryChangedFrom = retailer.country ?? DEFAULT_COUNTRY;
+				// Every courier wallet balance described an account in the OLD
+				// country (an SG EasyParcel account has its own wallet) — show
+				// "not reported yet" rather than a balance from the wrong one.
+				await resetWalletsForCountrySwitch(ctx, retailer._id);
 				// A new move re-opens every question the seller previously
 				// confirmed — their bank details were checked against the OLD
 				// destination.
