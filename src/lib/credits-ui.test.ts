@@ -108,7 +108,7 @@ describe("credit activity reads as a sentence", () => {
 			"Unused October plan credits — they don't carry over",
 		);
 		expect(row({ type: "expire", reason: "expiry", amount: -5 })).toBe(
-			"Bought credits expired (12 months)",
+			"Extra credits expired (12 months)",
 		);
 		expect(row({ type: "expire", reason: "trial", amount: -60 })).toMatch(
 			/Unused trial orders/,
@@ -372,18 +372,18 @@ describe("the meter's state line", () => {
 		).not.toMatch(/sponsored/i);
 	});
 
-	test("bought credits never stand in for a plan — they're kept for when it's active", () => {
+	test("extra credits never stand in for a plan — they're kept for when it's active", () => {
 		expect(creditStateLine({ ...base, status: "past_due" })).toBe(
 			"Pay your invoice and this month's credits land straight away.",
 		);
 		expect(
 			creditStateLine({ ...base, status: "past_due", purchased: 150 }),
 		).toBe(
-			"Pay your invoice and this month's credits land straight away. Your 150 bought credits are kept, and work again once your plan is active.",
+			"Pay your invoice and this month's credits land straight away. Your 150 extra credits are kept, and work again once your plan is active.",
 		);
 		expect(
 			creditStateLine({ ...base, status: "on_hold", purchased: 1 }),
-		).toMatch(/Your 1 bought credit is kept, and works again/);
+		).toMatch(/Your 1 extra credit is kept, and works again/);
 		expect(creditStateLine({ ...base, status: "cancelled" })).toMatch(
 			/^Your plan has ended/,
 		);
@@ -414,7 +414,7 @@ describe("the meter's state line", () => {
 
 	test("the rules name the order of use", () => {
 		expect(CREDIT_RULES_LINE).toMatch(
-			/Monthly credits are used first and reset on the 1st.*Bought credits are used next and last 12 months/,
+			/Monthly credits are used first and reset on the 1st.*Extra credits — top-ups and bonuses — are used next and last 12 months/,
 		);
 	});
 });

@@ -885,7 +885,7 @@ describe("directory — credits", () => {
 		for (const column of [
 			"Credits left",
 			"Plan credits",
-			"Bought credits",
+			"Extra credits",
 			"Out of credits since",
 			"Custom grant",
 		])

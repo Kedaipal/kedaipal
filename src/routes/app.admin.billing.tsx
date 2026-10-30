@@ -337,8 +337,11 @@ function AdminBillingOverview() {
 
 /**
  * The book-wide credit figures (Kedaipal Credits T5) — two counts of CREDITS,
- * never money: what sellers have bought and not used (the deferred-revenue
- * figure — service still owed) and the orders taken past zero that the next
+ * never money: the extra credits sellers hold and haven't used (service still
+ * owed — top-ups AND referral bonuses AND admin grants, so it is NOT the
+ * deferred-revenue figure: a lot's `source` would separate the paid share,
+ * but an Enterprise block is logged as an `adjust` lot and can't be told from
+ * a goodwill grant yet) and the orders taken past zero that the next
  * grant or pack will absorb. Beside them, the one money figure: this month's
  * top-up revenue from paid packs, per currency (Credits T3 × T2 — it waited
  * for the purchase table rather than guess). Exported for its states test.
@@ -351,17 +354,17 @@ export function CreditTotals() {
 	const stores = (n: number) => `${n} store${n === 1 ? "" : "s"}`;
 	const tiles: StatTileProps[] = [
 		{
-			label: "Unused bought credits",
+			label: "Unused extra credits",
 			value:
 				totals === undefined
 					? "..."
 					: totals.purchasedUnused.toLocaleString("en"),
 			helper:
 				totals === undefined
-					? "Deferred — service still owed"
+					? "Top-ups, bonuses and grants — service still owed"
 					: totals.storesWithPurchased === 0
 						? "No store holds any yet"
-						: `Across ${stores(totals.storesWithPurchased)} — service still owed`,
+						: `Across ${stores(totals.storesWithPurchased)} — top-ups, bonuses and grants`,
 			icon: <Coins className="size-4" />,
 			tone: "neutral",
 		},

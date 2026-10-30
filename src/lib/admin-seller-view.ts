@@ -768,7 +768,7 @@ export type CreditsTone = "normal" | "out" | "muted";
 export interface SellerCredits {
 	/** "130 left", "0 left", "15 owed" — "—" with no account. */
 	headline: string;
-	/** "plan 80 · bought 50", plus the custom grant when one is set. */
+	/** "plan 80 · extra 50", plus the custom grant when one is set. */
 	detail: string;
 	tone: CreditsTone;
 	/** The total is at or below zero — the fact the seller lock keys off
@@ -795,7 +795,7 @@ export function sellerCredits(row: AdminSellerRow): SellerCredits {
 	// one are outside the credit system — no account, no grant, no debit. Asked
 	// BEFORE the row's cached figures, which a store that was metered before
 	// the gate still carries: a comped store that was billed last month still
-	// holds "plan 200 · bought 0", and printing it here is the directory
+	// holds "plan 200 · extra 0", and printing it here is the directory
 	// repeating the very claim this ticket removed from the seller's meter.
 	if (row.ownerIsAdmin || row.comped)
 		return {
@@ -821,7 +821,7 @@ export function sellerCredits(row: AdminSellerRow): SellerCredits {
 	const neverLocked = row.comped;
 	const detail = [
 		`plan ${c.plan}`,
-		`bought ${c.purchased}`,
+		`extra ${c.purchased}`,
 		...(c.customGrant !== undefined ? [`custom ${c.customGrant}/mo`] : []),
 		...(out && neverLocked ? ["never locked"] : []),
 	].join(" · ");
@@ -889,7 +889,7 @@ export function sellerSummaryText(
 	].join("\n");
 }
 
-/** "130 left (plan 80 · bought 50)", "15 owed (…) · out since 3 Oct 2026". */
+/** "130 left (plan 80 · extra 50)", "15 owed (…) · out since 3 Oct 2026". */
 function creditsSummary(row: AdminSellerRow): string {
 	const credits = sellerCredits(row);
 	if (credits.total === undefined) return credits.detail;
@@ -911,7 +911,7 @@ const CSV_HEADER = [
 	"Seats",
 	"Credits left",
 	"Plan credits",
-	"Bought credits",
+	"Extra credits",
 	"Out of credits since",
 	"Custom grant",
 	"Expiry",

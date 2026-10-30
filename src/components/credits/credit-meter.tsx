@@ -61,8 +61,12 @@ const TONE_BAR: Record<CreditTone, string> = {
  * absence.
  *
  * The two balances are always shown apart (Zaki, 1 Oct 2026): MONTHLY credits
- * are used first and reset on the 1st; BOUGHT credits are used next and carry
+ * are used first and reset on the 1st; EXTRA credits are used next and carry
  * over for 12 months. The headline is their sum — what the lock reads.
+ *
+ * "Extra", never "bought": the second pot holds top-up packs AND referral
+ * bonuses AND admin grants, so a referee who never bought anything was being
+ * told "60 bought" (found in the referral hands-on test, 30 Oct 2026).
  */
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
@@ -270,7 +274,7 @@ export function CreditMeter({
 					<MonthlyBar balance={balance} tone={tone} />
 					<p className="text-xs text-muted-foreground tabular-nums">
 						{monthlyFigure(balance)} {monthlyNoun(balance)} ·{" "}
-						{balance.purchased} bought
+						{balance.purchased} extra
 					</p>
 				</div>
 				<p className="text-xs leading-relaxed text-muted-foreground">
@@ -306,9 +310,9 @@ export function CreditMeter({
 	}
 
 	// A store that can't buy packs (never locked, or on its trial) and holds no
-	// bought credits has one balance, so "used first / used next" has nothing
+	// extra credits has one balance, so "used first / used next" has nothing
 	// to explain.
-	const showBought =
+	const showExtra =
 		balance.purchased > 0 || (exempt === null && balance.regime !== "trial");
 
 	return (
@@ -324,14 +328,14 @@ export function CreditMeter({
 			<div
 				className={cn(
 					"grid gap-3",
-					showBought ? "sm:grid-cols-2" : "grid-cols-1",
+					showExtra ? "sm:grid-cols-2" : "grid-cols-1",
 				)}
 			>
 				<BalanceTile
 					label={
 						balance.regime === "trial" ? "Trial orders" : "Monthly credits"
 					}
-					order={showBought ? "Used first" : null}
+					order={showExtra ? "Used first" : null}
 					figure={
 						<>
 							{monthlyFigure(balance)}
@@ -347,17 +351,17 @@ export function CreditMeter({
 				>
 					<MonthlyBar balance={balance} tone={tone} />
 				</BalanceTile>
-				{showBought ? (
+				{showExtra ? (
 					<BalanceTile
-						label="Bought credits"
+						label="Extra credits"
 						order="Used next"
 						figure={balance.purchased}
 						detail={
 							balance.purchased > 0 && balance.nextExpiry
 								? `Next ${balance.nextExpiry.credits} expire ${formatShortDate(balance.nextExpiry.at)}`
 								: balance.purchased > 0
-									? "Last 12 months from purchase"
-									: "None yet — packs last 12 months"
+									? "Last 12 months from when they land"
+									: "None yet — top-ups and bonuses land here, for 12 months"
 						}
 					/>
 				) : null}
@@ -371,7 +375,7 @@ export function CreditMeter({
 			) : null}
 			{expirySoon ? (
 				<p className="text-xs text-amber-700 dark:text-amber-400">
-					{expirySoon.credits} bought{" "}
+					{expirySoon.credits} extra{" "}
 					{expirySoon.credits === 1 ? "credit expires" : "credits expire"} on{" "}
 					{formatShortDate(expirySoon.at)}.
 				</p>
