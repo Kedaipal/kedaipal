@@ -23,8 +23,7 @@ import { readLalamoveWallet, type WalletView } from "./courierWallets";
 import { creditGateFor, isOrderGated } from "./creditLock";
 import { addressCountryLine, displayAddressState } from "./lib/address";
 import { requireRetailerAccess } from "./lib/auth";
-import { DEFAULT_COUNTRY } from "./lib/country";
-import { DEFAULT_CURRENCY } from "./lib/currency";
+import { DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
 import { resolveDelyvaCredentials } from "./lib/delyva";
 import {
 	type DeliveryJobStatus,
@@ -297,7 +296,7 @@ export const overview = query({
 				mode !== "lalamove");
 
 		return {
-			currency: retailer.currency ?? DEFAULT_CURRENCY,
+			currency: storeCurrencyOf(retailer),
 			wallet: await readLalamoveWallet(ctx, retailerId),
 			booksCouriers,
 			bookingArmed: storeBooksCouriers({

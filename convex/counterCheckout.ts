@@ -47,7 +47,7 @@ import {
 	assertValidBuyerWaPhone,
 	resolveBuyerDialCountry,
 } from "./lib/buyerPhone";
-import { DEFAULT_COUNTRY } from "./lib/country";
+import { DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { recordOrderCreated } from "./subscriptionUsage";
 import {
@@ -907,7 +907,7 @@ export const createOrderFromSession = mutation({
 			}
 		}
 
-		const currency = retailer.currency ?? "MYR";
+		const currency = storeCurrencyOf(retailer);
 		const now = Date.now();
 
 		// Resolve variants server-side — price + stock are authoritative here.

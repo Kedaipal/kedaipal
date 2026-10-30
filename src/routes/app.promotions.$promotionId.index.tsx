@@ -7,7 +7,6 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { promotionPhase } from "../../convex/lib/promotions";
 import { ViewOnlyNote } from "../components/app/view-only-note";
 import { PageHeader } from "../components/dashboard/page-header";
@@ -71,7 +70,7 @@ function PromotionRoute() {
 	if (detail === null) return <PromotionGone />;
 
 	const { promotion, queue, products, pausedByPlan } = detail;
-	const currency = retailer.currency ?? DEFAULT_CURRENCY;
+	const currency = retailer.currency;
 	const phase = promotionPhase(promotion, queue, now);
 	const ended = phase === "ended" || phase === "ending";
 	const name = promotion.label ?? "Promotion";
