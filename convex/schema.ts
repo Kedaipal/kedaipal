@@ -1743,6 +1743,8 @@ export default defineSchema({
 				code: v.string(),
 				kind: v.union(v.literal("fixed"), v.literal("percent")),
 				value: v.number(),
+				// Frozen with the code (`z8r3fducfm`) — see `VoucherSnapshot`.
+				usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
 			}),
 		),
 		voucherDiscount: v.optional(v.number()),
@@ -3157,6 +3159,8 @@ export default defineSchema({
 				code: v.string(),
 				kind: v.union(v.literal("fixed"), v.literal("percent")),
 				value: v.number(),
+				// Frozen with the code (`z8r3fducfm`) — see `VoucherSnapshot`.
+				usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
 			}),
 		),
 		// Buyer capability for /claim/<token> — same generator + posture as
@@ -3274,9 +3278,35 @@ export default defineSchema({
 		),
 		// Set together at redemption. `redeemedOrderId` is what lets the list
 		// link a spent voucher to its order — and what a cancel clears when the
-		// voucher goes back to `active`.
+		// voucher goes back to `active`. Both are single-use only and never
+		// written on a SHARED code: its orders and each use's time live in
+		// `voucherRedemptions`.
 		redeemedOrderId: v.optional(v.id("orders")),
 		redeemedAt: v.optional(v.number()),
+		// --- Shared codes (`z8r3fducfm`) -------------------------------------
+		// `shared` = one seller-named code (`SALE345`) many buyers type, bounded
+		// by `maxRedemptions`, `endsAt`, or both (at least one — a public code
+		// with no bound is an open-ended liability, `sharedLimitsError`). Absent
+		// = `single`, the original one-code-one-use voucher: nothing to backfill.
+		//
+		// A shared code is unique PER STORE among its LIVE codes (`by_retailer_
+		// code`), not globally like a single-use one: it is public by design,
+		// so two stores both running `SALE20` is the normal case, and the buyer
+		// always types it at a known store. An ended code's word may be reused
+		// — the lookup picks the live row and the history keeps its own.
+		// `sharedCodeError` refuses any word the single-use parser would claim,
+		// so the two spellings can never collide (`parseVoucherCode`).
+		usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
+		maxRedemptions: v.optional(v.number()),
+		// Orders currently holding a use — incremented at redemption, decremented
+		// when an order is cancelled. A shared row is NEVER stored `redeemed`:
+		// "all used" and "ended" are both judged at read time off this count and
+		// `endsAt` (`resolveVoucherStatus`), so the row and the truth can't
+		// drift. Always equal to the row's `voucherRedemptions` count.
+		redeemedCount: v.optional(v.number()),
+		// Exact end instant (ms). NOT the `expiresAt` day convention — a shared
+		// code is posted for a happy hour, so it ends at a TIME.
+		endsAt: v.optional(v.number()),
 		// Set together on void. Soft by design: the row and its history stay,
 		// the code simply stops redeeming. There is no hard delete in v1.
 		voidedAt: v.optional(v.number()),
@@ -3304,7 +3334,33 @@ export default defineSchema({
 		// clock — see `vouchers.list`.
 		.index("by_retailer_status", ["retailerId", "status"])
 		// The list's default order (newest first) and the batch grouping.
-		.index("by_retailer_created", ["retailerId", "createdAt"]),
+		.index("by_retailer_created", ["retailerId", "createdAt"])
+		// A SHARED code's lookup and its live-uniqueness check at create — per
+		// store, because a public word is the same word in every shop.
+		.index("by_retailer_code", ["retailerId", "code"]),
+
+	/**
+	 * One order's use of a SHARED voucher code (`z8r3fducfm`). A single-use
+	 * voucher records its one order on the row itself (`redeemedOrderId`); a
+	 * shared code is spent many times, so each spend is a row here.
+	 *
+	 * Two jobs, both structural: the seller's "who used SALE345" list reads
+	 * `by_voucher`; and `by_order` is what makes the hand-back on cancel
+	 * IDEMPOTENT — a cancel that finds no row for its order has nothing to
+	 * return, so a second cancel seam (or a re-cancel) can't decrement twice.
+	 * The count on the voucher row is the cheap gate; this table is the truth
+	 * it must always equal.
+	 */
+	voucherRedemptions: defineTable({
+		voucherId: v.id("vouchers"),
+		retailerId: v.id("retailers"),
+		orderId: v.id("orders"),
+		createdAt: v.number(),
+	})
+		.index("by_voucher", ["voucherId", "createdAt"])
+		.index("by_order", ["orderId"])
+		// Tenant teardown (`accountDeletion`).
+		.index("by_retailer", ["retailerId"]),
 
 	/**
 	 * A bulk promotion (`z8r3fducfd`) — ONE set of terms (percent off, window,

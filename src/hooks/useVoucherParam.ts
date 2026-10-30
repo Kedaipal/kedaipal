@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { normalizeVoucherCode } from "../../convex/lib/vouchers";
+import { parseVoucherCode } from "../../convex/lib/vouchers";
 
 /**
  * Carry a `?voucher=` code across the storefront (`z8r3fdr617`) — the sibling
@@ -15,7 +15,7 @@ import { normalizeVoucherCode } from "../../convex/lib/vouchers";
  *
  * So every storefront route captures it, checkout reads it back, and the
  * empty-cart panel says the voucher is being held. Stored CANONICAL
- * (`normalizeVoucherCode`), so junk in the URL is dropped at the door rather
+ * (`parseVoucherCode`), so junk in the URL is dropped at the door rather
  * than surfacing as a refusal three pages later.
  *
  * sessionStorage, keyed per store: two shops in one browser can't cross-apply
@@ -33,7 +33,8 @@ export function useCaptureVoucherParam(slug: string | undefined): void {
 		try {
 			const raw = new URLSearchParams(window.location.search).get(PARAM);
 			if (!raw) return;
-			const code = normalizeVoucherCode(raw);
+			// Either spelling — a single-use `KP-…` or a shared word.
+			const code = parseVoucherCode(raw)?.code;
 			// A code that can't be one of ours is dropped, NOT stored — otherwise
 			// the buyer meets a refusal at checkout for a typo in a link they
 			// never wrote. A later hit with a real code overwrites (last touch,

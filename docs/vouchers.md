@@ -11,9 +11,12 @@
 > implements what's written here. Everything below is now live; the
 > implementation pointers at the bottom say where each part lives.
 
-A **voucher** is a seller-issued, single-use discount: one voucher = one
-unique code = one redemption, applied to **one order** at checkout. It is the
-*buyer-specific* discount lever. The *product-level* lever (promo price /
+A **voucher** is a seller-issued discount applied to **one order** at
+checkout. It comes in two **usages**: a **single-use** voucher is one unique
+`KP-XXXX-XXXX` code, one redemption; a **shared code** (`z8r3fducfm`, 30 Oct
+2026) is one seller-named word — `SALE345` — that every buyer can type, until
+it runs out or ends. See [Shared codes](#shared-codes--one-word-many-buyers-z8r3fducfm).
+It is the *buyer-specific* discount lever. The *product-level* lever (promo price /
 flash sale, `z8r3fdcw72`, [promo-price.md](./promo-price.md) once it lands) is
 a deliberately separate mechanism: a promo changes the **line price**, a
 voucher is an **order-level deduction**. They are never one system.
@@ -29,6 +32,131 @@ mutation that inserts the order, so two checkouts racing one code serialise on
 OCC and exactly one wins. A cancelled order returns its voucher to `active`
 (any cancel cause — the seller issued it to that buyer). One voucher per
 order, no stacking.
+
+A **shared** row differs in exactly one way: it **counts** instead of
+flipping. `usage: "shared"` carries a seller-named `code`, a `maxRedemptions`
+cap and/or an `endsAt` instant, and a `redeemedCount`; each order that spends
+it adds a `voucherRedemptions` row and bumps the count in the same
+transaction, and the row is never stored `redeemed` — "all used" and "ended"
+are both judged at read time. Everything else (the terms, the frozen
+snapshot, the totals seam, the three doors, the hand-back) is the same code
+path. See the section below.
+
+## Shared codes — one word, many buyers (`z8r3fducfm`)
+
+**Why.** Yap (14 Oct) and the vendor feedback behind Zaki's 30 Oct ask both
+expected what every other shop does: *"use code SALE345 for 20% off"* — one
+code on a poster or in a story, used by anyone. The single-use voucher
+deliberately left this out of its v1 as a different abuse surface; this is
+that revisit, scoped to what was actually asked for: a code the seller names
+or picks from suggestions, bounded by **a total number of uses, an end
+time, or both — whichever comes first ends it**.
+
+### The decisions
+
+- **A usage on the same table, not a second table.** Arif's draft ticket
+  sketched a separate `promoCodes` table with its own redemption doors and a
+  second id on `orders`. Rejected: every door, the totals seam, the frozen
+  snapshot, the money surfaces, the permission area, the plan gate, the rate
+  limiter, the deletion cascade and the buyer's field already exist for
+  vouchers, and a shared code needs every one of them unchanged. It differs
+  in ONE mechanism — count, don't flip — so it is `vouchers.usage`, and
+  `orders.voucherId` points at it like any other voucher. Absent `usage` is
+  `single`: no backfill.
+- **Scope follows Zaki's ask, not the draft ticket.** Per-buyer limit, min
+  spend, max-discount clamp, a scheduled start and "extend a live code" were
+  in Arif's sketch and are **not built** (per-buyer in particular would force
+  the storefront to ask for a phone before applying). Named as follow-ups on
+  the ticket; none of them changes the model here.
+- **At least one bound is required.** A public code with no cap and no end
+  is an open-ended liability. `sharedLimitsError` refuses it on the server
+  and the form says why beside the disabled button ("a shared code can't run
+  forever"). Zaki's wording — "either a max quantity or a deadline or both".
+- **The end is an INSTANT (`endsAt`), not the single-use day convention.** A
+  shared code is posted for a happy hour or a weekend, so it ends at a time;
+  "works all through the day" would overshoot by hours. Kept as its own
+  field rather than overloading `expiresAt` with a second meaning.
+- **Cap-first precedence is the actual order of events, not a tie-break.** A
+  use can only land while the code is running, so a full cap was filled
+  BEFORE any end passed. `resolveVoucherStatus` therefore asks the cap first
+  and needs no "which came first" stamp. A full code reads **Used** to the
+  seller ("All 50 uses taken") and **`exhausted`** to the buyer — "This code
+  has run out" — because "already used" would be a lie to someone who never
+  used it.
+- **Unique per store among LIVE codes, not globally.** A single-use code is
+  globally unique because it is private and a cross-store match must be
+  impossible. A shared word is public by design — two stores both running
+  `SALE20` is the normal case — and the buyer always types it at a known
+  store, so lookup is `(retailerId, code)` (`by_retailer_code`). An ended
+  code's word may be reused; `liveSharedVoucher` picks the spendable row,
+  else the newest dead one so the refusal names what happened to the word on
+  the poster rather than "not found". The same helper backs `create`'s
+  "already running" refusal and the form's live availability line, so
+  "taken" means exactly "a buyer typing it now would spend that other row".
+- **One buyer field, two parsers, no collision.** `parseVoucherCode` tries
+  the strict single-use shape first (8 symbols of the no-O/0/I/1 alphabet),
+  then the shared word (4–16 letters and digits). `sharedCodeError` refuses
+  at create any word the single-use parser would claim (`SALEDEAL`), so no
+  real code is ever claimed by both and the order of the parsers can never
+  change what a buyer's code means. The `malformed` sentence no longer names
+  `KP-XXXX-XXXX`, because two shapes are valid now.
+- **`voucherRedemptions` is the truth; `redeemedCount` is the cheap gate.**
+  The count is what the door checks (O(1), hot-row safe at SME volume); the
+  rows are what the seller's "who used SALE345" reads and — the structural
+  reason they exist — what makes the hand-back **idempotent**: a cancel that
+  finds no row for its order returns nothing, so a re-cancel or a second
+  cancel seam can't decrement twice. Both are written in the same
+  transaction, which is the only thing that keeps them equal.
+- **Void works on a shared code and corrects nothing retroactively.** Orders
+  that already used it keep their discount (the snapshot is frozen); the
+  count still drops when one of those orders is later cancelled, so "12
+  used" keeps meaning twelve even on a voided row.
+- **A shared word is public, and the form says so.** It is meant to be
+  guessable — that is what makes it easy to type off a poster — so it is no
+  way to keep a deal private: the per-store `checkCode` budget slows a
+  dictionary of common words down but cannot stop one. What limits a
+  shared code is its BOUNDS, not its secrecy. The code field's helper says
+  "It isn't secret: anyone who has the word, or guesses it, can use it", and
+  stays on screen under the "is free" line rather than being replaced by it.
+  A deal for named buyers is a batch of single-use vouchers.
+- **"Who used it" lists the latest `SHARED_USES_LISTED` (200) uses.** The
+  list reads one order per use, so a code near the 10,000-use ceiling would
+  exceed Convex's per-query read limit and the dialog would error. The query
+  takes one row past the limit so `limited` is exact, and the dialog then
+  says "Showing the latest 200 orders" instead of the "N more are waiting on
+  credits" line — that sentence is count minus rows, which only means
+  credits when nothing was cut off.
+- **`redeemedAt` is single-use only.** A shared use stamps nothing on the
+  code row: each use's time is its `voucherRedemptions.createdAt`, and a
+  "last used" stamp would point at a cancelled order the moment that use was
+  handed back.
+
+### What the seller sees
+
+- **One "New voucher" dialog, led by "Who can use it"** — *One buyer* (the
+  original) or *Everyone*. Picking Everyone swaps the batch count and
+  day-expiry for **the code** (typed, upper-cased in place, with three tap-to-
+  fill suggestions that follow the value — `SAVE20`, `DEAL20`, `SALE###` —
+  and a live "SALE20 is free / already running" line) and **two switches**
+  for the bounds, each opening its own control, with a helper that states the
+  rule for the combination that is on.
+- **The list row says "Shared"** (outlined chip, so it reads as a kind and not
+  a second status) and its outcome line is the tally — "12 of 50 used · ends
+  31 Oct 2026, 6:00 PM" / "All 50 uses taken" / "Ended … · 12 of 50 used".
+  An **"N orders"** button opens the *who used it* dialog (newest first,
+  linking each order); it is a READ, so it stays after the code is dead and
+  is offered to read-only teammates too. Gated orders are absent from it
+  (`forSeller`), and a count the list can't show is said plainly.
+- **The share sheet** addresses a crowd — "Use code SALE345 at … for 20% off"
+  — and states the bound as what is **left**, not what was set.
+
+### What the buyer sees
+
+The same field, the same link, the same QR. A word typed any way lands
+canonical; past the cap they read "This code has run out — every use has
+been taken"; past the end, "This voucher has expired". A claim link whose
+word ran out between send and open **drops** the discount with that sentence
+rather than dead-ending, exactly as a spent single-use code does.
 
 ## The code, the QR and the link — what each is for
 
@@ -304,7 +432,10 @@ file's own test).
 
 | Piece | Where |
 |---|---|
-| Code, value, status, refusal copy, `ClaimVoucherState` + `claimVoucherDiscount` (pure — the claim page loads it in the browser) | `convex/lib/vouchers.ts` |
+| Code, value, status, refusal copy, `ClaimVoucherState` + `claimVoucherDiscount` (pure — the claim page loads it in the browser); shared-code parser, bounds rule and status precedence | `convex/lib/vouchers.ts` |
+| Shared-code lookup (`liveSharedVoucher`), the count-not-flip redeem and the idempotent hand-back | `convex/lib/voucherRedemption.ts` |
+| Shared-code create (`insertSharedCode`), `sharedCodeAvailable`, `listRedemptions` | `convex/vouchers.ts` |
+| "Who used it" dialog | `src/components/vouchers/voucher-uses-dialog.tsx` |
 | Resolve / redeem / release / claim state (ctx) | `convex/lib/voucherRedemption.ts` |
 | Totals seam + `orderExtras` | `convex/lib/order.ts` |
 | Issue, rename-batch, void, void-batch, list, code check | `convex/vouchers.ts` |
@@ -316,7 +447,7 @@ file's own test).
 | Buyer / counter field | `src/components/vouchers/voucher-field.tsx` (ONE control, two skins) |
 | Batch grouping (pure) | `src/lib/voucher-groups.ts` + `voucher-batch-card.tsx` |
 | `?voucher=` carried across browsing | `src/hooks/useVoucherParam.ts` |
-| Tenant teardown | `vouchers` phase in `convex/lib/accountDeletion.ts` |
+| Tenant teardown | `voucherRedemptions` then `vouchers` phases in `convex/lib/accountDeletion.ts` |
 
 ### A refused code is a state to fix, not an error to read
 

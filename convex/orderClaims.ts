@@ -104,6 +104,7 @@ import {
 	type ClaimVoucherState,
 	claimVoucherDiscount,
 	type VoucherSnapshot,
+	voucherUsageOf,
 } from "./lib/vouchers";
 import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
 import type { OpeningHours } from "./lib/openingHours";
@@ -379,7 +380,11 @@ export const sendClaim = mutation({
 				now,
 			});
 			voucherId = resolved.voucher._id;
-			voucherSnapshot = { code: resolved.voucher.code, ...resolved.terms };
+			voucherSnapshot = {
+				code: resolved.voucher.code,
+				...resolved.terms,
+				usage: voucherUsageOf(resolved.voucher),
+			};
 		}
 
 		// Supersede: the previous open claim for this session dies with this send

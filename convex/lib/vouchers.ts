@@ -4,17 +4,26 @@
 // counter panel and the claim ticket can never disagree about what a code is
 // worth or why it was turned down.
 //
-// A voucher is the BUYER-SPECIFIC discount lever: one row = one unique code =
-// one redemption, deducted from ONE order. The product-level lever (promo
-// price / flash sale) changes the LINE PRICE and is a deliberately separate
-// mechanism — they stack, and neither knows about the other. See
-// docs/vouchers.md.
+// A voucher is the BUYER-SPECIFIC discount lever, deducted from ONE order. It
+// comes in two USAGES (`VoucherUsage`): a SINGLE-use voucher is one row = one
+// unique `KP-XXXX-XXXX` code = one redemption; a SHARED code (`z8r3fducfm`) is
+// one row = one seller-named code (`SALE345`) = many redemptions, bounded by a
+// total cap, an end time, or both. The product-level lever (promo price /
+// flash sale) changes the LINE PRICE and is a deliberately separate mechanism
+// — they stack, and neither knows about the other. See docs/vouchers.md.
 //
 // The claim ticket loads this file in the BROWSER, so it must never value-
 // import a Convex function module (`src/lib/convex-client-imports.test.ts`).
 
 import type { Id } from "../_generated/dataModel";
-import { DAY_MS, ymdFromEpoch } from "./fulfilmentDate";
+import {
+	DAY_MS,
+	formatFulfilmentDate,
+	formatFulfilmentTime,
+	mytMinutesOfDay,
+	todayMytMidnight,
+	ymdFromEpoch,
+} from "./fulfilmentDate";
 
 /**
  * Code alphabet — the `generateShortId` alphabet, for the same reason: a
@@ -95,6 +104,164 @@ export function normalizeVoucherCode(input: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Shared codes (`z8r3fducfm`)
+// ---------------------------------------------------------------------------
+
+/**
+ * How many times a code can be spent. `single` is the original voucher — one
+ * crypto-random code, one redemption, flips to `redeemed`. `shared` is one
+ * seller-named code many buyers type ("use SALE345 for 20% off"), which
+ * COUNTS redemptions instead of flipping, and stops at a total cap, an end
+ * time, or whichever of the two comes first.
+ *
+ * Absent on every row minted before shared codes existed, which is what
+ * `voucherUsageOf` folds back to `single` — no backfill, nothing to migrate.
+ */
+export type VoucherUsage = "single" | "shared";
+
+export function voucherUsageOf(voucher: { usage?: VoucherUsage }): VoucherUsage {
+	return voucher.usage ?? "single";
+}
+
+/** A seller-chosen code is a WORD, not a secret: 4–16 letters and digits,
+ * case-folded. Short enough to say on a poster, long enough that "SALE" alone
+ * isn't a code every store on the platform ends up sharing by accident. */
+export const SHARED_CODE_MIN = 4;
+export const SHARED_CODE_MAX = 16;
+
+/** Ceiling on a shared code's total uses. Not a business rule, a fat-finger
+ * guard like `VOUCHER_FIXED_MAX`: an extra zero on "how many can use it" is
+ * only visible after the hundredth stranger has. */
+export const SHARED_USES_MAX = 10_000;
+
+/**
+ * How many uses the seller's "Orders that used X" dialog lists, newest first.
+ * The list reads one order per use, so a code near `SHARED_USES_MAX` would
+ * blow Convex's per-query read limit; past this the dialog says it is showing
+ * the latest ones instead of erroring.
+ */
+export const SHARED_USES_LISTED = 200;
+
+/**
+ * Fold whatever the buyer typed onto a shared code's canonical spelling, or
+ * `null` if it can't be one: upper-cased, with spaces and punctuation dropped
+ * ("sale 345" → `SALE345`). Letters and digits are the whole alphabet, so —
+ * unlike the single-use parser — there is nothing to repair and nothing to
+ * refuse per character.
+ */
+export function normalizeSharedCode(input: string): string | null {
+	const stripped = input.toUpperCase().replace(/[^A-Z0-9]/g, "");
+	if (stripped.length < SHARED_CODE_MIN || stripped.length > SHARED_CODE_MAX)
+		return null;
+	return stripped;
+}
+
+/** What a typed code resolved to — which parser claimed it, and the canonical
+ * spelling to look up. */
+export type ParsedVoucherCode = { usage: VoucherUsage; code: string };
+
+/**
+ * ONE buyer field, two spellings. The single-use parser goes first because
+ * its shape is strict (exactly 8 symbols over the no-O/0/I/1 alphabet, with
+ * or without `KP-`), and `sharedCodeError` refuses at CREATE any shared code
+ * that would parse as a single-use one — so no real code is ever claimed by
+ * both, and the order here can never change what a buyer's code means.
+ *
+ * Every door asks this (storefront field, `?voucher=` link, counter draft,
+ * the resolve path) so a code has one spelling in the database and a lookup
+ * never misses on punctuation or case.
+ */
+export function parseVoucherCode(input: string): ParsedVoucherCode | null {
+	const single = normalizeVoucherCode(input);
+	if (single !== null) return { usage: "single", code: single };
+	const shared = normalizeSharedCode(input);
+	if (shared !== null) return { usage: "shared", code: shared };
+	return null;
+}
+
+/**
+ * Is this a code a seller is allowed to NAME? Shared by the create mutation
+ * and the issue form's disabled-with-reason button, so the form never offers
+ * a code the server will refuse. The last rule is the one that keeps
+ * `parseVoucherCode` honest: a word that happens to be 8 symbols of the
+ * single-use alphabet (`SALEDEAL`) would be claimed by the single-use parser
+ * and never reach the shared lookup, so it can't be issued as a shared code.
+ */
+export function sharedCodeError(input: string): string | null {
+	const trimmed = input.trim();
+	if (trimmed === "") return "Type a code, or pick one of the suggestions";
+	if (/[^A-Za-z0-9]/.test(trimmed))
+		return "Letters and numbers only — no spaces or symbols";
+	if (trimmed.length < SHARED_CODE_MIN)
+		return `At least ${SHARED_CODE_MIN} characters`;
+	if (trimmed.length > SHARED_CODE_MAX)
+		return `At most ${SHARED_CODE_MAX} characters`;
+	if (normalizeVoucherCode(trimmed) !== null)
+		return "That reads like one of our single-use codes — add a digit, or pick another word";
+	return null;
+}
+
+/** When a shared code stops working: a total number of uses, an exact end
+ * instant, or both. At least one is required — see `sharedLimitsError`. */
+export type SharedLimits = {
+	maxRedemptions?: number;
+	/** Exact epoch ms. NOT the single-use `expiresAt` day convention: a shared
+	 * code is posted for a happy hour or a weekend sale, so it ends at a
+	 * TIME, and "works all through the day" would overshoot by hours. */
+	endsAt?: number;
+};
+
+/**
+ * Is this a bound a seller is allowed to set? A shared code is public by
+ * design — anyone who sees the poster can use it — so one WITHOUT a bound is
+ * an open-ended liability, and refusing that is the one guard rail here that
+ * is a business rule rather than a fat-finger check (Zaki, 30 Oct 2026:
+ * "either a max quantity or a deadline or both").
+ */
+export function sharedLimitsError(limits: SharedLimits, now: number): string | null {
+	if (limits.maxRedemptions === undefined && limits.endsAt === undefined)
+		return "Set how many orders can use it, when it ends, or both";
+	if (limits.maxRedemptions !== undefined) {
+		if (
+			!Number.isInteger(limits.maxRedemptions) ||
+			limits.maxRedemptions < 1
+		)
+			return "Enter a whole number of uses";
+		if (limits.maxRedemptions > SHARED_USES_MAX)
+			return `At most ${SHARED_USES_MAX.toLocaleString("en-MY")} uses — check the number`;
+	}
+	if (limits.endsAt !== undefined) {
+		if (!Number.isFinite(limits.endsAt)) return "Pick when it ends";
+		if (limits.endsAt <= now) return "That end time has already passed";
+	}
+	return null;
+}
+
+/**
+ * Three codes a seller might like, so "name a code" never starts from a blank
+ * box: one that says the value (`SAVE20`), a second spelling of it, and a
+ * random `SALE###` for when the value isn't a nice word. Every suggestion is
+ * passed back through `sharedCodeError`, so none can be refused on pick — a
+ * suggestion the form then rejects would be worse than no suggestion.
+ */
+export function suggestSharedCodes(terms: VoucherTerms): string[] {
+	const n =
+		terms.kind === "percent"
+			? clampPercent(terms.value)
+			: Math.floor(finiteNonNegative(terms.value) / 100);
+	const bytes = new Uint8Array(2);
+	crypto.getRandomValues(bytes);
+	const digits = String(100 + ((bytes[0] * 256 + bytes[1]) % 900));
+	const picks = new Set<string>();
+	if (n > 0) {
+		picks.add(`SAVE${n}`);
+		picks.add(terms.kind === "percent" ? `DEAL${n}` : `TAKE${n}`);
+	}
+	picks.add(`SALE${digits}`);
+	return [...picks].filter((code) => sharedCodeError(code) === null).slice(0, 3);
+}
+
+// ---------------------------------------------------------------------------
 // Value
 // ---------------------------------------------------------------------------
 
@@ -116,7 +283,15 @@ export type VoucherTerms = {
  * pickup note does: it is what the buyer was told, and the receipt, the
  * tracking page and the seller's inbox all want to print it without a join.
  */
-export type VoucherSnapshot = VoucherTerms & { code: string };
+export type VoucherSnapshot = VoucherTerms & {
+	code: string;
+	/** Frozen with the code (`z8r3fducfm`): the order page has to say what a
+	 * cancel does to the voucher — "back to this buyer" for a single-use one,
+	 * "one use back for anyone" for a shared word — and the row the id points
+	 * at is not what a money surface should have to join for one sentence.
+	 * Absent on orders placed before shared codes existed = `single`. */
+	usage?: VoucherUsage;
+};
 
 /** Ceiling on a fixed-amount voucher (minor units) — RM5,000 / S$5,000. Not a
  * business rule, a fat-finger guard: an extra zero on a giveaway code is the
@@ -214,8 +389,15 @@ export type StoredVoucherStatus = "active" | "redeemed" | "voided";
 export type VoucherStatusFields = {
 	status: StoredVoucherStatus;
 	/** MYT midnight of the LAST day the code works (the `fulfilmentDate`
-	 * convention). The voucher dies when that day ends, not when it begins. */
+	 * convention). The voucher dies when that day ends, not when it begins.
+	 * Single-use only. */
 	expiresAt?: number;
+	usage?: VoucherUsage;
+	/** Shared only — see `SharedLimits`. */
+	endsAt?: number;
+	maxRedemptions?: number;
+	/** Shared only: how many orders have spent it (less any handed back). */
+	redeemedCount?: number;
 };
 
 /**
@@ -227,13 +409,43 @@ export type VoucherStatusFields = {
  * Deliberately one-way — a redeemed or voided voucher keeps that status past
  * its expiry date, because what happened to it is more useful to the seller
  * than the calendar ("used on #ORD-7F3K" beats "expired").
+ *
+ * A SHARED code is never stored `redeemed`: its two bounds are both judged
+ * here, off the count and the clock, so the row and the truth can't drift.
+ * It reads `redeemed` ("all used") once the cap is reached and `expired` once
+ * its end time passes — and the cap is asked FIRST, which is not a tie-break
+ * but the actual order of events: a redemption can only land while the code
+ * is still running, so a full cap was necessarily filled before any end time
+ * passed. "Whichever comes first" (Zaki) falls out of that without a stamp.
  */
 export function resolveVoucherStatus(
 	voucher: VoucherStatusFields,
 	now: number,
 ): VoucherStatus {
 	if (voucher.status !== "active") return voucher.status;
+	if (voucherUsageOf(voucher) === "shared") {
+		if (isSharedExhausted(voucher)) return "redeemed";
+		if (isSharedEnded(voucher.endsAt, now)) return "expired";
+		return "active";
+	}
 	return isVoucherExpired(voucher.expiresAt, now) ? "expired" : "active";
+}
+
+/** Has a shared code's cap been reached? No cap = never. */
+export function isSharedExhausted(voucher: {
+	maxRedemptions?: number;
+	redeemedCount?: number;
+}): boolean {
+	return (
+		voucher.maxRedemptions !== undefined &&
+		(voucher.redeemedCount ?? 0) >= voucher.maxRedemptions
+	);
+}
+
+/** Has a shared code's end time passed? An exact instant, unlike the
+ * single-use day rule — see `SharedLimits.endsAt`. */
+export function isSharedEnded(endsAt: number | undefined, now: number): boolean {
+	return endsAt !== undefined && now >= endsAt;
 }
 
 /** The expiry rule in one place: a voucher dated the 20th works all through
@@ -271,6 +483,10 @@ export type VoucherRefusal =
 	| "expired"
 	| "voided"
 	| "redeemed"
+	/** A SHARED code whose total cap is reached — "already used" would be a
+	 * lie to the buyer who never used it, and the honest sentence stops them
+	 * retyping it (`z8r3fducfm`). */
+	| "exhausted"
 	/**
 	 * The STORE can't redeem vouchers right now — it has dropped below the
 	 * plan that carries the feature (`z8r3fdr617`). A property of the shop,
@@ -289,7 +505,9 @@ export function voucherRefusalMessage(
 ): string {
 	switch (refusal) {
 		case "malformed":
-			return "That doesn't look like a voucher code — they read KP-XXXX-XXXX.";
+			// Two shapes are valid now (`KP-XXXX-XXXX` or a 4–16 letter word), so
+			// naming one of them would mislead the buyer holding the other.
+			return "That doesn't look like a voucher code — check it and try again.";
 		case "not_found":
 			// Covers a code that belongs to ANOTHER store too: naming that would
 			// confirm the code exists somewhere, and "not for this store" is not
@@ -303,6 +521,8 @@ export function voucherRefusalMessage(
 			return opts.usedOnOrder
 				? `This voucher was already used on ${opts.usedOnOrder}.`
 				: "This voucher has already been used.";
+		case "exhausted":
+			return "This code has run out — every use has been taken.";
 		case "store_ineligible":
 			// Neutral, and it never mentions a plan: the store's billing is not
 			// the buyer's business, and "they downgraded" invites the buyer to
@@ -359,6 +579,10 @@ export function refusalForVoucher(
 ): Exclude<VoucherRefusal, "malformed" | "not_found" | "already_on_order"> | null {
 	const status = resolveVoucherStatus(voucher, now);
 	if (status === "active") return null;
+	// A full shared code resolves `redeemed` for the seller's chips, but the
+	// BUYER was never the one who used it — their sentence is its own.
+	if (status === "redeemed" && voucherUsageOf(voucher) === "shared")
+		return "exhausted";
 	return status;
 }
 
@@ -385,6 +609,26 @@ export function formatVoucherTerms(
  * real answer ("no expiry") and not a blank. */
 export function formatVoucherExpiry(expiresAt: number | undefined): string {
 	return expiresAt === undefined ? "No expiry" : `Until ${ymdFromEpoch(expiresAt)}`;
+}
+
+/** "12 of 50 used" / "12 used" — a shared code's tally, cap or no cap. The
+ * ONE author for the seller's list, the share sheet and the uses dialog. */
+export function formatSharedUses(voucher: {
+	maxRedemptions?: number;
+	redeemedCount?: number;
+}): string {
+	const used = voucher.redeemedCount ?? 0;
+	return voucher.maxRedemptions === undefined
+		? `${used} used`
+		: `${used} of ${voucher.maxRedemptions} used`;
+}
+
+/** A shared code's end instant in store time — "31 Oct 2026, 6:00 PM" — from
+ * the house date and time formatters, so a time never appears in two
+ * spellings. A comma, not the fulfilment line's "·": this sits inside the
+ * list's own dot-separated outcome line. */
+export function formatVoucherEnd(endsAt: number): string {
+	return `${formatFulfilmentDate(todayMytMidnight(endsAt), { weekday: false })}, ${formatFulfilmentTime(mytMinutesOfDay(endsAt))}`;
 }
 
 /**

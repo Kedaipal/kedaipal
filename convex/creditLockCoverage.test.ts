@@ -252,6 +252,8 @@ const OPEN_READS: Record<string, string> = {
 		"a boolean — does this store sell bookings at all; reads products, never an order",
 	"schedule.hasDatedListings":
 		"a boolean — does this store sell events or bookings at all; reads products, never an order",
+	"vouchers.sharedCodeAvailable":
+		"a yes/no about the store's own voucher words (`z8r3fducfm`) — reads the vouchers table, never an order",
 	"orderClaims.getByToken":
 		"buyer door only (unguessable claim token, never enumerable) — the credit gate withholds an order from the SELLER, never from the buyer who placed it, so redacting here would hide a buyer's own ticket from them",
 };
