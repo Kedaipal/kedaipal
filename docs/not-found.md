@@ -68,18 +68,33 @@ render needs an owner:
   miss under `/app` arrives with `globalNotFound: true` and status `success`,
   not `notFound`).
 - **`/$slug` / checkout** title their own miss: "Store not found — Kedaipal".
-- **The trap:** fuzzy matching still *runs* `/$slug` (slug `foo`) on the way to
-  `/foo/bar` — its loader, and its head. Without a guard, `/foo/bar` was titled
-  "Store not found", and `/<real-store>/junk` would carry that store's full
-  indexable SEO head above a "Page not found" body. Every buyer route that can
-  be matched this way (`/$slug`, checkout, product, category) starts its
-  `head()` with `missOwnedElsewhere(matches, match)` and returns `{}` when it's
-  true. `src/lib/not-found-heads.test.ts` calls the real heads; deleting a
-  guard turns it red.
+- **The trap:** fuzzy matching still *runs* the deepest route it can match on
+  the way to a URL nothing claims — its loader, and its head — and it matches
+  a **static** leaf as readily as a param one: `/$slug` (slug `foo`) for
+  `/foo/bar`, `/pricing` for `/pricing/anything`, `/stores` for `/stores/x`,
+  `/track/$token` for `/track/<token>/x`. Without a guard, `/foo/bar` was
+  titled "Store not found", `/<real-store>/junk` carried that store's full
+  indexable SEO head above a "Page not found" body, and `/stores/x` re-asserted
+  `robots: index, follow` over the root's `noindex` on a 404.
+- **The one mechanism:** every LEAF route writes its head as
+  `head: (ctx) => pageHead(ctx, ({ loaderData }) => ({ ... }))`.
+  `pageHead` (`src/lib/not-found.ts`) returns `{}` when
+  `missOwnedElsewhere(matches, match)` — the miss is an ancestor's — and
+  delegates otherwise. The context is passed in rather than wrapped around the
+  function so TanStack still types `loaderData` (the route options object is
+  mid-inference when `head` is typed). **Machine-enforced** by
+  `src/lib/not-found-head-sweep.test.ts`: it loads every `src/routes/*.tsx`,
+  calls each `head` as a route matched on the way, and fails on one that
+  speaks. The two layouts that **own** misses — `__root` and `/app` — are the
+  listed exceptions: the owner's `missOwnedElsewhere` is false anyway, and the
+  root's head carries the charset, viewport and stylesheet, which a miss under
+  `/app` must never silence (pinned in `not-found-heads.test.ts`).
 
-Known cost, not fixed here: that fuzzy match also runs `/$slug`'s loader — one
-`getRetailerBySlug` read per unknown multi-segment URL. It was already the case
-before this page existed.
+Known cost, not fixed here: that fuzzy match also runs the matched leaf's
+**loader** — one `getRetailerBySlug` read for `/foo/bar`, the order read for
+`/track/<token>/x`. A loader has no view of the other matches, so the head
+guard can't be mirrored there; the cost was already the case before this page
+existed.
 
 ## Tests
 
@@ -89,4 +104,9 @@ before this page existed.
   real TanStack memory router: 404 status, copy, link targets, the `/app` page
   rendering inside the shell, `/$slug` matched on the way; plus the router
   wiring.
-- `src/lib/not-found-heads.test.ts` — the real routes' `head()`s.
+- `src/lib/not-found-heads.test.ts` — the real routes' `head()`s with data
+  loaded: a store's and `/stores`'s stay silent on the way, the root is never
+  silenced by a miss under `/app`.
+- `src/lib/not-found-head-sweep.test.ts` — every route in `src/routes` that
+  declares a `head`: silent when matched on the way, unless listed as an owner
+  with a reason.

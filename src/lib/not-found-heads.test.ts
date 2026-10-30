@@ -21,7 +21,12 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	}),
 }));
 
-type Meta = { title?: string; name?: string; content?: string };
+type Meta = {
+	title?: string;
+	name?: string;
+	content?: string;
+	charSet?: string;
+};
 type HeadFn = (ctx: {
 	loaderData: unknown;
 	match: { globalNotFound?: boolean; status?: string };
@@ -40,23 +45,32 @@ const robotsOf = (head: { meta?: Meta[] } | undefined) =>
 
 const ROOT_MISS = { globalNotFound: true, status: "success" };
 
-describe("buyer routes matched only on the way stay silent", () => {
+describe("routes matched only on the way stay silent", () => {
+	// The full list is swept by not-found-head-sweep.test.ts; these pin the
+	// two shapes with data LOADED, which the sweep (undefined loaderData)
+	// doesn't reach: a store's head for `/kek-sayang/zz`, and a static
+	// marketing page's for `/stores/x`.
 	test.each([
-		"../routes/$slug",
-		"../routes/$slug_.checkout",
-		"../routes/$slug_.p.$productSlug",
-		"../routes/$slug_.c.$categorySlug",
-	])("%s", async (path) => {
+		["../routes/$slug", { storeName: "Kek Sayang" }],
+		["../routes/stores", { stores: [], focusedShowcase: null }],
+	])("%s", async (path, loaderData) => {
 		const head = await headOf(path);
-		// Even with a store's data loaded (`/kek-sayang/zz`), the root owns it.
 		const match = { status: "success" };
-		expect(
-			head({
-				loaderData: { storeName: "Kek Sayang" },
-				match,
-				matches: [ROOT_MISS, match],
-			}),
-		).toEqual({});
+		expect(head({ loaderData, match, matches: [ROOT_MISS, match] })).toEqual(
+			{},
+		);
+	});
+
+	test("/stores: speaks on an ordinary render (the wrapper silences only the miss)", async () => {
+		const head = await headOf("../routes/stores");
+		const match = { status: "success" };
+		const out = head({
+			loaderData: { stores: [], focusedShowcase: null },
+			match,
+			matches: [{ status: "success" }, match],
+		});
+		expect(titleOf(out)).toBeTruthy();
+		expect(robotsOf(out)).toBe("index, follow");
 	});
 });
 
@@ -79,6 +93,18 @@ describe("layouts that own a global miss", () => {
 		const out = head({ loaderData: undefined, match: ROOT_MISS, matches: [] });
 		expect(titleOf(out)).toBe(NOT_FOUND_TITLE.site);
 		expect(robotsOf(out)).toBe("noindex, follow");
+	});
+
+	test("root: NOT silenced when /app owns the miss — the charset and stylesheet live here", async () => {
+		const head = await headOf("../routes/__root");
+		const root = { status: "success" };
+		const out = head({
+			loaderData: undefined,
+			match: root,
+			matches: [root, { globalNotFound: true, status: "success" }],
+		}) as { meta?: Meta[]; links?: unknown[] };
+		expect(out.meta?.some((m) => "charSet" in m)).toBe(true);
+		expect(out.links?.length).toBeGreaterThan(0);
 	});
 
 	test("root: an ordinary page keeps the house title and stays indexable", async () => {

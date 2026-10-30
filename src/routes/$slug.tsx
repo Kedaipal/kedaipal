@@ -37,11 +37,7 @@ import {
 	proxiedImageUrl,
 } from "../lib/image-proxy";
 import { jsonLdScript } from "../lib/json-ld";
-import {
-	missOwnedElsewhere,
-	notFoundHeadMeta,
-	rendersNotFound,
-} from "../lib/not-found";
+import { notFoundHeadMeta, pageHead, rendersNotFound } from "../lib/not-found";
 import { seoDescription } from "../lib/seo-text";
 import { ssrRead } from "../lib/ssr-read";
 
@@ -167,128 +163,127 @@ export const Route = createFileRoute("/$slug")({
 			indexable: retailer.indexable ?? true,
 		};
 	},
-	head: ({ loaderData, match, matches }) => {
-		// `/foo/bar` still runs this route (slug "foo") on the way to the
-		// root's "Page not found" — that page's head is the root's, not ours.
-		if (missOwnedElsewhere(matches, match)) return {};
-		if (rendersNotFound(match)) return { meta: notFoundHeadMeta("store") };
-		if (!loaderData) return {};
-		if ("unavailable" in loaderData)
-			return storeUnavailableHead(loaderData.storeName);
-		const {
-			storeName,
-			description,
-			canonicalUrl,
-			ogImageUrl,
-			coverImageUrl,
-			waPhone,
-			storeArea,
-			country,
-			currency,
-			logoUrl,
-			locale,
-			openingHours,
-			closedDates,
-			indexable,
-		} = loaderData;
-		const title = `${storeName} — Order on WhatsApp | Kedaipal`;
-		const ogLocale = OG_LOCALE[locale];
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData, match }) => {
+			if (rendersNotFound(match)) return { meta: notFoundHeadMeta("store") };
+			if (!loaderData) return {};
+			if ("unavailable" in loaderData)
+				return storeUnavailableHead(loaderData.storeName);
+			const {
+				storeName,
+				description,
+				canonicalUrl,
+				ogImageUrl,
+				coverImageUrl,
+				waPhone,
+				storeArea,
+				country,
+				currency,
+				logoUrl,
+				locale,
+				openingHours,
+				closedDates,
+				indexable,
+			} = loaderData;
+			const title = `${storeName} — Order on WhatsApp | Kedaipal`;
+			const ogLocale = OG_LOCALE[locale];
 
-		const meta = [
-			{ title },
-			{ name: "description", content: description },
-			// A cancelled or empty store still serves 200, so the sitemap rule
-			// is repeated here as `noindex` — same answer, same source.
-			{
-				name: "robots",
-				content: indexable ? "index, follow" : "noindex, follow",
-			},
-			// Open Graph
-			{ property: "og:type", content: "website" },
-			{ property: "og:site_name", content: "Kedaipal" },
-			{ property: "og:locale", content: ogLocale },
-			{ property: "og:title", content: title },
-			{ property: "og:description", content: description },
-			{ property: "og:url", content: canonicalUrl },
-			// Twitter
-			{
-				name: "twitter:card",
-				content: ogImageUrl ? "summary_large_image" : "summary",
-			},
-			{ name: "twitter:title", content: title },
-			{ name: "twitter:description", content: description },
-		];
-		if (ogImageUrl) {
-			meta.push(
-				{ property: "og:image", content: ogImageUrl },
-				{ property: "og:image:alt", content: storeName },
-				{ name: "twitter:image", content: ogImageUrl },
-			);
-		}
+			const meta = [
+				{ title },
+				{ name: "description", content: description },
+				// A cancelled or empty store still serves 200, so the sitemap rule
+				// is repeated here as `noindex` — same answer, same source.
+				{
+					name: "robots",
+					content: indexable ? "index, follow" : "noindex, follow",
+				},
+				// Open Graph
+				{ property: "og:type", content: "website" },
+				{ property: "og:site_name", content: "Kedaipal" },
+				{ property: "og:locale", content: ogLocale },
+				{ property: "og:title", content: title },
+				{ property: "og:description", content: description },
+				{ property: "og:url", content: canonicalUrl },
+				// Twitter
+				{
+					name: "twitter:card",
+					content: ogImageUrl ? "summary_large_image" : "summary",
+				},
+				{ name: "twitter:title", content: title },
+				{ name: "twitter:description", content: description },
+			];
+			if (ogImageUrl) {
+				meta.push(
+					{ property: "og:image", content: ogImageUrl },
+					{ property: "og:image:alt", content: storeName },
+					{ name: "twitter:image", content: ogImageUrl },
+				);
+			}
 
-		const jsonLd = {
-			"@context": "https://schema.org",
-			"@type": "Store",
-			"@id": `${canonicalUrl}#store`,
-			name: storeName,
-			url: canonicalUrl,
-			description,
-			...(ogImageUrl ? { image: ogImageUrl } : {}),
-			...(logoUrl ? { logo: logoUrl } : {}),
-			// The seller's own number — never the shared checkout number, which
-			// is the same on every store (storefront SEO audit, 21 Oct 2026).
-			...(waPhone ? { telephone: `+${waPhone}` } : {}),
-			address: {
-				"@type": "PostalAddress",
-				...(storeArea ? { addressLocality: storeArea } : {}),
-				addressCountry: country,
-			},
-			currenciesAccepted: currency,
-			// Configured hours only — the 24/7 default claims nothing rather
-			// than asserting "always open" (86eyp5rav).
-			...(openingHours
-				? {
-						openingHoursSpecification: openingHoursSpecification(openingHours),
-					}
-				: {}),
-			// Upcoming closed dates as schema.org holiday hours (z8r3fdhpm7) —
-			// search shows "Closed" on Raya instead of the weekly hours.
-			...(closedDatesSpecification(closedDates).length > 0
-				? {
-						specialOpeningHoursSpecification:
-							closedDatesSpecification(closedDates),
-					}
-				: {}),
-		};
+			const jsonLd = {
+				"@context": "https://schema.org",
+				"@type": "Store",
+				"@id": `${canonicalUrl}#store`,
+				name: storeName,
+				url: canonicalUrl,
+				description,
+				...(ogImageUrl ? { image: ogImageUrl } : {}),
+				...(logoUrl ? { logo: logoUrl } : {}),
+				// The seller's own number — never the shared checkout number, which
+				// is the same on every store (storefront SEO audit, 21 Oct 2026).
+				...(waPhone ? { telephone: `+${waPhone}` } : {}),
+				address: {
+					"@type": "PostalAddress",
+					...(storeArea ? { addressLocality: storeArea } : {}),
+					addressCountry: country,
+				},
+				currenciesAccepted: currency,
+				// Configured hours only — the 24/7 default claims nothing rather
+				// than asserting "always open" (86eyp5rav).
+				...(openingHours
+					? {
+							openingHoursSpecification:
+								openingHoursSpecification(openingHours),
+						}
+					: {}),
+				// Upcoming closed dates as schema.org holiday hours (z8r3fdhpm7) —
+				// search shows "Closed" on Raya instead of the weekly hours.
+				...(closedDatesSpecification(closedDates).length > 0
+					? {
+							specialOpeningHoursSpecification:
+								closedDatesSpecification(closedDates),
+						}
+					: {}),
+			};
 
-		return {
-			meta,
-			links: [
-				{ rel: "canonical", href: canonicalUrl },
-				// LCP preload — StorefrontHeader renders this URL with `priority`
-				// the moment retailer data resolves; hinting the browser before
-				// the JS bundle even parses shaves the fetch off the critical path.
-				// The preload MUST name the same candidate StorefrontHeader will
-				// actually request — it renders the cover through AppImage, which
-				// proxies it and emits a srcset. Preloading the raw storage URL
-				// would download a file the page never uses AND leave the real LCP
-				// element unpreloaded, so `imagesrcset`/`imagesizes` mirror the
-				// component's own `sizes="100vw"`.
-				...(coverImageUrl
-					? [
-							{
-								rel: "preload",
-								as: "image",
-								href: proxiedImageUrl(coverImageUrl),
-								imagesrcset: imageSrcSet(coverImageUrl) ?? undefined,
-								imagesizes: "100vw",
-							},
-						]
-					: []),
-			],
-			scripts: [jsonLdScript(jsonLd)],
-		};
-	},
+			return {
+				meta,
+				links: [
+					{ rel: "canonical", href: canonicalUrl },
+					// LCP preload — StorefrontHeader renders this URL with `priority`
+					// the moment retailer data resolves; hinting the browser before
+					// the JS bundle even parses shaves the fetch off the critical path.
+					// The preload MUST name the same candidate StorefrontHeader will
+					// actually request — it renders the cover through AppImage, which
+					// proxies it and emits a srcset. Preloading the raw storage URL
+					// would download a file the page never uses AND leave the real LCP
+					// element unpreloaded, so `imagesrcset`/`imagesizes` mirror the
+					// component's own `sizes="100vw"`.
+					...(coverImageUrl
+						? [
+								{
+									rel: "preload",
+									as: "image",
+									href: proxiedImageUrl(coverImageUrl),
+									imagesrcset: imageSrcSet(coverImageUrl) ?? undefined,
+									imagesizes: "100vw",
+								},
+							]
+						: []),
+				],
+				scripts: [jsonLdScript(jsonLd)],
+			};
+		}),
 	notFoundComponent: StoreNotFound,
 	component: StorefrontRoute,
 });

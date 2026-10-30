@@ -32,7 +32,7 @@ import {
 	proxiedImageUrl,
 } from "../lib/image-proxy";
 import { jsonLdScript } from "../lib/json-ld";
-import { missOwnedElsewhere } from "../lib/not-found";
+import { pageHead } from "../lib/not-found";
 import { seoDescription } from "../lib/seo-text";
 import { ssrRead } from "../lib/ssr-read";
 import { hasStartingPrice } from "../lib/variant";
@@ -186,166 +186,166 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			firstImageUrl: product.imageUrls[0],
 		};
 	},
-	head: ({ loaderData, match, matches }) => {
-		// Matched only on the way to a URL nothing claims (`/x/p/y/extra`):
-		// the page is the root's "Page not found", so this head stays out.
-		if (missOwnedElsewhere(matches, match)) return {};
-		if (!loaderData) return {};
-		if ("unavailable" in loaderData)
-			return storeUnavailableHead(loaderData.storeName);
-		const {
-			storeName,
-			slug,
-			productName,
-			primaryCategory,
-			description,
-			canonicalUrl,
-			indexable,
-			locale,
-			sku,
-			variantCount,
-			imageUrls,
-			promoPriceFrom,
-			promoEndsAt,
-			ogImageUrl,
-			priceFrom,
-			priceTo,
-			currency,
-			inStock,
-			quoteOnly,
-			startingPrice,
-			firstImageUrl,
-		} = loaderData;
-		const title = `${productName} — ${storeName} | Kedaipal`;
-		const storeUrl = `${SITE_URL}/${slug}`;
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData }) => {
+			if (!loaderData) return {};
+			if ("unavailable" in loaderData)
+				return storeUnavailableHead(loaderData.storeName);
+			const {
+				storeName,
+				slug,
+				productName,
+				primaryCategory,
+				description,
+				canonicalUrl,
+				indexable,
+				locale,
+				sku,
+				variantCount,
+				imageUrls,
+				promoPriceFrom,
+				promoEndsAt,
+				ogImageUrl,
+				priceFrom,
+				priceTo,
+				currency,
+				inStock,
+				quoteOnly,
+				startingPrice,
+				firstImageUrl,
+			} = loaderData;
+			const title = `${productName} — ${storeName} | Kedaipal`;
+			const storeUrl = `${SITE_URL}/${slug}`;
 
-		const meta = [
-			{ title },
-			{ name: "description", content: description },
-			{
-				name: "robots",
-				content: indexable ? "index, follow" : "noindex, follow",
-			},
-			{ property: "og:type", content: "product" },
-			{ property: "og:site_name", content: "Kedaipal" },
-			{ property: "og:locale", content: OG_LOCALE[locale] },
-			{ property: "og:title", content: title },
-			{ property: "og:description", content: description },
-			{ property: "og:url", content: canonicalUrl },
-			{
-				name: "twitter:card",
-				content: ogImageUrl ? "summary_large_image" : "summary",
-			},
-			{ name: "twitter:title", content: title },
-			{ name: "twitter:description", content: description },
-		];
-		if (ogImageUrl) {
-			meta.push(
-				{ property: "og:image", content: ogImageUrl },
-				{ property: "og:image:alt", content: productName },
-				{ name: "twitter:image", content: ogImageUrl },
-			);
-		}
+			const meta = [
+				{ title },
+				{ name: "description", content: description },
+				{
+					name: "robots",
+					content: indexable ? "index, follow" : "noindex, follow",
+				},
+				{ property: "og:type", content: "product" },
+				{ property: "og:site_name", content: "Kedaipal" },
+				{ property: "og:locale", content: OG_LOCALE[locale] },
+				{ property: "og:title", content: title },
+				{ property: "og:description", content: description },
+				{ property: "og:url", content: canonicalUrl },
+				{
+					name: "twitter:card",
+					content: ogImageUrl ? "summary_large_image" : "summary",
+				},
+				{ name: "twitter:title", content: title },
+				{ name: "twitter:description", content: description },
+			];
+			if (ogImageUrl) {
+				meta.push(
+					{ property: "og:image", content: ogImageUrl },
+					{ property: "og:image:alt", content: productName },
+					{ name: "twitter:image", content: ogImageUrl },
+				);
+			}
 
-		// Product JSON-LD. Prices convert minor → major units; quote-only
-		// products (price negotiated on the mockup) carry no offers block
-		// rather than advertising a misleading RM 0. A single price that's only
-		// a STARTING price is an AggregateOffer with a lowPrice and no ceiling —
-		// a flat `Offer.price` would promise a total the mockup can exceed.
-		const toMajor = (sen: number) => (sen / 100).toFixed(2);
-		const availability = inStock
-			? "https://schema.org/InStock"
-			: "https://schema.org/OutOfStock";
-		// Shared by both offer shapes: who sells it, in what condition, and —
-		// during a live promo — until when the price holds.
-		const offerCommon = {
-			priceCurrency: currency,
-			availability,
-			url: canonicalUrl,
-			itemCondition: "https://schema.org/NewCondition",
-			seller: { "@type": "Store", name: storeName, url: storeUrl },
-			...(promoEndsAt
-				? { priceValidUntil: new Date(promoEndsAt).toISOString().slice(0, 10) }
-				: {}),
-		};
-		// A live promo is what the page paints, so it is what the schema says:
-		// a single-price product on sale is one Offer at the sale price (the
-		// literal reading of the page), not a range up to the old price.
-		const lowPrice = promoPriceFrom ?? priceFrom;
-		const offers =
-			priceFrom === priceTo && !startingPrice
-				? { "@type": "Offer", price: toMajor(lowPrice), ...offerCommon }
+			// Product JSON-LD. Prices convert minor → major units; quote-only
+			// products (price negotiated on the mockup) carry no offers block
+			// rather than advertising a misleading RM 0. A single price that's only
+			// a STARTING price is an AggregateOffer with a lowPrice and no ceiling —
+			// a flat `Offer.price` would promise a total the mockup can exceed.
+			const toMajor = (sen: number) => (sen / 100).toFixed(2);
+			const availability = inStock
+				? "https://schema.org/InStock"
+				: "https://schema.org/OutOfStock";
+			// Shared by both offer shapes: who sells it, in what condition, and —
+			// during a live promo — until when the price holds.
+			const offerCommon = {
+				priceCurrency: currency,
+				availability,
+				url: canonicalUrl,
+				itemCondition: "https://schema.org/NewCondition",
+				seller: { "@type": "Store", name: storeName, url: storeUrl },
+				...(promoEndsAt
+					? {
+							priceValidUntil: new Date(promoEndsAt).toISOString().slice(0, 10),
+						}
+					: {}),
+			};
+			// A live promo is what the page paints, so it is what the schema says:
+			// a single-price product on sale is one Offer at the sale price (the
+			// literal reading of the page), not a range up to the old price.
+			const lowPrice = promoPriceFrom ?? priceFrom;
+			const offers =
+				priceFrom === priceTo && !startingPrice
+					? { "@type": "Offer", price: toMajor(lowPrice), ...offerCommon }
+					: {
+							"@type": "AggregateOffer",
+							lowPrice: toMajor(lowPrice),
+							...(priceTo > lowPrice ? { highPrice: toMajor(priceTo) } : {}),
+							// A live product whose variants are all inactive still has a
+							// price; Google warns on a non-positive count.
+							offerCount: Math.max(1, variantCount),
+							...offerCommon,
+						};
+			// Quote-only: Google requires offers, review or aggregateRating on a
+			// Product, and a negotiated price has none — so no Product block at
+			// all, rather than one Search Console reports as an error. The
+			// breadcrumb still carries the page.
+			const productJsonLd = quoteOnly
+				? null
 				: {
-						"@type": "AggregateOffer",
-						lowPrice: toMajor(lowPrice),
-						...(priceTo > lowPrice ? { highPrice: toMajor(priceTo) } : {}),
-						// A live product whose variants are all inactive still has a
-						// price; Google warns on a non-positive count.
-						offerCount: Math.max(1, variantCount),
-						...offerCommon,
+						"@context": "https://schema.org",
+						"@type": "Product",
+						name: productName,
+						description,
+						url: canonicalUrl,
+						...(imageUrls.length > 0 ? { image: imageUrls } : {}),
+						...(sku ? { sku } : {}),
+						brand: { "@type": "Brand", name: storeName },
+						offers,
 					};
-		// Quote-only: Google requires offers, review or aggregateRating on a
-		// Product, and a negotiated price has none — so no Product block at
-		// all, rather than one Search Console reports as an error. The
-		// breadcrumb still carries the page.
-		const productJsonLd = quoteOnly
-			? null
-			: {
-					"@context": "https://schema.org",
-					"@type": "Product",
-					name: productName,
-					description,
-					url: canonicalUrl,
-					...(imageUrls.length > 0 ? { image: imageUrls } : {}),
-					...(sku ? { sku } : {}),
-					brand: { "@type": "Brand", name: storeName },
-					offers,
-				};
 
-		return {
-			meta,
-			links: [
-				{ rel: "canonical", href: canonicalUrl },
-				// LCP preload (z8r3fdegb5): with the cover hero gone from subpages,
-				// the gallery's first photo is this page's LCP element. The hint
-				// must name the same candidate the gallery will actually request —
-				// it renders through AppImage (proxied + srcset), so
-				// imagesrcset/imagesizes mirror the component's own sizes.
-				//
-				// `imagesizes` comes from the gallery itself (GALLERY_PRELOAD_SIZES)
-				// so the hint can never drift from the branch that paints — it
-				// covers the mobile carousel tile below lg AND the desktop hero
-				// above it. See that constant for what the drift cost.
-				...(firstImageUrl
-					? [
-							{
-								rel: "preload",
-								as: "image",
-								href: proxiedImageUrl(firstImageUrl),
-								imagesrcset: imageSrcSet(firstImageUrl) ?? undefined,
-								imagesizes: GALLERY_PRELOAD_SIZES,
-							},
-						]
-					: []),
-			],
-			scripts: [
-				...(productJsonLd ? [jsonLdScript(productJsonLd)] : []),
-				// Store › Category › Product (z8r3fdh2z3).
-				jsonLdScript(
-					breadcrumbListJsonLd(
-						productCrumbs({
-							siteUrl: SITE_URL,
-							storeName,
-							storeSlug: slug,
-							category: primaryCategory,
-							productName,
-							productUrl: canonicalUrl,
-						}),
+			return {
+				meta,
+				links: [
+					{ rel: "canonical", href: canonicalUrl },
+					// LCP preload (z8r3fdegb5): with the cover hero gone from subpages,
+					// the gallery's first photo is this page's LCP element. The hint
+					// must name the same candidate the gallery will actually request —
+					// it renders through AppImage (proxied + srcset), so
+					// imagesrcset/imagesizes mirror the component's own sizes.
+					//
+					// `imagesizes` comes from the gallery itself (GALLERY_PRELOAD_SIZES)
+					// so the hint can never drift from the branch that paints — it
+					// covers the mobile carousel tile below lg AND the desktop hero
+					// above it. See that constant for what the drift cost.
+					...(firstImageUrl
+						? [
+								{
+									rel: "preload",
+									as: "image",
+									href: proxiedImageUrl(firstImageUrl),
+									imagesrcset: imageSrcSet(firstImageUrl) ?? undefined,
+									imagesizes: GALLERY_PRELOAD_SIZES,
+								},
+							]
+						: []),
+				],
+				scripts: [
+					...(productJsonLd ? [jsonLdScript(productJsonLd)] : []),
+					// Store › Category › Product (z8r3fdh2z3).
+					jsonLdScript(
+						breadcrumbListJsonLd(
+							productCrumbs({
+								siteUrl: SITE_URL,
+								storeName,
+								storeSlug: slug,
+								category: primaryCategory,
+								productName,
+								productUrl: canonicalUrl,
+							}),
+						),
 					),
-				),
-			],
-		};
-	},
+				],
+			};
+		}),
 	notFoundComponent: ProductNotFound,
 	component: ProductRoute,
 });

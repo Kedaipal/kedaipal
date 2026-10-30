@@ -33,11 +33,7 @@ import { usePromoClock } from "../hooks/usePromoClock";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient } from "../lib/convex-server";
-import {
-	missOwnedElsewhere,
-	notFoundHeadMeta,
-	rendersNotFound,
-} from "../lib/not-found";
+import { notFoundHeadMeta, pageHead, rendersNotFound } from "../lib/not-found";
 import type { PromoState } from "../lib/promo";
 import { searchText } from "../lib/search-params";
 import { ssrRead } from "../lib/ssr-read";
@@ -129,20 +125,19 @@ export const Route = createFileRoute("/$slug_/checkout")({
 			slug: result.retailer.slug,
 		};
 	},
-	head: ({ loaderData, match, matches }) => {
-		// Matched only on the way to a URL nothing claims: the root's head.
-		if (missOwnedElsewhere(matches, match)) return {};
-		if (rendersNotFound(match)) return { meta: notFoundHeadMeta("store") };
-		if (!loaderData) return {};
-		if ("unavailable" in loaderData)
-			return storeUnavailableHead(loaderData.storeName);
-		return {
-			meta: [
-				{ title: `Checkout — ${loaderData.storeName} | Kedaipal` },
-				{ name: "robots", content: "noindex, nofollow" },
-			],
-		};
-	},
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData, match }) => {
+			if (rendersNotFound(match)) return { meta: notFoundHeadMeta("store") };
+			if (!loaderData) return {};
+			if ("unavailable" in loaderData)
+				return storeUnavailableHead(loaderData.storeName);
+			return {
+				meta: [
+					{ title: `Checkout — ${loaderData.storeName} | Kedaipal` },
+					{ name: "robots", content: "noindex, nofollow" },
+				],
+			};
+		}),
 	notFoundComponent: CheckoutNotFound,
 	component: CheckoutRoute,
 });

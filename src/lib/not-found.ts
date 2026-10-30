@@ -108,6 +108,36 @@ export function missOwnedElsewhere(
 	return !match.globalNotFound && matches.some((m) => m.globalNotFound);
 }
 
+/** The slice of a route's `head()` context the wrapper reads. */
+type HeadCtx = { match: HeadMatch; matches: readonly HeadMatch[] };
+
+/**
+ * A LEAF route's `head()`, silent when the route was only matched on the way
+ * to a URL nothing claims. Fuzzy matching matches a static leaf as readily as
+ * a param one — `/pricing` is matched for `/pricing/anything`, `/stores` for
+ * `/stores/x`, `/track/$token` (loader included) for `/track/<token>/x` — and
+ * the deepest head wins the tag dedupe, so without this a "Page not found"
+ * body carries the leaf's title, canonical, JSON-LD and even its
+ * `robots: index, follow`.
+ *
+ *     head: (ctx) => pageHead(ctx, ({ loaderData }) => ({ meta: [...] })),
+ *
+ * The context is passed in rather than closed over so TanStack types it (the
+ * route options object is still being inferred when `head` is typed, so a
+ * `pageHead(fn)` wrapper would lose `loaderData`'s type). Every leaf route's
+ * `head` goes through here; `not-found-head-sweep.test.ts` fails on one that
+ * doesn't. The two LAYOUTS that own misses (`__root`, `/app`) are the
+ * exceptions: `missOwnedElsewhere` is false for the owner anyway, and the
+ * root's head carries the charset, viewport and stylesheet, which a miss under
+ * `/app` must never silence.
+ */
+export function pageHead<C extends HeadCtx, R>(
+	ctx: C,
+	head: (ctx: C) => R,
+): R | Record<string, never> {
+	return missOwnedElsewhere(ctx.matches, ctx.match) ? {} : head(ctx);
+}
+
 /** Past this, the printed path is cut — a pasted tracking URL must not push
  * the actions off a phone screen. */
 export const DISPLAY_PATH_MAX = 60;

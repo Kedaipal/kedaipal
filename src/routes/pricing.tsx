@@ -56,6 +56,7 @@ import {
 } from "../lib/enterprise-contact";
 import { trackEvent, trackSignupCta } from "../lib/ga-events";
 import { jsonLdScript } from "../lib/json-ld";
+import { pageHead } from "../lib/not-found";
 import { resolveTierCta } from "../lib/pricing-cta";
 import { pricingJsonLd } from "../lib/pricing-jsonld";
 import { SITE_URL } from "../lib/site-identity";
@@ -106,30 +107,31 @@ export const Route = createFileRoute("/pricing")({
 	// price is the price the visitor sees (Google flags a mismatch). A
 	// visitor's later toggle re-renders the cards, not the head; the SSR'd
 	// pair is what a crawler reads, and a crawler never toggles.
-	head: ({ matches }) => ({
-		scripts: [
-			jsonLdScript(
-				pricingJsonLd({
-					siteUrl: SITE_URL,
-					currency: BILLING_CURRENCY_FOR_COUNTRY[serverRegion(matches)],
-				}),
-			),
-		],
-		meta: [
-			{ title: SEO_TITLE },
-			{ name: "description", content: SEO_DESC },
-			{ property: "og:type", content: "website" },
-			{ property: "og:url", content: PAGE_URL },
-			{ property: "og:title", content: SEO_TITLE },
-			{ property: "og:description", content: SEO_DESC },
-			{ property: "og:image", content: OG_IMAGE },
-			{ name: "twitter:card", content: "summary_large_image" },
-			{ name: "twitter:title", content: SEO_TITLE },
-			{ name: "twitter:description", content: SEO_DESC },
-			{ name: "twitter:image", content: OG_IMAGE },
-		],
-		links: [{ rel: "canonical", href: PAGE_URL }],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, ({ matches }) => ({
+			scripts: [
+				jsonLdScript(
+					pricingJsonLd({
+						siteUrl: SITE_URL,
+						currency: BILLING_CURRENCY_FOR_COUNTRY[serverRegion(matches)],
+					}),
+				),
+			],
+			meta: [
+				{ title: SEO_TITLE },
+				{ name: "description", content: SEO_DESC },
+				{ property: "og:type", content: "website" },
+				{ property: "og:url", content: PAGE_URL },
+				{ property: "og:title", content: SEO_TITLE },
+				{ property: "og:description", content: SEO_DESC },
+				{ property: "og:image", content: OG_IMAGE },
+				{ name: "twitter:card", content: "summary_large_image" },
+				{ name: "twitter:title", content: SEO_TITLE },
+				{ name: "twitter:description", content: SEO_DESC },
+				{ name: "twitter:image", content: OG_IMAGE },
+			],
+			links: [{ rel: "canonical", href: PAGE_URL }],
+		})),
 	component: PricingPage,
 });
 

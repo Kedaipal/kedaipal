@@ -81,6 +81,7 @@ import {
 	googleMapsNavUrl,
 	wazeNavUrl,
 } from "../lib/google-address";
+import { pageHead } from "../lib/not-found";
 import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
@@ -246,18 +247,19 @@ export const Route = createFileRoute("/track/$token")({
 		// secret token into a title/canonical that could leak via referrer/history.
 		return { shortId: read.value.shortId };
 	},
-	head: ({ loaderData }) => ({
-		meta: [
-			{
-				title: loaderData?.shortId
-					? `Order ${loaderData.shortId} — Kedaipal`
-					: "Your order — Kedaipal",
-			},
-			// noindex + no canonical: the URL carries a capability token, so it must
-			// never be indexed or advertised.
-			{ name: "robots", content: "noindex" },
-		],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData }) => ({
+			meta: [
+				{
+					title: loaderData?.shortId
+						? `Order ${loaderData.shortId} — Kedaipal`
+						: "Your order — Kedaipal",
+				},
+				// noindex + no canonical: the URL carries a capability token, so it must
+				// never be indexed or advertised.
+				{ name: "robots", content: "noindex" },
+			],
+		})),
 	notFoundComponent: OrderNotFound,
 	component: TrackingRoute,
 });

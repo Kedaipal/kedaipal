@@ -122,6 +122,19 @@ describe("not-found page — site context", () => {
 		expect(missOwnedElsewhere(matches, slug ?? {})).toBe(true);
 		expect(missOwnedElsewhere(matches, root)).toBe(false);
 	});
+
+	test("a STATIC leaf is matched on the way too — /stores for /stores/extra", async () => {
+		// Why every leaf head goes through pageHead, not just the param routes:
+		// fuzzy matching matches `/stores` for `/stores/extra` with status
+		// success, and the root carries the miss.
+		const router = await renderAt("/stores/extra", "Page not found");
+		const matches = router.state.matches;
+		const stores = matches.find((m) => m.routeId === "/stores");
+		expect(matches[0].globalNotFound).toBe(true);
+		expect(stores?.status).toBe("success");
+		expect(stores?.globalNotFound).toBeFalsy();
+		expect(missOwnedElsewhere(matches, stores ?? {})).toBe(true);
+	});
 });
 
 describe("not-found page — store context", () => {

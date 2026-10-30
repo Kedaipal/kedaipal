@@ -30,7 +30,7 @@ import { breadcrumbListJsonLd, categoryCrumbs } from "../lib/breadcrumbs";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { absoluteProxiedImageUrl } from "../lib/image-proxy";
 import { jsonLdScript } from "../lib/json-ld";
-import { missOwnedElsewhere } from "../lib/not-found";
+import { pageHead } from "../lib/not-found";
 import { seoDescription } from "../lib/seo-text";
 import { ssrRead } from "../lib/ssr-read";
 
@@ -130,93 +130,94 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			locale: retailer.locale ?? "en",
 		};
 	},
-	head: ({ loaderData, match, matches }) => {
-		// Matched only on the way to a URL nothing claims (`/x/p/y/extra`):
-		// the page is the root's "Page not found", so this head stays out.
-		if (missOwnedElsewhere(matches, match)) return {};
-		if (!loaderData) return {};
-		if ("unavailable" in loaderData)
-			return storeUnavailableHead(loaderData.storeName);
-		const {
-			storeName,
-			slug,
-			categoryName,
-			categorySlug,
-			description,
-			canonicalUrl,
-			indexable,
-			productSlugs,
-			ogImageUrl,
-			locale,
-		} = loaderData;
-		const title = `${categoryName} — ${storeName} | Kedaipal`;
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData }) => {
+			if (!loaderData) return {};
+			if ("unavailable" in loaderData)
+				return storeUnavailableHead(loaderData.storeName);
+			const {
+				storeName,
+				slug,
+				categoryName,
+				categorySlug,
+				description,
+				canonicalUrl,
+				indexable,
+				productSlugs,
+				ogImageUrl,
+				locale,
+			} = loaderData;
+			const title = `${categoryName} — ${storeName} | Kedaipal`;
 
-		const meta = [
-			{ title },
-			{ name: "description", content: description },
-			{
-				name: "robots",
-				content: indexable ? "index, follow" : "noindex, follow",
-			},
-			{ property: "og:type", content: "website" },
-			{ property: "og:site_name", content: "Kedaipal" },
-			{ property: "og:locale", content: OG_LOCALE[locale] },
-			{ property: "og:title", content: title },
-			{ property: "og:description", content: description },
-			{ property: "og:url", content: canonicalUrl },
-			{
-				name: "twitter:card",
-				content: ogImageUrl ? "summary_large_image" : "summary",
-			},
-			{ name: "twitter:title", content: title },
-			{ name: "twitter:description", content: description },
-		];
-		if (ogImageUrl) {
-			meta.push(
-				{ property: "og:image", content: ogImageUrl },
-				{ property: "og:image:alt", content: `${categoryName} — ${storeName}` },
-				{ name: "twitter:image", content: ogImageUrl },
-			);
-		}
-		const store = `${SITE_URL}/${slug}`;
-		return {
-			meta,
-			// No cover preload here (z8r3fdegb5): the compact app bar carries no
-			// cover image, so the page's LCP element is a product photo — the old
-			// hint made every category deep link download a banner it never shows.
-			links: [{ rel: "canonical", href: canonicalUrl }],
-			// Store › Category, so the result reads as a trail, not a URL path
-			// (z8r3fdh2z3).
-			scripts: [
-				jsonLdScript(
-					breadcrumbListJsonLd(
-						categoryCrumbs({
-							siteUrl: SITE_URL,
-							storeName,
-							storeSlug: slug,
-							categoryName,
-							categorySlug,
-						}),
+			const meta = [
+				{ title },
+				{ name: "description", content: description },
+				{
+					name: "robots",
+					content: indexable ? "index, follow" : "noindex, follow",
+				},
+				{ property: "og:type", content: "website" },
+				{ property: "og:site_name", content: "Kedaipal" },
+				{ property: "og:locale", content: OG_LOCALE[locale] },
+				{ property: "og:title", content: title },
+				{ property: "og:description", content: description },
+				{ property: "og:url", content: canonicalUrl },
+				{
+					name: "twitter:card",
+					content: ogImageUrl ? "summary_large_image" : "summary",
+				},
+				{ name: "twitter:title", content: title },
+				{ name: "twitter:description", content: description },
+			];
+			if (ogImageUrl) {
+				meta.push(
+					{ property: "og:image", content: ogImageUrl },
+					{
+						property: "og:image:alt",
+						content: `${categoryName} — ${storeName}`,
+					},
+					{ name: "twitter:image", content: ogImageUrl },
+				);
+			}
+			const store = `${SITE_URL}/${slug}`;
+			return {
+				meta,
+				// No cover preload here (z8r3fdegb5): the compact app bar carries no
+				// cover image, so the page's LCP element is a product photo — the old
+				// hint made every category deep link download a banner it never shows.
+				links: [{ rel: "canonical", href: canonicalUrl }],
+				// Store › Category, so the result reads as a trail, not a URL path
+				// (z8r3fdh2z3).
+				scripts: [
+					jsonLdScript(
+						breadcrumbListJsonLd(
+							categoryCrumbs({
+								siteUrl: SITE_URL,
+								storeName,
+								storeSlug: slug,
+								categoryName,
+								categorySlug,
+							}),
+						),
 					),
-				),
-				// The category's products as an ItemList of URLs: the body is
-				// client-rendered, so this is how a crawler that runs no JS learns
-				// the product pages exist from here (storefront SEO audit).
-				jsonLdScript({
-					"@context": "https://schema.org",
-					"@type": "ItemList",
-					name: categoryName,
-					url: canonicalUrl,
-					numberOfItems: productSlugs.length,
-					itemListElement: productSlugs.map((productSlug, i) => ({
-						"@type": "ListItem",
-						position: i + 1,
-						url: `${store}/p/${productSlug}`,
-					})),
-				}),
-			],
-		};
-	},
+					// The category's products as an ItemList of URLs: the body is
+					// client-rendered, so this is how a crawler that runs no JS learns
+					// the product pages exist from here (storefront SEO audit).
+					jsonLdScript({
+						"@context": "https://schema.org",
+						"@type": "ItemList",
+						name: categoryName,
+						url: canonicalUrl,
+						numberOfItems: productSlugs.length,
+						itemListElement: productSlugs.map((productSlug, i) => ({
+							"@type": "ListItem",
+							position: i + 1,
+							url: `${store}/p/${productSlug}`,
+						})),
+					}),
+				],
+			};
+		}),
 	notFoundComponent: CategoryNotFound,
 	component: CategoryRoute,
 });

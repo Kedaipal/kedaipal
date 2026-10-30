@@ -15,6 +15,7 @@ import { ThemeToggle } from "../components/ui/theme-toggle";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { formatPrice } from "../lib/format";
+import { pageHead } from "../lib/not-found";
 import { ssrRead } from "../lib/ssr-read";
 
 /**
@@ -40,16 +41,17 @@ export const Route = createFileRoute("/claim/$token")({
 		if (read.value === null) throw notFound();
 		return { storeName: read.value.store.storeName };
 	},
-	head: ({ loaderData }) => ({
-		meta: [
-			{
-				title: loaderData
-					? `Complete your order — ${loaderData.storeName} | Kedaipal`
-					: "Complete your order | Kedaipal",
-			},
-			{ name: "robots", content: "noindex, nofollow" },
-		],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData }) => ({
+			meta: [
+				{
+					title: loaderData
+						? `Complete your order — ${loaderData.storeName} | Kedaipal`
+						: "Complete your order | Kedaipal",
+				},
+				{ name: "robots", content: "noindex, nofollow" },
+			],
+		})),
 	notFoundComponent: ClaimNotFound,
 	component: ClaimRoute,
 });
