@@ -91,6 +91,13 @@ export function CreditMeter({
 		convexQuery(api.creditPurchases.topUpOptions, storeArgs),
 	).data;
 	const lock = useCreditGateFor(retailer);
+	// The referral nudge (docs/referrals.md § The push): the moment a seller
+	// feels the cost of an order is the moment a free 60 means something, so
+	// the LOW and OUT states carry "or refer a kedai" under the top-up — never
+	// a healthy meter. Only for a store that EARNS the referrer half; a comped
+	// store has no meter to begin with.
+	const refer = useQuery(convexQuery(api.referrals.myCard, storeArgs)).data;
+	const canRefer = refer?.standing.canRefer === true && refer.earns;
 	// The burn rate behind "about N days of orders at this week's pace" (T2).
 	// `since` is a MYT midnight minus the window, never `Date.now()`, so the
 	// query is stable within a day and cacheable.
@@ -139,6 +146,23 @@ export function CreditMeter({
 		(topUp?.viewOnly === "acting_as_admin" ? TOP_UP_VIEW_ONLY_MESSAGE : null);
 	const topUpNoWrite = topUp?.viewOnly === "no_write";
 	const canTopUp = topUpReason === null && !topUpNoWrite;
+
+	// One sentence, one link — beside the top-up, never instead of it. Said
+	// in orders, the unit the meter already speaks.
+	const referLine =
+		canRefer && refer && (tone === "out" || tone === "low") ? (
+			<p className="text-xs leading-relaxed text-muted-foreground">
+				Or earn {refer.offer.pro} free orders:{" "}
+				<Link
+					to="/app/refer"
+					className="font-semibold text-foreground underline-offset-2 hover:underline"
+					data-testid="credit-refer-link"
+				>
+					refer a kedai that starts Pro
+				</Link>
+				.
+			</p>
+		) : null;
 
 	const stateLine = creditStateLine({
 		ordersWaiting: lock.ordersWaiting,
@@ -276,6 +300,7 @@ export function CreditMeter({
 						</Link>
 					</Button>
 				</div>
+				{referLine}
 			</section>
 		);
 	}
@@ -372,6 +397,7 @@ export function CreditMeter({
 					) : topUpNoWrite ? (
 						<NeedsAccessNote area="credits" level="write" />
 					) : null}
+					{referLine}
 				</div>
 			) : null}
 			<p className="border-t border-border pt-3 text-xs leading-relaxed text-muted-foreground">

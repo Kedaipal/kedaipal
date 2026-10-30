@@ -307,6 +307,8 @@ describe("BillingTab support WhatsApp number", () => {
 					return [];
 				if (name === getFunctionName(api.billing.paymentInstructions))
 					return null;
+				// The meter's referral nudge read — no card for this store.
+				if (name === getFunctionName(api.referrals.myCard)) return null;
 				return false;
 			})();
 			return { data, isPending: false };
@@ -412,6 +414,7 @@ describe("BillingTab pending invoice — how to pay", () => {
 					};
 				if (name === getFunctionName(api.contact.supportWhatsapp))
 					return CONFIGURED_WA;
+				if (name === getFunctionName(api.referrals.myCard)) return null;
 				return false;
 			})();
 			return { data, isPending: false };

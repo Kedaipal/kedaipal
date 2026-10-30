@@ -18,7 +18,7 @@ describe("ReferralInvitePill", () => {
 		expect(screen.getByText("Invited by Siti's Kitchen")).toBeTruthy();
 		expect(
 			screen.getByText(
-				"Get 60 bonus credits when you start Pro, or 30 on Starter",
+				"Get 60 free orders when you start Pro, or 30 on Starter",
 			),
 		).toBeTruthy();
 	});

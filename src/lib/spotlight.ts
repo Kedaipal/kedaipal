@@ -85,6 +85,15 @@ export const SPOTLIGHT_ANCHOR = {
 		tab: "billing",
 		anchor: "settings-plan-change",
 	},
+	// The self-serve plan PICKER (choosing a first plan, not changing a
+	// running one). It sits below the plan and credits cards, so a "Start
+	// your plan" button that only opened the tab landed the seller above the
+	// fold of the one thing it promised — the referral welcome card links here.
+	choose_plan: {
+		page: "settings",
+		tab: "billing",
+		anchor: "settings-choose-plan",
+	},
 	seasonal_hold: {
 		page: "settings",
 		tab: "billing",
