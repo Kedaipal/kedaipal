@@ -238,9 +238,17 @@ export const PER_BUYER_LIMIT_MAX = 99;
  * is a business rule rather than a fat-finger check (Zaki, 30 Oct 2026:
  * "either a max quantity or a deadline or both").
  */
+/**
+ * The one sentence for "a shared code with no bound" — at create, at extend,
+ * and in both dialogs' helper lines, so the seller reads the rule one way
+ * wherever they meet it.
+ */
+export const SHARED_NEEDS_A_BOUND =
+	"A shared code needs a total, an end time, or both — it can't run forever";
+
 export function sharedLimitsError(limits: SharedLimits, now: number): string | null {
 	if (limits.maxRedemptions === undefined && limits.endsAt === undefined)
-		return "Set how many orders can use it, when it ends, or both";
+		return SHARED_NEEDS_A_BOUND;
 	if (limits.maxRedemptions !== undefined) {
 		if (
 			!Number.isInteger(limits.maxRedemptions) ||
@@ -312,7 +320,7 @@ export function sharedExtendError(
 	now: number,
 ): string | null {
 	if (next.maxRedemptions === undefined && next.endsAt === undefined)
-		return "Keep a total, an end time, or both — a shared code can't run forever";
+		return SHARED_NEEDS_A_BOUND;
 	if (
 		next.maxRedemptions === current.maxRedemptions &&
 		next.endsAt === current.endsAt
@@ -642,6 +650,22 @@ export function isSharedScheduled(
  * single-use day rule — see `SharedLimits.endsAt`. */
 export function isSharedEnded(endsAt: number | undefined, now: number): boolean {
 	return endsAt !== undefined && now >= endsAt;
+}
+
+/**
+ * Which bound(s) stopped a dead shared code — BOTH can be true. The status
+ * only names one (cap first, `resolveVoucherStatus`), which is right for the
+ * list pill and wrong for "what do I change to bring it back": a code that
+ * ran out AND ended needs both bounds moved (`sharedExtendError`).
+ */
+export function whatStoppedShared(
+	voucher: { maxRedemptions?: number; redeemedCount?: number; endsAt?: number },
+	now: number,
+): { ranOut: boolean; ended: boolean } {
+	return {
+		ranOut: isSharedExhausted(voucher),
+		ended: isSharedEnded(voucher.endsAt, now),
+	};
 }
 
 /** The expiry rule in one place: a voucher dated the 20th works all through

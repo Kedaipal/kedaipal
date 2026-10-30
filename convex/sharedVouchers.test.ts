@@ -192,7 +192,7 @@ describe("creating a shared code", () => {
 		const retailer = await seedRetailer(t, OWNER);
 		await expect(
 			mintShared(t, retailer._id, { maxRedemptions: undefined }),
-		).rejects.toThrow(/how many|when it ends/i);
+		).rejects.toThrow(/needs a total, an end time, or both/);
 	});
 
 	test("the word is validated with the form's own rule", async () => {

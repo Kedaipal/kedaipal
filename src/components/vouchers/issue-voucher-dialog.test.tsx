@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { SHARED_NEEDS_A_BOUND } from "../../../convex/lib/vouchers";
 import { IssueVoucherDialog } from "./issue-voucher-dialog";
 
 // The create mutation, and the live "is this word free?" read (the adapter
@@ -136,7 +137,9 @@ describe("the button is never off without a reason", () => {
 
 		// Both bounds off: the one business rule, said where the button is.
 		fireEvent.click(screen.getByRole("switch", { name: /limit how many/i }));
-		expect(screen.getByText(/can't run forever/i)).toBeTruthy();
+		// The field states the rule where the switch is, and the footer names
+		// it as the blocker — one sentence, the same words in both places.
+		expect(screen.getAllByText(SHARED_NEEDS_A_BOUND)).toHaveLength(2);
 		expect(createButton()).toHaveProperty("disabled", true);
 
 		fireEvent.click(screen.getByRole("switch", { name: /limit how many/i }));

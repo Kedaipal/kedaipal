@@ -329,7 +329,13 @@ add 20 more" is the commonest reason to reach for it. The dialog then reads
 a code that ran out needs a total above what it has used ("It ran out at 10
 uses — raise the total to bring it back"), and an ended code needs a later
 end. Without that rule, a later end on a sold-out code saved "fine" and left
-it dead (PR #440 review). A revival is refused if a newer code has taken the
+it dead (PR #440 review). The dialog's description says the same thing
+BEFORE the seller touches anything — it names what stopped this code
+(`whatStoppedShared`: ran out, ended, or both) and the move that brings it
+back, and it never offers a later end to a code that ran out
+(`revivalSentence`, from the hands-on test of that fix: it had said "more
+uses or a later end" to a sold-out code with no end at all, and only "ran
+out" to one that had also ended). A revival is refused if a newer code has taken the
 word since, and a voided code stays voided. It is Pro-gated like `create`,
 because a raised cap gives more away.
 
@@ -337,6 +343,20 @@ because a raised cap gives more away.
 stored end can carry seconds. Rebuilding an untouched end from the pickers
 read as "moved earlier" and refused a cap-only raise, so an end the seller
 hasn't touched is now the stored instant.
+
+**One sentence for "no bound".** Create, extend and both dialogs refuse a
+code with neither a total nor an end in the same words,
+`SHARED_NEEDS_A_BOUND`. The extend dialog says it once — the line by the
+disabled button — rather than a helper line and a refusal one above the
+other; the New voucher dialog states it at the switches and names it as
+the blocker in its footer, the pattern every other error there follows.
+
+**A row wraps on content, not on a breakpoint.** A live shared code with
+uses carries four actions (orders, Share, Extend, Void), a single-use code
+two. Side by side at the same width, the four crushed the text to one word
+per line, so the row now gives the text a 16rem basis and lets the actions
+drop below it when they don't fit beside it. A code with one use reads
+"Its only use is taken", not "All 1 uses taken".
 
 ### Placement: Vouchers, not a Promotions tab
 

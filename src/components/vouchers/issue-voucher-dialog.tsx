@@ -18,6 +18,7 @@ import {
 	perBuyerLimitError,
 	SHARED_CODE_MAX,
 	SHARED_CODE_MIN,
+	SHARED_NEEDS_A_BOUND,
 	SHARED_PERCENT_CAUTION,
 	SHARED_USES_MAX,
 	sharedCodeError,
@@ -732,7 +733,7 @@ export function IssueVoucherDialog({
 												? "Once that many orders have used it, the next buyer is told it has run out."
 												: endOn
 													? "After that moment, buyers are told the code has ended."
-													: "Pick at least one — a shared code can't run forever."}
+													: SHARED_NEEDS_A_BOUND}
 									</FieldDescription>
 								)}
 							</Field>
