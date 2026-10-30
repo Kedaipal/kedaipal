@@ -583,28 +583,7 @@ describe("the overseas price is said here too (z8r3fdr5yy)", () => {
 		).toBeTruthy();
 	});
 
-	it("choosing live warns by Save — naming only the couriers the store's country offers", () => {
-		renderPricing({
-			country: "SG",
-			businessAddress: HQ,
-			deliveryBooking: booking(),
-			crossBorderLanes: [{ ...LANE, country: "MY" }],
-		});
-		fireEvent.click(mode(/live courier price/i));
-		const warning = screen.getByText(/pauses while you use live courier/);
-		expect(warning.textContent).toMatch(
-			/Lalamove delivers within Singapore only/,
-		);
-		expect(warning.textContent).not.toMatch(/Delyva/);
-		// Not saved yet, so the lane is still live and the note says so.
-		expect(
-			screen.getByText(/Orders to Malaysia have their own price/),
-		).toBeTruthy();
-	});
-
-	it("saved live: the note says the lane is paused, never that its price applies", () => {
-		// Found on the second /test-code pass: "Orders to Malaysia have their
-		// own price" sat above a lane that buyers couldn't choose.
+	it("live pricing at home never pauses the overseas lane — it keeps its own price (Zaki, 30 Oct)", () => {
 		renderPricing({
 			country: "SG",
 			config: { mode: "live", onUnquotable: "block" },
@@ -612,20 +591,11 @@ describe("the overseas price is said here too (z8r3fdr5yy)", () => {
 			deliveryBooking: booking(),
 			crossBorderLanes: [{ ...LANE, country: "MY" }],
 		});
-		expect(screen.getByText("Delivery to Malaysia is paused.")).toBeTruthy();
-		const reason = screen.getByText(
-			/Lalamove delivers within Singapore only/,
-		).textContent;
-		expect(reason).toMatch(/price — S\$\s?25\.00 per order — is kept/);
-		expect(reason).not.toMatch(/Delyva/);
-		expect(screen.queryByText(/have their own price/)).toBeNull();
-		// The note already says it — no second warning by the save button.
-		expect(screen.queryByText(/pauses while you use live courier/)).toBeNull();
 		expect(
-			screen
-				.getByRole("link", { name: "Overseas delivery" })
-				.getAttribute("href"),
-		).toBe("/app/settings/overseas-delivery");
+			screen.getByText(/Orders to Malaysia have their own price/),
+		).toBeTruthy();
+		expect(screen.queryByText(/is paused/)).toBeNull();
+		expect(screen.queryByText(/pauses while you use live courier/)).toBeNull();
 	});
 
 	it("paused by plan or delivery off reads paused too", () => {

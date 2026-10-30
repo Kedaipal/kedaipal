@@ -22,6 +22,7 @@
 import { v } from "convex/values";
 import { COUNTRIES, type Country, COUNTRY_LABELS } from "./country";
 import {
+	COURIER_DESTINATIONS,
 	type CourierProviderId,
 	courierBookingAllowed,
 } from "./courierProviders";
@@ -31,15 +32,16 @@ import {
 	DELIVERY_BANDS_MAX,
 	DELIVERY_FEE_MAX,
 	DELIVERY_FREE_ABOVE_MAX,
-	type DeliveryConfig,
 	type DeliveryQuote,
 	type WeightBand,
 } from "./delivery";
 import { effectiveKind } from "./productKind";
 
 /** How the seller charges delivery to the other country. Every arm is a price
- * the buyer can always be shown — there is no "arrange" and no live quote, so
- * a lane never leaves a buyer without a delivery price. */
+ * the buyer can always be shown — there is no "arrange": a lane never leaves a
+ * buyer without a delivery price. The live arm is EasyParcel's own quote,
+ * fetched at checkout; while EasyParcel can't quote, the lane is HELD (never
+ * offered), so the buyer still never meets an unpriced option. */
 export type CrossBorderPricing =
 	| {
 			kind: "flat";
@@ -59,11 +61,22 @@ export type CrossBorderPricing =
 			/** The seller covers the courier on every order to this country —
 			 * chosen on purpose, with its own acknowledgement in settings. */
 			kind: "free";
+	  }
+	| {
+			/** Priced live by EasyParcel at checkout — the same courier that
+			 * carries the parcel, so the buyer pays what booking will cost. */
+			kind: "live";
+			freeAbove?: number;
 	  };
 
 export type CrossBorderLane = {
 	country: Country;
 	pricing: CrossBorderPricing;
+	/** Set while the seller hasn't yet confirmed which products can go: the
+	 * lane is saved but not offered, so frozen goods are never shown abroad
+	 * before they're unticked (Zaki, 30 Oct). Absent = reviewed — every lane
+	 * saved before this field existed was reviewed on its first save. */
+	awaitingProducts?: boolean;
 };
 
 const weightBandValidator = v.object({ maxKg: v.number(), fee: v.number() });
@@ -80,6 +93,7 @@ export const crossBorderPricingValidator = v.union(
 		freeAbove: v.optional(v.number()),
 	}),
 	v.object({ kind: v.literal("free") }),
+	v.object({ kind: v.literal("live"), freeAbove: v.optional(v.number()) }),
 );
 
 /** `retailers.crossBorderLanes` — a LIST so a third country is a new entry,
@@ -88,14 +102,17 @@ export const crossBorderLanesValidator = v.array(
 	v.object({
 		country: v.union(v.literal("MY"), v.literal("SG")),
 		pricing: crossBorderPricingValidator,
+		awaitingProducts: v.optional(v.boolean()),
 	}),
 );
 
-/** The couriers that price checkout live, by display name. EasyParcel is
- * absent on purpose: it prices at dispatch, never at checkout. */
+/** The couriers that price a store's HOME deliveries live, by display name —
+ * EasyParcel only where it carries domestic orders (an SG store); on a MY
+ * store it's the overseas courier (`COURIER_DESTINATIONS`). */
 const LIVE_QUOTE_COURIERS = [
 	{ id: "lalamove", name: "Lalamove" },
 	{ id: "delyva", name: "Delyva" },
+	{ id: "easyparcel", name: "EasyParcel" },
 ] as const satisfies ReadonlyArray<{ id: CourierProviderId; name: string }>;
 
 /**
@@ -105,15 +122,23 @@ const LIVE_QUOTE_COURIERS = [
  * offered it (found on the /test-code pass).
  */
 export function liveQuoteCourierNames(country: Country): string[] {
-	return LIVE_QUOTE_COURIERS.filter((c) =>
-		courierBookingAllowed(c.id, country),
+	return LIVE_QUOTE_COURIERS.filter(
+		(c) =>
+			courierBookingAllowed(c.id, country) &&
+			COURIER_DESTINATIONS[c.id][country] !== "abroad",
 	).map((c) => c.name);
 }
 
 /** "Lalamove and Delyva deliver" / "Lalamove delivers" — the subject of the
- * domestic-only sentence, agreeing in number with what's connectable. */
-export function liveQuoteCouriersDeliver(country: Country): string {
-	const names = liveQuoteCourierNames(country);
+ * "…within Malaysia only" sentence: the connectable couriers that ONLY carry
+ * home parcels. Never EasyParcel, which also goes abroad — so an SG store's
+ * help can't claim its overseas courier stays at home. */
+export function domesticOnlyCouriersDeliver(country: Country): string {
+	const names = LIVE_QUOTE_COURIERS.filter(
+		(c) =>
+			courierBookingAllowed(c.id, country) &&
+			COURIER_DESTINATIONS[c.id][country] === "domestic",
+	).map((c) => c.name);
 	return names.length === 1
 		? `${names[0]} delivers`
 		: `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} deliver`;
@@ -129,37 +154,40 @@ export function countryName(country: Country): string {
 	return COUNTRY_LABELS[country];
 }
 
-/**
- * Whether a store's DOMESTIC pricing mode can sit beside a lane. Only the
- * store's own pricing (free, flat, distance, weight) can; live courier quotes
- * come from domestic-only providers (Lalamove takes one market per request;
- * Delyva's API can't be shown to price international routes), so a live store
- * pauses its lane. The seller's settings say so, with a shortcut to change it.
- */
-export function pricingModeCarriesLanes(
-	config: DeliveryConfig | undefined,
-): boolean {
-	return !(config?.mode === "live" || config?.mode === "lalamove");
-}
-
-/** Why a stored lane isn't taking orders right now. `null` = it is. Ordered by
- * what the seller has to fix first. */
+/** Why a lane isn't taking orders right now. `null` = it is. Ordered by what
+ * the seller has to fix first. The store's own home pricing no longer pauses
+ * a lane (Zaki, 30 Oct): a lane always carries its own price. */
 export type LanePause =
 	/** The plan doesn't include cross-border delivery (a downgrade). */
 	| "plan"
 	/** Delivery is switched off for the store — only pickup is offered. */
 	| "delivery_off"
-	/** Domestic pricing is a live courier quote, which is domestic-only. */
-	| "live_pricing";
+	/** Saved, but the seller hasn't confirmed which products can go yet. */
+	| "awaiting_products"
+	/** Priced live by EasyParcel, and EasyParcel can't quote right now
+	 * (disconnected, booking off, no pickup address or store number, or an
+	 * account in another currency) — so no buyer is offered it. */
+	| "courier_unavailable";
 
+/** The store-wide half: these pause every lane at once. */
 export function lanePause(args: {
 	planAllows: boolean;
 	offerDelivery: boolean | undefined;
-	deliveryConfig: DeliveryConfig | undefined;
-}): LanePause | null {
+}): Extract<LanePause, "plan" | "delivery_off"> | null {
 	if (!args.planAllows) return "plan";
 	if (args.offerDelivery === false) return "delivery_off";
-	if (!pricingModeCarriesLanes(args.deliveryConfig)) return "live_pricing";
+	return null;
+}
+
+/** The lane's own half. `easyparcelQuotes` = EasyParcel can price a checkout
+ * for this store right now (`easyparcelQuotesAtCheckout`). */
+export function laneHold(
+	lane: CrossBorderLane,
+	facts: { easyparcelQuotes: boolean },
+): Extract<LanePause, "awaiting_products" | "courier_unavailable"> | null {
+	if (lane.awaitingProducts === true) return "awaiting_products";
+	if (lane.pricing.kind === "live" && !facts.easyparcelQuotes)
+		return "courier_unavailable";
 	return null;
 }
 
@@ -175,11 +203,36 @@ export function effectiveLanes(args: {
 	storeCountry: Country;
 	planAllows: boolean;
 	offerDelivery: boolean | undefined;
-	deliveryConfig: DeliveryConfig | undefined;
+	easyparcelQuotes: boolean;
 }): CrossBorderLane[] {
 	if (!args.lanes || args.lanes.length === 0) return [];
 	if (lanePause(args) !== null) return [];
-	return args.lanes.filter((lane) => lane.country !== args.storeCountry);
+	return args.lanes.filter(
+		(lane) => lane.country !== args.storeCountry && laneHold(lane, args) === null,
+	);
+}
+
+/** The one pause a seller reads for their (v1: single) lane — store-wide
+ * first, then the lane's own hold. */
+export function lanePauseFor(args: {
+	lane: CrossBorderLane | undefined;
+	planAllows: boolean;
+	offerDelivery: boolean | undefined;
+	easyparcelQuotes: boolean;
+}): LanePause | null {
+	if (!args.lane) return null;
+	return lanePause(args) ?? laneHold(args.lane, args);
+}
+
+/** A lane whose price comes from EasyParcel's checkout quote for THIS cart —
+ * false once the cart has earned the lane's free-above threshold. */
+export function laneNeedsLiveQuote(
+	lane: CrossBorderLane,
+	subtotal: number,
+): boolean {
+	if (lane.pricing.kind !== "live") return false;
+	const { freeAbove } = lane.pricing;
+	return freeAbove === undefined || subtotal < freeAbove;
 }
 
 export function laneFor(
@@ -285,6 +338,9 @@ export function sanitizeCrossBorderPricing(
 ): CrossBorderPricing {
 	const where = countryName(country);
 	if (raw.kind === "free") return { kind: "free" };
+	if (raw.kind === "live") {
+		return { kind: "live", freeAbove: sanitizeFreeAbove(raw.freeAbove) };
+	}
 	if (raw.kind === "flat") {
 		return {
 			kind: "flat",
@@ -362,6 +418,12 @@ export function resolveCrossBorderQuote(args: {
 	if (pricing.freeAbove !== undefined && subtotal >= pricing.freeAbove) {
 		return { kind: "free", reason: "threshold" };
 	}
+	// A live lane is priced by EasyParcel's checkout quote, never here — every
+	// caller takes that path first (`laneNeedsLiveQuote`). Reaching this line
+	// means no quote was taken, so it refuses rather than inventing a price.
+	if (pricing.kind === "live") {
+		return { kind: "blocked", reason: "unquotable" };
+	}
 	if (pricing.kind === "flat") {
 		return { kind: "fee", fee: pricing.fee, mode: "flat" };
 	}
@@ -399,6 +461,7 @@ export function crossBorderPricingSummary(
 			? ` · free from ${money(pricing.freeAbove)}`
 			: "";
 	if (pricing.kind === "flat") return `${money(pricing.fee)} per order${free}`;
+	if (pricing.kind === "live") return `Priced live by EasyParcel${free}`;
 	const first = pricing.bands[0];
 	const bands = pricing.bands.length;
 	return `By weight · from ${money(first.fee)} (${bands} band${bands === 1 ? "" : "s"})${free}`;

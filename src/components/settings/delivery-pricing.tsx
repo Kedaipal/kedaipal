@@ -30,7 +30,7 @@ import {
 	countryName,
 	crossBorderPricingSummary,
 	lanePause,
-	liveQuoteCouriersDeliver,
+	liveQuoteCourierNames,
 } from "../../../convex/lib/crossBorder";
 import {
 	DELIVERY_BANDS_MAX,
@@ -69,6 +69,7 @@ import { MissingWeightsNotice } from "../products/missing-weights-notice";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { DelyvaLogo } from "../ui/delyva-logo";
+import { EasyparcelLogo } from "../ui/easyparcel-logo";
 import { FilterChip } from "../ui/filter-chip";
 import { Input } from "../ui/input";
 import { InputPrefixFrame } from "../ui/input-prefix-frame";
@@ -79,6 +80,7 @@ import {
 	COURIER_BOOKING_ANCHOR,
 	CourierBookingSection,
 } from "./courier-booking-section";
+import { ParcelBoxGuide } from "./parcel-box-guide";
 import {
 	Card,
 	Glance,
@@ -546,7 +548,22 @@ export function DeliveryPricing({
 	).data;
 	// What BIDS at checkout is the Courier-booking toggle, not mere keys.
 	const delyvaArmed =
-		delyvaSettings?.connected === true && delyvaSettings.enabled === true;
+		delyvaSettings?.countryAllowed !== false &&
+		delyvaSettings?.connected === true &&
+		delyvaSettings.enabled === true;
+	// EasyParcel bids on HOME deliveries only where it carries them (an SG
+	// store, z8r3fdr5yy) — on a MY store it's the overseas courier only.
+	const easyparcelSettings = useQuery(
+		convexQuery(api.easyparcel.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	const easyparcelAtHome = easyparcelSettings?.destinations === "both";
+	const easyparcelArmed =
+		easyparcelAtHome &&
+		easyparcelSettings?.connected === true &&
+		!easyparcelSettings.needsReconnect &&
+		easyparcelSettings.enabled &&
+		easyparcelSettings.pickupAddress !== undefined &&
+		easyparcelSettings.hasSenderPhone;
 	const lalamoveArmed = hasStoredKey && deliveryBooking?.enabled === true;
 	const liveModeSelected = mode === "live";
 	const storedLiveMode = config?.mode === "live" || config?.mode === "lalamove";
@@ -567,7 +584,8 @@ export function DeliveryPricing({
 	// where they chose that courier). Only for a reader who may see product
 	// names.
 	const productsPerm = usePermission("products");
-	const weightMatters = mode === "weight" || (liveModeSelected && delyvaArmed);
+	const weightMatters =
+		mode === "weight" || (liveModeSelected && (delyvaArmed || easyparcelArmed));
 	const missingWeights = useQuery(
 		convexQuery(
 			api.products.missingParcelWeights,
@@ -685,8 +703,13 @@ export function DeliveryPricing({
 				onUnpriceable,
 			};
 		} else if (mode === "live") {
-			// Mirrors the server gates so the failure is a helpful message.
-			if (!businessAddress) {
+			// Mirrors the server gates so the failure is a helpful message. An
+			// EasyParcel-only store collects from EasyParcel's own pickup
+			// address, so it isn't asked for a business address here.
+			if (
+				!businessAddress &&
+				!(easyparcelArmed && !lalamoveArmed && !delyvaArmed)
+			) {
 				setError(
 					!lalamoveArmed && delyvaArmed
 						? "Set your business address first — it anchors your store's delivery setup."
@@ -697,11 +720,11 @@ export function DeliveryPricing({
 				return;
 			}
 			// At least ONE provider must be ARMED, or every checkout would block.
-			if (!lalamoveArmed && !delyvaArmed) {
+			if (!lalamoveArmed && !delyvaArmed && !easyparcelArmed) {
 				setError(
 					hasStoredKey || delyvaSettings?.connected
 						? "Turn on at least one service under Courier booking below — live pricing quotes whatever is switched on."
-						: "Connect Lalamove or Delyva under Settings → Integrations first — live prices run on your own accounts.",
+						: `Connect ${liveQuoteCourierNames(country).join(" or ")} under Settings → Integrations first — live prices run on your own accounts.`,
 				);
 				return;
 			}
@@ -789,42 +812,18 @@ export function DeliveryPricing({
 		(mode === "radius" && radiusLocked && config?.mode === "radius") ||
 		(liveModeSelected && lalamoveLocked && storedLiveMode);
 
-	// Overseas delivery (z8r3fdr5yy) runs on the store's OWN price; live
-	// courier quotes are domestic-only, so saving live pauses the lane. Said
-	// here, before the save, with the way back.
+	// Overseas delivery (z8r3fdr5yy) carries its OWN price, whatever this page
+	// sets — home pricing never pauses it (Zaki, 30 Oct). The note at the top
+	// says what overseas buyers pay; only a store-wide pause is shown here.
 	const overseasLane = crossBorderLanes?.[0];
-	// Judged on what's SAVED — the note at the top says what buyers get now;
-	// the warning by the save button says what saving live would change.
 	const overseasPause = overseasLane
 		? lanePause({
 				planAllows: hasFeature(subscription, "crossBorder"),
 				offerDelivery,
-				deliveryConfig: config,
 			})
 		: null;
-	const pausesOverseas =
-		liveModeSelected && overseasLane !== undefined && overseasPause === null;
 	const saveBlock = (
 		<div className="flex flex-col gap-3">
-			{pausesOverseas ? (
-				<p
-					className={cn(
-						"rounded-xl border px-3 py-2.5 text-xs",
-						TONE_PANEL.warn,
-					)}
-				>
-					Delivery to {countryName(overseasLane.country)} pauses while you use
-					live courier prices — {liveQuoteCouriersDeliver(country)} within{" "}
-					{countryName(country)} only. Your overseas price is kept and comes
-					back when you switch to your own price.{" "}
-					<Link
-						to="/app/settings/overseas-delivery"
-						className="font-semibold underline underline-offset-2"
-					>
-						Overseas delivery
-					</Link>
-				</p>
-			) : null}
 			{error ? (
 				<p role="alert" className="text-sm text-destructive">
 					{error}
@@ -885,8 +884,8 @@ export function DeliveryPricing({
 								Delivery to {countryName(overseasLane.country)} is paused.
 							</p>
 							<p>
-								{laneBlockCopy(overseasPause, country, overseasLane.country)}{" "}
-								Your overseas price —{" "}
+								{laneBlockCopy(overseasPause, overseasLane.country)} Your
+								overseas price —{" "}
 								<span className="whitespace-nowrap">
 									{crossBorderPricingSummary(overseasLane.pricing, (minor) =>
 										formatPrice(minor, currency),
@@ -1377,22 +1376,47 @@ export function DeliveryPricing({
 										: "off"
 							}
 						/>
-						<ProviderPricingRow
-							logo={<DelyvaLogo heightClass="h-2.5" alt="Delyva" />}
-							name="Couriers"
-							detail="Nationwide parcels, cheapest service"
-							status={
-								delyvaArmed
-									? delyvaSettings?.isDemo
-										? "test"
-										: "live"
-									: delyvaSettings?.connected
-										? "paused"
-										: "off"
-							}
-						/>
+						{/* Delyva can't be connected outside Malaysia — never offered
+						    where it can't bid (fixed in passing, z8r3fdr5yy). */}
+						{delyvaSettings?.countryAllowed !== false ? (
+							<ProviderPricingRow
+								logo={<DelyvaLogo heightClass="h-2.5" alt="Delyva" />}
+								name="Couriers"
+								detail="Nationwide parcels, cheapest service"
+								status={
+									delyvaArmed
+										? delyvaSettings?.isDemo
+											? "test"
+											: "live"
+										: delyvaSettings?.connected
+											? "paused"
+											: "off"
+								}
+							/>
+						) : null}
+						{easyparcelAtHome ? (
+							<ProviderPricingRow
+								logo={<EasyparcelLogo heightClass="h-3" alt="EasyParcel" />}
+								name="Couriers"
+								detail="J&T, SingPost, Ninja Van and more"
+								status={
+									easyparcelArmed
+										? easyparcelSettings?.environment === "sandbox"
+											? "test"
+											: "live"
+										: easyparcelSettings?.connected
+											? "paused"
+											: "off"
+								}
+							/>
+						) : null}
 					</div>
-					{!lalamoveArmed && !delyvaArmed ? (
+					{easyparcelArmed ? (
+						<InfoDisclosure summary="Box sizes EasyParcel quotes with">
+							<ParcelBoxGuide />
+						</InfoDisclosure>
+					) : null}
+					{!lalamoveArmed && !delyvaArmed && !easyparcelArmed ? (
 						<p className="rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
 							Nothing can quote yet, so delivery checkout would be refused —
 							connect a courier in{" "}
@@ -1406,14 +1430,15 @@ export function DeliveryPricing({
 							and switch it on under Courier booking below.
 						</p>
 					) : null}
-					{delyvaArmed ? (
+					{delyvaArmed || easyparcelArmed ? (
 						<MissingWeightsNotice
 							missingWeights={missingWeights}
 							reason="courier"
 						/>
 					) : null}
 					{(lalamoveArmed && deliveryBooking?.env === "sandbox") ||
-					(delyvaArmed && delyvaSettings?.isDemo) ? (
+					(delyvaArmed && delyvaSettings?.isDemo) ||
+					(easyparcelArmed && easyparcelSettings?.environment === "sandbox") ? (
 						<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
 							<FlaskConical aria-hidden className="mt-0.5 size-3.5 shrink-0" />
 							<span>

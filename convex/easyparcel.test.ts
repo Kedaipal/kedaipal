@@ -885,6 +885,46 @@ describe("dispatch state — every block names its cause", () => {
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 
+	test("a MY store's first connect opens its Singapore lane — EasyParcel-priced and HELD for the products step (Zaki, 30 Oct)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, "MY");
+		await t.mutation(internal.easyparcel.storeConnection, {
+			retailerId: retailer._id,
+			accessToken: "access-live",
+			accessExpiresAt: Date.now() + 3_600_000,
+			environment: "live",
+			balanceCurrency: "MYR",
+		});
+		const after = await t.run((ctx) => ctx.db.get(retailer._id));
+		expect(after?.crossBorderLanes).toEqual([
+			{ country: "SG", pricing: { kind: "live" }, awaitingProducts: true },
+		]);
+		// Never on an SG store, where EasyParcel also carries home parcels.
+		const t2 = setup();
+		const sg = await seedRetailer(t2, "SG");
+		await t2.mutation(internal.easyparcel.storeConnection, {
+			retailerId: sg._id,
+			accessToken: "access-live",
+			accessExpiresAt: Date.now() + 3_600_000,
+		});
+		expect((await t2.run((ctx) => ctx.db.get(sg._id)))?.crossBorderLanes).toBeUndefined();
+	});
+
+	test("an existing lane is never replaced by a connect", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, "MY");
+		const lane = { country: "SG" as const, pricing: { kind: "flat" as const, fee: 2500 } };
+		await t.run((ctx) => ctx.db.patch(retailer._id, { crossBorderLanes: [lane] }));
+		await t.mutation(internal.easyparcel.storeConnection, {
+			retailerId: retailer._id,
+			accessToken: "access-live",
+			accessExpiresAt: Date.now() + 3_600_000,
+		});
+		expect((await t.run((ctx) => ctx.db.get(retailer._id)))?.crossBorderLanes).toEqual([
+			lane,
+		]);
+	});
+
 	test("disconnect deletes the grant outright", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);

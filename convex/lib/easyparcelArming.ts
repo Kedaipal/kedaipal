@@ -10,6 +10,7 @@
 
 import type { Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
+import { type Country, storeCurrencyOf } from "./country";
 
 /** Kedaipal's EasyParcel app is configured on this deployment. */
 export function easyparcelConfigured(): boolean {
@@ -33,4 +34,72 @@ export async function loadEasyparcelArming(
 			conn !== null && conn.revokedAt === undefined && easyparcelConfigured(),
 		enabled: conn?.enabled === true,
 	};
+}
+
+/** Why EasyParcel can't price a checkout for this store right now — the
+ * reason a live overseas lane is held, said to the seller with its fix.
+ * `null` = it can quote. Ordered by what to fix first. */
+export type EasyparcelQuoteBlock =
+	| "not_connected"
+	| "reconnect_needed"
+	| "disabled"
+	| "no_pickup_address"
+	| "no_sender_phone"
+	/** The account prices in another currency than the store charges in
+	 * (EasyParcel's one sandbox per login is MYR): a quote the buyer can't be
+	 * charged in is dropped, so the lane would never price — held instead. */
+	| "wrong_currency";
+
+/**
+ * Can EasyParcel price a checkout for this store right now? Pure over the
+ * stored connection, so `storeLanes` (every storefront read) costs one
+ * indexed read and no network. The live quote itself still decides the
+ * price — this only says whether asking is worth offering the lane.
+ */
+export function easyparcelQuoteBlock(args: {
+	conn:
+		| {
+				revokedAt?: number;
+				enabled: boolean;
+				pickupAddress?: unknown;
+				balanceCurrency?: string;
+		  }
+		| null;
+	configured: boolean;
+	senderPhone: string | undefined;
+	storeCurrency: string;
+}): EasyparcelQuoteBlock | null {
+	const { conn } = args;
+	if (!conn || !args.configured) return "not_connected";
+	if (conn.revokedAt !== undefined) return "reconnect_needed";
+	if (!conn.enabled) return "disabled";
+	if (!conn.pickupAddress) return "no_pickup_address";
+	if (!(args.senderPhone ?? "").replace(/\D/g, "")) return "no_sender_phone";
+	if (
+		conn.balanceCurrency &&
+		conn.balanceCurrency.toUpperCase() !== args.storeCurrency.toUpperCase()
+	)
+		return "wrong_currency";
+	return null;
+}
+
+export async function loadEasyparcelQuoteBlock(
+	ctx: QueryCtx,
+	retailer: {
+		_id: Id<"retailers">;
+		waPhone?: string;
+		currency?: string;
+		country?: Country;
+	},
+): Promise<EasyparcelQuoteBlock | null> {
+	const conn = await ctx.db
+		.query("easyparcelConnections")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+		.unique();
+	return easyparcelQuoteBlock({
+		conn,
+		configured: easyparcelConfigured(),
+		senderPhone: retailer.waPhone,
+		storeCurrency: storeCurrencyOf(retailer),
+	});
 }

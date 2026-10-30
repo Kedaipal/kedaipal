@@ -35,6 +35,8 @@ import {
 	TOKEN_REFRESH_SKEW_MS,
 	tokenEnvironment,
 	transitLabel,
+	boxForWeight,
+	boxSizeWeightKg,
 } from "./easyparcel";
 
 const NOW = Date.parse("2026-10-27T04:00:00.000Z");
@@ -755,3 +757,17 @@ describe("sellerHandoff — read from a STORED service name", () => {
 	});
 });
 
+
+describe("the box a checkout quotes with (z8r3fdr5yy)", () => {
+	it("the smallest box whose size weight covers the parcel", () => {
+		// Size weight = L×W×H ÷ 5000: Small 0.6, Medium 2.25, Large 6 kg.
+		expect(boxSizeWeightKg("small")).toBe(0.6);
+		expect(boxSizeWeightKg("medium")).toBe(2.25);
+		expect(boxForWeight(0.5)).toBe("small");
+		expect(boxForWeight(0.6)).toBe("small");
+		expect(boxForWeight(0.61)).toBe("medium");
+		expect(boxForWeight(2.25)).toBe("medium");
+		expect(boxForWeight(2.3)).toBe("large");
+		expect(boxForWeight(40)).toBe("large");
+	});
+});

@@ -43,6 +43,7 @@ import {
 	COUNTRY_LABELS,
 	type Country,
 } from "../../../convex/lib/country";
+import type { LanePause } from "../../../convex/lib/crossBorder";
 import { accountCountryMismatch } from "../../../convex/lib/easyparcel";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import type { FixHighlight } from "../../lib/country-setup-copy";
@@ -175,7 +176,11 @@ export function EasyparcelCard({
 	// Optional-chained on purpose: during a rollout the page can be newer than
 	// the backend, and a missing field must not take the card down.
 	const lane = settings?.overseasLane as
-		| { destination: Country; state: "on" | "paused" | "off" }
+		| {
+				destination: Country;
+				state: "on" | "paused" | "off";
+				pause?: LanePause;
+		  }
 		| undefined;
 	const laneStep = settings?.destinations === "abroad" ? lane : undefined;
 	// No store WhatsApp number = no sender phone, and EasyParcel refuses every
@@ -881,41 +886,62 @@ function LaneSetupStep({
 	lane,
 }: {
 	n: number;
-	lane: { destination: Country; state: "on" | "paused" | "off" };
+	lane: {
+		destination: Country;
+		state: "on" | "paused" | "off";
+		pause?: LanePause;
+	};
 }) {
 	const where = COUNTRY_LABELS[lane.destination];
-	const link = (label: string) => (
-		<Link
-			to="/app/settings/overseas-delivery"
-			className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
-		>
-			{label}
-		</Link>
-	);
+	const link = (label: string, toProducts = false) =>
+		toProducts ? (
+			<Link
+				to="/app/products/overseas"
+				search={{ first: true }}
+				className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
+			>
+				{label}
+			</Link>
+		) : (
+			<Link
+				to="/app/settings/overseas-delivery"
+				className="-my-2 py-2 font-medium text-accent-emphasis hover:underline"
+			>
+				{label}
+			</Link>
+		);
+	const detail =
+		lane.state === "on" ? (
+			<>
+				On — EasyParcel books your orders going to {where}.{" "}
+				{link("Change price")}
+			</>
+		) : lane.pause === "awaiting_products" ? (
+			<>
+				Almost on — choose which products can go to {where}.{" "}
+				{link("Choose products", true)}
+			</>
+		) : lane.pause === "courier_unavailable" ? (
+			// Priced by EasyParcel, and EasyParcel isn't ready: the steps below
+			// are what's missing — it turns on by itself once they're done.
+			<>Turns on by itself once EasyParcel is ready — finish the steps below.</>
+		) : lane.state === "paused" ? (
+			<>
+				Paused — buyers can&apos;t choose {where} right now. {link("See why")}
+			</>
+		) : (
+			<>
+				EasyParcel carries your orders to {where}. Turn on delivery there and
+				set its price — before or after connecting, either works.{" "}
+				{link(`Turn on delivery to ${where}`)}
+			</>
+		);
 	return (
 		<SetupStep
 			n={n}
 			state={lane.state === "on" ? "done" : "action"}
 			title={`Deliver to ${where}`}
-			detail={
-				lane.state === "on" ? (
-					<>
-						On — EasyParcel books your orders going to {where}.{" "}
-						{link("Change price")}
-					</>
-				) : lane.state === "paused" ? (
-					<>
-						Paused — buyers can&apos;t choose {where} right now, so there&apos;s
-						nothing for EasyParcel to book. {link("See why")}
-					</>
-				) : (
-					<>
-						EasyParcel carries your orders to {where}. Turn on delivery there
-						and set its price — before or after connecting, either works.{" "}
-						{link(`Turn on delivery to ${where}`)}
-					</>
-				)
-			}
+			detail={detail}
 		/>
 	);
 }

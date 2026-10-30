@@ -30,6 +30,9 @@ import {
 	query,
 } from "./_generated/server";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
+import { checkoutRate } from "./lib/easyparcelRates";
+import { collectUnweighedChoices } from "./lib/parcelWeights";
+import type { ProviderQuote } from "./lib/liveQuote";
 import { requireRetailerAccess, resolveMyRetailer } from "./lib/auth";
 import { COUNTRY_LABELS, DEFAULT_COUNTRY, type Country } from "./lib/country";
 import { toDomesticContactPhone } from "./lib/courierContact";
@@ -60,6 +63,7 @@ import {
 	type EasyparcelRate,
 	type EasyparcelTokens,
 	normalizeEasyparcelStatus,
+	boxForWeight,
 	PARCEL_BOXES,
 	type ParcelBox,
 	parseAccountResponse,
@@ -77,8 +81,12 @@ import type { PermissionLevel } from "./lib/permissions";
 import { rateLimiter } from "./lib/rateLimiter";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
 import { storeLanes } from "./crossBorder";
-import { laneCountriesFor } from "./lib/crossBorder";
-import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
+import { type LanePause, laneCountriesFor } from "./lib/crossBorder";
+import {
+	assertPlanFeature,
+	assertSubscriptionActive,
+	getAccess,
+} from "./subscriptions";
 
 type Connection = Doc<"easyparcelConnections">;
 
@@ -366,8 +374,43 @@ export const storeConnection = internalMutation({
 			connectedAt: now,
 			...fields,
 		});
+		await openLaneOnFirstConnect(ctx, args.retailerId);
 	},
 });
+
+/**
+ * On a MY store EasyParcel ONLY carries overseas orders, so connecting it
+ * says "I want to deliver to Singapore" (Zaki, 30 Oct). The first connect
+ * therefore opens that lane, priced live by EasyParcel — saved and HELD
+ * until the seller picks what can go (`awaitingProducts`), so nothing is
+ * offered abroad before frozen goods are unticked. Skipped (the card's
+ * setup step says what's needed) when the store already has a lane, the
+ * plan doesn't include overseas delivery, delivery is off, or products
+ * still need a weight — the conditions the lane switch itself refuses on.
+ * Never on an SG store: there EasyParcel also carries home parcels.
+ */
+async function openLaneOnFirstConnect(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+): Promise<void> {
+	const retailer = await ctx.db.get(retailerId);
+	if (!retailer) return;
+	const country = retailer.country ?? DEFAULT_COUNTRY;
+	if (COURIER_DESTINATIONS.easyparcel[country] !== "abroad") return;
+	if ((retailer.crossBorderLanes?.length ?? 0) > 0) return;
+	if (retailer.offerDelivery === false) return;
+	if (!(await getAccess(ctx, retailerId)).features.crossBorder) return;
+	if ((await collectUnweighedChoices(ctx, retailerId)).length > 0) return;
+	await ctx.db.patch(retailerId, {
+		crossBorderLanes: [
+			{
+				country: laneCountriesFor(country)[0],
+				pricing: { kind: "live" },
+				awaitingProducts: true,
+			},
+		],
+	});
+}
 
 /**
  * Step 2, run by the `GET /oauth/easyparcel/callback` route: redeem the state,
@@ -578,6 +621,8 @@ export const updateSettings = mutation({
 export type EasyparcelLaneState = {
 	destination: Country;
 	state: "on" | "paused" | "off";
+	/** Why it's paused — the card says it with the right next step. */
+	pause?: LanePause;
 };
 
 /** Settings-card read — no tokens, ever. */
@@ -596,6 +641,7 @@ export const getSettings = query({
 					: lanes.stored.length > 0
 						? "paused"
 						: "off",
+			...(lanes.pause ? { pause: lanes.pause } : {}),
 		};
 		const lastAttempt = await ctx.db
 			.query("courierOAuthStates")
@@ -1347,6 +1393,75 @@ export const prepareBooking = action({
 		}
 	},
 });
+
+/** One provider's answer without the provider tag — distributed over the
+ * union so each status keeps its own fields (Delyva's sibling type). */
+export type EasyparcelCheckoutQuote = ProviderQuote extends infer Q
+	? Q extends ProviderQuote
+		? Omit<Q, "provider">
+		: never
+	: never;
+
+/**
+ * EasyParcel's price for a CHECKOUT (z8r3fdr5yy) — the cart-shaped sibling of
+ * `prepareBooking`, called from `liveQuote.quoteForCheckout`. Quotes with the
+ * box the cart's weight suggests (`boxForWeight`) and prices the service the
+ * dispatch card will pre-select (`checkoutRate`), so the buyer pays what the
+ * seller's default booking costs. Never throws: every failure is a
+ * provider-neutral status the checkout already has copy for.
+ */
+export async function fetchEasyparcelCheckoutQuote(
+	ctx: ActionCtx,
+	args: {
+		retailerId: Id<"retailers">;
+		sender: { postcode: string; state?: string; country: Country };
+		receiver: { postcode: string; state?: string; country: Country };
+		weightKg: number;
+		/** Goods value in major units, as the dispatch quote declares it. */
+		parcelValue: number;
+		fulfilmentDate?: number;
+	},
+): Promise<EasyparcelCheckoutQuote> {
+	if (!(args.weightKg > 0)) return { status: "store_unavailable" };
+	try {
+		const rates = await withToken(ctx, args.retailerId, async (token) => {
+			const quote = await callApi(
+				token,
+				"POST",
+				"/shipment/quotations",
+				buildQuotationBody({
+					sender: args.sender,
+					receiver: args.receiver,
+					weightKg: args.weightKg,
+					dims: PARCEL_BOXES[boxForWeight(args.weightKg)],
+					parcelValue: args.parcelValue,
+				}),
+			);
+			return parseQuotationResponse(quote.text, quote.status);
+		});
+		const rate = checkoutRate(rates, args.fulfilmentDate);
+		if (!rate) return { status: "out_of_range" };
+		return {
+			status: "quoted",
+			fee: rate.priceMinor,
+			currency: rate.currency,
+			serviceCode: rate.serviceId,
+			serviceName: rate.serviceName,
+		};
+	} catch (err) {
+		if (err instanceof ReconnectNeeded) return { status: "store_unavailable" };
+		if (err instanceof EasyparcelApiError) {
+			const kind = classifyEasyparcelFailure(err);
+			if (kind === "auth") return { status: "store_unavailable" };
+			if (kind === "invalid_address") return { status: "out_of_range" };
+		}
+		console.warn("[easyparcel] checkout quote failed", {
+			retailerId: args.retailerId,
+			message: err instanceof Error ? err.message : String(err),
+		});
+		return { status: "unavailable" };
+	}
+}
 
 /** How long an uncommitted reservation may exist before the sweeper flags it. */
 const RESERVATION_EXPIRY_MS = 5 * 60 * 1000;

@@ -470,8 +470,9 @@ export const saveCheckoutQuote = internalMutation({
 				}),
 			),
 		),
-		latitude: v.number(),
-		longitude: v.number(),
+		latitude: v.optional(v.number()),
+		longitude: v.optional(v.number()),
+		postcode: v.optional(v.string()),
 		// The one-kilo floor stamp (`liveQuoteWeightFacts`) — Delyva-won
 		// provider-aware quotes only; a rider quote never carries it.
 		weightFloored: v.optional(v.boolean()),

@@ -308,14 +308,47 @@ describe("a MY store finds EasyParcel and is told the lane it needs (z8r3fdr5yy)
 		).toBeDefined();
 	});
 
-	it("a paused lane says why there's nothing to book", () => {
+	it("a lane paused store-wide says so, with the way to see why", () => {
 		state.settings = settings({
 			...MY,
-			overseasLane: { destination: "SG", state: "paused" },
+			overseasLane: { destination: "SG", state: "paused", pause: "plan" },
 		});
 		render(card({ country: "MY" }));
-		expect(screen.getByText(/nothing for EasyParcel to book/)).toBeDefined();
+		expect(
+			screen.getByText(/Paused — buyers can't choose Singapore/),
+		).toBeDefined();
 		expect(screen.getByText("See why").closest("a")).not.toBeNull();
+	});
+
+	it("a lane waiting on EasyParcel says it turns on by itself once the steps below are done", () => {
+		state.settings = settings({
+			...MY,
+			overseasLane: {
+				destination: "SG",
+				state: "paused",
+				pause: "courier_unavailable",
+			},
+		});
+		render(card({ country: "MY" }));
+		expect(
+			screen.getByText(/Turns on by itself once EasyParcel is ready/),
+		).toBeDefined();
+	});
+
+	it("a new lane waiting on its products links the products step", () => {
+		state.settings = settings({
+			...MY,
+			overseasLane: {
+				destination: "SG",
+				state: "paused",
+				pause: "awaiting_products",
+			},
+		});
+		render(card({ country: "MY" }));
+		expect(screen.getByText(/Almost on — choose which products/)).toBeDefined();
+		expect(
+			screen.getByText("Choose products").closest("a")?.getAttribute("to"),
+		).toBe("/app/products/overseas");
 	});
 
 	it("lane on: every step done", () => {

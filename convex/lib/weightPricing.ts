@@ -32,7 +32,13 @@
  * prevent.
  */
 
-import { type CourierRetailer, delyvaBookingArmed } from "./courierBooking";
+import {
+	type CourierRetailer,
+	delyvaBookingArmed,
+	easyparcelBookingArmed,
+} from "./courierBooking";
+import { COURIER_DESTINATIONS } from "./courierProviders";
+import { DEFAULT_COUNTRY } from "./country";
 import { LIVE_QUOTE_WEIGHT_FLOOR_G } from "./liveQuote";
 
 export type WeightPricing = "rate_card" | "courier";
@@ -55,7 +61,19 @@ export function weightPricingOf(
 	if (mode === "weight") return "rate_card";
 	if (retailer.crossBorderLanes?.some((lane) => lane.pricing.kind === "weight"))
 		return "rate_card";
+	// An EasyParcel-priced lane quotes by the cart's weight (z8r3fdr5yy).
+	if (retailer.crossBorderLanes?.some((lane) => lane.pricing.kind === "live"))
+		return "courier";
 	if (mode === "live" && delyvaBookingArmed(retailer)) return "courier";
+	// EasyParcel bids on home deliveries only where it carries them (an SG
+	// store) — read only when the caller loaded its arming (`easyparcel`).
+	if (
+		mode === "live" &&
+		easyparcelBookingArmed(retailer) &&
+		COURIER_DESTINATIONS.easyparcel[retailer.country ?? DEFAULT_COUNTRY] !==
+			"abroad"
+	)
+		return "courier";
 	return null;
 }
 

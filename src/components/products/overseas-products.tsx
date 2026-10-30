@@ -38,6 +38,7 @@ export function OverseasProducts({
 	storeCountry,
 	destination,
 	first,
+	turnsOnLane = false,
 	readOnly,
 	readOnlyReason,
 	onDone,
@@ -46,6 +47,9 @@ export function OverseasProducts({
 	storeCountry: Country;
 	destination: Country;
 	first: boolean;
+	/** A new lane waits on this step — confirming it (even with no changes)
+	 * is what makes delivery abroad live. */
+	turnsOnLane?: boolean;
 	readOnly: boolean;
 	readOnlyReason?: string;
 	onDone: () => void;
@@ -123,7 +127,7 @@ export function OverseasProducts({
 	const dirty = edits.size > 0;
 
 	async function save() {
-		if (!dirty) {
+		if (!dirty && !turnsOnLane) {
 			onDone();
 			return;
 		}
@@ -133,9 +137,15 @@ export function OverseasProducts({
 				productId: productId as Id<"products">,
 				domesticOnly: !on,
 			}));
-			await setDomesticOnly({ retailerId, changes });
+			await setDomesticOnly({
+				retailerId,
+				changes,
+				...(turnsOnLane ? { confirmLane: true } : {}),
+			});
 			toast.success(
-				`${goingTotal} product${goingTotal === 1 ? "" : "s"} can go to ${where}.`,
+				turnsOnLane
+					? `Done — ${goingTotal} product${goingTotal === 1 ? "" : "s"} can go to ${where}.`
+					: `${goingTotal} product${goingTotal === 1 ? "" : "s"} can go to ${where}.`,
 			);
 			setEdits(new Map());
 			onDone();
@@ -163,6 +173,9 @@ export function OverseasProducts({
 						the trip or that couriers won't carry across the border — frozen,
 						chilled or fresh food, same-day bakes. Unticked products show buyers
 						in {where} "Ships within {countryName(storeCountry)} only".
+						{turnsOnLane
+							? ` Buyers in ${where} see your store once you confirm.`
+							: ""}
 					</p>
 				</div>
 			) : null}
@@ -281,7 +294,7 @@ export function OverseasProducts({
 					>
 						{dirty
 							? `Save ${edits.size} change${edits.size === 1 ? "" : "s"}`
-							: first
+							: turnsOnLane || first
 								? "Looks right"
 								: "Done"}
 					</Button>

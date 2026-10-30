@@ -67,6 +67,11 @@ function OverseasProductsRoute() {
 				storeCountry={retailer.country}
 				destination={destination}
 				first={first === true}
+				// The lane is saved but held until this step is confirmed
+				// (Zaki, 30 Oct) — confirming turns delivery abroad on.
+				turnsOnLane={
+					retailer.crossBorderLanes?.some((l) => l.awaitingProducts) === true
+				}
 				readOnly={lock.readOnly}
 				readOnlyReason={lock.reason}
 				onDone={backTo}

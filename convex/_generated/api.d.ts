@@ -92,6 +92,7 @@ import type * as lib_dialCountryNames from "../lib/dialCountryNames.js";
 import type * as lib_dialMobilePatterns from "../lib/dialMobilePatterns.js";
 import type * as lib_easyparcel from "../lib/easyparcel.js";
 import type * as lib_easyparcelArming from "../lib/easyparcelArming.js";
+import type * as lib_easyparcelRates from "../lib/easyparcelRates.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_emailCopy from "../lib/emailCopy.js";
 import type * as lib_enterprise from "../lib/enterprise.js";
@@ -312,6 +313,7 @@ declare const fullApi: ApiFromModules<{
   "lib/dialMobilePatterns": typeof lib_dialMobilePatterns;
   "lib/easyparcel": typeof lib_easyparcel;
   "lib/easyparcelArming": typeof lib_easyparcelArming;
+  "lib/easyparcelRates": typeof lib_easyparcelRates;
   "lib/email": typeof lib_email;
   "lib/emailCopy": typeof lib_emailCopy;
   "lib/enterprise": typeof lib_enterprise;
