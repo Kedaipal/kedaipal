@@ -560,7 +560,7 @@ export function TrialReferNotice({
 				    with no door is a dead end (found in the hands-on test). */}
 				<Link
 					to="/app/settings"
-					search={{ tab: "billing" }}
+					search={{ tab: "billing", spot: "choose_plan" }}
 					className="inline-flex min-h-11 w-fit items-center text-sm font-semibold underline-offset-4 hover:underline"
 				>
 					Start your plan in Billing

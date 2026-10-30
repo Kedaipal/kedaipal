@@ -55,8 +55,13 @@ export function ReferralWelcomeCard({
 					</p>
 				</div>
 			</div>
-			<Button asChild className="h-11 shrink-0 sm:h-10">
-				<Link to="/app/settings" search={{ tab: "billing" }}>
+			<Button asChild className="h-11 shrink-0">
+				{/* Straight to the plan picker, which sits below the fold of the
+				    Billing tab — the button promises a plan, not a tab. */}
+				<Link
+					to="/app/settings"
+					search={{ tab: "billing", spot: "choose_plan" }}
+				>
 					Start your plan
 				</Link>
 			</Button>

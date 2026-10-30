@@ -638,9 +638,13 @@ export function ReferredByChip({
 }) {
 	return (
 		<div className="flex flex-col gap-2">
-			<span className="text-sm font-medium">Referred by a Kedaipal seller</span>
+			{/* The same label as the field it stands in for — tapping "Not them?"
+			    must not rename the slot under the seller's finger. */}
+			<span className="text-sm font-medium">
+				Which store sent you? (optional)
+			</span>
 			<div
-				className="flex min-h-11 items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent/5 px-3 py-2"
+				className="flex min-h-11 items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent/5 py-0 pl-3 pr-1"
 				data-testid="referred-by-chip"
 			>
 				<span className="flex min-w-0 items-center gap-2 text-sm">
@@ -656,13 +660,13 @@ export function ReferredByChip({
 				<button
 					type="button"
 					onClick={onChange}
-					className="shrink-0 text-xs font-semibold text-muted-foreground underline-offset-4 hover:underline"
+					className="inline-flex min-h-11 shrink-0 items-center px-2 text-xs font-semibold text-muted-foreground underline-offset-4 hover:underline"
 				>
 					Not them?
 				</button>
 			</div>
 			<span className="text-xs text-muted-foreground">
-				Filled in from the link you opened. Bonus credits for you both when you
+				Filled in from the link you opened. Free orders for you both when you
 				pay your first invoice.
 			</span>
 		</div>

@@ -78,6 +78,9 @@ describe("onboarding referred-by chip (the push)", () => {
 		expect(chip.textContent).toContain("referred you");
 		// No input to mistype into — the link already answered the question.
 		expect(screen.queryByRole("textbox")).toBeNull();
+		// Same label as the field it stands in for; the promise in orders.
+		expect(screen.getByText("Which store sent you? (optional)")).toBeTruthy();
+		expect(screen.getByText(/Free orders for you both/)).toBeTruthy();
 		expect(screen.getByText(/Filled in from the link you opened/)).toBeTruthy();
 		screen.getByRole("button", { name: "Not them?" }).click();
 		expect(onChange).toHaveBeenCalledTimes(1);
