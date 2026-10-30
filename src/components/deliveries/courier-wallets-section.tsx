@@ -32,13 +32,11 @@ export function CourierWalletList({
 	retailerId,
 	country,
 	editable,
-	topUp = "needed",
 }: {
 	wallets: CourierWalletView[];
 	retailerId: Id<"retailers">;
 	country: Country;
 	editable: boolean;
-	topUp?: "needed" | "always";
 }) {
 	const now = useMinuteClock();
 	return (
@@ -51,7 +49,6 @@ export function CourierWalletList({
 					country={country}
 					now={now}
 					editable={editable}
-					topUp={topUp}
 				/>
 			))}
 		</ul>
@@ -116,7 +113,6 @@ export function IntegrationWalletBlock({
 					retailerId={retailerId}
 					country={country}
 					editable
-					topUp="always"
 				/>
 			</div>
 		</div>

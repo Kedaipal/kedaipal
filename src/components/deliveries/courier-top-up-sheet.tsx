@@ -121,11 +121,7 @@ export function CourierTopUpSheet({
 			<Dialog open={open} onOpenChange={onOpenChange}>
 				<DialogContent className="sm:max-w-md">
 					<DialogHeader>
-						<DialogTitle>
-							{view.state === "unshared"
-								? `Check your ${walletLabel(view)}`
-								: `Top up your ${walletLabel(view)}`}
-						</DialogTitle>
+						<DialogTitle>Top up your {walletLabel(view)}</DialogTitle>
 						<DialogDescription>
 							{name} holds this money, not Kedaipal — top-ups happen in your{" "}
 							{name} account.

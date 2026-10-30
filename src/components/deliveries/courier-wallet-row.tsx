@@ -13,7 +13,7 @@
  */
 
 import { useAction, useMutation } from "convex/react";
-import { Clock, Pencil, RefreshCw } from "lucide-react";
+import { ArrowUpRight, Clock, Pencil, RefreshCw } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -94,7 +94,6 @@ export function CourierWalletRow({
 	country,
 	now,
 	editable = true,
-	topUp = "needed",
 }: {
 	view: CourierWalletView;
 	retailerId: Id<"retailers">;
@@ -103,9 +102,6 @@ export function CourierWalletRow({
 	now: number;
 	/** Show the low-alert control. Home passes false: a glance, not settings. */
 	editable?: boolean;
-	/** `needed` = Top up only when low/empty/short (Home, Deliveries);
-	 * `always` = also on a healthy wallet (Integrations, the account's home). */
-	topUp?: "needed" | "always";
 }) {
 	const alertShown =
 		editable && view.isTest !== true && view.state !== "unshared";
@@ -116,11 +112,10 @@ export function CourierWalletRow({
 	// a lapsed (view-only) store, sees it as a statement with the reason.
 	const alertLock = useAreaLock("integrations");
 	const model = WALLET_PROVIDERS[view.provider].model;
-	// An unshared wallet (Delyva) always offers the trip to look it up there —
-	// the row can't show the number, so it shows the way to it.
-	const showTopUp =
-		!p.isTest &&
-		(p.needsTopUp || topUp === "always" || view.state === "unshared");
+	// Every real wallet offers its top-up on every surface (Zaki, 31 Oct) —
+	// filled when it needs money, quiet when it doesn't. Play money never.
+	const showTopUp = !p.isTest;
+	const name = WALLET_PROVIDERS[view.provider].name;
 	const detailTone: Tone =
 		p.tone === "danger" ? "danger" : p.tone === "warn" ? "warn" : "neutral";
 	// The seller went to top up from this or another surface: say we're
@@ -185,43 +180,49 @@ export function CourierWalletRow({
 						</p>
 					) : null}
 				</div>
-				<span
-					className={cn(
-						"shrink-0 pt-0.5 text-right text-sm font-semibold",
-						p.figureIsAmount ? "font-mono tabular-nums" : "text-xs font-medium",
-						// A word carries the state's colour too — "Too low" is as
-						// urgent as RM 0.00; only a neutral word ("Not shared")
-						// stays quiet.
-						p.stale || (!p.figureIsAmount && p.tone === "neutral")
-							? "text-muted-foreground"
-							: FIGURE_TONE[p.tone],
-					)}
-				>
-					{p.figure}
-				</span>
-			</div>
-
-			{showTopUp || (model === "pull" && integrations.canRead) ? (
-				<div className="flex flex-wrap items-center gap-x-1 gap-y-1">
-					{showTopUp ? (
-						<Button
-							type="button"
-							variant={p.needsTopUp ? "default" : "outline"}
-							className="tap-target"
-							onClick={() => setSheetOpen(true)}
-						>
-							{/* Named: on Home it sits near the credits' own top-up, and
-							    the two are different money. */}
-							{view.state === "unshared"
-								? `Check in ${WALLET_PROVIDERS[view.provider].name}`
-								: `Top up ${WALLET_PROVIDERS[view.provider].name}`}
-						</Button>
-					) : null}
-					{model === "pull" && integrations.canRead ? (
-						<RefreshWalletButton />
+				<div className="flex shrink-0 flex-col items-end gap-1.5">
+					<span
+						className={cn(
+							"pt-0.5 text-right text-sm font-semibold",
+							p.figureIsAmount
+								? "font-mono tabular-nums"
+								: "text-xs font-medium",
+							// A word carries the state's colour too — "Too low" is as
+							// urgent as RM 0.00; only a neutral word ("Not shared")
+							// stays quiet.
+							p.stale || (!p.figureIsAmount && p.tone === "neutral")
+								? "text-muted-foreground"
+								: FIGURE_TONE[p.tone],
+						)}
+					>
+						{p.figure}
+					</span>
+					{showTopUp || (model === "pull" && integrations.canRead) ? (
+						<div className="flex items-center gap-1">
+							{model === "pull" && integrations.canRead ? (
+								<RefreshWalletButton name={name} />
+							) : null}
+							{showTopUp ? (
+								<button
+									type="button"
+									aria-label={`Top up ${name}`}
+									onClick={() => setSheetOpen(true)}
+									className={cn(
+										// 32px drawn, 44px to tap: the overlay is the target.
+										"relative inline-flex h-8 items-center gap-1 rounded-full px-3 text-xs font-semibold outline-none transition-colors after:absolute after:-inset-1.5 after:content-[''] focus-visible:ring-3 focus-visible:ring-ring/50",
+										p.needsTopUp
+											? "bg-accent text-accent-foreground hover:bg-accent/90"
+											: "border border-border text-foreground hover:bg-muted",
+									)}
+								>
+									Top up
+									<ArrowUpRight aria-hidden className="size-3.5" />
+								</button>
+							) : null}
+						</div>
 					) : null}
 				</div>
-			) : null}
+			</div>
 
 			<CourierTopUpSheet
 				open={sheetOpen}
@@ -235,16 +236,17 @@ export function CourierWalletRow({
 	);
 }
 
-/** EasyParcel answers when asked — the one wallet a refresh can move. */
-function RefreshWalletButton() {
+/** EasyParcel answers when asked — the one wallet a refresh can move. An
+ * icon beside Top up, named for screen readers; spins while asking. */
+function RefreshWalletButton({ name }: { name: string }) {
 	const actAsRetailerId = useActAsRetailerId();
 	const refresh = useAction(api.easyparcel.refreshBalance);
 	const [busy, setBusy] = useState(false);
 	return (
-		<Button
+		<button
 			type="button"
-			variant="ghost"
-			className="tap-target text-muted-foreground"
+			aria-label={busy ? `Checking ${name}…` : `Refresh ${name} balance`}
+			title="Ask for the latest balance"
 			disabled={busy}
 			onClick={async () => {
 				setBusy(true);
@@ -257,10 +259,13 @@ function RefreshWalletButton() {
 					setBusy(false);
 				}
 			}}
+			className="relative inline-flex size-8 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors after:absolute after:-inset-1.5 after:content-[''] hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-60"
 		>
-			<RefreshCw className={cn("size-3.5", busy && "animate-spin")} />
-			{busy ? "Checking…" : "Refresh"}
-		</Button>
+			<RefreshCw
+				aria-hidden
+				className={cn("size-3.5", busy && "animate-spin")}
+			/>
+		</button>
 	);
 }
 

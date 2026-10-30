@@ -76,17 +76,13 @@ const v = (o: Partial<CourierWalletView> = {}): CourierWalletView => ({
 	...o,
 });
 
-function row(
-	view: CourierWalletView,
-	opts: { editable?: boolean; topUp?: "needed" | "always" } = {},
-) {
+function row(view: CourierWalletView, opts: { editable?: boolean } = {}) {
 	render(
 		<CourierWalletList
 			wallets={[view]}
 			retailerId={"r1" as never}
 			country="MY"
 			editable={opts.editable ?? true}
-			topUp={opts.topUp ?? "needed"}
 		/>,
 	);
 	return screen.getByTestId(`courier-wallet-${view.provider}`);
@@ -103,14 +99,17 @@ afterEach(() => {
 });
 
 describe("CourierWalletRow", () => {
-	it("a healthy wallet is quiet — no Top up on Home/Deliveries, but the account's home offers one", () => {
+	it("every real wallet offers its top-up — quiet when healthy, filled when it needs money", () => {
+		// Zaki, 31 Oct: Top up is always there, on every surface.
 		row(v());
-		expect(screen.queryByRole("button", { name: /^Top up/ })).toBeNull();
+		const quiet = screen.getByRole("button", { name: "Top up Lalamove" });
+		expect(quiet.className).toContain("border");
+		expect(quiet.className).not.toContain("bg-accent");
 		cleanup();
-		row(v(), { topUp: "always" });
+		row(v({ state: "low", balanceMinor: 1240 }));
 		expect(
-			screen.getByRole("button", { name: "Top up Lalamove" }),
-		).toBeTruthy();
+			screen.getByRole("button", { name: "Top up Lalamove" }).className,
+		).toContain("bg-accent");
 	});
 
 	it("a low Lalamove wallet leads with Top up and the Business-account note", () => {
@@ -125,9 +124,7 @@ describe("CourierWalletRow", () => {
 	});
 
 	it("a test account never asks for money", () => {
-		row(v({ isTest: true, state: "empty", balanceMinor: 0 }), {
-			topUp: "always",
-		});
+		row(v({ isTest: true, state: "empty", balanceMinor: 0 }));
 		expect(screen.queryByRole("button", { name: /^Top up/ })).toBeNull();
 		expect(screen.getByText("Test")).toBeTruthy();
 	});
@@ -157,7 +154,7 @@ describe("CourierWalletRow", () => {
 		);
 	});
 
-	it("Delyva's unshared wallet offers the way to look it up there", () => {
+	it("Delyva's unshared wallet still offers Top up — the sheet says it can't be read", () => {
 		row(
 			v({
 				provider: "delyva",
@@ -167,9 +164,7 @@ describe("CourierWalletRow", () => {
 				source: null,
 			}),
 		);
-		expect(
-			screen.getByRole("button", { name: "Check in Delyva" }),
-		).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Top up Delyva" })).toBeTruthy();
 		// An alert line on a number we never see would be a setting that does nothing.
 		expect(screen.queryByText(/Alert at/)).toBeNull();
 	});

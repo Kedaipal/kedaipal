@@ -24,7 +24,6 @@ import {
 	type CourierWalletView,
 	dispatchWalletLine,
 	LALAMOVE_BUSINESS_NOTE,
-	walletProviderName,
 } from "../../lib/courier-wallets";
 import { TONE_ACCENT, TONE_PANEL } from "../../lib/tone";
 import { cn } from "../../lib/utils";
@@ -100,9 +99,7 @@ export function DispatchWalletLine({
 								className="-my-2 inline py-2 font-semibold text-accent-emphasis underline-offset-2 hover:underline"
 								onClick={() => setSheetOpen(true)}
 							>
-								{view.state === "unshared"
-									? `Check in ${walletProviderName(view)}`
-									: "Top up"}
+								Top up
 							</button>
 						</>
 					) : null}

@@ -64,7 +64,7 @@ how much.
 | `empty` | Zero or below | red, "Empty — the next booking will fail", Top up |
 | `short` | A refusal newer than the last balance, with no number | red "Too low", when it was refused, Top up |
 | `unreported` | Nothing seen yet (Lalamove until money moves; EasyParcel before its first read) | "Not reported yet" — **never RM 0** |
-| `unshared` | A refusal-model courier with nothing seen (Delyva) | "Not shared", Check in Delyva |
+| `unshared` | A refusal-model courier with nothing seen (Delyva) | "Not shared", Top up (the sheet says Delyva doesn't share it) |
 
 Two modifiers sit across every state. A **test account** (Lalamove `pk_test`,
 Delyva demo, EasyParcel sandbox) shows a TEST chip, says "play money", and
@@ -144,11 +144,18 @@ come from `presentWallet` (`src/lib/courier-wallets.ts`). One idea, one control.
 | **Order page, dispatch card** | `DispatchWalletLine` above Book, on all three couriers. Quiet when it covers; amber warn or red block per `walletVerdict`. Lalamove adds a "Good to know" list (city zone only, free cancel until accepted, unassigned bookings expire). Delyva adds per-courier margin ("+RM 0.80 kept" / "RM 3.40 from your margin") and "Only couriers switched on in your Delyva account show here (N on)". |
 | **Deliveries page** | "Courier wallets" section at the **top**, always while a courier is connected. Every row carries its alert control. |
 | **Home** | The **Balances** card: Kedaipal credits and the courier wallets, each under its own label. Placed by the more urgent half (`balancesPlacement`): credits out → top of the page; credits low or a booking courier needing a top-up → under the today strip; otherwise in "Your store". **The half that moved the card leads it** (`balancesWalletsFirst`): when credits are fine and a wallet lifted the card, the wallets come first; otherwise credits do. |
-| **Settings → Integrations** | Each courier card's Wallet block — Top up shown even when healthy, Refresh for EasyParcel. |
+| **Settings → Integrations** | Each courier card's Wallet block — the same row: Top up, Refresh for EasyParcel. |
 | **Email** | The once-per-crossing low notice above. |
 
 Courier wallets are **never in the profile menu** (Zaki, 29 Oct 2026): that
 menu carries Kedaipal credits only.
+
+**Top up is on every real wallet, on every surface** (Zaki, 31 Oct 2026):
+Home, Deliveries and Integrations alike, healthy or not — a compact pill under
+the amount, filled mint when the wallet needs money and outlined when it
+doesn't, with EasyParcel's Refresh as an icon beside it. Both draw 32px and tap
+at 44px (an invisible overlay). Delyva says "Top up" too, not "Check": the
+sheet is where it says the balance can't be read. Test wallets never show it.
 
 ### The top-up hand-off (`CourierTopUpSheet`)
 
