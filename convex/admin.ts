@@ -25,9 +25,9 @@ import {
 	requireAdmin,
 } from "./lib/auth";
 import {
-	COUNTRY_CURRENCY,
 	type Country,
 	DEFAULT_COUNTRY,
+	storeCurrencyOf,
 } from "./lib/country";
 import {
 	BUSINESS_REPORT_ORDER_SCAN_CAP,
@@ -577,7 +577,7 @@ export const listSellersForAdmin = query({
 				waPhone: r.waPhone,
 				notifyWaPhone: r.notifyWaPhone,
 				country,
-				currency: r.currency ?? COUNTRY_CURRENCY[country],
+				currency: storeCurrencyOf(r),
 				billingCycle: sub?.billingCycle,
 				trialEndsAt: sub?.trialEndsAt,
 				freePeriodEndedAt: sub?.freePeriodEndedAt,

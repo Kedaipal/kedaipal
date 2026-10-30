@@ -53,7 +53,6 @@ import {
 	visibleQuestions,
 } from "../../convex/lib/buyerQuestions";
 import type { Country } from "../../convex/lib/country";
-import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import {
 	formatFulfilmentDate,
 	fulfilmentDateBounds,
@@ -362,7 +361,7 @@ function ActiveSession({
 					isNewCustomer: session.isNewCustomer,
 					customer: session.customer,
 				}}
-				currency={retailer.currency ?? DEFAULT_CURRENCY}
+				currency={retailer.currency}
 				country={retailer.country}
 				draft={session.draft}
 				defaultClaimWindowMinutes={retailer.claimLinkWindowMinutes}

@@ -71,7 +71,7 @@ import {
 } from "./subscriptions";
 import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
 import { tallyPromoUnits } from "./lib/promoTally";
-import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import { type Country, DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
 import { storeBooksCouriers } from "./lib/courierBooking";
 import { loadEasyparcelArming } from "./lib/easyparcelArming";
 import { getDisplayName, requireCustomerName } from "./lib/customer";
@@ -404,7 +404,7 @@ export const sendClaim = mutation({
 			waPhone: session.waPhone,
 			buyerName: session.waProfileName,
 			lines,
-			currency: retailer.currency ?? "MYR",
+			currency: storeCurrencyOf(retailer),
 			voucherId,
 			voucherSnapshot,
 			token,
@@ -802,7 +802,7 @@ export const getByToken = query({
 				waPhone: retailer.waPhone,
 				country: retailer.country ?? DEFAULT_COUNTRY,
 				locale: pickLocale(retailer.locale),
-				currency: retailer.currency ?? "MYR",
+				currency: storeCurrencyOf(retailer),
 				// Same legacy-default posture as the storefront payload.
 				offerDelivery: (retailer.offerDelivery ?? true) === true,
 				offerSelfCollect: retailer.offerSelfCollect === true,

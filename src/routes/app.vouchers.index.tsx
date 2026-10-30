@@ -6,7 +6,6 @@ import { Lock, Plus, Ticket } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
-import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import {
 	VOUCHER_NOTE_MAX,
 	type VoucherStatus,
@@ -124,7 +123,7 @@ function VouchersRoute() {
 	// Captured after the guard above: the batch handlers are hoisted function
 	// declarations, so TS can't carry the narrowing into them.
 	const retailerId = retailer._id;
-	const currency = retailer.currency ?? DEFAULT_CURRENCY;
+	const currency = retailer.currency;
 	const loading = result === undefined;
 	const vouchers = result?.vouchers ?? [];
 	const counts = result?.counts;
