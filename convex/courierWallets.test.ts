@@ -2,7 +2,7 @@
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
 import type { FunctionArgs } from "convex/server";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { resetWalletsForCountrySwitch } from "./courierWallets";
@@ -285,6 +285,72 @@ describe("courierWallets.list — every connected account, never RM 0 for 'unkno
 		const [lalamove] = await list(t, retailerId);
 		expect(lalamove?.lowAlertMinor).toBe(3000);
 		expect(lalamove?.lowAlertCustom).toBe(false);
+	});
+});
+
+describe("EasyParcel — a store connected before the wallet table widened", () => {
+	afterEach(() => vi.unstubAllEnvs());
+
+	async function seedEasyparcelStore(t: ReturnType<typeof setup>) {
+		vi.stubEnv("EASYPARCEL_CLIENT_ID", "client-id-test");
+		vi.stubEnv("EASYPARCEL_CLIENT_SECRET", "client-secret-test");
+		vi.stubEnv("CONVEX_SITE_URL", "https://site.test");
+		const { retailerId } = await seedKeyedStore(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { country: "SG", currency: "SGD" });
+			// The connection's own snapshot, as every pull has written it since
+			// before `courierWallets` knew about EasyParcel — and no wallet row.
+			await ctx.db.insert("easyparcelConnections", {
+				retailerId,
+				enabled: true,
+				environment: "sandbox",
+				accessToken: "access",
+				refreshToken: "refresh",
+				accessExpiresAt: Date.now() + 3_600_000,
+				balanceMinor: 1980,
+				balanceCurrency: "SGD",
+				balanceCheckedAt: 5_000,
+				connectedAt: 1,
+				updatedAt: 1,
+			});
+		});
+		return retailerId;
+	}
+
+	test("reads the balance its connection already holds, as a pull — never '—'", async () => {
+		const t = setup();
+		const retailerId = await seedEasyparcelStore(t);
+		const easyparcel = (await list(t, retailerId)).find(
+			(w) => w.provider === "easyparcel",
+		);
+		expect(easyparcel).toMatchObject({
+			state: "ok",
+			balanceMinor: 1980,
+			currency: "SGD",
+			at: 5_000,
+			source: "pull",
+			isTest: true,
+		});
+	});
+
+	test("a newer wallet observation outranks the snapshot", async () => {
+		const t = setup();
+		const retailerId = await seedEasyparcelStore(t);
+		await record(t, {
+			retailerId,
+			provider: "easyparcel",
+			at: 9_000,
+			observation: {
+				kind: "balance",
+				balanceMinor: 900,
+				currency: "SGD",
+				source: "pull",
+			},
+		});
+		const easyparcel = (await list(t, retailerId)).find(
+			(w) => w.provider === "easyparcel",
+		);
+		expect(easyparcel).toMatchObject({ balanceMinor: 900, at: 9_000 });
 	});
 });
 

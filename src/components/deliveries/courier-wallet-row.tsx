@@ -171,11 +171,13 @@ export function CourierWalletRow({
 				<span
 					className={cn(
 						"shrink-0 pt-0.5 text-right text-sm font-semibold",
-						p.figureIsAmount
-							? "font-mono tabular-nums"
-							: "text-xs font-medium text-muted-foreground",
-						p.figureIsAmount &&
-							(p.stale ? "text-muted-foreground" : FIGURE_TONE[p.tone]),
+						p.figureIsAmount ? "font-mono tabular-nums" : "text-xs font-medium",
+						// A word carries the state's colour too — "Too low" is as
+						// urgent as RM 0.00; only a neutral word ("Not shared")
+						// stays quiet.
+						p.stale || (!p.figureIsAmount && p.tone === "neutral")
+							? "text-muted-foreground"
+							: FIGURE_TONE[p.tone],
 					)}
 				>
 					{p.figure}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CourierWalletView } from "../../lib/courier-wallets";
-import { balancesPlacement } from "./balances-card";
+import { balancesPlacement, balancesWalletsFirst } from "./balances-card";
 
 /** Home's Balances card goes where the more urgent half says (z8r3fdx34j). */
 
@@ -49,5 +49,23 @@ describe("balancesPlacement", () => {
 		expect(balancesPlacement("ok", [wallet({ state: "unshared" })])).toBe(
 			"store",
 		);
+	});
+});
+
+describe("balancesWalletsFirst — the half that moved the card leads it", () => {
+	it("a wallet that lifted the card opens it", () => {
+		expect(balancesWalletsFirst("ok", [wallet({ state: "low" })])).toBe(true);
+		expect(balancesWalletsFirst(null, [wallet({ state: "empty" })])).toBe(true);
+	});
+
+	it("credits lead when they are urgent themselves, or nothing is", () => {
+		expect(balancesWalletsFirst("low", [wallet({ state: "low" })])).toBe(false);
+		expect(balancesWalletsFirst("out", [wallet({ state: "empty" })])).toBe(
+			false,
+		);
+		expect(balancesWalletsFirst("ok", [wallet({})])).toBe(false);
+		expect(
+			balancesWalletsFirst("ok", [wallet({ state: "low", isTest: true })]),
+		).toBe(false);
 	});
 });

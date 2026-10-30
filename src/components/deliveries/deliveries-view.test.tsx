@@ -326,6 +326,13 @@ describe("DeliveriesView", () => {
 		expect(sections[0]?.textContent).toMatch(/Courier wallets/);
 	});
 
+	it("a server older than the page (no `wallets`) draws the page without the section", () => {
+		// Regression (test-code, 30 Oct 2026): another branch pushed to the
+		// shared dev deployment and `wallets.length` crashed the whole page.
+		renderView(overview({ shipsParcels: true, wallets: undefined as never }));
+		expect(screen.queryByText("Courier wallets")).toBeNull();
+	});
+
 	it("a store with no courier connected has no wallets section at all", () => {
 		renderView(overview({ shipsParcels: true }));
 		expect(screen.queryByText("Courier wallets")).toBeNull();

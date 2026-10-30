@@ -314,10 +314,13 @@ export function CreditStubBlock({ stub }: { stub: CreditStub }) {
 				</span>
 			) : null}
 			<div className="border-x-[1.5px] border-[var(--stub-edge)] px-3.5 pt-2 pb-3">
-				{/* The stub is the way to Billing — one item, the whole receipt. */}
+				{/* The stub is the way to Billing — one item, the whole receipt.
+				    `w-auto` beats the primitive's `w-full`: with -mx-2 a full
+				    width only SHIFTS the item 8px left instead of widening it,
+				    which put the whole receipt off-centre (test-code). */}
 				<DropdownMenuItem
 					asChild
-					className="-mx-2 flex-col items-stretch gap-0 rounded-md px-2 py-1 data-[highlighted]:bg-accent/5"
+					className="-mx-2 w-auto flex-col items-stretch gap-0 rounded-md px-2 py-1 data-[highlighted]:bg-accent/5"
 				>
 					<Link
 						to="/app/settings"
@@ -336,9 +339,11 @@ export function CreditStubBlock({ stub }: { stub: CreditStub }) {
 								{month}
 							</span>
 						) : null}
+						{/* Edge to edge of the receipt: the item's -mx-2/px-2 cancel,
+						    so the rule cancels only the wrapper's px-3.5. */}
 						<span
 							aria-hidden
-							className="-mx-5.5 my-2.5 block border-t-[1.5px] border-dashed border-[var(--stub-edge)]"
+							className="-mx-3.5 my-2.5 block border-t-[1.5px] border-dashed border-[var(--stub-edge)]"
 						/>
 						<span
 							className={cn(

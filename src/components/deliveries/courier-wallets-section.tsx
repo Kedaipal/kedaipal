@@ -63,11 +63,14 @@ export function CourierWalletsSection({
 	retailerId,
 	country,
 }: {
-	wallets: CourierWalletView[];
+	/** Absent when the page is newer than the server it reads (a deploy in
+	 * flight, or another branch on the shared dev deployment): the page draws
+	 * without the section rather than crashing (test-code, 30 Oct 2026). */
+	wallets: CourierWalletView[] | undefined;
 	retailerId: Id<"retailers">;
 	country: Country;
 }) {
-	if (wallets.length === 0) return null;
+	if (!wallets || wallets.length === 0) return null;
 	return (
 		<Card>
 			<SectionHeading

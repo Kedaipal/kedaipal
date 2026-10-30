@@ -192,7 +192,8 @@ export type DispatchWalletLine = {
  * The wallet line above Book. `covers` and `unknown` stay quiet; `warn` says
  * how short and that the courier has the final say (Book stays enabled);
  * `block` is a pulled balance read moments ago that can't pay — Book
- * disables with this sentence as its reason.
+ * disables with this sentence as its reason. A test wallet gets the same
+ * verdict in sandbox words.
  */
 export function dispatchWalletLine(
 	view: CourierWalletView,
@@ -207,10 +208,12 @@ export function dispatchWalletLine(
 			: null;
 	const p = presentWallet(view, now);
 	if (verdict === "block" && view.balanceMinor !== null) {
+		// A sandbox refuses too, so it blocks too — but its money is play
+		// money, added in the sandbox, never "topped up".
 		return {
 			verdict,
 			tone: "danger",
-			text: `Your ${name} wallet has ${balance}; this booking costs ${formatPrice(priceMinor, view.currency)}. Top up first.`,
+			text: `Your ${name} ${p.isTest ? "test wallet" : "wallet"} has ${balance}; this booking costs ${formatPrice(priceMinor, view.currency)}. ${p.isTest ? `Add test credit in your ${name} sandbox first.` : "Top up first."}`,
 		};
 	}
 	if (verdict === "warn") {

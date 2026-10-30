@@ -2,7 +2,8 @@
  * Home → Balances (Arif's artboard 1, z8r3fdx34j): the one card that answers
  * "can I take and ship today's orders?" — Kedaipal credits (orders) on top,
  * the courier wallets (money at each courier) under them, each under its own
- * label so the two are never read as one balance.
+ * label so the two are never read as one balance. The half that moved the
+ * card leads it (`balancesWalletsFirst`).
  *
  * WHERE it sits is the urgency, before a word is read (decision 6 of the
  * credits home work): out of credits → top of the page; credits running low
@@ -43,24 +44,72 @@ export function balancesPlacement(
 ): CreditPlacement {
 	const credit = creditTone ? creditPlacement(creditTone) : "store";
 	if (credit === "top") return "top";
-	const walletUrgent = wallets.some(
+	return walletsUrgent(wallets) ? "under-strip" : credit;
+}
+
+/** A booking courier whose real wallet needs a top-up — what moves the card. */
+function walletsUrgent(wallets: readonly CourierWalletView[]): boolean {
+	return wallets.some(
 		(w) => w.armed && w.isTest !== true && walletNeedsTopUp(w.state),
 	);
-	return walletUrgent ? "under-strip" : credit;
+}
+
+/**
+ * The half that moved the card leads it. When credits are fine and a wallet
+ * lifted the card, opening on a healthy credits meter buries the reason the
+ * card is up there (test-code, 30 Oct 2026). Credits keep the lead whenever
+ * they are urgent themselves — out or low — since an order the seller can't
+ * see is worse than one they can't ship yet.
+ */
+export function balancesWalletsFirst(
+	creditTone: CreditTone | null,
+	wallets: readonly CourierWalletView[],
+): boolean {
+	const credit = creditTone ? creditPlacement(creditTone) : "store";
+	return credit === "store" && walletsUrgent(wallets);
 }
 
 export function BalancesCard({
 	retailer,
 	wallets,
 	showCredits,
+	walletsFirst = false,
 }: {
 	retailer: Retailer;
 	wallets: readonly CourierWalletView[];
 	/** The credits half has a balance to show (not unmetered, reader has the
 	 * grant) — decided by the caller from the same cached read. */
 	showCredits: boolean;
+	/** `balancesWalletsFirst` — the wallets are why the card moved. */
+	walletsFirst?: boolean;
 }) {
 	if (!showCredits && wallets.length === 0) return null;
+	const credits = showCredits ? (
+		<CreditMeter variant="section" retailer={retailer} />
+	) : null;
+	const walletsSection =
+		wallets.length > 0 ? (
+			<section className="flex flex-col gap-3" aria-label="Courier wallets">
+				<div className="flex flex-col gap-0.5">
+					<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+						Courier wallets
+					</p>
+					<p className="text-xs leading-relaxed text-muted-foreground">
+						{COURIER_WALLETS_HELPER}
+					</p>
+				</div>
+				<CourierWalletList
+					wallets={[...wallets]}
+					retailerId={retailer._id}
+					country={retailer.country ?? DEFAULT_COUNTRY}
+					editable={false}
+				/>
+			</section>
+		) : null;
+	const divider =
+		credits && walletsSection ? (
+			<hr className="border-t-2 border-dashed border-border" />
+		) : null;
 	return (
 		<article
 			className="flex flex-col gap-4 rounded-[20px] border border-border bg-card p-4 shadow-[0_1px_2px_rgb(15_23_41/0.04)] lg:p-5"
@@ -77,30 +126,9 @@ export function BalancesCard({
 					Balances
 				</h2>
 			</div>
-			{showCredits ? (
-				<CreditMeter variant="section" retailer={retailer} />
-			) : null}
-			{showCredits && wallets.length > 0 ? (
-				<hr className="border-t-2 border-dashed border-border" />
-			) : null}
-			{wallets.length > 0 ? (
-				<section className="flex flex-col gap-3" aria-label="Courier wallets">
-					<div className="flex flex-col gap-0.5">
-						<p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-							Courier wallets
-						</p>
-						<p className="text-xs leading-relaxed text-muted-foreground">
-							{COURIER_WALLETS_HELPER}
-						</p>
-					</div>
-					<CourierWalletList
-						wallets={[...wallets]}
-						retailerId={retailer._id}
-						country={retailer.country ?? DEFAULT_COUNTRY}
-						editable={false}
-					/>
-				</section>
-			) : null}
+			{walletsFirst ? walletsSection : credits}
+			{divider}
+			{walletsFirst ? credits : walletsSection}
 		</article>
 	);
 }

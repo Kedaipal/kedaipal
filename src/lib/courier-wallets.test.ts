@@ -164,6 +164,25 @@ describe("dispatchWalletLine — what Book is told", () => {
 		);
 	});
 
+	it("block on a test wallet speaks sandbox, never 'top up'", () => {
+		const line = dispatchWalletLine(
+			v({
+				provider: "easyparcel",
+				isTest: true,
+				source: "pull",
+				at: NOW - min,
+				balanceMinor: 1980,
+			}),
+			2033,
+			NOW,
+		);
+		expect(line.verdict).toBe("block");
+		expect(line.text).toMatch(
+			/Your EasyParcel test wallet has RM\s?19\.80; this booking costs RM\s?20\.33\. Add test credit in your EasyParcel sandbox first\./,
+		);
+		expect(line.text).not.toMatch(/Top up/);
+	});
+
 	it("covers: a quiet line with the balance and its age", () => {
 		const line = dispatchWalletLine(v(), 600, NOW);
 		expect(line.verdict).toBe("covers");
@@ -185,6 +204,13 @@ describe("helpers", () => {
 		);
 		expect(walletTopUpLinks({ provider: "delyva" }, "MY").appUrl).toBe(
 			"https://my.delyva.app",
+		);
+		// The bare app root lands on the Malaysian site for every account.
+		expect(walletTopUpLinks({ provider: "easyparcel" }, "SG").appUrl).toBe(
+			"https://app.easyparcel.com/sg/en/",
+		);
+		expect(walletTopUpLinks({ provider: "easyparcel" }, "MY").appUrl).toBe(
+			"https://app.easyparcel.com/my/en/",
 		);
 	});
 });

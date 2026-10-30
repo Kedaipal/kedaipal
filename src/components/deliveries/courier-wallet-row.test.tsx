@@ -116,6 +116,31 @@ describe("CourierWalletRow", () => {
 		expect(screen.getByText("Test")).toBeTruthy();
 	});
 
+	it("a word figure carries its state's colour — 'Too low' reads red, 'Not shared' stays quiet", () => {
+		row(
+			v({
+				state: "short",
+				balanceMinor: null,
+				source: null,
+				refusedAt: Date.now() - 60_000,
+			}),
+		);
+		expect(screen.getByText("Too low").className).toMatch(/text-red-700/);
+		cleanup();
+		row(
+			v({
+				provider: "delyva",
+				state: "unshared",
+				balanceMinor: null,
+				at: null,
+				source: null,
+			}),
+		);
+		expect(screen.getByText("Not shared").className).toMatch(
+			/text-muted-foreground/,
+		);
+	});
+
 	it("Delyva's unshared wallet offers the way to look it up there", () => {
 		row(
 			v({

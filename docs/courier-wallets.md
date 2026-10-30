@@ -48,6 +48,12 @@ how much.
   snapshot, because the account-country check and dispatch read it today.
   `storeBalance` and the connect write both, in one mutation. Dropping the
   connection's copy is a later narrow.
+- **…and the read falls back to it.** A store connected before this table
+  knew EasyParcel has a balance on its connection and none on the wallet row.
+  `withConnectionSnapshot` reads the newer of the two (newest wins, like the
+  writer), so such a store shows the number we already hold instead of "—"
+  until its next refresh (found in the hands-on test, 30 Oct 2026). No
+  backfill needed.
 
 ### States (`walletState`)
 
@@ -80,7 +86,13 @@ Only a **fresh pulled** balance (EasyParcel, read in the last 5 minutes) that
 can't pay **disables Book**, with the reason as Book's description. A pushed
 (Lalamove) or refusal-seen (Delyva) number may be stale, so a short one only
 **warns**: amber, how short, "*Lalamove has the final say*", Book stays live.
-Test wallets never block or warn.
+
+**A test wallet is judged the same way.** A sandbox refuses a booking its play
+money can't cover just as a live account does, so a fresh short sandbox read
+disables Book too. Only the words change: "*Your EasyParcel test wallet has
+RM 19.80 … Add test credit in your EasyParcel sandbox first*", never "Top up".
+(The first build exempted test wallets; the hands-on test caught it as a
+regression of the old EasyParcel card, which blocked on any short quote.)
 
 ### The low email
 
@@ -120,7 +132,7 @@ come from `presentWallet` (`src/lib/courier-wallets.ts`). One idea, one control.
 | --- | --- |
 | **Order page, dispatch card** | `DispatchWalletLine` above Book, on all three couriers. Quiet when it covers; amber warn or red block per `walletVerdict`. Lalamove adds a "Good to know" list (city zone only, free cancel until accepted, unassigned bookings expire). Delyva adds per-courier margin ("+RM 0.80 kept" / "RM 3.40 from your margin") and "Only couriers switched on in your Delyva account show here (N on)". |
 | **Deliveries page** | "Courier wallets" section at the **top**, always while a courier is connected. Every row carries its alert control. |
-| **Home** | The **Balances** card: Kedaipal credits on top, courier wallets under, each under its own label. Placed by the more urgent half (`balancesPlacement`): credits out → top of the page; credits low or a booking courier needing a top-up → under the today strip; otherwise in "Your store". |
+| **Home** | The **Balances** card: Kedaipal credits and the courier wallets, each under its own label. Placed by the more urgent half (`balancesPlacement`): credits out → top of the page; credits low or a booking courier needing a top-up → under the today strip; otherwise in "Your store". **The half that moved the card leads it** (`balancesWalletsFirst`): when credits are fine and a wallet lifted the card, the wallets come first; otherwise credits do. |
 | **Settings → Integrations** | Each courier card's Wallet block — Top up shown even when healthy, Refresh for EasyParcel. |
 | **Email** | The once-per-crossing low notice above. |
 
@@ -136,14 +148,15 @@ account (the personal app is a different wallet). Only EasyParcel gets
 "I've topped up — check again", because it is the one wallet we can ask;
 Lalamove pushes on its own and Delyva never shares.
 
-Destinations (`WALLET_PROVIDERS`, checked 29 Oct 2026 — no provider publishes
-a deep top-up URL, so these are each provider's web app plus its own article):
+Destinations (`WALLET_PROVIDERS`, checked 29–30 Oct 2026 — no provider
+publishes a deep top-up URL, so these are each provider's web app plus its own
+article):
 
 | Courier | Opens | Guide |
 | --- | --- | --- |
 | Lalamove | `web.lalamove.com` | MY / SG blog guides |
 | Delyva (MY) | `my.delyva.app` | none published |
-| EasyParcel | `app.easyparcel.com` | SG help-centre article |
+| EasyParcel | `app.easyparcel.com/sg/en/` (SG) · `/my/en/` (MY) — the bare root redirects every account to the Malaysian site | SG help-centre article |
 
 ## Deliberately not built
 

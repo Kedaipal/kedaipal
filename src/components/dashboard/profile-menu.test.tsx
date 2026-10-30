@@ -135,6 +135,10 @@ describe("ProfileMenu", () => {
 			name: /Kedaipal credits: 54 orders left/,
 		});
 		expect(stubLink.getAttribute("href")).toMatch(/tab=billing$/);
+		// The receipt is centred only if its -mx-2 item WIDENS: the menu-item
+		// primitive's w-full would shift it 8px left instead (test-code).
+		expect(stubLink.className.split(" ")).toContain("w-auto");
+		expect(stubLink.className.split(" ")).not.toContain("w-full");
 		const topUp = screen.getByRole("menuitem", { name: "Top up" });
 		expect(topUp.getAttribute("href")).toMatch(/topup=1/);
 	});

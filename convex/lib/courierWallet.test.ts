@@ -10,6 +10,7 @@ import {
 	walletMoney,
 	walletState,
 	walletVerdict,
+	withConnectionSnapshot,
 } from "./courierWallet";
 
 /**
@@ -83,14 +84,56 @@ describe("walletVerdict — block only on a balance we just PULLED", () => {
 		expect(walletVerdict(view({ source: "refusal" }), 1150, now)).toBe("warn");
 	});
 
-	test("short warns; unknown and test wallets never block", () => {
+	test("short warns; nothing known is unknown", () => {
 		expect(
 			walletVerdict(view({ state: "short", balanceMinor: null }), 1150, now),
 		).toBe("warn");
 		expect(
 			walletVerdict(view({ balanceMinor: null, state: "unreported" }), 1150, now),
 		).toBe("unknown");
-		expect(walletVerdict(view({ isTest: true }), 1150, now)).toBe("unknown");
+	});
+
+	test("a TEST wallet is judged like a live one — a sandbox refuses too", () => {
+		// Regression (test-code, 30 Oct 2026): J&T at RM 20.33 against a sandbox
+		// read of RM 19.80 left Book live, one tap from a refusal.
+		expect(walletVerdict(view({ isTest: true }), 1150, now)).toBe("block");
+		expect(
+			walletVerdict(view({ isTest: true, source: "webhook" }), 1150, now),
+		).toBe("warn");
+		expect(walletVerdict(view({ isTest: true }), 700, now)).toBe("covers");
+	});
+});
+
+describe("withConnectionSnapshot — the connection's balance fills a bare row", () => {
+	const snap = { balance: 1980, currency: "SGD", at: 500 };
+
+	test("no row, or a row with no balance, reads the snapshot as a pull", () => {
+		expect(withConnectionSnapshot(null, snap)).toEqual({
+			balance: 1980,
+			currency: "SGD",
+			balanceAt: 500,
+			source: "pull",
+		});
+		expect(
+			withConnectionSnapshot({ lowAlertMinor: 5000 }, snap),
+		).toMatchObject({ balance: 1980, lowAlertMinor: 5000, source: "pull" });
+	});
+
+	test("newest wins: a newer row keeps its balance, an older one yields", () => {
+		const newer = { balance: 900, balanceAt: 600, source: "pull" as const };
+		expect(withConnectionSnapshot(newer, snap)).toBe(newer);
+		expect(
+			withConnectionSnapshot({ balance: 900, balanceAt: 400 }, snap),
+		).toMatchObject({ balance: 1980, balanceAt: 500 });
+	});
+
+	test("a refusal newer than the snapshot still reads short", () => {
+		const obs = withConnectionSnapshot({ refusedAt: 700 }, snap);
+		expect(walletState("easyparcel", obs)).toBe("short");
+	});
+
+	test("no snapshot leaves the row alone", () => {
+		expect(withConnectionSnapshot(null, null)).toBeNull();
 	});
 });
 

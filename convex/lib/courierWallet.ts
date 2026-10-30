@@ -164,9 +164,11 @@ export const WALLET_PROVIDERS: Record<CourierProviderId, WalletProvider> = {
 	easyparcel: {
 		name: "EasyParcel",
 		model: "pull",
+		// The bare app root redirects to the MALAYSIAN site whatever the
+		// account (test-code, 30 Oct 2026) — each country names its own.
 		appUrl: {
-			MY: "https://app.easyparcel.com",
-			SG: "https://app.easyparcel.com",
+			MY: "https://app.easyparcel.com/my/en/",
+			SG: "https://app.easyparcel.com/sg/en/",
 		},
 		guideUrl: {
 			MY: null,
@@ -266,19 +268,24 @@ export type CourierWalletView = {
  *  - `covers`  — the known balance pays for it.
  *  - `warn`    — probably can't; book stays enabled, with the reason beside it.
  *  - `block`   — can't, on a balance we just read; Book disables with the reason.
- *  - `unknown` — nothing to judge on (or a test wallet, where it's play money).
+ *  - `unknown` — nothing to judge on.
+ *
+ * A TEST wallet is judged the same way: a sandbox refuses a booking its play
+ * money can't pay just as a live account does, so a fresh short read must
+ * still disable Book (test-code, 30 Oct 2026 — waving it through put the
+ * seller one tap from a refusal). Test-ness changes the words, never the
+ * verdict (`dispatchWalletLine`).
  */
 export type WalletVerdict = "covers" | "warn" | "block" | "unknown";
 
 export function walletVerdict(
 	view: Pick<
 		CourierWalletView,
-		"isTest" | "state" | "balanceMinor" | "at" | "source"
+		"state" | "balanceMinor" | "at" | "source"
 	>,
 	priceMinor: number,
 	now: number,
 ): WalletVerdict {
-	if (view.isTest === true) return "unknown";
 	if (view.state === "short") return "warn";
 	if (view.balanceMinor === null) return "unknown";
 	if (view.balanceMinor >= priceMinor) return "covers";
@@ -287,6 +294,41 @@ export function walletVerdict(
 		view.at !== null &&
 		now - view.at <= FRESH_WALLET_MS;
 	return fresh ? "block" : "warn";
+}
+
+/** A balance a provider's own CONNECTION row holds (EasyParcel keeps one on
+ * `easyparcelConnections`, written by every pull since before this table). */
+export type WalletSnapshot = { balance: number; currency: string; at: number };
+
+/**
+ * The observation a view is built from: the wallet row, unless the
+ * connection's snapshot is NEWER (or the row has no balance at all). A store
+ * connected before `courierWallets` widened has a balance on its connection
+ * and none on the row — read alone, the row said "—" for a number we already
+ * held (test-code, 30 Oct 2026). Newest-wins, like `recordObservation`, so
+ * the two copies can never disagree about which is current; a refusal on the
+ * row still outranks an OLDER snapshot through `walletState`.
+ */
+export function withConnectionSnapshot<
+	T extends WalletObservation & { source?: WalletSource },
+>(
+	row: T | null,
+	snapshot: WalletSnapshot | null,
+): (WalletObservation & { source?: WalletSource }) | null {
+	if (!snapshot) return row;
+	if (
+		row?.balance !== undefined &&
+		row.balanceAt !== undefined &&
+		row.balanceAt >= snapshot.at
+	)
+		return row;
+	return {
+		...(row ?? {}),
+		balance: snapshot.balance,
+		currency: snapshot.currency,
+		balanceAt: snapshot.at,
+		source: "pull",
+	};
 }
 
 /**

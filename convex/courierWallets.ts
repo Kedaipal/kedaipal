@@ -50,8 +50,10 @@ import {
 	lowWalletNotice,
 	parseDelyvaRefusal,
 	WALLET_PROVIDERS,
+	type WalletSnapshot,
 	walletMoney,
 	walletState,
+	withConnectionSnapshot,
 } from "./lib/courierWallet";
 import { renderLowWalletEmail } from "./lib/courierWalletEmailCopy";
 import { decryptSecret } from "./lib/credentialCrypto";
@@ -395,7 +397,13 @@ export const setLowAlert = mutation({
 
 type ProviderFacts = Record<
 	CourierProviderId,
-	{ connected: boolean; armed: boolean; isTest: boolean | null }
+	{
+		connected: boolean;
+		armed: boolean;
+		isTest: boolean | null;
+		/** A balance the provider's connection row already holds. */
+		snapshot: WalletSnapshot | null;
+	}
 >;
 
 /** Which providers this store has an account with, which are booking, and
@@ -430,6 +438,7 @@ async function providerFacts(
 					: booking?.env === "production"
 						? false
 						: null,
+			snapshot: null,
 		},
 		delyva: {
 			connected:
@@ -437,6 +446,7 @@ async function providerFacts(
 				courierBookingAllowed("delyva", country),
 			armed: delyvaBookingArmed(courierRetailer),
 			isTest: delyva?.isDemo ?? null,
+			snapshot: null,
 		},
 		easyparcel: {
 			connected:
@@ -448,6 +458,15 @@ async function providerFacts(
 					: epConn?.environment === "live"
 						? false
 						: null,
+			snapshot:
+				epConn?.balanceMinor !== undefined &&
+				epConn.balanceCheckedAt !== undefined
+					? {
+							balance: epConn.balanceMinor,
+							currency: epConn.balanceCurrency ?? COUNTRY_CURRENCY[country],
+							at: epConn.balanceCheckedAt,
+						}
+					: null,
 		},
 	};
 }
@@ -468,20 +487,21 @@ export async function readCourierWallets(
 		const fact = facts[provider];
 		if (!fact.connected) continue;
 		const row = await walletRow(ctx.db, retailer._id, provider);
-		const state = walletState(provider, row);
+		const obs = withConnectionSnapshot(row, fact.snapshot);
+		const state = walletState(provider, obs);
 		out.push({
 			provider,
 			armed: fact.armed,
 			isTest: fact.isTest,
 			state,
-			balanceMinor: row?.balance ?? null,
-			currency: row?.currency ?? storeCurrency,
-			at: row?.balanceAt ?? null,
+			balanceMinor: obs?.balance ?? null,
+			currency: obs?.currency ?? storeCurrency,
+			at: obs?.balanceAt ?? null,
 			lowAlertMinor:
 				row?.lowAlertMinor ??
-				defaultLowAlertMinor(row?.currency ?? storeCurrency),
+				defaultLowAlertMinor(obs?.currency ?? storeCurrency),
 			lowAlertCustom: row?.lowAlertMinor !== undefined,
-			source: row?.balance !== undefined ? (row.source ?? "webhook") : null,
+			source: obs?.balance !== undefined ? (obs.source ?? "webhook") : null,
 			refusedAt: state === "short" ? (row?.refusedAt ?? null) : null,
 			refusedPriceMinor:
 				state === "short" ? (row?.refusedPriceMinor ?? null) : null,

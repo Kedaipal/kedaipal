@@ -26,6 +26,7 @@ import { ActionStrip } from "../components/home/action-strip";
 import {
 	BalancesCard,
 	balancesPlacement,
+	balancesWalletsFirst,
 } from "../components/home/balances-card";
 import { DeliveriesHomeCard } from "../components/home/deliveries-card";
 import { EmptySalesCard } from "../components/home/empty-sales-card";
@@ -344,6 +345,7 @@ function DashboardHome() {
 			retailer={retailer}
 			wallets={wallets}
 			showCredits={Boolean(creditBalance)}
+			walletsFirst={balancesWalletsFirst(tone, wallets)}
 		/>
 	);
 	const outOfCredits = tone === "out";
