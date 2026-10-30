@@ -516,8 +516,8 @@ export function ReferFinePrint({
 }) {
 	return (
 		<p className="text-xs leading-relaxed text-muted-foreground">
-			1 credit = 1 order. Bonus credits join your bought credits and last 12
-			months.{" "}
+			1 credit = 1 order. Bonus credits are used after your monthly credits and
+			last 12 months.{" "}
 			{card.earns
 				? "No limit on how many kedai you refer."
 				: "Your account is on the house, so there's nothing for you to earn — every kedai you refer still gets their bonus."}
