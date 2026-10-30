@@ -40,7 +40,9 @@ vi.mock("@tanstack/react-query", async () => {
 			data:
 				getFunctionName(q.fn as never) === "courierWallets:list"
 					? walletState.wallets
-					: state.dispatch,
+					: getFunctionName(q.fn as never) === "courierWallets:topUpSuggestion"
+						? undefined
+						: state.dispatch,
 		}),
 	};
 });
@@ -114,6 +116,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	cleanup();
+	walletState.wallets = [];
 	vi.clearAllMocks();
 });
 
@@ -240,6 +243,46 @@ describe("quote → pick → book", () => {
 		expect(container.textContent).toContain("18.50");
 		// The buyer's paid fee sits beside the quotes — the margin comparison.
 		expect(container.textContent).toContain("12.00");
+	});
+
+	it("a balance read with the quote that can't pay disables Book, the wallet line as its reason", async () => {
+		// Since 31 Oct the quote reads Delyva's wallet (GET /customer/{id}).
+		walletState.wallets = [
+			{
+				provider: "delyva",
+				armed: true,
+				isTest: false,
+				state: "low",
+				balanceMinor: 900,
+				currency: "MYR",
+				at: Date.now(),
+				lowAlertMinor: 3000,
+				lowAlertCustom: false,
+				source: "pull",
+				refusedAt: null,
+				refusedPriceMinor: null,
+			},
+		];
+		state.actions.set(
+			NAME.prepare,
+			vi.fn().mockResolvedValue({
+				ok: true,
+				services: SERVICES,
+				weightKg: 2.5,
+				itemType: "CHILLED",
+				buyerPaidFee: 1200,
+			}),
+		);
+		render(<DelyvaDispatchCard order={order} />);
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
+		const book = await screen.findByRole("button", { name: /Book Ninja Cold/ });
+		expect((book as HTMLButtonElement).disabled).toBe(true);
+		expect(book.getAttribute("aria-describedby")).toBe(
+			"delyva-wallet-ORD-1234",
+		);
+		walletState.wallets = [];
 	});
 
 	it("books the courier the seller selected, not the default", async () => {

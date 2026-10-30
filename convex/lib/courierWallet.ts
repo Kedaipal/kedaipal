@@ -11,9 +11,13 @@
  * `model` in WALLET_PROVIDERS names which —
  *  - `push`    Lalamove: a WALLET_BALANCE_CHANGED webhook on every top-up and
  *              deduction; there is no endpoint to ask.
- *  - `pull`    EasyParcel: GET /wallet, any time.
- *  - `refusal` Delyva: no balance endpoint; the one place the number appears
- *              is an insufficient-credit refusal ("Bal: 0, Price: 5.00").
+ *  - `pull`    EasyParcel: GET /wallet, any time. Delyva too, since 31 Oct
+ *              2026: its customer profile (`GET /customer/{id}`, the seller's
+ *              own key) carries `walletBalance`. Its insufficient-credit
+ *              refusal ("Bal: 0, Price: 5.00") still records what it shows.
+ *  - `refusal` A provider whose balance appears ONLY in a refusal. None
+ *              today; kept so one that hides its balance still reads "Not
+ *              shared" honestly rather than "Not reported yet".
  * All three land in `courierWallets` through one writer
  * (`courierWallets.recordObservation`), so a new provider plugs in by adding
  * a row here and calling that writer — no surface changes.
@@ -65,7 +69,8 @@ export function parseWalletBalance(
 }
 
 /**
- * Delyva's insufficient-credit refusal is the only place its balance appears:
+ * Delyva's insufficient-credit refusal also names its balance (the profile
+ * read, `parseDelyvaWalletBalance` in lib/delyva.ts, is the main source):
  * `"Payment failed, You don't have enough credit balance. Bal: 0, Price: 5.00"`.
  * Both numbers are major units; anything that doesn't carry BOTH reads as null
  * (a refusal with no number still records that the wallet came up short).
@@ -167,8 +172,11 @@ export const WALLET_PROVIDERS: Record<CourierProviderId, WalletProvider> = {
 	},
 	delyva: {
 		name: "Delyva",
-		model: "refusal",
-		appUrl: { MY: "https://my.delyva.app", SG: null },
+		model: "pull",
+		// Straight to the Top-up page: signed out, it lands there after the
+		// login (`returnUrl=/topup`, checked 31 Oct 2026 on the DelyvaNow and
+		// try-express tenants).
+		appUrl: { MY: "https://my.delyva.app/customer/topup", SG: null },
 		guideUrl: { MY: null, SG: null },
 		autoTopUpUrl: { MY: null, SG: null },
 	},
@@ -203,9 +211,9 @@ export const WALLET_PROVIDERS: Record<CourierProviderId, WalletProvider> = {
  *                   by how much.
  *  - `unreported` — nothing seen yet (Lalamove sends nothing until money
  *                   moves; EasyParcel before its first read).
- *  - `unshared`   — a refusal-model provider with nothing seen yet: Delyva
- *                   doesn't share the balance, which is a different sentence
- *                   from "not yet".
+ *  - `unshared`   — a refusal-model provider with nothing seen yet: one that
+ *                   doesn't share its balance, which is a different sentence
+ *                   from "not yet". No provider is refusal-only today.
  */
 export type WalletState =
 	| "ok"

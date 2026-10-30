@@ -222,6 +222,7 @@ import type * as team from "../team.js";
 import type * as vouchers from "../vouchers.js";
 import type * as wabaProtection from "../wabaProtection.js";
 import type * as whatsapp from "../whatsapp.js";
+import type * as zzDevSeed from "../zzDevSeed.js";
 
 import type {
   ApiFromModules,
@@ -444,6 +445,7 @@ declare const fullApi: ApiFromModules<{
   vouchers: typeof vouchers;
   wabaProtection: typeof wabaProtection;
   whatsapp: typeof whatsapp;
+  zzDevSeed: typeof zzDevSeed;
 }>;
 
 /**

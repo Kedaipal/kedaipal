@@ -41,10 +41,13 @@ describe("walletState", () => {
 		).toBe("ok");
 	});
 
-	test("nothing seen yet is its own state — 'unreported', or 'unshared' for a refusal-only courier", () => {
+	test("nothing seen yet is its own state — 'unreported', never RM 0", () => {
 		expect(walletState("lalamove", null)).toBe("unreported");
 		expect(walletState("easyparcel", {})).toBe("unreported");
-		expect(walletState("delyva", null)).toBe("unshared");
+		// Delyva became a PULL wallet on 31 Oct 2026 (its customer profile
+		// carries walletBalance), so it's "not asked yet", not "not shared".
+		expect(walletState("delyva", null)).toBe("unreported");
+		expect(WALLET_PROVIDERS.delyva.model).toBe("pull");
 	});
 
 	test("a refusal newer than the balance is 'short'; an older one changes nothing", () => {

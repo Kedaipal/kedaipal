@@ -35,14 +35,15 @@ describe("awaitingTopUp / topUpLanded", () => {
 		expect(awaitingTopUp(trip, seen(NOW - 1_000, 1240), NOW)).toBe(true);
 	});
 
-	it("never for a courier that doesn't tell us (Delyva), nor once it lapses", () => {
+	it("Delyva waits like EasyParcel now its balance can be read; any trip lapses", () => {
+		// Delyva became askable on 31 Oct 2026 (its customer profile).
 		expect(
 			awaitingTopUp(
 				trip,
 				{ provider: "delyva", at: null, balanceMinor: null },
 				NOW,
 			),
-		).toBe(false);
+		).toBe(true);
 		const old = { at: NOW - AWAIT_TOP_UP_MS - 1, balanceBefore: 1240 };
 		expect(awaitingTopUp(old, seen(null, null), NOW)).toBe(false);
 		expect(topUpLanded(old, seen(NOW - 1_000, 9999), NOW)).toBe(false);

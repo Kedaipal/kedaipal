@@ -182,6 +182,7 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 	"easyparcel.disconnect": "settings: removing a courier account is never trapped",
 	"easyparcel.updateSettings": "settings: courier pickup address and on/off",
 	"easyparcel.refreshBalance": "settings: re-reads the prepaid wallet snapshot",
+	"delyva.refreshBalance": "settings: re-reads the prepaid wallet balance",
 	"easyparcel.cancelBooking": "cancelling a courier releases the order",
 	"easyparcel.refreshJobStatus": "status poll: reads provider truth, moves nothing the webhooks wouldn't",
 	"delyva.resubscribeWebhooks": "settings: re-registers the courier webhooks",

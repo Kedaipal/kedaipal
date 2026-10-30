@@ -547,16 +547,20 @@ precedent.
 
 ### Wallet, margin and the couriers-on footer (z8r3fdx34j)
 
-Delyva has **no balance endpoint**, so its wallet row reads "Not shared" with
-a Check in Delyva hand-off, until an insufficient-credit refusal reveals the
-number (`"Bal: 0, Price: 5.00"`, parsed by `parseDelyvaRefusal` and recorded
-through `courierWallets.recordDelyvaRefusal`). It then shows that balance as
-"last seen", dated. See [`courier-wallets.md`](./courier-wallets.md).
+Delyva's **customer profile carries the wallet balance** (found 31 Oct
+2026): `GET /customer/{customerId}` with the seller's own key returns
+`walletBalance` (`parseDelyvaWalletBalance`). It's read on connect, from the
+Refresh icon (`delyva.refreshBalance`), alongside every dispatch quote, and by
+the top-up sheet's re-check, and recorded as a PULL observation. An
+insufficient-credit refusal (`"Bal: 0, Price: 5.00"`, `parseDelyvaRefusal`)
+still records its number too. Top up goes to `my.delyva.app/customer/topup`.
+See [`courier-wallets.md`](./courier-wallets.md).
 
 On the dispatch card:
 
-- **The wallet line** above Book. A short last-seen balance only warns —
-  Delyva has the final say.
+- **The wallet line** above Book. A balance read with the quote that can't
+  pay **disables Book** with the line as its reason (like EasyParcel); a
+  last-seen (refusal) balance only warns — Delyva has the final say.
 - **Margin per courier**: beside every price, what it leaves of the delivery
   fee the buyer paid ("+RM 0.80 kept" / "RM 3.40 from your margin",
   `courierMargin`). The buyer never chose this courier, so its price is the

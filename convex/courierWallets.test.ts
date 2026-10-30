@@ -269,14 +269,14 @@ describe("courierWallets.list — every connected account, never RM 0 for 'unkno
 		});
 	});
 
-	test("a connected Delyva account reads 'unshared' until a refusal reveals a number", async () => {
+	test("a connected Delyva account reads 'unreported' until its balance is read", async () => {
 		const t = setup();
 		const { retailerId } = await seedKeyedStore(t);
 		await connectDelyva(t, retailerId);
 		const delyva = (await list(t, retailerId)).find(
 			(w) => w.provider === "delyva",
 		);
-		expect(delyva).toMatchObject({ state: "unshared", balanceMinor: null });
+		expect(delyva).toMatchObject({ state: "unreported", balanceMinor: null });
 	});
 
 	test("the default low line follows the wallet's currency (RM 30)", async () => {
@@ -682,6 +682,54 @@ describe("topUpSuggestion — from this store's own bookings with the courier", 
 		const keyed = await seedKeyedStore(sandbox); // pk_test key: a test wallet
 		await bookings(sandbox, keyed.retailerId, [{}, {}, {}, {}, {}, {}]);
 		expect(await suggest(sandbox, keyed.retailerId)).toBeNull();
+	});
+});
+
+describe("delyva.refreshBalance — Delyva's balance, read with the seller's own key", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	function stubDelyva(profile: unknown) {
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("/customer/128399"))
+				return new Response(JSON.stringify(profile), { status: 200 });
+			return new Response("{}", { status: 404 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		return fetchMock;
+	}
+
+	test("records walletBalance as a fresh pull — Delyva is an ASKABLE wallet now", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedKeyedStore(t);
+		await connectDelyva(t, retailerId);
+		const fetchMock = stubDelyva({
+			data: { id: 128399, walletBalance: "42.50", minBalanceVal: "20.00" },
+		});
+		const result = await asUser.action(api.delyva.refreshBalance, {});
+		expect(result).toEqual({ ok: true, balanceMinor: 4250, currency: "MYR" });
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const delyva = (await list(t, retailerId)).find(
+			(w) => w.provider === "delyva",
+		);
+		expect(delyva).toMatchObject({
+			state: "ok",
+			balanceMinor: 4250,
+			source: "pull",
+		});
+	});
+
+	test("a profile without a wallet balance says so and records nothing", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedKeyedStore(t);
+		await connectDelyva(t, retailerId);
+		stubDelyva({ data: { id: 128399 } });
+		const result = await asUser.action(api.delyva.refreshBalance, {});
+		expect(result.ok).toBe(false);
+		const delyva = (await list(t, retailerId)).find(
+			(w) => w.provider === "delyva",
+		);
+		expect(delyva?.balanceMinor).toBeNull();
 	});
 });
 

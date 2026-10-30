@@ -169,9 +169,15 @@ describe("CourierWalletRow", () => {
 		expect(screen.queryByText(/Alert at/)).toBeNull();
 	});
 
-	it("only a wallet we can ASK offers Refresh (EasyParcel), and only to integrations readers", () => {
+	it("only a wallet we can ASK offers Refresh (EasyParcel, Delyva), and only to integrations readers", () => {
 		row(v({ provider: "easyparcel", currency: "SGD", source: "pull" }));
 		expect(screen.getByRole("button", { name: /Refresh/ })).toBeTruthy();
+		cleanup();
+		// Delyva became askable on 31 Oct 2026 (its customer profile).
+		row(v({ provider: "delyva", source: "pull" }));
+		expect(
+			screen.getByRole("button", { name: "Refresh Delyva balance" }),
+		).toBeTruthy();
 		cleanup();
 		row(v());
 		expect(screen.queryByRole("button", { name: /Refresh/ })).toBeNull();

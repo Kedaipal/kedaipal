@@ -41,6 +41,7 @@ import {
 	parseDelyvaErrorMessage,
 	parseCompanyResponse,
 	countActiveDelyvaServices,
+	parseDelyvaWalletBalance,
 	parseInstantQuoteResponse,
 	parseOrderResponse,
 	resolveDelyvaCredentials,
@@ -49,7 +50,7 @@ import { isActiveJobStatus } from "./lib/deliveryJobs";
 import { encryptSecret } from "./lib/credentialCrypto";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { isColdItemType } from "./lib/liveQuote";
-import { DEFAULT_COUNTRY, type Country } from "./lib/country";
+import { COUNTRY_CURRENCY, DEFAULT_COUNTRY, type Country } from "./lib/country";
 import { clearCourierWallet } from "./courierWallets";
 import {
 	delyvaBookingArmed,
@@ -375,6 +376,7 @@ export const connect = action({
 		let accountName: string | undefined;
 		let isDemo: boolean | undefined;
 		let companyCode: string | undefined;
+		let walletBalanceSen: number | null = null;
 		let importedPickupAddress:
 			| {
 					address1: string;
@@ -410,6 +412,10 @@ export const connect = action({
 			};
 			customerId =
 				typeof customer.data?.id === "number" ? customer.data.id : undefined;
+			// The profile carries the wallet too (found 31 Oct 2026) — read on
+			// connect, like EasyParcel's, so a new account shows its balance at
+			// once instead of "Not reported yet".
+			walletBalanceSen = parseDelyvaWalletBalance(customer);
 			accountName =
 				typeof customer.data?.name === "string" && customer.data.name
 					? customer.data.name
@@ -510,6 +516,21 @@ export const connect = action({
 			companyCode,
 			importedPickupAddress,
 		});
+		// After storeConnection: a different account clears the wallet row
+		// first, so this reading is the new account's own.
+		if (walletBalanceSen !== null) {
+			await ctx.runMutation(internal.courierWallets.record, {
+				retailerId: context.retailerId,
+				provider: "delyva",
+				at: Date.now(),
+				observation: {
+					kind: "balance",
+					balanceMinor: walletBalanceSen,
+					currency: COUNTRY_CURRENCY[context.country],
+					source: "pull",
+				},
+			});
+		}
 
 		// Webhooks: best-effort — a subscribe failure must not fail the connect
 		// (bookings work without it; status just won't flow). The unset
@@ -540,6 +561,89 @@ export const connect = action({
 			isDemo,
 			bookingHeldForWeights: stored?.bookingHeldForWeights || undefined,
 		};
+	},
+});
+
+/** What a wallet re-read needs: the store, its credentials and currency.
+ * Integrations READ, like EasyParcel's Refresh — reading a balance changes
+ * nothing. */
+export const getBalanceContext = internalQuery({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		retailerId: Id<"retailers">;
+		credentials: DelyvaCredentials;
+		currency: string;
+	} | null> => {
+		const access = await resolveStoreAccess(ctx, retailerId, "read");
+		const credentials = resolveDelyvaCredentials(
+			access.retailer.delyva as DelyvaConfig | undefined,
+		);
+		if (!credentials) return null;
+		return {
+			retailerId: access.retailer._id,
+			credentials,
+			currency: COUNTRY_CURRENCY[access.retailer.country ?? DEFAULT_COUNTRY],
+		};
+	},
+});
+
+/**
+ * Ask Delyva for the wallet balance now — the Integrations/Deliveries Refresh
+ * and the top-up sheet's "I've topped up — check again". `GET /customer/{id}`
+ * with the seller's own key carries `walletBalance` (found 31 Oct 2026), so
+ * Delyva is a PULL wallet like EasyParcel, no longer refusal-only.
+ */
+export const refreshBalance = action({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<
+		| { ok: false; message: string }
+		| { ok: true; balanceMinor: number; currency: string }
+	> => {
+		const context = await ctx.runQuery(internal.delyva.getBalanceContext, {
+			retailerId,
+		});
+		if (!context) return { ok: false, message: "Connect Delyva first." };
+		try {
+			const balanceMinor = parseDelyvaWalletBalance(
+				await callDelyva(
+					context.credentials,
+					"GET",
+					`/customer/${context.credentials.customerId}`,
+				),
+			);
+			if (balanceMinor === null)
+				return {
+					ok: false,
+					message:
+						"Delyva answered without a wallet balance — check it in the Delyva app.",
+				};
+			await ctx.runMutation(internal.courierWallets.record, {
+				retailerId: context.retailerId,
+				provider: "delyva",
+				at: Date.now(),
+				observation: {
+					kind: "balance",
+					balanceMinor,
+					currency: context.currency,
+					source: "pull",
+				},
+			});
+			return { ok: true, balanceMinor, currency: context.currency };
+		} catch (err) {
+			console.warn("[delyva] wallet refresh failed", {
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return {
+				ok: false,
+				message: "Couldn't reach Delyva just now. Try again in a moment.",
+			};
+		}
 	},
 });
 
@@ -1400,17 +1504,41 @@ export const prepareBooking = action({
 			// (z8r3fdx34j): a fresh Delyva account has NONE on, and the seller
 			// only learns couriers are opt-in if the card says "N couriers on".
 			// In parallel, and it can never fail the quote.
-			const [response, activeCourierCount] = await Promise.all([
-				callDelyva(
-					context.credentials,
-					"POST",
-					"/service/instantQuote",
-					quoteBody(itemType),
-				),
-				callDelyva(context.credentials, "GET", "/service")
-					.then((json) => countActiveDelyvaServices(json))
-					.catch(() => null),
-			]);
+			// The wallet rides along too (z8r3fdx34j, 31 Oct): a balance read
+			// with the quote is what lets the card disable Book on a wallet that
+			// can't pay, before the tap. Never fails the quote.
+			const [response, activeCourierCount, walletBalanceSen] =
+				await Promise.all([
+					callDelyva(
+						context.credentials,
+						"POST",
+						"/service/instantQuote",
+						quoteBody(itemType),
+					),
+					callDelyva(context.credentials, "GET", "/service")
+						.then((json) => countActiveDelyvaServices(json))
+						.catch(() => null),
+					callDelyva(
+						context.credentials,
+						"GET",
+						`/customer/${context.customerId}`,
+					)
+						.then((json) => parseDelyvaWalletBalance(json))
+						.catch(() => null),
+				]);
+			if (walletBalanceSen !== null) {
+				await ctx.runMutation(internal.courierWallets.record, {
+					retailerId: context.retailerId,
+					provider: "delyva",
+					at: Date.now(),
+					observation: {
+						kind: "balance",
+						balanceMinor: walletBalanceSen,
+						currency: context.currency,
+						source: "pull",
+					},
+				});
+			}
 			const services = parseInstantQuoteResponse(response).sort(
 				(a, b) => a.price - b.price,
 			);

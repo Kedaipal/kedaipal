@@ -25,7 +25,7 @@ each one is:
 | --- | --- | --- |
 | Lalamove | `push` | `WALLET_BALANCE_CHANGED` webhook on every top-up and deduction. No endpoint to ask. Attributed by the key fingerprint, verified by the store's own secret (`http.ts`, `recordLalamoveWallet`). |
 | EasyParcel | `pull` | `GET /wallet` — on connect, on the Integrations Refresh, with every dispatch quote, and from the top-up sheet's "I've topped up — check again". |
-| Delyva | `refusal` | No balance endpoint. The insufficient-credit refusal is the only place it appears: `"…Bal: 0, Price: 5.00"` (`parseDelyvaRefusal`). |
+| Delyva | `pull` | Its **customer profile** carries the wallet: `GET /customer/{customerId}` with the seller's own API key returns `walletBalance` ("500.00", MYR major units; `parseDelyvaWalletBalance`). Read on connect, on Refresh, with every dispatch quote, and from "I've topped up — check again". Found 31 Oct 2026 on Zaki's try-express portal, which reads its header balance from the same endpoint. The insufficient-credit refusal (`"…Bal: 0, Price: 5.00"`, `parseDelyvaRefusal`) still records what it shows. Recorded in the store's currency: the profile names none. |
 
 Lalamove also records a **refusal** (`ERR_INSUFFICIENT_BALANCE` on a live key)
 without a number. The wallet then reads `short`: known to be too low, not by
@@ -64,7 +64,7 @@ how much.
 | `empty` | Zero or below | red, "Empty — the next booking will fail", Top up |
 | `short` | A refusal newer than the last balance, with no number | red "Too low", when it was refused, Top up |
 | `unreported` | Nothing seen yet (Lalamove until money moves; EasyParcel before its first read) | "Not reported yet" — **never RM 0** |
-| `unshared` | A refusal-model courier with nothing seen (Delyva) | "Not shared", Top up (the sheet says Delyva doesn't share it) |
+| `unshared` | A refusal-model courier with nothing seen | "Not shared", Top up. No courier is refusal-only since Delyva became askable (31 Oct); the state stays for one that hides its balance |
 
 Two modifiers sit across every state. A **test account** (Lalamove `pk_test`,
 Delyva demo, EasyParcel sandbox) shows a TEST chip, says "play money", and
@@ -85,7 +85,7 @@ changes it per wallet with the "Alert at RM 30" control on the row
 
 Only a **fresh pulled** balance (EasyParcel, read in the last 5 minutes) that
 can't pay **disables Book**, with the reason as Book's description. A pushed
-(Lalamove) or refusal-seen (Delyva) number may be stale, so a short one only
+(Lalamove) or refusal-seen number may be stale, so a short one only
 **warns**: amber, how short, "*Lalamove has the final say*", Book stays live.
 
 **A test wallet is judged the same way.** A sandbox refuses a booking its play
@@ -154,8 +154,8 @@ menu carries Kedaipal credits only.
 Home, Deliveries and Integrations alike, healthy or not — a compact pill under
 the amount, filled mint when the wallet needs money and outlined when it
 doesn't, with EasyParcel's Refresh as an icon beside it. Both draw 32px and tap
-at 44px (an invisible overlay). Delyva says "Top up" too, not "Check": the
-sheet is where it says the balance can't be read. Test wallets never show it.
+at 44px (an invisible overlay). Delyva says "Top up" like the others, and
+gets the Refresh icon too now its balance can be read. Test wallets never show it.
 
 ### The top-up hand-off (`CourierTopUpSheet`)
 
@@ -163,9 +163,9 @@ No provider has a top-up API, so Top up is always a guided trip out: what the
 wallet holds now, three steps at the courier, the courier's own guide when it
 publishes one, and **Open <Courier>**. Lalamove's steps name the
 Partner Portal account the API keys come from, and say to check its
-Sandbox/Production switch (the Lalamove app is a different wallet). Only EasyParcel gets
-"I've topped up — check again", because it is the one wallet we can ask;
-Lalamove pushes on its own and Delyva never shares.
+Sandbox/Production switch (the Lalamove app is a different wallet). The
+wallets we can ask, EasyParcel and Delyva, get "I've topped up — check
+again"; Lalamove pushes on its own, so it needs none.
 
 Three more pieces from Arif's 24 Oct scope comment (built 31 Oct):
 
@@ -185,10 +185,9 @@ Three more pieces from Arif's 24 Oct scope comment (built 31 Oct):
   (Lalamove's webhook also fires on every deduction, and EasyParcel's re-read
   lands a fresh reading whether or not anything was paid). It's derived, so
   a landed top-up ends it, the open sheet then says "Lalamove reported your
-  top-up", and it lapses after 30 minutes. For EasyParcel, coming back to the tab re-reads the
+  top-up", and it lapses after 30 minutes. For EasyParcel and Delyva, coming back to the tab re-reads the
   balance by itself (once a minute at most, across every open surface) and
-  says whether the top-up has landed yet. Delyva never reports, so it never
-  waits.
+  says whether the top-up has landed yet.
 
 Destinations (`WALLET_PROVIDERS`, checked 29–30 Oct 2026 — no provider
 publishes a deep top-up URL, so these are each provider's web app plus its own
@@ -197,7 +196,7 @@ article):
 | Courier | Opens | Guide |
 | --- | --- | --- |
 | Lalamove | `partnerportal.lalamove.com/wallet` — the **Partner Portal** wallet API bookings spend (checked 31 Oct on Zaki's own portal: its Wallet page lists the API orders' debits and holds the Top Up button). The first build linked `web.lalamove.com` and the Business-app steps, which is a different wallet | none (the blog guides were for the consumer app) |
-| Delyva (MY) | `my.delyva.app` | none published |
+| Delyva (MY) | `my.delyva.app/customer/topup` — the portal's Top-up page (plans P20/P200/P2000); signed out it logs in and lands there (checked 31 Oct) | none published |
 | EasyParcel | `app.easyparcel.com/sg/en/` (SG) · `/my/en/` (MY) — the bare root redirects every account to the Malaysian site | SG help-centre article; auto top-up `…/<country>/en/account/auto-topup/` (checked 31 Oct) |
 
 ## Deliberately not built
@@ -206,8 +205,10 @@ article):
   mapping verified on a real account with Grab Express and pandago switched
   on. Unverified, the ticket's own kill clause applies: one list, cheapest
   first.
-- **A Delyva balance endpoint.** Asked of Delyva as the ticket's T0; until
-  they answer, Delyva ships the honest "Not shared" row.
+- ~~A Delyva balance endpoint~~ — found ourselves on 31 Oct (the customer
+  profile, above), so the T0 question to Delyva is answered. Still worth
+  confirming on a LIVE key that `walletBalance` is present (checked on the
+  demo/try-express tenants only).
 - **A fleet-wide pull cron.** No polling; EasyParcel is read when the seller
   is looking or booking.
 

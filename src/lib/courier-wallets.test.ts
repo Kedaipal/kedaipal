@@ -227,7 +227,7 @@ describe("helpers", () => {
 			/helpcentre-sg\.easyparcel\.com/,
 		);
 		expect(walletTopUpLinks({ provider: "delyva" }, "MY").appUrl).toBe(
-			"https://my.delyva.app",
+			"https://my.delyva.app/customer/topup",
 		);
 		// The bare app root lands on the Malaysian site for every account.
 		expect(walletTopUpLinks({ provider: "easyparcel" }, "SG").appUrl).toBe(

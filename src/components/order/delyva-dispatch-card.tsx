@@ -31,6 +31,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { walletVerdict } from "../../../convex/lib/courierWallet";
 import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
 import type { DelyvaItemType, DelyvaService } from "../../../convex/lib/delyva";
 import { courierMargin } from "../../lib/courier-margin";
@@ -71,6 +72,10 @@ export function DelyvaDispatchCard({
 }) {
 	const dispatch = useQuery(
 		convexQuery(api.delyva.getDispatchState, { shortId: order.shortId }),
+	).data;
+	// The same wallet read the line beside Book shows (the cache shares it).
+	const wallets = useQuery(
+		convexQuery(api.courierWallets.list, { retailerId: order.retailerId }),
 	).data;
 
 	const prepareBooking = useAction(api.delyva.prepareBooking);
@@ -238,6 +243,16 @@ export function DelyvaDispatchCard({
 	}
 
 	const selected = services?.find((s) => s.code === selectedCode) ?? null;
+	// Since 31 Oct the quote reads Delyva's balance too, so a wallet that
+	// can't pay is known before the tap: Book disables with the wallet line as
+	// its reason, exactly like EasyParcel. A stale or refusal-seen number only
+	// warns (walletVerdict) — Delyva stays the final judge.
+	const walletView = wallets?.find((w) => w.provider === "delyva");
+	const selectedUnaffordable =
+		selected !== null &&
+		walletView !== undefined &&
+		walletVerdict(walletView, selected.price, Date.now(), selected.currency) ===
+			"block";
 
 	return (
 		<section
@@ -712,9 +727,10 @@ export function DelyvaDispatchCard({
 									</span>
 								</p>
 							) : null}
-							{/* Delyva only reveals its balance in a refusal, so a short
-							    last-seen balance warns and Book stays enabled. */}
+							{/* Read with the quote: short on a fresh read disables Book
+							    below; a last-seen (refusal) balance only warns. */}
 							<DispatchWalletLine
+								id={`delyva-wallet-${order.shortId}`}
 								provider="delyva"
 								priceMinor={selected ? selected.price : null}
 								priceCurrency={selected?.currency ?? order.currency}
@@ -725,7 +741,12 @@ export function DelyvaDispatchCard({
 								type="button"
 								className="h-11 w-full"
 								isLoading={booking}
-								disabled={booking || !selected}
+								disabled={booking || !selected || selectedUnaffordable}
+								aria-describedby={
+									selectedUnaffordable
+										? `delyva-wallet-${order.shortId}`
+										: undefined
+								}
 								onClick={() => void handleBook()}
 							>
 								{booking ? (

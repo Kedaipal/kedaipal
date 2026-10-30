@@ -19,7 +19,6 @@
 
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { useAction } from "convex/react";
 import { CheckCircle2, Clock, ExternalLink, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -27,7 +26,9 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { Country } from "../../../convex/lib/country";
 import type { CourierProviderId } from "../../../convex/lib/courierProviders";
+import { WALLET_PROVIDERS } from "../../../convex/lib/courierWallet";
 import { useActAsRetailerId } from "../../hooks/useActAs";
+import { useWalletRefresh } from "../../hooks/useWalletRefresh";
 import {
 	type CourierWalletView,
 	presentWallet,
@@ -73,8 +74,8 @@ export function topUpSteps(provider: CourierProviderId): string[] {
 		case "delyva":
 			return [
 				"Open Delyva and sign in to the account connected to this store.",
-				"Top up your Delyva wallet there.",
-				"Your next booking uses the new balance. Delyva doesn't share it with Kedaipal, so Kedaipal only learns it when Delyva turns a booking down.",
+				"Under Finance, open Top-up, choose a plan and pay.",
+				"Come back here and tap “I've topped up — check again”.",
 			];
 	}
 }
@@ -100,6 +101,8 @@ export function CourierTopUpSheet({
 	const steps = topUpSteps(view.provider);
 	const trip = useTopUpTrip(view.provider);
 	const waiting = awaitingTopUp(trip, view, now);
+	// The wallets we can ASK — EasyParcel and Delyva — get the re-check.
+	const pullable = WALLET_PROVIDERS[view.provider].model === "pull";
 	const landed = topUpLanded(trip, view, now);
 	const suggestion = useQuery(
 		convexQuery(
@@ -112,7 +115,7 @@ export function CourierTopUpSheet({
 
 	return (
 		<>
-			{waiting && view.provider === "easyparcel" && view.isTest !== true ? (
+			{waiting && pullable && view.isTest !== true ? (
 				<RecheckOnReturn
 					view={view}
 					balanceBefore={trip?.balanceBefore ?? null}
@@ -243,11 +246,8 @@ export function CourierTopUpSheet({
 					) : null}
 
 					<DialogFooter>
-						{view.provider === "easyparcel" ? (
-							<RecheckButton
-								currency={view.currency}
-								onLanded={() => onOpenChange(false)}
-							/>
+						{pullable ? (
+							<RecheckButton view={view} onLanded={() => onOpenChange(false)} />
 						) : (
 							<Button
 								type="button"
@@ -280,16 +280,17 @@ export function CourierTopUpSheet({
 	);
 }
 
-/** EasyParcel is the wallet we can ASK, so "I've topped up" means something. */
+/** A wallet we can ASK (EasyParcel, Delyva), so "I've topped up" means
+ * something. */
 function RecheckButton({
-	currency,
+	view,
 	onLanded,
 }: {
-	currency: string;
+	view: CourierWalletView;
 	onLanded: () => void;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
-	const refresh = useAction(api.easyparcel.refreshBalance);
+	const refresh = useWalletRefresh(view.provider);
 	const [busy, setBusy] = useState(false);
 	return (
 		<Button
@@ -306,7 +307,7 @@ function RecheckButton({
 						return;
 					}
 					toast.success(
-						`EasyParcel wallet: ${formatPrice(result.balanceMinor, result.currency || currency)}`,
+						`${walletLabel(view)}: ${formatPrice(result.balanceMinor, result.currency || view.currency)}`,
 					);
 					onLanded();
 				} catch (err) {
@@ -322,15 +323,15 @@ function RecheckButton({
 	);
 }
 
-/** EasyParcel re-reads, at most once a minute across every open surface. */
+/** A pull wallet re-reads at most once a minute across every open surface. */
 const RECHECK_GAP_MS = 60_000;
 const lastRecheck = new Map<string, number>();
 
 /**
  * Coming back to this tab after leaving for the courier's site re-reads the
- * balance by itself — for EasyParcel, the one wallet we can ask (Arif, 24
- * Oct). Mounted only while a top-up is pending, so an idle sheet does
- * nothing; Lalamove pushes, so it just waits, and Delyva never tells. The
+ * balance by itself — for the wallets we can ask, EasyParcel and Delyva
+ * (Arif, 24 Oct). Mounted only while a top-up is pending, so an idle sheet
+ * does nothing; Lalamove pushes, so it just waits. The
  * newer observation ends "waiting" on its own (`awaitingTopUp`), whether or
  * not the money has landed yet; the toast says which.
  */
@@ -343,7 +344,7 @@ function RecheckOnReturn({
 	balanceBefore: number | null;
 }) {
 	const actAsRetailerId = useActAsRetailerId();
-	const refresh = useAction(api.easyparcel.refreshBalance);
+	const refresh = useWalletRefresh(view.provider);
 	const before = balanceBefore;
 	useEffect(() => {
 		const onVisible = async () => {
@@ -359,9 +360,9 @@ function RecheckOnReturn({
 					result.currency || view.currency,
 				);
 				if (before !== null && result.balanceMinor > before)
-					toast.success(`EasyParcel wallet topped up: ${amount}`);
+					toast.success(`${walletLabel(view)} topped up: ${amount}`);
 				else
-					toast(`EasyParcel wallet: ${amount} — no top-up yet`, {
+					toast(`${walletLabel(view)}: ${amount} — no top-up yet`, {
 						description: "Tap “I've topped up — check again” once it's paid.",
 					});
 			} catch {
@@ -370,6 +371,6 @@ function RecheckOnReturn({
 		};
 		document.addEventListener("visibilitychange", onVisible);
 		return () => document.removeEventListener("visibilitychange", onVisible);
-	}, [refresh, actAsRetailerId, view.provider, view.currency, before]);
+	}, [refresh, actAsRetailerId, view, before]);
 	return null;
 }

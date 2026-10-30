@@ -12,7 +12,7 @@
  *    Delyva never shares, so a refresh button there would do nothing.
  */
 
-import { useAction, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { ArrowUpRight, Clock, Pencil, RefreshCw } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
@@ -29,6 +29,7 @@ import {
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { usePermission } from "../../hooks/usePermission";
 import { useAreaLock } from "../../hooks/useStoreLock";
+import { useWalletRefresh } from "../../hooks/useWalletRefresh";
 import {
 	type CourierWalletView,
 	LALAMOVE_BUSINESS_NOTE,
@@ -200,7 +201,7 @@ export function CourierWalletRow({
 					{showTopUp || (model === "pull" && integrations.canRead) ? (
 						<div className="flex items-center gap-1">
 							{model === "pull" && integrations.canRead ? (
-								<RefreshWalletButton name={name} />
+								<RefreshWalletButton provider={view.provider} name={name} />
 							) : null}
 							{showTopUp ? (
 								<button
@@ -236,11 +237,18 @@ export function CourierWalletRow({
 	);
 }
 
-/** EasyParcel answers when asked — the one wallet a refresh can move. An
- * icon beside Top up, named for screen readers; spins while asking. */
-function RefreshWalletButton({ name }: { name: string }) {
+/** The wallets that answer when asked (EasyParcel, Delyva) — the ones a
+ * refresh can move. An icon beside Top up, named for screen readers; spins
+ * while asking. */
+function RefreshWalletButton({
+	provider,
+	name,
+}: {
+	provider: CourierProviderId;
+	name: string;
+}) {
 	const actAsRetailerId = useActAsRetailerId();
-	const refresh = useAction(api.easyparcel.refreshBalance);
+	const refresh = useWalletRefresh(provider);
 	const [busy, setBusy] = useState(false);
 	return (
 		<button
