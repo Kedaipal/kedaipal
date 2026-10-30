@@ -175,6 +175,7 @@ describe("storefront checkout", () => {
 			code: voucher.code,
 			kind: "fixed",
 			value: 1000,
+			usage: "single",
 		});
 		const row = await readVoucher(t, voucher.id);
 		expect(row?.status).toBe("redeemed");

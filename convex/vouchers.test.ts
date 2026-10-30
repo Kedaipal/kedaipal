@@ -835,6 +835,7 @@ describe("claim link", () => {
 			code: voucher.code,
 			kind: "fixed",
 			value: 500,
+			usage: "single",
 		});
 		// An abandoned link must not burn a voucher.
 		expect((await t.run((ctx) => ctx.db.get(voucher.id)))?.status).toBe(

@@ -1743,6 +1743,8 @@ export default defineSchema({
 				code: v.string(),
 				kind: v.union(v.literal("fixed"), v.literal("percent")),
 				value: v.number(),
+				// Frozen with the code (`z8r3fducfm`) — see `VoucherSnapshot`.
+				usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
 			}),
 		),
 		voucherDiscount: v.optional(v.number()),
@@ -3130,6 +3132,8 @@ export default defineSchema({
 				code: v.string(),
 				kind: v.union(v.literal("fixed"), v.literal("percent")),
 				value: v.number(),
+				// Frozen with the code (`z8r3fducfm`) — see `VoucherSnapshot`.
+				usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
 			}),
 		),
 		// Buyer capability for /claim/<token> — same generator + posture as

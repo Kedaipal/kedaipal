@@ -246,9 +246,7 @@ function sharedOutcomeLine(voucher: VoucherRowView): string {
 	switch (voucher.status) {
 		case "redeemed":
 			return `All ${voucher.maxRedemptions ?? voucher.redeemedCount ?? 0} uses taken${
-				voucher.endsAt
-					? ` · was running until ${formatVoucherEnd(voucher.endsAt)}`
-					: ""
+				voucher.endsAt ? ` · had until ${formatVoucherEnd(voucher.endsAt)}` : ""
 			}`;
 		case "expired":
 			return voucher.endsAt

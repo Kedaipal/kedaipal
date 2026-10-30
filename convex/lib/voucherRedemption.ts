@@ -298,7 +298,12 @@ export async function claimVoucherState(
 		// are the same thing today — a voucher's value is immutable once issued —
 		// but reading the terms off the row keeps this honest if editing a
 		// voucher's value is ever added.
-		snapshot: { code: snapshot.code, kind: voucher.kind, value: voucher.value },
+		snapshot: {
+			code: snapshot.code,
+			kind: voucher.kind,
+			value: voucher.value,
+			usage: voucherUsageOf(voucher),
+		},
 		terms: { kind: voucher.kind, value: voucher.value },
 	};
 }

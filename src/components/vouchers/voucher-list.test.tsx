@@ -189,7 +189,11 @@ describe("a shared code", () => {
 
 	it("a full code says the CAP stopped it, not the clock", () => {
 		renderList([{ ...shared, status: "redeemed", redeemedCount: 50 }]);
-		expect(screen.getByText(/All 50 uses taken/)).toBeTruthy();
+		// "Had until", not "was running until": the cap filled while the end
+		// was still ahead, and the past tense read as a lie.
+		expect(
+			screen.getByText(/All 50 uses taken · had until 31 Oct 2026, 6:00 PM/),
+		).toBeTruthy();
 		expect(screen.getByText("Used")).toBeTruthy();
 	});
 

@@ -275,7 +275,15 @@ export type VoucherTerms = {
  * pickup note does: it is what the buyer was told, and the receipt, the
  * tracking page and the seller's inbox all want to print it without a join.
  */
-export type VoucherSnapshot = VoucherTerms & { code: string };
+export type VoucherSnapshot = VoucherTerms & {
+	code: string;
+	/** Frozen with the code (`z8r3fducfm`): the order page has to say what a
+	 * cancel does to the voucher — "back to this buyer" for a single-use one,
+	 * "one use back for anyone" for a shared word — and the row the id points
+	 * at is not what a money surface should have to join for one sentence.
+	 * Absent on orders placed before shared codes existed = `single`. */
+	usage?: VoucherUsage;
+};
 
 /** Ceiling on a fixed-amount voucher (minor units) — RM5,000 / S$5,000. Not a
  * business rule, a fat-finger guard: an extra zero on a giveaway code is the

@@ -365,7 +365,9 @@ describe("the storefront spends a shared code by counting", () => {
 		const order = await t.run((ctx) => ctx.db.get(firstId));
 		expect(order).toMatchObject({
 			voucherId: code.id,
-			voucherSnapshot: { code: "SALE345", kind: "fixed", value: 1000 },
+			// `usage` rides in the snapshot so the order page can say what a
+			// cancel does without joining the voucher row.
+			voucherSnapshot: { code: "SALE345", kind: "fixed", value: 1000, usage: "shared" },
 			voucherDiscount: 1000,
 			total: 4000,
 		});
@@ -593,6 +595,15 @@ describe("the counter and the claim link spend the same row", () => {
 		});
 		// An offer, not a spend.
 		expect((await readVoucher(t, code.id)).redeemedCount).toBe(0);
+		// The seller's frozen "waiting" view carries the voucher line the
+		// buyer's ticket draws — items 5000, SALE345 −1000, locked total 4000.
+		const session = await asOwner.query(api.counterCheckout.getCheckoutSession, {
+			sessionId,
+		});
+		expect(session?.liveClaim).toMatchObject({
+			total: 4000,
+			voucher: { code: "SALE345", discount: 1000 },
+		});
 		const page = await t.query(api.orderClaims.getByToken, { token });
 		expect(page?.open?.voucher).toMatchObject({
 			kind: "applied",
