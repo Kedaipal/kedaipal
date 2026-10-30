@@ -7,6 +7,7 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import {
 	formatSharedUses,
 	formatVoucherEnd,
+	SHARED_USES_LISTED,
 } from "../../../convex/lib/vouchers";
 import { formatPrice, formatRelativeTime } from "../../lib/format";
 import {
@@ -37,7 +38,9 @@ export interface UsesDialogVoucher {
  * thirty queries for a question the seller asks of one code at a time. Gated
  * orders are already absent from the server's answer (`forSeller`), so a
  * count that exceeds the rows shown is said plainly rather than left as a
- * puzzle.
+ * puzzle. A very large code lists only its latest `SHARED_USES_LISTED` uses,
+ * and says so — the count-minus-rows sentence would otherwise blame credits
+ * for thousands of orders that are simply further down.
  */
 export function VoucherUsesDialog({
 	voucher,
@@ -46,12 +49,13 @@ export function VoucherUsesDialog({
 	voucher: UsesDialogVoucher | null;
 	onClose: () => void;
 }) {
-	const rows = useQuery(
+	const uses = useQuery(
 		convexQuery(
 			api.vouchers.listRedemptions,
 			voucher ? { voucherId: voucher.id } : "skip",
 		),
 	).data;
+	const rows = uses?.orders;
 
 	return (
 		<Dialog open={voucher !== null} onOpenChange={(o) => !o && onClose()}>
@@ -117,7 +121,11 @@ export function VoucherUsesDialog({
 										</span>
 									</li>
 								))}
-								{rows.length < (voucher.redeemedCount ?? 0) ? (
+								{uses?.limited ? (
+									<li className="pt-2.5 text-xs text-muted-foreground">
+										Showing the latest {SHARED_USES_LISTED} orders.
+									</li>
+								) : rows.length < (voucher.redeemedCount ?? 0) ? (
 									<li className="pt-2.5 text-xs text-muted-foreground">
 										{(voucher.redeemedCount ?? 0) - rows.length} more{" "}
 										{(voucher.redeemedCount ?? 0) - rows.length === 1

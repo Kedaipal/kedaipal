@@ -166,6 +166,9 @@ export function IssueVoucherDialog({
 		availability !== undefined &&
 		availability.code === sharedCode.trim().toUpperCase();
 	const taken = availabilityCurrent && availability.available === false;
+	// The word the ANSWER is about — equal to the box whenever
+	// `availabilityCurrent`, so the line can never name a word mid-debounce.
+	const answeredCode = availabilityCurrent ? availability.code : null;
 	// Suggestions follow the value ("SAVE20" for 20%), reshuffled on demand.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the seed exists only to force a reshuffle
 	const suggestions = useMemo(
@@ -202,7 +205,7 @@ export function IssueVoucherDialog({
 				? !codeTouched
 					? "Name the code, or pick a suggestion"
 					: (codeError ??
-						(taken ? `${debouncedCode} is already running` : null) ??
+						(taken ? `${answeredCode} is already running` : null) ??
 						limitsError)
 				: (countError ?? expiryError);
 
@@ -430,20 +433,24 @@ export function IssueVoucherDialog({
 										role="alert"
 										className="text-xs font-medium text-destructive"
 									>
-										{debouncedCode} is already running — void it or let it end
+										{answeredCode} is already running — void it or let it end
 										before reusing the word.
 									</p>
 								) : availabilityCurrent && availability.available ? (
 									<p className="flex items-center gap-1 text-xs font-medium text-accent-emphasis">
 										<Check className="size-3.5" aria-hidden />
-										{debouncedCode} is free
+										{answeredCode} is free
 									</p>
-								) : (
-									<FieldDescription>
-										{SHARED_CODE_MIN}–{SHARED_CODE_MAX} letters and numbers.
-										Buyers type it at checkout — capitals don't matter.
-									</FieldDescription>
-								)}
+								) : null}
+								{/* Always on, under whatever the word's status is: a seller
+								    picking VIP50 for "my regulars" needs to know a shared
+								    word is a public word — anyone who has it, or guesses
+								    it, can use it. The bounds are what limit it. */}
+								<FieldDescription>
+									{SHARED_CODE_MIN}–{SHARED_CODE_MAX} letters and numbers,
+									capitals don't matter. It isn't secret: anyone who has the
+									word, or guesses it, can use it.
+								</FieldDescription>
 							</Field>
 
 							{/* The bounds. Two switches, not a pick-one: a cap, an end

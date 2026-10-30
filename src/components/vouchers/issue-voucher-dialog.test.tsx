@@ -57,6 +57,24 @@ const createButton = () =>
  * names its reason, and that the payload the server gets is the shared one.
  */
 describe("picking Everyone", () => {
+	it("says a shared word is not secret, and keeps saying it once the word is free", async () => {
+		state.availability = { available: true, code: "SALE20" };
+		renderDialog();
+		fireEvent.click(screen.getByRole("button", { name: /everyone/i }));
+		expect(screen.getByText(/It isn't secret/)).toBeTruthy();
+		fireEvent.change(screen.getByLabelText("The code"), {
+			target: { value: "SALE20" },
+		});
+		await waitFor(() =>
+			expect(
+				screen.getByText(
+					(_, el) => el?.tagName === "P" && el.textContent === "SALE20 is free",
+				),
+			).toBeTruthy(),
+		);
+		expect(screen.getByText(/It isn't secret/)).toBeTruthy();
+	});
+
 	it("swaps the batch count and day-expiry for a word and its bounds", () => {
 		renderDialog();
 		expect(screen.getByLabelText("How many")).toBeTruthy();

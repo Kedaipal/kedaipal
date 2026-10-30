@@ -135,6 +135,14 @@ export const SHARED_CODE_MAX = 16;
 export const SHARED_USES_MAX = 10_000;
 
 /**
+ * How many uses the seller's "Orders that used X" dialog lists, newest first.
+ * The list reads one order per use, so a code near `SHARED_USES_MAX` would
+ * blow Convex's per-query read limit; past this the dialog says it is showing
+ * the latest ones instead of erroring.
+ */
+export const SHARED_USES_LISTED = 200;
+
+/**
  * Fold whatever the buyer typed onto a shared code's canonical spelling, or
  * `null` if it can't be one: upper-cased, with spaces and punctuation dropped
  * ("sale 345" → `SALE345`). Letters and digits are the whole alphabet, so —

@@ -3251,8 +3251,9 @@ export default defineSchema({
 		),
 		// Set together at redemption. `redeemedOrderId` is what lets the list
 		// link a spent voucher to its order — and what a cancel clears when the
-		// voucher goes back to `active`. Single-use only: a SHARED code's orders
-		// live in `voucherRedemptions`.
+		// voucher goes back to `active`. Both are single-use only and never
+		// written on a SHARED code: its orders and each use's time live in
+		// `voucherRedemptions`.
 		redeemedOrderId: v.optional(v.id("orders")),
 		redeemedAt: v.optional(v.number()),
 		// --- Shared codes (`z8r3fducfm`) -------------------------------------

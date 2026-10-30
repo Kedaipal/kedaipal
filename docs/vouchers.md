@@ -111,6 +111,25 @@ time, or both — whichever comes first ends it**.
   that already used it keep their discount (the snapshot is frozen); the
   count still drops when one of those orders is later cancelled, so "12
   used" keeps meaning twelve even on a voided row.
+- **A shared word is public, and the form says so.** It is meant to be
+  guessable — that is what makes it easy to type off a poster — so it is no
+  way to keep a deal private: the per-store `checkCode` budget slows a
+  dictionary of common words down but cannot stop one. What limits a
+  shared code is its BOUNDS, not its secrecy. The code field's helper says
+  "It isn't secret: anyone who has the word, or guesses it, can use it", and
+  stays on screen under the "is free" line rather than being replaced by it.
+  A deal for named buyers is a batch of single-use vouchers.
+- **"Who used it" lists the latest `SHARED_USES_LISTED` (200) uses.** The
+  list reads one order per use, so a code near the 10,000-use ceiling would
+  exceed Convex's per-query read limit and the dialog would error. The query
+  takes one row past the limit so `limited` is exact, and the dialog then
+  says "Showing the latest 200 orders" instead of the "N more are waiting on
+  credits" line — that sentence is count minus rows, which only means
+  credits when nothing was cut off.
+- **`redeemedAt` is single-use only.** A shared use stamps nothing on the
+  code row: each use's time is its `voucherRedemptions.createdAt`, and a
+  "last used" stamp would point at a cancelled order the moment that use was
+  handed back.
 
 ### What the seller sees
 

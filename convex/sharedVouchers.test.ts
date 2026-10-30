@@ -6,6 +6,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { DAY_MS, todayMytMidnight } from "./lib/fulfilmentDate";
 import { releaseOrderVoucher } from "./lib/voucherRedemption";
+import { SHARED_USES_LISTED } from "./lib/vouchers";
 import schema from "./schema";
 
 /**
@@ -665,17 +666,58 @@ describe("who used it", () => {
 		const { retailer, productId, code } = await scene(t);
 		const a = await placeOrder(t, retailer._id, productId, code.code);
 		const b = await placeOrder(t, retailer._id, productId, code.code);
-		const rows = await t
+		const { orders: rows, limited } = await t
 			.withIdentity({ subject: OWNER })
 			.query(api.vouchers.listRedemptions, { voucherId: code.id });
 		expect(rows.map((r) => r.shortId)).toEqual([b.shortId, a.shortId]);
 		expect(rows[0].total).toBe(4000);
 		expect(rows[0].redeemedAt).toBeTypeOf("number");
+		expect(limited).toBe(false);
 		await expect(
 			t
 				.withIdentity({ subject: OTHER })
 				.query(api.vouchers.listRedemptions, { voucherId: code.id }),
 		).rejects.toThrow();
+	});
+
+	test("listRedemptions stops at SHARED_USES_LISTED and says so, exactly at the edge", async () => {
+		const t = setup();
+		const { retailer, productId, code } = await scene(t);
+		const order = await placeOrder(t, retailer._id, productId, code.code);
+		const orderId = await orderIdOf(t, order.shortId);
+		// Pad the truth table to exactly the limit — the real door is exercised
+		// above; this pins the read bound, which only the row count drives.
+		const pad = async (n: number) =>
+			t.run(async (ctx) => {
+				for (let i = 0; i < n; i++)
+					await ctx.db.insert("voucherRedemptions", {
+						voucherId: code.id,
+						retailerId: retailer._id,
+						orderId,
+						createdAt: Date.now(),
+					});
+			});
+		const read = () =>
+			t
+				.withIdentity({ subject: OWNER })
+				.query(api.vouchers.listRedemptions, { voucherId: code.id });
+		await pad(SHARED_USES_LISTED - 1);
+		const atLimit = await read();
+		expect(atLimit.orders).toHaveLength(SHARED_USES_LISTED);
+		expect(atLimit.limited).toBe(false);
+		await pad(1);
+		const past = await read();
+		expect(past.orders).toHaveLength(SHARED_USES_LISTED);
+		expect(past.limited).toBe(true);
+	});
+
+	test("a shared use writes no redeemedAt on the code — each use's time is its own row", async () => {
+		const t = setup();
+		const { retailer, productId, code } = await scene(t);
+		await placeOrder(t, retailer._id, productId, code.code);
+		const row = await t.run((ctx) => ctx.db.get(code.id));
+		expect(row?.redeemedCount).toBe(1);
+		expect(row?.redeemedAt).toBeUndefined();
 	});
 
 	test("the list carries the tally and never a redeemedOrder for a shared row", async () => {

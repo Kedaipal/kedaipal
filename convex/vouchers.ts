@@ -24,6 +24,7 @@ import {
 	isVoucherExpired,
 	normalizeSharedCode,
 	resolveVoucherStatus,
+	SHARED_USES_LISTED,
 	sharedCodeError,
 	sharedLimitsError,
 	type VoucherKind,
@@ -527,9 +528,15 @@ export const listRedemptions = query({
 	handler: async (
 		ctx,
 		{ voucherId },
-	): Promise<Array<{ shortId: string; total: number; redeemedAt: number }>> => {
+	): Promise<{
+		orders: Array<{ shortId: string; total: number; redeemedAt: number }>;
+		/** More uses exist than were listed — the dialog says it is showing the
+		 * latest `SHARED_USES_LISTED`, so the "waiting on credits" arithmetic
+		 * (count minus rows) is never applied to a cut-off list. */
+		limited: boolean;
+	}> => {
 		const voucher = await ctx.db.get(voucherId);
-		if (!voucher) return [];
+		if (!voucher) return { orders: [], limited: false };
 		await requireRetailerAccess(ctx, voucher.retailerId, {
 			area: "vouchers",
 			level: "read",
@@ -538,10 +545,13 @@ export const listRedemptions = query({
 			.query("voucherRedemptions")
 			.withIndex("by_voucher", (q) => q.eq("voucherId", voucherId))
 			.order("desc")
-			.collect();
+			// One past the limit, so `limited` is exact rather than a guess from
+			// the count (which a hand-back can lower after the read).
+			.take(SHARED_USES_LISTED + 1);
+		const limited = rows.length > SHARED_USES_LISTED;
 		const gate = await creditGateFor(ctx, voucher.retailerId, Date.now());
 		const out: Array<{ shortId: string; total: number; redeemedAt: number }> = [];
-		for (const row of rows) {
+		for (const row of rows.slice(0, SHARED_USES_LISTED)) {
 			const raw = await ctx.db.get(row.orderId);
 			if (!raw) continue;
 			const order = forSeller(gate, raw);
@@ -552,7 +562,7 @@ export const listRedemptions = query({
 				redeemedAt: row.createdAt,
 			});
 		}
-		return out;
+		return { orders: out, limited };
 	},
 });
 

@@ -236,8 +236,10 @@ export async function redeemVoucher(
 		// conflict on this patch, and the retry reads a full cap and is refused
 		// `exhausted` by `refusalForVoucher` above.
 		await ctx.db.patch(args.voucherId, {
+			// No `redeemedAt`: each use's time is its `voucherRedemptions` row,
+			// and a "last used" stamp would go stale the moment that use was
+			// handed back.
 			redeemedCount: (fresh.redeemedCount ?? 0) + 1,
-			redeemedAt: args.now,
 			updatedAt: args.now,
 		});
 		await ctx.db.insert("voucherRedemptions", {
