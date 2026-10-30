@@ -6,7 +6,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import {
 	formatSharedUses,
-	formatVoucherEnd,
+	formatVoucherMoment,
 	SHARED_USES_LISTED,
 } from "../../../convex/lib/vouchers";
 import { formatPrice, formatRelativeTime } from "../../lib/format";
@@ -71,7 +71,7 @@ export function VoucherUsesDialog({
 							<DialogDescription>
 								{formatSharedUses(voucher)}
 								{voucher.endsAt
-									? ` · ends ${formatVoucherEnd(voucher.endsAt)}`
+									? ` · ends ${formatVoucherMoment(voucher.endsAt)}`
 									: ""}
 							</DialogDescription>
 						</DialogHeader>

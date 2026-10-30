@@ -209,7 +209,27 @@ export type SharedLimits = {
 	 * code is posted for a happy hour or a weekend sale, so it ends at a
 	 * TIME, and "works all through the day" would overshoot by hours. */
 	endsAt?: number;
+	/**
+	 * Exact epoch ms the code STARTS working (`z8r3fdz0pw`). Absent = from the
+	 * moment it is created, which is every code minted before this existed.
+	 * Lets a seller set up Saturday's poster code on Thursday: until then the
+	 * row reads `scheduled` and a buyer typing it is told when it opens.
+	 */
+	startsAt?: number;
+	/**
+	 * How many orders ONE buyer (one WhatsApp number) may place with it
+	 * (`z8r3fdz0pw`). Absent = no per-buyer limit, only the code's own bounds.
+	 * The abuse case it closes: without it a public code is reusable by the
+	 * same buyer until the cap or the end, so "first 50 buyers" means "the
+	 * first buyer, 50 times". Counted off `voucherRedemptions.waPhone`, so a
+	 * cancelled order gives the buyer's use back exactly as it gives the code's.
+	 */
+	perBuyerLimit?: number;
 };
+
+/** Fat-finger ceiling on the per-buyer limit — a real "3 per customer" is
+ * single digits, and a limit at or above the cap is the same as none. */
+export const PER_BUYER_LIMIT_MAX = 99;
 
 /**
  * Is this a bound a seller is allowed to set? A shared code is public by
@@ -234,8 +254,129 @@ export function sharedLimitsError(limits: SharedLimits, now: number): string | n
 		if (!Number.isFinite(limits.endsAt)) return "Pick when it ends";
 		if (limits.endsAt <= now) return "That end time has already passed";
 	}
+	return (
+		sharedStartError(limits.startsAt, limits.endsAt, now) ??
+		perBuyerLimitError(limits.perBuyerLimit, limits.maxRedemptions)
+	);
+}
+
+/** The start half of `sharedLimitsError`, on its own so the issue form can
+ * put the sentence under the start picker (`z8r3fdz0pw`). */
+export function sharedStartError(
+	startsAt: number | undefined,
+	endsAt: number | undefined,
+	now: number,
+): string | null {
+	if (startsAt === undefined) return null;
+	if (!Number.isFinite(startsAt)) return "Pick when it starts";
+	if (startsAt <= now)
+		return "That start time has already passed — pick Right away to begin now";
+	if (endsAt !== undefined && Number.isFinite(endsAt) && startsAt >= endsAt)
+		return "It has to start before it ends";
 	return null;
 }
+
+/** The per-buyer half of `sharedLimitsError`, on its own for the same
+ * reason (`z8r3fdz0pw`). */
+export function perBuyerLimitError(
+	perBuyerLimit: number | undefined,
+	maxRedemptions: number | undefined,
+): string | null {
+	if (perBuyerLimit === undefined) return null;
+	if (!Number.isInteger(perBuyerLimit) || perBuyerLimit < 1)
+		return "Enter a whole number of orders per buyer";
+	if (perBuyerLimit > PER_BUYER_LIMIT_MAX)
+		return `At most ${PER_BUYER_LIMIT_MAX} per buyer — check the number`;
+	if (maxRedemptions !== undefined && perBuyerLimit > maxRedemptions)
+		return "The per-buyer limit can't be more than the total";
+	return null;
+}
+
+/**
+ * Can a live shared code be changed to these bounds? (`z8r3fdz0pw`)
+ *
+ * Only ever MORE generous: the end moves later, the cap goes up. A code is a
+ * public promise already on a poster — "until Sunday", "first 50" — and
+ * every buyer who used it was told its value, so the value, the per-buyer
+ * limit, the minimum spend and the start are not editable at all, and the two
+ * bounds only widen. Dropping a bound is the widest widening and is allowed
+ * as long as the other remains, because a code with neither is the
+ * open-ended liability `sharedLimitsError` refuses at create.
+ *
+ * `null` means "allowed"; a string is the sentence the extend dialog shows
+ * beside its disabled button and the mutation throws.
+ */
+export function sharedExtendError(
+	current: { maxRedemptions?: number; endsAt?: number; redeemedCount?: number },
+	next: { maxRedemptions?: number; endsAt?: number },
+	now: number,
+): string | null {
+	if (next.maxRedemptions === undefined && next.endsAt === undefined)
+		return "Keep a total, an end time, or both — a shared code can't run forever";
+	if (
+		next.maxRedemptions === current.maxRedemptions &&
+		next.endsAt === current.endsAt
+	)
+		return "Nothing has changed yet";
+	if (next.maxRedemptions !== undefined) {
+		if (current.maxRedemptions === undefined)
+			return "It has no total now — adding one would cut it short";
+		if (!Number.isInteger(next.maxRedemptions))
+			return "Enter a whole number of uses";
+		if (next.maxRedemptions < current.maxRedemptions)
+			return `You can only raise the total — it's ${current.maxRedemptions} now`;
+		if (next.maxRedemptions > SHARED_USES_MAX)
+			return `At most ${SHARED_USES_MAX.toLocaleString("en-MY")} uses — check the number`;
+	}
+	if (next.endsAt !== undefined) {
+		if (current.endsAt === undefined)
+			return "It has no end time now — adding one would cut it short";
+		if (!Number.isFinite(next.endsAt)) return "Pick when it ends";
+		if (next.endsAt < current.endsAt)
+			return "You can only move the end later";
+		if (next.endsAt <= now) return "That end time has already passed";
+	}
+	return null;
+}
+
+/** Ceiling on a minimum spend (minor units) — RM10,000 / S$10,000. A
+ * fat-finger guard like `VOUCHER_FIXED_MAX`: an extra zero turns "spend
+ * RM50" into a code nobody can ever use. */
+export const MIN_SPEND_MAX = 1_000_000;
+
+/**
+ * Is this a minimum spend a seller may set? (`z8r3fdz0pw`) Any voucher can
+ * carry one — single-use or shared — because it is judged on the same resolve
+ * path every door already shares. Absent = no minimum.
+ */
+export function minSpendError(minSpend: number | undefined): string | null {
+	if (minSpend === undefined) return null;
+	if (!Number.isInteger(minSpend) || minSpend <= 0)
+		return "Enter the least a buyer has to spend";
+	if (minSpend > MIN_SPEND_MAX)
+		return `That's over the ${MIN_SPEND_MAX / 100} limit — check the amount`;
+	return null;
+}
+
+/**
+ * The amount (minor units) a basket still needs to reach a voucher's minimum
+ * spend, or 0 when it qualifies. Judged against the GROSS item subtotal, like
+ * every other threshold in the app, and only ONCE — at redemption. A later
+ * recompute (a custom line declined, an item dropped) never re-judges it, so
+ * a buyer who was given the discount is never silently stripped of it
+ * (`z8r3fdz0pw`, docs/vouchers.md).
+ */
+export function minSpendShortfall(
+	minSpend: number | undefined,
+	itemSubtotal: number,
+): number {
+	if (minSpend === undefined || minSpend <= 0) return 0;
+	return Math.max(0, minSpend - finiteNonNegative(itemSubtotal));
+}
+
+/** A percentage at or above this on a SHARED code gets a caution line in the
+ * issue form — never a refusal. See docs/vouchers.md "The percent ceiling". */
+export const SHARED_PERCENT_CAUTION = 50;
 
 /**
  * Three codes a seller might like, so "name a code" never starts from a blank
@@ -275,6 +416,15 @@ export type VoucherTerms = {
 	kind: VoucherKind;
 	/** `fixed`: minor units (sen). `percent`: whole percent, 1–100. */
 	value: number;
+	/**
+	 * The most a PERCENT voucher takes off one order, in minor units
+	 * (`z8r3fdz0pw`) — "20% off, up to RM20". Part of the TERMS, not an entry
+	 * rule, because it shapes the figure on every recompute: frozen into
+	 * `voucherSnapshot` with the rest, so the custom-decline and the address
+	 * re-price clamp exactly as the create did. Never set on a fixed voucher —
+	 * a fixed amount is already its own cap (`voucherValueError`).
+	 */
+	maxDiscount?: number;
 };
 
 /**
@@ -339,7 +489,14 @@ export function voucherDiscountFor(
 		terms.kind === "percent"
 			? Math.round((base * clampPercent(terms.value)) / 100)
 			: Math.floor(finiteNonNegative(terms.value));
-	return Math.min(raw, base);
+	// The per-order cap (`z8r3fdz0pw`), applied BEFORE the subtotal clamp so
+	// the two compose: "20% off, up to RM20" on a RM15 basket is RM3, on a
+	// RM500 basket RM20, and never more than the goods.
+	const capped =
+		terms.maxDiscount === undefined
+			? raw
+			: Math.min(raw, Math.floor(finiteNonNegative(terms.maxDiscount)));
+	return Math.min(capped, base);
 }
 
 /**
@@ -371,6 +528,19 @@ export function voucherValueError(terms: VoucherTerms): string | null {
 		return "A voucher can't take off more than 100%";
 	if (terms.kind === "fixed" && terms.value > VOUCHER_FIXED_MAX)
 		return `That's over the ${VOUCHER_FIXED_MAX / 100} limit — check the amount`;
+	if (terms.maxDiscount !== undefined) {
+		if (terms.kind === "fixed")
+			// A client bug rather than a seller choice: the form only offers the
+			// cap on a percentage, where it means something.
+			return "A fixed amount is already its own limit — the cap is for a percentage";
+		if (
+			!Number.isInteger(terms.maxDiscount) ||
+			terms.maxDiscount <= 0
+		)
+			return "Enter the most it can take off";
+		if (terms.maxDiscount > VOUCHER_FIXED_MAX)
+			return `That's over the ${VOUCHER_FIXED_MAX / 100} limit — check the amount`;
+	}
 	return null;
 }
 
@@ -378,9 +548,15 @@ export function voucherValueError(terms: VoucherTerms): string | null {
 // Status
 // ---------------------------------------------------------------------------
 
-/** What a seller (and the buyer's error message) sees. `expired` is NOT
- * stored — see `resolveVoucherStatus`. */
-export type VoucherStatus = "active" | "redeemed" | "voided" | "expired";
+/** What a seller (and the buyer's error message) sees. `expired` and
+ * `scheduled` are NOT stored — see `resolveVoucherStatus`. */
+export type VoucherStatus =
+	| "active"
+	| "redeemed"
+	| "voided"
+	| "expired"
+	/** A shared code whose `startsAt` is still ahead (`z8r3fdz0pw`). */
+	| "scheduled";
 
 /** The three states a row can actually be IN. */
 export type StoredVoucherStatus = "active" | "redeemed" | "voided";
@@ -395,6 +571,7 @@ export type VoucherStatusFields = {
 	usage?: VoucherUsage;
 	/** Shared only — see `SharedLimits`. */
 	endsAt?: number;
+	startsAt?: number;
 	maxRedemptions?: number;
 	/** Shared only: how many orders have spent it (less any handed back). */
 	redeemedCount?: number;
@@ -426,6 +603,9 @@ export function resolveVoucherStatus(
 	if (voucherUsageOf(voucher) === "shared") {
 		if (isSharedExhausted(voucher)) return "redeemed";
 		if (isSharedEnded(voucher.endsAt, now)) return "expired";
+		// Asked last: a code can't be spent before it starts, so a scheduled
+		// one has no uses and (start < end, `sharedLimitsError`) hasn't ended.
+		if (isSharedScheduled(voucher.startsAt, now)) return "scheduled";
 		return "active";
 	}
 	return isVoucherExpired(voucher.expiresAt, now) ? "expired" : "active";
@@ -440,6 +620,14 @@ export function isSharedExhausted(voucher: {
 		voucher.maxRedemptions !== undefined &&
 		(voucher.redeemedCount ?? 0) >= voucher.maxRedemptions
 	);
+}
+
+/** Is a shared code still waiting for its start? (`z8r3fdz0pw`) */
+export function isSharedScheduled(
+	startsAt: number | undefined,
+	now: number,
+): boolean {
+	return startsAt !== undefined && now < startsAt;
 }
 
 /** Has a shared code's end time passed? An exact instant, unlike the
@@ -494,14 +682,57 @@ export type VoucherRefusal =
 	 * makes it spendable again, exactly as a promo price returns.
 	 */
 	| "store_ineligible"
-	| "already_on_order";
+	| "already_on_order"
+	/** A shared code whose start is still ahead (`z8r3fdz0pw`) — the buyer is
+	 * told WHEN, because "invalid" would send them away from a code that will
+	 * work on Saturday. */
+	| "not_started"
+	/** The basket's items are under the code's minimum spend. */
+	| "below_min_spend"
+	/** This WhatsApp number has used up its per-buyer allowance. */
+	| "buyer_limit"
+	/** A per-buyer code at a door with no buyer number to count against. The
+	 * storefront form requires the number, so this is the protocol-level
+	 * backstop (a `?voucher=` order from an old client). */
+	| "buyer_phone_required";
+
+/**
+ * What a refusal sentence may need to be specific (`z8r3fdz0pw` widened it
+ * past the one `usedOnOrder`). Carried on the typed error too, so a surface
+ * can re-word without parsing the sentence.
+ */
+export type VoucherRefusalDetail = {
+	/** The order a single-use code was already spent on. */
+	usedOnOrder?: string;
+	/** `not_started`: when it opens. */
+	startsAt?: number;
+	/** `below_min_spend`: the minimum and what is still missing (minor
+	 * units), in `currency`. */
+	minSpend?: number;
+	shortfall?: number;
+	currency?: string;
+	/** `buyer_limit`: the per-buyer allowance that has been reached. */
+	perBuyerLimit?: number;
+};
+
+/**
+ * Minor units → "RM 50.00" / "S$ 50.00", for the refusal sentences the SERVER
+ * writes (the storefront prints `err.data.message` verbatim). The client
+ * passes its own `formatPrice` instead; the two differ only in the space
+ * character, which is invisible.
+ */
+export function formatVoucherMoney(minorUnits: number, currency: string): string {
+	const prefix = currency === "SGD" ? "S$" : currency === "MYR" ? "RM" : currency;
+	return `${prefix} ${(finiteNonNegative(minorUnits) / 100).toFixed(2)}`;
+}
 
 /** The buyer- and seller-facing sentence for each refusal. One author, so the
  * storefront field, the counter panel, the claim page and the server's thrown
  * error all say the same thing. */
 export function voucherRefusalMessage(
 	refusal: VoucherRefusal,
-	opts: { usedOnOrder?: string } = {},
+	opts: VoucherRefusalDetail = {},
+	formatAmount: (minorUnits: number, currency: string) => string = formatVoucherMoney,
 ): string {
 	switch (refusal) {
 		case "malformed":
@@ -531,6 +762,26 @@ export function voucherRefusalMessage(
 			return "This store isn't accepting vouchers right now.";
 		case "already_on_order":
 			return "One voucher per order — remove the current one first.";
+		case "not_started":
+			return opts.startsAt !== undefined
+				? `This code starts on ${formatVoucherMoment(opts.startsAt)} — try again then.`
+				: "This code hasn't started yet.";
+		case "below_min_spend": {
+			if (opts.minSpend === undefined || opts.currency === undefined)
+				return "Your items don't reach this code's minimum spend yet.";
+			const min = formatAmount(opts.minSpend, opts.currency);
+			return opts.shortfall !== undefined && opts.shortfall > 0
+				? `This code needs ${min} of items — add ${formatAmount(opts.shortfall, opts.currency)} more.`
+				: `This code needs ${min} of items.`;
+		}
+		case "buyer_limit":
+			// Never names the earlier order: the number is typed, not proven, so
+			// "has already used it" is the least a per-buyer limit can say.
+			return (opts.perBuyerLimit ?? 1) === 1
+				? "This WhatsApp number has already used this code — it's 1 per buyer."
+				: `This WhatsApp number has used this code ${opts.perBuyerLimit} times — that's the limit per buyer.`;
+		case "buyer_phone_required":
+			return "This code is limited per buyer — add your WhatsApp number to use it.";
 	}
 }
 
@@ -547,17 +798,25 @@ export type VoucherRefusalErrorData = {
 	message: string;
 	/** The order the code was already spent on, when that's why. */
 	usedOnOrder?: string;
+	/** Everything the sentence was built from (`z8r3fdz0pw`). */
+	detail?: VoucherRefusalDetail;
 };
 
 export function voucherRefusalErrorData(
 	refusal: VoucherRefusal,
-	opts: { usedOnOrder?: string } = {},
+	opts: VoucherRefusalDetail = {},
 ): VoucherRefusalErrorData {
+	// Only the keys that carry something: an `undefined` inside a thrown
+	// ConvexError's data does not survive the trip to the client as absent.
+	const detail = Object.fromEntries(
+		Object.entries(opts).filter(([, value]) => value !== undefined),
+	) as VoucherRefusalDetail;
 	return {
 		kind: "voucher_refused",
 		refusal,
 		message: voucherRefusalMessage(refusal, opts),
-		usedOnOrder: opts.usedOnOrder,
+		...(opts.usedOnOrder !== undefined ? { usedOnOrder: opts.usedOnOrder } : {}),
+		...(Object.keys(detail).length > 0 ? { detail } : {}),
 	};
 }
 
@@ -576,9 +835,18 @@ export function isVoucherRefusalErrorData(
 export function refusalForVoucher(
 	voucher: VoucherStatusFields,
 	now: number,
-): Exclude<VoucherRefusal, "malformed" | "not_found" | "already_on_order"> | null {
+): Exclude<
+	VoucherRefusal,
+	| "malformed"
+	| "not_found"
+	| "already_on_order"
+	| "below_min_spend"
+	| "buyer_limit"
+	| "buyer_phone_required"
+> | null {
 	const status = resolveVoucherStatus(voucher, now);
 	if (status === "active") return null;
+	if (status === "scheduled") return "not_started";
 	// A full shared code resolves `redeemed` for the seller's chips, but the
 	// BUYER was never the one who used it — their sentence is its own.
 	if (status === "redeemed" && voucherUsageOf(voucher) === "shared")
@@ -605,6 +873,36 @@ export function formatVoucherTerms(
 		: `${formatAmount(terms.value)} off`;
 }
 
+/** The rules a buyer has to meet to use a code (`z8r3fdz0pw`), as opposed
+ * to its TERMS (what it takes off). Judged once, at redemption. */
+export type VoucherConditions = {
+	/** Least gross item subtotal, minor units. */
+	minSpend?: number;
+	/** Orders per WhatsApp number. */
+	perBuyerLimit?: number;
+};
+
+/**
+ * The fine print in words — "up to RM 20.00 off", "min. spend RM 50.00",
+ * "1 per buyer" — in that order, which is the order a buyer weighs them in:
+ * what it's worth, whether my basket counts, whether I can come back. The ONE
+ * author for the seller's list, the share sheet and the buyer's field, so a
+ * condition is never shown on one surface and missing from another.
+ */
+export function voucherFinePrint(
+	voucher: Pick<VoucherTerms, "maxDiscount"> & VoucherConditions,
+	formatAmount: (minorUnits: number) => string,
+): string[] {
+	const lines: string[] = [];
+	if (voucher.maxDiscount !== undefined)
+		lines.push(`up to ${formatAmount(voucher.maxDiscount)} off`);
+	if (voucher.minSpend !== undefined)
+		lines.push(`min. spend ${formatAmount(voucher.minSpend)}`);
+	if (voucher.perBuyerLimit !== undefined)
+		lines.push(`${voucher.perBuyerLimit} per buyer`);
+	return lines;
+}
+
 /** The expiry in the seller's words — `undefined` expiry has none, which is a
  * real answer ("no expiry") and not a blank. */
 export function formatVoucherExpiry(expiresAt: number | undefined): string {
@@ -623,12 +921,12 @@ export function formatSharedUses(voucher: {
 		: `${used} of ${voucher.maxRedemptions} used`;
 }
 
-/** A shared code's end instant in store time — "31 Oct 2026, 6:00 PM" — from
- * the house date and time formatters, so a time never appears in two
- * spellings. A comma, not the fulfilment line's "·": this sits inside the
+/** A shared code's start or end instant in store time — "31 Oct 2026,
+ * 6:00 PM" — from the house date and time formatters, so a time never
+ * appears in two spellings. A comma, not the fulfilment line's "·": this sits inside the
  * list's own dot-separated outcome line. */
-export function formatVoucherEnd(endsAt: number): string {
-	return `${formatFulfilmentDate(todayMytMidnight(endsAt), { weekday: false })}, ${formatFulfilmentTime(mytMinutesOfDay(endsAt))}`;
+export function formatVoucherMoment(at: number): string {
+	return `${formatFulfilmentDate(todayMytMidnight(at), { weekday: false })}, ${formatFulfilmentTime(mytMinutesOfDay(at))}`;
 }
 
 /**

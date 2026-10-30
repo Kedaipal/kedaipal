@@ -55,6 +55,7 @@ import { type DialIso, isDialIso } from "../../../convex/lib/phoneDial";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
 import type { UseCart } from "../../hooks/useCart";
+import { useDebounce } from "../../hooks/useDebounce";
 import { usePromoClock } from "../../hooks/usePromoClock";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
@@ -128,7 +129,10 @@ import {
 import {
 	type AppliedVoucher,
 	previewDiscount,
+	usePerBuyerRecheck,
 	VoucherField,
+	VoucherNotes,
+	voucherCodeForOrder,
 } from "../vouchers/voucher-field";
 import { AddressFieldset } from "./address-fieldset";
 import { CheckoutHint } from "./checkout-hint";
@@ -814,13 +818,16 @@ export function CheckoutPage({
 					expectedSubtotal: cartItemSubtotal(cart.items),
 					// Re-validated server-side (the field's check was only for the
 					// tick) — a code that died in the meantime refuses the order
-					// rather than quietly charging full price.
-					voucherCode: voucher?.code,
+					// rather than quietly charging full price. A code still under its
+					// minimum spend is NOT sent — the ticket already shows it taking
+					// nothing off and says how much more it needs (`z8r3fdz0pw`).
+					voucherCode: voucherCodeForOrder(voucher, cart.total),
 				});
 				// Spent — forget the held code, or the next checkout in this tab
 				// re-applies a redeemed voucher and is refused for no visible
 				// reason.
-				if (voucher) clearVoucherParam(storeSlug);
+				if (voucherCodeForOrder(voucher, cart.total))
+					clearVoucherParam(storeSlug);
 				if (effectiveMethod === "delivery")
 					saveAddress(deliverToOf(value.deliverTo), value.address);
 				setSubmitted(true);
@@ -908,6 +915,46 @@ export function CheckoutPage({
 	const dialCountry: DialIso = isDialIso(watchedDialCountry)
 		? watchedDialCountry
 		: country;
+	// The number a per-buyer voucher is judged against (`z8r3fdz0pw`, flow
+	// A): only once it parses, and settled for a moment first, so a buyer
+	// finishing their number doesn't spend the store's check budget on every
+	// keystroke. Undefined until then — the ticket says the code will be
+	// checked against it, and the order door checks it regardless.
+	const watchedWaPhone = useStore(form.store, (s) => s.values.waPhone);
+	const settledWaPhone = useDebounce(watchedWaPhone ?? "", 600);
+	const voucherBuyer = useMemo(() => {
+		const parsed = parseBuyerWaPhone(settledWaPhone, dialCountry);
+		return parsed.ok
+			? {
+					waPhone: settledWaPhone,
+					waDialCountry: dialCountry,
+					digits: parsed.digits,
+					label: formatMobile(parsed.digits),
+				}
+			: undefined;
+	}, [settledWaPhone, dialCountry]);
+	// The code flow A took off for this number, kept typed in the field so
+	// the sentence is visibly about it.
+	const [voucherRefusedCode, setVoucherRefusedCode] = useState<
+		string | undefined
+	>(undefined);
+	const applyRechecked = useCallback((v: AppliedVoucher) => {
+		setVoucherServerRefusal(undefined);
+		setVoucherRefusedCode(undefined);
+		setVoucher(v);
+	}, []);
+	const refuseForBuyer = useCallback((message: string, code: string) => {
+		setVoucher(null);
+		setVoucherServerRefusal(message);
+		setVoucherRefusedCode(code);
+	}, []);
+	usePerBuyerRecheck({
+		retailerId,
+		applied: voucher,
+		buyer: voucherBuyer,
+		onApply: applyRechecked,
+		onRefused: refuseForBuyer,
+	});
 	// The phone box's value as the waPhone listener last left it — the
 	// "previous" `applyBuyerPhoneKeystroke` judges a change against, since a
 	// TanStack listener is handed only the new value. Every edit of the box
@@ -1844,6 +1891,14 @@ export function CheckoutPage({
 											awaitingQuote={hasCustomLine}
 											voucherDiscount={previewDiscount(voucher, cart.total)}
 											voucherCode={voucher?.code}
+											voucherNote={
+												<VoucherNotes
+													applied={voucher}
+													itemSubtotal={cart.total}
+													currency={cart.currency}
+													buyer={voucherBuyer}
+												/>
+											}
 											voucherField={
 												acceptsVouchers ? (
 													<VoucherField
@@ -1854,14 +1909,18 @@ export function CheckoutPage({
 														applied={voucher}
 														onApply={(v) => {
 															setVoucherServerRefusal(undefined);
+															setVoucherRefusedCode(undefined);
 															setVoucher(v);
 														}}
 														onRemove={() => {
 															setVoucherServerRefusal(undefined);
+															setVoucherRefusedCode(undefined);
 															setVoucher(null);
 														}}
 														serverRefusal={voucherServerRefusal}
 														initialCode={initialVoucherCode}
+														buyer={voucherBuyer}
+														refusedCode={voucherRefusedCode}
 													/>
 												) : null
 											}

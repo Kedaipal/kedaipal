@@ -407,6 +407,10 @@ interface CheckoutTotalsProps {
 	 * states the discount, so a second panel repeating it was noise.
 	 */
 	voucherField?: ReactNode;
+	/** The applied code's notes (`z8r3fdz0pw`) — per-buyer, minimum spend,
+	 * cap. Rendered UNDER the voucher line and outside its disclosure, so a
+	 * buyer reads them without opening it. */
+	voucherNote?: ReactNode;
 }
 
 /**
@@ -446,6 +450,7 @@ export function CheckoutTotals({
 	voucherDiscount = 0,
 	voucherCode,
 	voucherField,
+	voucherNote,
 }: CheckoutTotalsProps) {
 	// The applied voucher line discloses its remove the way an ITEM line
 	// discloses its stepper — same interaction, so the ticket has one idea of
@@ -513,13 +518,21 @@ export function CheckoutTotals({
 			    applied state needs no panel of its own — this line already says
 			    what is on, and the disclosure is where it comes off
 			    (`z8r3fdr617`, Zaki 12 Oct). */}
-			{voucherDiscount > 0 ? (
+			{/* An applied code that takes nothing off YET (under its minimum
+			    spend, `z8r3fdz0pw`) still gets its line — muted, reading "not
+			    yet" — so the ticket never shows a voucher only as a Remove
+			    button with no code above it. */}
+			{voucherDiscount > 0 || voucherCode !== undefined ? (
 				<>
 					<button
 						type="button"
 						aria-expanded={voucherOpen}
 						onClick={() => setVoucherOpen((v) => !v)}
-						className="flex w-full items-baseline gap-2 py-0.5 text-left font-mono text-[13px] leading-6 text-accent-emphasis"
+						className={`flex w-full items-baseline gap-2 py-0.5 text-left font-mono text-[13px] leading-6 ${
+							voucherDiscount > 0
+								? "text-accent-emphasis"
+								: "text-muted-foreground"
+						}`}
 					>
 						<ChevronDown
 							aria-hidden
@@ -535,9 +548,12 @@ export function CheckoutTotals({
 							className="flex-1 border-b-2 border-dotted border-border"
 						/>
 						<span className="shrink-0 tabular-nums">
-							−{receiptAmount(voucherDiscount)}
+							{voucherDiscount > 0
+								? `−${receiptAmount(voucherDiscount)}`
+								: "not yet"}
 						</span>
 					</button>
+					{voucherNote}
 					{voucherOpen ? voucherField : null}
 				</>
 			) : (

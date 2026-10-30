@@ -1,10 +1,15 @@
 import { Download, QrCode, Send } from "lucide-react";
 import { useRef } from "react";
 import QRCode from "react-qr-code";
-import type { VoucherKind, VoucherUsage } from "../../../convex/lib/vouchers";
+import type {
+	VoucherKind,
+	VoucherStatus,
+	VoucherUsage,
+} from "../../../convex/lib/vouchers";
 import {
-	formatVoucherEnd,
+	formatVoucherMoment,
 	formatVoucherTerms,
+	voucherFinePrint,
 } from "../../../convex/lib/vouchers";
 import { formatPrice } from "../../lib/format";
 import { voucherCheckoutUrl } from "../../lib/storefront-url";
@@ -52,6 +57,25 @@ export interface ShareableVoucher {
 	maxRedemptions?: number;
 	redeemedCount?: number;
 	endsAt?: number;
+	/** v2 (`z8r3fdz0pw`) — the start and the fine print travel with the
+	 * code, so a buyer is never surprised at checkout by a rule the seller
+	 * set but didn't send. */
+	startsAt?: number;
+	perBuyerLimit?: number;
+	minSpend?: number;
+	maxDiscount?: number;
+	status?: VoucherStatus;
+}
+
+/** "Up to RM 20.00 off · min. spend RM 50.00 · 1 per buyer." — or "". The
+ * sentence form of `voucherFinePrint`, capitalised for a message. */
+function finePrintSentence(voucher: ShareableVoucher): string {
+	const lines = voucherFinePrint(voucher, (sen) =>
+		formatPrice(sen, voucher.currency),
+	);
+	if (lines.length === 0) return "";
+	const joined = lines.join(" · ");
+	return `${joined.charAt(0).toUpperCase()}${joined.slice(1)}.`;
 }
 
 /**
@@ -68,19 +92,29 @@ function sharedBounds(voucher: ShareableVoucher): {
 			? undefined
 			: Math.max(0, voucher.maxRedemptions - (voucher.redeemedCount ?? 0));
 	const end =
-		voucher.endsAt === undefined ? undefined : formatVoucherEnd(voucher.endsAt);
+		voucher.endsAt === undefined
+			? undefined
+			: formatVoucherMoment(voucher.endsAt);
+	// A code shared ahead of its start says WHEN it opens first — the one
+	// thing a buyer reading it early needs (`z8r3fdz0pw`).
+	const start =
+		voucher.startsAt !== undefined && voucher.startsAt > Date.now()
+			? formatVoucherMoment(voucher.startsAt)
+			: undefined;
 	const property = [
+		start !== undefined ? `starts ${start}` : null,
 		left !== undefined ? `${left} ${left === 1 ? "use" : "uses"} left` : null,
 		end !== undefined ? `ends ${end}` : null,
 	]
 		.filter((p) => p !== null)
 		.join(" · ");
-	const sentence =
+	const bound =
 		end !== undefined && left !== undefined
 			? `Valid until ${end} — for the next ${left} orders only.`
 			: end !== undefined
 				? `Valid until ${end}.`
 				: `For the next ${left ?? 0} orders only — first come, first served.`;
+	const sentence = start !== undefined ? `Starts ${start}. ${bound}` : bound;
 	return { property, sentence };
 }
 
@@ -146,9 +180,11 @@ function VoucherShareBody({
 	// nothing and reads like spam in a WhatsApp thread. A SHARED code is
 	// addressed to a crowd ("use code …"), not to "you": it is the message a
 	// seller pastes into a group or a status, so it must not presume a reader.
+	const finePrint = finePrintSentence(voucher);
+	const finePrintLine = finePrint ? `\n${finePrint}` : "";
 	const waText = bounds
-		? `Use code ${voucher.code} at ${storeName} for ${worth} 🎁\n\n${bounds.sentence}\n\nTap to shop with it already applied:\n${link}`
-		: `Here's your ${worth} voucher for ${storeName} 🎁\n\nCode: ${voucher.code}\n${expiryLine}\n\nTap to shop with it already applied:\n${link}`;
+		? `Use code ${voucher.code} at ${storeName} for ${worth} 🎁\n\n${bounds.sentence}${finePrintLine}\n\nTap to shop with it already applied:\n${link}`
+		: `Here's your ${worth} voucher for ${storeName} 🎁\n\nCode: ${voucher.code}\n${expiryLine}${finePrintLine}\n\nTap to shop with it already applied:\n${link}`;
 	const waUrl = `https://wa.me/?text=${encodeURIComponent(waText)}`;
 
 	return (
@@ -174,6 +210,9 @@ function VoucherShareBody({
 								: `valid until ${expiryDate}`}
 						</>
 					)}
+					{/* The conditions ride the message, so the seller sees them
+					    here before sending (`z8r3fdz0pw`). */}
+					{finePrint ? <span className="mt-1 block">{finePrint}</span> : null}
 				</DialogDescription>
 			</DialogHeader>
 
@@ -301,7 +340,7 @@ async function downloadQr(
 	// the poster; its bound goes in the subtitle instead.
 	ctx.fillText(
 		voucher.usage === "shared"
-			? `${worth}${voucher.endsAt ? ` · until ${formatVoucherEnd(voucher.endsAt)}` : ""}`
+			? `${worth}${voucher.endsAt ? ` · until ${formatVoucherMoment(voucher.endsAt)}` : ""}`
 			: `${worth} · one use`,
 		W / 2,
 		y,

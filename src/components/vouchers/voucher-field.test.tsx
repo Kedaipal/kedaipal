@@ -6,9 +6,17 @@ import {
 	screen,
 	waitFor,
 } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { previewDiscount, VoucherField } from "./voucher-field";
+import {
+	type AppliedVoucher,
+	previewDiscount,
+	usePerBuyerRecheck,
+	VoucherField,
+	VoucherNotes,
+	voucherCodeForOrder,
+} from "./voucher-field";
 
 // `checkCode` is a mutation (it spends rate-limiter budget — see
 // convex/vouchers.ts), so the field reaches Convex through useMutation only.
@@ -333,5 +341,231 @@ describe("a refusal handed back by the order door", () => {
 		expect(
 			screen.queryByText("This voucher has already been used."),
 		).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Shared codes v2 (`z8r3fdz0pw`)
+// ---------------------------------------------------------------------------
+
+const PER_BUYER: AppliedVoucher = {
+	code: "SALE345",
+	kind: "percent",
+	value: 20,
+	conditions: { perBuyerLimit: 1 },
+};
+const ALI = {
+	waPhone: "012-345 6789",
+	waDialCountry: "MY",
+	digits: "60123456789",
+	label: "012-345 6789",
+};
+
+describe("the minimum spend, judged against the live basket", () => {
+	const MIN: AppliedVoucher = {
+		code: "SALE345",
+		kind: "fixed",
+		value: 1000,
+		conditions: { minSpend: 6000 },
+	};
+
+	it("stays applied but takes nothing off, and isn't sent, until it qualifies", () => {
+		expect(previewDiscount(MIN, 5000)).toBe(0);
+		expect(voucherCodeForOrder(MIN, 5000)).toBeUndefined();
+		expect(previewDiscount(MIN, 6000)).toBe(1000);
+		expect(voucherCodeForOrder(MIN, 6000)).toBe("SALE345");
+		expect(voucherCodeForOrder(null, 9000)).toBeUndefined();
+	});
+
+	it("says how much more, with the number, under the voucher line", () => {
+		render(<VoucherNotes applied={MIN} itemSubtotal={4800} currency="MYR" />);
+		expect(
+			screen.getByText(
+				/Add RM\s12\.00 more to use SALE345 — it needs RM\s60\.00 of items\./,
+			),
+		).toBeTruthy();
+	});
+});
+
+describe("the per-order cap", () => {
+	it("clamps the preview exactly as the server does", () => {
+		expect(
+			previewDiscount(
+				{ code: "BIG50", kind: "percent", value: 50, maxDiscount: 2000 },
+				10_000,
+			),
+		).toBe(2000);
+	});
+
+	it("is printed as fine print on the applied code", () => {
+		render(
+			<VoucherNotes
+				applied={{
+					code: "BIG50",
+					kind: "percent",
+					value: 50,
+					maxDiscount: 2000,
+				}}
+				itemSubtotal={10_000}
+				currency="MYR"
+			/>,
+		);
+		expect(screen.getByText(/up to RM\s20\.00 off/)).toBeTruthy();
+	});
+});
+
+describe("the per-buyer limit — flow A (Zaki, 30 Oct 2026)", () => {
+	it("applies before the number, and the ticket note says it will be checked", () => {
+		render(
+			<VoucherNotes applied={PER_BUYER} itemSubtotal={5000} currency="MYR" />,
+		);
+		expect(
+			screen.getByText("1 per buyer · checked against your WhatsApp number"),
+		).toBeTruthy();
+		expect(checkCode).not.toHaveBeenCalled();
+	});
+
+	it("says which number it was checked for — and only for the number on the page", () => {
+		render(
+			<VoucherNotes
+				applied={{ ...PER_BUYER, checkedFor: ALI.digits }}
+				itemSubtotal={5000}
+				currency="MYR"
+				buyer={ALI}
+			/>,
+		);
+		expect(
+			screen.getByText("✓ 1 per buyer · checked for 012-345 6789"),
+		).toBeTruthy();
+		cleanup();
+		render(
+			<VoucherNotes
+				applied={{ ...PER_BUYER, checkedFor: ALI.digits }}
+				itemSubtotal={5000}
+				currency="MYR"
+				buyer={{ ...ALI, digits: "60198765432", label: "019-876 5432" }}
+			/>,
+		);
+		expect(
+			screen.getByText("1 per buyer · checked against your WhatsApp number"),
+		).toBeTruthy();
+	});
+
+	/** A page that owns the voucher, as the storefront does. */
+	function Page({ buyer }: { buyer?: typeof ALI }) {
+		const [applied, setApplied] = useState<AppliedVoucher | null>(PER_BUYER);
+		const [refusal, setRefusal] = useState<string | undefined>();
+		usePerBuyerRecheck({
+			retailerId: RETAILER,
+			applied,
+			buyer,
+			onApply: setApplied,
+			onRefused: (message) => {
+				setApplied(null);
+				setRefusal(message);
+			},
+		});
+		return (
+			<>
+				<p data-testid="applied">{applied ? applied.code : "none"}</p>
+				<p data-testid="checked">{applied?.checkedFor ?? ""}</p>
+				<p data-testid="refusal">{refusal ?? ""}</p>
+			</>
+		);
+	}
+
+	it("the re-check runs with no field mounted — the page owns it", async () => {
+		checkCode.mockResolvedValue({
+			ok: true,
+			code: "SALE345",
+			terms: { kind: "percent", value: 20 },
+			conditions: { perBuyerLimit: 1 },
+			checkedFor: ALI.digits,
+		});
+		render(<Page buyer={ALI} />);
+		await waitFor(() =>
+			expect(screen.getByTestId("checked").textContent).toBe(ALI.digits),
+		);
+		expect(checkCode).toHaveBeenCalledTimes(1);
+		expect(checkCode.mock.calls[0][0]).toMatchObject({
+			code: "SALE345",
+			waPhone: ALI.waPhone,
+			waDialCountry: "MY",
+		});
+	});
+
+	it("waits for a number — nothing is spent on a buyer who hasn't typed one", () => {
+		render(<Page />);
+		expect(checkCode).not.toHaveBeenCalled();
+	});
+
+	it("a number that has used it takes the code OFF, with the reason", async () => {
+		checkCode.mockResolvedValue({
+			ok: false,
+			refusal: "buyer_limit",
+			detail: { perBuyerLimit: 1 },
+		});
+		render(<Page buyer={ALI} />);
+		await waitFor(() =>
+			expect(screen.getByTestId("applied").textContent).toBe("none"),
+		);
+		expect(screen.getByTestId("refusal").textContent).toBe(
+			"This WhatsApp number has already used this code — it's 1 per buyer.",
+		);
+	});
+
+	it("the field puts a refused code back in the box, so the sentence is about it", () => {
+		renderField({
+			variant: "receipt",
+			serverRefusal:
+				"This WhatsApp number has already used this code — it's 1 per buyer.",
+			refusedCode: "SALE345",
+		});
+		expect(screen.getByLabelText("Voucher code")).toHaveProperty(
+			"value",
+			"SALE345",
+		);
+	});
+
+	it("a code with no per-buyer limit is never re-checked", () => {
+		function Open() {
+			usePerBuyerRecheck({
+				retailerId: RETAILER,
+				applied: { code: "OPEN20", kind: "percent", value: 20 },
+				buyer: ALI,
+				onApply: () => {},
+				onRefused: () => {},
+			});
+			return null;
+		}
+		render(<Open />);
+		expect(checkCode).not.toHaveBeenCalled();
+	});
+
+	it("the counter's anonymous sale is told the use counts toward the total only", () => {
+		renderField({ applied: PER_BUYER, anonymousBuyer: true });
+		expect(
+			screen.getByText(
+				/no buyer number, so it counts toward the code's total only/,
+			),
+		).toBeTruthy();
+	});
+
+	it("passes a known buyer's number with the first check", async () => {
+		checkCode.mockResolvedValue({
+			ok: true,
+			code: "SALE345",
+			terms: { kind: "percent", value: 20 },
+			conditions: { perBuyerLimit: 1 },
+			checkedFor: ALI.digits,
+		});
+		renderField({ buyer: ALI });
+		fireEvent.click(screen.getByRole("button", { name: /have a voucher/i }));
+		fireEvent.change(screen.getByLabelText("Voucher code"), {
+			target: { value: "sale345" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+		await waitFor(() => expect(checkCode).toHaveBeenCalled());
+		expect(checkCode.mock.calls[0][0]).toMatchObject({ waPhone: ALI.waPhone });
 	});
 });

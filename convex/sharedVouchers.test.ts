@@ -315,6 +315,7 @@ describe("checking a shared code", () => {
 			ok: true,
 			code: "SALE345",
 			terms: { kind: "fixed", value: 1000 },
+			conditions: {},
 		});
 	});
 

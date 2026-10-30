@@ -423,6 +423,7 @@ describe("vouchers.list", () => {
 			redeemed: 1,
 			voided: 1,
 			expired: 1,
+			scheduled: 0,
 		});
 		expect(all.vouchers).toHaveLength(4);
 
@@ -553,6 +554,8 @@ describe("vouchers.checkCode", () => {
 			ok: true,
 			code: vouchers[0].code,
 			terms: { kind: "percent", value: 15 },
+			// No entry rules on this one (`z8r3fdz0pw`).
+			conditions: {},
 		});
 	});
 

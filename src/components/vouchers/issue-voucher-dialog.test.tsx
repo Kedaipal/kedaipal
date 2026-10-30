@@ -202,8 +202,123 @@ describe("what the server gets", () => {
 			code: "SALE20",
 			maxRedemptions: 75,
 			endsAt: undefined,
+			// v2 (`z8r3fdz0pw`): one per buyer unless the seller turns it off.
+			startsAt: undefined,
+			perBuyerLimit: 1,
+			minSpend: undefined,
+			maxDiscount: undefined,
 			note: undefined,
 		});
 		await waitFor(() => expect(onIssued).toHaveBeenCalled());
+	});
+});
+
+/**
+ * Shared codes v2 (`z8r3fdz0pw`): the per-buyer limit, the minimum spend,
+ * the per-order cap and the scheduled start. Each one states its consequence
+ * where it is set, and the disabled button names the reason.
+ */
+describe("v2 — who qualifies, the cap, the start", () => {
+	function shareSetup() {
+		state.availability = { available: true, code: "SALE20" };
+		const out = renderDialog();
+		fireEvent.click(screen.getByRole("button", { name: /everyone/i }));
+		fireEvent.change(screen.getByLabelText("The code"), {
+			target: { value: "SALE20" },
+		});
+		return out;
+	}
+
+	it("a shared code is one per buyer by default, and says what that means", () => {
+		shareSetup();
+		expect(screen.getByLabelText("Orders per buyer")).toHaveProperty(
+			"value",
+			"1",
+		);
+		expect(
+			screen.getByText(/Checked against the buyer's WhatsApp number/),
+		).toBeTruthy();
+		expect(screen.getByText(/counts toward the total only/)).toBeTruthy();
+	});
+
+	it("turning the per-buyer limit off says what is now possible", () => {
+		shareSetup();
+		fireEvent.click(screen.getByRole("switch", { name: "Limit per buyer" }));
+		expect(
+			screen.getByText(/one buyer can use it again and again/),
+		).toBeTruthy();
+	});
+
+	it("a single-use voucher offers the minimum spend but never the per-buyer limit", () => {
+		renderDialog();
+		expect(screen.getByRole("switch", { name: "Minimum spend" })).toBeTruthy();
+		expect(
+			screen.queryByRole("switch", { name: "Limit per buyer" }),
+		).toBeNull();
+	});
+
+	it("the cap is offered on a percentage only, and its sentence does the maths", () => {
+		renderDialog();
+		expect(
+			screen.queryByRole("switch", { name: "Cap the discount" }),
+		).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: /a percentage/i }));
+		fireEvent.change(screen.getByLabelText("What it takes off"), {
+			target: { value: "20" },
+		});
+		fireEvent.click(screen.getByRole("switch", { name: "Cap the discount" }));
+		fireEvent.change(screen.getByLabelText("Most it takes off one order"), {
+			target: { value: "15" },
+		});
+		expect(
+			screen.getByText(/20% off, up to RM\s15\.00\. A basket over RM\s75\.00/),
+		).toBeTruthy();
+	});
+
+	it("a big shared percentage gets a caution, never a refusal", () => {
+		shareSetup();
+		fireEvent.click(screen.getByRole("button", { name: /a percentage/i }));
+		fireEvent.change(screen.getByLabelText("What it takes off"), {
+			target: { value: "60" },
+		});
+		expect(screen.getByText(/60% off for anyone with the word/)).toBeTruthy();
+		expect(createButton()).toHaveProperty("disabled", false);
+	});
+
+	it("a minimum spend left empty blocks Create with the reason", () => {
+		shareSetup();
+		fireEvent.click(screen.getByRole("switch", { name: "Minimum spend" }));
+		expect(createButton()).toHaveProperty("disabled", true);
+		expect(
+			screen.getAllByText(/Enter the least a buyer has to spend/).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("Later… asks for a start and states what buyers are told", () => {
+		shareSetup();
+		fireEvent.click(screen.getByRole("button", { name: /later/i }));
+		expect(screen.getByText(/shows as Scheduled/)).toBeTruthy();
+	});
+
+	it("a single-use payload carries the minimum spend", async () => {
+		createVoucher.mockResolvedValue({
+			vouchers: [{ code: "KP-AAAA-BBBB", id: "v1", status: "active" }],
+		});
+		renderDialog();
+		fireEvent.change(screen.getByLabelText("What it takes off"), {
+			target: { value: "10" },
+		});
+		fireEvent.click(screen.getByRole("switch", { name: "Minimum spend" }));
+		fireEvent.change(screen.getByLabelText("Least a buyer spends on items"), {
+			target: { value: "50" },
+		});
+		fireEvent.click(createButton());
+		await waitFor(() => expect(createVoucher).toHaveBeenCalledTimes(1));
+		expect(createVoucher.mock.calls[0][0]).toMatchObject({
+			kind: "fixed",
+			value: 1000,
+			minSpend: 5000,
+			maxDiscount: undefined,
+		});
 	});
 });

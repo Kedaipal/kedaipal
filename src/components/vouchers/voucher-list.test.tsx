@@ -236,3 +236,83 @@ describe("a shared code", () => {
 		expect(screen.getByRole("button", { name: "Share" })).toBeTruthy();
 	});
 });
+
+/**
+ * Shared codes v2 (`z8r3fdz0pw`): a scheduled row is live-in-waiting, the
+ * conditions a buyer meets are printed on the row, and a shared code can be
+ * extended — including one that has run out, which is when it is wanted.
+ */
+describe("v2 — scheduled, fine print, extend", () => {
+	const shared: VoucherRowView = {
+		...base,
+		code: "SALE345",
+		usage: "shared",
+		maxRedemptions: 50,
+		redeemedCount: 0,
+	};
+	const startsAt = Date.parse("2026-11-01T09:00:00+08:00");
+
+	function renderWithExtend(rows: VoucherRowView[], canWrite = true) {
+		const onExtend = vi.fn();
+		render(
+			<VoucherList
+				vouchers={rows}
+				onShare={vi.fn()}
+				onVoid={vi.fn()}
+				onExtend={onExtend}
+				canWrite={canWrite}
+			/>,
+		);
+		return { onExtend };
+	}
+
+	it("a scheduled code says Scheduled, leads with its start, and is not struck through", () => {
+		renderWithExtend([{ ...shared, status: "scheduled", startsAt }]);
+		expect(screen.getByText("Scheduled")).toBeTruthy();
+		expect(
+			screen.getByText("Starts 1 Nov 2026, 9:00 AM · 50 uses"),
+		).toBeTruthy();
+		expect(screen.getByText("SALE345").className).not.toMatch(/line-through/);
+		// Can be shared early and called off before it starts.
+		expect(screen.getByRole("button", { name: /share/i })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Void" })).toBeTruthy();
+	});
+
+	it("prints the conditions a buyer meets", () => {
+		renderWithExtend([
+			{
+				...shared,
+				kind: "percent",
+				value: 20,
+				maxDiscount: 2000,
+				minSpend: 5000,
+				perBuyerLimit: 1,
+			},
+		]);
+		expect(
+			screen.getByText(
+				/up to RM\s20\.00 off · min\. spend RM\s50\.00 · 1 per buyer/,
+			),
+		).toBeTruthy();
+	});
+
+	it("offers Extend on a live shared code and on one that ran out, never on a voided one", () => {
+		const { onExtend } = renderWithExtend([shared]);
+		fireEvent.click(screen.getByRole("button", { name: /extend/i }));
+		expect(onExtend).toHaveBeenCalledWith(shared);
+		cleanup();
+		renderWithExtend([{ ...shared, status: "redeemed", redeemedCount: 50 }]);
+		expect(screen.getByRole("button", { name: /extend/i })).toBeTruthy();
+		cleanup();
+		renderWithExtend([{ ...shared, status: "voided" }]);
+		expect(screen.queryByRole("button", { name: /extend/i })).toBeNull();
+	});
+
+	it("a single-use voucher and a read-only teammate get no Extend", () => {
+		renderWithExtend([base]);
+		expect(screen.queryByRole("button", { name: /extend/i })).toBeNull();
+		cleanup();
+		renderWithExtend([shared], false);
+		expect(screen.queryByRole("button", { name: /extend/i })).toBeNull();
+	});
+});
