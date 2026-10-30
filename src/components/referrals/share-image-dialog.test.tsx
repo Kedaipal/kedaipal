@@ -115,6 +115,8 @@ describe("ShareImageDialog", () => {
 		await screen.findByRole("img");
 		const button = await screen.findByRole("button", { name: /Share image/ });
 		expect(screen.getByRole("button", { name: /Save image/ })).toBeTruthy();
+		// Said for any device that can share — a Mac shares too, not only a phone.
+		expect(screen.getByText(/^Opens your share sheet/)).toBeTruthy();
 		await act(async () => {
 			fireEvent.click(button);
 		});

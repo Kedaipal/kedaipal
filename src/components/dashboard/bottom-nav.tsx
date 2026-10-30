@@ -398,7 +398,7 @@ function MoreTab({
 						to="/app/refer"
 						icon={Gift}
 						label="Refer & earn"
-						sub="Refer a kedai, both get credits"
+						sub="Refer a kedai, both get free orders"
 						onNavigate={close}
 					/>
 					<MoreRow

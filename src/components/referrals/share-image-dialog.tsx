@@ -237,7 +237,7 @@ export function ShareImageDialog({
 								Share image
 							</Button>
 							<p className="text-center text-xs text-muted-foreground">
-								Opens your phone's share sheet: WhatsApp, Instagram, Facebook.
+								Opens your share sheet: WhatsApp, Instagram, Facebook and more.
 							</p>
 							<div className="grid grid-cols-2 gap-2">
 								<Button
