@@ -1516,7 +1516,7 @@ export const adminAdjust = mutation({
 				);
 			if (bucket !== "purchased" || amount <= 0)
 				throw new ConvexError(
-					"An Enterprise block adds bought credits — a positive number, to the bought bucket.",
+					"An Enterprise block adds extra credits — a positive number, to the extra-credits bucket.",
 				);
 		}
 		if (Math.abs(amount) > ADMIN_CREDIT_LIMIT)
@@ -1729,8 +1729,9 @@ export const adminSetGrantOverride = mutation({
 const ADMIN_TOTALS_SCAN_LIMIT = 5_000;
 
 export type AdminCreditTotals = {
-	/** Σ purchasedBalance: credits sellers bought and haven't used yet — the
-	 * deferred-revenue figure (a sold credit is a service still owed). */
+	/** Σ purchasedBalance: the EXTRA credits sellers hold and haven't used —
+	 * service still owed. Not deferred revenue: the pot mixes paid packs with
+	 * referral bonuses and admin grants (docs/credits.md § Extra credits). */
 	purchasedUnused: number;
 	/** How many stores hold any unused purchased credits. */
 	storesWithPurchased: number;

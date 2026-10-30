@@ -144,15 +144,99 @@ export function referrerStanding(args: {
 }
 
 /**
- * The WhatsApp message the "Refer a kedai" card pre-fills (T3, z8r3fdfp97) —
- * one author, so copy changes never touch the component. Says what Kedaipal
- * fixes in the seller's own words, then the referee's offer and the link.
- * The house register: "refer", "kedai", bonus credits — never "commission",
+ * The WhatsApp message the Refer & earn surfaces pre-fill (T3, z8r3fdfp97;
+ * personalised in the 28 Oct 2026 push) — one author, so copy changes never
+ * touch a component. Three rules, each a lesson:
+ *  - the STORE'S OWN NAME comes first. "I run Kek Mak Jah on Kedaipal" is a
+ *    friend vouching; "I use Kedaipal" is an ad. The unfurl card below the
+ *    message already says "Kek Mak Jah invited you", so the two agree;
+ *  - the offer is said in ORDERS ("60 free orders"), the unit a seller thinks
+ *    in — "bonus credits" needed a conversion the prospect wouldn't make;
+ *  - the link is the LAST line, on its own, so WhatsApp renders the invite
+ *    page's preview card under the text instead of burying the URL.
+ * The house register: "refer", "kedai", orders — never "commission",
  * "affiliate" or a money amount.
  */
-export function referralShareMessage(link: string): string {
+export function referralShareMessage(link: string, storeName: string): string {
 	const offer = referralRefereeOffer();
-	return `I use Kedaipal for my WhatsApp orders — no more orders lost in the chat, and payments are tracked for me. Sign up through my link and you get ${offer.pro} bonus credits when you start Pro (${offer.starter} on Starter). 1 credit = 1 order:\n${link}`;
+	const name = storeName.trim() || "my kedai";
+	return `Hi! I run ${name} on Kedaipal now — no more orders lost in the WhatsApp chat, and payments are tracked for me.\n\nSign up through my link and you get ${offer.pro} free orders when you start Pro (${offer.starter} on Starter):\n${link}`;
+}
+
+/**
+ * The share IMAGE's lines — the invite drawn as a voucher, for the places a
+ * text link can't travel (a WhatsApp status, an Instagram story, a Facebook
+ * seller group). Same offer, same author as the message; the canvas only
+ * draws them. The headline is two lines on purpose — the number lit, then
+ * "on us." — so neither format ever orphans a word. `benefits` are drawn on
+ * the tall Story format only, where there is room for them; each is a claim
+ * the product keeps (one list, payments tracked, live without Meta setup).
+ */
+export function referralShareImageCopy(storeName: string): {
+	eyebrow: string;
+	initials: string;
+	headlineLead: string;
+	headlineRest: string;
+	body: string;
+	benefits: [string, string, string];
+	scanLabel: string;
+} {
+	const offer = referralRefereeOffer();
+	const name = storeName.trim() || "A Kedaipal seller";
+	return {
+		eyebrow: `${name} invites you`,
+		initials: storeInitials(name),
+		headlineLead: `${offer.pro} orders`,
+		headlineRest: "on us.",
+		body: `Start Pro with this invite and get ${offer.pro} free orders on top of your plan. ${offer.starter} on Starter.`,
+		benefits: [
+			"Every WhatsApp order in one list",
+			"Payments tracked, no chasing",
+			"Live in 5 minutes, no Meta setup",
+		],
+		scanLabel: "Scan to claim",
+	};
+}
+
+/** Up to two letters for the store's badge: "Kek Mak Jah" → "KM". Letters
+ * and digits only, so "✦ DRESSES" still yields "D" and an all-symbol name
+ * falls back to "K" (Kedaipal) rather than drawing a glyph the font lacks. */
+export function storeInitials(name: string): string {
+	const words = name
+		.split(/\s+/)
+		.map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
+		.filter((w) => w.length > 0);
+	const letters = words
+		.slice(0, 2)
+		.map((w) => Array.from(w)[0])
+		.join("");
+	return (letters || "K").toUpperCase();
+}
+
+/**
+ * Where an UNREWARDED referee stands — the reward lands at their first paid
+ * plan invoice, so this is how close that is. Read off their subscription:
+ * `free` while the free period runs; `invoice_due` once it ended (first order
+ * or the backstop) and the first invoice is out; `overdue` when that invoice
+ * passed its due date; `not_on_plan` for everything that can't pay out right
+ * now (no subscription, cancelled, on hold, comped). Never "on their free
+ * trial" by assumption — a referee whose trial ended unpaid is the commonest
+ * state and the one a nudge from the referrer matters most for.
+ */
+export type RefereeStage = "free" | "invoice_due" | "overdue" | "not_on_plan";
+
+export function refereeStage(
+	sub: {
+		status: string;
+		freePeriodEndedAt?: number;
+		comped?: boolean;
+	} | null,
+): RefereeStage {
+	if (!sub || sub.comped === true) return "not_on_plan";
+	if (sub.status === "trialing")
+		return sub.freePeriodEndedAt === undefined ? "free" : "invoice_due";
+	if (sub.status === "past_due") return "overdue";
+	return "not_on_plan";
 }
 
 /**

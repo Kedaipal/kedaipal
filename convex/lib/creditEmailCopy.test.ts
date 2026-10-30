@@ -133,10 +133,20 @@ describe("credit notice emails (Credits T3)", () => {
 		expect(out.html).toContain("&lt;img");
 	});
 
-	test("bought credits expiring: how many, and when", () => {
+	test("extra credits expiring: how many, and when", () => {
 		const out = renderCreditEmail("en", "expiring", vars());
 		expect(`${out.subject} ${out.html}`).toMatch(/20/);
 		expect(out.html).toContain("14 Oct 2026");
+		expect(out.subject).toContain("20 extra credits expire");
+	});
+
+	test("the expiry email never says the credits were BOUGHT — a referral bonus expires too", () => {
+		const bought = { en: /bought|you buy/i, ms: /dibeli|anda beli/i, zh: /购买/ };
+		for (const locale of ["en", "ms", "zh"] as const) {
+			const out = renderCreditEmail(locale, "expiring", vars());
+			const all = `${out.subject}\n${out.html}\n${out.text}`;
+			expect(all).not.toMatch(bought[locale]);
+		}
 	});
 
 	test("the WhatsApp balance phrase is always an order count", () => {

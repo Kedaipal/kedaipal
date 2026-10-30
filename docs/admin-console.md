@@ -505,21 +505,23 @@ and opens the **credit ledger drawer**
 refunds left, open lots) and the full paginated ledger
 (`credits.adminListLedger`, admin notes included), plus the two levers:
 
-- **Adjust by hand** (`credits.adminAdjust`) — plan or bought credits, a whole
+- **Adjust by hand** (`credits.adminAdjust`) — plan or extra credits, a whole
   number (+ adds, − takes away), and a **mandatory note, said plainly to be
   admin-only**: kept on the ledger, never shown to the seller. Plan
-  adjustments last until the month resets; bought additions land as a
-  12-month lot; bought removals take the oldest lot first and can't overdraw
+  adjustments last until the month resets; extra-credit additions land as a
+  12-month lot; extra-credit removals take the oldest lot first and can't overdraw
   (the drawer says so before the tap — the server refuses it too). The button
-  names its consequence ("Add 50 bought credits").
+  names its consequence ("Add 50 extra credits"). Each open lot in the drawer
+  says its source — top-up, referral bonus, or admin grant / block.
 - **Custom monthly grant** (`credits.adminSetGrantOverride`) — beats every plan
   grant (a partner deal, a pilot); a higher grant lands its difference now, a
   lower one or a clear waits for next month.
 
 Both writes are `requireAdmin`-gated and audited (`credits.adminAdjust` /
 `credits.adminSetGrantOverride`). **Admin → Billing** gains two tiles from
-`credits.adminCreditTotals`: **unused bought credits** (Σ `purchasedBalance` —
-the deferred-revenue figure, service still owed) and **orders owed**
+`credits.adminCreditTotals`: **unused extra credits** (Σ `purchasedBalance` —
+service still owed; NOT deferred revenue, because the pot includes unpaid
+referral bonuses and grants — docs/credits.md § Purchased credits) and **orders owed**
 (Σ min(0, `planBalance`)), each "across N stores". Counts of credits, never
 money. The top-up REVENUE tile needs T2's purchase table and is a follow-up.
 
