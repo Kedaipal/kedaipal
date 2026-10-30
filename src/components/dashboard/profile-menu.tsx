@@ -379,6 +379,9 @@ export function CreditStubBlock({ stub }: { stub: CreditStub }) {
  * same destination as the sidebar's Refer & earn (`/app/refer`, the 28 Oct
  * referral push): one idea, one control. Never greyed — that page explains
  * itself to a trial or paused store, so the row only changes its line.
+ * `w-auto` beats the menu-item primitive's `w-full`: with `mx-1` a full width
+ * pushes the row past the right edge instead of insetting it, so its right
+ * gap read narrower than its left (test-code, 31 Oct).
  */
 function ReferRow({ retailer }: { retailer: Retailer }) {
 	const card = useQuery(
@@ -396,7 +399,7 @@ function ReferRow({ retailer }: { retailer: Retailer }) {
 	return (
 		<DropdownMenuItem
 			asChild
-			className="mx-1 my-1 min-h-12 gap-2.5 rounded-[10px] border border-dashed border-accent/35 bg-accent/10 px-2.5 py-2 data-[highlighted]:bg-accent/15"
+			className="mx-1 my-1 min-h-12 w-auto gap-2.5 rounded-[10px] border border-dashed border-accent/35 bg-accent/10 px-2.5 py-2 data-[highlighted]:bg-accent/15"
 			data-testid="refer-row"
 		>
 			<Link to="/app/refer">

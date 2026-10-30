@@ -1334,12 +1334,18 @@ Billing, is never dismissable (a fact, not a nag), and comes in three sizes:
 
 | Where | Shows | Torn |
 | --- | --- | --- |
-| Rail, under the plan pill | the stub's headline + its row of 20 dots | top and bottom (`.kp-credit-ticket`) |
+| Rail, the top band | the stub's headline + its row of 20 dots, with the **plan pill riding the top tear** | top and bottom (`.kp-credit-ticket`) |
 | Collapsed 68px rail, under the logo | the figure + one word: `254 LEFT`, `18 LOW`, `4 OWED`, `3 WAIT` | top and bottom, 44px wide |
 | Phone header, beside the plan pill | `254 left` / `3 waiting` | left and right (`.kp-credit-ticket-side`), 18px drawn, 44px to tap |
 
 Healthy is plain ink; **low is amber with a LOW stamp and orders waiting red
-with a WAITING stamp**, so the state never rests on colour alone. An owed
+with a WAITING stamp**, so the state never rests on colour alone. On the rail
+the stamp sits on the **bottom** tear, by the dots it describes: the top tear
+belongs to the plan pill (Zaki, 31 Oct — "your plan and what's left on it" as
+one object), whose label can run long ("FOUNDING #3" + "PRO", "FREE · 12D
+LEFT") and must never collide with a stamp. The pill is a sibling of the
+ticket's link, never inside it. A reader with no ticket keeps the pill on its
+own row. An owed
 balance reads "owed", never a negative number. The collapsed figure caps at
 `999+` (orders waiting at `99+`) so it fits 44px; the phone line keeps the
 whole count. Words come from `creditStub(...).ticket`; colours from
@@ -1351,8 +1357,9 @@ on a whole tooth at any width (the menu stub now does too).
 
 The ticket **replaced** the first build's balance line on the avatar row and
 the avatar's tone dot: the number is said once per screen, and the foot row
-is back to name and email. Trade-off: the rail's top band is ~70px taller,
-so on a short laptop window the nav list starts scrolling one link sooner.
+is back to name and email. Trade-off: the rail's top band is ~60px taller
+(93px, down from 111px before the pill moved onto the tear), so on a short
+laptop window the nav list starts scrolling about one link sooner.
 
 The menu (`src/components/dashboard/profile-menu.tsx`, replacing Clerk's
 `UserButton`) holds, in order: who you are (name, email, your role in this

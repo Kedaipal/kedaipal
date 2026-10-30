@@ -161,8 +161,9 @@ export function Sidebar({
 
 			{/* Subscription tier pill — always-visible chrome (links to billing).
 			    Hidden for a storeless admin (no subscription to show). Reads "Admin"
-			    on an admin's own store. Under it, the credits ticket (z8r3fdx34j):
-			    the balance on every page, beside the plan it belongs to. */}
+			    on an admin's own store. With a credits balance to show it rides
+			    the top tear of the credits ticket (z8r3fdx34j): your plan and
+			    what's left on it, as one object; without one, its own row. */}
 			{retailer ? (
 				// `inert`, not just hidden: the pill is a link (billing / admin
 				// console), so a clipped, invisible copy would still be a Tab stop
@@ -172,19 +173,37 @@ export function Sidebar({
 					inert={collapsed}
 					className={cn(
 						"shrink-0 overflow-hidden border-b border-border px-4",
-						"flex flex-col gap-2.5",
-						collapsed ? "max-h-0 py-0 opacity-0" : "max-h-40 py-2 opacity-100",
-						stub?.ticket && !collapsed && "pb-3",
+						collapsed
+							? "max-h-0 py-0 opacity-0"
+							: stub?.ticket
+								? "max-h-32 pt-4 pb-3 opacity-100"
+								: "max-h-12 py-2 opacity-100",
 						motion,
 					)}
 				>
-					<TierPill
-						subscription={retailer.subscription}
-						foundingRank={retailer.foundingMemberRank}
-						admin={adminBadge}
-						unclaimed={retailer?.unclaimed === true}
-					/>
-					{stub ? <CreditTicket stub={stub} variant="rail" /> : null}
+					{stub?.ticket ? (
+						<CreditTicket
+							stub={stub}
+							variant="rail"
+							plan={
+								<TierPill
+									subscription={retailer.subscription}
+									foundingRank={retailer.foundingMemberRank}
+									admin={adminBadge}
+									unclaimed={retailer?.unclaimed === true}
+									compact
+									className="py-0 text-[9px]"
+								/>
+							}
+						/>
+					) : (
+						<TierPill
+							subscription={retailer.subscription}
+							foundingRank={retailer.foundingMemberRank}
+							admin={adminBadge}
+							unclaimed={retailer?.unclaimed === true}
+						/>
+					)}
 				</div>
 			) : null}
 			{/* Collapsed, the pill goes but the balance stays: the ticket shrinks

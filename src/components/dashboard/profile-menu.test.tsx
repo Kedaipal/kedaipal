@@ -174,6 +174,9 @@ describe("ProfileMenu", () => {
 		expect(row.textContent).toMatch(/Refer & earn/);
 		expect(row.textContent).toMatch(/you both get 60 free orders/);
 		expect(row.getAttribute("href")).toBe("/app/refer");
+		// Inset evenly: the primitive's w-full with mx-1 overhangs the right.
+		expect(row.className.split(" ")).toContain("w-auto");
+		expect(row.className.split(" ")).not.toContain("w-full");
 		cleanup();
 
 		q.data["referrals:myCard"] = {

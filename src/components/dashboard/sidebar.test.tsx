@@ -89,14 +89,17 @@ vi.mock("./credit-ticket", () => ({
 	CreditTicket: ({
 		stub,
 		variant,
+		plan,
 	}: {
 		stub: { ticket: unknown };
 		variant: string;
+		plan?: ReactNode;
 	}) =>
 		stub.ticket ? (
-			<a href="/billing" data-ticket={variant}>
-				ticket
-			</a>
+			<div data-ticket={variant}>
+				{plan}
+				<a href="/billing">ticket</a>
+			</div>
 		) : null,
 }));
 vi.mock("./app-version-row", () => ({
@@ -423,8 +426,11 @@ describe("the credits ticket rides the top of the rail (z8r3fdx34j)", () => {
 			<Sidebar retailer={STORE} newOrdersCount={0} />,
 		);
 		const band = ticketBox(container, "rail");
-		expect(band?.textContent).toContain("Pro");
 		expect(band?.hasAttribute("inert")).toBe(false);
+		// The plan pill rides the ticket's top tear — one object, not two rows.
+		expect(
+			container.querySelector('[data-ticket="rail"]')?.textContent,
+		).toContain("Pro");
 		// The collapsed copy is out of the focus order while the rail is wide.
 		expect(ticketBox(container, "collapsed")?.hasAttribute("inert")).toBe(true);
 		// Said once per rail: the foot row is name + email, never the balance.
@@ -444,6 +450,16 @@ describe("the credits ticket rides the top of the rail (z8r3fdx34j)", () => {
 			false,
 		);
 		expect(ticketBox(container, "rail")?.hasAttribute("inert")).toBe(true);
+	});
+
+	it("without a ticket the plan pill keeps its own row", () => {
+		collapsed = false;
+		profile.stub = null;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(container.querySelector("[data-ticket]")).toBeNull();
+		expect(container.textContent).toContain("Pro");
 	});
 
 	it("no ticket for a reader without the credits grant, or an unmetered store", () => {

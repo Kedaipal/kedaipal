@@ -80,6 +80,21 @@ describe("CreditTicket", () => {
 		expect(t.className).toContain("text-foreground");
 	});
 
+	it("rail: the plan pill rides the top tear — beside the ticket's link, never inside it", () => {
+		render(
+			<CreditTicket
+				stub={stub()}
+				variant="rail"
+				plan={<a href="/app/settings?tab=billing">Pro</a>}
+			/>,
+		);
+		const plan = screen.getByTestId("credit-ticket-plan");
+		expect(plan.textContent).toBe("Pro");
+		// A link inside a link is invalid HTML and a broken tab order.
+		expect(ticket().contains(plan)).toBe(false);
+		expect(ticket().querySelector("a")).toBeNull();
+	});
+
 	it("low is amber AND stamped — the state never rests on colour alone", () => {
 		render(
 			<CreditTicket
@@ -89,7 +104,10 @@ describe("CreditTicket", () => {
 		);
 		expect(ticket().getAttribute("data-tone")).toBe("low");
 		expect(ticket().className).toMatch(/text-amber-700/);
-		expect(screen.getByTestId("credit-ticket-stamp").textContent).toBe("Low");
+		const stamp = screen.getByTestId("credit-ticket-stamp");
+		expect(stamp.textContent).toBe("Low");
+		// The bottom tear, by the dots it describes — the top is the plan's.
+		expect(stamp.className).toContain("-bottom-1");
 	});
 
 	it("orders waiting: red, stamped, every dot torn off", () => {
