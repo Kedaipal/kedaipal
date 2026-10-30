@@ -21,12 +21,14 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getAccess } from "../subscriptions";
 import {
 	type ClaimVoucherState,
-	normalizeVoucherCode,
+	isVoucherRedeemable,
+	parseVoucherCode,
 	refusalForVoucher,
 	type VoucherRefusal,
 	voucherRefusalErrorData,
 	voucherRefusalMessage,
 	type VoucherTerms,
+	voucherUsageOf,
 } from "./vouchers";
 
 /** What a door gets back. A refusal is DATA, not a throw, so the caller
@@ -120,13 +122,16 @@ export async function resolveVoucherForOrder(
 	ctx: QueryCtx,
 	args: { retailerId: Id<"retailers">; code: string; now: number },
 ): Promise<VoucherResolution> {
-	const code = normalizeVoucherCode(args.code);
-	if (code === null) return { ok: false, refusal: "malformed" };
+	const parsed = parseVoucherCode(args.code);
+	if (parsed === null) return { ok: false, refusal: "malformed" };
 
-	const voucher = await ctx.db
-		.query("vouchers")
-		.withIndex("by_code", (q) => q.eq("code", code))
-		.unique();
+	const voucher =
+		parsed.usage === "single"
+			? await ctx.db
+					.query("vouchers")
+					.withIndex("by_code", (q) => q.eq("code", parsed.code))
+					.unique()
+			: await liveSharedVoucher(ctx, args.retailerId, parsed.code, args.now);
 	if (!voucher || voucher.retailerId !== args.retailerId)
 		return { ok: false, refusal: "not_found" };
 
@@ -152,6 +157,42 @@ export async function resolveVoucherForOrder(
 		voucher,
 		terms: { kind: voucher.kind, value: voucher.value },
 	};
+}
+
+/**
+ * The shared voucher a store's code currently points at (`z8r3fducfm`).
+ *
+ * A shared word is unique per store among LIVE codes only — a seller may run
+ * `SALE20` again after last month's ended — so one `(retailerId, code)` can
+ * hold several rows. The spendable one wins; failing that, the NEWEST dead
+ * one, so the buyer's refusal names what happened to the code they were most
+ * recently told about ("run out", "expired") rather than "not found" for a
+ * word that is plainly on the poster.
+ *
+ * Shared by the resolve path and the create mutation's uniqueness check, so
+ * "is this word taken?" and "which row does this word spend?" are one rule.
+ */
+export async function liveSharedVoucher(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+	code: string,
+	now: number,
+): Promise<Doc<"vouchers"> | null> {
+	const rows = (
+		await ctx.db
+			.query("vouchers")
+			.withIndex("by_retailer_code", (q) =>
+				q.eq("retailerId", retailerId).eq("code", code),
+			)
+			.collect()
+	).filter((row) => voucherUsageOf(row) === "shared");
+	if (rows.length === 0) return null;
+	return (
+		rows.find((row) => isVoucherRedeemable(row, now)) ??
+		rows.reduce((newest, row) =>
+			row.createdAt > newest.createdAt ? row : newest,
+		)
+	);
 }
 
 /** Resolve, or throw the typed refusal. The shape the two doors that REFUSE
@@ -188,6 +229,25 @@ export async function redeemVoucher(
 	const refusal = refusalForVoucher(fresh, args.now);
 	if (refusal !== null)
 		throw new ConvexError(voucherRefusalErrorData(refusal));
+	if (voucherUsageOf(fresh) === "shared") {
+		// A shared code COUNTS instead of flipping (`z8r3fducfm`). The count
+		// and the row are written in the same transaction, which is the only
+		// thing that keeps them equal; two checkouts racing the last use
+		// conflict on this patch, and the retry reads a full cap and is refused
+		// `exhausted` by `refusalForVoucher` above.
+		await ctx.db.patch(args.voucherId, {
+			redeemedCount: (fresh.redeemedCount ?? 0) + 1,
+			redeemedAt: args.now,
+			updatedAt: args.now,
+		});
+		await ctx.db.insert("voucherRedemptions", {
+			voucherId: args.voucherId,
+			retailerId: fresh.retailerId,
+			orderId: args.orderId,
+			createdAt: args.now,
+		});
+		return;
+	}
 	await ctx.db.patch(args.voucherId, {
 		status: "redeemed",
 		redeemedOrderId: args.orderId,
@@ -264,9 +324,27 @@ export async function releaseOrderVoucher(
 ): Promise<void> {
 	if (!order.voucherId) return;
 	const voucher = await ctx.db.get(order.voucherId);
-	// Row gone (tenant teardown mid-cascade), already handed back, or voided
-	// since — nothing to do in any of those.
-	if (!voucher || voucher.status !== "redeemed") return;
+	if (!voucher) return; // tenant teardown mid-cascade
+	if (voucherUsageOf(voucher) === "shared") {
+		// Give ONE use back (`z8r3fducfm`). The redemption row is the
+		// idempotency guard: no row for this order means it was already
+		// returned (or never spent), so a re-cancel can't decrement twice. A
+		// voided shared code still gets its count corrected — the status is
+		// the seller's withdrawal and stays, but "12 used" should mean twelve.
+		const redemption = await ctx.db
+			.query("voucherRedemptions")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.unique();
+		if (!redemption) return;
+		await ctx.db.delete(redemption._id);
+		await ctx.db.patch(voucher._id, {
+			redeemedCount: Math.max(0, (voucher.redeemedCount ?? 0) - 1),
+			updatedAt: now,
+		});
+		return;
+	}
+	// Already handed back, or voided since — nothing to do in either.
+	if (voucher.status !== "redeemed") return;
 	// Only release a voucher THIS order is holding. Without this, cancelling an
 	// order whose voucher had been released and re-spent elsewhere would steal
 	// it back from the order that legitimately holds it now.

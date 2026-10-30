@@ -83,6 +83,7 @@ export const DELETION_PHASES = [
 	"pickupLocations",
 	"counterCheckoutSessions",
 	"orderClaims",
+	"voucherRedemptions",
 	"vouchers",
 	"promotions",
 	"storeAvailability",
@@ -341,6 +342,17 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer_status", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const claim of rows) await ctx.db.delete(claim._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "voucherRedemptions": {
+			// A shared code's per-order uses (`z8r3fducfm`). Pure bookkeeping —
+			// the money is on the ORDER — and they go before their voucher rows
+			// so no row is ever left pointing at a deleted code.
+			const rows = await ctx.db
+				.query("voucherRedemptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const row of rows) await ctx.db.delete(row._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "vouchers": {

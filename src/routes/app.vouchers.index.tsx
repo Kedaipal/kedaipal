@@ -38,6 +38,10 @@ import {
 	type ShareableVoucher,
 	VoucherShareSheet,
 } from "../components/vouchers/voucher-share-sheet";
+import {
+	type UsesDialogVoucher,
+	VoucherUsesDialog,
+} from "../components/vouchers/voucher-uses-dialog";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { usePermission } from "../hooks/usePermission";
 import { useAreaLock } from "../hooks/useStoreLock";
@@ -91,6 +95,9 @@ function VouchersRoute() {
 	const [filter, setFilter] = useState<VoucherStatus | "all">("active");
 	const [issuing, setIssuing] = useState(false);
 	const [sharing, setSharing] = useState<ShareableVoucher | null>(null);
+	const [showingUses, setShowingUses] = useState<UsesDialogVoucher | null>(
+		null,
+	);
 	const [voiding, setVoiding] = useState<VoucherRowView | null>(null);
 	const [voidingBatch, setVoidingBatch] = useState<BatchGroup | null>(null);
 	const [renaming, setRenaming] = useState<BatchGroup | null>(null);
@@ -227,7 +234,7 @@ function VouchersRoute() {
 						Vouchers
 					</h2>
 					<p className="text-[13px] text-muted-foreground">
-						{subtitle ?? "Single-use discount codes"}
+						{subtitle ?? "Discount codes — one buyer, or everyone"}
 					</p>
 				</div>
 				{issueButton}
@@ -302,6 +309,7 @@ function VouchersRoute() {
 								paused={redemptionPaused}
 								onShare={(v) => setSharing(v)}
 								onVoid={(v) => setVoiding(v)}
+								onShowUses={(v) => setShowingUses(v)}
 							/>
 						),
 					)}
@@ -332,6 +340,11 @@ function VouchersRoute() {
 				storeName={retailer.storeName}
 				slug={retailer.slug}
 				onClose={() => setSharing(null)}
+			/>
+
+			<VoucherUsesDialog
+				voucher={showingUses}
+				onClose={() => setShowingUses(null)}
 			/>
 
 			{/* Rename — the one bulk UPDATE a run needs (a voucher's value is
@@ -410,7 +423,15 @@ function VouchersRoute() {
 				open={voiding !== null}
 				onOpenChange={(o) => !o && setVoiding(null)}
 				title={`Void ${voiding?.code ?? ""}?`}
-				description="The code stops working straight away. It stays in your list with its history, and anyone you've already sent it to will be told it's no longer valid."
+				description={
+					voiding?.usage === "shared"
+						? `The code stops working straight away for everyone — orders that already used it keep their discount. It stays in your list with its history${
+								(voiding.redeemedCount ?? 0) > 0
+									? ` (${voiding.redeemedCount} ${voiding.redeemedCount === 1 ? "order" : "orders"} so far)`
+									: ""
+							}, and anyone who types it from now on is told it's no longer valid.`
+						: "The code stops working straight away. It stays in your list with its history, and anyone you've already sent it to will be told it's no longer valid."
+				}
 				confirmLabel="Void it"
 				destructive
 				onConfirm={confirmVoid}
@@ -458,8 +479,9 @@ function EmptyState({
 				<div className="max-w-sm">
 					<p className="font-medium">No vouchers yet</p>
 					<p className="mt-1 text-sm text-muted-foreground">
-						A voucher is a single-use code you give one buyer — say, to make up
-						for a late order, or as a giveaway at a stall. They enter it at
+						A voucher is a discount code. Give one buyer a unique code — say, to
+						make up for a late order — or post one shared code, like SALE345,
+						that everyone can use until it runs out or ends. Buyers enter it at
 						checkout, or show you its QR at the counter.
 					</p>
 				</div>

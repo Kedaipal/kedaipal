@@ -158,3 +158,77 @@ describe("a dead code is struck through, so the list scans", () => {
 		);
 	});
 });
+
+/**
+ * A SHARED code (`z8r3fducfm`) reads differently on every line: it says it is
+ * shared, its outcome is a tally rather than one order, and "who used it" is
+ * a read that stays available after the code has stopped working.
+ */
+describe("a shared code", () => {
+	const shared: VoucherRowView = {
+		...base,
+		code: "SALE345",
+		usage: "shared",
+		maxRedemptions: 50,
+		redeemedCount: 12,
+		endsAt: Date.parse("2026-10-31T18:00:00+08:00"),
+	};
+
+	it("says it is shared, and leads with the tally and the end", () => {
+		renderList([shared]);
+		expect(screen.getByText("Shared")).toBeTruthy();
+		expect(
+			screen.getByText("12 of 50 used · ends 31 Oct 2026, 6:00 PM"),
+		).toBeTruthy();
+	});
+
+	it("with no end time says so, rather than leaving a blank", () => {
+		renderList([{ ...shared, endsAt: undefined }]);
+		expect(screen.getByText("12 of 50 used · no end time")).toBeTruthy();
+	});
+
+	it("a full code says the CAP stopped it, not the clock", () => {
+		renderList([{ ...shared, status: "redeemed", redeemedCount: 50 }]);
+		expect(screen.getByText(/All 50 uses taken/)).toBeTruthy();
+		expect(screen.getByText("Used")).toBeTruthy();
+	});
+
+	it("an ended code names when, and how many got in", () => {
+		renderList([{ ...shared, status: "expired" }]);
+		expect(
+			screen.getByText("Ended 31 Oct 2026, 6:00 PM · 12 of 50 used"),
+		).toBeTruthy();
+	});
+
+	it("offers 'who used it' once anyone has — to readers too, and after it is dead", () => {
+		const onShowUses = vi.fn();
+		render(
+			<VoucherList
+				vouchers={[{ ...shared, status: "expired" }]}
+				onShare={vi.fn()}
+				onVoid={vi.fn()}
+				onShowUses={onShowUses}
+				canWrite={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /12 orders/ }));
+		expect(onShowUses).toHaveBeenCalledWith(
+			expect.objectContaining({ code: "SALE345" }),
+		);
+	});
+
+	it("does not offer it before anyone has used the code", () => {
+		render(
+			<VoucherList
+				vouchers={[{ ...shared, redeemedCount: 0 }]}
+				onShare={vi.fn()}
+				onVoid={vi.fn()}
+				onShowUses={vi.fn()}
+				canWrite
+			/>,
+		);
+		expect(screen.queryByRole("button", { name: /orders?$/ })).toBeNull();
+		// Share and Void are still there — the code is live.
+		expect(screen.getByRole("button", { name: "Share" })).toBeTruthy();
+	});
+});

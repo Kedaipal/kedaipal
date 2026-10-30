@@ -5,7 +5,8 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import {
 	formatVoucherTerms,
-	normalizeVoucherCode,
+	parseVoucherCode,
+	SHARED_CODE_MIN,
 	type VoucherTerms,
 	voucherDiscountFor,
 	voucherRefusalMessage,
@@ -148,8 +149,9 @@ export function VoucherField({
 	}, [initialCode, apply]);
 
 	// Typed-but-unapplied guess, so Apply can disable until the code could be
-	// real rather than refusing a half-typed one at the server.
-	const guess = normalizeVoucherCode(code);
+	// real rather than refusing a half-typed one at the server. Either
+	// spelling — a `KP-…` single-use code or a shared word (`z8r3fducfm`).
+	const guess = parseVoucherCode(code);
 	const receipt = variant === "receipt";
 
 	// ── APPLIED ─────────────────────────────────────────────────────────────
@@ -331,7 +333,7 @@ export function VoucherField({
 					autoCapitalize="characters"
 					autoComplete="off"
 					spellCheck={false}
-					placeholder="KP-XXXX-XXXX"
+					placeholder="Code"
 					value={code}
 					disabled={disabled || checking}
 					isError={refusal !== null}
@@ -378,9 +380,11 @@ export function VoucherField({
 					{refusal}
 				</p>
 			) : code.trim() !== "" && guess === null ? (
+				// Not the `KP-XXXX-XXXX` hint any more: a shared word is a code
+				// too, so the only thing a half-typed one has in common with a
+				// real one is being too short.
 				<p className="text-xs text-muted-foreground">
-					Codes read <span className="font-mono">KP-XXXX-XXXX</span> — keep
-					typing.
+					Keep typing — a code is at least {SHARED_CODE_MIN} letters or numbers.
 				</p>
 			) : itemSubtotal <= 0 ? (
 				// The counter can sit with an empty cart and the field open; the

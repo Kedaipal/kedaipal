@@ -564,9 +564,16 @@ describe("vouchers.checkCode", () => {
 			code: "KP-ZZZZ-ZZZZ",
 		});
 		expect(unknown).toMatchObject({ ok: false, refusal: "not_found" });
-		const junk = await t.mutation(api.vouchers.checkCode, {
+		// A word nobody issued is a shared-code SHAPE (`z8r3fducfm`), so it is
+		// "not found" — only something too short to be any code is malformed.
+		const unissued = await t.mutation(api.vouchers.checkCode, {
 			retailerId: retailer._id,
 			code: "hello",
+		});
+		expect(unissued).toMatchObject({ ok: false, refusal: "not_found" });
+		const junk = await t.mutation(api.vouchers.checkCode, {
+			retailerId: retailer._id,
+			code: "hi",
 		});
 		expect(junk).toMatchObject({ ok: false, refusal: "malformed" });
 	});
@@ -769,7 +776,8 @@ describe("counter checkout", () => {
 		// Mid-keystroke. Refusing the save would lose the rest of the cart.
 		await asUser.mutation(api.counterCheckout.saveSessionDraft, {
 			sessionId,
-			draft: { items: [{ variantId, quantity: 1 }], voucherCode: "KP-7F" },
+			// Too short for either spelling (`parseVoucherCode`).
+			draft: { items: [{ variantId, quantity: 1 }], voucherCode: "K7" },
 		});
 		const session = await t.run((ctx) => ctx.db.get(sessionId));
 		expect(session?.draft?.voucherCode).toBeUndefined();

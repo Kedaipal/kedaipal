@@ -99,7 +99,7 @@ import {
 } from "./lib/voucherRedemption";
 import {
 	claimVoucherDiscount,
-	normalizeVoucherCode,
+	parseVoucherCode,
 	type VoucherSnapshot,
 	type VoucherTerms,
 } from "./lib/vouchers";
@@ -706,7 +706,7 @@ export const saveSessionDraft = mutation({
 				voucherCode:
 					draft.voucherCode === undefined
 						? undefined
-						: (normalizeVoucherCode(draft.voucherCode) ?? undefined),
+						: (parseVoucherCode(draft.voucherCode)?.code ?? undefined),
 			},
 			expiresAt: now + OPEN_SESSION_TTL_MS, // slide the idle window
 			updatedAt: now,
