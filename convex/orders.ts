@@ -165,7 +165,11 @@ import {
 	releaseOrderVoucher,
 	resolveVoucherOrThrow,
 } from "./lib/voucherRedemption";
-import type { VoucherSnapshot, VoucherTerms } from "./lib/vouchers";
+import {
+	type VoucherSnapshot,
+	type VoucherTerms,
+	voucherUsageOf,
+} from "./lib/vouchers";
 import {
 	borrowedLeadReference,
 	currentClaimIndex,
@@ -1922,7 +1926,11 @@ export const create = mutation({
 			});
 			voucherTerms = terms;
 			redeemedVoucherId = voucher._id;
-			voucherSnapshot = { code: voucher.code, ...terms };
+			voucherSnapshot = {
+				code: voucher.code,
+				...terms,
+				usage: voucherUsageOf(voucher),
+			};
 		}
 
 		// The chosen pickup point's frozen fee and the delivery charge ride the

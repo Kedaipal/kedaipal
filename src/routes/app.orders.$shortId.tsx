@@ -2381,7 +2381,11 @@ function OrderDetailRoute() {
 					// (`z8r3fdr617` — the credit's rule and the voucher's differ, so
 					// they are two sentences, not one).
 					order.voucherSnapshot
-						? `Voucher ${order.voucherSnapshot.code} goes back to active — this buyer can use it again.`
+						? order.voucherSnapshot.usage === "shared"
+							? // A SHARED word (`z8r3fducfm`) was never this buyer's: one use
+								// returns to the pool and whoever types it next takes it.
+								`One use of ${order.voucherSnapshot.code} goes back — the next buyer to type it gets it.`
+							: `Voucher ${order.voucherSnapshot.code} goes back to active — this buyer can use it again.`
 						: null,
 					hasActiveRiderBooking
 						? `⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`

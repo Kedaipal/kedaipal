@@ -71,8 +71,10 @@ describe("applying a code", () => {
 	it("refuses to call the server on something that can't be a code", () => {
 		renderField();
 		fireEvent.click(screen.getByRole("button", { name: /have a voucher/i }));
+		// Too short to be a single-use code OR a shared word (`z8r3fducfm`) —
+		// "hello" would be a plausible shared code and must reach the server.
 		fireEvent.change(screen.getByLabelText("Voucher code"), {
-			target: { value: "hello" },
+			target: { value: "hi" },
 		});
 		expect(screen.getByRole("button", { name: "Apply" })).toHaveProperty(
 			"disabled",
@@ -101,6 +103,36 @@ describe("applying a code", () => {
 				value: 1000,
 			}),
 		);
+	});
+
+	it("a shared WORD is a code too — it reaches the server and comes back canonical", async () => {
+		// `z8r3fducfm`: the field is ONE control for both spellings.
+		checkCode.mockResolvedValue({
+			ok: true,
+			code: "SALE345",
+			terms: { kind: "percent", value: 20 },
+		});
+		const { onApply } = renderField();
+		fireEvent.click(screen.getByRole("button", { name: /have a voucher/i }));
+		fireEvent.change(screen.getByLabelText("Voucher code"), {
+			target: { value: "sale 345" },
+		});
+		expect(screen.getByRole("button", { name: "Apply" })).toHaveProperty(
+			"disabled",
+			false,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+		await waitFor(() =>
+			expect(onApply).toHaveBeenCalledWith({
+				code: "SALE345",
+				kind: "percent",
+				value: 20,
+			}),
+		);
+		expect(checkCode).toHaveBeenCalledWith({
+			retailerId: RETAILER,
+			code: "sale 345",
+		});
 	});
 
 	it("shows a refusal UNDER THE FIELD, never as a page error", async () => {

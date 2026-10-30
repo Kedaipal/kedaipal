@@ -1,15 +1,25 @@
 import { describe, expect, test } from "vitest";
 import { DAY_MS, mytMidnightFromYmd } from "./fulfilmentDate";
 import {
+	formatSharedUses,
+	formatVoucherEnd,
 	formatVoucherExpiry,
 	formatVoucherTerms,
 	generateVoucherCode,
 	isVoucherExpired,
 	isVoucherRedeemable,
 	isVoucherRefusalErrorData,
+	normalizeSharedCode,
 	normalizeVoucherCode,
+	parseVoucherCode,
 	refusalForVoucher,
 	resolveVoucherStatus,
+	SHARED_CODE_MAX,
+	SHARED_CODE_MIN,
+	SHARED_USES_MAX,
+	sharedCodeError,
+	sharedLimitsError,
+	suggestSharedCodes,
 	VOUCHER_FIXED_MAX,
 	VOUCHER_PERCENT_MAX,
 	voucherDiscountFor,
@@ -238,6 +248,8 @@ describe("refusals", () => {
 			"expired",
 			"voided",
 			"redeemed",
+			"exhausted",
+			"store_ineligible",
 			"already_on_order",
 		] as const;
 		const seen = new Set<string>();
@@ -292,6 +304,173 @@ describe("display", () => {
 		expect(formatVoucherExpiry(undefined)).toBe("No expiry");
 		expect(formatVoucherExpiry(mytMidnightFromYmd("2026-10-20"))).toBe(
 			"Until 2026-10-20",
+		);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Shared codes (`z8r3fducfm`)
+// ---------------------------------------------------------------------------
+
+describe("shared codes — the word", () => {
+	test("normalizeSharedCode folds case and punctuation, and bounds the length", () => {
+		expect(normalizeSharedCode("sale 345")).toBe("SALE345");
+		expect(normalizeSharedCode("  happy-hour ")).toBe("HAPPYHOUR");
+		expect(normalizeSharedCode("abc")).toBeNull(); // too short
+		expect(normalizeSharedCode("A".repeat(SHARED_CODE_MAX + 1))).toBeNull();
+		expect(normalizeSharedCode("A".repeat(SHARED_CODE_MIN))).toBe(
+			"A".repeat(SHARED_CODE_MIN),
+		);
+	});
+
+	test("parseVoucherCode gives the single-use parser first claim", () => {
+		// A real single-use code, however carelessly typed, is never read as a word.
+		expect(parseVoucherCode("kp 7f3k q2wm")).toEqual({
+			usage: "single",
+			code: "KP-7F3K-Q2WM",
+		});
+		// Eight alphabet symbols without the prefix: still single-use.
+		expect(parseVoucherCode("7F3KQ2WM")).toEqual({
+			usage: "single",
+			code: "KP-7F3K-Q2WM",
+		});
+		// A word with a digit the alphabet lacks (0) can only be shared.
+		expect(parseVoucherCode("sale20")).toEqual({ usage: "shared", code: "SALE20" });
+		// Too short for either.
+		expect(parseVoucherCode("hi")).toBeNull();
+	});
+
+	test("sharedCodeError refuses a word the single-use parser would claim", () => {
+		// `SALEDEAL` is 8 symbols of the single-use alphabet — a buyer typing it
+		// would be routed to the KP lookup and never find the shared row.
+		expect(sharedCodeError("SALEDEAL")).toMatch(/single-use/);
+		expect(sharedCodeError("SALEDEAL1")).toBeNull(); // a 1 breaks the shape
+		expect(sharedCodeError("")).toMatch(/type a code/i);
+		expect(sharedCodeError("SALE 20")).toMatch(/letters and numbers/i);
+		expect(sharedCodeError("abc")).toMatch(/at least/i);
+		expect(sharedCodeError("A".repeat(SHARED_CODE_MAX + 1))).toMatch(/at most/i);
+		expect(sharedCodeError("sale20")).toBeNull();
+	});
+
+	test("every suggestion is one the form would accept", () => {
+		for (const terms of [
+			{ kind: "percent" as const, value: 20 },
+			{ kind: "fixed" as const, value: 1000 },
+			// A value whose digits are all alphabet symbols: SAVE2345 would parse
+			// as single-use and must be filtered out rather than offered.
+			{ kind: "fixed" as const, value: 234_500 },
+			{ kind: "percent" as const, value: 0 },
+		]) {
+			const picks = suggestSharedCodes(terms);
+			expect(picks.length).toBeGreaterThan(0);
+			expect(picks.length).toBeLessThanOrEqual(3);
+			for (const code of picks) expect(sharedCodeError(code)).toBeNull();
+		}
+		expect(suggestSharedCodes({ kind: "percent", value: 20 })).toContain("SAVE20");
+	});
+});
+
+describe("shared codes — the bounds", () => {
+	const now = Date.parse("2026-10-30T10:00:00+08:00");
+
+	test("at least one bound is required", () => {
+		expect(sharedLimitsError({}, now)).toMatch(/how many|when it ends/i);
+		expect(sharedLimitsError({ maxRedemptions: 50 }, now)).toBeNull();
+		expect(sharedLimitsError({ endsAt: now + 1 }, now)).toBeNull();
+		expect(sharedLimitsError({ maxRedemptions: 50, endsAt: now + 1 }, now)).toBeNull();
+	});
+
+	test("a cap is a whole positive number under the fat-finger ceiling", () => {
+		expect(sharedLimitsError({ maxRedemptions: 0 }, now)).toMatch(/whole number/i);
+		expect(sharedLimitsError({ maxRedemptions: 2.5 }, now)).toMatch(/whole number/i);
+		expect(sharedLimitsError({ maxRedemptions: SHARED_USES_MAX + 1 }, now)).toMatch(
+			/at most/i,
+		);
+	});
+
+	test("an end time has to be ahead", () => {
+		expect(sharedLimitsError({ endsAt: now }, now)).toMatch(/already passed/i);
+		expect(sharedLimitsError({ endsAt: Number.NaN }, now)).toMatch(/pick when/i);
+	});
+});
+
+describe("shared codes — status is judged, never stored", () => {
+	const now = Date.parse("2026-10-30T10:00:00+08:00");
+	const shared = {
+		status: "active" as const,
+		usage: "shared" as const,
+		maxRedemptions: 2,
+		redeemedCount: 0,
+		endsAt: now + 60_000,
+	};
+
+	test("active while under the cap and before the end", () => {
+		expect(resolveVoucherStatus(shared, now)).toBe("active");
+		expect(isVoucherRedeemable(shared, now)).toBe(true);
+	});
+
+	test("reads USED once the cap is reached, and the buyer hears 'run out'", () => {
+		const full = { ...shared, redeemedCount: 2 };
+		expect(resolveVoucherStatus(full, now)).toBe("redeemed");
+		expect(refusalForVoucher(full, now)).toBe("exhausted");
+		expect(voucherRefusalMessage("exhausted")).toMatch(/run out/i);
+	});
+
+	test("reads EXPIRED at the end instant exactly — not end of day", () => {
+		expect(resolveVoucherStatus(shared, shared.endsAt - 1)).toBe("active");
+		expect(resolveVoucherStatus(shared, shared.endsAt)).toBe("expired");
+		expect(refusalForVoucher(shared, shared.endsAt)).toBe("expired");
+	});
+
+	test("a full cap outranks a passed end — whichever came first, and the cap always did", () => {
+		// A use can only land while the code runs, so a full cap was filled
+		// BEFORE the end passed; reporting "expired" would hide that.
+		const both = { ...shared, redeemedCount: 2 };
+		expect(resolveVoucherStatus(both, shared.endsAt + DAY_MS)).toBe("redeemed");
+	});
+
+	test("no cap never exhausts; no end never expires", () => {
+		expect(
+			resolveVoucherStatus(
+				{ status: "active", usage: "shared", redeemedCount: 10_000, endsAt: now + 1 },
+				now,
+			),
+		).toBe("active");
+		expect(
+			resolveVoucherStatus(
+				{ status: "active", usage: "shared", maxRedemptions: 5, redeemedCount: 4 },
+				now + 1000 * DAY_MS,
+			),
+		).toBe("active");
+	});
+
+	test("voided outranks everything, and a single-use row ignores the shared fields", () => {
+		expect(
+			resolveVoucherStatus({ ...shared, status: "voided", redeemedCount: 2 }, now),
+		).toBe("voided");
+		// A single-use voucher never carries these; if it did, they must not act.
+		expect(
+			resolveVoucherStatus(
+				{ status: "active", maxRedemptions: 1, redeemedCount: 1 },
+				now,
+			),
+		).toBe("active");
+		expect(refusalForVoucher({ status: "redeemed" }, now)).toBe("redeemed");
+	});
+});
+
+describe("shared codes — display", () => {
+	test("the tally reads with or without a cap", () => {
+		expect(formatSharedUses({ maxRedemptions: 50, redeemedCount: 12 })).toBe(
+			"12 of 50 used",
+		);
+		expect(formatSharedUses({ redeemedCount: 12 })).toBe("12 used");
+		expect(formatSharedUses({ maxRedemptions: 50 })).toBe("0 of 50 used");
+	});
+
+	test("the end instant prints in store time", () => {
+		expect(formatVoucherEnd(Date.parse("2026-10-31T18:00:00+08:00"))).toBe(
+			"31 Oct 2026, 6:00 PM",
 		);
 	});
 });
