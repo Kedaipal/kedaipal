@@ -40,7 +40,7 @@ import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { ThemeToggle } from "../ui/theme-toggle";
 import { AppVersionRow } from "./app-version-row";
-import { CreditTicket } from "./credit-ticket";
+import { CreditTicket, CreditTicketPlaceholder } from "./credit-ticket";
 import { ProfileAvatar, ProfileMenu, useCreditStub } from "./profile-menu";
 import { TierPill } from "./tier-pill";
 import { WhatsNewNavItem } from "./whats-new";
@@ -98,6 +98,17 @@ export function Sidebar({
 	const { user } = useUser();
 	const [menuOpen, setMenuOpen] = useState(false);
 	const stub = useCreditStub(retailer);
+	// The plan pill as it rides the credits ticket's top tear (compact copy).
+	const railPill = retailer ? (
+		<TierPill
+			subscription={retailer.subscription}
+			foundingRank={retailer.foundingMemberRank}
+			admin={adminBadge}
+			unclaimed={retailer?.unclaimed === true}
+			compact
+			className="py-0 text-[9px]"
+		/>
+	) : null;
 	const userEmail = user?.primaryEmailAddress?.emailAddress ?? null;
 	const userName =
 		user?.fullName ||
@@ -175,27 +186,16 @@ export function Sidebar({
 						"shrink-0 overflow-hidden border-b border-border px-4",
 						collapsed
 							? "max-h-0 py-0 opacity-0"
-							: stub?.ticket
+							: stub?.ticket || stub === undefined
 								? "max-h-32 pt-3 pb-3 opacity-100"
 								: "max-h-12 py-2 opacity-100",
 						motion,
 					)}
 				>
 					{stub?.ticket ? (
-						<CreditTicket
-							stub={stub}
-							variant="rail"
-							plan={
-								<TierPill
-									subscription={retailer.subscription}
-									foundingRank={retailer.foundingMemberRank}
-									admin={adminBadge}
-									unclaimed={retailer?.unclaimed === true}
-									compact
-									className="py-0 text-[9px]"
-								/>
-							}
-						/>
+						<CreditTicket stub={stub} variant="rail" plan={railPill} />
+					) : stub === undefined ? (
+						<CreditTicketPlaceholder plan={railPill} />
 					) : (
 						<TierPill
 							subscription={retailer.subscription}

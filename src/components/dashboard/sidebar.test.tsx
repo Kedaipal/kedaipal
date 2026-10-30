@@ -78,7 +78,7 @@ vi.mock("./whats-new", () => ({
 // whatever the test sets. The ticket draws itself (credit-ticket.test.tsx);
 // here it only has to land in the right place.
 const profile = vi.hoisted(() => ({
-	stub: null as null | { ticket: { figure: string } | null },
+	stub: null as undefined | null | { ticket: { figure: string } | null },
 }));
 vi.mock("./profile-menu", () => ({
 	useCreditStub: () => profile.stub,
@@ -101,6 +101,9 @@ vi.mock("./credit-ticket", () => ({
 				<a href="/billing">ticket</a>
 			</div>
 		) : null,
+	CreditTicketPlaceholder: ({ plan }: { plan: ReactNode }) => (
+		<div data-ticket="placeholder">{plan}</div>
+	),
 }));
 vi.mock("./app-version-row", () => ({
 	AppVersionRow: () => <div data-slot="app-version" />,
@@ -450,6 +453,17 @@ describe("the credits ticket rides the top of the rail (z8r3fdx34j)", () => {
 			false,
 		);
 		expect(ticketBox(container, "rail")?.hasAttribute("inert")).toBe(true);
+	});
+
+	it("while the balance loads, the ticket's frame holds the pill on its tear — nothing jumps", () => {
+		collapsed = false;
+		profile.stub = undefined;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(
+			container.querySelector('[data-ticket="placeholder"]')?.textContent,
+		).toContain("Pro");
 	});
 
 	it("without a ticket the plan pill keeps its own row", () => {

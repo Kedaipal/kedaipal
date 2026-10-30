@@ -1345,7 +1345,9 @@ belongs to the plan pill (Zaki, 31 Oct — "your plan and what's left on it" as
 one object), whose label can run long ("FOUNDING #3" + "PRO", "FREE · 12D
 LEFT") and must never collide with a stamp. The pill is a sibling of the
 ticket's link, never inside it. A reader with no ticket keeps the pill on its
-own row. An owed
+own row. While the balance loads, `CreditTicketPlaceholder` holds the ticket's
+empty frame with the pill already on its tear, so neither jumps when the
+number lands. An owed
 balance reads "owed", never a negative number. The collapsed figure caps at
 `999+` (orders waiting at `99+`) so it fits 44px; the phone line keeps the
 whole count. Words come from `creditStub(...).ticket`; colours from

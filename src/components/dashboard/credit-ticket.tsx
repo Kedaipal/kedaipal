@@ -93,17 +93,7 @@ export function CreditTicket({
 
 	return (
 		<div className="relative">
-			{plan ? (
-				// The tear runs right up to the pill's own border. The card-coloured
-				// backing is the pill's exact shape, so a translucent pill (trial,
-				// unclaimed) never shows the teeth through it.
-				<div
-					data-testid="credit-ticket-plan"
-					className="absolute -top-1 left-2.5 z-10 flex max-w-[calc(100%-1.25rem)] rounded-full bg-card"
-				>
-					{plan}
-				</div>
-			) : null}
+			{plan ? <PlanOnTear plan={plan} /> : null}
 			<Link
 				{...link}
 				className={cn(
@@ -145,6 +135,41 @@ export function CreditTicket({
 					</span>
 				</span>
 			</Link>
+		</div>
+	);
+}
+
+/**
+ * While the balance loads: the rail ticket's empty frame, with the plan pill
+ * already on its tear — so the pill doesn't sit on its own row for a beat
+ * and then jump onto the ticket when the number lands (test-code, 31 Oct).
+ * Sized to the real ticket so nothing below it moves either.
+ */
+export function CreditTicketPlaceholder({ plan }: { plan: ReactNode }) {
+	return (
+		<div className="relative" data-testid="credit-ticket-placeholder">
+			<PlanOnTear plan={plan} />
+			<div aria-hidden className="kp-credit-ticket">
+				<span className="flex flex-col items-center gap-[7px] border-x-[1.5px] border-[var(--stub-edge)] px-2 pt-3 pb-2.5">
+					<span className="h-[18.75px] w-28 animate-pulse rounded bg-muted motion-reduce:animate-none" />
+					<span className="h-[5px] w-[157px] rounded-full bg-muted/60" />
+				</span>
+			</div>
+		</div>
+	);
+}
+
+/** The plan pill laid on the rail ticket's top tear. The tear runs right up
+ * to the pill's own border; the card-coloured backing is the pill's exact
+ * shape, so a translucent pill (trial, unclaimed) never shows the teeth
+ * through it. */
+function PlanOnTear({ plan }: { plan: ReactNode }) {
+	return (
+		<div
+			data-testid="credit-ticket-plan"
+			className="absolute -top-1 left-2.5 z-10 flex max-w-[calc(100%-1.25rem)] rounded-full bg-card"
+		>
+			{plan}
 		</div>
 	);
 }

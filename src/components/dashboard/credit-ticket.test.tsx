@@ -7,7 +7,7 @@ import {
 	creditStub,
 	STUB_DOTS,
 } from "../../lib/credit-stub";
-import { CreditTicket } from "./credit-ticket";
+import { CreditTicket, CreditTicketPlaceholder } from "./credit-ticket";
 
 /**
  * The always-on credits ticket (z8r3fdx34j, Zaki 31 Oct): the menu stub torn
@@ -149,6 +149,17 @@ describe("CreditTicket", () => {
 		expect(t.textContent).toBe("2 waiting");
 		expect(t.querySelector(".kp-credit-ticket-side")).not.toBeNull();
 		expect(t.className).toContain("py-[13px]");
+	});
+
+	it("placeholder: the pill on an empty frame, no link and nothing for a reader to hear", () => {
+		const { container } = render(
+			<CreditTicketPlaceholder plan={<a href="/billing">Pro</a>} />,
+		);
+		expect(screen.getByTestId("credit-ticket-plan").textContent).toBe("Pro");
+		expect(
+			container.querySelector('.kp-credit-ticket[aria-hidden="true"]'),
+		).not.toBeNull();
+		expect(screen.queryByTestId("credit-ticket")).toBeNull();
 	});
 
 	it("an unmetered store gets no ticket — the menu still says 'On us'", () => {
