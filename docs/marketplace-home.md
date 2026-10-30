@@ -166,8 +166,9 @@ the card's one geographic hint — the profile has no city field.
 
 - **Storefront footer** — "Discover more stores on Kedaipal →" above the
   Powered-by badge (`StorefrontFooter discover`). Opt-in per page and ON only
-  where a buyer is browsing: store home, category, product, and the
-  store-not-found dead end — **plus the order page**. Never at checkout or a
+  where a buyer is browsing: store home, category, product — **plus the order
+  page**. The store-not-found dead end leads with **Browse stores** as its
+  primary action instead ([`not-found.md`](./not-found.md)). Never at checkout or a
   claim page. Hidden for a store that opted out (`marketplaceUnlisted` rides
   the by-slug payload — public-safe — and the order read). **Deliberately NOT a Kedaipal logo top-left**
   (considered, 1 Oct 2026): the top of a storefront is the seller's brand,

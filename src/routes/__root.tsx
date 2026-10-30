@@ -21,6 +21,7 @@ import { clerkAppearance } from "../lib/clerk-appearance";
 import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
 import { readVisitorMarket, readVisitorRegion } from "../lib/geo-region";
+import { notFoundHeadMeta } from "../lib/not-found";
 import { readReferralSlugOnServer } from "../lib/referral-cookie";
 import { THEME_INIT_SCRIPT } from "../lib/theme";
 import { getLocale } from "../paraglide/runtime";
@@ -53,7 +54,7 @@ export const Route = createRootRoute({
 		// read, no I/O, same cost posture as the region above.
 		referralSlug: readReferralSlugOnServer(),
 	}),
-	head: () => ({
+	head: ({ match }) => ({
 		meta: [
 			{ charSet: "utf-8" },
 			{
@@ -61,9 +62,15 @@ export const Route = createRootRoute({
 				content: "width=device-width, initial-scale=1, viewport-fit=cover",
 			},
 			{ name: "theme-color", content: "#0F172A" },
-			{ name: "robots", content: "index, follow" },
 			{ property: "og:site_name", content: "Kedaipal" },
-			{ title: "Kedaipal — Order Hub for Small Retailers" },
+			// A URL nothing claims, with no layout under it to own the miss, is
+			// the root's to title (the page itself is `RouteNotFound`).
+			...(match.globalNotFound
+				? notFoundHeadMeta("site")
+				: [
+						{ name: "robots", content: "index, follow" },
+						{ title: "Kedaipal — Order Hub for Small Retailers" },
+					]),
 		],
 		links: [
 			{ rel: "stylesheet", href: appCss },
