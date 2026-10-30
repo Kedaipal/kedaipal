@@ -223,11 +223,16 @@ describe("CourierWalletRow", () => {
 });
 
 describe("DispatchWalletLine", () => {
-	const line = (provider: "lalamove" | "easyparcel", price: number) => {
+	const line = (
+		provider: "lalamove" | "easyparcel",
+		price: number,
+		currency = "MYR",
+	) => {
 		render(
 			<DispatchWalletLine
 				provider={provider}
 				priceMinor={price}
+				priceCurrency={currency}
 				retailerId={"r1" as never}
 				country="MY"
 			/>,
@@ -240,6 +245,31 @@ describe("DispatchWalletLine", () => {
 		const el = line("lalamove", 1270);
 		expect(el.getAttribute("data-verdict")).toBe("warn");
 		expect(el.textContent).toMatch(/Lalamove has the final say/);
+		// A live key: the Business-account trap is worth saying.
+		expect(el.textContent).toMatch(/Business account your keys belong to/);
+	});
+
+	it("a sandbox key's warn never says to top up the Business account", () => {
+		// Regression (test-code, 31 Oct): it contradicted the sandbox banner.
+		s.wallets = [v({ balanceMinor: 840, state: "low", isTest: true })];
+		const el = line("lalamove", 1270);
+		expect(el.getAttribute("data-verdict")).toBe("warn");
+		expect(el.textContent).not.toMatch(/Business account/);
+		expect(screen.queryByRole("button", { name: /Top up/ })).toBeNull();
+	});
+
+	it("a quote in another currency than the wallet is never compared", () => {
+		s.wallets = [
+			v({
+				provider: "easyparcel",
+				source: "pull",
+				at: Date.now(),
+				balanceMinor: 300,
+			}),
+		];
+		const el = line("easyparcel", 475, "HKD");
+		expect(el.getAttribute("data-verdict")).toBe("unknown");
+		expect(el.textContent).not.toMatch(/short|Top up first/);
 	});
 
 	it("blocks on a balance pulled moments ago that can't pay", () => {
@@ -252,7 +282,9 @@ describe("DispatchWalletLine", () => {
 				balanceMinor: 800,
 			}),
 		];
-		expect(line("easyparcel", 1150).getAttribute("data-verdict")).toBe("block");
+		expect(line("easyparcel", 1150, "SGD").getAttribute("data-verdict")).toBe(
+			"block",
+		);
 	});
 
 	it("renders nothing for a courier that isn't connected", () => {
@@ -261,6 +293,7 @@ describe("DispatchWalletLine", () => {
 			<DispatchWalletLine
 				provider="delyva"
 				priceMinor={500}
+				priceCurrency="MYR"
 				retailerId={"r1" as never}
 				country="MY"
 			/>,

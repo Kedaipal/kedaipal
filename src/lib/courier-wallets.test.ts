@@ -131,6 +131,27 @@ describe("presentWallet — every state the row can be in", () => {
 		expect(p.needsTopUp).toBe(false);
 		expect(p.detail).toMatch(/play money/);
 	});
+
+	it("a test wallet with nothing seen names its state, never a bare dash", () => {
+		const none = { balanceMinor: null, at: null, source: null } as const;
+		expect(
+			presentWallet(
+				v({ ...none, isTest: true, provider: "delyva", state: "unshared" }),
+				NOW,
+			).figure,
+		).toBe("Not shared");
+		expect(
+			presentWallet(v({ ...none, isTest: true, state: "unreported" }), NOW)
+				.figure,
+		).toBe("Not reported yet");
+		const line = dispatchWalletLine(
+			v({ ...none, isTest: true, provider: "delyva", state: "unshared" }),
+			475,
+			NOW,
+			"MYR",
+		);
+		expect(line.text).toBe("Delyva wallet: Not shared · test account");
+	});
 });
 
 describe("dispatchWalletLine — what Book is told", () => {
@@ -139,6 +160,7 @@ describe("dispatchWalletLine — what Book is told", () => {
 			v({ balanceMinor: 840, state: "low" }),
 			1270,
 			NOW,
+			"MYR",
 		);
 		expect(line.verdict).toBe("warn");
 		expect(line.text).toMatch(
@@ -157,6 +179,7 @@ describe("dispatchWalletLine — what Book is told", () => {
 			}),
 			1150,
 			NOW,
+			"SGD",
 		);
 		expect(line.verdict).toBe("block");
 		expect(line.text).toMatch(
@@ -175,6 +198,7 @@ describe("dispatchWalletLine — what Book is told", () => {
 			}),
 			2033,
 			NOW,
+			"MYR",
 		);
 		expect(line.verdict).toBe("block");
 		expect(line.text).toMatch(
@@ -184,7 +208,7 @@ describe("dispatchWalletLine — what Book is told", () => {
 	});
 
 	it("covers: a quiet line with the balance and its age", () => {
-		const line = dispatchWalletLine(v(), 600, NOW);
+		const line = dispatchWalletLine(v(), 600, NOW, "MYR");
 		expect(line.verdict).toBe("covers");
 		expect(line.text).toMatch(
 			/^Lalamove wallet: RM\s?84\.50 · updated 3m ago$/,

@@ -313,7 +313,12 @@ export function EasyparcelDispatchCard({
 	const selectedUnaffordable =
 		selected !== null &&
 		(walletView
-			? walletVerdict(walletView, selected.priceMinor, Date.now()) === "block"
+			? walletVerdict(
+					walletView,
+					selected.priceMinor,
+					Date.now(),
+					selected.currency || walletCurrency,
+				) === "block"
 			: quotedBalance !== undefined && selected.priceMinor > quotedBalance);
 	const counts = rates ? rateFilterCounts(rates) : { door: 0, point: 0 };
 	const bothModes = counts.door > 0 && counts.point > 0;
@@ -870,6 +875,7 @@ export function EasyparcelDispatchCard({
 								id={`easyparcel-wallet-${order.shortId}`}
 								provider="easyparcel"
 								priceMinor={selected ? selected.priceMinor : null}
+								priceCurrency={selected?.currency || walletCurrency}
 								retailerId={order.retailerId}
 								country={dispatch.country}
 								fallback={

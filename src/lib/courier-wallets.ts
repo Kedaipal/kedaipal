@@ -94,7 +94,15 @@ export function presentWallet(
 
 	if (isTest) {
 		return {
-			figure: amount ?? "—",
+			// Nothing seen yet reads as the state, like a live wallet — never a
+			// bare dash (test-code, 31 Oct).
+			figure:
+				amount ??
+				(view.state === "unshared"
+					? "Not shared"
+					: view.state === "short"
+						? "Too low"
+						: "Not reported yet"),
 			figureIsAmount: amount !== null,
 			tone: "neutral",
 			detail: "Test account — play money. Nothing here needs a top-up.",
@@ -193,14 +201,16 @@ export type DispatchWalletLine = {
  * how short and that the courier has the final say (Book stays enabled);
  * `block` is a pulled balance read moments ago that can't pay — Book
  * disables with this sentence as its reason. A test wallet gets the same
- * verdict in sandbox words.
+ * verdict in sandbox words. `priceCurrency` is the quote's own currency: a
+ * balance in another one is never compared against it.
  */
 export function dispatchWalletLine(
 	view: CourierWalletView,
 	priceMinor: number,
 	now: number,
+	priceCurrency: string,
 ): DispatchWalletLine {
-	const verdict = walletVerdict(view, priceMinor, now);
+	const verdict = walletVerdict(view, priceMinor, now, priceCurrency);
 	const name = walletProviderName(view);
 	const balance =
 		view.balanceMinor !== null

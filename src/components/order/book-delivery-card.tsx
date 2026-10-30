@@ -1293,6 +1293,7 @@ export function BookDeliveryCard({
 							<DispatchWalletLine
 								provider="lalamove"
 								priceMinor={requoting ? null : quote.fee}
+								priceCurrency={order.currency}
 								retailerId={order.retailerId}
 								country={quote.market}
 							/>

@@ -62,6 +62,7 @@ describe("walletVerdict — block only on a balance we just PULLED", () => {
 		({
 			isTest: false,
 			state: "low",
+			currency: "MYR",
 			balanceMinor: 800,
 			at: now - 60_000,
 			source: "pull",
@@ -69,38 +70,66 @@ describe("walletVerdict — block only on a balance we just PULLED", () => {
 		}) as CourierWalletView;
 
 	test("a fresh pull that can't pay blocks; one that can covers", () => {
-		expect(walletVerdict(view({}), 1150, now)).toBe("block");
-		expect(walletVerdict(view({}), 700, now)).toBe("covers");
+		expect(walletVerdict(view({}), 1150, now, "MYR")).toBe("block");
+		expect(walletVerdict(view({}), 700, now, "MYR")).toBe("covers");
 	});
 
 	test("a STALE pull only warns — EasyParcel is the final judge", () => {
 		expect(
-			walletVerdict(view({ at: now - FRESH_WALLET_MS - 1 }), 1150, now),
+			walletVerdict(view({ at: now - FRESH_WALLET_MS - 1 }), 1150, now, "MYR"),
 		).toBe("warn");
 	});
 
 	test("a pushed (Lalamove) or refusal-seen (Delyva) number only warns", () => {
-		expect(walletVerdict(view({ source: "webhook" }), 1150, now)).toBe("warn");
-		expect(walletVerdict(view({ source: "refusal" }), 1150, now)).toBe("warn");
+		expect(walletVerdict(view({ source: "webhook" }), 1150, now, "MYR")).toBe("warn");
+		expect(walletVerdict(view({ source: "refusal" }), 1150, now, "MYR")).toBe("warn");
 	});
 
 	test("short warns; nothing known is unknown", () => {
 		expect(
-			walletVerdict(view({ state: "short", balanceMinor: null }), 1150, now),
+			walletVerdict(view({ state: "short", balanceMinor: null }), 1150, now, "MYR"),
 		).toBe("warn");
 		expect(
-			walletVerdict(view({ balanceMinor: null, state: "unreported" }), 1150, now),
+			walletVerdict(view({ balanceMinor: null, state: "unreported" }), 1150, now, "MYR"),
 		).toBe("unknown");
 	});
 
 	test("a TEST wallet is judged like a live one — a sandbox refuses too", () => {
 		// Regression (test-code, 30 Oct 2026): J&T at RM 20.33 against a sandbox
 		// read of RM 19.80 left Book live, one tap from a refusal.
-		expect(walletVerdict(view({ isTest: true }), 1150, now)).toBe("block");
+		expect(walletVerdict(view({ isTest: true }), 1150, now, "MYR")).toBe("block");
 		expect(
-			walletVerdict(view({ isTest: true, source: "webhook" }), 1150, now),
+			walletVerdict(view({ isTest: true, source: "webhook" }), 1150, now, "MYR"),
 		).toBe("warn");
-		expect(walletVerdict(view({ isTest: true }), 700, now)).toBe("covers");
+		expect(walletVerdict(view({ isTest: true }), 700, now, "MYR")).toBe("covers");
+	});
+});
+
+describe("walletVerdict — never across currencies", () => {
+	const now = 10_000_000;
+	const view = {
+		state: "low",
+		currency: "MYR",
+		balanceMinor: 300,
+		at: now - 60_000,
+		source: "pull",
+	} as CourierWalletView;
+
+	test("a balance in another currency than the price says nothing", () => {
+		// Regression (test-code, 31 Oct 2026): the Delyva demo quotes HKD.
+		expect(walletVerdict(view, 475, now, "HKD")).toBe("unknown");
+		expect(walletVerdict(view, 475, now, "MYR")).toBe("block");
+	});
+
+	test("…but a refusal is the provider's own verdict, in any currency", () => {
+		expect(
+			walletVerdict(
+				{ ...view, state: "short", balanceMinor: null },
+				475,
+				now,
+				"HKD",
+			),
+		).toBe("warn");
 	});
 });
 

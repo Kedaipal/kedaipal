@@ -33,6 +33,7 @@ import { CourierTopUpSheet } from "./courier-top-up-sheet";
 export function DispatchWalletLine({
 	provider,
 	priceMinor,
+	priceCurrency,
 	retailerId,
 	country,
 	id,
@@ -41,6 +42,8 @@ export function DispatchWalletLine({
 	provider: CourierProviderId;
 	/** What this booking costs; null while there is no price yet. */
 	priceMinor: number | null;
+	/** The quote's currency — a wallet in another one is never compared. */
+	priceCurrency: string;
 	retailerId: Id<"retailers">;
 	country: Country;
 	/** For `aria-describedby` on a Book button this line disables. */
@@ -57,7 +60,7 @@ export function DispatchWalletLine({
 	const [sheetOpen, setSheetOpen] = useState(false);
 	const view = wallets?.find((w) => w.provider === provider) ?? fallback;
 	if (!view) return null;
-	const line = dispatchWalletLine(view, priceMinor ?? 0, now);
+	const line = dispatchWalletLine(view, priceMinor ?? 0, now, priceCurrency);
 	const loud =
 		priceMinor !== null &&
 		line.verdict !== "covers" &&
@@ -105,7 +108,9 @@ export function DispatchWalletLine({
 					) : null}
 				</span>
 			</p>
-			{loud && provider === "lalamove" ? (
+			{/* Play money has no Business account to top up — the dialog's
+			    sandbox banner already says so (test-code, 31 Oct). */}
+			{loud && provider === "lalamove" && canTopUp ? (
 				<p className="pl-5 opacity-80">{LALAMOVE_BUSINESS_NOTE}</p>
 			) : null}
 			<CourierTopUpSheet

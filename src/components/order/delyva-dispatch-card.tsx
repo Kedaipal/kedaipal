@@ -717,6 +717,7 @@ export function DelyvaDispatchCard({
 							<DispatchWalletLine
 								provider="delyva"
 								priceMinor={selected ? selected.price : null}
+								priceCurrency={selected?.currency ?? order.currency}
 								retailerId={order.retailerId}
 								country={dispatch.country}
 							/>

@@ -268,7 +268,10 @@ export type CourierWalletView = {
  *  - `covers`  — the known balance pays for it.
  *  - `warn`    — probably can't; book stays enabled, with the reason beside it.
  *  - `block`   — can't, on a balance we just read; Book disables with the reason.
- *  - `unknown` — nothing to judge on.
+ *  - `unknown` — nothing to judge on, or a balance in another currency
+ *                than the price (the Delyva demo quotes in HKD): comparing
+ *                RM against HK$ would invent a shortfall, so it says nothing
+ *                (test-code, 31 Oct 2026).
  *
  * A TEST wallet is judged the same way: a sandbox refuses a booking its play
  * money can't pay just as a live account does, so a fresh short read must
@@ -281,13 +284,16 @@ export type WalletVerdict = "covers" | "warn" | "block" | "unknown";
 export function walletVerdict(
 	view: Pick<
 		CourierWalletView,
-		"state" | "balanceMinor" | "at" | "source"
+		"state" | "balanceMinor" | "at" | "source" | "currency"
 	>,
 	priceMinor: number,
 	now: number,
+	priceCurrency: string,
 ): WalletVerdict {
+	// A refusal is the provider's own verdict — no number, no currency to mix.
 	if (view.state === "short") return "warn";
 	if (view.balanceMinor === null) return "unknown";
+	if (priceCurrency !== view.currency) return "unknown";
 	if (view.balanceMinor >= priceMinor) return "covers";
 	const fresh =
 		view.source === "pull" &&

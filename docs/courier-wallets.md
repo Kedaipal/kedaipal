@@ -68,7 +68,8 @@ how much.
 
 Two modifiers sit across every state. A **test account** (Lalamove `pk_test`,
 Delyva demo, EasyParcel sandbox) shows a TEST chip, says "play money", and
-never asks for a top-up. A balance **older than 24 hours** greys out and says
+never asks for a top-up. With nothing seen yet it still names the state
+("Not shared", "Not reported yet"), never a bare "—". A balance **older than 24 hours** greys out and says
 "May be out of date", because bookings made outside Kedaipal spend the same
 wallet.
 
@@ -93,6 +94,16 @@ disables Book too. Only the words change: "*Your EasyParcel test wallet has
 RM 19.80 … Add test credit in your EasyParcel sandbox first*", never "Top up".
 (The first build exempted test wallets; the hands-on test caught it as a
 regression of the old EasyParcel card, which blocked on any short quote.)
+On a sandbox key the warn also drops Lalamove's "top up the Business account"
+note: there's no real wallet behind play money, and the dialog's own banner
+already says so.
+
+**Never across currencies.** `walletVerdict` takes the quote's currency and
+says nothing (`unknown`) when the balance is in another one, so a line can
+never call RM 3.00 "HK$1.75 short". A provider refusal (`short`) still warns,
+since it is the provider's own verdict. Found on the Delyva demo, which quotes
+in HKD (hands-on test, 31 Oct 2026); every dispatch card passes its quote's
+currency, and the argument is required so a new caller can't forget it.
 
 ### The low email
 
