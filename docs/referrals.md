@@ -243,8 +243,8 @@ What changed, and why each piece is where it is:
   top-up — "Or earn 60 free orders: refer a kedai that starts Pro" — only for
   a store that earns the referrer half, never on a healthy meter. Every
   paid-**plan** receipt email (`notifyPaymentReceived`) carries the invitation
-  under its CTA (`referralReceiptFooter`, en/ms/zh); a hold receipt does not —
-  a paused store's link is paused too.
+  under its CTA (`referralReceiptFooter`, en/ms/zh, in orders like every share
+  surface); a hold receipt does not — a paused store's link is paused too.
 - **The referee's side.** Home shows a **referral welcome card** above the
   welcome card for a referred store until its first invoice is paid — who
   invited them, the 60, and "Start your plan" into Billing. Built as a card,
@@ -284,8 +284,11 @@ What changed, and why each piece is where it is:
 - **One promise, referee-side.** Everything a referee sees before Billing —
   the invite pill, the link preview, the onboarding chip and note, the Home
   welcome card — says "free orders", the same words as the message and image
-  that brought them. Billing keeps "bonus credits": its plan rows are counted
-  in credits ("200 credits a month"), and 1 credit = 1 order.
+  that brought them, and so does the receipt footer. Billing keeps "bonus
+  credits": its plan rows are counted in credits ("200 credits a month"), and
+  1 credit = 1 order. The referee welcome card reads `referrals.mine` only
+  with billing:read in hand (the query refuses without it), the way Home
+  skips its other gated reads — never fired and left to error.
 - **Measured.** `referral_share` (`channel` × `surface`) fires on every share
   tap — `image` for a saved PNG, `image_share` for one handed to the share
   sheet; docs/analytics.md.

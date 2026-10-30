@@ -159,7 +159,9 @@ export function renderReferralEmail(
  * to say "worth it" to a friend, and the receipt is the one email every
  * paying store gets every month. One author for the line, in the seller's
  * locale; the receipt renderer places it under its CTA. `html` is escaped
- * for the `afterCta` slot, `text` goes in the plain-text body.
+ * for the `afterCta` slot, `text` goes in the plain-text body. The offer is
+ * said in ORDERS, like every other share surface — "bonus credits" stays
+ * only where a balance is counted (Billing, the reward emails).
  */
 export function referralReceiptFooter(
 	locale: Locale,
@@ -170,15 +172,15 @@ export function referralReceiptFooter(
 	const lines: Record<Locale, { lead: string; offer: string }> = {
 		en: {
 			lead: "Know a kedai still taking orders by hand in WhatsApp?",
-			offer: `Send them your link — when they start Pro, you both get ${n} bonus credits.`,
+			offer: `Send them your link — when they start Pro, you both get ${n} free orders.`,
 		},
 		ms: {
 			lead: "Kenal kedai yang masih ambil pesanan secara manual di WhatsApp?",
-			offer: `Hantar pautan anda — bila mereka mula Pro, anda berdua dapat ${n} kredit bonus.`,
+			offer: `Hantar pautan anda — bila mereka mula Pro, anda berdua dapat ${n} pesanan percuma.`,
 		},
 		zh: {
 			lead: "认识还在 WhatsApp 上手动接单的店家？",
-			offer: `把您的链接发给他们 —— 他们开始使用 Pro 后，你们双方各得 ${n} 点奖励。`,
+			offer: `把您的链接发给他们 —— 他们开始使用 Pro 后，你们双方各得 ${n} 笔免费订单。`,
 		},
 	};
 	const l = lines[locale];

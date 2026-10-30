@@ -372,13 +372,14 @@ describe("renderPaymentEmail", () => {
 		expect(text.endsWith(pv.dashboardUrl)).toBe(true);
 	});
 
-	it("the footer escapes what it quotes and says the offer in bonus credits", () => {
+	it("the footer escapes what it quotes and says the offer in free orders, never credits", () => {
 		const { html, text } = referralReceiptFooter("en", {
 			link: "https://kedaipal.com/referral/a&b",
 			proCredits: 60,
 		});
 		expect(html).toContain("a&amp;b");
-		expect(html).toContain("you both get 60 bonus credits");
+		expect(html).toContain("you both get 60 free orders");
+		expect(html).not.toContain("credits");
 		expect(text).toContain("https://kedaipal.com/referral/a&b");
 	});
 });

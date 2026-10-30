@@ -676,13 +676,14 @@ export type MyReferralCard = {
 	/** The count hit STATS_CAP. */
 	capped: boolean;
 	/** Referees who signed up and haven't paid their first invoice yet — the
-	 * reward WAITING on them. The state that gets a card opened. */
+	 * reward WAITING on them. The state that gets a card opened. A referee
+	 * whose store has since been deleted can never pay, so it is not
+	 * "waiting" (the list still shows its row, labelled). */
 	pending: number;
 	/** The newest of those, for the Home teaser's one line ("Che Ta signed
 	 * up 3 days ago · 60 waiting"). A referee's store name is public — it is
-	 * their storefront's — so any member may read it. `storeName` is null
-	 * for a store since deleted. */
-	latestPending: { storeName: string | null; createdAt: number } | null;
+	 * their storefront's — so any member may read it. */
+	latestPending: { storeName: string; createdAt: number } | null;
 };
 
 /**
@@ -708,17 +709,23 @@ export const myCard = query({
 			.order("desc")
 			.take(STATS_CAP);
 		let started = 0;
+		let pending = 0;
 		let creditsEarned = 0;
 		let latestPending: MyReferralCard["latestPending"] = null;
 		for (const r of rows) {
 			if (r.rewardedAt !== undefined) {
 				started += 1;
-			} else if (latestPending === null) {
+			} else {
+				// One get per unrewarded row (≤ STATS_CAP): a deleted referee's
+				// row would otherwise read "waiting" forever.
 				const referee = await ctx.db.get(r.refereeId);
-				latestPending = {
-					storeName: referee?.storeName ?? null,
-					createdAt: r.createdAt,
-				};
+				if (referee) {
+					pending += 1;
+					latestPending ??= {
+						storeName: referee.storeName,
+						createdAt: r.createdAt,
+					};
+				}
 			}
 			creditsEarned += r.referrerCredits ?? 0;
 		}
@@ -733,7 +740,7 @@ export const myCard = query({
 			started,
 			creditsEarned,
 			capped: rows.length >= STATS_CAP,
-			pending: rows.length - started,
+			pending,
 			latestPending,
 		};
 	},

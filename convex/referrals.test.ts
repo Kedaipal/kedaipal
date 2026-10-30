@@ -808,6 +808,24 @@ describe("referrals.myCard — the pending state (the push)", () => {
 		});
 	});
 
+	test("a deleted referee is not 'waiting' — it can never pay, so the teaser doesn't count it", async () => {
+		const t = setup();
+		const { refereeId } = await referredPair(t, { status: "active" });
+		await t.run(async (ctx) => {
+			await ctx.db.delete(refereeId);
+		});
+		const card = await t
+			.withIdentity({ subject: REFERRER })
+			.query(api.referrals.myCard, {});
+		// The row still counts as a sign-up; the reward is simply never coming.
+		expect(card).toMatchObject({
+			signedUp: 1,
+			started: 0,
+			pending: 0,
+			latestPending: null,
+		});
+	});
+
 	test("nothing pending once every referee has started", async () => {
 		const t = setup();
 		const { refereeId } = await referredPair(t, { status: "active" });

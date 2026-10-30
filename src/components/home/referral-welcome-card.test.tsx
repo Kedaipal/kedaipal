@@ -9,11 +9,22 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { MyReferral } from "../../../convex/referrals";
 
 let referral: MyReferral | null | undefined;
+let canRead = true;
+// What the card asked Convex for — `"skip"` when it must not ask at all.
+let askedWith: unknown;
 vi.mock("@tanstack/react-query", () => ({
-	useQuery: () => ({ data: referral }),
+	useQuery: (args: unknown) => ({
+		data: args === "skip" ? undefined : referral,
+	}),
 }));
 vi.mock("@convex-dev/react-query", () => ({
-	convexQuery: (_ref: unknown, args: unknown) => args,
+	convexQuery: (_ref: unknown, args: unknown) => {
+		askedWith = args;
+		return args;
+	},
+}));
+vi.mock("../../hooks/usePermission", () => ({
+	usePermission: () => ({ canRead, canWrite: canRead, role: "member" }),
 }));
 vi.mock("@tanstack/react-router", () => ({
 	Link: ({
@@ -40,7 +51,11 @@ const base: MyReferral = {
 	reward: null,
 };
 
-afterEach(() => cleanup());
+afterEach(() => {
+	cleanup();
+	canRead = true;
+	askedWith = undefined;
+});
 
 describe("ReferralWelcomeCard", () => {
 	test("names who invited them, says the offer in orders, and opens the plan picker", () => {
@@ -62,6 +77,14 @@ describe("ReferralWelcomeCard", () => {
 		referral = { ...base, referrerName: null };
 		render(<ReferralWelcomeCard retailerId={RID} />);
 		expect(screen.getByText(/a Kedaipal seller invited you/)).toBeTruthy();
+	});
+
+	test("a teammate without billing:read never asks — the gated read is skipped, not fired and refused", () => {
+		referral = base;
+		canRead = false;
+		const { container } = render(<ReferralWelcomeCard retailerId={RID} />);
+		expect(askedWith).toBe("skip");
+		expect(container.firstChild).toBeNull();
 	});
 
 	test("gone once the first invoice is paid, and for a store nobody referred", () => {

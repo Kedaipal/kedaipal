@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { Gift } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { usePermission } from "../../hooks/usePermission";
 import { referrerLabel } from "../settings/referral-bonus-note";
 import { Button } from "../ui/button";
 
@@ -21,16 +22,19 @@ import { Button } from "../ui/button";
  * the one author (`referrals.mine`). Gone the moment the first invoice is
  * paid; the Credit activity row takes over.
  *
- * Billing:read like the note it mirrors: a teammate without the grant sees
- * nothing here (and can't reach Billing anyway).
+ * Billing:read like the note it mirrors (`referrals.mine` refuses without
+ * it), so the read is SKIPPED for a teammate without the grant — the way
+ * Home skips its orders-gated reads — rather than fired and left to error:
+ * they see nothing here, and can't reach Billing anyway.
  */
 export function ReferralWelcomeCard({
 	retailerId,
 }: {
 	retailerId: Id<"retailers">;
 }) {
+	const billing = usePermission("billing");
 	const referral = useQuery(
-		convexQuery(api.referrals.mine, { retailerId }),
+		convexQuery(api.referrals.mine, billing.canRead ? { retailerId } : "skip"),
 	).data;
 	if (!referral || referral.firstInvoicePaid) return null;
 	const who = referrerLabel(referral);

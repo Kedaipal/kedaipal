@@ -210,7 +210,7 @@ export function PendingLine({
 }) {
 	const latest = card.latestPending;
 	if (!latest || card.pending === 0) return null;
-	const who = latest.storeName ?? "A kedai";
+	const who = latest.storeName;
 	const more = card.pending - 1;
 	return (
 		<div
