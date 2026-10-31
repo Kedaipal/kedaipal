@@ -255,6 +255,7 @@ export function BillingTab({
 				now,
 				founding: foundingPricing,
 				adminOwnAccount,
+				country: retailer.country,
 			})
 		: ({ kind: "hidden" } as const);
 	// Founding Members stay on Founding Pro — named as such wherever the plan is.

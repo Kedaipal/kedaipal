@@ -178,6 +178,19 @@ and links to its settings. With no lane, the overseas row offers both doors
   **"Ships from Malaysia"** (`MarketplaceStoreCard.shipsFrom`). A paid highlight
   applies in the store's own market only.
 
+### The date floor abroad (31 Oct 2026)
+
+An order going abroad can't be for today whatever the store's own notice says:
+the checkout offered "Today, 8 PM" for an SG→MY parcel in the staging pass, a
+promise no courier keeps. `CROSS_BORDER_MIN_NOTICE_DAYS` (2, `convex/lib/crossBorder.ts`)
+is folded into the same floor the store's and the cart's notice already share —
+on the client (`overseasNoticeDays` in `checkout-form.tsx`, re-floored when the
+Deliver-to switch flips) and at the order door (`orders.create`, pinned by a
+test), so a stale tab can't bypass it. The buyer reads why under the date
+("A parcel to Malaysia needs 2 days' notice"); the seller reads it on the
+Overseas delivery page's "How overseas orders work". A store whose own notice is
+already longer sees nothing change.
+
 ## Dispatch: which courier carries which order
 
 `COURIER_DESTINATIONS` ([`convex/lib/courierProviders.ts`](../convex/lib/courierProviders.ts))

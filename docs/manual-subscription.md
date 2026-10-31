@@ -548,6 +548,14 @@ costs one billing event a year instead of twelve. So the offer lives in the
 seller's own **Settings → Billing**, as a prefilled WhatsApp message like every
 other billing action in that tab.
 
+**The quote is in the store's country's currency, full stop (31 Oct 2026).**
+`resolveAnnualOffer` takes `country` and reads `storeBillingCurrency`, the same
+answer every invoice, renewal and Pay-now link gives since 86eyp7hn7. It used to
+follow the last PAID invoice with an MYR default, so a Singapore store read
+"You're billed RM 149.00 a month" on the same tab as its S$ hold and renewal
+(found in the v2026.10.7 staging pass). Pinned by `annual-billing.test.ts`: two
+ringgit invoices on an SG store still quote SGD.
+
 ### Who is offered it (`src/lib/annual-billing.ts`)
 
 `resolveAnnualOffer` is a pure ladder, first match wins. The **order is

@@ -385,7 +385,7 @@ function MoreTab({
 							to="/app/vouchers"
 							icon={Ticket}
 							label="Vouchers"
-							sub="Single-use discount codes"
+							sub="One-off and shared discount codes"
 							pro={vouchersLocked}
 							onNavigate={close}
 						/>

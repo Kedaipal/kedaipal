@@ -14,6 +14,7 @@ import {
 } from "../../../convex/lib/fulfilmentDate";
 import {
 	BUCKET_LEAVES,
+	HOLDING_LEAVES,
 	INBOX_BUCKETS,
 	INBOX_LEAF_KEYS,
 	type InboxStatusLeaf,
@@ -309,6 +310,14 @@ function dueToken(v: OrderFilterValue): FilterToken | null {
 }
 
 /** One applied-filter token: its label + how to clear just that filter. */
+/** True when the picked leaves are exactly the seat-holding set. */
+function isHoldingSet(statuses: readonly string[]): boolean {
+	return (
+		statuses.length === HOLDING_LEAVES.length &&
+		HOLDING_LEAVES.every((l) => statuses.includes(l))
+	);
+}
+
 type FilterToken = {
 	key: string;
 	label: string;
@@ -338,7 +347,18 @@ function activeFilterTokens(
 			clear: (x) => ({ ...x, listing: undefined }),
 		});
 	}
-	for (const st of v.statuses) {
+	// The Schedule row and the RSVP panel open the inbox on every leaf but
+	// cancelled (`listingOrdersSearch`): seven pills for "not cancelled" read as
+	// clutter on a phone, so that exact set is ONE token, cleared as one. Any
+	// other mix stays per-leaf — the seller chose those by hand.
+	if (isHoldingSet(v.statuses)) {
+		tokens.push({
+			key: "status-holding",
+			label: "Excluding cancelled",
+			clear: (x) => ({ ...x, statuses: [] }),
+		});
+	}
+	for (const st of isHoldingSet(v.statuses) ? [] : v.statuses) {
 		tokens.push({
 			key: `status-${st}`,
 			// Through `leafLabel`, or the unseen leaf prints its raw key —

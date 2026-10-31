@@ -426,6 +426,8 @@ describe("vouchers.list", () => {
 			scheduled: 0,
 		});
 		expect(all.vouchers).toHaveLength(4);
+		// One spent single-use voucher is one order used.
+		expect(all.used).toBe(1);
 
 		// Every row comes back with its RESOLVED status — the lapsed one reads
 		// `expired` with no cron having touched it, which is what lets the

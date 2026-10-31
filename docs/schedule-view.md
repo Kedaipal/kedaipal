@@ -106,7 +106,11 @@ cap, not a second copy of the count: an earlier "46/50 seats" beside
   In progress and Completed lit and Cancelled dark, which is the honest
   picture of what the number excluded. One helper, `listingOrdersSearch`
   (`src/lib/listing-orders-link.ts`), writes this for the Schedule row AND the
-  event RSVP panel's "Open these RSVPs", which counts the same way. A row with nobody behind it
+  event RSVP panel's "Open these RSVPs", which counts the same way.
+  **The inbox renders that exact set as ONE token, "Excluding cancelled"**
+  (`order-filters.tsx`, `isHoldingSet`): seven status pills plus Listing and
+  Due read as clutter on a phone. Any other mix of leaves stays one token per
+  leaf — the seller chose those by hand. Pinned in `order-filters.test.tsx`. A row with nobody behind it
   says "No one registered yet" / "No bookings yet" / "Nothing to open yet"
   instead of offering a dead "Open 0 orders".
 - **Headcount** (events only): the listing's own RSVP panel at

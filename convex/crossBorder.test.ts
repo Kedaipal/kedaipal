@@ -4,6 +4,8 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { CROSS_BORDER_MIN_NOTICE_DAYS } from "./lib/crossBorder";
+import { fulfilmentDateBounds } from "./lib/fulfilmentDate";
 import schema from "./schema";
 
 // Cross-border delivery MY ↔ SG (z8r3fdr5yy) through the real doors: the
@@ -648,6 +650,37 @@ describe("a lane priced live by EasyParcel (z8r3fdr5yy)", () => {
 		const order = await orderByShortId(t, shortId);
 		expect(order.deliveryFee).toBe(2731);
 		expect(order.deliverySnapshot?.quoteProvider).toBe("easyparcel");
+	});
+
+	test("an order abroad can't be for today or tomorrow — the lane's notice floors the date at the door", async () => {
+		// The checkout offered "Today" for an SG→MY parcel (staging test,
+		// 31 Oct 2026). The same floor the picker now applies is enforced here,
+		// so a stale tab can't promise what no courier can do.
+		const t = setup();
+		mockQuotes();
+		const { retailerId, keropok } = await seedLiveLane(t);
+		const result = await quote(t, retailerId, await variantOf(t, keropok), "460123");
+		if (result.status !== "quoted") throw new Error("not quoted");
+		const DAY_MS = 24 * 60 * 60 * 1000;
+		const today = fulfilmentDateBounds(0).min;
+		const create = (fulfilmentDate: number) =>
+			t.mutation(api.orders.create, {
+				retailerId,
+				items: [{ productId: keropok, quantity: 1 }],
+				currency: "MYR",
+				channel: "whatsapp",
+				customer: { name: "Mei Ling", waPhone: "6598765432", waDialCountry: "SG" },
+				deliveryAddress: SG_ADDRESS,
+				deliveryQuoteId: result.quoteId,
+				fulfilmentDate,
+			});
+		await expect(create(today + DAY_MS)).rejects.toThrow(/too soon/i);
+		const { shortId } = await create(
+			today + CROSS_BORDER_MIN_NOTICE_DAYS * DAY_MS,
+		);
+		expect((await orderByShortId(t, shortId)).fulfilmentDate).toBe(
+			today + CROSS_BORDER_MIN_NOTICE_DAYS * DAY_MS,
+		);
 	});
 
 	test("a quote for one postcode never prices an order to another", async () => {

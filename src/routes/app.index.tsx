@@ -109,8 +109,11 @@ export const Route = createFileRoute("/app/")({
 // Named per store country (z8r3fdbmc9) — DuitNow is a Malaysian rail; an SG
 // store's confirmation carries PayNow instead.
 const PAYMENT_STEP_WHY: Record<Country, string> = {
-	MY: "Your bank account or DuitNow QR is included automatically in the order confirmation message sent to every shopper.",
-	SG: "Your bank account or PayNow QR is included automatically in the order confirmation message sent to every shopper.",
+	// Not "in the WhatsApp message": raw bank details left the chat in July
+	// 2026 (86ey98ju1). The confirmation carries the order link; the details
+	// sit on that page, where the buyer pays and uploads the receipt.
+	MY: "Your bank account or DuitNow QR shows on every buyer's order page — the link in their WhatsApp confirmation.",
+	SG: "Your bank account or PayNow QR shows on every buyer's order page — the link in their WhatsApp confirmation.",
 };
 
 /**
