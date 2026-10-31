@@ -27,6 +27,7 @@ const SETTINGS_CARD_DIRS = [
 ];
 const PRODUCT_FORM = join(__dirname, "../components/forms/product-form.tsx");
 const HOME_COMPONENTS = join(__dirname, "../components/home");
+const HOME_ROUTE = join(__dirname, "../routes/app.index.tsx");
 
 const settingsEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
 	([, t]) => t.page === "settings",
@@ -62,28 +63,27 @@ describe("spotlight registry", () => {
 		expect(homeEntries.length).toBeGreaterThan(0);
 	});
 
-	test("every Home anchor is rendered as a section id by a Home component", () => {
+	test("every Home anchor is rendered as a section id on Home", () => {
 		// Same rule as the settings cards: a Home key nothing renders scrolls
-		// nowhere. The Refer card renders every standing (live, trial, paused)
-		// through ONE shell that carries the anchor, so the deep link can never
-		// work for one standing and dead-end for another — pinned below as
-		// "exactly one shell, and it is the anchored one".
-		const source = readdirSync(HOME_COMPONENTS)
-			.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
-			.map((f) => readFileSync(join(HOME_COMPONENTS, f), "utf8"))
-			.join("\n");
+		// nowhere. Home's anchors live in its components, or in the route
+		// itself — Refer & earn's two doors (the header button, the phone row)
+		// sit under the greeting, so the route wraps them in ONE anchored block
+		// and the deep link lands on whichever door the screen shows.
+		const source = [
+			readFileSync(HOME_ROUTE, "utf8"),
+			...readdirSync(HOME_COMPONENTS)
+				.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
+				.map((f) => readFileSync(join(HOME_COMPONENTS, f), "utf8")),
+		].join("\n");
 		for (const [key] of homeEntries) {
 			expect(
 				source.includes(`id={SPOTLIGHT_ANCHOR.${key}.anchor}`),
 				`no Home component renders id={SPOTLIGHT_ANCHOR.${key}.anchor}`,
 			).toBe(true);
 		}
-		const refer = readFileSync(join(HOME_COMPONENTS, "refer-card.tsx"), "utf8");
-		expect(refer.split("id={SPOTLIGHT_ANCHOR.refer.anchor}").length - 1).toBe(
+		expect(source.split("id={SPOTLIGHT_ANCHOR.refer.anchor}").length - 1).toBe(
 			1,
 		);
-		// Every standing renders through that shell: no `<section` outside it.
-		expect(refer.split("<section").length - 1).toBe(1);
 	});
 
 	test("every anchor is rendered as a card id somewhere under settings", () => {
