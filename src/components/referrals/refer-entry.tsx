@@ -21,6 +21,8 @@
 import type { FunctionReturnType } from "convex/server";
 import { ChevronRight, Gift } from "lucide-react";
 import type { api } from "../../../convex/_generated/api";
+import { TONE_CHIP } from "../../lib/tone";
+import { cn } from "../../lib/utils";
 
 export type ReferEntryCard = NonNullable<
 	FunctionReturnType<typeof api.referrals.myCard>
@@ -51,11 +53,15 @@ export function referEntryHint(card: ReferEntryCard): string {
 }
 
 /** A referee who signed up and hasn't paid their first invoice yet — the
- * news that brings a seller back to the page. */
+ * news that brings a seller back to the page. Amber through `TONE_CHIP.warn`,
+ * the same chip the page's own waiting rows wear (one idea, one control). */
 function WaitingBadge({ count }: { count: number }) {
 	return (
 		<span
-			className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+			className={cn(
+				"inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold",
+				TONE_CHIP.warn,
+			)}
 			data-testid="refer-waiting"
 		>
 			<span aria-hidden className="size-1.5 rounded-full bg-amber-500" />
