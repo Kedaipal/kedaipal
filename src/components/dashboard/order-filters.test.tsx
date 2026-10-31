@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	BUCKET_LEAVES,
+	HOLDING_LEAVES,
 	INBOX_BUCKETS,
 	INBOX_LEAF_KEYS,
 	leafBucket,
@@ -316,6 +317,45 @@ describe("OrderFilters — status + categories mirror the header filters (86eyrt
 			mockup: false,
 			statuses: [],
 		});
+	});
+
+	it("the seat-holding set (every leaf but cancelled) is ONE token, cleared as one", () => {
+		// The Schedule row and the RSVP panel open the inbox on this exact set
+		// (`listingOrdersSearch`); seven pills for "not cancelled" read as
+		// clutter on a phone (staging test, 31 Oct 2026).
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: [...HOLDING_LEAVES] },
+		});
+		expect(
+			screen.getAllByRole("button", {
+				name: /remove filter: excluding cancelled/i,
+			}),
+		).toHaveLength(1);
+		expect(
+			screen.queryByRole("button", { name: /remove filter: packed/i }),
+		).toBeNull();
+		fireEvent.click(
+			screen.getAllByRole("button", {
+				name: /remove filter: excluding cancelled/i,
+			})[0],
+		);
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ statuses: [] }),
+		);
+	});
+
+	it("any other mix of leaves stays one token per leaf", () => {
+		renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: ["packed", "shipped"] },
+		});
+		expect(
+			screen.queryByRole("button", {
+				name: /remove filter: excluding cancelled/i,
+			}),
+		).toBeNull();
+		expect(
+			screen.getAllByRole("button", { name: /remove filter: packed/i }).length,
+		).toBeGreaterThan(0);
 	});
 
 	it("lets a cards-view seller set a status, which has no table header to click", () => {

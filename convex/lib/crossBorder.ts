@@ -145,6 +145,18 @@ export function domesticOnlyCouriersDeliver(country: Country): string {
 }
 
 /** Countries a store in `store` may open a lane to. */
+/**
+ * The fewest days' notice an order going ABROAD needs, whatever the store's
+ * own setting says. A parcel across the Causeway clears customs and rides a
+ * line-haul; no courier delivers it the same afternoon, yet the checkout's
+ * date picker offered "Today" for one (staging test, 31 Oct 2026) — a promise
+ * the seller then had to break by hand. Folded into the same floor the
+ * store's and the cart's notice already share, on the client and at the order
+ * door, so it can't be bypassed by a stale tab. Said to the buyer under the
+ * date, and to the seller on the Overseas delivery page.
+ */
+export const CROSS_BORDER_MIN_NOTICE_DAYS = 2;
+
 export function laneCountriesFor(store: Country): Country[] {
 	return COUNTRIES.filter((c) => c !== store);
 }

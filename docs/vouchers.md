@@ -806,6 +806,15 @@ withholds an order from the seller and never from the buyer who placed it.
   back, the empty-cart panel SAYS it is being held, and it is forgotten once
   spent so a second checkout in the same tab can't re-apply a redeemed code.
 
+### "N used" counts orders, not rows (31 Oct 2026)
+
+The Vouchers header read "1 active · 0 used" beside a shared row saying "1 of
+50 used": `counts.redeemed` counts rows whose resolved status is `redeemed`,
+which a live shared code never is. `vouchers.list` now also returns `used` — a
+spent single-use voucher counts one, a shared code counts its `redeemedCount`
+whatever it currently reads — and the header prints that. The status chips keep
+`counts` (they filter rows). Pinned in `vouchers.test.ts` and `sharedVouchers.test.ts`.
+
 ### The bugs found in passing
 
 `orders.updateDeliveryAddress` refuses `self_collect` but **not** `booking`, so

@@ -22,6 +22,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { Country } from "../../../convex/lib/country";
 import {
+	CROSS_BORDER_MIN_NOTICE_DAYS,
 	type CrossBorderLane,
 	countryName,
 	domesticOnlyCouriersDeliver,
@@ -722,6 +723,7 @@ export function OverseasDelivery({
 									? "Untick it under What can go."
 									: "Once delivery is on, you choose which products can go."
 							}`,
+							`Buyers can't pick a delivery date sooner than ${CROSS_BORDER_MIN_NOTICE_DAYS} days out — a parcel across the border takes at least that — on top of any notice you've set.`,
 							"Buyers pay in your store's currency. Any import tax or duty is the buyer's, collected by the courier — checkout tells them.",
 							`Overseas orders are marked "Overseas · ${where}" on the order page, and the label prints the country.`,
 						]}

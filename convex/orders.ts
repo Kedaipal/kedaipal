@@ -217,6 +217,7 @@ import {
 	DEFAULT_COUNTRY,
 } from "./lib/country";
 import {
+	CROSS_BORDER_MIN_NOTICE_DAYS,
 	type CrossBorderLane,
 	countryName,
 	laneFor,
@@ -1716,6 +1717,9 @@ export const create = mutation({
 					Math.max(
 						retailer.minFulfilmentNoticeDays ?? 0,
 						maxItemNoticeDays,
+						// An order going abroad can't be delivered today whatever the
+						// store's own notice says (`CROSS_BORDER_MIN_NOTICE_DAYS`).
+						crossBorderLane ? CROSS_BORDER_MIN_NOTICE_DAYS : 0,
 					),
 				);
 			} catch (err) {

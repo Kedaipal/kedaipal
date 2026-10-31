@@ -29,7 +29,11 @@ import {
 	closureOn,
 } from "../../../convex/lib/closedDates";
 import { type Country, isCountry } from "../../../convex/lib/country";
-import { countryName, overseasFeeLabel } from "../../../convex/lib/crossBorder";
+import {
+	CROSS_BORDER_MIN_NOTICE_DAYS,
+	countryName,
+	overseasFeeLabel,
+} from "../../../convex/lib/crossBorder";
 import {
 	assertValidFulfilmentDate,
 	defaultFulfilmentTimeMinutes,
@@ -468,6 +472,21 @@ export function CheckoutPage({
 	// soon as the buyer picks one.
 	const [pickupError, setPickupError] = useState<string | null>(null);
 
+	// "Deliver to" (z8r3fdr5yy): the store's own country, unless the store
+	// delivers abroad and the visitor is browsing from there — then theirs.
+	const initialDeliverTo: Country =
+		visitorCountry !== undefined && shipsAbroadTo.includes(visitorCountry)
+			? visitorCountry
+			: country;
+	// The pick, narrowed to a country this store delivers to RIGHT NOW — a
+	// lane that paused since the page loaded falls back to the store's own.
+	const deliverToOf = (raw: string | undefined): Country =>
+		raw !== undefined &&
+		isCountry(raw) &&
+		(raw === country || shipsAbroadTo.includes(raw))
+			? raw
+			: country;
+
 	// Selectable date range for the picker: today + the retailer's notice (the
 	// earliest day) through today + 30. Memoised on the retailer setting so the
 	// "today" anchor is computed once per mount, not on every keystroke. The
@@ -484,21 +503,36 @@ export function CheckoutPage({
 	const hasCustomLine = cart.items.some(
 		(item) => item.isCustom === true || item.quoteOnRequest === true,
 	);
-	const noticeDays = Math.max(minFulfilmentNoticeDays ?? 0, cartNoticeDays);
+	const baseNoticeDays = Math.max(minFulfilmentNoticeDays ?? 0, cartNoticeDays);
+	// An order going ABROAD can't be delivered today whatever the store's own
+	// notice says (`CROSS_BORDER_MIN_NOTICE_DAYS`) — the floor the server
+	// applies at the order door too. The form's initial date reads the
+	// initial Deliver-to pick; the live one (`noticeDays`, below the form)
+	// follows the switch.
+	const overseasNoticeDays = (abroad: boolean) =>
+		Math.max(baseNoticeDays, abroad ? CROSS_BORDER_MIN_NOTICE_DAYS : 0);
+	const initialNoticeDays = overseasNoticeDays(initialDeliverTo !== country);
 	// Keyed on the calendar DAY, so a tab left open past midnight re-floors
 	// instead of offering yesterday.
 	const nowDayKey = ymdFromEpoch(now);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: recomputed per calendar day (nowDayKey), not per render.
-	const { minYmd, maxYmd, todayYmd } = useMemo(() => {
-		const bounds = fulfilmentDateBounds(noticeDays, now);
+	const boundsFor = (days: number) => {
+		const bounds = fulfilmentDateBounds(days, now);
 		return {
 			minYmd: ymdFromEpoch(bounds.min),
 			maxYmd: ymdFromEpoch(bounds.max),
+		};
+	};
+	// biome-ignore lint/correctness/useExhaustiveDependencies: recomputed per calendar day (nowDayKey), not per render.
+	const { initialMinYmd, initialMaxYmd, todayYmd } = useMemo(() => {
+		const { minYmd, maxYmd } = boundsFor(initialNoticeDays);
+		return {
+			initialMinYmd: minYmd,
+			initialMaxYmd: maxYmd,
 			// Today with no notice applied — lets the chips say "Today"/"Tomorrow"
 			// only when those days are genuinely selectable.
 			todayYmd: ymdFromEpoch(fulfilmentDateBounds(0, now).min),
 		};
-	}, [noticeDays, nowDayKey]);
+	}, [initialNoticeDays, nowDayKey]);
 	const noCheckoutPhone = !checkoutPhone;
 
 	// Self-collect surfaces on the storefront only when the retailer opted in
@@ -575,29 +609,24 @@ export function CheckoutPage({
 	// days and a today already used up. Falls back to the plain earliest day
 	// when the whole window is closed (a notice-vs-hours misconfig — the inline
 	// notice and submit copy then explain).
-	const firstSelectableYmd = (schedule: Schedule) => {
-		for (let ymd = minYmd; ymd <= maxYmd; ymd = addDaysYmd(ymd, 1)) {
+	const firstSelectableYmd = (
+		schedule: Schedule,
+		bounds: { minYmd: string; maxYmd: string },
+	) => {
+		for (
+			let ymd = bounds.minYmd;
+			ymd <= bounds.maxYmd;
+			ymd = addDaysYmd(ymd, 1)
+		) {
 			if (isDaySelectable(ymd, schedule)) return ymd;
 		}
-		return minYmd;
+		return bounds.minYmd;
 	};
 	const defaultSchedule = scheduleFor(defaultMethod, "");
-	const defaultYmd = firstSelectableYmd(defaultSchedule);
-	// "Deliver to" (z8r3fdr5yy): the store's own country, unless the store
-	// delivers abroad and the visitor is browsing from there — then theirs.
-	const initialDeliverTo: Country =
-		visitorCountry !== undefined && shipsAbroadTo.includes(visitorCountry)
-			? visitorCountry
-			: country;
-	// The pick, narrowed to a country this store delivers to RIGHT NOW — a
-	// lane that paused since the page loaded falls back to the store's own.
-	const deliverToOf = (raw: string | undefined): Country =>
-		raw !== undefined &&
-		isCountry(raw) &&
-		(raw === country || shipsAbroadTo.includes(raw))
-			? raw
-			: country;
-
+	const defaultYmd = firstSelectableYmd(defaultSchedule, {
+		minYmd: initialMinYmd,
+		maxYmd: initialMaxYmd,
+	});
 	const form = useAppForm({
 		defaultValues: {
 			name: "",
@@ -890,8 +919,21 @@ export function CheckoutPage({
 		form.store,
 		(s) => s.values.pickupLocationId,
 	);
+	// "Deliver to" (z8r3fdr5yy) — the address form, its schema arm, the Places
+	// region and the quote all follow the country the address is IN.
+	const watchedDeliverTo = useStore(form.store, (s) => s.values.deliverTo);
+	const addressCountry = deliverToOf(watchedDeliverTo);
+	const abroad = addressCountry !== country;
+	// The live date floor: the store's and the cart's notice, raised for an
+	// address abroad. Flipping Deliver to re-floors the date (the effect below).
+	const noticeDays = overseasNoticeDays(abroad);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: recomputed per calendar day (nowDayKey), not per render.
+	const { minYmd, maxYmd } = useMemo(
+		() => boundsFor(noticeDays),
+		[noticeDays, nowDayKey],
+	);
 	const watchedSchedule = scheduleFor(watchedMethod, watchedPickupId);
-	const floorYmd = firstSelectableYmd(watchedSchedule);
+	const floorYmd = firstSelectableYmd(watchedSchedule, { minYmd, maxYmd });
 	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; value read fresh inside.
 	useEffect(() => {
 		const current = form.store.state.values.fulfilmentDate;
@@ -907,11 +949,6 @@ export function CheckoutPage({
 		form.store,
 		(s) => s.values.waDialCountry,
 	);
-	// "Deliver to" (z8r3fdr5yy) — the address form, its schema arm, the Places
-	// region and the quote all follow the country the address is IN.
-	const watchedDeliverTo = useStore(form.store, (s) => s.values.deliverTo);
-	const addressCountry = deliverToOf(watchedDeliverTo);
-	const abroad = addressCountry !== country;
 	const dialCountry: DialIso = isDialIso(watchedDialCountry)
 		? watchedDialCountry
 		: country;
@@ -2493,12 +2530,19 @@ export function CheckoutPage({
 																			? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
 																			: ""
 																	}`
-																: cartNoticeDays >
-																		(minFulfilmentNoticeDays ?? 0)
-																	? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
-																	: isDropOff
-																		? "Pick the date you'll meet at the drop-off point."
-																		: "Pick the date you need this order."
+																: abroad &&
+																		CROSS_BORDER_MIN_NOTICE_DAYS >
+																			Math.max(
+																				minFulfilmentNoticeDays ?? 0,
+																				cartNoticeDays,
+																			)
+																	? `A parcel to ${countryName(addressCountry)} needs ${CROSS_BORDER_MIN_NOTICE_DAYS} days' notice — that's the earliest date you can pick.`
+																	: cartNoticeDays >
+																			(minFulfilmentNoticeDays ?? 0)
+																		? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
+																		: isDropOff
+																			? "Pick the date you'll meet at the drop-off point."
+																			: "Pick the date you need this order."
 														}
 													/>
 												)}

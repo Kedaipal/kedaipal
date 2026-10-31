@@ -170,7 +170,7 @@ function VouchersRoute() {
 		: counts
 			? `${counts.active} active${
 					counts.scheduled > 0 ? ` · ${counts.scheduled} scheduled` : ""
-				} · ${counts.redeemed} used`
+				} · ${result?.used ?? counts.redeemed} used`
 			: undefined;
 
 	async function confirmVoid() {

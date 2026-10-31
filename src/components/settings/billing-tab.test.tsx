@@ -1228,12 +1228,17 @@ describe("BillingTab annual billing", () => {
 		expect(swap).toContain("haven't paid it yet");
 	});
 
-	it("quotes an SGD seller in SGD", () => {
+	it("quotes a Singapore store in SGD — by its country, never its invoice history", () => {
+		// The staging pass (31 Oct 2026) found this card saying "RM 149.00 a
+		// month" to an SG store beside its S$ hold and renewal: it read the
+		// last paid invoice's currency. Two ringgit invoices must not move it.
 		mockQueries({
 			isAdmin: false,
-			invoices: settled.map((i) => ({ ...i, currency: "SGD" })),
+			invoices: settled.map((i) => ({ ...i, currency: "MYR" })),
 		});
-		render(<BillingTab retailer={activePro()} />);
+		render(
+			<BillingTab retailer={{ ...activePro(), country: "SG" } as Retailer} />,
+		);
 		expect(screen.getByText(/S\$\s*590\.00/)).toBeTruthy();
 		expect(screen.queryByText(/RM\s*1,490\.00/)).toBeNull();
 	});

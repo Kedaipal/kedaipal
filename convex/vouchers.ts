@@ -164,6 +164,9 @@ export const list = query({
 	): Promise<{
 		vouchers: VoucherRow[];
 		counts: VoucherCounts;
+		/** Orders that used a code: spent single-use vouchers plus every shared
+		 * code's uses — what "N used" in the header means. */
+		used: number;
 		/**
 		 * The store is below the plan that carries vouchers, so none of these
 		 * codes can be redeemed right now (`z8r3fdr617`).
@@ -194,7 +197,21 @@ export const list = query({
 			expired: 0,
 			scheduled: 0,
 		};
-		for (const voucher of all) counts[resolveVoucherStatus(voucher, now)]++;
+		// `used` is ORDERS, not rows: a single-use voucher spent is one, a shared
+		// code is its `redeemedCount` however it currently reads (live, run out,
+		// ended). `counts.redeemed` alone answered "1 active · 0 used" beside a
+		// row saying "1 of 50 used" (staging test, 31 Oct 2026).
+		let used = 0;
+		for (const voucher of all) {
+			const status = resolveVoucherStatus(voucher, now);
+			counts[status]++;
+			used +=
+				voucherUsageOf(voucher) === "shared"
+					? (voucher.redeemedCount ?? 0)
+					: status === "redeemed"
+						? 1
+						: 0;
+		}
 
 		// A spent voucher names the order it went to, which makes this a seller
 		// read of ORDER data under the T3.1 rule ("a gated order is
@@ -224,6 +241,7 @@ export const list = query({
 		return {
 			vouchers,
 			counts,
+			used,
 			paused: !(await storeCanUseVouchers(ctx, retailerId)),
 		};
 	},

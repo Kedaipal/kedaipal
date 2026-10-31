@@ -396,8 +396,9 @@ describe("the storefront spends a shared code by counting", () => {
 		).rejects.toThrow(/run out/i);
 		const orders = await t.run((ctx) => ctx.db.query("orders").collect());
 		expect(orders).toHaveLength(2);
-		// The seller's list reads it as USED.
-		const { vouchers } = await t
+		// The seller's list reads it as USED — and the header's count is the
+		// code's two orders, not the one row (staging test, 31 Oct 2026).
+		const { vouchers, used } = await t
 			.withIdentity({ subject: OWNER })
 			.query(api.vouchers.list, { retailerId: retailer._id });
 		expect(vouchers[0]).toMatchObject({
@@ -405,6 +406,7 @@ describe("the storefront spends a shared code by counting", () => {
 			redeemedCount: 2,
 			maxRedemptions: 2,
 		});
+		expect(used).toBe(2);
 		// And the buyer's check says the same, as data.
 		expect(
 			await t.mutation(api.vouchers.checkCode, {
