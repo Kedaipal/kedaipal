@@ -29,7 +29,7 @@ vi.mock("convex/react", async () => {
 				: registerWebhook,
 	};
 });
-const wallet = vi.hoisted(() => ({ current: null as unknown }));
+const wallet = vi.hoisted(() => ({ current: [] as unknown[] }));
 const block = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
@@ -47,6 +47,13 @@ vi.mock("@tanstack/react-query", async () => {
 });
 vi.mock("../../hooks/useActAs", () => ({
 	useActAsRetailerId: () => undefined,
+}));
+// The shared wallet row (z8r3fdx34j) asks who may edit its alert line.
+vi.mock("../../hooks/usePermission", () => ({
+	usePermission: () => ({ canRead: true, canWrite: true, role: "owner" }),
+}));
+vi.mock("../../hooks/useStoreLock", () => ({
+	useAreaLock: () => ({ readOnly: false, reason: "", cause: null }),
 }));
 vi.mock("@tanstack/react-router", () => ({
 	Link: ({
@@ -83,6 +90,7 @@ function renderCard(overrides: Partial<Props> = {}) {
 	render(
 		<LalamoveIntegrationCard
 			retailerId={"r1" as never}
+			country="MY"
 			deliveryBooking={KEYED}
 			businessAddress={HQ}
 			onSave={onSave}
@@ -95,7 +103,7 @@ function renderCard(overrides: Partial<Props> = {}) {
 afterEach(() => {
 	cleanup();
 	vi.clearAllMocks();
-	wallet.current = null;
+	wallet.current = [];
 	block.current = null;
 });
 
@@ -196,10 +204,53 @@ describe("LalamoveIntegrationCard — setup checklist", () => {
 		);
 	});
 
-	it("shows the reported wallet beside the key, amber when low (6A)", () => {
-		wallet.current = { balance: 1240, currency: "MYR", at: 1, low: true };
+	it("shows the wallet through the shared row — amber when low, with its top-up (z8r3fdx34j)", () => {
+		wallet.current = [
+			{
+				provider: "lalamove",
+				armed: true,
+				isTest: false,
+				state: "low",
+				balanceMinor: 1240,
+				currency: "MYR",
+				at: Date.now() - 60_000,
+				lowAlertMinor: 3000,
+				lowAlertCustom: false,
+				source: "webhook",
+				refusedAt: null,
+				refusedPriceMinor: null,
+			},
+		];
 		renderCard();
-		expect(screen.getByText("RM 12.40").className).toContain("amber");
+		expect(screen.getByText(/RM\s?12\.40/).className).toContain("amber");
+		expect(
+			screen.getByRole("button", { name: "Top up Lalamove" }),
+		).toBeTruthy();
+		expect(
+			screen.getByText(/Partner Portal, the account your API keys come from/),
+		).toBeTruthy();
+	});
+
+	it("a key with nothing reported yet says so — never RM 0", () => {
+		wallet.current = [
+			{
+				provider: "lalamove",
+				armed: true,
+				isTest: false,
+				state: "unreported",
+				balanceMinor: null,
+				currency: "MYR",
+				at: null,
+				lowAlertMinor: 3000,
+				lowAlertCustom: false,
+				source: null,
+				refusedAt: null,
+				refusedPriceMinor: null,
+			},
+		];
+		renderCard();
+		expect(screen.getByText("Not reported yet")).toBeTruthy();
+		expect(screen.queryByText(/RM\s?0\.00/)).toBeNull();
 	});
 
 	it("sandbox keys say what they cost on the key step", () => {

@@ -31,13 +31,34 @@ vi.mock("convex/react", async () => {
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
-vi.mock("@tanstack/react-query", () => ({
-	useQuery: () => ({ data: state.dispatch }),
+vi.mock("@tanstack/react-query", async () => {
+	const { getFunctionName } = await import("convex/server");
+	return {
+		// The courier-wallet line (z8r3fdx34j) reads its own query; everything
+		// else answers with this card's own state.
+		useQuery: (q: { fn: unknown }) => ({
+			data:
+				getFunctionName(q.fn as never) === "courierWallets:list"
+					? walletState.wallets
+					: getFunctionName(q.fn as never) === "courierWallets:topUpSuggestion"
+						? undefined
+						: state.dispatch,
+		}),
+	};
+});
+const walletState = vi.hoisted(() => ({
+	wallets: [] as unknown[],
 }));
 vi.mock("@tanstack/react-router", () => ({
 	Link: ({ to, search, ...props }: Record<string, unknown>) => (
 		<a href={String(to)} {...props} />
 	),
+}));
+vi.mock("../../hooks/usePermission", () => ({
+	// The top-up sheet inside `DispatchWalletLine` gates its re-check on the
+	// integrations grant; these tests are about the card, so the reader has it.
+	usePermission: () => ({ canRead: true, canWrite: true, role: "owner" }),
+	useStoreRole: () => "owner",
 }));
 vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
@@ -101,6 +122,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	cleanup();
+	walletState.wallets = [];
 	vi.clearAllMocks();
 });
 
@@ -227,6 +249,46 @@ describe("quote → pick → book", () => {
 		expect(container.textContent).toContain("18.50");
 		// The buyer's paid fee sits beside the quotes — the margin comparison.
 		expect(container.textContent).toContain("12.00");
+	});
+
+	it("a balance read with the quote that can't pay disables Book, the wallet line as its reason", async () => {
+		// Since 31 Oct the quote reads Delyva's wallet (GET /customer/{id}).
+		walletState.wallets = [
+			{
+				provider: "delyva",
+				armed: true,
+				isTest: false,
+				state: "low",
+				balanceMinor: 900,
+				currency: "MYR",
+				at: Date.now(),
+				lowAlertMinor: 3000,
+				lowAlertCustom: false,
+				source: "pull",
+				refusedAt: null,
+				refusedPriceMinor: null,
+			},
+		];
+		state.actions.set(
+			NAME.prepare,
+			vi.fn().mockResolvedValue({
+				ok: true,
+				services: SERVICES,
+				weightKg: 2.5,
+				itemType: "CHILLED",
+				buyerPaidFee: 1200,
+			}),
+		);
+		render(<DelyvaDispatchCard order={order} />);
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
+		const book = await screen.findByRole("button", { name: /Book Ninja Cold/ });
+		expect((book as HTMLButtonElement).disabled).toBe(true);
+		expect(book.getAttribute("aria-describedby")).toBe(
+			"delyva-wallet-ORD-1234",
+		);
+		walletState.wallets = [];
 	});
 
 	it("books the courier the seller selected, not the default", async () => {

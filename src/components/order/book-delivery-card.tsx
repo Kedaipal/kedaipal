@@ -43,6 +43,8 @@ import {
 import { lalamoveSurface } from "../../lib/dispatch-surface";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
+import { DispatchWalletLine } from "../deliveries/dispatch-wallet-line";
+import { HelperBullets, InfoDisclosure } from "../settings/settings-primitives";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -1285,6 +1287,25 @@ export function BookDeliveryCard({
 										: `Today's price is ${formatPrice(-variance, order.currency)} less than the buyer paid — the difference stays with you.`}
 								</p>
 							) : null}
+							{/* Can the wallet pay for THIS trip — said before the tap
+							    (z8r3fdx34j). Lalamove only pushes its balance, so a short
+							    wallet warns and Book stays enabled: Lalamove judges. */}
+							<DispatchWalletLine
+								provider="lalamove"
+								priceMinor={requoting ? null : quote.fee}
+								priceCurrency={order.currency}
+								retailerId={order.retailerId}
+								country={quote.market}
+							/>
+							<InfoDisclosure summary="Good to know">
+								<HelperBullets
+									items={[
+										"Riders cover your city zone only — roughly 40 to 70 km from your pickup address.",
+										"Cancelling is free until a rider accepts. After that, Lalamove may charge a fee.",
+										"A booking no rider takes expires. Adding a tip makes it more likely to be picked up.",
+									]}
+								/>
+							</InfoDisclosure>
 						</div>
 					)}
 					{/* The way out for an order going by hand. Its own full-width row,

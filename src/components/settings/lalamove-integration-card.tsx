@@ -31,11 +31,13 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type { Country } from "../../../convex/lib/country";
 import { checkLalamoveKeyShape } from "../../../convex/lib/lalamove";
 import type { DeliveryBookingSummary } from "../../../convex/retailers";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { clientEnv } from "../../lib/env";
-import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { convexErrorMessage } from "../../lib/format";
+import { IntegrationWalletBlock } from "../deliveries/courier-wallets-section";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -69,11 +71,14 @@ type BookingPatch = {
 
 export function LalamoveIntegrationCard({
 	retailerId,
+	country,
 	deliveryBooking,
 	businessAddress,
 	onSave,
 }: {
 	retailerId: Id<"retailers">;
+	/** Which Lalamove site a wallet top-up opens. */
+	country: Country;
 	deliveryBooking: DeliveryBookingSummary | undefined;
 	/** The store's pickup point — where every rider is sent. Edited under
 	 * Fulfilment; this card only reports whether it's there. */
@@ -95,14 +100,6 @@ export function LalamoveIntegrationCard({
 	const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 
 	const hasStoredKey = !!deliveryBooking?.apiKeyHint;
-	// The balance Lalamove last reported (86eye9xd4, 6A) — shown once, beside
-	// the key, as proof the key works. The daily view is on Deliveries.
-	const wallet = useQuery(
-		convexQuery(
-			api.courierWallets.lalamoveWallet,
-			hasStoredKey ? { retailerId } : "skip",
-		),
-	).data;
 	// Why Disconnect is greyed out right now, if it is — the server's own rule.
 	const disconnectBlock = useQuery(
 		convexQuery(
@@ -274,21 +271,6 @@ export function LalamoveIntegrationCard({
 									…{deliveryBooking?.apiKeyHint}
 								</span>{" "}
 								·{" "}
-								{wallet ? (
-									<>
-										wallet{" "}
-										<span
-											className={
-												wallet.low
-													? "font-semibold text-amber-700 dark:text-amber-300"
-													: "font-medium text-foreground"
-											}
-										>
-											{formatPrice(wallet.balance, wallet.currency)}
-										</span>{" "}
-										·{" "}
-									</>
-								) : null}
 								<button
 									type="button"
 									onClick={() => setEditingKeys(true)}
@@ -468,6 +450,16 @@ export function LalamoveIntegrationCard({
 				</SetupStep>
 			</SetupChecklist>
 
+			{/* The wallet the bookings are paid from — one shared row, the same
+			    one Home and Deliveries show (z8r3fdx34j). */}
+			{hasStoredKey ? (
+				<IntegrationWalletBlock
+					retailerId={retailerId}
+					country={country}
+					provider="lalamove"
+				/>
+			) : null}
+
 			<ConfirmDialog
 				open={confirmingDisconnect}
 				onOpenChange={setConfirmingDisconnect}
@@ -484,7 +476,7 @@ export function LalamoveIntegrationCard({
 						"Serves the city zone around your pickup (e.g. Klang Valley) — roughly 40–70 km, never across zones",
 						"Bike and car cover the same area — the difference is parcel size and price",
 						"Cancel free until a rider accepts; after that Lalamove's cancel fee applies",
-						"Bookings fail on an empty wallet — top up the Lalamove Business account these keys belong to",
+						"Bookings fail on an empty wallet — top up in Lalamove's Partner Portal, the account these keys come from",
 						"You pay Lalamove directly — Kedaipal never books or pays on your behalf",
 					]}
 				/>

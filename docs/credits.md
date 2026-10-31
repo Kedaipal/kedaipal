@@ -752,6 +752,16 @@ live in `src/lib/credit-packs.ts` (`packOffers`, `afterTopUpLine`), pinned by
 tests. The default pick stays the smaller pack: the badge and the saving do the
 persuading, not a pre-selection.
 
+
+**"Enough to 1 Nov" (z8r3fdx34j).** At this week's pace (`getUsagePace`),
+the picker says how many more orders the store needs before its reset and
+badges the **smallest pack that covers it** (`recommendedPack`,
+`src/lib/credit-packs.ts`) — and pre-selects it, so a seller who taps Buy
+straight away gets the pack that lasts. A debt is part of the gap. Nothing is
+recommended when there's no reset to aim at (a trial), no measurable pace,
+a balance that already lasts, or a gap bigger than any pack (the upgrade hint
+says that instead).
+
 ### Receipts and history
 
 - **Email** (`billingEmail.notifyCreditPurchaseReceipt`, en/ms/zh): to the
@@ -1294,7 +1304,9 @@ tracking page at +50 and −50 and asserts they're identical).
 
 One `CreditMeter`, two places (one control, one rule):
 
-- **Dashboard home** (`card`) — "42 orders left", the monthly bar, both
+- **Dashboard home** (`section`, inside the **Balances** card since
+  z8r3fdx34j, with the courier wallets under it under their own label — see
+  [`courier-wallets.md`](./courier-wallets.md)) — "42 orders left", the monthly bar, both
   balances in one line ("120 of 200 monthly · 25 extra"), the reset ("Back to
   200 on 1 Nov"), and a way into Billing. One button by urgency: when locked,
   the one that puts credits back; once running low, **Top up credits** straight
@@ -1312,6 +1324,66 @@ One `CreditMeter`, two places (one control, one rule):
   trial) shows the one tile. An UNMETERED store — admin-owned or **comped** —
   shows no meter at all; the Sponsored card in Settings → Billing is where a
   comped seller is told their limits are off instead.
+
+### The always-on ticket and the profile menu stub (z8r3fdx34j)
+
+**The balance is on every page** as a small torn ticket (`CreditTicket`,
+`src/components/dashboard/credit-ticket.tsx`), the menu stub torn down to its
+number (Zaki, 31 Oct: see it at a glance without opening a menu). It opens
+Billing, is never dismissable (a fact, not a nag), and comes in three sizes:
+
+| Where | Shows | Torn |
+| --- | --- | --- |
+| Rail, the top band | the stub's headline + its row of 20 dots, with the **plan pill riding the top tear** | top and bottom (`.kp-credit-ticket`) |
+| Collapsed 68px rail, under the logo | the figure + one word: `254 LEFT`, `18 LOW`, `4 OWED`, `3 WAIT` | top and bottom, 44px wide |
+| Phone header, beside the plan pill | `254 left` / `3 waiting` | left and right (`.kp-credit-ticket-side`), 18px drawn, 44px to tap |
+
+Healthy is plain ink; **low is amber with a LOW stamp and orders waiting red
+with a WAITING stamp**, so the state never rests on colour alone. On the rail
+the stamp sits on the **bottom** tear, by the dots it describes: the top tear
+belongs to the plan pill (Zaki, 31 Oct — "your plan and what's left on it" as
+one object), whose label can run long ("FOUNDING #3" + "PRO", "FREE · 12D
+LEFT") and must never collide with a stamp. The pill is a sibling of the
+ticket's link, never inside it. A reader with no ticket keeps the pill on its
+own row. While the balance loads, `CreditTicketPlaceholder` holds the ticket's
+empty frame with the pill already on its tear, so neither jumps when the
+number lands. An owed
+balance reads "owed", never a negative number. The collapsed figure caps at
+`999+` (orders waiting at `99+`) so it fits 44px; the phone line keeps the
+whole count. Words come from `creditStub(...).ticket`; colours from
+`credit-stub-tones.ts`, shared with the menu stub so the two can't drift.
+**No ticket** for a teammate without the credits grant, nor for an
+**unmetered** store: a permanent "∞" in the chrome says nothing the menu's
+"On us" doesn't. The torn edges use `background-repeat: round`, so they end
+on a whole tooth at any width (the menu stub now does too).
+
+The ticket **replaced** the first build's balance line on the avatar row and
+the avatar's tone dot: the number is said once per screen, and the foot row
+is back to name and email. Trade-off: the rail's top band is ~60px taller
+(93px, down from 111px before the pill moved onto the tear), so on a short
+laptop window the nav list starts scrolling about one link sooner.
+
+The menu (`src/components/dashboard/profile-menu.tsx`, replacing Clerk's
+`UserButton`) holds, in order: who you are (name, email, your role in this
+store), **the credits stub**, **Refer a kedai**, then Manage account and Sign
+out. The stub is option **2A** from the 29 Oct mockups: an outlined torn
+receipt on the menu's own surface (`.kp-credit-stub` in `styles.css`) —
+masthead, month, the headline, one row of 20 dots for the month's grant,
+a dotted-leader line, ONE outline button. The whole receipt opens Billing; the
+button opens the pack picker, or the lock's own way back when orders wait.
+Every state is `creditStub` (`src/lib/credit-stub.ts`):
+
+| State | Headline | Leader | Button | Stamp |
+| --- | --- | --- | --- | --- |
+| Healthy | 54 orders left | Resets · 1 Nov · 200 | Top up | — |
+| Low (last 20%) | 38 orders left | About 6 days · 1 Nov | Top up | LOW |
+| Orders waiting | 3 orders waiting (every dot torn) | Resets · 1 Nov · 197 | the lock's CTA | WAITING |
+| Trial | 163 orders left | Trial · 200 orders | Pick a plan | TRIAL |
+| Unmetered | ∞ orders | Plan · Sponsored / Orders · Unlimited | none | ON US |
+
+A reader who can't buy sees the button greyed with T2's own sentence under it.
+**A teammate without the credits grant gets no stub** (and no ticket). Unmetered stores DO get the stub (Zaki, 29 Oct): "on us" is
+worth seeing. Courier wallets are never in this menu.
 
 **The reset reads as a reset** (Zaki's test round): "300 more on 1 Oct" read as
 300 ADDED; monthly credits go BACK to the allowance. `creditRefreshLabel`

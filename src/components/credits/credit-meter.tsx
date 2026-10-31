@@ -77,7 +77,10 @@ export function CreditMeter({
 	retailer,
 	highlight,
 }: {
-	variant: "card" | "full";
+	/** `card` = Home's framed quick look; `section` = the same body without
+	 * its own frame, inside Home's Balances card (z8r3fdx34j); `full` =
+	 * Settings → Billing. */
+	variant: "card" | "section" | "full";
 	retailer: Retailer | null | undefined;
 	/** Deep-link target — the full variant IS the card a `?spot=credit_balance`
 	 * note rings (see src/lib/spotlight.ts). The frame already carries a bare
@@ -118,7 +121,7 @@ export function CreditMeter({
 	).data;
 
 	if (balance === undefined)
-		return variant === "card" ? (
+		return variant !== "full" ? (
 			<Skeleton className="h-36 w-full rounded-2xl" />
 		) : (
 			<Skeleton className="h-64 w-full rounded-2xl" />
@@ -185,7 +188,7 @@ export function CreditMeter({
 		<div className="flex items-center justify-between gap-3">
 			<p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 				<Gauge className="size-3.5" aria-hidden="true" />
-				Credits
+				{variant === "section" ? "Kedaipal credits" : "Credits"}
 			</p>
 			{founding ? (
 				<span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
@@ -232,7 +235,7 @@ export function CreditMeter({
 		</div>
 	);
 
-	if (variant === "card") {
+	if (variant === "card" || variant === "section") {
 		// One button, by urgency: the way back when locked; otherwise a top-up
 		// from the moment the balance stops being comfortable — `out` as well as
 		// `low`, which are mutually exclusive in `creditTone`. The locked branch
@@ -262,7 +265,13 @@ export function CreditMeter({
 					})
 				: null;
 		return (
-			<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5">
+			<section
+				className={cn(
+					"flex flex-col gap-3",
+					variant === "card" &&
+						"rounded-2xl border border-input bg-background p-5",
+				)}
+			>
 				{header}
 				<div className="flex flex-col gap-2">
 					{headline}

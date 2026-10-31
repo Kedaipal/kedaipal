@@ -9,20 +9,14 @@
  *    **Courier bookings**, filterable, each row carrying the one action its
  *    state needs (track, see the proof, rebook).
  *
- * Order by urgency: what the seller must do today first, what is merely
- * moving last. A store that does neither gets one empty state that says how
+ * Order by urgency: whether the courier wallets can pay for today's bookings
+ * first (z8r3fdx34j — a healthy wallet is shown too, it's still the answer),
+ * then what the seller must do today, what is merely moving last. A store that does neither gets one empty state that says how
  * deliveries get here, never a blank page.
  */
 
 import { Link } from "@tanstack/react-router";
-import {
-	ExternalLink,
-	PackageCheck,
-	Printer,
-	TriangleAlert,
-	Truck,
-	Wallet,
-} from "lucide-react";
+import { ExternalLink, PackageCheck, Printer, Truck } from "lucide-react";
 import { useState } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type {
@@ -31,6 +25,7 @@ import type {
 	JobGroup,
 	ParcelRow,
 } from "../../../convex/deliveries";
+import type { Country } from "../../../convex/lib/country";
 import { GATED_CELL_LABEL } from "../../../convex/lib/credits";
 import {
 	JOB_TONE_CLASS,
@@ -45,6 +40,7 @@ import { AddTipDialog, canTipMore } from "../order/add-tip-dialog";
 import { Card, Glance, SectionHeading } from "../settings/settings-primitives";
 import { Button } from "../ui/button";
 import { FilterChip, FilterChipRow } from "../ui/filter-chip";
+import { CourierWalletsSection } from "./courier-wallets-section";
 
 // Malaysia/Singapore time (both UTC+8) — the month the server counted, not
 // the viewer's device zone; en-US for "Oct"/"Sep" rather than en-MY's "Sept".
@@ -59,53 +55,17 @@ export function monthGlance(o: DeliveriesOverview): string {
 	return `${MONTH.format(o.month.start)} · ${o.month.partial ? `${o.month.bookings}+` : o.month.bookings} · ${spend}`;
 }
 
-export function WalletGlance({
-	wallet,
-}: {
-	wallet: DeliveriesOverview["wallet"];
-}) {
-	if (!wallet) return null;
-	return (
-		<Glance tone={wallet.low ? "warn" : "grey"}>
-			<Wallet aria-hidden className="mr-1 size-3" />
-			Wallet {formatPrice(wallet.balance, wallet.currency)}
-		</Glance>
-	);
-}
-
-/** Warns BEFORE a booking fails on an empty wallet — Home and this page. */
-export function LowWalletBanner({
-	wallet,
-}: {
-	wallet: DeliveriesOverview["wallet"];
-}) {
-	if (!wallet?.low) return null;
-	return (
-		<section
-			aria-label="Lalamove wallet low"
-			className="flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
-		>
-			<TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
-			<p className="text-sm">
-				<span className="font-semibold">
-					Lalamove wallet low — {formatPrice(wallet.balance, wallet.currency)}{" "}
-					left.
-				</span>{" "}
-				Top up the Lalamove Business account your keys belong to before your
-				next booking fails.
-			</p>
-		</section>
-	);
-}
-
 export function DeliveriesView({
 	overview,
 	retailerId,
+	country,
 	paperLabel,
 	canPrintLabels,
 }: {
 	overview: DeliveriesOverview;
 	retailerId: Id<"retailers">;
+	/** The store's country — which courier site a Top up opens. */
+	country: Country;
 	/** The store's saved label size, for the print dialog. */
 	paperLabel: string;
 	/** Batch label printing is a Pro capability (`orderInbox`, enforced by
@@ -116,7 +76,11 @@ export function DeliveriesView({
 	if (!booksCouriers && !shipsParcels) return <NothingYet />;
 	return (
 		<div className="flex flex-col gap-6">
-			<LowWalletBanner wallet={overview.wallet} />
+			<CourierWalletsSection
+				wallets={overview.wallets}
+				retailerId={retailerId}
+				country={country}
+			/>
 			{shipsParcels ? (
 				<ToShipCard
 					overview={overview}

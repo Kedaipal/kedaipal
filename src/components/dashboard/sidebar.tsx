@@ -1,4 +1,4 @@
-import { UserButton, useUser } from "@clerk/tanstack-react-start";
+import { useUser } from "@clerk/tanstack-react-start";
 import { Link, type LinkProps } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import {
@@ -40,6 +40,8 @@ import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { ThemeToggle } from "../ui/theme-toggle";
 import { AppVersionRow } from "./app-version-row";
+import { CreditTicket, CreditTicketPlaceholder } from "./credit-ticket";
+import { ProfileAvatar, ProfileMenu, useCreditStub } from "./profile-menu";
 import { TierPill } from "./tier-pill";
 import { WhatsNewNavItem } from "./whats-new";
 
@@ -94,6 +96,19 @@ export function Sidebar({
 		? "transition-[width,max-width,max-height,padding,opacity,transform,color,background-color] duration-200 motion-reduce:transition-none"
 		: "";
 	const { user } = useUser();
+	const [menuOpen, setMenuOpen] = useState(false);
+	const stub = useCreditStub(retailer);
+	// The plan pill as it rides the credits ticket's top tear (compact copy).
+	const railPill = retailer ? (
+		<TierPill
+			subscription={retailer.subscription}
+			foundingRank={retailer.foundingMemberRank}
+			admin={adminBadge}
+			unclaimed={retailer?.unclaimed === true}
+			compact
+			className="py-0 text-[9px]"
+		/>
+	) : null;
 	const userEmail = user?.primaryEmailAddress?.emailAddress ?? null;
 	const userName =
 		user?.fullName ||
@@ -157,7 +172,9 @@ export function Sidebar({
 
 			{/* Subscription tier pill — always-visible chrome (links to billing).
 			    Hidden for a storeless admin (no subscription to show). Reads "Admin"
-			    on an admin's own store. */}
+			    on an admin's own store. With a credits balance to show it rides
+			    the top tear of the credits ticket (z8r3fdx34j): your plan and
+			    what's left on it, as one object; without one, its own row. */}
 			{retailer ? (
 				// `inert`, not just hidden: the pill is a link (billing / admin
 				// console), so a clipped, invisible copy would still be a Tab stop
@@ -167,16 +184,42 @@ export function Sidebar({
 					inert={collapsed}
 					className={cn(
 						"shrink-0 overflow-hidden border-b border-border px-4",
-						collapsed ? "max-h-0 py-0 opacity-0" : "max-h-12 py-2 opacity-100",
+						collapsed
+							? "max-h-0 py-0 opacity-0"
+							: stub?.ticket || stub === undefined
+								? "max-h-32 pt-3 pb-3 opacity-100"
+								: "max-h-12 py-2 opacity-100",
 						motion,
 					)}
 				>
-					<TierPill
-						subscription={retailer.subscription}
-						foundingRank={retailer.foundingMemberRank}
-						admin={adminBadge}
-						unclaimed={retailer?.unclaimed === true}
-					/>
+					{stub?.ticket ? (
+						<CreditTicket stub={stub} variant="rail" plan={railPill} />
+					) : stub === undefined ? (
+						<CreditTicketPlaceholder plan={railPill} />
+					) : (
+						<TierPill
+							subscription={retailer.subscription}
+							foundingRank={retailer.foundingMemberRank}
+							admin={adminBadge}
+							unclaimed={retailer?.unclaimed === true}
+						/>
+					)}
+				</div>
+			) : null}
+			{/* Collapsed, the pill goes but the balance stays: the ticket shrinks
+			    to its figure and the one word it counts. */}
+			{retailer && stub?.ticket ? (
+				<div
+					inert={!collapsed}
+					className={cn(
+						"shrink-0 overflow-hidden border-border",
+						collapsed
+							? "max-h-20 border-b py-2.5 opacity-100"
+							: "max-h-0 py-0 opacity-0",
+						motion,
+					)}
+				>
+					<CreditTicket stub={stub} variant="collapsed" />
 				</div>
 			) : null}
 
@@ -488,26 +531,45 @@ export function Sidebar({
 						motion,
 					)}
 				>
-					<UserButton />
-					{userName || userEmail ? (
-						<div
-							aria-hidden={collapsed || undefined}
-							className={cn(
-								"flex min-w-0 flex-1 flex-col overflow-hidden",
-								collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
-								motion,
-							)}
-						>
-							{userName ? (
-								<span className="truncate text-xs font-medium">{userName}</span>
-							) : null}
-							{userEmail ? (
-								<span className="truncate text-[10px] text-muted-foreground">
-									{userEmail}
+					{/* The profile menu (z8r3fdx34j): the avatar row IS its trigger —
+					    name and email; the balance is the ticket at the top of the
+					    rail, said once. */}
+					<ProfileMenu
+						retailer={retailer}
+						side="right"
+						align="end"
+						open={menuOpen}
+						onOpenChange={setMenuOpen}
+						trigger={
+							<button
+								type="button"
+								aria-label="Account menu"
+								data-testid="profile-trigger"
+								className="-my-1 -ml-1 flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg py-1 pl-1 text-left outline-none hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50"
+							>
+								<ProfileAvatar size="sm" />
+								<span
+									aria-hidden={collapsed || undefined}
+									className={cn(
+										"flex min-w-0 flex-1 flex-col overflow-hidden",
+										collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
+										motion,
+									)}
+								>
+									{userName ? (
+										<span className="truncate text-xs font-medium">
+											{userName}
+										</span>
+									) : null}
+									{userEmail ? (
+										<span className="truncate text-[10px] text-muted-foreground">
+											{userEmail}
+										</span>
+									) : null}
 								</span>
-							) : null}
-						</div>
-					) : null}
+							</button>
+						}
+					/>
 					{/* The expanded home. `-my-2` keeps the row at the avatar's
 					    height, and `-mr-4` lands the glyph's right edge on the version
 					    pill's below — one right-hand edge for the foot — while giving

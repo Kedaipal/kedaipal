@@ -356,7 +356,10 @@ import {
 	requireRetailerAccess,
 	storeOwnerIsAdmin,
 } from "./lib/auth";
-import { syncLalamoveWallet } from "./courierWallets";
+import {
+	resetWalletsForCountrySwitch,
+	syncLalamoveWallet,
+} from "./courierWallets";
 import {
 	hasPermission,
 	type MemberPermissions,
@@ -2948,6 +2951,10 @@ export const updateSettings = mutation({
 			if (args.country !== (retailer.country ?? DEFAULT_COUNTRY)) {
 				patch.countryChangedAt = Date.now();
 				patch.countryChangedFrom = retailer.country ?? DEFAULT_COUNTRY;
+				// Every courier wallet balance described an account in the OLD
+				// country (an SG EasyParcel account has its own wallet) — show
+				// "not reported yet" rather than a balance from the wrong one.
+				await resetWalletsForCountrySwitch(ctx, retailer._id);
 				// The overseas lane is the one thing cleared (z8r3fdr5yy, Zaki
 				// 30 Oct). Unlike a rate card it carries nothing the new country
 				// can use: it points at what is now HOME, its price is in the old

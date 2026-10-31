@@ -77,6 +77,7 @@ export function IntegrationsTab({
 			>
 				<LalamoveIntegrationCard
 					retailerId={retailerId}
+					country={country}
 					deliveryBooking={deliveryBooking}
 					businessAddress={businessAddress}
 					onSave={onSave}

@@ -178,8 +178,13 @@ export function retryWait(retryAfterMs: number): string {
  * Compact "time ago" label (e.g. "just now", "5m ago", "3h ago", "2d ago").
  * Falls back to an absolute date once older than ~a month.
  */
-export function formatRelativeTime(epochMs: number): string {
-	const diff = Date.now() - epochMs;
+export function formatRelativeTime(
+	epochMs: number,
+	/** The clock to measure against — a caller that renders several labels at
+	 * once passes one `now` so they agree (and a test can pin it). */
+	now: number = Date.now(),
+): string {
+	const diff = now - epochMs;
 	const minute = 60_000;
 	const hour = 60 * minute;
 	const day = 24 * hour;

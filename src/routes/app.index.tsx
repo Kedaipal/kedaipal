@@ -17,14 +17,17 @@ import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Country } from "../../convex/lib/country";
 import { todayMytMidnight } from "../../convex/lib/fulfilmentDate";
-import { CreditMeter } from "../components/credits/credit-meter";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
 import { ShareLinkChecklistRow } from "../components/dashboard/share-link-checklist-row";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
 import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
-import { LowWalletBanner } from "../components/deliveries/deliveries-view";
 import { ActionStrip } from "../components/home/action-strip";
+import {
+	BalancesCard,
+	balancesPlacement,
+	balancesWalletsFirst,
+} from "../components/home/balances-card";
 import { DeliveriesHomeCard } from "../components/home/deliveries-card";
 import { EmptySalesCard } from "../components/home/empty-sales-card";
 import { ExceptionRows } from "../components/home/exception-rows";
@@ -47,7 +50,7 @@ import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { usePermission } from "../hooks/usePermission";
 import { revealAnchorWhenMounted } from "../lib/country-setup-copy";
-import { creditPlacement, creditTone } from "../lib/credits-ui";
+import { creditTone } from "../lib/credits-ui";
 import { type HomePeriod, parseHomePeriod } from "../lib/home-copy";
 import {
 	type HomeSpotlightKey,
@@ -143,8 +146,9 @@ function DashboardHome() {
 				: "skip",
 		),
 	).data;
-	// The Deliveries page's own read (86eye9xd4, 6A) — Home's card and the
-	// low-wallet banner share its cache, so the page opens instantly.
+	// The Deliveries page's own read (86eye9xd4, 6A) — Home's deliveries card
+	// and the courier wallets in the Balances card share its cache, so the
+	// page opens instantly.
 	const deliveries = useQuery(
 		convexQuery(
 			api.deliveries.overview,
@@ -332,10 +336,18 @@ function DashboardHome() {
 		creditBalance && creditBalance !== null
 			? creditTone(creditBalance.total, creditBalance.periodGrant)
 			: null;
-	const placement = tone ? creditPlacement(tone) : null;
-	const creditCard = creditBalance ? (
-		<CreditMeter variant="card" retailer={retailer} />
-	) : null;
+	// One Balances card (z8r3fdx34j): credits + courier wallets, placed by
+	// whichever half is more urgent.
+	const wallets = deliveries?.wallets ?? [];
+	const placement = balancesPlacement(tone, wallets);
+	const creditCard = (
+		<BalancesCard
+			retailer={retailer}
+			wallets={wallets}
+			showCredits={Boolean(creditBalance)}
+			walletsFirst={balancesWalletsFirst(tone, wallets)}
+		/>
+	);
 	const outOfCredits = tone === "out";
 
 	const renderChecklistRow = (
@@ -496,8 +508,6 @@ function DashboardHome() {
 					navigate({ to: "/app/settings", search: { tab, fix: key } })
 				}
 			/>
-			{/* Before the next booking fails, not after (86eye9xd4, 6A). */}
-			<LowWalletBanner wallet={deliveries?.wallet ?? null} />
 
 			{/* A REFERRED store, until its first invoice is paid: who invited it
 			    and what starting the plan brings — above the welcome card and
