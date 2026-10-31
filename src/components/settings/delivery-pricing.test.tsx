@@ -69,7 +69,11 @@ function booking(over: Partial<Booking> = {}): Booking {
 
 let updateSettings: ReturnType<typeof vi.fn>;
 let missingWeights:
-	| { count: number; named: { productId: string; name: string }[] }
+	| {
+			count: number;
+			choiceCount: number;
+			named: { productId: string; name: string }[];
+	  }
 	| undefined;
 let delyvaSettings: { connected: boolean; enabled: boolean } | undefined;
 /** Every args value the readiness query was asked with — `"skip"` included,
@@ -242,6 +246,7 @@ describe("weight & zone readiness (4A)", () => {
 	it("names the products checkout would refuse, and how many more", () => {
 		missingWeights = {
 			count: 7,
+			choiceCount: 9,
 			named: [
 				{ productId: "p1", name: "Brownies" },
 				{ productId: "p2", name: "Kuih lapis" },
@@ -254,7 +259,7 @@ describe("weight & zone readiness (4A)", () => {
 	});
 
 	it("says nothing when every product is weighed", () => {
-		missingWeights = { count: 0, named: [] };
+		missingWeights = { count: 0, choiceCount: 0, named: [] };
 		const { container } = renderPricing({ config: weight as never });
 		expect(container.textContent).not.toMatch(/(has|have) no parcel weight/);
 	});
@@ -405,6 +410,7 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 			delyvaSettings = { connected: true, enabled: true };
 			missingWeights = {
 				count: 3,
+				choiceCount: 4,
 				named: [{ productId: "p1", name: "Oversized Tee" }],
 			};
 			const { container } = renderLive({
@@ -424,7 +430,7 @@ describe("live courier pricing (z8r3fdbvdy)", () => {
 
 		it("never fetches, never shows, when no courier prices by weight", () => {
 			delyvaSettings = { connected: true, enabled: false };
-			missingWeights = { count: 3, named: [] };
+			missingWeights = { count: 3, choiceCount: 3, named: [] };
 			const { container } = renderLive({
 				config: { mode: "live", onUnquotable: "block" },
 			});
@@ -469,5 +475,137 @@ describe("live-mode saves respect the toggles (Zaki, 6 Sep)", () => {
 		expect(container.textContent).toContain(
 			"Turn on at least one service under Courier booking",
 		);
+	});
+});
+
+describe("arming weight pricing waits for the catalogue (23 Oct 2026)", () => {
+	const weight = {
+		mode: "weight" as const,
+		zones: [],
+		onUnzoned: "arrange" as const,
+	};
+	const unweighed = {
+		count: 2,
+		choiceCount: 5,
+		named: [{ productId: "p1", name: "Brownies" }],
+	};
+
+	it("the readiness notice links the bulk fill with the choice count", () => {
+		missingWeights = unweighed;
+		renderPricing({ config: weight as never });
+		const fix = screen.getByRole("link", { name: /set parcel weights/i });
+		expect(fix.getAttribute("href")).toBe("/app/products/weights");
+		expect(fix.textContent).toContain("5 choices");
+	});
+
+	it("moving onto the rate card is disabled-with-reason while products are unweighed", () => {
+		missingWeights = unweighed;
+		const { container } = renderPricing({ config: { mode: "flat", fee: 500 } });
+		fireEvent.click(mode(/By weight & zone/));
+		const save = screen.getByRole("button", { name: /save delivery pricing/i });
+		expect(save.hasAttribute("disabled")).toBe(true);
+		expect(container.textContent).toContain(
+			"Saving is off until every product has a parcel weight — 2 still need one.",
+		);
+	});
+
+	it("a store already on the rate card keeps saving — only the switch is gated", () => {
+		missingWeights = unweighed;
+		renderPricing({ config: weight as never });
+		expect(
+			screen
+				.getByRole("button", { name: /save delivery pricing/i })
+				.hasAttribute("disabled"),
+		).toBe(false);
+	});
+
+	it("moving onto live pricing with Delyva armed is gated the same way; riders alone are not", () => {
+		delyvaSettings = { connected: true, enabled: true };
+		missingWeights = unweighed;
+		renderPricing({
+			config: { mode: "flat", fee: 500 },
+			businessAddress: HQ,
+			deliveryBooking: booking(),
+		});
+		fireEvent.click(mode(/live courier price/i));
+		expect(
+			screen
+				.getByRole("button", { name: /save live pricing/i })
+				.hasAttribute("disabled"),
+		).toBe(true);
+		cleanup();
+		delyvaSettings = { connected: true, enabled: false };
+		renderPricing({
+			config: { mode: "flat", fee: 500 },
+			businessAddress: HQ,
+			deliveryBooking: booking(),
+		});
+		fireEvent.click(mode(/live courier price/i));
+		expect(
+			screen
+				.getByRole("button", { name: /save live pricing/i })
+				.hasAttribute("disabled"),
+		).toBe(false);
+	});
+});
+
+describe("the overseas price is said here too (z8r3fdr5yy)", () => {
+	// Found on the /test-code pass: a Free store read "no delivery charge"
+	// while Malaysia orders paid S$12, and the live-pricing warning named
+	// Delyva to an SG store that was never offered it.
+	const LANE = {
+		country: "SG" as const,
+		pricing: { kind: "flat" as const, fee: 2500 },
+	};
+
+	it("a store with a lane sees the overseas price and the way to change it", () => {
+		// No config = Free.
+		renderPricing({ crossBorderLanes: [LANE] });
+		expect(
+			screen.getByText(/Orders to Singapore have their own price/),
+		).toBeTruthy();
+		expect(screen.getByText(/RM\s?25\.00 per order/)).toBeTruthy();
+		expect(
+			screen
+				.getByRole("link", { name: "Change overseas price" })
+				.getAttribute("href"),
+		).toBe("/app/settings/overseas-delivery");
+		expect(
+			screen.getByText(/Orders to Singapore still pay your overseas price/),
+		).toBeTruthy();
+	});
+
+	it("a store without a lane reads exactly as before", () => {
+		renderPricing();
+		expect(screen.queryByText(/have their own price/)).toBeNull();
+		expect(
+			screen.getByText("Buyers pay nothing extra for delivery — it's on you."),
+		).toBeTruthy();
+	});
+
+	it("live pricing at home never pauses the overseas lane — it keeps its own price (Zaki, 30 Oct)", () => {
+		renderPricing({
+			country: "SG",
+			config: { mode: "live", onUnquotable: "block" },
+			businessAddress: HQ,
+			deliveryBooking: booking(),
+			crossBorderLanes: [{ ...LANE, country: "MY" }],
+		});
+		expect(
+			screen.getByText(/Orders to Malaysia have their own price/),
+		).toBeTruthy();
+		expect(screen.queryByText(/is paused/)).toBeNull();
+		expect(screen.queryByText(/pauses while you use live courier/)).toBeNull();
+	});
+
+	it("paused by plan or delivery off reads paused too", () => {
+		renderPricing({
+			crossBorderLanes: [LANE],
+			subscription: { features: { crossBorder: false } } as never,
+		});
+		expect(screen.getByText("Delivery to Singapore is paused.")).toBeTruthy();
+		cleanup();
+		renderPricing({ crossBorderLanes: [LANE], offerDelivery: false });
+		expect(screen.getByText("Delivery to Singapore is paused.")).toBeTruthy();
 	});
 });

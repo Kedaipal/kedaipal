@@ -42,8 +42,8 @@ import {
 import {
 	ANNUAL_MONTHS_RECEIVED,
 	annualQuote,
-	BILLING_CURRENCIES,
 	type BillingCurrency,
+	DEFAULT_BILLING_CURRENCY,
 	enterprisePrice,
 	isPlanUpgrade,
 	PLANS,
@@ -337,8 +337,11 @@ function AdminBillingOverview() {
 
 /**
  * The book-wide credit figures (Kedaipal Credits T5) — two counts of CREDITS,
- * never money: what sellers have bought and not used (the deferred-revenue
- * figure — service still owed) and the orders taken past zero that the next
+ * never money: the extra credits sellers hold and haven't used (service still
+ * owed — top-ups AND referral bonuses AND admin grants, so it is NOT the
+ * deferred-revenue figure: a lot's `source` would separate the paid share,
+ * but an Enterprise block is logged as an `adjust` lot and can't be told from
+ * a goodwill grant yet) and the orders taken past zero that the next
  * grant or pack will absorb. Beside them, the one money figure: this month's
  * top-up revenue from paid packs, per currency (Credits T3 × T2 — it waited
  * for the purchase table rather than guess). Exported for its states test.
@@ -351,17 +354,17 @@ export function CreditTotals() {
 	const stores = (n: number) => `${n} store${n === 1 ? "" : "s"}`;
 	const tiles: StatTileProps[] = [
 		{
-			label: "Unused bought credits",
+			label: "Unused extra credits",
 			value:
 				totals === undefined
 					? "..."
 					: totals.purchasedUnused.toLocaleString("en"),
 			helper:
 				totals === undefined
-					? "Deferred — service still owed"
+					? "Top-ups, bonuses and grants — service still owed"
 					: totals.storesWithPurchased === 0
 						? "No store holds any yet"
-						: `Across ${stores(totals.storesWithPurchased)} — service still owed`,
+						: `Across ${stores(totals.storesWithPurchased)} — top-ups, bonuses and grants`,
 			icon: <Coins className="size-4" />,
 			tone: "neutral",
 		},
@@ -891,6 +894,11 @@ function retailerOptionLabel(r: {
 	return parts.join(" · ");
 }
 
+/** How the issue form names a billing currency. */
+function currencyChoiceLabel(currency: BillingCurrency): string {
+	return currency === "MYR" ? "RM (MYR)" : "S$ (SGD)";
+}
+
 /**
  * Issue a pending invoice — covers standard conversions/renewals AND onboarding a
  * Founding-10 member (founding toggle). Built for minimal typing: amount is
@@ -916,12 +924,16 @@ export function IssueInvoiceForm() {
 	const [cycle, setCycle] = useState<"monthly" | "annual">("monthly");
 	// The operator's OVERRIDE only — not the effective value. See `founding`.
 	const [foundingOverride, setFoundingOverride] = useState(false);
-	const [currency, setCurrency] = useState<BillingCurrency>("MYR");
 	const [busy, setBusy] = useState(false);
 	const [contractSheetOpen, setContractSheetOpen] = useState(false);
 	const [confirmReplace, setConfirmReplace] = useState(false);
 
 	const selected = retailers?.find((r) => r._id === retailerId);
+	// Not a pick: a store is billed in its country's currency, and
+	// `issueInvoice` applies that itself (86eyp7hn7). The form only SHOWS it,
+	// with the country that set it — a picker here once defaulted to MYR and
+	// handed a Singapore store a ringgit bill.
+	const currency = selected?.billingCurrency ?? DEFAULT_BILLING_CURRENCY;
 	// Live contracts the admin could model a new deal on — off the picker list
 	// already loaded, so the "start from" dropdown costs no second query. Same
 	// helper the sellers directory uses, so the two pickers can't drift.
@@ -972,11 +984,10 @@ export function IssueInvoiceForm() {
 	// DIFFERENT store — never when a revoke elsewhere on the page changes the
 	// status. Currency clears with it: an SGD pick left over from the previous
 	// store must never silently carry to a Malaysian retailer (an SGD invoice
-	// ships with no bank/DuitNow block).
+	// ships with no bank/DuitNow block) — the next store opens on its own.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: retailerId is the TRIGGER, not a read — picking a different store is exactly what clears the operator's override
 	useEffect(() => {
 		setFoundingOverride(false);
-		setCurrency("MYR");
 		// A contract store ARMS its contract (z8r3fdkp8h, found live on 2 Oct):
 		// the previous default left Pro · RM 149.00 one click from issue for a
 		// store whose paid Pro bill would take it OFF its contract — the most
@@ -1098,7 +1109,6 @@ export function IssueInvoiceForm() {
 				plan: effectivePlan,
 				billingCycle: effectiveCycle,
 				founding: foundingBill,
-				currency: effectiveCurrency,
 				// The server re-checks that this is still the open bill, so a
 				// stale page replaces nothing.
 				...(openBill ? { replacePendingId: openBill._id } : {}),
@@ -1118,8 +1128,6 @@ export function IssueInvoiceForm() {
 			setConfirmReplace(false);
 			setRetailerId("");
 			setFoundingOverride(false);
-			// Reset to the default so the next store isn't silently billed in SGD.
-			setCurrency("MYR");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 		} finally {
@@ -1244,33 +1252,22 @@ export function IssueInvoiceForm() {
 					<span className="text-xs font-medium text-muted-foreground">
 						Currency
 					</span>
-					<div className="grid grid-cols-2 gap-1.5 rounded-xl bg-background p-1 shadow-inner shadow-border/40">
-						{BILLING_CURRENCIES.map((cur) => (
-							<button
-								key={cur}
-								type="button"
-								disabled={billsContract}
-								onClick={() => setCurrency(cur)}
-								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 transition-all disabled:cursor-not-allowed ${
-									!noContract && effectiveCurrency === cur
-										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
-										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
-								}`}
-							>
-								{!noContract && effectiveCurrency === cur ? (
-									<Check className="size-3.5 shrink-0" />
-								) : null}
-								{cur === "MYR" ? "RM (MYR)" : "S$ (SGD)"}
-							</button>
-						))}
+					<div className="flex min-h-11 items-center rounded-xl bg-background px-3 text-sm font-semibold shadow-inner shadow-border/40">
+						{selected && !noContract ? (
+							currencyChoiceLabel(effectiveCurrency)
+						) : (
+							<span className="text-muted-foreground">—</span>
+						)}
 					</div>
-					{billsContract ? (
-						<span className="text-[11px] text-muted-foreground">
-							{contract
+					<span className="text-[11px] text-muted-foreground">
+						{billsContract
+							? contract
 								? "Set by the store's Enterprise contract — the term and currency it was agreed in."
-								: "The contract sets both — choose the term while you write it."}
-						</span>
-					) : null}
+								: "The contract sets both — choose the term while you write it."
+							: selected
+								? `Set by its country (${COUNTRY_LABELS[selected.country]}). To bill another currency, change the store's country first (act as it → Settings) — that also turns off its auto-renewal.`
+								: "Follows the store's country."}
+					</span>
 					{effectiveCurrency === "SGD" ? (
 						<span className="text-[11px] text-muted-foreground">
 							SGD invoices carry no bank/DuitNow block — payment is arranged

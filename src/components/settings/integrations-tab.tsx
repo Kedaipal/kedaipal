@@ -14,7 +14,6 @@
  * inside a pricing section — the thing this rework undid.
  */
 
-import type { ReactNode } from "react";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import type { Country } from "../../../convex/lib/country";
 import type {
@@ -22,41 +21,17 @@ import type {
 	HitpaySummary,
 } from "../../../convex/retailers";
 import type { useUpdateSettings } from "../../hooks/useUpdateSettings";
-import {
-	type CardTarget,
-	type FixHighlight,
-	highlightRingClass,
-} from "../../lib/country-setup-copy";
+import type { CardTarget, FixHighlight } from "../../lib/country-setup-copy";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
 import { DelyvaCard } from "./delyva-card";
+import { EasyparcelCard } from "./easyparcel-card";
 import { LalamoveIntegrationCard } from "./lalamove-integration-card";
 import { OnlinePaymentsCard } from "./online-payments-card";
-
-/**
- * One account card per provider. Each is a `section` with a stable `id` so a
- * deep link can land on the exact card and ring it (the post-switch checklist
- * on HitPay, a What's-new note on any of the three — src/lib/spotlight.ts).
- */
-function AccountCard({
-	id,
-	highlight,
-	children,
-}: {
-	id: string;
-	highlight: FixHighlight | undefined;
-	children: ReactNode;
-}) {
-	return (
-		<section
-			id={id}
-			data-fix-highlight={highlight ?? undefined}
-			className={`flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
-		>
-			{children}
-		</section>
-	);
-}
+// The shared `AccountCard` section shell lives in settings-primitives — the
+// courier cards wrap themselves in it so a provider that hides (country not
+// served) takes its border with it, never an empty box.
+import { AccountCard } from "./settings-primitives";
 
 export function IntegrationsTab({
 	target,
@@ -102,22 +77,31 @@ export function IntegrationsTab({
 			>
 				<LalamoveIntegrationCard
 					retailerId={retailerId}
+					country={country}
 					deliveryBooking={deliveryBooking}
 					businessAddress={businessAddress}
 					onSave={onSave}
 				/>
 			</AccountCard>
 
-			<AccountCard
-				id={SPOTLIGHT_ANCHOR.delyva.anchor}
+			{/* The two parcel aggregators wrap their own shells and hide
+			    themselves in a country they don't serve — MY and SG stores each
+			    see exactly one (z8r3fdcje2). */}
+			<DelyvaCard
+				shellId={SPOTLIGHT_ANCHOR.delyva.anchor}
 				highlight={ring(SPOTLIGHT_ANCHOR.delyva.anchor)}
-			>
-				<DelyvaCard
-					retailerId={retailerId}
-					canUse={hasFeature(subscription, "delivery")}
-					country={country}
-				/>
-			</AccountCard>
+				retailerId={retailerId}
+				canUse={hasFeature(subscription, "delivery")}
+				country={country}
+			/>
+
+			<EasyparcelCard
+				shellId={SPOTLIGHT_ANCHOR.easyparcel.anchor}
+				highlight={ring(SPOTLIGHT_ANCHOR.easyparcel.anchor)}
+				retailerId={retailerId}
+				canUse={hasFeature(subscription, "delivery")}
+				country={country}
+			/>
 
 			{/* The id doubles as the post-switch checklist's `hitpay` anchor
 			    (SETTINGS_ANCHOR.hitpay) — one string, asserted equal by test. */}

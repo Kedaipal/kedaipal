@@ -1,6 +1,7 @@
 // Retailer-facing email copy catalog. Pure — no Convex imports — to keep testable.
 // Trilingual (en / ms / zh) parity with the WhatsApp retailer alerts.
 
+import type { CourierProviderId } from "./courierProviders";
 import type { Locale } from "./locale";
 
 export type { Locale } from "./locale";
@@ -69,7 +70,7 @@ export type RetailerEmailVars = {
 	// Which booking provider the failed job belonged to (86eyjpv6z). Absent =
 	// "lalamove" (every pre-Delyva caller), so old scheduled sends render
 	// unchanged.
-	deliveryProvider?: "lalamove" | "delyva";
+	deliveryProvider?: CourierProviderId;
 	// True when the order has a made-to-order custom item that needs a mockup
 	// approved before it can be packed (and before the buyer is asked to pay).
 	// Surfaced on the newOrder / orderConfirmed alerts so the seller knows to act.
@@ -391,13 +392,19 @@ const en = {
 		return { subject, html, text };
 	},
 	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
-		const delyva = v.deliveryProvider === "delyva";
-		const provider = delyva ? "Delyva" : "Lalamove";
-		const rebook = delyva ? "rebook the courier" : "rebook a rider";
+		const courier =
+			v.deliveryProvider === "delyva" || v.deliveryProvider === "easyparcel";
+		const provider =
+			v.deliveryProvider === "delyva"
+				? "Delyva"
+				: v.deliveryProvider === "easyparcel"
+					? "EasyParcel"
+					: "Lalamove";
+		const rebook = courier ? "rebook the courier" : "rebook a rider";
 		const subject = `🚨 Delivery booking failed for ${v.shortId}`;
 		const reasonLine = v.jobFailureReason
 			? `Reason: ${v.jobFailureReason}`
-			: delyva
+			: courier
 				? `The booking ended without a courier.`
 				: `The booking ended without a rider.`;
 		const lines = [
@@ -592,13 +599,19 @@ const ms = {
 		return { subject, html, text };
 	},
 	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
-		const delyva = v.deliveryProvider === "delyva";
-		const provider = delyva ? "Delyva" : "Lalamove";
-		const rebook = delyva ? "tempah kurier semula" : "tempah rider semula";
+		const courier =
+			v.deliveryProvider === "delyva" || v.deliveryProvider === "easyparcel";
+		const provider =
+			v.deliveryProvider === "delyva"
+				? "Delyva"
+				: v.deliveryProvider === "easyparcel"
+					? "EasyParcel"
+					: "Lalamove";
+		const rebook = courier ? "tempah kurier semula" : "tempah rider semula";
 		const subject = `🚨 Tempahan penghantaran gagal untuk ${v.shortId}`;
 		const reasonLine = v.jobFailureReason
 			? `Sebab: ${v.jobFailureReason}`
-			: delyva
+			: courier
 				? `Tempahan tamat tanpa kurier.`
 				: `Tempahan tamat tanpa rider.`;
 		const lines = [
@@ -793,13 +806,19 @@ const zh = {
 		return { subject, html, text };
 	},
 	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
-		const delyva = v.deliveryProvider === "delyva";
-		const provider = delyva ? "Delyva" : "Lalamove";
-		const rebook = delyva ? "重新预订快递" : "重新预订骑士";
+		const courier =
+			v.deliveryProvider === "delyva" || v.deliveryProvider === "easyparcel";
+		const provider =
+			v.deliveryProvider === "delyva"
+				? "Delyva"
+				: v.deliveryProvider === "easyparcel"
+					? "EasyParcel"
+					: "Lalamove";
+		const rebook = courier ? "重新预订快递" : "重新预订骑士";
 		const subject = `🚨 ${v.shortId} 的配送预订失败`;
 		const reasonLine = v.jobFailureReason
 			? `原因：${v.jobFailureReason}`
-			: delyva
+			: courier
 				? `预订没有配对到快递。`
 				: `预订没有配对到骑士。`;
 		const lines = [

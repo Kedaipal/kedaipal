@@ -236,6 +236,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			events: true,
 			promo: true,
 			vouchers: true,
+			crossBorder: true,
 		});
 
 		await setPlan(t, retailer._id, "starter");
@@ -252,6 +253,7 @@ describe("plan gating — CRM (Pro+)", () => {
 			events: false,
 			promo: false,
 			vouchers: false,
+			crossBorder: false,
 		});
 	});
 
@@ -277,6 +279,7 @@ describe("plan gating — CRM (Pro+)", () => {
 		events: true,
 			promo: true,
 		vouchers: true,
+		crossBorder: true,
 		});
 		// subscriptions.current (billing nav) resolves the same way.
 		const current = await asAdmin.query(api.subscriptions.current, {});

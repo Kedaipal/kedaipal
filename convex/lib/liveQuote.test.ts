@@ -8,8 +8,10 @@ import {
 	chooseLiveQuote,
 	isColdItemType,
 	LIVE_QUOTE_WEIGHT_FLOOR_G,
+	liveQuoteWeightFacts,
 	liveQuoteWeightKg,
 	type ProviderQuote,
+	weightGapStamp,
 } from "./liveQuote";
 
 const rider = (fee: number, currency = "MYR"): ProviderQuote => ({
@@ -31,7 +33,7 @@ const courier = (fee: number, currency = "MYR"): ProviderQuote => ({
 });
 
 const failed = (
-	provider: "lalamove" | "delyva",
+	provider: ProviderQuote["provider"],
 	status: "out_of_range" | "no_cold_service" | "store_unavailable" | "unavailable",
 ): ProviderQuote => ({ provider, status }) as ProviderQuote;
 
@@ -312,6 +314,84 @@ describe("liveQuoteWeightKg — an unweighed item never blocks the quote (Mandos
 	});
 });
 
+describe("weightGapStamp — what a won quote records about weight it couldn't see", () => {
+	test("PR #416 review: 1.5 kg weighed + 5 unweighed tees is NOT floored, and is still stamped", () => {
+		const facts = liveQuoteWeightFacts([
+			{ parcelWeightG: 1500, quantity: 1 },
+			{ parcelWeightG: 0, quantity: 5 },
+		]);
+		expect(facts).toEqual({ kg: 1.5, floored: false, unweighedLines: 1 });
+		expect(
+			weightGapStamp({
+				provider: "delyva",
+				weightFloored: false,
+				unweighedLines: 5,
+			}),
+		).toEqual({ unweighedLines: 5 });
+	});
+
+	test("a floored cart stamps both, a custom-only floor stamps the floor with zero lines", () => {
+		expect(
+			weightGapStamp({ provider: "delyva", weightFloored: true, unweighedLines: 2 }),
+		).toEqual({ weightFloored: true, unweighedLines: 2 });
+		expect(
+			weightGapStamp({ provider: "delyva", weightFloored: true, unweighedLines: 0 }),
+		).toEqual({ weightFloored: true, unweighedLines: 0 });
+	});
+
+	test("a fully weighed cart stamps nothing", () => {
+		expect(
+			weightGapStamp({ provider: "delyva", weightFloored: false, unweighedLines: 0 }),
+		).toEqual({});
+	});
+
+	test("a rider's price never used the weight, so it never carries a stamp", () => {
+		expect(
+			weightGapStamp({ provider: "lalamove", weightFloored: true, unweighedLines: 3 }),
+		).toEqual({});
+	});
+});
+
+describe("liveQuoteWeightFacts — the stamp the order carries (23 Oct 2026)", () => {
+	test("a floored cart says so, and counts the lines a product weight would have priced", () => {
+		expect(
+			liveQuoteWeightFacts([
+				{ parcelWeightG: 0, quantity: 2 },
+				{ parcelWeightG: 300, quantity: 1 },
+				{ parcelWeightG: 0, quantity: 1 },
+			]),
+		).toEqual({ kg: 1, floored: true, unweighedLines: 2 });
+	});
+
+	test("a custom line floors the quote but is not something the seller can weigh", () => {
+		expect(
+			liveQuoteWeightFacts([
+				{ parcelWeightG: 0, quantity: 1, isCustom: true },
+				{ parcelWeightG: 200, quantity: 1 },
+			]),
+		).toEqual({ kg: 1, floored: true, unweighedLines: 0 });
+	});
+
+	test("an unweighed line in a cart already over a kilo is unweighed but NOT floored — the sum stood", () => {
+		expect(
+			liveQuoteWeightFacts([
+				{ parcelWeightG: 0, quantity: 1 },
+				{ parcelWeightG: 1500, quantity: 1 },
+			]),
+		).toEqual({ kg: 1.5, floored: false, unweighedLines: 1 });
+	});
+
+	test("a fully weighed light cart keeps its sum and is not floored", () => {
+		expect(
+			liveQuoteWeightFacts([{ parcelWeightG: 250, quantity: 2 }]),
+		).toEqual({ kg: 0.5, floored: false, unweighedLines: 0 });
+	});
+
+	test("an empty cart has no facts", () => {
+		expect(liveQuoteWeightFacts([])).toBeNull();
+	});
+});
+
 describe("sameQuotedLines — a quote is bound to the cart it priced", () => {
 	// Delyva bids on summed weight, so redeeming a light cart's quote against
 	// a heavy cart buys a cheaper courier band (PR #253 review, MEDIUM).
@@ -372,3 +452,54 @@ describe("sameQuotedLines — a quote is bound to the cart it priced", () => {
 		).toBe(true);
 	});
 })
+
+describe("too heavy for a rider (25 Oct 2026)", () => {
+	test("a courier that priced it wins — the rider's refusal costs the buyer nothing", () => {
+		expect(
+			chooseLiveQuote({
+				quotes: [
+					{ provider: "lalamove", status: "too_heavy" },
+					{ provider: "delyva", status: "quoted", fee: 5377, currency: "MYR" },
+				],
+				storeCurrency: "MYR",
+				cold: false,
+			}),
+		).toMatchObject({ kind: "quoted", provider: "delyva", fee: 5377 });
+	});
+
+	test("alone, it is the reason the buyer sees", () => {
+		expect(
+			chooseLiveQuote({
+				quotes: [{ provider: "lalamove", status: "too_heavy" }],
+				storeCurrency: "MYR",
+				cold: false,
+			}),
+		).toEqual({ kind: "unquotable", reason: "too_heavy" });
+	});
+
+	test("beside a coverage refusal it still wins — the address may be fine, the ORDER is too big", () => {
+		expect(
+			chooseLiveQuote({
+				quotes: [
+					{ provider: "lalamove", status: "too_heavy" },
+					{ provider: "delyva", status: "out_of_range" },
+				],
+				storeCurrency: "MYR",
+				cold: false,
+			}),
+		).toEqual({ kind: "unquotable", reason: "too_heavy" });
+	});
+
+	test("a cold cart's missing cold courier still outranks it — riders never carry cold", () => {
+		expect(
+			chooseLiveQuote({
+				quotes: [
+					{ provider: "lalamove", status: "too_heavy" },
+					{ provider: "delyva", status: "no_cold_service" },
+				],
+				storeCurrency: "MYR",
+				cold: true,
+			}),
+		).toEqual({ kind: "unquotable", reason: "no_cold_service" });
+	});
+});

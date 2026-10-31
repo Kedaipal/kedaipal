@@ -4,6 +4,7 @@ import {
 	afterTopUpLine,
 	opensLine,
 	packOffers,
+	recommendedPack,
 	wholePrice,
 } from "./credit-packs";
 
@@ -177,5 +178,78 @@ describe("opensLine — what the pack OPENS, before the tap (Credits T3.1)", () 
 				);
 			}
 		});
+	});
+});
+
+describe("recommendedPack — the pack that reaches the reset (z8r3fdx34j)", () => {
+	const packs = [
+		{ id: "p50", credits: 50, priceMinor: 4500, currency: "MYR" },
+		{ id: "p200", credits: 200, priceMinor: 15000, currency: "MYR" },
+	];
+	const DAY = 86_400_000;
+	const now = 0;
+
+	it("picks the smallest pack that covers this week's pace to the reset", () => {
+		// 6 a day × 10 days = 60 needed, 20 held → 40 short → the 50-pack.
+		expect(
+			recommendedPack(packs, {
+				total: 20,
+				perDay: 6,
+				refreshesAt: 10 * DAY,
+				now,
+			}),
+		).toEqual({ pack: packs[0], needed: 40 });
+	});
+
+	it("a debt is part of the gap", () => {
+		expect(
+			recommendedPack(packs, {
+				total: -15,
+				perDay: 6,
+				refreshesAt: 10 * DAY,
+				now,
+			})?.needed,
+		).toBe(75);
+		expect(
+			recommendedPack(packs, {
+				total: -15,
+				perDay: 6,
+				refreshesAt: 10 * DAY,
+				now,
+			})?.pack.id,
+		).toBe("p200");
+	});
+
+	it("recommends nothing when there's nothing honest to say", () => {
+		// Lasts already.
+		expect(
+			recommendedPack(packs, {
+				total: 100,
+				perDay: 6,
+				refreshesAt: 10 * DAY,
+				now,
+			}),
+		).toBeNull();
+		// No measurable pace, or no reset (a trial).
+		expect(
+			recommendedPack(packs, {
+				total: 0,
+				perDay: 0.5,
+				refreshesAt: 10 * DAY,
+				now,
+			}),
+		).toBeNull();
+		expect(
+			recommendedPack(packs, { total: 0, perDay: 6, refreshesAt: null, now }),
+		).toBeNull();
+		// Bigger than any pack: the upgrade hint's job, not a pack that falls short.
+		expect(
+			recommendedPack(packs, {
+				total: 0,
+				perDay: 40,
+				refreshesAt: 10 * DAY,
+				now,
+			}),
+		).toBeNull();
 	});
 });

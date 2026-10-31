@@ -75,6 +75,20 @@ export const BUCKET_LEAVES: Record<OrderBucket, InboxStatusLeaf[]> = {
 	cancelled: ["cancelled"],
 };
 
+/**
+ * Every leaf that still HOLDS its place — a seat at an event, a booking's
+ * capacity: the whole row minus the cancelled bucket. It is the status scope
+ * behind every "registered" count (`holdsSeats` / `holdsCapacity` are the
+ * same rule, `status !== "cancelled"`), so a link that opens the orders behind
+ * such a count carries it as `?st=`: the Schedule row said "Open 2 orders"
+ * and the inbox showed three, the third cancelled, because the link narrowed
+ * to the listing and the day but not to the statuses the count was made of.
+ * Derived, never listed by hand, so a new leaf joins it on its own.
+ */
+export const HOLDING_LEAVES: InboxStatusLeaf[] = INBOX_LEAF_KEYS.filter(
+	(leaf) => !BUCKET_LEAVES.cancelled.includes(leaf),
+);
+
 /** Seller-facing name for a leaf that has no `OrderStatus` behind it. Not
  * renameable (see `INBOX_LEAF_KEYS`), so it needs no label resolver. */
 export const UNSEEN_LEAF_LABEL = "Not yet opened";

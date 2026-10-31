@@ -432,6 +432,30 @@ export function parseCompanyResponse(json: unknown): DelyvaCompany {
 }
 
 /**
+ * The wallet balance on Delyva's customer profile (`GET /customer` and
+ * `GET /customer/{id}`, both read with the seller's own API key) → integer
+ * sen, or null when the field is missing or isn't money. Found 31 Oct 2026:
+ * `walletBalance: "500.00"` (a decimal STRING, MYR major units) beside
+ * Delyva's own low line, `minBalanceVal`. This is what made Delyva a wallet we
+ * can ASK — before it, the balance only surfaced in a refusal. Negative
+ * balances are allowed (an overdrawn account reads as empty, not as garbage).
+ */
+export function parseDelyvaWalletBalance(json: unknown): number | null {
+	const record = ((json as { data?: unknown })?.data ?? json) as
+		| Record<string, unknown>
+		| null
+		| undefined;
+	const raw = record?.walletBalance;
+	if (typeof raw !== "string" && typeof raw !== "number") return null;
+	const s = String(raw).trim();
+	const match = /^(-)?(\d+)(?:\.(\d{1,2}))?$/.exec(s);
+	if (!match) return null;
+	const sen =
+		Number(match[2]) * 100 + Number((match[3] ?? "0").padEnd(2, "0"));
+	return match[1] ? -sen : sen;
+}
+
+/**
  * Delyva's numeric status vocabulary → our normalized job status. Codes from
  * their own maintained WooCommerce plugin (Statuses mapping, verified against
  * the webhook docs):

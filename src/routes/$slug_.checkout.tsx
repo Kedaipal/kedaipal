@@ -10,6 +10,7 @@ import { ArrowLeft, Zap } from "lucide-react";
 import { useMemo } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { NotFoundPage } from "../components/not-found/not-found-page";
 import { BookingCheckoutForm } from "../components/storefront/booking-checkout-form";
 import { CheckoutPage } from "../components/storefront/checkout-form";
 import { EventRsvpCheckoutForm } from "../components/storefront/event-rsvp-checkout-form";
@@ -27,10 +28,12 @@ import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { CountdownBand } from "../components/ui/countdown-strip";
 import { Skeleton } from "../components/ui/skeleton";
 import { type UseCart, useCart } from "../hooks/useCart";
+import { useMarketplaceRegion } from "../hooks/useMarketplaceRegion";
 import { usePromoClock } from "../hooks/usePromoClock";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { getConvexHttpClient } from "../lib/convex-server";
+import { notFoundHeadMeta, pageHead, rendersNotFound } from "../lib/not-found";
 import type { PromoState } from "../lib/promo";
 import { searchText } from "../lib/search-params";
 import { ssrRead } from "../lib/ssr-read";
@@ -122,35 +125,28 @@ export const Route = createFileRoute("/$slug_/checkout")({
 			slug: result.retailer.slug,
 		};
 	},
-	head: ({ loaderData }) => {
-		if (!loaderData) return {};
-		if ("unavailable" in loaderData)
-			return storeUnavailableHead(loaderData.storeName);
-		return {
-			meta: [
-				{ title: `Checkout — ${loaderData.storeName} | Kedaipal` },
-				{ name: "robots", content: "noindex, nofollow" },
-			],
-		};
-	},
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData, match }) => {
+			if (rendersNotFound(match)) return { meta: notFoundHeadMeta("store") };
+			if (!loaderData) return {};
+			if ("unavailable" in loaderData)
+				return storeUnavailableHead(loaderData.storeName);
+			return {
+				meta: [
+					{ title: `Checkout — ${loaderData.storeName} | Kedaipal` },
+					{ name: "robots", content: "noindex, nofollow" },
+				],
+			};
+		}),
 	notFoundComponent: CheckoutNotFound,
 	component: CheckoutRoute,
 });
 
 function CheckoutNotFound() {
 	const { slug } = Route.useParams();
-	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
-			<div className="flex flex-1 flex-col items-center justify-center gap-3">
-				<h1 className="text-3xl font-bold">Store not found</h1>
-				<p className="text-sm text-muted-foreground">
-					No retailer uses <span className="font-mono">/{slug}</span>.
-				</p>
-			</div>
-			{/* No store to attribute to — the slug names nobody. */}
-			<StorefrontFooter />
-		</main>
-	);
+	// The slug is what's wrong, so the page prints `/<slug>`, not the checkout
+	// path — and reads exactly as the store home's miss does.
+	return <NotFoundPage context="store" path={`/${slug}`} />;
 }
 
 function CheckoutSkeleton() {
@@ -179,6 +175,9 @@ function CheckoutSkeleton() {
 }
 
 function CheckoutRoute() {
+	// The visitor's country from the edge — preselects "Deliver to" on a
+	// store that delivers there (z8r3fdr5yy). Geo is a guess; the switch shows.
+	const visitorCountry = useMarketplaceRegion();
 	const { slug } = Route.useParams();
 	const { booking, rsvp, voucher } = Route.useSearch();
 	// A tagged link can land straight on checkout — capture here too.
@@ -348,6 +347,8 @@ function CheckoutRoute() {
 						checkoutPhone={retailer.checkoutPhone}
 						locale={retailer.locale}
 						country={retailer.country}
+						shipsAbroadTo={retailer.shipsAbroadTo ?? []}
+						visitorCountry={visitorCountry}
 						confirmPushEnabled={retailer.confirmPushEnabled ?? false}
 						offerSelfCollect={retailer.offerSelfCollect ?? false}
 						offerDelivery={retailer.offerDelivery ?? true}

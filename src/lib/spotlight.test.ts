@@ -27,6 +27,7 @@ const SETTINGS_CARD_DIRS = [
 ];
 const PRODUCT_FORM = join(__dirname, "../components/forms/product-form.tsx");
 const HOME_COMPONENTS = join(__dirname, "../components/home");
+const HOME_ROUTE = join(__dirname, "../routes/app.index.tsx");
 
 const settingsEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
 	([, t]) => t.page === "settings",
@@ -62,24 +63,26 @@ describe("spotlight registry", () => {
 		expect(homeEntries.length).toBeGreaterThan(0);
 	});
 
-	test("every Home anchor is rendered as a section id by a Home component", () => {
+	test("every Home anchor is rendered as a section id on Home", () => {
 		// Same rule as the settings cards: a Home key nothing renders scrolls
-		// nowhere. The Refer card renders two sections (live and paused) and
-		// both must carry the anchor, or the deep link works for one standing
-		// and dead-ends for the other.
-		const source = readdirSync(HOME_COMPONENTS)
-			.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
-			.map((f) => readFileSync(join(HOME_COMPONENTS, f), "utf8"))
-			.join("\n");
+		// nowhere. Home's anchors live in its components, or in the route
+		// itself — Refer & earn's two doors (the header button, the phone row)
+		// sit under the greeting, so the route wraps them in ONE anchored block
+		// and the deep link lands on whichever door the screen shows.
+		const source = [
+			readFileSync(HOME_ROUTE, "utf8"),
+			...readdirSync(HOME_COMPONENTS)
+				.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
+				.map((f) => readFileSync(join(HOME_COMPONENTS, f), "utf8")),
+		].join("\n");
 		for (const [key] of homeEntries) {
 			expect(
 				source.includes(`id={SPOTLIGHT_ANCHOR.${key}.anchor}`),
 				`no Home component renders id={SPOTLIGHT_ANCHOR.${key}.anchor}`,
 			).toBe(true);
 		}
-		const refer = readFileSync(join(HOME_COMPONENTS, "refer-card.tsx"), "utf8");
-		expect(refer.split("id={SPOTLIGHT_ANCHOR.refer.anchor}").length - 1).toBe(
-			2,
+		expect(source.split("id={SPOTLIGHT_ANCHOR.refer.anchor}").length - 1).toBe(
+			1,
 		);
 	});
 
@@ -103,6 +106,10 @@ describe("spotlight registry", () => {
 			// asserted equal below, so either spelling proves the card exists.
 			const accepted = [
 				`id={SPOTLIGHT_ANCHOR.${key}.anchor}`,
+				// The courier cards wrap their OWN AccountCard shell (so hiding in
+				// an unserved country takes the border with it) and receive the
+				// anchor as `shellId` — same registry source, different prop.
+				`shellId={SPOTLIGHT_ANCHOR.${key}.anchor}`,
 				...Object.entries(SETTINGS_ANCHOR)
 					.filter(([, id]) => id === anchor)
 					.map(([fixKey]) => `id={SETTINGS_ANCHOR.${fixKey}}`),

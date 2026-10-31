@@ -31,13 +31,39 @@ import type { DeliveryBookingSummary } from "../../../convex/retailers";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
 import { convexErrorMessage } from "../../lib/format";
+import {
+	type EasyparcelVisibility,
+	easyparcelCardShown,
+} from "../../lib/integrations-glance";
+import { TONE_CHIP } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
+import { DelyvaLogo } from "../ui/delyva-logo";
+import { EasyparcelLogo } from "../ui/easyparcel-logo";
 import { ToggleSwitch } from "../ui/toggle-switch";
 
 /** The card's id on the Delivery pricing page — the Fulfilment row and the
  * order page's "turn it on" hints land here (`#courier-booking`). */
 export const COURIER_BOOKING_ANCHOR = "courier-booking";
+
+/**
+ * EasyParcel books only when the seller's switch is on AND the connection is
+ * live (not signed out at EasyParcel's end) AND it serves this store — the
+ * client mirror of `easyparcelBookingArmed`, so the row and the switch's copy
+ * never claim booking that the order page won't offer.
+ */
+export function easyparcelBookingOn(
+	settings:
+		| (EasyparcelVisibility & { enabled: boolean; needsReconnect: boolean })
+		| undefined,
+): boolean {
+	return (
+		settings?.available === true &&
+		settings.connected &&
+		settings.enabled &&
+		!settings.needsReconnect
+	);
+}
 
 /**
  * What the Fulfilment row says about this section: the services ARMED, in
@@ -49,17 +75,20 @@ export function courierBookingGlance({
 	lalamoveArmed,
 	lalamovePricing,
 	delyvaArmed,
+	easyparcelArmed = false,
 }: {
 	riderBookingAvailable: boolean;
 	lalamoveArmed: boolean;
 	lalamovePricing: boolean;
 	delyvaArmed: boolean;
+	easyparcelArmed?: boolean;
 }): string {
 	const on = [
 		...(riderBookingAvailable && (lalamoveArmed || lalamovePricing)
 			? ["Lalamove riders"]
 			: []),
 		...(delyvaArmed ? ["Delyva"] : []),
+		...(easyparcelArmed ? ["EasyParcel"] : []),
 	];
 	return on.length > 0 ? on.join(" · ") : "Off";
 }
@@ -82,8 +111,14 @@ export function CourierBookingSection({
 	const actAsRetailerId = useActAsRetailerId();
 	const updateSettings = useUpdateSettings();
 	const updateDelyva = useMutation(api.delyva.updateSettings);
+	const updateEasyparcel = useMutation(api.easyparcel.updateSettings);
 	const delyva = useQuery(
 		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	// Same args as the Integrations card, so the switch and the card share one
+	// cache entry and can't disagree about whether it's on.
+	const easyparcel = useQuery(
+		convexQuery(api.easyparcel.getSettings, { retailerId: actAsRetailerId }),
 	).data;
 
 	const [busy, setBusy] = useState(false);
@@ -101,6 +136,17 @@ export function CourierBookingSection({
 	const delyvaArmed = delyvaConnected && delyva?.enabled === true;
 	const lalamoveIsLastBidder = livePricing && lalamoveArmed && !delyvaArmed;
 	const delyvaIsLastBidder = livePricing && delyvaArmed && !lalamoveArmed;
+	// Switching Delyva on would make this live store price every order by
+	// parcel weight (23 Oct 2026); the server refuses while buyable choices
+	// are unweighed, and the summary carries that count so the toggle says
+	// so BEFORE the tap — disabled-with-reason, with the one page that fixes
+	// it. Undefined whenever the flip would be accepted.
+	const delyvaHeldForWeights = delyva?.bookingHeldForWeights;
+	// EasyParcel books at dispatch only — it never quotes the buyer's live
+	// charge, so it neither counts as a "last bidder" nor waits on weights
+	// (the dispatch card asks for the parcel weight per order).
+	const easyparcelConnected = easyparcel?.connected === true;
+	const easyparcelSignedOut = easyparcel?.needsReconnect === true;
 
 	async function run(fn: () => Promise<unknown>, message: string) {
 		setBusy(true);
@@ -131,7 +177,10 @@ export function CourierBookingSection({
 			{riderBookingAvailable ? (
 				<div className="flex items-start justify-between gap-4 rounded-xl border border-input p-3">
 					<div className="min-w-0">
-						<p className="flex items-center gap-2 text-sm font-medium">
+						{/* A div, not a <p>: AppImage renders a block skeleton, and a
+						    block inside a <p> is invalid HTML React warns about on
+						    every hydration of this page. */}
+						<div className="flex items-center gap-2 text-sm font-medium">
 							<AppImage
 								src="/img/lalamove-logo.svg"
 								alt=""
@@ -140,7 +189,7 @@ export function CourierBookingSection({
 								className="shrink-0"
 							/>
 							Lalamove riders
-						</p>
+						</div>
 						<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
 							{lalamovePricing
 								? "On — your delivery charge runs on Lalamove live quotes, so rider booking comes with it. Switch the charge mode above to change this."
@@ -196,21 +245,17 @@ export function CourierBookingSection({
 			{delyvaCountryOk ? (
 				<div className="flex items-start justify-between gap-4 rounded-xl border border-input p-3">
 					<div className="min-w-0">
-						<p className="flex items-center gap-2 text-sm font-medium">
-							<AppImage
-								src="/img/delyva-logo.png"
-								alt=""
-								aspect="h-3.5 w-auto"
-								fill={false}
-								className="shrink-0"
-							/>
+						<div className="flex items-center gap-2 text-sm font-medium">
+							<DelyvaLogo heightClass="h-3.5" />
 							Delyva couriers
 							{delyva?.isDemo ? (
-								<span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+								<span
+									className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${TONE_CHIP.warn}`}
+								>
 									Demo
 								</span>
 							) : null}
-						</p>
+						</div>
 						<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
 							{delyvaIsLastBidder ? (
 								<>
@@ -223,6 +268,18 @@ export function CourierBookingSection({
 										className="font-medium text-accent hover:underline"
 									>
 										Manage account
+									</Link>
+								</>
+							) : delyvaHeldForWeights ? (
+								<>
+									Couriers price by weight, and {delyvaHeldForWeights} of your
+									products {delyvaHeldForWeights === 1 ? "has" : "have"} no
+									parcel weight — switch this on once they do.{" "}
+									<Link
+										to="/app/products/weights"
+										className="font-medium text-accent hover:underline"
+									>
+										Set parcel weights
 									</Link>
 								</>
 							) : delyvaConnected ? (
@@ -259,6 +316,7 @@ export function CourierBookingSection({
 							busy ||
 							delyvaIsLastBidder ||
 							!delyvaConnected ||
+							delyvaHeldForWeights !== undefined ||
 							(!canUse && delyva?.enabled !== true)
 						}
 						label="Delyva courier booking"
@@ -270,6 +328,91 @@ export function CourierBookingSection({
 										enabled: next,
 									}),
 								next ? "Delyva booking on" : "Delyva booking off",
+							)
+						}
+					/>
+				</div>
+			) : null}
+
+			{easyparcelCardShown(easyparcel) ? (
+				<div className="flex items-start justify-between gap-4 rounded-xl border border-input p-3">
+					<div className="min-w-0">
+						<div className="flex items-center gap-2 text-sm font-medium">
+							<EasyparcelLogo heightClass="h-3.5" />
+							EasyParcel couriers
+							{easyparcel?.environment === "sandbox" ? (
+								<span
+									className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${TONE_CHIP.warn}`}
+								>
+									Test mode
+								</span>
+							) : null}
+						</div>
+						<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+							{easyparcelSignedOut ? (
+								<>
+									Paused — EasyParcel signed Kedaipal out of your account, so
+									nothing can be booked until you{" "}
+									<Link
+										to="/app/settings"
+										search={{ tab: "integrations" }}
+										className="font-medium text-accent hover:underline"
+									>
+										reconnect in Integrations
+									</Link>
+									.
+								</>
+							) : easyparcelConnected ? (
+								<>
+									Parcel couriers (J&amp;T, Ninja Van, Teleport…), ambient goods
+									only. Pick the courier and price per order
+									{livePricing
+										? " — it books, but doesn't quote your buyers' live delivery charge"
+										: ""}
+									.{" "}
+									<Link
+										to="/app/settings"
+										search={{ tab: "integrations" }}
+										className="font-medium text-accent hover:underline"
+									>
+										Manage account
+									</Link>
+								</>
+							) : (
+								<>
+									Parcel couriers (J&amp;T, Ninja Van, Teleport…).{" "}
+									<Link
+										to="/app/settings"
+										search={{ tab: "integrations" }}
+										className="inline-flex items-center gap-1 font-medium text-accent hover:underline"
+									>
+										Connect EasyParcel in Integrations{" "}
+										<ExternalLink className="size-3" />
+									</Link>{" "}
+									to turn this on.
+								</>
+							)}
+						</p>
+					</div>
+					<ToggleSwitch
+						on={easyparcel?.enabled === true && !easyparcelSignedOut}
+						disabled={
+							busy ||
+							!easyparcelConnected ||
+							easyparcelSignedOut ||
+							(!canUse && easyparcel?.enabled !== true)
+						}
+						label="EasyParcel courier booking"
+						onChange={(next) =>
+							void run(
+								async () => {
+									const res = await updateEasyparcel({
+										retailerId: actAsRetailerId,
+										enabled: next,
+									});
+									if (!res.ok) throw new Error(res.message);
+								},
+								next ? "EasyParcel booking on" : "EasyParcel booking off",
 							)
 						}
 					/>

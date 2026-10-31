@@ -1,10 +1,11 @@
-import { UserButton } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { api } from "../../../convex/_generated/api";
 import { AppImage } from "../ui/app-image";
 import { ThemeToggle } from "../ui/theme-toggle";
+import { CreditTicket } from "./credit-ticket";
+import { ProfileAvatar, ProfileMenu, useCreditStub } from "./profile-menu";
 import { TierPill } from "./tier-pill";
 
 type Retailer = NonNullable<
@@ -25,6 +26,10 @@ export function MobileHeader({ retailer, adminBadge }: MobileHeaderProps) {
 	// pin itself just BELOW it instead of hardcoding a fragile pixel offset.
 	// display:none at `lg` reports 0 — fine, those consumers go static on desktop.
 	const headerRef = useRef<HTMLElement>(null);
+	const [menuOpen, setMenuOpen] = useState(false);
+	// The balance rides beside the plan pill as a small torn ticket
+	// (z8r3fdx34j), so it's on every page; the full stub is in the menu.
+	const stub = useCreditStub(retailer);
 	useEffect(() => {
 		const el = headerRef.current;
 		if (!el) return;
@@ -64,14 +69,17 @@ export function MobileHeader({ retailer, adminBadge }: MobileHeaderProps) {
 							<span className="max-w-full truncate font-mono text-xs text-muted-foreground">
 								kedaipal.com/{retailer.slug}
 							</span>
-							<TierPill
-								subscription={retailer.subscription}
-								foundingRank={retailer.foundingMemberRank}
-								admin={adminBadge}
-								compact
-								className="py-0 text-[9px]"
-								unclaimed={retailer?.unclaimed === true}
-							/>
+							<div className="flex max-w-full items-center gap-2">
+								<TierPill
+									subscription={retailer.subscription}
+									foundingRank={retailer.foundingMemberRank}
+									admin={adminBadge}
+									compact
+									className="py-0 text-[9px]"
+									unclaimed={retailer?.unclaimed === true}
+								/>
+								{stub ? <CreditTicket stub={stub} variant="phone" /> : null}
+							</div>
 						</div>
 					</div>
 				) : (
@@ -91,7 +99,23 @@ export function MobileHeader({ retailer, adminBadge }: MobileHeaderProps) {
 			<div className="flex shrink-0 items-center gap-1">
 				{/* Quick flip; the three-way picker lives in Settings → App → Appearance. */}
 				<ThemeToggle variant="ghost" />
-				<UserButton />
+				<ProfileMenu
+					retailer={retailer}
+					side="bottom"
+					align="end"
+					open={menuOpen}
+					onOpenChange={setMenuOpen}
+					trigger={
+						<button
+							type="button"
+							aria-label="Account menu"
+							data-testid="profile-trigger"
+							className="flex size-11 items-center justify-center rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+						>
+							<ProfileAvatar />
+						</button>
+					}
+				/>
 			</div>
 		</header>
 	);

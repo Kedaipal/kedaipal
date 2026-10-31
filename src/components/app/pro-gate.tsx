@@ -82,14 +82,22 @@ export function ProFeatureTease({ message }: { message: string }) {
 		<div className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3.5 shadow-sm lg:p-4">
 			<Sparkles className="size-4 shrink-0 text-accent" aria-hidden="true" />
 			<p className="flex-1 text-sm text-muted-foreground">{message}</p>
-			<Link
-				to="/app/settings"
-				search={{ tab: "billing" }}
-				className="inline-flex h-9 shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
-			>
-				Upgrade
-			</Link>
+			<UpgradeLink />
 		</div>
+	);
+}
+
+/** The one Upgrade control — the tease's button, reused wherever a gated
+ * feature offers the way up, so upgrading never looks like two things. */
+export function UpgradeLink({ className }: { className?: string }) {
+	return (
+		<Link
+			to="/app/settings"
+			search={{ tab: "billing" }}
+			className={`inline-flex h-9 shrink-0 items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background ${className ?? ""}`}
+		>
+			Upgrade
+		</Link>
 	);
 }
 

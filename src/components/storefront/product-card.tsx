@@ -27,6 +27,7 @@ import { hasStartingPrice, minQuantityUnreachable } from "../../lib/variant";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ORDERING_PAUSED_CTA, useOrderingPaused } from "./seasonal-break";
+import { useHomeOnlyLabel } from "./ships-abroad";
 
 export type StorefrontProduct = FunctionReturnType<
 	typeof api.products.list
@@ -175,8 +176,15 @@ export function ProductCard({
 	// A sale strip sits where the chips do, so it has to claim the same
 	// clearance on a photo-less tile or it paints over the product's name.
 	const hasSaleStrip = countdownAt !== undefined || unitsLeft !== undefined;
+	// Cross-border (z8r3fdr5yy): told on the card, before the add — never
+	// discovered at checkout.
+	const homeOnly = useHomeOnlyLabel(product);
 	const hasBottomChips =
-		event !== undefined || hasCustom || minQuantity >= 2 || hasSaleStrip;
+		event !== undefined ||
+		hasCustom ||
+		minQuantity >= 2 ||
+		hasSaleStrip ||
+		homeOnly !== null;
 	// A LIVE flash sale breathes (Zaki, 9 Oct) — a slow mint heartbeat that
 	// pulls the eye across a grid. Only a TIMED sale, never a plain discount:
 	// urgency you can't run out of isn't urgency, and a storefront where every
@@ -364,6 +372,11 @@ export function ProductCard({
 						{hasCustom ? (
 							<span className="rounded-full bg-background/85 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
 								Custom available
+							</span>
+						) : null}
+						{homeOnly ? (
+							<span className="rounded-full bg-background/85 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+								{homeOnly}
 							</span>
 						) : null}
 					</span>

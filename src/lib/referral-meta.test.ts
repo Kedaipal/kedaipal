@@ -10,7 +10,7 @@ describe("referral link preview", () => {
 			offer: referralRefereeOffer(),
 		});
 		expect(meta.title).toBe("Siti's Kitchen invited you to Kedaipal");
-		expect(meta.description).toContain("60 bonus credits when you start Pro");
+		expect(meta.description).toContain("60 free orders when you start Pro");
 		expect(meta.description).toContain("30 on Starter");
 	});
 

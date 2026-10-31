@@ -37,6 +37,7 @@ export const INBOX_FILTER_PARAMS = [
 	"ful",
 	"cat",
 	"catunspec",
+	"listing",
 	"asrc",
 ] as const;
 

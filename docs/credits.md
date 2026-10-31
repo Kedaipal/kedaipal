@@ -77,11 +77,11 @@ next month is Pro's 200 (and that Pro bill's emails already quote 200, not the
 row, `monthlyCreditGrant` falls back to Pro's grant rather than zero — a data
 fault must not lock a contract customer.
 
-**Overage blocks are bought credits.** A block (HSL: 5,000 at RM0.60) is
+**Overage blocks are extra credits.** A block (HSL: 5,000 at RM0.60) is
 invoiced by hand and landed with `credits.adminAdjust` into the **purchased**
 bucket under reason **`enterprise_block`** — contract stores only, positive
 amounts only. It then behaves like any pack: 12 months, spent after the monthly
-credits, counted in "Unused bought credits". The seller's activity list reads
+credits, counted in "Unused extra credits". The seller's activity list reads
 "Enterprise block — extra credits under your contract". The top-up dialog
 names the contract's block rate beside the packs, with an "Ask us for a block"
 chat for the owner (`topUpOptions.contractBlock`); the packs themselves stay on
@@ -195,7 +195,7 @@ Two things the gate does NOT cover, each guarded where it lives:
 
 The admin console reads it too: the seller row prints **"Admin store — not
 metered"** / **"Sponsored — not metered"** rather than its stale cached figures
-(a comped store that was billed last month still carries `plan 200 · bought 0`,
+(a comped store that was billed last month still carries `plan 200 · extra 0`,
 and printing it is the directory repeating the very number the seller's meter
 stopped showing), and the credit-ledger drawer says the same instead of "This
 store no longer exists" (the same `null` view means both — `adminGetAccount`
@@ -269,8 +269,9 @@ purge those** — their bought lots must survive the comp. Stepping over them is
 the one remedy that serves both populations.
 
 **The purge is deliberately narrower than the gate — admin-owned only.** A
-sponsored store can hold **bought credits**: 12-month `creditLots` a seller paid
-real money for before the comp was switched on. A comp is a toggle an admin can
+sponsored store can hold **extra credits**: 12-month `creditLots` — packs a
+seller paid real money for, bonuses, grants — landed before the comp was
+switched on. A comp is a toggle an admin can
 turn off, and when it goes off those lots must still be there — so purging a
 comped store would destroy credits we sold. An admin's own store can never be
 in that position (`topUpRefusal` refuses it a pack), which is why the narrower
@@ -365,6 +366,28 @@ reward or admin grant — each with a `remaining` count and an `expiresAt` 12
 **calendar** months after it landed (the same date next year on the MYT wall
 clock; 29 Feb clamps to 28 Feb). Orders spend the lot that expires soonest.
 `purchasedBalance` is always the sum of `remaining`.
+
+**Sellers and admins see this pot as "Extra credits", never "bought".** The
+code keeps `purchased` (field, bucket, `addPurchasedCredits`), but the pot holds
+**top-up packs, referral bonuses and admin grants/blocks** alike, and the label
+was a lie for most of them: a referee who bought nothing read "60 bought" on
+the meter and would have been emailed that "60 of the credits you bought"
+expire (found in the referral hands-on test, 30 Oct 2026). So every seller- and
+admin-facing word for the pot is **extra** — the meter tile "Extra credits ·
+used next", "120 of 200 monthly · 25 extra", the rules line ("Extra credits —
+top-ups and bonuses — are used next and last 12 months"), the expiry email in
+en/ms/zh ("kredit tambahan", "额外点数"), the activity row "Extra credits
+expired (12 months)", the admin drawer, directory and CSV column. "Bought"
+stays only where something WAS bought: "Bought a credit pack", the top-up
+receipt, "Bought by" a teammate, the Terms. Each admin lot row says its source
+(top-up / referral bonus / admin grant / block).
+
+**The admin tile is "Unused extra credits", not deferred revenue.** It sums
+`purchasedBalance`, which includes unpaid bonuses and grants — service still
+owed, but not money received. A paid-only figure would sum open lots with
+`source: "purchase"`, except an Enterprise block lands as an `adjust` lot and
+can't be told from a goodwill grant without widening `creditLots.source`
+(follow-up).
 
 A daily sweep at **00:10 MYT** retires whatever is left of each expired lot as
 one `expire` ledger row per lot, so the seller's activity list shows exactly what
@@ -559,9 +582,9 @@ bucket **exactly once**, as a 12-month lot, through `addPurchasedCredits`.
 | MYR | 50 credits — RM 45 · 200 credits — RM 160 |
 | SGD | 50 credits — S$ 22 · 200 credits — S$ 75 |
 
-A store sees **one currency's packs: its BILLING currency** — `renewalCurrency`
-(the newest paid invoice's currency, else the country), the author renewals
-already bill by. Never the visitor's geo cookie: a Malaysian seller on holiday
+A store sees **one currency's packs: its BILLING currency** —
+`storeBillingCurrency`, its country's (86eyp7hn7), the author renewals already
+bill by. Never the visitor's geo cookie: a Malaysian seller on holiday
 in Singapore still pays in ringgit. A pack id from the other currency is
 refused. The purchase row freezes the pack, credits, amount and currency;
 nothing ever re-prices it.
@@ -705,7 +728,7 @@ read, and inside the gate the only place they can buy would be hidden.
 ### Every state the picker has
 
 Loading (skeletons) · can buy (balance being topped up — "37 orders left",
-always split as "12 monthly · 25 bought" — the packs, the rules, the Terms
+always split as "12 monthly · 25 extra" — the packs, the rules, the Terms
 `#credits` link) · refused (disabled with the reason and the way out; the
 packs stay visible but inert) · view-only teammate (`NeedsAccessNote`) · no credits
 access (the note is the surface) · admin act-as (view-only note, reads the
@@ -728,6 +751,16 @@ orders" when the store owes orders (a pack pays the debt first). The rules
 live in `src/lib/credit-packs.ts` (`packOffers`, `afterTopUpLine`), pinned by
 tests. The default pick stays the smaller pack: the badge and the saving do the
 persuading, not a pre-selection.
+
+
+**"Enough to 1 Nov" (z8r3fdx34j).** At this week's pace (`getUsagePace`),
+the picker says how many more orders the store needs before its reset and
+badges the **smallest pack that covers it** (`recommendedPack`,
+`src/lib/credit-packs.ts`) — and pre-selects it, so a seller who taps Buy
+straight away gets the pack that lasts. A debt is part of the gap. Nothing is
+recommended when there's no reset to aim at (a trial), no measurable pace,
+a balance that already lasts, or a gap bigger than any pack (the upgrade hint
+says that instead).
 
 ### Receipts and history
 
@@ -1271,24 +1304,86 @@ tracking page at +50 and −50 and asserts they're identical).
 
 One `CreditMeter`, two places (one control, one rule):
 
-- **Dashboard home** (`card`) — "42 orders left", the monthly bar, both
-  balances in one line ("120 of 200 monthly · 25 bought"), the reset ("Back to
+- **Dashboard home** (`section`, inside the **Balances** card since
+  z8r3fdx34j, with the courier wallets under it under their own label — see
+  [`courier-wallets.md`](./courier-wallets.md)) — "42 orders left", the monthly bar, both
+  balances in one line ("120 of 200 monthly · 25 extra"), the reset ("Back to
   200 on 1 Nov"), and a way into Billing. One button by urgency: when locked,
   the one that puts credits back; once running low, **Top up credits** straight
   into the picker (for a reader who may buy); otherwise just Billing.
 - **Settings → Billing** (`full`), right under the plan — the total, then **the
   two balances as two tiles in their order of use** (Zaki, 1 Oct 2026):
   *Monthly credits · used first* ("120 of 200", its bar, "Back to 200 on 1 Nov")
-  and *Bought credits · used next* ("25", "Next 25 expire 12 Jan 2027" / "None
-  yet — packs last 12 months"); the state line; the nearest bought-credit
+  and *Extra credits · used next* ("25", "Next 25 expire 12 Jan 2027" / "None
+  yet — top-ups and bonuses land here, for 12 months"); the state line; the nearest extra-credit
   expiry when it falls within 30 days; **Top up credits** → T2's picker; and
   the rule in plain words at the foot (monthly credits are used first and reset
-  on the 1st — they don't carry over; bought credits are used next and last 12
+  on the 1st — they don't carry over; extra credits are used next and last 12
   months; a cancelled never-accepted order gives its credit back, up to 10 a
-  month). A store that can't buy and holds no bought credits (the fail-safe, a
+  month). A store that can't buy and holds no extra credits (the fail-safe, a
   trial) shows the one tile. An UNMETERED store — admin-owned or **comped** —
   shows no meter at all; the Sponsored card in Settings → Billing is where a
   comped seller is told their limits are off instead.
+
+### The always-on ticket and the profile menu stub (z8r3fdx34j)
+
+**The balance is on every page** as a small torn ticket (`CreditTicket`,
+`src/components/dashboard/credit-ticket.tsx`), the menu stub torn down to its
+number (Zaki, 31 Oct: see it at a glance without opening a menu). It opens
+Billing, is never dismissable (a fact, not a nag), and comes in three sizes:
+
+| Where | Shows | Torn |
+| --- | --- | --- |
+| Rail, the top band | the stub's headline + its row of 20 dots, with the **plan pill riding the top tear** | top and bottom (`.kp-credit-ticket`) |
+| Collapsed 68px rail, under the logo | the figure + one word: `254 LEFT`, `18 LOW`, `4 OWED`, `3 WAIT` | top and bottom, 44px wide |
+| Phone header, beside the plan pill | `254 left` / `3 waiting` | left and right (`.kp-credit-ticket-side`), 18px drawn, 44px to tap |
+
+Healthy is plain ink; **low is amber with a LOW stamp and orders waiting red
+with a WAITING stamp**, so the state never rests on colour alone. On the rail
+the stamp sits on the **bottom** tear, by the dots it describes: the top tear
+belongs to the plan pill (Zaki, 31 Oct — "your plan and what's left on it" as
+one object), whose label can run long ("FOUNDING #3" + "PRO", "FREE · 12D
+LEFT") and must never collide with a stamp. The pill is a sibling of the
+ticket's link, never inside it. A reader with no ticket keeps the pill on its
+own row. While the balance loads, `CreditTicketPlaceholder` holds the ticket's
+empty frame with the pill already on its tear, so neither jumps when the
+number lands. An owed
+balance reads "owed", never a negative number. The collapsed figure caps at
+`999+` (orders waiting at `99+`) so it fits 44px; the phone line keeps the
+whole count. Words come from `creditStub(...).ticket`; colours from
+`credit-stub-tones.ts`, shared with the menu stub so the two can't drift.
+**No ticket** for a teammate without the credits grant, nor for an
+**unmetered** store: a permanent "∞" in the chrome says nothing the menu's
+"On us" doesn't. The torn edges use `background-repeat: round`, so they end
+on a whole tooth at any width (the menu stub now does too).
+
+The ticket **replaced** the first build's balance line on the avatar row and
+the avatar's tone dot: the number is said once per screen, and the foot row
+is back to name and email. Trade-off: the rail's top band is ~60px taller
+(93px, down from 111px before the pill moved onto the tear), so on a short
+laptop window the nav list starts scrolling about one link sooner.
+
+The menu (`src/components/dashboard/profile-menu.tsx`, replacing Clerk's
+`UserButton`) holds, in order: who you are (name, email, your role in this
+store), **the credits stub**, **Refer a kedai**, then Manage account and Sign
+out. The stub is option **2A** from the 29 Oct mockups: an outlined torn
+receipt on the menu's own surface (`.kp-credit-stub` in `styles.css`) —
+masthead, month, the headline, one row of 20 dots for the month's grant,
+a dotted-leader line, ONE outline button. The whole receipt opens Billing; the
+button opens the pack picker, or the lock's own way back when orders wait.
+Every state is `creditStub` (`src/lib/credit-stub.ts`):
+
+| State | Headline | Leader | Button | Stamp |
+| --- | --- | --- | --- | --- |
+| Healthy | 54 orders left | Resets · 1 Nov · 200 | Top up | — |
+| Low (last 20%) | 38 orders left | About 6 days · 1 Nov | Top up | LOW |
+| Orders waiting | 3 orders waiting (every dot torn) | Resets · 1 Nov · 197 | the lock's CTA | WAITING |
+| Trial | 163 orders left | Trial · 200 orders | Pick a plan | TRIAL |
+| Unmetered | ∞ orders | Plan · Sponsored / Orders · Unlimited | none | ON US |
+
+A reader who can't buy sees the button greyed with T2's own sentence under it.
+**A teammate without the credits grant gets no stub** (and no ticket). Unmetered stores DO get the stub (Zaki, 29 Oct): "on us" is
+worth seeing. Courier wallets are never in this menu.
 
 **The reset reads as a reset** (Zaki's test round): "300 more on 1 Oct" read as
 300 ADDED; monthly credits go BACK to the allowance. `creditRefreshLabel`
@@ -1300,8 +1395,8 @@ into the last 20% of the month's credits** (`lowCreditLine` — one line shared
 with the banner and the low email), red at 0. Every state is designed —
 `creditStateLine` is the one author: loading, trial ("200 orders from your
 first order"), active, founding (the 300 badge), past due / on hold / ended
-("…your 150 bought credits are kept, and work again once your plan is active"
-— bought credits never stand in for a plan), the fail-safe ("This store is
+("…your 150 extra credits are kept, and work again once your plan is active"
+— extra credits never stand in for a plan), the fail-safe ("This store is
 never locked — the balance is here so you can see your volume" — keyed on
 `getBalance`'s `lockExempt`, never on the raw status: an exempt store sits in
 `past_due` or `trialing` and was being told to pay its invoice; unmetered
@@ -1322,7 +1417,7 @@ the new allowance against.
 **Credit activity** (Billing) lists every movement as a sentence — "October
 credits from your plan", "Order ORD-7K2Q", "cancelled before you accepted it,
 credit returned", "Unused October plan credits — they don't carry over",
-"Bought credits expired (12 months)" — with the balance after it. No admin notes.
+"Extra credits expired (12 months)" — with the balance after it. No admin notes.
 
 ### The seller lock — SUPERSEDED by T3.1
 
@@ -1363,7 +1458,7 @@ unlock routes and the audience rules, and the cancel outlook.
   Zaki's test round, 1 Oct 2026; the meter's amber and the banner move with it,
   one line — never for an exempt store or a custom allowance), `locked`, `still_locked` (a refresh left the store at or below
   zero — says how many orders short, or "at 0"), `unlocked`, and `expiring`
-  (a bought lot expires within 14 days — once per lot via
+  (an extra-credit lot expires within 14 days — once per lot via
   `creditLots.expiryNoticeAt`, a daily 00:15 MYT sweep, one email per store).
 - **How:** **email always**, to `notifyEmail`, in the seller's language — not
   subject to order-alert settings, because a lock must reach them; a top-up

@@ -277,7 +277,8 @@ describe("putting a store on a contract", () => {
 describe("putting a store on a contract — the review round (1 Oct)", () => {
 	test("a new contract is frozen in the store's billing currency — the same answer the admin form labels the fee with", async () => {
 		const t = setup();
-		// An SG store that has only ever paid in ringgit.
+		// An SG store that once paid a ringgit bill — still an SGD store: the
+		// country sets the currency, never a past bill (86eyp7hn7).
 		const s = await activeStore(t, { country: "SG" });
 		await t.run((ctx) =>
 			ctx.db.insert("invoices", {
@@ -299,7 +300,7 @@ describe("putting a store on a contract — the review round (1 Oct)", () => {
 		);
 		const { sellers: rows } = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
 		const row = rows.find((r) => r._id === s.retailerId);
-		expect(row?.billingCurrency).toBe("MYR");
+		expect(row?.billingCurrency).toBe("SGD");
 		await asAdmin(t).mutation(api.enterprise.setContract, {
 			retailerId: s.retailerId,
 			...HSL,
@@ -1242,7 +1243,6 @@ describe("getContractContext — the contract form's subject (z8r3fdpm2p)", () =
 			plan: "pro",
 			billingCycle: "monthly",
 			founding: false,
-			currency: "MYR",
 		});
 
 		const ctx = await asAdmin(t).query(api.enterprise.getContractContext, {

@@ -23,7 +23,8 @@ import {
 import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
-import { isKindCard, type KindCard } from "../lib/kind-card";
+import { type KindCard, parseKindCard } from "../lib/kind-card";
+import { overseasOf } from "../lib/overseas-delivery";
 import type { UnsavedState } from "../lib/product-form-dirty";
 import { hasFeature } from "../lib/subscription";
 
@@ -35,9 +36,10 @@ import { hasFeature } from "../lib/subscription";
  * to confirm. Drafts ride in memory only; a refresh starts the chosen view
  * blank. See docs/product-setup-wizard.md.
  *
- * `?card=<food|physical|service|booking|event>` (`z8r3fdhkr7`) pre-selects
+ * `?card=<food|physical|service|plan|stay|event>` (`z8r3fdhkr7`) pre-selects
  * step 0's card — how a What's-new note says "Create an event" and lands on
- * Event rather than the store's own type. It answers the WIZARD's first
+ * Event. The retired `booking` card still parses, as Stay (`parseKindCard`),
+ * so links already in the wild keep working. It answers the WIZARD's first
  * question, so `form=full` drops it: the full form has no step 0, and a
  * param that silently does nothing is worse than none.
  */
@@ -50,7 +52,7 @@ export const Route = createFileRoute("/app/products/new")({
 		if (search.form === "full") return { form: "full", card: undefined };
 		return {
 			form: undefined,
-			card: isKindCard(search.card) ? search.card : undefined,
+			card: parseKindCard(search.card),
 		};
 	},
 	component: NewProductRoute,
@@ -129,6 +131,7 @@ function NewProductRoute() {
 				sortOrder: Date.now(),
 				options: values.options,
 				hidden: values.hidden,
+				domesticOnly: values.domesticOnly,
 				kind: values.kind,
 				booking: values.booking,
 				minNoticeDays: values.minNoticeDays,
@@ -229,7 +232,7 @@ function NewProductRoute() {
 					eventsLocked={eventsLocked}
 					promoLocked={promoLocked}
 					currency={retailer.currency}
-					defaultKind={retailer.storeType}
+					weightPricing={retailer.weightPricing ?? null}
 					storeSchedule={{
 						openingHours: retailer.openingHours,
 						closedDates: retailer.closedDates,
@@ -276,6 +279,7 @@ function NewProductRoute() {
 
 			<ProductForm
 				retailerId={retailer._id}
+				overseas={overseasOf(retailer)}
 				categoriesLocked={categoriesLocked}
 				eventsLocked={eventsLocked}
 				promoLocked={promoLocked}
@@ -285,7 +289,7 @@ function NewProductRoute() {
 				draftRef={formDraftRef}
 				currency={retailer.currency}
 				submitLabel="Create product"
-				weightMode={retailer.deliveryConfig?.mode === "weight"}
+				weightPricing={retailer.weightPricing ?? null}
 				storeSchedule={{
 					openingHours: retailer.openingHours,
 					closedDates: retailer.closedDates,

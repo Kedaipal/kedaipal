@@ -22,9 +22,10 @@
  * testable without a network or a database. Fetching lives in the action.
  */
 
+import type { CourierProviderId } from "./courierProviders";
 import { type CartWeightItem, lacksParcelWeight } from "./delivery";
 
-export type LiveQuoteProvider = "lalamove" | "delyva";
+export type LiveQuoteProvider = CourierProviderId;
 
 /** One provider's answer. Failure kinds are deliberately provider-neutral:
  * the buyer-facing copy keys off the resolved outcome, never off which API
@@ -67,6 +68,13 @@ export type ProviderQuote =
 			 * not the buyer's fault and not retryable by them. */
 			status: "store_unavailable";
 	  }
+	| {
+			provider: LiveQuoteProvider;
+			/** Riders only (25 Oct 2026): the cart is heavier than every rider
+			 * vehicle's published load (`chooseRiderVehicle`), so no rider bids.
+			 * Not a coverage answer — the address is fine. */
+			status: "too_heavy";
+	  }
 	| { provider: LiveQuoteProvider; status: "unavailable" };
 
 export type LiveQuoteOutcome =
@@ -93,6 +101,7 @@ export type LiveQuoteOutcome =
 			reason:
 				| "out_of_range"
 				| "no_cold_service"
+				| "too_heavy"
 				| "store_unavailable"
 				| "unavailable";
 	  };
@@ -154,18 +163,74 @@ export const LIVE_QUOTE_WEIGHT_FLOOR_G = 1000;
  * required on every buyer surface precisely so this never happens).
  */
 export function liveQuoteWeightKg(items: CartWeightItem[]): number | null {
+	return liveQuoteWeightFacts(items)?.kg ?? null;
+}
+
+/**
+ * What the courier was asked to price, with the audit trail the ORDER needs:
+ * whether the floor fired and how many lines had no weight. Recorded on the
+ * quote row and frozen onto the order's delivery snapshot, so the seller's
+ * order page can say "priced at the 1 kg floor — 2 items had no weight"
+ * instead of showing a fee with no hint of why it may under-collect.
+ *
+ * `unweighedLines` counts NON-custom lines only: a custom line's weight is
+ * unknowable by design, so it floors the quote (`floored`) without being
+ * something the seller can go and set.
+ */
+export function liveQuoteWeightFacts(items: CartWeightItem[]): {
+	kg: number;
+	/** The cart was quoted at `LIVE_QUOTE_WEIGHT_FLOOR_G` rather than its sum. */
+	floored: boolean;
+	/** Cart lines a product weight would have priced. */
+	unweighedLines: number;
+} | null {
 	if (items.length === 0) return null;
 	let grams = 0;
-	let unweighed = false;
+	let gap = false;
+	let unweighedLines = 0;
 	for (const item of items) {
-		if (lacksParcelWeight(item) || item.isCustom) {
-			unweighed = true;
+		if (item.isCustom) {
+			gap = true;
+			continue;
+		}
+		if (lacksParcelWeight(item)) {
+			gap = true;
+			unweighedLines += 1;
 			continue;
 		}
 		grams += Math.round(item.parcelWeightG) * Math.max(0, item.quantity);
 	}
-	if (unweighed) grams = Math.max(grams, LIVE_QUOTE_WEIGHT_FLOOR_G);
-	return grams / 1000;
+	const floored = gap && grams < LIVE_QUOTE_WEIGHT_FLOOR_G;
+	if (gap) grams = Math.max(grams, LIVE_QUOTE_WEIGHT_FLOOR_G);
+	return { kg: grams / 1000, floored, unweighedLines };
+}
+
+/**
+ * What a won quote records about weight it could not see (PR #416 review).
+ * Only a courier prices by weight, so a rider's price records nothing.
+ *
+ * Two different gaps, both worth telling the seller:
+ * - `weightFloored`: the cart was priced at the one-kilo floor;
+ * - `unweighedLines`: lines a product weight would have priced. Recorded
+ *   whenever there are any, NOT only when the floor fired — a 1.5 kg cart
+ *   with five unweighed tees was priced at 1.5 kg, under-collecting exactly
+ *   as much as a floored one, and used to leave no note.
+ */
+export function weightGapStamp(args: {
+	provider: LiveQuoteProvider;
+	weightFloored: boolean;
+	unweighedLines: number;
+}): { weightFloored?: true; unweighedLines?: number } {
+	// Couriers (Delyva, EasyParcel) price by weight; a rider doesn't.
+	if (args.provider === "lalamove") return {};
+	const lines =
+		args.weightFloored || args.unweighedLines > 0
+			? args.unweighedLines
+			: undefined;
+	return {
+		...(args.weightFloored ? { weightFloored: true as const } : {}),
+		...(lines !== undefined ? { unweighedLines: lines } : {}),
+	};
 }
 
 /**
@@ -229,6 +294,11 @@ export function chooseLiveQuote(args: {
 	const reasons = new Set(eligible.map((q) => q.status));
 	if (cold && reasons.has("no_cold_service"))
 		return { kind: "unquotable", reason: "no_cold_service" };
+	// Too heavy for a rider, and nothing else priced it: the buyer can act on
+	// that (pickup, a smaller order), so it outranks the seller-side and
+	// generic answers — and it is never "change your address".
+	if (reasons.has("too_heavy"))
+		return { kind: "unquotable", reason: "too_heavy" };
 	if (reasons.has("store_unavailable"))
 		return { kind: "unquotable", reason: "store_unavailable" };
 	// Every provider that answered says the address is outside its coverage —

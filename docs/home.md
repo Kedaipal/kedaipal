@@ -277,9 +277,9 @@ after first paint is the thing the skeleton exists to prevent.
 
 ### Order on mobile
 
-Greeting → (credit card if `out`) → action strip → (credit card if `low`) →
+Greeting → (credit card if `out`) → (referral welcome card, for a referred store until its first invoice is paid — docs/referrals.md § The push) → action strip → (credit card if `low`) →
 exception rows → Sales (chips + hero + three cards) → Plan ahead → Your store
-(credit card if `ok`, share card).
+(credit card if `ok`, share card) → Refer & earn teaser (live, trial or paused — never absent for a store with a plan).
 
 ### Rules worth knowing before changing it
 

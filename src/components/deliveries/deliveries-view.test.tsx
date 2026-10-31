@@ -26,6 +26,26 @@ vi.mock("../order/add-tip-dialog", () => ({
 	AddTipDialog: ({ open, shortId }: { open: boolean; shortId: string }) =>
 		open ? <div role="dialog">tip {shortId}</div> : null,
 }));
+vi.mock("convex/react", () => ({
+	useAction: () => vi.fn(),
+	useMutation: () => vi.fn(),
+}));
+// The wallet rows' top-up sheet reads its suggestion through the adapter.
+vi.mock("@convex-dev/react-query", () => ({
+	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
+}));
+vi.mock("@tanstack/react-query", () => ({
+	useQuery: () => ({ data: undefined }),
+}));
+vi.mock("../../hooks/useStoreLock", () => ({
+	useAreaLock: () => ({ readOnly: false, reason: "", cause: null }),
+}));
+vi.mock("../../hooks/usePermission", () => ({
+	usePermission: () => ({ canRead: true, canWrite: true, role: "owner" }),
+}));
+vi.mock("../../hooks/useActAs", () => ({
+	useActAsRetailerId: () => undefined,
+}));
 vi.mock("../dashboard/print-labels-dialog", () => ({
 	PrintLabelsDialog: ({ open }: { open: boolean }) =>
 		open ? <div role="dialog">print queue</div> : null,
@@ -73,7 +93,7 @@ function parcel(over: Partial<ParcelRow>): ParcelRow {
 function overview(over: Partial<DeliveriesOverview> = {}): DeliveriesOverview {
 	return {
 		currency: "MYR",
-		wallet: null,
+		wallets: [],
 		booksCouriers: false,
 		bookingArmed: false,
 		shipsParcels: false,
@@ -102,6 +122,7 @@ const renderView = (o: DeliveriesOverview, canPrint = true) =>
 		<DeliveriesView
 			overview={o}
 			retailerId={"r1" as never}
+			country="MY"
 			paperLabel="A6"
 			canPrintLabels={canPrint}
 		/>,
@@ -279,14 +300,49 @@ describe("DeliveriesView", () => {
 		expect(screen.queryByText("ORD-1")).toBeNull();
 	});
 
-	it("warns about a low wallet before a booking fails", () => {
+	it("leads with the courier wallets — a low one says so and offers its top-up", () => {
 		renderView(
 			overview({
 				booksCouriers: true,
-				wallet: { balance: 1240, currency: "MYR", at: 1, low: true },
+				wallets: [
+					{
+						provider: "lalamove",
+						armed: true,
+						isTest: false,
+						state: "low",
+						balanceMinor: 1240,
+						currency: "MYR",
+						at: Date.now() - 60_000,
+						lowAlertMinor: 3000,
+						lowAlertCustom: false,
+						source: "webhook",
+						refusedAt: null,
+						refusedPriceMinor: null,
+					},
+				],
 			}),
 		);
-		expect(screen.getByLabelText("Lalamove wallet low")).toBeTruthy();
+		const row = screen.getByTestId("courier-wallet-lalamove");
+		expect(row.getAttribute("data-state")).toBe("low");
+		expect(row.textContent).toMatch(/RM\s?12\.40/);
+		expect(
+			screen.getByRole("button", { name: "Top up Lalamove" }),
+		).toBeTruthy();
+		// The section sits above every other card on the page.
+		const sections = Array.from(document.querySelectorAll("section"));
+		expect(sections[0]?.textContent).toMatch(/Courier wallets/);
+	});
+
+	it("a server older than the page (no `wallets`) draws the page without the section", () => {
+		// Regression (test-code, 30 Oct 2026): another branch pushed to the
+		// shared dev deployment and `wallets.length` crashed the whole page.
+		renderView(overview({ shipsParcels: true, wallets: undefined as never }));
+		expect(screen.queryByText("Courier wallets")).toBeNull();
+	});
+
+	it("a store with no courier connected has no wallets section at all", () => {
+		renderView(overview({ shipsParcels: true }));
+		expect(screen.queryByText("Courier wallets")).toBeNull();
 	});
 });
 

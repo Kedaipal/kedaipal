@@ -32,6 +32,7 @@ import {
 	paymentsPausedOrderLine,
 } from "../../convex/lib/buyerPayments";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
+import { overseasFeeLabel } from "../../convex/lib/crossBorder";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
@@ -80,6 +81,7 @@ import {
 	googleMapsNavUrl,
 	wazeNavUrl,
 } from "../lib/google-address";
+import { pageHead } from "../lib/not-found";
 import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
@@ -245,18 +247,19 @@ export const Route = createFileRoute("/track/$token")({
 		// secret token into a title/canonical that could leak via referrer/history.
 		return { shortId: read.value.shortId };
 	},
-	head: ({ loaderData }) => ({
-		meta: [
-			{
-				title: loaderData?.shortId
-					? `Order ${loaderData.shortId} — Kedaipal`
-					: "Your order — Kedaipal",
-			},
-			// noindex + no canonical: the URL carries a capability token, so it must
-			// never be indexed or advertised.
-			{ name: "robots", content: "noindex" },
-		],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData }) => ({
+			meta: [
+				{
+					title: loaderData?.shortId
+						? `Order ${loaderData.shortId} — Kedaipal`
+						: "Your order — Kedaipal",
+				},
+				// noindex + no canonical: the URL carries a capability token, so it must
+				// never be indexed or advertised.
+				{ name: "robots", content: "noindex" },
+			],
+		})),
 	notFoundComponent: OrderNotFound,
 	component: TrackingRoute,
 });
@@ -1693,7 +1696,10 @@ function TrackingRoute() {
 							</button>
 						) : null}
 					</div>
-					<DeliveryAddressDisplay address={order.deliveryAddress} />
+					<DeliveryAddressDisplay
+						address={order.deliveryAddress}
+						storeCountry={order.retailerCountry}
+					/>
 					{(() => {
 						const mapsUrl = deriveMapsUrl(order.deliveryAddress);
 						return mapsUrl ? (
@@ -1804,7 +1810,9 @@ function TrackingRoute() {
 				token={token}
 				currentAddress={order.deliveryAddress}
 				retailerId={order.retailerId}
-				country={order.retailerCountry}
+				// An overseas order is edited within ITS country (z8r3fdr5yy) — the
+				// address form follows the address, not the store.
+				country={order.deliveryAddress?.country ?? order.retailerCountry}
 				subtotal={order.subtotal}
 				orderItems={order.items}
 				currency={order.currency}
@@ -1890,7 +1898,14 @@ function TrackingRoute() {
 				{/* Frozen delivery charge — same reconciliation rule as the pickup fee. */}
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
-						<span>{isCollection ? "Collection fee" : "Delivery fee"}</span>
+						<span>
+							{isCollection
+								? "Collection fee"
+								: (overseasFeeLabel(
+										order.deliveryAddress?.country,
+										order.retailerCountry,
+									) ?? "Delivery fee")}
+						</span>
 						<span className="tabular-nums">
 							{formatPrice(order.deliveryFee, order.currency)}
 						</span>
@@ -2361,6 +2376,7 @@ function SendOrderCard({
 	const message = buildOrderWaMessage({
 		shortId: order.shortId,
 		storeName: order.storeName,
+		storeCountry: order.retailerCountry,
 		items: order.items,
 		currency: order.currency,
 		total: order.total,

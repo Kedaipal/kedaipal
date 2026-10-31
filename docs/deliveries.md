@@ -57,28 +57,21 @@ The Orders inbox keeps its *Ready to ship* strip, now a
 pointer with the same count that opens Deliveries; printing a ticked
 **selection** stays in the inbox's bulk bar.
 
-## The courier wallet
+## The courier wallets
 
-Lalamove reports the balance only on a `WALLET_BALANCE_CHANGED` webhook —
-there is no endpoint to poll — and the event names no order, only the
-sender's API key. Stored keys are encrypted at rest, so the key can't be
-matched against them. Instead:
+Every connected courier's wallet, as a **"Courier wallets" section at the top
+of the page** — shown whenever a courier is connected, healthy or not, because
+"can I book today?" is the first question here. It is the same row Home's
+Balances card, Settings → Integrations and the dispatch cards draw, read from
+`courierWallets.list` and carried on this page's overview as `wallets`.
 
-- `courierWallets` holds a **SHA-256 fingerprint of the plaintext key**,
-  stamped in `retailers.updateSettings` (the only place the plaintext exists)
-  via `syncLalamoveWallet`. A typed key re-stamps it and resets the balance
-  (a different account); a cleared key removes the row.
-- The route (`recordLalamoveWallet` in `convex/http.ts`) finds the wallet(s)
-  by fingerprint and verifies the event with **that store's own secret**.
-  Unattributable or forged events are acked and dropped — never a retry
-  storm. An event older than the stored balance never overwrites it.
-- Own table, not fields on `retailers`: the balance moves on every booking,
-  and a retailer patch re-runs every open storefront tab.
-- Settings → Integrations shows the balance **once**, beside the API key, as
-  proof the key works.
+How each courier reports its balance (Lalamove pushes, EasyParcel is pulled,
+Delyva only shows it in a refusal), the one writer, the states, the
+block-or-warn rule at dispatch, the seller's low line and the email live in
+[`courier-wallets.md`](./courier-wallets.md).
 
 **Operator step (once per deployment):** keys saved before the table existed
-have no fingerprint, so their wallet events can't attribute until
+have no fingerprint, so their Lalamove wallet events can't attribute until
 `npx convex run courierWallets:backfillFingerprints` runs (idempotent,
 self-continuing; it decrypts in an action).
 

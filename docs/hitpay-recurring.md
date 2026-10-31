@@ -411,8 +411,21 @@ recurring/charge events) — the signing secret shown for THAT endpoint is
   ACCOUNT's own tokenisable set decides (sandbox: a TnG-only account
   rejected `card`, and a card-only fallback would have been the one method
   it did not have).
-- Renewal/self-serve invoice currency: last **paid** invoice's currency,
-  falling back to `BILLING_CURRENCY_FOR_COUNTRY[retailer.country]`.
+- Every invoice — first, renewal, plan change, top-up — bills in the store's
+  **country's** currency (`storeBillingCurrency`, 86eyp7hn7). It used to
+  follow the last paid invoice, which let one wrong-currency bill stick.
+- **A country switch detaches the saved method.** The switch is the one way
+  to change what a store bills in, and the session HitPay authorised was in
+  the OLD currency — charging it in the new one is a charge the seller never
+  agreed to. `retailers.updateSettings` runs `detachAutoRenewForRetailer` on
+  a real country change (the same path as a store handover), reports
+  `autoRenewDetached`, and the post-switch checklist's `billing_currency` row
+  sends the seller to set auto-renewal up again. Pay-now keeps working.
+  A setup STARTED but not finished (`autoRenewSetup`) is cleared by the same
+  switch: its HitPay page was minted in the old currency, and "Finish setting
+  up" after the move would authorise that session on a store now billed in
+  the new one (found in the Chrome test, 28 Oct 2026). A half-started setup
+  was never on, so it is not reported as detached.
 - `times_to_be_charged` is NEVER sent: a save-payment-method session
   rejects it outright ("You cant set times_to_be_charged for save_card is
   true", sandbox 11 Sep 2026). No charge-count ceiling exists on the
@@ -842,8 +855,8 @@ pay **RM104** (S$59 vs S$41). Two defects stacked:
 
 **One number everywhere.** `renewalQuote` (lib/plans.ts) is the single author
 of what the next renewal bills — tier (a scheduled downgrade lands with it),
-cycle, founding, currency (`renewalCurrency`: last PAID invoice, else the
-country) and amount (the hold price for a paused store). The cron's renewal
+cycle, founding, currency (`storeBillingCurrency`: the store's country's,
+86eyp7hn7) and amount (the hold price for a paused store). The cron's renewal
 invoice, the pre-charge email, HitPay's authorisation page (which used to show
 the MONTHLY price in the COUNTRY currency — wrong for annual and SGD-billed
 stores) and the billing page (`billingGatewayAvailable.nextRenewal`) all read

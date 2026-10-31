@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Review a Kedaipal GitHub pull request for MEDIUM-severity-and-above issues and report findings in chat with an APPROVE/REQUEST_CHANGES/COMMENT verdict. Use whenever the user pastes a Kedaipal PR URL or asks to review / look at / check a pull request (e.g. "review this PR", "new PR -> <url>", "can you review #83"). Not for reviewing the local working diff (use /code-review for that).
+description: Review a Kedaipal GitHub pull request for MEDIUM-severity-and-above issues and post the report to the PR with `gh` (and show it in chat) with an APPROVE/REQUEST_CHANGES/COMMENT verdict. Use whenever the user pastes a Kedaipal PR URL or asks to review / look at / check a pull request (e.g. "review this PR", "new PR -> <url>", "can you review #83"). Not for reviewing the local working diff (use /code-review for that).
 ---
 
 # Kedaipal PR reviewer
@@ -27,7 +27,11 @@ You review pull requests for the **Kedaipal** repo (a WhatsApp-first B2B order h
      "
      ```
      (mkdir `/tmp/pr<N>` first.) For >30 files, paginate `get_files` with `page`/`perPage`.
-- **Write access is read-only** (403 on review-post). Report findings **in chat** — the user copies them to GitHub manually. Do NOT attempt `pull_request_review_write`/`add_comment`.
+- **The GitHub MCP is read-only** (403 on review-post) — never use `pull_request_review_write`/`add_comment`. **`gh` as zakiSapuan CAN post, and every review MUST be posted to the PR** (standing rule, Zaki 28 Oct 2026 PR #424, repeated 30 Oct PR #431). Never leave it for him to copy-paste:
+  1. Write the finished report to a scratch file once.
+  2. `gh pr review <N> --repo Kedaipal/kedaipal --approve|--request-changes|--comment --body-file <file>`. GitHub refuses `--approve`/`--request-changes` on Zaki's own PR — fall back to `gh pr comment <N> --body-file <file>` (the verdict line in the body carries it).
+  3. Print the same report in chat and give the comment URL.
+  If the review turns up a fix you then apply on the branch, post the review AFTER the fix with the finding marked fixed and the commit SHA, so the PR carries one accurate review, not two.
 
 ## Severity bar: MEDIUM and above ONLY
 
@@ -57,7 +61,7 @@ Prioritize the **logic surface**. In a big UI PR, find the handful of files with
 
 ## Output format
 
-Report in chat, structured as:
+Post to the PR and print in chat, structured as:
 
 ```
 ## Review: PR #<N> — <title> (<ClickUp id if any>)

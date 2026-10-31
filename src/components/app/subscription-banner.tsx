@@ -237,7 +237,7 @@ export function SubscriptionBanner({
 					    be wrong in a second way too: a store can be below zero with
 					    nothing waiting at all. */}
 					{canBuy
-						? "Top up to stay ahead — bought credits carry over for 12 months, so nothing goes to waste."
+						? "Top up to stay ahead — credits you buy carry over for 12 months, so nothing goes to waste."
 						: onTrial
 							? "Orders past your trial's allowance come off your first month's credits — pick a plan when you're ready."
 							: creditLock.canAct

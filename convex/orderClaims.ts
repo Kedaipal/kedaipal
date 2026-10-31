@@ -71,8 +71,9 @@ import {
 } from "./subscriptions";
 import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
 import { tallyPromoUnits } from "./lib/promoTally";
-import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import { type Country, DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
 import { storeBooksCouriers } from "./lib/courierBooking";
+import { loadEasyparcelArming } from "./lib/easyparcelArming";
 import { getDisplayName, requireCustomerName } from "./lib/customer";
 import type { CartWeightItem } from "./lib/delivery";
 import {
@@ -93,6 +94,7 @@ import {
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import { withCategoryNames } from "./lib/orderCategoryNames";
 import {
 	claimVoucherState,
 	redeemVoucher,
@@ -102,6 +104,7 @@ import {
 	type ClaimVoucherState,
 	claimVoucherDiscount,
 	type VoucherSnapshot,
+	voucherUsageOf,
 } from "./lib/vouchers";
 import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
 import type { OpeningHours } from "./lib/openingHours";
@@ -375,9 +378,21 @@ export const sendClaim = mutation({
 				retailerId: retailer._id,
 				code: args.voucherCode,
 				now,
+				// Judged for the buyer the link goes to and the lines being
+				// frozen (`z8r3fdz0pw`): a send refuses here, at the counter,
+				// rather than promising a discount the claim page then drops.
+				entry: {
+					itemSubtotal: claimItemsTotal(lines),
+					waPhone: session.waPhone,
+					phoneless: "refuse",
+				},
 			});
 			voucherId = resolved.voucher._id;
-			voucherSnapshot = { code: resolved.voucher.code, ...resolved.terms };
+			voucherSnapshot = {
+				code: resolved.voucher.code,
+				...resolved.terms,
+				usage: voucherUsageOf(resolved.voucher),
+			};
 		}
 
 		// Supersede: the previous open claim for this session dies with this send
@@ -402,7 +417,7 @@ export const sendClaim = mutation({
 			waPhone: session.waPhone,
 			buyerName: session.waProfileName,
 			lines,
-			currency: retailer.currency ?? "MYR",
+			currency: storeCurrencyOf(retailer),
 			voucherId,
 			voucherSnapshot,
 			token,
@@ -800,13 +815,16 @@ export const getByToken = query({
 				waPhone: retailer.waPhone,
 				country: retailer.country ?? DEFAULT_COUNTRY,
 				locale: pickLocale(retailer.locale),
-				currency: retailer.currency ?? "MYR",
+				currency: storeCurrencyOf(retailer),
 				// Same legacy-default posture as the storefront payload.
 				offerDelivery: (retailer.offerDelivery ?? true) === true,
 				offerSelfCollect: retailer.offerSelfCollect === true,
 				collectsFromCustomer:
 					retailer.deliveryBooking?.deliveryDirection === "collection",
-				booksCouriers: storeBooksCouriers(retailer),
+				booksCouriers: storeBooksCouriers({
+					...retailer,
+					easyparcel: await loadEasyparcelArming(ctx, retailer._id),
+				}),
 				minNoticeDays,
 				openingHours: retailer.openingHours as OpeningHours | undefined,
 				closedDates: retailer.closedDates,
@@ -949,6 +967,16 @@ export const commit = mutation({
 				"Delivery orders should not include a pickup location",
 			);
 
+		// A claim link is a counter sale finished on the buyer's phone — it
+		// delivers within the store's country only (z8r3fdr5yy); the lane, its
+		// price and the home-only check are the storefront checkout's.
+		if (
+			args.deliveryAddress?.country !== undefined &&
+			args.deliveryAddress.country !== retailerCountry
+		)
+			throw new ConvexError(
+				"This order can only be delivered within the store's country — message the store to arrange overseas delivery.",
+			);
 		let sanitizedAddress: ReturnType<typeof assertValidAddress> | undefined;
 		if (args.deliveryAddress) {
 			try {
@@ -1250,16 +1278,23 @@ export const commit = mutation({
 			//
 			// This is the THIRD create path to need it (storefront, counter, claim)
 			// — each builds its own snapshot, so a new frozen field has to be
-			// stamped in three places. See docs/stock-adjustments.md.
-			items: claim.lines.map((line) => {
-				const pickupNote = pickupNoteByProduct.get(line.productId);
-				return {
-					...line,
-					stockReserved: requestedByVariant.get(line.variantId)?.block === true,
-					// Frozen from the live product at commit — see the header.
-					...(pickupNote !== undefined ? { pickupNote } : {}),
-				};
-			}),
+			// stamped in every door (booking included). See
+			// docs/stock-adjustments.md.
+			// Categories are frozen at COMMIT too (86eyrtz74), from the live
+			// junctions — the same moment `stockReserved` describes.
+			items: await withCategoryNames(
+				ctx,
+				claim.lines.map((line) => {
+					const pickupNote = pickupNoteByProduct.get(line.productId);
+					return {
+						...line,
+						stockReserved:
+							requestedByVariant.get(line.variantId)?.block === true,
+						// Frozen from the live product at commit — see the header.
+						...(pickupNote !== undefined ? { pickupNote } : {}),
+					};
+				}),
+			),
 			subtotal,
 			total,
 			// Only recorded when the voucher actually applied — an order that
@@ -1314,6 +1349,7 @@ export const commit = mutation({
 				voucherId: voucherState.voucherId,
 				orderId,
 				now,
+				waPhone: claim.waPhone,
 			});
 
 		await ctx.db.insert("orderEvents", {

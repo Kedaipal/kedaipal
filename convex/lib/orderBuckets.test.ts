@@ -1,9 +1,12 @@
 import { describe, expect, test } from "vitest";
+import { holdsCapacity } from "./bookingAvailability";
+import { holdsSeats } from "./eventSeats";
 import { isRevenueOrder } from "./insights";
 import {
 	BUCKET_LEAVES,
 	foldLegacyBuckets,
 	formatStatusAge,
+	HOLDING_LEAVES,
 	INBOX_LEAF_KEYS,
 	type InboxStatusLeaf,
 	isUnseenOrder,
@@ -82,6 +85,20 @@ describe("status leaves — the one filterable atom", () => {
 		const shout = (st: string) => `RENAMED_${st}`;
 		expect(leafLabel("confirmed_unseen", shout)).toBe("Not yet opened");
 		expect(leafLabel("packed", shout)).toBe("RENAMED_packed");
+	});
+});
+
+describe("HOLDING_LEAVES — the status scope behind every registered count", () => {
+	test("is every leaf holdsSeats/holdsCapacity keep, and nothing else", () => {
+		expect(HOLDING_LEAVES).toEqual(
+			INBOX_LEAF_KEYS.filter((l) => l !== "cancelled"),
+		);
+		// The two seat/capacity rules and this list are one answer.
+		for (const leaf of INBOX_LEAF_KEYS) {
+			const status = leaf === "confirmed_unseen" ? "confirmed" : leaf;
+			expect(HOLDING_LEAVES.includes(leaf)).toBe(holdsSeats(status));
+			expect(HOLDING_LEAVES.includes(leaf)).toBe(holdsCapacity(status));
+		}
 	});
 });
 

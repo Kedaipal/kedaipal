@@ -29,6 +29,7 @@ import { Route as ReferralSlugRouteImport } from './routes/referral.$slug'
 import { Route as JoinTokenRouteImport } from './routes/join.$token'
 import { Route as ClaimTokenRouteImport } from './routes/claim.$token'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
+import { Route as AppReferRouteImport } from './routes/app.refer'
 import { Route as AppPosterRouteImport } from './routes/app.poster'
 import { Route as AppInsightsRouteImport } from './routes/app.insights'
 import { Route as AppDeliveriesRouteImport } from './routes/app.deliveries'
@@ -39,18 +40,23 @@ import { Route as AppPromotionsIndexRouteImport } from './routes/app.promotions.
 import { Route as AppProductsIndexRouteImport } from './routes/app.products.index'
 import { Route as AppOrdersIndexRouteImport } from './routes/app.orders.index'
 import { Route as AppCustomersIndexRouteImport } from './routes/app.customers.index'
+import { Route as AppSettingsOverseasDeliveryRouteImport } from './routes/app.settings_.overseas-delivery'
 import { Route as AppSettingsDeliveryPricingRouteImport } from './routes/app.settings_.delivery-pricing'
 import { Route as AppPromotionsNewRouteImport } from './routes/app.promotions.new'
+import { Route as AppProductsWeightsRouteImport } from './routes/app.products.weights'
+import { Route as AppProductsOverseasRouteImport } from './routes/app.products.overseas'
 import { Route as AppProductsNewRouteImport } from './routes/app.products.new'
 import { Route as AppProductsImportRouteImport } from './routes/app.products.import'
 import { Route as AppProductsCategoriesRouteImport } from './routes/app.products.categories'
 import { Route as AppProductsProductIdRouteImport } from './routes/app.products.$productId'
+import { Route as AppOrdersScheduleRouteImport } from './routes/app.orders.schedule'
 import { Route as AppOrdersCalendarRouteImport } from './routes/app.orders.calendar'
 import { Route as AppOrdersShortIdRouteImport } from './routes/app.orders.$shortId'
 import { Route as AppCustomersCustomerIdRouteImport } from './routes/app.customers.$customerId'
 import { Route as AppAdminWabaRouteImport } from './routes/app.admin.waba'
 import { Route as AppAdminSellersRouteImport } from './routes/app.admin.sellers'
 import { Route as AppAdminBillingRouteImport } from './routes/app.admin.billing'
+import { Route as AppAdminAcquisitionRouteImport } from './routes/app.admin.acquisition'
 import { Route as SlugPProductSlugRouteImport } from './routes/$slug_.p.$productSlug'
 import { Route as SlugCCategorySlugRouteImport } from './routes/$slug_.c.$categorySlug'
 import { Route as AppPromotionsPromotionIdIndexRouteImport } from './routes/app.promotions.$promotionId.index'
@@ -159,6 +165,11 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AppRoute,
 } as any)
+const AppReferRoute = AppReferRouteImport.update({
+  id: '/refer',
+  path: '/refer',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppPosterRoute = AppPosterRouteImport.update({
   id: '/poster',
   path: '/poster',
@@ -209,6 +220,12 @@ const AppCustomersIndexRoute = AppCustomersIndexRouteImport.update({
   path: '/customers/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSettingsOverseasDeliveryRoute =
+  AppSettingsOverseasDeliveryRouteImport.update({
+    id: '/settings_/overseas-delivery',
+    path: '/settings/overseas-delivery',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppSettingsDeliveryPricingRoute =
   AppSettingsDeliveryPricingRouteImport.update({
     id: '/settings_/delivery-pricing',
@@ -218,6 +235,16 @@ const AppSettingsDeliveryPricingRoute =
 const AppPromotionsNewRoute = AppPromotionsNewRouteImport.update({
   id: '/promotions/new',
   path: '/promotions/new',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppProductsWeightsRoute = AppProductsWeightsRouteImport.update({
+  id: '/products/weights',
+  path: '/products/weights',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppProductsOverseasRoute = AppProductsOverseasRouteImport.update({
+  id: '/products/overseas',
+  path: '/products/overseas',
   getParentRoute: () => AppRoute,
 } as any)
 const AppProductsNewRoute = AppProductsNewRouteImport.update({
@@ -238,6 +265,11 @@ const AppProductsCategoriesRoute = AppProductsCategoriesRouteImport.update({
 const AppProductsProductIdRoute = AppProductsProductIdRouteImport.update({
   id: '/products/$productId',
   path: '/products/$productId',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOrdersScheduleRoute = AppOrdersScheduleRouteImport.update({
+  id: '/orders/schedule',
+  path: '/orders/schedule',
   getParentRoute: () => AppRoute,
 } as any)
 const AppOrdersCalendarRoute = AppOrdersCalendarRouteImport.update({
@@ -268,6 +300,11 @@ const AppAdminSellersRoute = AppAdminSellersRouteImport.update({
 const AppAdminBillingRoute = AppAdminBillingRouteImport.update({
   id: '/admin/billing',
   path: '/admin/billing',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAdminAcquisitionRoute = AppAdminAcquisitionRouteImport.update({
+  id: '/admin/acquisition',
+  path: '/admin/acquisition',
   getParentRoute: () => AppRoute,
 } as any)
 const SlugPProductSlugRoute = SlugPProductSlugRouteImport.update({
@@ -328,6 +365,7 @@ export interface FileRoutesByFullPath {
   '/app/deliveries': typeof AppDeliveriesRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
+  '/app/refer': typeof AppReferRoute
   '/app/settings': typeof AppSettingsRoute
   '/claim/$token': typeof ClaimTokenRoute
   '/join/$token': typeof JoinTokenRoute
@@ -338,18 +376,23 @@ export interface FileRoutesByFullPath {
   '/app/': typeof AppIndexRoute
   '/$slug/c/$categorySlug': typeof SlugCCategorySlugRoute
   '/$slug/p/$productSlug': typeof SlugPProductSlugRoute
+  '/app/admin/acquisition': typeof AppAdminAcquisitionRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/orders/calendar': typeof AppOrdersCalendarRoute
+  '/app/orders/schedule': typeof AppOrdersScheduleRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/products/overseas': typeof AppProductsOverseasRoute
+  '/app/products/weights': typeof AppProductsWeightsRoute
   '/app/promotions/new': typeof AppPromotionsNewRoute
   '/app/settings/delivery-pricing': typeof AppSettingsDeliveryPricingRoute
+  '/app/settings/overseas-delivery': typeof AppSettingsOverseasDeliveryRoute
   '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
@@ -378,6 +421,7 @@ export interface FileRoutesByTo {
   '/app/deliveries': typeof AppDeliveriesRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
+  '/app/refer': typeof AppReferRoute
   '/app/settings': typeof AppSettingsRoute
   '/claim/$token': typeof ClaimTokenRoute
   '/join/$token': typeof JoinTokenRoute
@@ -388,18 +432,23 @@ export interface FileRoutesByTo {
   '/app': typeof AppIndexRoute
   '/$slug/c/$categorySlug': typeof SlugCCategorySlugRoute
   '/$slug/p/$productSlug': typeof SlugPProductSlugRoute
+  '/app/admin/acquisition': typeof AppAdminAcquisitionRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/orders/calendar': typeof AppOrdersCalendarRoute
+  '/app/orders/schedule': typeof AppOrdersScheduleRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/products/overseas': typeof AppProductsOverseasRoute
+  '/app/products/weights': typeof AppProductsWeightsRoute
   '/app/promotions/new': typeof AppPromotionsNewRoute
   '/app/settings/delivery-pricing': typeof AppSettingsDeliveryPricingRoute
+  '/app/settings/overseas-delivery': typeof AppSettingsOverseasDeliveryRoute
   '/app/customers': typeof AppCustomersIndexRoute
   '/app/orders': typeof AppOrdersIndexRoute
   '/app/products': typeof AppProductsIndexRoute
@@ -430,6 +479,7 @@ export interface FileRoutesById {
   '/app/deliveries': typeof AppDeliveriesRoute
   '/app/insights': typeof AppInsightsRoute
   '/app/poster': typeof AppPosterRoute
+  '/app/refer': typeof AppReferRoute
   '/app/settings': typeof AppSettingsRoute
   '/claim/$token': typeof ClaimTokenRoute
   '/join/$token': typeof JoinTokenRoute
@@ -440,18 +490,23 @@ export interface FileRoutesById {
   '/app/': typeof AppIndexRoute
   '/$slug_/c/$categorySlug': typeof SlugCCategorySlugRoute
   '/$slug_/p/$productSlug': typeof SlugPProductSlugRoute
+  '/app/admin/acquisition': typeof AppAdminAcquisitionRoute
   '/app/admin/billing': typeof AppAdminBillingRoute
   '/app/admin/sellers': typeof AppAdminSellersRoute
   '/app/admin/waba': typeof AppAdminWabaRoute
   '/app/customers/$customerId': typeof AppCustomersCustomerIdRoute
   '/app/orders/$shortId': typeof AppOrdersShortIdRoute
   '/app/orders/calendar': typeof AppOrdersCalendarRoute
+  '/app/orders/schedule': typeof AppOrdersScheduleRoute
   '/app/products/$productId': typeof AppProductsProductIdRoute
   '/app/products/categories': typeof AppProductsCategoriesRoute
   '/app/products/import': typeof AppProductsImportRoute
   '/app/products/new': typeof AppProductsNewRoute
+  '/app/products/overseas': typeof AppProductsOverseasRoute
+  '/app/products/weights': typeof AppProductsWeightsRoute
   '/app/promotions/new': typeof AppPromotionsNewRoute
   '/app/settings_/delivery-pricing': typeof AppSettingsDeliveryPricingRoute
+  '/app/settings_/overseas-delivery': typeof AppSettingsOverseasDeliveryRoute
   '/app/customers/': typeof AppCustomersIndexRoute
   '/app/orders/': typeof AppOrdersIndexRoute
   '/app/products/': typeof AppProductsIndexRoute
@@ -483,6 +538,7 @@ export interface FileRouteTypes {
     | '/app/deliveries'
     | '/app/insights'
     | '/app/poster'
+    | '/app/refer'
     | '/app/settings'
     | '/claim/$token'
     | '/join/$token'
@@ -493,18 +549,23 @@ export interface FileRouteTypes {
     | '/app/'
     | '/$slug/c/$categorySlug'
     | '/$slug/p/$productSlug'
+    | '/app/admin/acquisition'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/orders/calendar'
+    | '/app/orders/schedule'
     | '/app/products/$productId'
     | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/products/overseas'
+    | '/app/products/weights'
     | '/app/promotions/new'
     | '/app/settings/delivery-pricing'
+    | '/app/settings/overseas-delivery'
     | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
@@ -533,6 +594,7 @@ export interface FileRouteTypes {
     | '/app/deliveries'
     | '/app/insights'
     | '/app/poster'
+    | '/app/refer'
     | '/app/settings'
     | '/claim/$token'
     | '/join/$token'
@@ -543,18 +605,23 @@ export interface FileRouteTypes {
     | '/app'
     | '/$slug/c/$categorySlug'
     | '/$slug/p/$productSlug'
+    | '/app/admin/acquisition'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/orders/calendar'
+    | '/app/orders/schedule'
     | '/app/products/$productId'
     | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/products/overseas'
+    | '/app/products/weights'
     | '/app/promotions/new'
     | '/app/settings/delivery-pricing'
+    | '/app/settings/overseas-delivery'
     | '/app/customers'
     | '/app/orders'
     | '/app/products'
@@ -584,6 +651,7 @@ export interface FileRouteTypes {
     | '/app/deliveries'
     | '/app/insights'
     | '/app/poster'
+    | '/app/refer'
     | '/app/settings'
     | '/claim/$token'
     | '/join/$token'
@@ -594,18 +662,23 @@ export interface FileRouteTypes {
     | '/app/'
     | '/$slug_/c/$categorySlug'
     | '/$slug_/p/$productSlug'
+    | '/app/admin/acquisition'
     | '/app/admin/billing'
     | '/app/admin/sellers'
     | '/app/admin/waba'
     | '/app/customers/$customerId'
     | '/app/orders/$shortId'
     | '/app/orders/calendar'
+    | '/app/orders/schedule'
     | '/app/products/$productId'
     | '/app/products/categories'
     | '/app/products/import'
     | '/app/products/new'
+    | '/app/products/overseas'
+    | '/app/products/weights'
     | '/app/promotions/new'
     | '/app/settings_/delivery-pricing'
+    | '/app/settings_/overseas-delivery'
     | '/app/customers/'
     | '/app/orders/'
     | '/app/products/'
@@ -784,6 +857,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/refer': {
+      id: '/app/refer'
+      path: '/refer'
+      fullPath: '/app/refer'
+      preLoaderRoute: typeof AppReferRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/poster': {
       id: '/app/poster'
       path: '/poster'
@@ -854,6 +934,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCustomersIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/settings_/overseas-delivery': {
+      id: '/app/settings_/overseas-delivery'
+      path: '/settings/overseas-delivery'
+      fullPath: '/app/settings/overseas-delivery'
+      preLoaderRoute: typeof AppSettingsOverseasDeliveryRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/settings_/delivery-pricing': {
       id: '/app/settings_/delivery-pricing'
       path: '/settings/delivery-pricing'
@@ -866,6 +953,20 @@ declare module '@tanstack/react-router' {
       path: '/promotions/new'
       fullPath: '/app/promotions/new'
       preLoaderRoute: typeof AppPromotionsNewRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/products/weights': {
+      id: '/app/products/weights'
+      path: '/products/weights'
+      fullPath: '/app/products/weights'
+      preLoaderRoute: typeof AppProductsWeightsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/products/overseas': {
+      id: '/app/products/overseas'
+      path: '/products/overseas'
+      fullPath: '/app/products/overseas'
+      preLoaderRoute: typeof AppProductsOverseasRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/products/new': {
@@ -894,6 +995,13 @@ declare module '@tanstack/react-router' {
       path: '/products/$productId'
       fullPath: '/app/products/$productId'
       preLoaderRoute: typeof AppProductsProductIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/orders/schedule': {
+      id: '/app/orders/schedule'
+      path: '/orders/schedule'
+      fullPath: '/app/orders/schedule'
+      preLoaderRoute: typeof AppOrdersScheduleRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/orders/calendar': {
@@ -936,6 +1044,13 @@ declare module '@tanstack/react-router' {
       path: '/admin/billing'
       fullPath: '/app/admin/billing'
       preLoaderRoute: typeof AppAdminBillingRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/admin/acquisition': {
+      id: '/app/admin/acquisition'
+      path: '/admin/acquisition'
+      fullPath: '/app/admin/acquisition'
+      preLoaderRoute: typeof AppAdminAcquisitionRouteImport
       parentRoute: typeof AppRoute
     }
     '/$slug_/p/$productSlug': {
@@ -995,20 +1110,26 @@ interface AppRouteChildren {
   AppDeliveriesRoute: typeof AppDeliveriesRoute
   AppInsightsRoute: typeof AppInsightsRoute
   AppPosterRoute: typeof AppPosterRoute
+  AppReferRoute: typeof AppReferRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppAdminAcquisitionRoute: typeof AppAdminAcquisitionRoute
   AppAdminBillingRoute: typeof AppAdminBillingRoute
   AppAdminSellersRoute: typeof AppAdminSellersRoute
   AppAdminWabaRoute: typeof AppAdminWabaRoute
   AppCustomersCustomerIdRoute: typeof AppCustomersCustomerIdRoute
   AppOrdersShortIdRoute: typeof AppOrdersShortIdRoute
   AppOrdersCalendarRoute: typeof AppOrdersCalendarRoute
+  AppOrdersScheduleRoute: typeof AppOrdersScheduleRoute
   AppProductsProductIdRoute: typeof AppProductsProductIdRoute
   AppProductsCategoriesRoute: typeof AppProductsCategoriesRoute
   AppProductsImportRoute: typeof AppProductsImportRoute
   AppProductsNewRoute: typeof AppProductsNewRoute
+  AppProductsOverseasRoute: typeof AppProductsOverseasRoute
+  AppProductsWeightsRoute: typeof AppProductsWeightsRoute
   AppPromotionsNewRoute: typeof AppPromotionsNewRoute
   AppSettingsDeliveryPricingRoute: typeof AppSettingsDeliveryPricingRoute
+  AppSettingsOverseasDeliveryRoute: typeof AppSettingsOverseasDeliveryRoute
   AppCustomersIndexRoute: typeof AppCustomersIndexRoute
   AppOrdersIndexRoute: typeof AppOrdersIndexRoute
   AppProductsIndexRoute: typeof AppProductsIndexRoute
@@ -1026,20 +1147,26 @@ const AppRouteChildren: AppRouteChildren = {
   AppDeliveriesRoute: AppDeliveriesRoute,
   AppInsightsRoute: AppInsightsRoute,
   AppPosterRoute: AppPosterRoute,
+  AppReferRoute: AppReferRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
+  AppAdminAcquisitionRoute: AppAdminAcquisitionRoute,
   AppAdminBillingRoute: AppAdminBillingRoute,
   AppAdminSellersRoute: AppAdminSellersRoute,
   AppAdminWabaRoute: AppAdminWabaRoute,
   AppCustomersCustomerIdRoute: AppCustomersCustomerIdRoute,
   AppOrdersShortIdRoute: AppOrdersShortIdRoute,
   AppOrdersCalendarRoute: AppOrdersCalendarRoute,
+  AppOrdersScheduleRoute: AppOrdersScheduleRoute,
   AppProductsProductIdRoute: AppProductsProductIdRoute,
   AppProductsCategoriesRoute: AppProductsCategoriesRoute,
   AppProductsImportRoute: AppProductsImportRoute,
   AppProductsNewRoute: AppProductsNewRoute,
+  AppProductsOverseasRoute: AppProductsOverseasRoute,
+  AppProductsWeightsRoute: AppProductsWeightsRoute,
   AppPromotionsNewRoute: AppPromotionsNewRoute,
   AppSettingsDeliveryPricingRoute: AppSettingsDeliveryPricingRoute,
+  AppSettingsOverseasDeliveryRoute: AppSettingsOverseasDeliveryRoute,
   AppCustomersIndexRoute: AppCustomersIndexRoute,
   AppOrdersIndexRoute: AppOrdersIndexRoute,
   AppProductsIndexRoute: AppProductsIndexRoute,

@@ -133,7 +133,6 @@ type Gateway = {
 	autoRenew: boolean;
 	methods: string[];
 	currency: string;
-	renewalCurrency: string;
 	foundingPricing: boolean;
 	foundingPricingLapsed: boolean;
 	foundingBenefitsRevoked: boolean;
@@ -154,7 +153,6 @@ const GATEWAY_OFF: Gateway = {
 	autoRenew: false,
 	methods: ["card", "touch_n_go"],
 	currency: "MYR",
-	renewalCurrency: "MYR",
 	foundingPricing: false,
 	foundingPricingLapsed: false,
 	foundingBenefitsRevoked: false,
@@ -309,6 +307,8 @@ describe("BillingTab support WhatsApp number", () => {
 					return [];
 				if (name === getFunctionName(api.billing.paymentInstructions))
 					return null;
+				// The meter's referral nudge read — no card for this store.
+				if (name === getFunctionName(api.referrals.myCard)) return null;
 				return false;
 			})();
 			return { data, isPending: false };
@@ -414,6 +414,7 @@ describe("BillingTab pending invoice — how to pay", () => {
 					};
 				if (name === getFunctionName(api.contact.supportWhatsapp))
 					return CONFIGURED_WA;
+				if (name === getFunctionName(api.referrals.myCard)) return null;
 				return false;
 			})();
 			return { data, isPending: false };
@@ -1227,12 +1228,17 @@ describe("BillingTab annual billing", () => {
 		expect(swap).toContain("haven't paid it yet");
 	});
 
-	it("quotes an SGD seller in SGD", () => {
+	it("quotes a Singapore store in SGD — by its country, never its invoice history", () => {
+		// The staging pass (31 Oct 2026) found this card saying "RM 149.00 a
+		// month" to an SG store beside its S$ hold and renewal: it read the
+		// last paid invoice's currency. Two ringgit invoices must not move it.
 		mockQueries({
 			isAdmin: false,
-			invoices: settled.map((i) => ({ ...i, currency: "SGD" })),
+			invoices: settled.map((i) => ({ ...i, currency: "MYR" })),
 		});
-		render(<BillingTab retailer={activePro()} />);
+		render(
+			<BillingTab retailer={{ ...activePro(), country: "SG" } as Retailer} />,
+		);
 		expect(screen.getByText(/S\$\s*590\.00/)).toBeTruthy();
 		expect(screen.queryByText(/RM\s*1,490\.00/)).toBeNull();
 	});
@@ -1732,7 +1738,6 @@ describe("BillingTab founding price — one server-resolved answer (z8r3fdfty4)"
 			...GATEWAY_ON,
 			methods: currency === "SGD" ? ["card"] : ["card", "touch_n_go"],
 			currency,
-			renewalCurrency: currency,
 			foundingPricing: founding,
 			foundingPricingLapsed: lapsed,
 			foundingBenefitsRevoked: revoked,
@@ -2153,7 +2158,6 @@ describe("BillingTab under admin act-as (z8r3fdfty4)", () => {
 		...GATEWAY_ON,
 		methods: ["card"],
 		currency: "SGD",
-		renewalCurrency: "SGD",
 		foundingPricing: true,
 		nextRenewal: {
 			kind: "plan",
@@ -2465,7 +2469,6 @@ describe("BillingTab — Enterprise (Credits T6)", () => {
 	const gatewayIn = (currency: "MYR" | "SGD" = "MYR"): Gateway => ({
 		...GATEWAY_ON,
 		currency,
-		renewalCurrency: currency,
 	});
 	/** An active store on a contract, renewing in 10 days. */
 	function onContract(

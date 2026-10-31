@@ -585,6 +585,7 @@ describe("hasFeature (client plan gate)", () => {
 				events: false,
 				promo: false,
 				vouchers: false,
+				crossBorder: false,
 			},
 		});
 		expect(hasFeature(starter, "crm")).toBe(false);
@@ -607,6 +608,7 @@ describe("hasFeature (client plan gate)", () => {
 				events: true,
 				promo: true,
 				vouchers: true,
+				crossBorder: true,
 			},
 		});
 		expect(hasFeature(pro, "crm")).toBe(true);
@@ -637,6 +639,7 @@ describe("isCrmLocked", () => {
 			events: false,
 			promo: false,
 			vouchers: false,
+			crossBorder: false,
 		},
 	});
 
@@ -681,6 +684,7 @@ describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", 
 			events: false,
 			promo: false,
 			vouchers: false,
+			crossBorder: false,
 		},
 	});
 
@@ -726,6 +730,7 @@ describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", 
 				events: false,
 				promo: false,
 				vouchers: false,
+				crossBorder: false,
 			},
 		});
 		expect(

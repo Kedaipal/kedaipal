@@ -115,7 +115,9 @@ describe("admin act-as access", () => {
 		const { acked } = await t
 			.withIdentity({ subject: ADMIN })
 			.mutation(api.retailers.ackCountrySetup, { retailerId: retailer._id });
-		expect(acked).toBe(1);
+		// Bank details + the billing-currency notice (86eyp7hn7) — two rows,
+		// ONE audited act.
+		expect(acked).toBe(2);
 		expect(await auditCount(t, retailer._id)).toBe(1);
 		const rows = await t
 			.withIdentity({ subject: ADMIN })
@@ -329,6 +331,36 @@ describe("admin console reads", () => {
 		expect(rows.find((r) => r.ownerUserId === OWNER)?.signupSource).toBe(
 			"spotlight-thg",
 		);
+	});
+
+	test("listSellersForAdmin carries the acquisition channel and a suggestion from the tag (86eye3eyp)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, OWNER);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { signupSource: "spotlight-thg" });
+		});
+		const admin = t.withIdentity({ subject: ADMIN });
+		const before = (await admin.query(api.admin.listSellersForAdmin, {})).sellers.find(
+			(r) => r.ownerUserId === OWNER,
+		);
+		expect(before?.acquisition).toEqual({ suggested: "talk_event" });
+		expect(before?.hasPaidInvoice).toBe(false);
+
+		await admin.mutation(api.metrics.setAcquisitionSource, {
+			retailerId: retailer._id,
+			source: "talk_event",
+			note: "Great Day Club talk",
+		});
+		const after = (await admin.query(api.admin.listSellersForAdmin, {})).sellers.find(
+			(r) => r.ownerUserId === OWNER,
+		);
+		expect(after?.acquisition).toMatchObject({
+			channel: "talk_event",
+			setBy: "admin",
+			note: "Great Day Club talk",
+			suggested: "talk_event",
+		});
+		expect(after?.acquisition.at).toBeTypeOf("number");
 	});
 
 	test("listSellersForAdmin resolves the powered-by referrer to its CURRENT slug + name (z8r3fdcwd0)", async () => {

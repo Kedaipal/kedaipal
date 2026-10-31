@@ -5,6 +5,7 @@ import {
 	PRIVACY_ANCHOR,
 	PRIVACY_VERSION,
 } from "../lib/legal";
+import { pageHead } from "../lib/not-found";
 
 const SEO_TITLE = "Privacy Policy — Kedaipal";
 const SEO_DESC =
@@ -14,22 +15,23 @@ const PAGE_URL = `${SITE_URL}/privacy`;
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
 
 export const Route = createFileRoute("/privacy")({
-	head: () => ({
-		meta: [
-			{ title: SEO_TITLE },
-			{ name: "description", content: SEO_DESC },
-			{ property: "og:type", content: "website" },
-			{ property: "og:url", content: PAGE_URL },
-			{ property: "og:title", content: SEO_TITLE },
-			{ property: "og:description", content: SEO_DESC },
-			{ property: "og:image", content: OG_IMAGE },
-			{ name: "twitter:card", content: "summary_large_image" },
-			{ name: "twitter:title", content: SEO_TITLE },
-			{ name: "twitter:description", content: SEO_DESC },
-			{ name: "twitter:image", content: OG_IMAGE },
-		],
-		links: [{ rel: "canonical", href: PAGE_URL }],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, () => ({
+			meta: [
+				{ title: SEO_TITLE },
+				{ name: "description", content: SEO_DESC },
+				{ property: "og:type", content: "website" },
+				{ property: "og:url", content: PAGE_URL },
+				{ property: "og:title", content: SEO_TITLE },
+				{ property: "og:description", content: SEO_DESC },
+				{ property: "og:image", content: OG_IMAGE },
+				{ name: "twitter:card", content: "summary_large_image" },
+				{ name: "twitter:title", content: SEO_TITLE },
+				{ name: "twitter:description", content: SEO_DESC },
+				{ name: "twitter:image", content: OG_IMAGE },
+			],
+			links: [{ rel: "canonical", href: PAGE_URL }],
+		})),
 	component: PrivacyPage,
 });
 

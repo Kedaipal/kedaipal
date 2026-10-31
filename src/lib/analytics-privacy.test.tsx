@@ -72,7 +72,9 @@ describe("PII surfaces carry the mask", () => {
 	// DeliveryAddressDisplay is shared by the seller's order detail and the
 	// buyer's tracking page, so this one assertion covers both call sites.
 	it("masks the delivery address and its notes", () => {
-		const { container } = render(<DeliveryAddressDisplay address={ADDRESS} />);
+		const { container } = render(
+			<DeliveryAddressDisplay address={ADDRESS} storeCountry="MY" />,
+		);
 
 		const masked = container.querySelector('[data-clarity-mask="true"]');
 		expect(masked).not.toBeNull();

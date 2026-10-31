@@ -1,10 +1,26 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const component = (type: string, text: string) => ({
+	types: [type],
+	longText: text,
+	shortText: text,
+});
+
+/** A complete MY pick — every field the strict schema asks for. */
+const FULL_MY_COMPONENTS = [
+	component("street_number", "12"),
+	component("route", "Jalan Ceylon"),
+	component("locality", "Kuala Lumpur"),
+	component("administrative_area_level_1", "Wilayah Persekutuan Kuala Lumpur"),
+	component("postal_code", "50200"),
+];
 
 // The autocomplete talks to Convex (Places actions) — stub it with a button
 // that fires a canned pick. The tests here are about the FIELD GROUP's pin
-// lifecycle, not Google's UI.
+// lifecycle, not Google's UI. `pick.components` is what Places "returned".
+const pick = vi.hoisted(() => ({ components: [] as unknown[] }));
 vi.mock("../forms/google-address-autocomplete", () => ({
 	GoogleAddressAutocomplete: ({
 		onSelect,
@@ -16,7 +32,7 @@ vi.mock("../forms/google-address-autocomplete", () => ({
 			onClick={() =>
 				onSelect({
 					formattedAddress: "12, Jalan Ceylon, 50200 Kuala Lumpur",
-					addressComponents: [],
+					addressComponents: pick.components,
 					latitude: 3.1456,
 					longitude: 101.7021,
 					placeId: "place-123",
@@ -32,6 +48,9 @@ import { type CheckoutAddressValues, emptyAddress } from "../../lib/schemas";
 import { useAppForm } from "../forms/form";
 import { AddressFieldset } from "./address-fieldset";
 
+beforeEach(() => {
+	pick.components = FULL_MY_COMPONENTS;
+});
 afterEach(cleanup);
 
 /** Minimal parent harness — mirrors how the checkout page mounts the group,
@@ -312,5 +331,116 @@ describe("AddressFieldset — stale-coordinate guard (defence in depth)", () => 
 		fireEvent.click(screen.getByText("mock-pick"));
 		expect(latest.latitude).toBe("3.1456");
 		expect(latest.longitude).toBe("101.7021");
+	});
+});
+
+describe("AddressFieldset — a pick missing a required field asks for it in place", () => {
+	const SG_NO_POSTCODE = [
+		component("street_number", "123"),
+		component("route", "Bedok North Avenue 3"),
+	];
+
+	it("a complete pick asks for nothing — the card stays read-only", () => {
+		render(<Harness onState={() => {}} />);
+		fireEvent.click(screen.getByText("mock-pick"));
+		expect(screen.getByText("Location confirmed")).toBeTruthy();
+		expect(screen.queryByText(/Google didn't include/)).toBeNull();
+		expect(screen.queryByLabelText(/Postcode/i)).toBeNull();
+		expect(screen.queryByLabelText(/^City/i)).toBeNull();
+		expect(screen.queryByLabelText(/^State/i)).toBeNull();
+	});
+
+	it("an SG pick with no postal code shows the postal-code input on the locked card, and keeps the pin", () => {
+		pick.components = SG_NO_POSTCODE;
+		let latest = { ...emptyAddress };
+		render(
+			<Harness
+				country="SG"
+				onState={(v) => {
+					latest = v;
+				}}
+			/>,
+		);
+		fireEvent.click(screen.getByText("mock-pick"));
+
+		expect(screen.getByText("Location confirmed")).toBeTruthy();
+		expect(screen.getByText("123 Bedok North Avenue 3")).toBeTruthy();
+		expect(
+			screen.getByText(
+				"Google didn't include the postal code for this spot — add it to finish your address.",
+			),
+		).toBeTruthy();
+		const postal = screen.getByLabelText(/Postal code/i) as HTMLInputElement;
+		expect(postal.value).toBe("");
+
+		fireEvent.change(postal, { target: { value: "460123" } });
+		expect(latest.postcode).toBe("460123");
+		// Completing the pinned place doesn't move it — the pin survives.
+		expect(latest.latitude).toBe("3.1456");
+		expect(latest.longitude).toBe("101.7021");
+		expect(latest.placeId).toBe("place-123");
+		// …and the field stays put once it reads valid, so a typo stays fixable.
+		expect(screen.getByLabelText(/Postal code/i)).toBe(postal);
+		// The summary doesn't echo what's being typed below it.
+		expect(screen.queryByText("460123 Singapore")).toBeNull();
+	});
+
+	it("a postcode Places got wrong is shown prefilled, to correct", () => {
+		pick.components = [...SG_NO_POSTCODE, component("postal_code", "4601")];
+		render(<Harness country="SG" onState={() => {}} />);
+		fireEvent.click(screen.getByText("mock-pick"));
+		expect(
+			(screen.getByLabelText(/Postal code/i) as HTMLInputElement).value,
+		).toBe("4601");
+	});
+
+	it("an MY pick with no locality and an unknown state asks for both, and only those", () => {
+		pick.components = [
+			component("route", "Jalan Ceylon"),
+			component("administrative_area_level_1", "Somewhere Else"),
+			component("postal_code", "50200"),
+		];
+		render(<Harness onState={() => {}} />);
+		fireEvent.click(screen.getByText("mock-pick"));
+
+		expect(
+			screen.getByText(
+				"Google didn't include the city and state for this spot — add them to finish your address.",
+			),
+		).toBeTruthy();
+		expect(screen.getByLabelText(/^City/i)).toBeTruthy();
+		expect(screen.getByLabelText(/^State/i)).toBeTruthy();
+		// What Google did give stays read-only — no second postcode box.
+		expect(screen.queryByLabelText(/Postcode/i)).toBeNull();
+		expect(screen.queryByLabelText(/Address line 1/i)).toBeNull();
+		expect(screen.getByText("50200")).toBeTruthy();
+	});
+
+	it("a restored pinned address missing its postcode asks for it too", () => {
+		render(
+			<Harness
+				initial={{ ...PINNED_ADDRESS, postcode: "" }}
+				onState={() => {}}
+			/>,
+		);
+		expect(screen.getByText("Location confirmed")).toBeTruthy();
+		expect(screen.getByLabelText(/Postcode/i)).toBeTruthy();
+	});
+
+	it("'Search again' then a complete pick measures its own gaps — none", () => {
+		pick.components = [
+			component("route", "Jalan Ceylon"),
+			component("locality", "Kuala Lumpur"),
+			component("administrative_area_level_1", "Selangor"),
+		];
+		render(<Harness onState={() => {}} />);
+		fireEvent.click(screen.getByText("mock-pick"));
+		expect(screen.getByLabelText(/Postcode/i)).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: /Search again/i }));
+		pick.components = FULL_MY_COMPONENTS;
+		fireEvent.click(screen.getByText("mock-pick"));
+		expect(screen.getByText("Location confirmed")).toBeTruthy();
+		expect(screen.queryByLabelText(/Postcode/i)).toBeNull();
 	});
 });
