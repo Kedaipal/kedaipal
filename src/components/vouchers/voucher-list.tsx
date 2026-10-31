@@ -127,11 +127,11 @@ export function VoucherList({
 					key={voucher.id}
 					className={
 						nested
-							? "flex flex-col gap-3 border-t border-border/70 px-4 py-3 first:border-t-0 sm:flex-row sm:items-center sm:gap-4"
-							: "flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:gap-4"
+							? `${ROW_LAYOUT} border-t border-border/70 px-4 py-3 first:border-t-0`
+							: `${ROW_LAYOUT} rounded-2xl border border-border bg-card p-4`
 					}
 				>
-					<div className="flex min-w-0 flex-1 flex-col gap-1">
+					<div className="flex min-w-0 flex-[1_1_16rem] flex-col gap-1">
 						<div className="flex min-w-0 flex-wrap items-center gap-2">
 							<code
 								className={`font-mono text-sm font-bold tracking-wider ${
@@ -179,7 +179,7 @@ export function VoucherList({
 					{(canWrite && isLive(voucher)) ||
 					(canWrite && onExtend && canExtend(voucher)) ||
 					(onShowUses && hasUses(voucher)) ? (
-						<div className="flex shrink-0 flex-wrap gap-2">
+						<div className="flex w-full flex-wrap gap-2 sm:w-auto">
 							{/* "Who used it" is a READ and stays available after the code
 							    has run out or ended — that is exactly when the seller
 							    wants to see where the money went. */}
@@ -230,6 +230,17 @@ export function VoucherList({
 		</ul>
 	);
 }
+
+/**
+ * A row is the text and its actions, side by side only while the TEXT keeps
+ * room to read. Breakpoints can't decide that: a single-use row carries two
+ * buttons and a live shared code with uses carries four, and at the same
+ * width the second squeezed its text to one word per line (`z8r3fdz0pw`
+ * hands-on test). So the row wraps on content instead — the text asks for a
+ * 16rem basis, and when the actions don't fit beside that they drop below
+ * it. On a phone the actions always take their own full-width line.
+ */
+const ROW_LAYOUT = "flex flex-wrap items-center gap-x-4 gap-y-3";
 
 /** "up to RM 20.00 off · min. spend RM 50.00 · 1 per buyer" — or nothing. */
 function FinePrint({ voucher }: { voucher: VoucherRowView }) {
@@ -293,11 +304,17 @@ function OutcomeLine({ voucher }: { voucher: VoucherRowView }): ReactNode {
  * "All 50 used" rather than "Used" — the pill already says Used, and the
  * seller wants to know it was the CAP, not the clock, that stopped it.
  */
+/** "All 50 uses taken", but "Its only use is taken" — "All 1 uses" reads
+ * as a typo on the commonest small test, a one-off code. */
+function usesTaken(total: number): string {
+	return total === 1 ? "Its only use is taken" : `All ${total} uses taken`;
+}
+
 function sharedOutcomeLine(voucher: VoucherRowView): string {
 	const uses = formatSharedUses(voucher);
 	switch (voucher.status) {
 		case "redeemed":
-			return `All ${voucher.maxRedemptions ?? voucher.redeemedCount ?? 0} uses taken${
+			return `${usesTaken(voucher.maxRedemptions ?? voucher.redeemedCount ?? 0)}${
 				voucher.endsAt
 					? ` · had until ${formatVoucherMoment(voucher.endsAt)}`
 					: ""

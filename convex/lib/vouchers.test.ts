@@ -31,6 +31,8 @@ import {
 	voucherRefusalErrorData,
 	voucherRefusalMessage,
 	voucherValueError,
+	SHARED_NEEDS_A_BOUND,
+	whatStoppedShared,
 } from "./vouchers";
 
 const sen = (n: number) => `RM${(n / 100).toFixed(2)}`;
@@ -379,7 +381,7 @@ describe("shared codes — the bounds", () => {
 	const now = Date.parse("2026-10-30T10:00:00+08:00");
 
 	test("at least one bound is required", () => {
-		expect(sharedLimitsError({}, now)).toMatch(/how many|when it ends/i);
+		expect(sharedLimitsError({}, now)).toBe(SHARED_NEEDS_A_BOUND);
 		expect(sharedLimitsError({ maxRedemptions: 50 }, now)).toBeNull();
 		expect(sharedLimitsError({ endsAt: now + 1 }, now)).toBeNull();
 		expect(sharedLimitsError({ maxRedemptions: 50, endsAt: now + 1 }, now)).toBeNull();
@@ -651,5 +653,34 @@ describe("the fine print", () => {
 			message: "This WhatsApp number has already used this code — it's 1 per buyer.",
 			detail: { perBuyerLimit: 1 },
 		});
+	});
+});
+
+describe("whatStoppedShared (z8r3fdz0pw)", () => {
+	const now = 1_000_000;
+	test("names both bounds when both stopped it — the status only names the cap", () => {
+		expect(
+			whatStoppedShared({ maxRedemptions: 1, redeemedCount: 1, endsAt: now - 1 }, now),
+		).toEqual({ ranOut: true, ended: true });
+	});
+	test("a code with uses left and its end ahead was stopped by neither", () => {
+		expect(
+			whatStoppedShared({ maxRedemptions: 5, redeemedCount: 1, endsAt: now + 1 }, now),
+		).toEqual({ ranOut: false, ended: false });
+	});
+	test("no cap can't run out; no end can't end", () => {
+		expect(whatStoppedShared({ redeemedCount: 9 }, now)).toEqual({
+			ranOut: false,
+			ended: false,
+		});
+	});
+});
+
+describe("SHARED_NEEDS_A_BOUND", () => {
+	test("is the one sentence create and extend both refuse with", () => {
+		expect(sharedLimitsError({}, 0)).toBe(SHARED_NEEDS_A_BOUND);
+		expect(sharedExtendError({ maxRedemptions: 5 }, {}, 0)).toBe(
+			SHARED_NEEDS_A_BOUND,
+		);
 	});
 });

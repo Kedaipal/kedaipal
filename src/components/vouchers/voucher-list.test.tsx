@@ -187,6 +187,20 @@ describe("a shared code", () => {
 		expect(screen.getByText("12 of 50 used · no end time")).toBeTruthy();
 	});
 
+	it("a one-use code that is spent reads as a sentence, not 'All 1 uses'", () => {
+		renderList([
+			{
+				...shared,
+				status: "redeemed",
+				maxRedemptions: 1,
+				redeemedCount: 1,
+				endsAt: undefined,
+			},
+		]);
+		expect(screen.getByText("Its only use is taken")).toBeTruthy();
+		expect(screen.queryByText(/All 1 uses/)).toBeNull();
+	});
+
 	it("a full code says the CAP stopped it, not the clock", () => {
 		renderList([{ ...shared, status: "redeemed", redeemedCount: 50 }]);
 		// "Had until", not "was running until": the cap filled while the end

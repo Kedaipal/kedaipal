@@ -19,6 +19,7 @@ import {
 	SHARED_USES_MAX,
 	sharedExtendError,
 	type VoucherStatus,
+	whatStoppedShared,
 } from "../../../convex/lib/vouchers";
 import { Button } from "../ui/button";
 import { DatePicker } from "../ui/date-picker";
@@ -163,7 +164,7 @@ function ExtendForm({
 				</DialogTitle>
 				<DialogDescription>
 					{reviving
-						? `It ${voucher.status === "redeemed" ? "ran out" : "ended"} with ${formatSharedUses(voucher)}. Give it more uses or a later end and buyers can use it again.`
+						? revivalSentence(voucher, Date.now())
 						: `${formatSharedUses(voucher)} so far.`}{" "}
 					You can give it more room, never less. Its discount and who qualifies
 					stay as they are, because buyers have already been told.
@@ -238,7 +239,10 @@ function ExtendForm({
 							? "With no end time, it runs until every use is taken."
 							: endOn
 								? "With no total, any number of orders can use it until it ends."
-								: "Keep at least one — a shared code can't run forever."}
+								: // Both off: the blocked line right below says it
+									// (`SHARED_NEEDS_A_BOUND`) — a second wording here
+									// would be the same rule twice.
+									null}
 				</FieldDescription>
 			</Field>
 
@@ -270,4 +274,28 @@ function ExtendForm({
 			</DialogFooter>
 		</DialogContent>
 	);
+}
+
+/**
+ * What a dead shared code needs to come back, naming the bound(s) that
+ * stopped it (`whatStoppedShared`). It never offers a move that can't revive
+ * the code: a later end does nothing for a code that ran out, which is the
+ * rule `sharedExtendError` enforces (PR #440 review) — so the description
+ * and the refusal under it can't disagree.
+ */
+export function revivalSentence(
+	voucher: {
+		maxRedemptions?: number;
+		redeemedCount?: number;
+		endsAt?: number;
+	},
+	now: number,
+): string {
+	const { ranOut, ended } = whatStoppedShared(voucher, now);
+	const uses = formatSharedUses(voucher);
+	if (ranOut && ended)
+		return `It ran out with ${uses}, and its end time has passed. Raise the total and move the end later to bring it back.`;
+	if (ended && voucher.endsAt !== undefined)
+		return `It ended ${formatVoucherMoment(voucher.endsAt)} with ${uses}. Move the end later to bring it back.`;
+	return `It ran out with ${uses}. Raise the total to bring it back.`;
 }
