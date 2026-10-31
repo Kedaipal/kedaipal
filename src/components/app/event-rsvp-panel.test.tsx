@@ -2,6 +2,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HOLDING_LEAVES } from "../../../convex/lib/orderBuckets";
 import { type EventHeadcount, EventRsvpPanel } from "./event-rsvp-panel";
 
 vi.mock("@tanstack/react-router", () => ({
@@ -86,6 +87,10 @@ describe("EventRsvpPanel — the way into these RSVPs' orders", () => {
 			listing: "p_bfast",
 			ffrom: BASE.date,
 			fto: BASE.date,
+			// `taken` is counted with holdsSeats, so a cancelled RSVP must not
+			// appear behind "Open these RSVPs".
+			st: HOLDING_LEAVES,
 		});
+		expect(HOLDING_LEAVES).not.toContain("cancelled");
 	});
 });

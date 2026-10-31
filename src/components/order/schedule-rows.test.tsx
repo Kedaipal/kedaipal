@@ -2,6 +2,7 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HOLDING_LEAVES } from "../../../convex/lib/orderBuckets";
 import type { ScheduleRow } from "../../../convex/lib/scheduleRows";
 import {
 	dayHeading,
@@ -182,6 +183,12 @@ describe("ScheduleRows", () => {
 		expect(q.get("listing")).toBe("p_lunch");
 		expect(q.get("ffrom")).toBe(String(TODAY + 3 * DAY));
 		expect(q.get("fto")).toBe(String(TODAY + 3 * DAY));
+		// The count excludes cancelled, so the door does too — without this the
+		// inbox listed a cancelled order beside "Open 2 orders" (Zaki, 31 Oct).
+		// (The stub above joins an array with commas; the real router writes
+		// JSON. Either way the inbox reads it back through `toList`.)
+		expect(q.get("st")?.split(",")).toEqual(HOLDING_LEAVES);
+		expect(HOLDING_LEAVES).not.toContain("cancelled");
 	});
 
 	it("an event offers its headcount; a booking doesn't have one", () => {

@@ -95,9 +95,18 @@ cap, not a second copy of the count: an earlier "46/50 seats" beside
 ## Where a row goes
 
 - **Open N orders**: the inbox narrowed to exactly this row's orders, i.e.
-  `?listing=<productId>&ffrom=<date>&fto=<date>`. `N` is `row.orders`: the
-  orders the inbox *will* list (not seats, and not waiting-on-credits orders),
-  so the button is a promise the next screen keeps. A row with nobody behind it
+  `?listing=<productId>&ffrom=<date>&fto=<date>&st=<HOLDING_LEAVES>`. `N` is
+  `row.orders`: the orders the inbox *will* list (not seats, and not
+  waiting-on-credits orders), so the button is a promise the next screen keeps.
+  **The status scope is part of that promise** (31 Oct 2026): the row counts
+  with `holdsSeats`, so the door carries every leaf but `cancelled`
+  (`HOLDING_LEAVES`, `convex/lib/orderBuckets.ts`) — before it did, "Open 2
+  orders" opened an inbox of three, the third cancelled, and a seller who
+  missed the red badge read a discrepancy. The chip row then shows New,
+  In progress and Completed lit and Cancelled dark, which is the honest
+  picture of what the number excluded. One helper, `listingOrdersSearch`
+  (`src/lib/listing-orders-link.ts`), writes this for the Schedule row AND the
+  event RSVP panel's "Open these RSVPs", which counts the same way. A row with nobody behind it
   says "No one registered yet" / "No bookings yet" / "Nothing to open yet"
   instead of offering a dead "Open 0 orders".
 - **Headcount** (events only): the listing's own RSVP panel at

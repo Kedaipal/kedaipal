@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { CalendarClock, Inbox, Users } from "lucide-react";
 import type { QuestionTally } from "../../../convex/lib/eventSeats";
 import { formatEventMoment } from "../../../convex/lib/productEvent";
+import { listingOrdersSearch } from "../../lib/listing-orders-link";
 
 export type EventHeadcount = {
 	date: number;
@@ -158,12 +159,11 @@ export function EventRsvpPanel({
 						// the product's name, which also caught any listing whose name
 						// contains it ("Luncheon VIP") and missed RSVPs frozen under a
 						// name the event has since been renamed from. (`from`/`to`
-						// would be wrong: they bind to when the order was PLACED.)
-						search={{
-							listing: productId,
-							ffrom: headcount.date,
-							fto: headcount.date,
-						}}
+						// would be wrong: they bind to when the order was PLACED.) The
+						// helper also carries the seat-holding statuses, so the inbox
+						// shows the orders `taken` was counted from and not a cancelled
+						// RSVP beside them.
+						search={listingOrdersSearch(productId, headcount.date)}
 						className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-border px-3 text-sm font-medium transition-colors hover:bg-muted"
 					>
 						<Inbox className="size-4" aria-hidden />

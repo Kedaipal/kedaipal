@@ -14,6 +14,7 @@ import {
 	formatFulfilmentTime,
 } from "../../../convex/lib/fulfilmentDate";
 import type { ScheduleRow } from "../../../convex/lib/scheduleRows";
+import { listingOrdersSearch } from "../../lib/listing-orders-link";
 import { TONE_CHIP } from "../../lib/tone";
 import { cn } from "../../lib/utils";
 
@@ -158,7 +159,9 @@ export function scheduleNotes(row: ScheduleRow): string[] {
 function ordersLinkProps(row: ScheduleRow) {
 	return {
 		to: "/app/orders" as const,
-		search: { listing: row.productId, ffrom: row.date, fto: row.date },
+		// Listing + day + the statuses the count was made of — `row.orders`
+		// excludes cancelled, so the door must too.
+		search: listingOrdersSearch(row.productId, row.date),
 	};
 }
 
