@@ -183,16 +183,12 @@ export const RELEASES: Release[] = [
 	{
 		version: "2026.10.7",
 		date: "2026-10-31",
-		// Not notable — put to the owner, as every release is. The three big
-		// doors (EasyParcel, delivery abroad, shared codes) are all opt-in, so
-		// a seller who reads nothing keeps working exactly as before. What
-		// MOVED is small and self-announcing: Refer & earn's card became a
-		// button at the top of Home, the avatar menu is ours now with the same
-		// rows in it, and the store-type picker left Settings → Store (nothing
-		// read it). No number a seller relies on changes unless a store was
-		// being billed in the wrong currency, which the release PR checks by
-		// hand. A dot reaches them. v2026.09.4 was authored false and flipped.
-		notable: false,
+		// Notable (Zaki, 31 Oct 2026): twelve entries carrying three whole new
+		// ways of selling — parcel couriers, delivery abroad, a code the whole
+		// crowd can type — plus a Schedule view and courier balances a seller
+		// would otherwise never find. A dot would reach them; the modal is what
+		// gets them opened.
+		notable: true,
 		entries: [
 			{
 				kind: "feature",
