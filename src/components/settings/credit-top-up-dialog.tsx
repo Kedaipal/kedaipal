@@ -22,6 +22,8 @@ import {
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { USAGE_PACE_DAYS } from "../../../convex/lib/credits";
+import { todayMytMidnight } from "../../../convex/lib/fulfilmentDate";
 import { useStoreRole } from "../../hooks/usePermission";
 import { useResetOnBfcache } from "../../hooks/useResetOnBfcache";
 import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
@@ -30,6 +32,7 @@ import {
 	afterTopUpLine,
 	opensLine,
 	packOffers,
+	recommendedPack,
 	wholePrice,
 } from "../../lib/credit-packs";
 import type { TopUpParam } from "../../lib/credit-top-up";
@@ -196,6 +199,14 @@ function PickerView({
 }) {
 	const createTopUp = useAction(api.creditPurchases.createTopUp);
 	const supportWa = useSupportWaNumber();
+	// This week's pace — the same read the credit meter uses — so the picker
+	// can say which pack reaches the reset (z8r3fdx34j).
+	const pace = useQuery(
+		convexQuery(api.credits.getUsagePace, {
+			retailerId,
+			since: todayMytMidnight() - USAGE_PACE_DAYS * 24 * 60 * 60 * 1000,
+		}),
+	).data;
 	const [picked, setPicked] = useState<string | null>(null);
 	const [phase, setPhase] = useState<"idle" | "opening">("idle");
 	// Back from HitPay by the Back button restores this page with `opening`
@@ -269,8 +280,21 @@ function PickerView({
 
 	// Derived, not stored: the default is the first (smallest) pack, and a
 	// pick the options no longer carry can never be what Buy sends.
+	// The pack that reaches the next reset at this week's pace, if one does —
+	// badged "Enough to <date>" and picked by default (a seller who taps Buy
+	// straight away gets the pack that lasts, not merely the smallest).
+	const recommendation = recommendedPack(options.packs, {
+		total: balance.total,
+		perDay: pace?.perDay ?? 0,
+		refreshesAt: balance.refreshesAt,
+		now: Date.now(),
+	});
+	const resetDate =
+		balance.refreshesAt !== null ? formatShortDate(balance.refreshesAt) : null;
 	const pack: Pack | undefined =
-		options.packs.find((p) => p.id === picked) ?? options.packs[0];
+		options.packs.find((p) => p.id === picked) ??
+		recommendation?.pack ??
+		options.packs[0];
 	const offers = packOffers(options.packs);
 	const canBuy =
 		options.available &&
@@ -356,6 +380,16 @@ function PickerView({
 			{/* The packs read like the /pricing cards — credits as the headline,
 			    then the price, what a credit costs in each, and exactly what the
 			    bigger pack saves. Native radios: arrow keys move the choice. */}
+			{recommendation && resetDate && canBuy ? (
+				<p className="text-xs leading-relaxed text-muted-foreground">
+					At this week&apos;s pace you&apos;ll need about{" "}
+					<span className="font-semibold text-foreground tabular-nums">
+						{recommendation.needed} more{" "}
+						{recommendation.needed === 1 ? "order" : "orders"}
+					</span>{" "}
+					before your monthly credits reset on {resetDate}.
+				</p>
+			) : null}
 			<fieldset className="min-w-0">
 				<legend className="sr-only">Choose a credit pack</legend>
 				<div className="grid grid-cols-2 gap-3 pt-2.5">
@@ -372,6 +406,9 @@ function PickerView({
 								? `save ${wholePrice(p.saving.minor, p.currency)}`
 								: null,
 							p.bestValue ? "best value" : null,
+							recommendation?.pack.id === p.id && resetDate
+								? `enough to ${resetDate} at this week's pace`
+								: null,
 							"lasts 12 months",
 						]
 							.filter(Boolean)
@@ -430,6 +467,14 @@ function PickerView({
 								{p.bestValue ? (
 									<span className="absolute -top-2.5 left-1/2 -translate-x-1/2 rotate-2 whitespace-nowrap rounded-md bg-accent px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent-foreground shadow-sm">
 										Best value
+									</span>
+								) : null}
+								{recommendation?.pack.id === p.id && resetDate ? (
+									<span
+										data-testid="pack-enough-to"
+										className="mt-2 w-fit rounded-full bg-segment px-2 py-0.5 text-[11px] font-semibold text-segment-foreground"
+									>
+										Enough to {resetDate}
 									</span>
 								) : null}
 								<span

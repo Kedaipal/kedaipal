@@ -545,6 +545,38 @@ account → credit → cold-chain activation → API key → paste → one real 
 linked from the settings card, the `hitpay-setup.html` / `lalamove-setup.html`
 precedent.
 
+### Wallet, margin and the couriers-on footer (z8r3fdx34j)
+
+Delyva's **customer profile carries the wallet balance** (found 31 Oct
+2026): `GET /customer/{customerId}` with the seller's own key returns
+`walletBalance` (`parseDelyvaWalletBalance`). It's read on connect, from the
+Refresh icon (`delyva.refreshBalance`), alongside every dispatch quote, and by
+the top-up sheet's re-check, and recorded as a PULL observation. An
+insufficient-credit refusal (`"Bal: 0, Price: 5.00"`, `parseDelyvaRefusal`)
+still records its number too. Top up goes to `my.delyva.app/customer/topup`.
+See [`courier-wallets.md`](./courier-wallets.md).
+
+On the dispatch card:
+
+- **The wallet line** above Book. A balance read with the quote that can't
+  pay **disables Book** with the line as its reason (like EasyParcel); a
+  last-seen (refusal) balance only warns — Delyva has the final say.
+- **Margin per courier**: beside every price, what it leaves of the delivery
+  fee the buyer paid ("+RM 0.80 kept" / "RM 3.40 from your margin",
+  `courierMargin`). The buyer never chose this courier, so its price is the
+  seller's margin. Hidden when the account quotes in another currency.
+- **"Only couriers switched on in your Delyva account show here (N on)"**,
+  with a link to Delyva. A fresh DelyvaNow account has none on, and the
+  count rides alongside every quote (`GET /service` in parallel, never able
+  to fail the quote).
+- **Indicative price**: "the final one is set when the booking goes through".
+- **Weights**: the typed-weight helper links to Products, so setting the
+  weights once fills every later booking in.
+
+**Not built:** grouping instant riders (Grab Express, pandago) apart from
+parcel couriers. It needs a service-code mapping verified on a real account
+with those couriers on; until then it is one list, cheapest first.
+
 ## Testing
 
 - `convex/lib/delyva.test.ts` — pure client mechanics; fixtures are payloads

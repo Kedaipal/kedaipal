@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./sidebar";
@@ -71,6 +71,38 @@ vi.mock("./whats-new", () => ({
 		<button type="button" data-variant={variant}>
 			What's new
 		</button>
+	),
+}));
+// The profile menu reads credits + Clerk; here only its TRIGGER matters (the
+// sidebar's job is the row), so the menu renders its trigger and the stub is
+// whatever the test sets. The ticket draws itself (credit-ticket.test.tsx);
+// here it only has to land in the right place.
+const profile = vi.hoisted(() => ({
+	stub: null as undefined | null | { ticket: { figure: string } | null },
+}));
+vi.mock("./profile-menu", () => ({
+	useCreditStub: () => profile.stub,
+	ProfileMenu: ({ trigger }: { trigger: ReactNode }) => trigger,
+	ProfileAvatar: () => <span data-slot="avatar" />,
+}));
+vi.mock("./credit-ticket", () => ({
+	CreditTicket: ({
+		stub,
+		variant,
+		plan,
+	}: {
+		stub: { ticket: unknown };
+		variant: string;
+		plan?: ReactNode;
+	}) =>
+		stub.ticket ? (
+			<div data-ticket={variant}>
+				{plan}
+				<a href="/billing">ticket</a>
+			</div>
+		) : null,
+	CreditTicketPlaceholder: ({ plan }: { plan: ReactNode }) => (
+		<div data-ticket="placeholder">{plan}</div>
 	),
 }));
 vi.mock("./app-version-row", () => ({
@@ -279,9 +311,9 @@ describe("a short window scrolls the link list; the chrome never squashes", () =
 			).filter((b) => !b.closest("[inert]"));
 		expect(open.container.textContent).not.toMatch(/Dark mode|Light mode/);
 		expect(live()).toHaveLength(1);
-		// Expanded: it lives in the profile row, after the user button.
+		// Expanded: it lives in the profile row, after the profile trigger.
 		const profileRow = open.container
-			.querySelector('[data-slot="user-button"]')
+			.querySelector('[data-testid="profile-trigger"]')
 			?.closest("div.flex");
 		expect(profileRow?.contains(live()[0])).toBe(true);
 		cleanup();
@@ -297,7 +329,7 @@ describe("a short window scrolls the link list; the chrome never squashes", () =
 		).filter((b) => !b.closest("[inert]"));
 		expect(railLive).toHaveLength(1);
 		const railProfile = rail.container
-			.querySelector('[data-slot="user-button"]')
+			.querySelector('[data-testid="profile-trigger"]')
 			?.closest("div.flex");
 		// Collapsed: the live one is the row above the avatar, not the profile one.
 		expect(railProfile?.contains(railLive[0])).toBe(false);
@@ -380,5 +412,80 @@ describe("Admin group — the Blog videos shortcut (admin areas, z8r3fdwwpe)", (
 			"Blog videos — Opens admin.kedaipal.com",
 		);
 		expect(link?.querySelector('[aria-hidden="true"]')).not.toBeNull();
+	});
+});
+
+describe("the credits ticket rides the top of the rail (z8r3fdx34j)", () => {
+	afterEach(() => {
+		profile.stub = null;
+	});
+	const ticketBox = (container: HTMLElement, variant: string) =>
+		container.querySelector(`[data-ticket="${variant}"]`)?.parentElement;
+
+	it("expanded: the ticket sits under the plan pill, and the profile row is just the person", () => {
+		collapsed = false;
+		profile.stub = { ticket: { figure: "254" } };
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		const band = ticketBox(container, "rail");
+		expect(band?.hasAttribute("inert")).toBe(false);
+		// The plan pill rides the ticket's top tear — one object, not two rows.
+		expect(
+			container.querySelector('[data-ticket="rail"]')?.textContent,
+		).toContain("Pro");
+		// The collapsed copy is out of the focus order while the rail is wide.
+		expect(ticketBox(container, "collapsed")?.hasAttribute("inert")).toBe(true);
+		// Said once per rail: the foot row is name + email, never the balance.
+		expect(container.textContent).toContain("zaki@example.com");
+		expect(
+			screen.getByTestId("profile-trigger").getAttribute("aria-label"),
+		).toBe("Account menu");
+	});
+
+	it("collapsed: the pill goes, the ticket stays — as its figure", () => {
+		collapsed = true;
+		profile.stub = { ticket: { figure: "3" } };
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(ticketBox(container, "collapsed")?.hasAttribute("inert")).toBe(
+			false,
+		);
+		expect(ticketBox(container, "rail")?.hasAttribute("inert")).toBe(true);
+	});
+
+	it("while the balance loads, the ticket's frame holds the pill on its tear — nothing jumps", () => {
+		collapsed = false;
+		profile.stub = undefined;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(
+			container.querySelector('[data-ticket="placeholder"]')?.textContent,
+		).toContain("Pro");
+	});
+
+	it("without a ticket the plan pill keeps its own row", () => {
+		collapsed = false;
+		profile.stub = null;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(container.querySelector("[data-ticket]")).toBeNull();
+		expect(container.textContent).toContain("Pro");
+	});
+
+	it("no ticket for a reader without the credits grant, or an unmetered store", () => {
+		collapsed = true;
+		profile.stub = null;
+		const first = render(<Sidebar retailer={STORE} newOrdersCount={0} />);
+		expect(first.container.querySelector("[data-ticket]")).toBeNull();
+		first.unmount();
+		profile.stub = { ticket: null };
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(container.querySelector("[data-ticket]")).toBeNull();
 	});
 });

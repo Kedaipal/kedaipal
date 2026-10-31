@@ -1,7 +1,33 @@
 /**
- * Courier wallet helpers (86eye9xd4, 6A) — pure, shared by the settings save,
- * the webhook route and the backfill. See `courierWallets` in schema.ts.
+ * Courier wallets — the pure half (86eye9xd4 6A, then z8r3fdrgxc +
+ * z8r3fdx34j). Every courier Kedaipal books through is BYO and PREPAID: the
+ * seller's own wallet at the provider pays each booking, and Kedaipal never
+ * holds or tops up that money. This module owns what a wallet balance MEANS —
+ * its state, whether it can cover a booking, where the seller tops it up —
+ * so every surface (dispatch cards, Settings → Integrations, Home, the
+ * Deliveries page, the low-balance email) reads one answer.
+ *
+ * The seam: each provider reports its balance a different way, and the
+ * `model` in WALLET_PROVIDERS names which —
+ *  - `push`    Lalamove: a WALLET_BALANCE_CHANGED webhook on every top-up and
+ *              deduction; there is no endpoint to ask.
+ *  - `pull`    EasyParcel: GET /wallet, any time. Delyva too, since 31 Oct
+ *              2026: its customer profile (`GET /customer/{id}`, the seller's
+ *              own key) carries `walletBalance`. Its insufficient-credit
+ *              refusal ("Bal: 0, Price: 5.00") still records what it shows.
+ *  - `refusal` A provider whose balance appears ONLY in a refusal. None
+ *              today; kept so one that hides its balance still reads "Not
+ *              shared" honestly rather than "Not reported yet".
+ * All three land in `courierWallets` through one writer
+ * (`courierWallets.recordObservation`), so a new provider plugs in by adding
+ * a row here and calling that writer — no surface changes.
+ *
+ * Naming rule: always "<Provider> wallet" / "Courier wallets". Never
+ * "credits" — Kedaipal Credits own that word.
  */
+
+import type { Country } from "./country";
+import type { CourierProviderId } from "./courierProviders";
 
 /** SHA-256 hex of a PLAINTEXT API key. Lalamove sends its key in the clear in
  * every webhook body, so this is an index, not a secret — the store's own API
@@ -43,12 +69,357 @@ export function parseWalletBalance(
 }
 
 /**
- * Below this, the dashboard warns BEFORE a booking fails on an empty wallet:
- * 20.00 in the wallet's currency — about two rider trips in Klang Valley or
- * Singapore.
+ * Delyva's insufficient-credit refusal also names its balance (the profile
+ * read, `parseDelyvaWalletBalance` in lib/delyva.ts, is the main source):
+ * `"Payment failed, You don't have enough credit balance. Bal: 0, Price: 5.00"`.
+ * Both numbers are major units; anything that doesn't carry BOTH reads as null
+ * (a refusal with no number still records that the wallet came up short).
  */
-export const LOW_WALLET_MINOR = 2000;
-
-export function walletIsLow(balance: number | undefined): boolean {
-	return balance !== undefined && balance < LOW_WALLET_MINOR;
+export function parseDelyvaRefusal(
+	message: string | undefined,
+): { balanceMinor: number; priceMinor: number } | null {
+	if (!message) return null;
+	const match = /Bal:\s*(-?[\d,]+(?:\.\d+)?)\s*,\s*Price:\s*([\d,]+(?:\.\d+)?)/i.exec(
+		message,
+	);
+	if (!match) return null;
+	const balance = Number(match[1].replaceAll(",", ""));
+	const price = Number(match[2].replaceAll(",", ""));
+	if (!Number.isFinite(balance) || !Number.isFinite(price)) return null;
+	return {
+		balanceMinor: Math.round(balance * 100),
+		priceMinor: Math.round(price * 100),
+	};
 }
+
+/**
+ * The default "low alert" line per wallet currency (z8r3fdrgxc decision 1):
+ * RM 30 / S$ 15 — about three rider trips. The seller changes it per provider
+ * on the Courier wallets section ("Low alert at RM 30"); `lowAlertMinor` on
+ * the row overrides this.
+ */
+export const DEFAULT_LOW_ALERT_MINOR: Record<string, number> = {
+	MYR: 3000,
+	SGD: 1500,
+};
+
+export function defaultLowAlertMinor(currency: string): number {
+	return DEFAULT_LOW_ALERT_MINOR[currency.toUpperCase()] ?? 3000;
+}
+
+/** Bounds on a seller-set low alert: zero switches the alert off in all but
+ * name, so the floor is one unit; the ceiling keeps a typo from turning every
+ * healthy wallet amber. */
+export const LOW_ALERT_MIN_MINOR = 100;
+export const LOW_ALERT_MAX_MINOR = 100_000;
+
+/** A balance older than this reads as STALE (greyed, "updated 2 days ago"):
+ * bookings made outside Kedaipal spend the same wallet. */
+export const STALE_WALLET_MS = 24 * 60 * 60 * 1000;
+
+/** "RM 12.40" / "S$ 12.40" — server-side copy (emails); the dashboard uses
+ * `formatPrice`, which renders the same symbols. */
+export function walletMoney(minor: number, currency: string): string {
+	const symbol =
+		currency === "MYR" ? "RM" : currency === "SGD" ? "S$" : currency;
+	return `${symbol} ${(minor / 100).toFixed(2)}`;
+}
+
+/** A pulled balance this recent is trusted enough to REFUSE a booking on;
+ * anything older (or pushed, or seen in a refusal) only warns — the provider
+ * is the final judge of what its wallet can pay. */
+export const FRESH_WALLET_MS = 5 * 60 * 1000;
+
+export type WalletModel = "push" | "pull" | "refusal";
+export type WalletSource = "webhook" | "pull" | "refusal";
+
+type CountryUrls = Record<Country, string | null>;
+
+export type WalletProvider = {
+	name: string;
+	model: WalletModel;
+	/** Where the seller tops up: the provider's own web app. */
+	appUrl: CountryUrls;
+	/** The provider's own top-up guide, when it publishes one. */
+	guideUrl: CountryUrls;
+	/** The provider's own auto top-up setting, when it has one — the way
+	 * a wallet never runs dry at all. */
+	autoTopUpUrl: CountryUrls;
+};
+
+/**
+ * One row per provider. None of the three publishes a top-up API or a deep
+ * top-up URL (checked 29 Oct 2026), so the hand-off is the provider's web app
+ * plus its own help article — never a page Kedaipal pretends to own. A
+ * `Record` so a new provider id can't compile without its row.
+ */
+export const WALLET_PROVIDERS: Record<CourierProviderId, WalletProvider> = {
+	lalamove: {
+		name: "Lalamove",
+		model: "push",
+		// API bookings are paid from the PARTNER PORTAL wallet — the account the
+		// API keys come from — not the Lalamove app's or web's wallet (checked on
+		// Zaki's own portal 31 Oct 2026: its Wallet page lists the API orders'
+		// debits and has the Top Up button). One portal serves both countries;
+		// its city picker and Sandbox/Production switch sit inside it. The
+		// Lalamove blog guides were for the consumer app's wallet, so none.
+		appUrl: {
+			MY: "https://partnerportal.lalamove.com/wallet",
+			SG: "https://partnerportal.lalamove.com/wallet",
+		},
+		guideUrl: { MY: null, SG: null },
+		autoTopUpUrl: { MY: null, SG: null },
+	},
+	delyva: {
+		name: "Delyva",
+		model: "pull",
+		// Straight to the Top-up page: signed out, it lands there after the
+		// login (`returnUrl=/topup`, checked 31 Oct 2026 on the DelyvaNow and
+		// try-express tenants).
+		appUrl: { MY: "https://my.delyva.app/customer/topup", SG: null },
+		guideUrl: { MY: null, SG: null },
+		autoTopUpUrl: { MY: null, SG: null },
+	},
+	easyparcel: {
+		name: "EasyParcel",
+		model: "pull",
+		// The bare app root redirects to the MALAYSIAN site whatever the
+		// account (test-code, 30 Oct 2026) — each country names its own.
+		appUrl: {
+			MY: "https://app.easyparcel.com/my/en/",
+			SG: "https://app.easyparcel.com/sg/en/",
+		},
+		guideUrl: {
+			MY: null,
+			SG: "https://helpcentre-sg.easyparcel.com/support/solutions/articles/9000224683-how-to-add-or-top-up-credit-to-my-account-on-easyparcel-",
+		},
+		// Card auto top-up on EasyParcel's side (Arif, 24 Oct). Both land on
+		// the account's own Auto Topup page (checked 31 Oct 2026).
+		autoTopUpUrl: {
+			MY: "https://app.easyparcel.com/my/en/account/auto-topup/",
+			SG: "https://app.easyparcel.com/sg/en/account/auto-topup/",
+		},
+	},
+};
+
+/**
+ * What a wallet's latest observation says, before test-ness is applied:
+ *  - `ok` / `low` / `empty` — a balance is known (≤ 0 is empty).
+ *  - `short`      — the provider refused a booking for lack of funds AFTER the
+ *                   last balance it reported, and the refusal named no amount
+ *                   (Lalamove). Never rendered as RM 0: we know it's short, not
+ *                   by how much.
+ *  - `unreported` — nothing seen yet (Lalamove sends nothing until money
+ *                   moves; EasyParcel before its first read).
+ *  - `unshared`   — a refusal-model provider with nothing seen yet: one that
+ *                   doesn't share its balance, which is a different sentence
+ *                   from "not yet". No provider is refusal-only today.
+ */
+export type WalletState =
+	| "ok"
+	| "low"
+	| "empty"
+	| "short"
+	| "unreported"
+	| "unshared";
+
+/** The stored observation, as `courierWallets` holds it. */
+export type WalletObservation = {
+	balance?: number;
+	currency?: string;
+	balanceAt?: number;
+	refusedAt?: number;
+	lowAlertMinor?: number;
+};
+
+export function walletState(
+	provider: CourierProviderId,
+	obs: WalletObservation | null,
+): WalletState {
+	const refusedLater =
+		obs?.refusedAt !== undefined &&
+		(obs.balanceAt === undefined || obs.refusedAt > obs.balanceAt);
+	if (refusedLater) return "short";
+	if (obs?.balance === undefined)
+		return WALLET_PROVIDERS[provider].model === "refusal"
+			? "unshared"
+			: "unreported";
+	if (obs.balance <= 0) return "empty";
+	const line =
+		obs.lowAlertMinor ?? defaultLowAlertMinor(obs.currency ?? "MYR");
+	if (obs.balance < line) return "low";
+	return "ok";
+}
+
+/** States that need the seller to top up — what Home, the Deliveries banner
+ * and the email react to. */
+export function walletNeedsTopUp(state: WalletState): boolean {
+	return state === "low" || state === "empty" || state === "short";
+}
+
+/**
+ * The read model every surface renders. `isTest` = the connected key belongs
+ * to the provider's sandbox/demo (play money: never a top-up prompt);
+ * `null` = not known yet, rendered as unknown — never as live.
+ */
+export type CourierWalletView = {
+	provider: CourierProviderId;
+	/** Booking is switched on and allowed in the store's country. */
+	armed: boolean;
+	isTest: boolean | null;
+	state: WalletState;
+	/** Minor units in `currency`, or null when no amount is known. */
+	balanceMinor: number | null;
+	/** The PROVIDER's currency (an SG account answers in SGD). */
+	currency: string;
+	/** When the provider reported `balanceMinor`. */
+	at: number | null;
+	/** Below this the wallet reads `low` — the seller's own line, or the
+	 * currency default. */
+	lowAlertMinor: number;
+	/** The seller set `lowAlertMinor` (vs the default). */
+	lowAlertCustom: boolean;
+	source: WalletSource | null;
+	/** The latest insufficient-funds refusal, if it is newer than the balance. */
+	refusedAt: number | null;
+	refusedPriceMinor: number | null;
+};
+
+/**
+ * Can this wallet pay for a booking of `priceMinor`? The ticket's rule:
+ * BLOCK only on a fresh PULLED balance that can't cover it (EasyParcel read
+ * moments ago); everything else that looks short only WARNS, because a push or
+ * refusal number may be stale and the provider is the final judge.
+ *  - `covers`  — the known balance pays for it.
+ *  - `warn`    — probably can't; book stays enabled, with the reason beside it.
+ *  - `block`   — can't, on a balance we just read; Book disables with the reason.
+ *  - `unknown` — nothing to judge on, or a balance in another currency
+ *                than the price (the Delyva demo quotes in HKD): comparing
+ *                RM against HK$ would invent a shortfall, so it says nothing
+ *                (test-code, 31 Oct 2026).
+ *
+ * A TEST wallet is judged the same way: a sandbox refuses a booking its play
+ * money can't pay just as a live account does, so a fresh short read must
+ * still disable Book (test-code, 30 Oct 2026 — waving it through put the
+ * seller one tap from a refusal). Test-ness changes the words, never the
+ * verdict (`dispatchWalletLine`).
+ */
+export type WalletVerdict = "covers" | "warn" | "block" | "unknown";
+
+export function walletVerdict(
+	view: Pick<
+		CourierWalletView,
+		"state" | "balanceMinor" | "at" | "source" | "currency"
+	>,
+	priceMinor: number,
+	now: number,
+	priceCurrency: string,
+): WalletVerdict {
+	// A refusal is the provider's own verdict — no number, no currency to mix.
+	if (view.state === "short") return "warn";
+	if (view.balanceMinor === null) return "unknown";
+	if (priceCurrency !== view.currency) return "unknown";
+	if (view.balanceMinor >= priceMinor) return "covers";
+	const fresh =
+		view.source === "pull" &&
+		view.at !== null &&
+		now - view.at <= FRESH_WALLET_MS;
+	return fresh ? "block" : "warn";
+}
+
+/** A balance a provider's own CONNECTION row holds (EasyParcel keeps one on
+ * `easyparcelConnections`, written by every pull since before this table). */
+export type WalletSnapshot = { balance: number; currency: string; at: number };
+
+/**
+ * The observation a view is built from: the wallet row, unless the
+ * connection's snapshot is NEWER (or the row has no balance at all). A store
+ * connected before `courierWallets` widened has a balance on its connection
+ * and none on the row — read alone, the row said "—" for a number we already
+ * held (test-code, 30 Oct 2026). Newest-wins, like `recordObservation`, so
+ * the two copies can never disagree about which is current; a refusal on the
+ * row still outranks an OLDER snapshot through `walletState`.
+ */
+export function withConnectionSnapshot<
+	T extends WalletObservation & { source?: WalletSource },
+>(
+	row: T | null,
+	snapshot: WalletSnapshot | null,
+): (WalletObservation & { source?: WalletSource }) | null {
+	if (!snapshot) return row;
+	if (
+		row?.balance !== undefined &&
+		row.balanceAt !== undefined &&
+		row.balanceAt >= snapshot.at
+	)
+		return row;
+	return {
+		...(row ?? {}),
+		balance: snapshot.balance,
+		currency: snapshot.currency,
+		balanceAt: snapshot.at,
+		source: "pull",
+	};
+}
+
+/**
+ * The low-balance email fires once per CROSSING into a needs-top-up state,
+ * and re-arms once the wallet is healthy again — never once per webhook.
+ * Test wallets never email (play money).
+ */
+export function lowWalletNotice(args: {
+	state: WalletState;
+	notifiedAt: number | undefined;
+	isTest: boolean | null;
+}): "notify" | "rearm" | null {
+	if (args.state === "ok") return args.notifiedAt !== undefined ? "rearm" : null;
+	if (args.isTest === true) return null;
+	if (walletNeedsTopUp(args.state) && args.notifiedAt === undefined)
+		return "notify";
+	return null;
+}
+
+/** Bookings below this tell us too little to suggest an amount. */
+export const TOP_UP_SUGGESTION_MIN_BOOKINGS = 5;
+/** The window the suggestion averages over. */
+export const TOP_UP_SUGGESTION_WINDOW_DAYS = 30;
+
+export type TopUpSuggestion = {
+	/** "~4 trips", "~1 week", "~2 weeks". */
+	label: string;
+	/** Bookings this amount covers at the store's average cost. */
+	trips: number;
+	/** Rounded UP to a whole 5 of the currency — a number to type, not a
+	 * calculation to copy. */
+	minor: number;
+};
+
+/**
+ * What to top up, from the store's OWN bookings with this courier
+ * (Arif, 24 Oct): the average booking cost × a few trips, a week, two weeks
+ * at this pace. `null` below `TOP_UP_SUGGESTION_MIN_BOOKINGS` — a guess from
+ * two trips is worse than none. A suggestion only: the seller types the
+ * amount at the courier. Options that come out the same are said once.
+ */
+export function topUpSuggestions(
+	costsMinor: readonly number[],
+	windowDays: number = TOP_UP_SUGGESTION_WINDOW_DAYS,
+): TopUpSuggestion[] | null {
+	if (costsMinor.length < TOP_UP_SUGGESTION_MIN_BOOKINGS) return null;
+	const avg = costsMinor.reduce((a, b) => a + b, 0) / costsMinor.length;
+	const perWeek = (costsMinor.length / windowDays) * 7;
+	const roundUp = (minor: number) => Math.ceil(minor / 500) * 500;
+	const raw = [
+		{ label: "~4 trips", trips: 4 },
+		{ label: "~1 week", trips: Math.max(1, Math.round(perWeek)) },
+		{ label: "~2 weeks", trips: Math.max(1, Math.round(perWeek * 2)) },
+	];
+	const out: TopUpSuggestion[] = [];
+	for (const r of raw) {
+		const minor = roundUp(avg * r.trips);
+		if (minor <= 0 || out.some((o) => o.minor === minor)) continue;
+		out.push({ ...r, minor });
+	}
+	return out.sort((a, b) => a.minor - b.minor);
+}
+

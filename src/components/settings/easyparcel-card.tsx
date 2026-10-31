@@ -24,14 +24,12 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useAction, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import {
 	CircleAlert,
 	ExternalLink,
 	FlaskConical,
-	RefreshCw,
 	Snowflake,
-	Wallet,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -47,13 +45,14 @@ import type { LanePause } from "../../../convex/lib/crossBorder";
 import { accountCountryMismatch } from "../../../convex/lib/easyparcel";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import type { FixHighlight } from "../../lib/country-setup-copy";
-import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { convexErrorMessage } from "../../lib/format";
 import { parseGoogleAddress } from "../../lib/google-address";
 import { easyparcelCardShown } from "../../lib/integrations-glance";
 import { PARCEL_NO_PHOTO_NOTE } from "../../lib/parcel-courier-copy";
 import { SPOTLIGHT_ANCHOR } from "../../lib/spotlight";
 import { TONE_PANEL } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
+import { IntegrationWalletBlock } from "../deliveries/courier-wallets-section";
 import { GoogleAddressAutocomplete } from "../forms/google-address-autocomplete";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -116,13 +115,11 @@ export function EasyparcelCard({
 	).data;
 
 	const startConnect = useMutation(api.easyparcel.startConnect);
-	const refreshBalance = useAction(api.easyparcel.refreshBalance);
 	const disconnect = useMutation(api.easyparcel.disconnect);
 	const updateSettings = useMutation(api.easyparcel.updateSettings);
 
 	const [busy, setBusy] = useState(false);
 	const [leaving, setLeaving] = useState(false);
-	const [refreshing, setRefreshing] = useState(false);
 	const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 	const [address, setAddress] = useState<PickupAddressDraft | null>(null);
 	const [addressError, setAddressError] = useState<string | null>(null);
@@ -242,18 +239,6 @@ export function EasyparcelCard({
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
 			setLeaving(false);
-		}
-	}
-
-	async function handleRefreshBalance() {
-		setRefreshing(true);
-		try {
-			const result = await refreshBalance({ retailerId: actAsRetailerId });
-			if (!result.ok) toast.error(result.message);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setRefreshing(false);
 		}
 	}
 
@@ -532,41 +517,15 @@ export function EasyparcelCard({
 							) : null}
 						</SetupChecklist>
 
-						{/* Prepaid: the wallet is the thing that fails first. */}
-						<SectionLabel>Wallet</SectionLabel>
-						<div className="flex items-center gap-2 rounded-xl border border-input bg-muted/30 px-3 py-2.5">
-							<Wallet className="size-4 shrink-0 text-muted-foreground" />
-							<span className="text-sm">
-								{settings.balanceMinor !== undefined ? (
-									<strong className="font-semibold">
-										{formatPrice(
-											settings.balanceMinor,
-											// EasyParcel reports its own currency; until a read
-											// carries one, the store country's is the honest guess.
-											settings.balanceCurrency || COUNTRY_CURRENCY[country],
-										)}
-									</strong>
-								) : (
-									"Balance unknown"
-								)}
-								<span className="text-muted-foreground">
-									{" "}
-									· prepaid — each booking draws from this
-								</span>
-							</span>
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								className="ml-auto h-11"
-								isLoading={refreshing}
-								disabled={needsReconnect}
-								onClick={() => void handleRefreshBalance()}
-							>
-								<RefreshCw className="size-3.5" />
-								Refresh
-							</Button>
-						</div>
+						{/* Prepaid: the wallet is the thing that fails first — the shared
+						    row every surface draws (z8r3fdx34j), Refresh included. */}
+						{needsReconnect ? null : (
+							<IntegrationWalletBlock
+								retailerId={retailerId}
+								country={country}
+								provider="easyparcel"
+							/>
+						)}
 
 						<p className="flex items-start gap-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
 							<Snowflake className="mt-0.5 size-3.5 shrink-0" />
