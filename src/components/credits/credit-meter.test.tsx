@@ -213,11 +213,11 @@ describe("CreditMeter — Billing (full)", () => {
 		// Monthly credits first, bought credits next — each its own tile.
 		expect(screen.getByText("Monthly credits")).toBeTruthy();
 		expect(screen.getByText("Used first")).toBeTruthy();
-		expect(screen.getByText("Bought credits")).toBeTruthy();
+		expect(screen.getByText("Extra credits")).toBeTruthy();
 		expect(screen.getByText("Used next")).toBeTruthy();
 		expect(container.textContent).toContain("120 of 200");
 		expect(screen.getByText("30")).toBeTruthy();
-		expect(screen.getByText("Last 12 months from purchase")).toBeTruthy();
+		expect(screen.getByText("Last 12 months from when they land")).toBeTruthy();
 		// A RESET, not more on top (Zaki, 1 Oct 2026).
 		expect(
 			screen.getByText(`Back to 200 on ${formatShortDate(NOV_1)}`),
@@ -226,17 +226,21 @@ describe("CreditMeter — Billing (full)", () => {
 		// The rule, in plain words — no hidden behaviour.
 		expect(
 			screen.getByText(
-				/Monthly credits are used first and reset on the 1st — they don't carry over\. Bought credits are used next and last 12 months/,
+				/Monthly credits are used first and reset on the 1st — they don't carry over\. Extra credits — top-ups and bonuses — are used next and last 12 months/,
 			),
 		).toBeTruthy();
 		const topUp = screen.getByRole("link", { name: "Top up credits" });
 		expect(topUp.getAttribute("href")).toContain("topup=1");
 	});
 
-	it("no bought credits yet: the tile says packs last 12 months", () => {
+	it("no extra credits yet: the tile says what lands there, for how long", () => {
 		mockQueries({ bal: balance() });
 		render(<CreditMeter variant="full" retailer={retailer()} />);
-		expect(screen.getByText("None yet — packs last 12 months")).toBeTruthy();
+		expect(
+			screen.getByText(
+				"None yet — top-ups and bonuses land here, for 12 months",
+			),
+		).toBeTruthy();
 	});
 
 	it("owing orders: the reset says the debt comes off it", () => {
@@ -323,7 +327,7 @@ describe("CreditMeter — Billing (full)", () => {
 		).toBeTruthy();
 	});
 
-	it("past due with bought credits: they're kept, but only work once the plan is paid", () => {
+	it("past due with extra credits: they're kept, but only work once the plan is paid", () => {
 		mockQueries({
 			bal: balance({
 				regime: "none",
@@ -342,7 +346,7 @@ describe("CreditMeter — Billing (full)", () => {
 		);
 		expect(
 			screen.getByText(
-				"Pay your invoice and this month's credits land straight away. Your 150 bought credits are kept, and work again once your plan is active.",
+				"Pay your invoice and this month's credits land straight away. Your 150 extra credits are kept, and work again once your plan is active.",
 			),
 		).toBeTruthy();
 		expect(screen.getByText("None granted this month")).toBeTruthy();
@@ -399,7 +403,7 @@ describe("CreditMeter — Billing (full)", () => {
 		expect(screen.getByText(/This store is never locked/)).toBeTruthy();
 		expect(screen.queryByText("Top up credits")).toBeNull();
 		// One balance, so no order of use to explain.
-		expect(screen.queryByText("Bought credits")).toBeNull();
+		expect(screen.queryByText("Extra credits")).toBeNull();
 		expect(screen.queryByText("Used first")).toBeNull();
 	});
 
@@ -447,7 +451,30 @@ describe("CreditMeter — Billing (full)", () => {
 		expect(screen.queryByText(/Founding · 300/)).toBeNull();
 	});
 
-	it("bought credits expiring within 30 days get a heads-up", () => {
+	it("a referee holding only a referral bonus is never told it was BOUGHT", () => {
+		// The second pot holds packs, referral bonuses and admin grants alike —
+		// found in the referral hands-on test (30 Oct 2026): a referee who
+		// bought nothing read "60 bought".
+		const at = Date.now() + 200 * 24 * 60 * 60 * 1000;
+		mockQueries({
+			bal: balance({
+				purchased: 60,
+				total: 260,
+				nextExpiry: { credits: 60, at },
+			}),
+		});
+		const { container } = render(
+			<CreditMeter variant="full" retailer={retailer()} />,
+		);
+		expect(screen.getByText("Extra credits")).toBeTruthy();
+		expect(container.textContent).not.toMatch(/bought/i);
+		cleanup();
+		const card = render(<CreditMeter variant="card" retailer={retailer()} />);
+		expect(card.container.textContent).toContain("60 extra");
+		expect(card.container.textContent).not.toMatch(/bought/i);
+	});
+
+	it("extra credits expiring within 30 days get a heads-up", () => {
 		const at = Date.now() + 10 * 24 * 60 * 60 * 1000;
 		mockQueries({
 			bal: balance({
@@ -458,7 +485,7 @@ describe("CreditMeter — Billing (full)", () => {
 		});
 		render(<CreditMeter variant="full" retailer={retailer()} />);
 		expect(
-			screen.getByText(`20 bought credits expire on ${formatShortDate(at)}.`, {
+			screen.getByText(`20 extra credits expire on ${formatShortDate(at)}.`, {
 				exact: false,
 			}),
 		).toBeTruthy();
@@ -533,7 +560,7 @@ describe("CreditMeter — dashboard home (card)", () => {
 		expect(screen.getByTestId("credit-balance").textContent).toBe(
 			"145 orders left",
 		);
-		expect(screen.getByText("120 of 200 monthly · 25 bought")).toBeTruthy();
+		expect(screen.getByText("120 of 200 monthly · 25 extra")).toBeTruthy();
 		expect(
 			screen.getByText(`Back to 200 on ${formatShortDate(NOV_1)}`),
 		).toBeTruthy();

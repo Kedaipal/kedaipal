@@ -137,6 +137,16 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 3,
 	},
+	// EasyParcel webhooks are UNSIGNED (z8r3fdcje2), so each one only schedules
+	// a re-read of the shipment with the seller's own token. Keyed per job: a
+	// real shipment emits a few events per status change, and a flood of
+	// forged ones for the same shipment number costs at most this many reads.
+	easyparcelWebhookSync: {
+		kind: "token bucket",
+		rate: 6,
+		period: MINUTE,
+		capacity: 4,
+	},
 	// Buyer's "Pay now" tap (86eyb6z3a) — mints (or reuses) a HitPay payment
 	// request. Keyed by tracking token. Each fresh mint is an outbound API call
 	// on the SELLER's HitPay account, so sized like paymentClaim: a burst of
@@ -251,6 +261,16 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		rate: 10,
 		period: MINUTE,
 		capacity: 4,
+	},
+	// The seller's "is this pasted Lalamove pair real?" probe (z8r3fdy5ht).
+	// Authenticated + keyed by retailer, but it answers "does this key pair
+	// work" — an oracle a stolen-key tester would hammer. A seller retyping a
+	// pair a few times never notices.
+	lalamoveKeyCheck: {
+		kind: "token bucket",
+		rate: 6,
+		period: MINUTE,
+		capacity: 3,
 	},
 	googlePlaceDetails: {
 		kind: "token bucket",

@@ -304,8 +304,8 @@ The RM2,000 floor is test-pinned in every locale.
 phone above the home indicator, rendered below `md` only — from `md` up the fixed nav bar carries the pill. It
 appears once the hero has scrolled out, hides while the final CTA or the
 footer is on screen (a phone's footer is taller than the viewport, and the
-dock sat on its last lines), never shows to a signed-in seller (every other
-surface gives them their dashboard door; the dock is a prospect's tool), and
+dock sat on its last lines), never shows to a signed-in seller or while sign-in is still resolving (every
+other surface gives them their dashboard door; the dock is a prospect's tool), and
 never renders on SSR or first paint (`useSectionVisibility` is `null` until
 the observer reports). The first cut copied docket.io's per-section question
 chips beside the pill; three loose bubbles stacked bottom-right read as
@@ -331,6 +331,42 @@ claim (test: no landing key says five minutes). FAQ 8 keeps the locked
 then — rather than leaving the two to read as a contradiction. The proof rail
 lost the navy "why they switch" closer with its founder metrics, then the
 section itself (above). The nav's first anchor is `/#flow` ("How it works").
+
+## Signed in or not — "we don't know yet" is its own state (z8r3fdy2m0, 27 Oct 2026)
+
+Clerk resolves auth **client-side only** — there is no SSR auth on the
+marketing routes — so `useAuth().isSignedIn` is `undefined` on the server
+render and the first paint. Every CTA branched `isSignedIn ? dashboard :
+doors`, which read `undefined` as signed-out: a signed-in seller landed on
+"Log in" + the demo pill + "Start free" and watched them flip to
+`Go to Dashboard` a beat later, on every visit.
+
+**One author: `useAuthState()`** (`src/hooks/useAuthState.ts`) returns
+`"loading" | "signed-in" | "signed-out"`. Every auth-branching marketing
+surface reads it — the nav bar, the mobile menu, the hero, the final CTA, the
+pricing teaser, the dock and `/pricing`. A new marketing CTA that branches on
+sign-in uses it too, never `isSignedIn` directly.
+
+- **While loading, each slot holds a placeholder**, never either answer.
+  `AuthCtaPlaceholder` (`landing-ui.tsx`) is a `role="status"` region named
+  "Checking if you're signed in…" (`nav_auth_checking`) wrapping `Skeleton`
+  shapes **sized to the signed-out layout** — the common visitor is a
+  prospect, so their page doesn't jump; a signed-in seller's stack shrinks to
+  one pill. The final CTA's skeleton takes `bg-cta-mesh-foreground/10` (muted
+  would glare on the navy mesh). The pricing cards keep the control `/pricing`
+  already used — a disabled `Button isLoading` — so one idea stays one control.
+- **The dock shows only on a confirmed `signed-out`** — it was `!isSignedIn`,
+  which a loading Clerk also satisfied.
+- **Clerk that never loads** (blocked script, dead network) must not strand a
+  prospect on a skeleton with no way to sign up: after
+  `AUTH_LOAD_TIMEOUT_MS` (3 s) the hook answers `"signed-out"`. A late Clerk
+  load still moves it to `"signed-in"`. `/pricing`'s spinner rides the same
+  fallback (it waited on `!isLoaded` forever).
+- **Rejected:** SSR auth (Clerk on the Worker for every marketing request, for
+  a sub-second gap — the same reasoning that keeps `/app` client-side), a
+  page-wide spinner (hides the whole pitch to fix one slot), and rendering the
+  signed-out doors invisibly (a signed-in seller still sees the stack reserve
+  space with nothing in it, and it says nothing to a screen reader).
 
 ## One region for the page
 

@@ -54,7 +54,7 @@ export function CountrySetupPanel({
 	const [acking, setAcking] = useState(false);
 
 	if (!setup || setup.items.length === 0) return null;
-	const { country, changedFrom, items } = setup;
+	const { country, changedFrom, items, autoRenewOn } = setup;
 	const ackable = items.filter((i) => !i.verifiable);
 
 	async function confirmChecked() {
@@ -98,14 +98,16 @@ export function CountrySetupPanel({
 
 			<ul className="flex flex-col gap-2">
 				{items.map((item) => {
-					const copy = countrySetupCopy(item, country, changedFrom);
+					const copy = countrySetupCopy(item, country, changedFrom, {
+						autoRenewOn,
+					});
 					return (
 						<li
 							key={item.key}
 							className="flex flex-col gap-2 rounded-lg border border-amber-300/60 bg-background/70 p-3 dark:border-amber-800/60"
 						>
 							<div className="flex flex-wrap items-center gap-2">
-								<SeverityChip severity={item.severity} />
+								<SeverityChip severity={item.severity} label={copy.chip} />
 								<span className="text-sm font-medium">{copy.title}</span>
 							</div>
 							<p className="text-xs leading-relaxed text-muted-foreground">
@@ -157,13 +159,21 @@ export function CountrySetupPanel({
 }
 
 /** Ranked by what it costs to get wrong — a seller reads the first row and
- * maybe the second, so the money ones have to look different. */
-function SeverityChip({ severity }: { severity: CountrySetupSeverity }) {
+ * maybe the second, so the money ones have to look different. `label`
+ * renames the chip where the default would claim the wrong thing (the
+ * seller's own subscription is money, but not a buyer payment at risk). */
+function SeverityChip({
+	severity,
+	label,
+}: {
+	severity: CountrySetupSeverity;
+	label?: string;
+}) {
 	if (severity === "money") {
 		return (
 			<span className="inline-flex items-center gap-1 rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-700 dark:text-red-400">
 				<CircleAlert className="size-3" aria-hidden="true" />
-				Payments at risk
+				{label ?? "Payments at risk"}
 			</span>
 		);
 	}

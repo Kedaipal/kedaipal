@@ -18,16 +18,20 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { query } from "./_generated/server";
-import { readLalamoveWallet, type WalletView } from "./courierWallets";
+import type { CourierProviderId } from "./lib/courierProviders";
+import { readCourierWallets } from "./courierWallets";
+import type { CourierWalletView } from "./lib/courierWallet";
 import { creditGateFor, isOrderGated } from "./creditLock";
+import { addressCountryLine, displayAddressState } from "./lib/address";
 import { requireRetailerAccess } from "./lib/auth";
-import { DEFAULT_CURRENCY } from "./lib/currency";
+import { DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
 import { resolveDelyvaCredentials } from "./lib/delyva";
 import {
 	type DeliveryJobStatus,
 	isActiveJobStatus,
 } from "./lib/deliveryJobs";
 import { storeBooksCouriers } from "./lib/courierBooking";
+import { loadEasyparcelArming } from "./lib/easyparcelArming";
 import { hasLalamoveCredentials } from "./lib/lalamove";
 import { isReadyToShipForLabel } from "./lib/pdf/awb";
 
@@ -46,7 +50,7 @@ export type DeliveryJobRow = {
 	jobId: Id<"deliveryJobs">;
 	orderId: Id<"orders">;
 	shortId: string;
-	provider: "lalamove" | "delyva";
+	provider: CourierProviderId;
 	status: DeliveryJobStatus;
 	group: JobGroup;
 	direction: "standard" | "collection";
@@ -91,7 +95,9 @@ export type ParcelRow = {
 
 export type DeliveriesOverview = {
 	currency: string;
-	wallet: WalletView;
+	/** Every connected courier account's wallet (courierWallets.list's
+	 * read model) — one row each on this page and on Home. */
+	wallets: CourierWalletView[];
 	/** Has this store ever booked, or set up, a courier account? */
 	booksCouriers: boolean;
 	/** A rider or courier can be booked from an order right now (Lalamove or
@@ -232,7 +238,19 @@ export const overview = query({
 				destination:
 					gated || !address
 						? undefined
-						: [address.city, address.state].filter(Boolean).join(", "),
+						: [
+								address.city,
+								// "Singapore, Singapore" read as a bug; the state is
+								// dropped when it repeats the city, and an overseas
+								// parcel names its country (z8r3fdr5yy).
+								displayAddressState(address),
+								addressCountryLine(
+									address,
+									retailer.country ?? DEFAULT_COUNTRY,
+								),
+							]
+								.filter(Boolean)
+								.join(", "),
 				deliveryFee: order.deliveryFee,
 				courierName: order.courierName,
 				trackingNo: gated ? undefined : order.trackingNo,
@@ -266,8 +284,10 @@ export const overview = query({
 		const inTransitAll = shipped.filter((o) => isParcel(o) && !!o.trackingNo);
 
 		const mode = retailer.deliveryConfig?.mode ?? "free";
+		const wallets = await readCourierWallets(ctx, retailer);
 		const booksCouriers =
 			jobs.length > 0 ||
+			wallets.length > 0 ||
 			hasLalamoveCredentials(retailer.deliveryBooking) ||
 			resolveDelyvaCredentials(retailer.delyva) !== null;
 		// Radius sellers drive their own deliveries — there is no consignment
@@ -281,10 +301,13 @@ export const overview = query({
 				mode !== "lalamove");
 
 		return {
-			currency: retailer.currency ?? DEFAULT_CURRENCY,
-			wallet: await readLalamoveWallet(ctx, retailerId),
+			currency: storeCurrencyOf(retailer),
+			wallets,
 			booksCouriers,
-			bookingArmed: storeBooksCouriers(retailer),
+			bookingArmed: storeBooksCouriers({
+				...retailer,
+				easyparcel: await loadEasyparcelArming(ctx, retailer._id),
+			}),
 			shipsParcels,
 			jobs: jobRows,
 			counts: {

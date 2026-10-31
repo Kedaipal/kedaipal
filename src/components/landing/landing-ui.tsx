@@ -100,6 +100,32 @@ export function StartFreeLink({
 }
 
 /**
+ * Holds a CTA slot while Clerk works out whether the visitor is signed in
+ * (`useAuthState` → `"loading"`, z8r3fdy2m0). Before this, the slot painted
+ * the signed-out doors and a signed-in seller watched them flip to "Go to
+ * Dashboard". Children are the skeleton shapes — sized to the signed-out
+ * layout, the common case, so a prospect's page doesn't jump. One `<output>`
+ * (role `status`) per slot names what is pending for screen readers.
+ */
+export function AuthCtaPlaceholder({
+	children,
+	className,
+}: {
+	children: ReactNode;
+	className?: string;
+}) {
+	return (
+		<output
+			aria-busy="true"
+			aria-label={m.nav_auth_checking()}
+			className={className}
+		>
+			{children}
+		</output>
+	);
+}
+
+/**
  * "Flat fee. Never a cut of your sales." — the commission badge (Arif, 14 Oct
  * 2026), in the hero and on the pricing surfaces. Credits are live (one per
  * order), so the TRUE claim is "no cut of your sales": never "zero fees" or

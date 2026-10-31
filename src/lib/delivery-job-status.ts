@@ -1,3 +1,4 @@
+import type { CourierProviderId } from "../../convex/lib/courierProviders";
 import type { DeliveryJobStatus } from "../../convex/lib/deliveryJobs";
 
 /**
@@ -7,22 +8,25 @@ import type { DeliveryJobStatus } from "../../convex/lib/deliveryJobs";
  *
  * Collection trips (86eyg0n8e) run backwards — the rider collects FROM the
  * buyer and ends at the seller's outlet — so "Delivered" would misread there:
- * it's "Arrived". A Delyva parcel has no rider to find, so its early states
- * speak courier, not rider.
+ * it's "Arrived". A parcel courier (Delyva, EasyParcel) has no rider to find,
+ * so its early states speak courier, not rider — the branch is on the RIDER
+ * provider, never on one parcel provider, so a new aggregator reads courier
+ * by default (the status-proxy lesson).
  */
 export function jobStatusLabel(
 	status: DeliveryJobStatus,
-	opts: { provider: "lalamove" | "delyva"; collection: boolean },
+	opts: { provider: CourierProviderId; collection: boolean },
 ): string {
 	const { provider, collection } = opts;
+	const rider = provider === "lalamove";
 	switch (status) {
 		case "assigning":
-			return provider === "delyva" ? "Booked" : "Finding rider";
+			return rider ? "Finding rider" : "Booked";
 		case "ongoing":
-			if (provider === "delyva") return "Awaiting pickup";
+			if (!rider) return "Awaiting pickup";
 			return collection ? "Heading to customer" : "Rider on the way";
 		case "picked_up":
-			if (provider === "delyva") return "In transit";
+			if (!rider) return "In transit";
 			return collection ? "Collected" : "Picked up";
 		case "completed":
 			return collection ? "Arrived" : "Delivered";

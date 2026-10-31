@@ -36,7 +36,8 @@ export type SellerFilter =
 	| "all"
 	| SellerBucket
 	| "wants_enterprise"
-	| "unavailable";
+	| "unavailable"
+	| "untagged_payers";
 
 /** Chip order. Past due sits first after All — it is the urgent bucket, and
  * an urgent filter never sits last (CLAUDE.md, "own the structure"). Unclaimed
@@ -56,6 +57,11 @@ export const SELLER_FILTERS: readonly SellerFilter[] = [
 	// lead filter, and in the front group: a store not taking orders is
 	// either something Kedaipal did or something to check on.
 	"unavailable",
+	// Paying stores with no confirmed acquisition channel (86eye3eyp) — the
+	// backfill to-do, so it sits in the front group with the other things
+	// Kedaipal owes an action. Orthogonal to status: churned payers count,
+	// because churn by channel is half the point.
+	"untagged_payers",
 	"trialing",
 	"active",
 	"on_hold",
@@ -78,6 +84,7 @@ export const SELLER_FILTER_LABEL: Record<SellerFilter, string> = {
 	none: "No subscription",
 	wants_enterprise: "Wants Enterprise",
 	unavailable: "Paused / offline",
+	untagged_payers: "Untagged payers",
 };
 
 /** The empty state's noun for a filter — "No {noun}{ match …}". The chip
@@ -87,6 +94,7 @@ export const SELLER_FILTER_LABEL: Record<SellerFilter, string> = {
 export function sellerFilterEmptyNoun(filter: SellerFilter): string {
 	if (filter === "wants_enterprise") return "open Enterprise asks";
 	if (filter === "unavailable") return "paused or offline stores";
+	if (filter === "untagged_payers") return "untagged payers";
 	return `${SELLER_FILTER_LABEL[filter].toLowerCase()} sellers`;
 }
 
@@ -112,6 +120,15 @@ export function sellerBucket(row: AdminSellerRow): SellerBucket {
 	return row.subscriptionStatus ?? "none";
 }
 
+/** A store that has paid Kedaipal and has no admin-confirmed acquisition
+ * channel (86eye3eyp) — CAC can't count it. A seller's own onboarding answer
+ * doesn't clear it: it's a claim until confirmed. Admin stores never pay. */
+export function isUntaggedPayer(row: AdminSellerRow): boolean {
+	return (
+		row.hasPaidInvoice && !row.ownerIsAdmin && row.acquisition.setBy !== "admin"
+	);
+}
+
 export function countSellerBuckets(
 	rows: readonly AdminSellerRow[],
 ): Record<SellerFilter, number> {
@@ -128,11 +145,13 @@ export function countSellerBuckets(
 		none: 0,
 		wants_enterprise: 0,
 		unavailable: 0,
+		untagged_payers: 0,
 	};
 	for (const row of rows) {
 		counts[sellerBucket(row)] += 1;
 		if (isEnterpriseLead(row)) counts.wants_enterprise += 1;
 		if (row.availability.state !== "open") counts.unavailable += 1;
+		if (isUntaggedPayer(row)) counts.untagged_payers += 1;
 	}
 	return counts;
 }
@@ -257,7 +276,10 @@ export function filterSellers(
 					? isEnterpriseLead(row)
 					: filter === "unavailable"
 						? row.availability.state !== "open"
-						: sellerBucket(row) === filter) && matchesSellerSearch(row, query),
+						: filter === "untagged_payers"
+							? isUntaggedPayer(row)
+							: sellerBucket(row) === filter) &&
+			matchesSellerSearch(row, query),
 	);
 }
 
@@ -746,7 +768,7 @@ export type CreditsTone = "normal" | "out" | "muted";
 export interface SellerCredits {
 	/** "130 left", "0 left", "15 owed" — "—" with no account. */
 	headline: string;
-	/** "plan 80 · bought 50", plus the custom grant when one is set. */
+	/** "plan 80 · extra 50", plus the custom grant when one is set. */
 	detail: string;
 	tone: CreditsTone;
 	/** The total is at or below zero — the fact the seller lock keys off
@@ -773,7 +795,7 @@ export function sellerCredits(row: AdminSellerRow): SellerCredits {
 	// one are outside the credit system — no account, no grant, no debit. Asked
 	// BEFORE the row's cached figures, which a store that was metered before
 	// the gate still carries: a comped store that was billed last month still
-	// holds "plan 200 · bought 0", and printing it here is the directory
+	// holds "plan 200 · extra 0", and printing it here is the directory
 	// repeating the very claim this ticket removed from the seller's meter.
 	if (row.ownerIsAdmin || row.comped)
 		return {
@@ -799,7 +821,7 @@ export function sellerCredits(row: AdminSellerRow): SellerCredits {
 	const neverLocked = row.comped;
 	const detail = [
 		`plan ${c.plan}`,
-		`bought ${c.purchased}`,
+		`extra ${c.purchased}`,
 		...(c.customGrant !== undefined ? [`custom ${c.customGrant}/mo`] : []),
 		...(out && neverLocked ? ["never locked"] : []),
 	].join(" · ");
@@ -867,7 +889,7 @@ export function sellerSummaryText(
 	].join("\n");
 }
 
-/** "130 left (plan 80 · bought 50)", "15 owed (…) · out since 3 Oct 2026". */
+/** "130 left (plan 80 · extra 50)", "15 owed (…) · out since 3 Oct 2026". */
 function creditsSummary(row: AdminSellerRow): string {
 	const credits = sellerCredits(row);
 	if (credits.total === undefined) return credits.detail;
@@ -889,7 +911,7 @@ const CSV_HEADER = [
 	"Seats",
 	"Credits left",
 	"Plan credits",
-	"Bought credits",
+	"Extra credits",
 	"Out of credits since",
 	"Custom grant",
 	"Expiry",

@@ -369,7 +369,7 @@ describe("invoices.issueInvoice", () => {
 		expect((await getRetailer(t, retailerId))?.isFoundingMember).toBe(true);
 	});
 
-	test("defaults to MYR when no currency is passed (legacy call shape)", async () => {
+	test("a Malaysian store is billed in MYR — the admin never picks the currency", async () => {
 		const t = setup();
 		const { retailerId } = await seedPublic(t, "u_myr", "myr-store");
 		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
@@ -387,12 +387,13 @@ describe("invoices.issueInvoice", () => {
 	test("an SGD invoice bills from the SGD price table", async () => {
 		const t = setup();
 		const { retailerId } = await seedPublic(t, "u_sgd", "sgd-store");
+		// An SGD bill is an SG store's — the currency follows the country.
+		await t.run((ctx) => ctx.db.patch(retailerId, { country: "SG" }));
 		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
 			retailerId,
 			plan: "pro",
 			billingCycle: "monthly",
 			founding: false,
-			currency: "SGD",
 			dueDate: due(),
 		});
 		const inv = await getInvoice(t, invoiceId);
@@ -405,12 +406,13 @@ describe("invoices.issueInvoice", () => {
 	test("an SGD ANNUAL invoice charges 10 months, like MYR", async () => {
 		const t = setup();
 		const { retailerId } = await seedPublic(t, "u_sgd_a", "sgd-annual-store");
+		// An SGD bill is an SG store's — the currency follows the country.
+		await t.run((ctx) => ctx.db.patch(retailerId, { country: "SG" }));
 		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
 			retailerId,
 			plan: "starter",
 			billingCycle: "annual",
 			founding: false,
-			currency: "SGD",
 			dueDate: due(),
 		});
 		const inv = await getInvoice(t, invoiceId);
@@ -421,12 +423,13 @@ describe("invoices.issueInvoice", () => {
 	test("an SGD FOUNDING invoice bills S$41 and claims the rank when paid", async () => {
 		const t = setup();
 		const { retailerId } = await seedPublic(t, "u_sgd_f", "sgd-founding-store");
+		// An SGD bill is an SG store's — the currency follows the country.
+		await t.run((ctx) => ctx.db.patch(retailerId, { country: "SG" }));
 		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
 			retailerId,
 			plan: "pro",
 			billingCycle: "monthly",
 			founding: true,
-			currency: "SGD",
 			dueDate: due(),
 		});
 		const inv = await getInvoice(t, invoiceId);
@@ -441,9 +444,9 @@ describe("invoices.issueInvoice", () => {
 	/**
 	 * Enterprise (Credits T6) has no list price: its invoice bills the store's
 	 * CONTRACT — the fee, the currency it was agreed in and its term — whatever
-	 * the form sends, and founding never applies. No contract, no invoice.
+	 * cycle the form sends, and founding never applies. No contract, no invoice.
 	 */
-	test("an Enterprise invoice bills the contract — never the form's cycle or currency, never founding", async () => {
+	test("an Enterprise invoice bills the contract — never the form's cycle, never founding", async () => {
 		const t = setup();
 		const { retailerId } = await seedPublic(t, "u_ent", "store-ent");
 		await expect(
@@ -469,7 +472,6 @@ describe("invoices.issueInvoice", () => {
 			plan: "enterprise",
 			billingCycle: "monthly",
 			founding: false,
-			currency: "SGD",
 			dueDate: due(),
 		});
 		const inv = await getInvoice(t, invoiceId);
@@ -2459,5 +2461,113 @@ describe("the billing picker and the sellers directory list the same book (z8r3f
 			}
 		}
 		expect(ADMIN_STORE_LIST_LIMIT).toBeGreaterThan(0);
+	});
+});
+
+describe("a store is billed in its country's currency — always (86eyp7hn7)", () => {
+	/** A store in `country`, optionally with one invoice of `invoice`'s
+	 * status and currency already on its books. */
+	async function seedStore(
+		t: ReturnType<typeof setup>,
+		slug: string,
+		country: "MY" | "SG",
+		invoice?: { status: "paid" | "pending" | "void"; currency: "MYR" | "SGD" },
+	) {
+		await t
+			.withIdentity({ subject: `u_${slug}` })
+			.mutation(api.retailers.createRetailer, {
+				storeName: `Store ${slug}`,
+				slug,
+			});
+		return t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			if (!r) throw new Error("no retailer");
+			await ctx.db.patch(r._id, { country });
+			if (invoice) {
+				const sub = await ctx.db
+					.query("subscriptions")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", r._id))
+					.first();
+				if (!sub) throw new Error("no sub");
+				const now = Date.now();
+				await ctx.db.insert("invoices", {
+					retailerId: r._id,
+					subscriptionId: sub._id,
+					invoiceNumber: `INV-${slug}`,
+					amount: 14900,
+					total: 14900,
+					currency: invoice.currency,
+					periodStart: now,
+					periodEnd: now + 30 * 24 * 60 * 60 * 1000,
+					dueDate: now,
+					status: invoice.status,
+					createdAt: now,
+					...(invoice.status === "paid" ? { markedPaidAt: now } : {}),
+				});
+			}
+			return r._id;
+		});
+	}
+
+	async function rowOf(t: ReturnType<typeof setup>, slug: string) {
+		const { stores } = await asAdmin(t).query(
+			api.invoices.listRetailersForAdmin,
+			{},
+		);
+		return stores.find((s) => s.slug === slug);
+	}
+
+	test("the picker shows each store's country and the currency it sets", async () => {
+		const t = setup();
+		await seedStore(t, "sg-new", "SG");
+		await seedStore(t, "my-new", "MY");
+		expect(await rowOf(t, "sg-new")).toMatchObject({
+			billingCurrency: "SGD",
+			country: "SG",
+		});
+		expect(await rowOf(t, "my-new")).toMatchObject({
+			billingCurrency: "MYR",
+			country: "MY",
+		});
+	});
+
+	test("a ringgit bill an SG store once paid never makes it a ringgit store", async () => {
+		// The bug that made this a rule: the form defaulted to MYR, an SG store
+		// paid one RM bill, and "last paid currency wins" then billed it in RM
+		// for every renewal after. The country is the only answer now.
+		const t = setup();
+		const retailerId = await seedStore(t, "sg-paid-rm", "SG", {
+			status: "paid",
+			currency: "MYR",
+		});
+		expect(await rowOf(t, "sg-paid-rm")).toMatchObject({
+			billingCurrency: "SGD",
+		});
+		const { invoiceId } = await asAdmin(t).mutation(
+			api.invoices.issueInvoice,
+			{ retailerId, plan: "pro", billingCycle: "monthly", founding: false },
+		);
+		expect(await getInvoice(t, invoiceId)).toMatchObject({
+			currency: "SGD",
+			total: 5900,
+		});
+	});
+
+	test("issueInvoice takes no currency — a caller can't send one", async () => {
+		const t = setup();
+		const retailerId = await seedStore(t, "sg-sent-rm", "SG");
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "pro",
+				billingCycle: "monthly",
+				founding: false,
+				// A stale tab from before the gate still sends this.
+				...({ currency: "MYR" } as object),
+			}),
+		).rejects.toThrow(/currency/);
 	});
 });

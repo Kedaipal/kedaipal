@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { CalendarClock, Inbox, Users } from "lucide-react";
 import type { QuestionTally } from "../../../convex/lib/eventSeats";
 import { formatEventMoment } from "../../../convex/lib/productEvent";
+import { listingOrdersSearch } from "../../lib/listing-orders-link";
 
 export type EventHeadcount = {
 	date: number;
@@ -31,9 +32,12 @@ export type EventHeadcount = {
  */
 export function EventRsvpPanel({
 	headcount,
+	productId,
 	productName,
 }: {
 	headcount: EventHeadcount;
+	/** For the inbox link's exact `listing` filter. */
+	productId: string;
 	productName: string;
 }) {
 	const { taken, seats, left, passed, options } = headcount;
@@ -150,16 +154,16 @@ export function EventRsvpPanel({
 					    event's day — never "go to the inbox and find them". */}
 					<Link
 						to="/app/orders"
-						// ITEM search, not the date-range filter: the inbox's from/to
-						// bind to createdAt (when the order was PLACED), so pointing
-						// them at the event day found nothing — caught live, the link
-						// landed on "No orders match your filters". There is no
-						// arbitrary fulfilment-day filter to use (fwin is only
-						// today/tomorrow/this week), and every RSVP's frozen item name
-						// is this product's name, so the search IS the tally's list.
-						// A rename only affects future orders' frozen names — same
-						// staleness the CSV's live category lookup already accepts.
-						search={{ q: productName }}
+						// EXACTLY this listing on this day (`z8r3fdjv0d`) — the same
+						// door the Schedule view's rows use. It replaced a search for
+						// the product's name, which also caught any listing whose name
+						// contains it ("Luncheon VIP") and missed RSVPs frozen under a
+						// name the event has since been renamed from. (`from`/`to`
+						// would be wrong: they bind to when the order was PLACED.) The
+						// helper also carries the seat-holding statuses, so the inbox
+						// shows the orders `taken` was counted from and not a cancelled
+						// RSVP beside them.
+						search={listingOrdersSearch(productId, headcount.date)}
 						className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-border px-3 text-sm font-medium transition-colors hover:bg-muted"
 					>
 						<Inbox className="size-4" aria-hidden />

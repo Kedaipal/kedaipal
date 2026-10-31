@@ -6,6 +6,8 @@ import {
 	itemAnswerInputValidator,
 } from "./lib/buyerQuestions";
 import { countryValidator } from "./lib/country";
+import { courierProviderValidator } from "./lib/courierProviders";
+import { crossBorderLanesValidator } from "./lib/crossBorder";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
 import { showcaseThemeValidator } from "./lib/showcase";
 import { memberPermissionsValidator } from "./lib/permissions";
@@ -129,6 +131,21 @@ export default defineSchema({
 		// dangles once the referrer is purged — readers treat a missing doc as
 		// "no referrer". Same posture as signupSource: per-row read, no index.
 		signupReferrerId: v.optional(v.id("retailers")),
+		// Which motion won this store, for CAC by channel (86eye3eyp,
+		// docs/acquisition-attribution.md). A CLOSED vocabulary validated in
+		// convex/lib/metrics.ts (ACQUISITION_CHANNELS), not here, so a channel
+		// can be added without a migration. Distinct from `signupSource`: that
+		// is the link tag captured automatically (null for walk-ins, talks and
+		// personal intros); this is the classification, set by an admin or
+		// claimed by the seller at onboarding. `acquisitionSetBy` says which —
+		// an admin tag is authoritative and a seller answer never overwrites
+		// it. Absent = untagged. Per-row read only, no index.
+		acquisitionSource: v.optional(v.string()),
+		acquisitionNote: v.optional(v.string()),
+		acquisitionSetBy: v.optional(
+			v.union(v.literal("admin"), v.literal("seller")),
+		),
+		acquisitionSetAt: v.optional(v.number()),
 		// The owner tapped "Talk to Arif" in-app (Credits T6 follow-up,
 		// z8r3fdkp8h): a signed-in Enterprise lead, stamped so the admin
 		// console can list who asked instead of trusting a WhatsApp scrollback.
@@ -359,6 +376,16 @@ export default defineSchema({
 		// settings invariant guarantee a store always keeps ≥1 WORKING fulfilment
 		// method (delivery, or self-collect with ≥1 active pickup location).
 		offerDelivery: v.optional(v.boolean()),
+		// Cross-border delivery lanes (z8r3fdr5yy): "this store also delivers to
+		// <country>", each with the SELLER'S OWN price for that country (flat,
+		// weight bands, or free — never the domestic price). Absent / empty =
+		// domestic only. A list so a future corridor is a new entry, not a
+		// migration; v1 holds at most one (the other country). Stored ≠ live:
+		// `effectiveLanes` (convex/lib/crossBorder.ts) pauses a lane at read time
+		// when the plan lacks `crossBorder`, delivery is off, or domestic pricing
+		// is a live courier quote — so a downgrade or a pricing change never
+		// deletes it. See docs/cross-border.md.
+		crossBorderLanes: v.optional(crossBorderLanesValidator),
 		// Seller's business address — the ORIGIN for radius-based delivery
 		// pricing (straight-line distance to the buyer's address). Captured via
 		// Google autocomplete in Settings → Fulfilment; `label` is the formatted
@@ -1150,6 +1177,13 @@ export default defineSchema({
 		// lists online. undefined/false = visible (legacy default; no backfill).
 		// See docs/hidden-products.md.
 		hidden: v.optional(v.boolean()),
+		// Cross-border opt-out (z8r3fdr5yy). Products INHERIT the store's
+		// overseas lane; true = "Ships within <store country> only" (frozen
+		// goods, same-day cakes, anything that can't survive the trip or the
+		// courier's prohibited list). A product can only opt OUT — with no lane
+		// on the store nothing ships abroad whatever this says. Undefined =
+		// inherit (no backfill).
+		domesticOnly: v.optional(v.boolean()),
 		// Minimum order quantity (86ey9unyx) — buyers must order at least this many
 		// units of this product per storefront order, SUMMED across the product's
 		// variants (10 + 10 of two flavours satisfies min 20 — deliberately
@@ -1709,6 +1743,11 @@ export default defineSchema({
 				code: v.string(),
 				kind: v.union(v.literal("fixed"), v.literal("percent")),
 				value: v.number(),
+				// Frozen with the code (`z8r3fducfm`) — see `VoucherSnapshot`.
+				usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
+				// The per-order cap of a percent code (`z8r3fdz0pw`), frozen with
+				// the terms so every recompute clamps as the create did.
+				maxDiscount: v.optional(v.number()),
 			}),
 		),
 		voucherDiscount: v.optional(v.number()),
@@ -1918,6 +1957,12 @@ export default defineSchema({
 				// Google Place ID — when set, maps URLs deep-link to the
 				// named place page instead of raw lat/lng search.
 				placeId: v.optional(v.string()),
+				// The address's own country (z8r3fdr5yy). Stamped on every order
+				// created after cross-border shipped; absent = the store's country
+				// (every older order, zero migration). Differs from the store's
+				// country only on a cross-border order — the one thing every
+				// address renderer, the label and the courier booking key off.
+				country: v.optional(countryValidator),
 			}),
 		),
 		// Reference to the retailer's pickup location when deliveryMethod ===
@@ -2015,19 +2060,25 @@ export default defineSchema({
 				// Which provider's price the buyer actually paid, and every quote
 				// that competed for it (mode "live"). Absent on "lalamove" rows —
 				// there was only ever one bidder.
-				quoteProvider: v.optional(
-					v.union(v.literal("lalamove"), v.literal("delyva")),
-				),
+				quoteProvider: v.optional(courierProviderValidator),
 				quoteServiceName: v.optional(v.string()),
 				quotesConsidered: v.optional(
 					v.array(
 						v.object({
-							provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+							provider: courierProviderValidator,
 							fee: v.number(),
 							currency: v.string(),
 						}),
 					),
 				),
+				// The courier was asked to price the one-kilo FLOOR rather than the
+				// cart's real weight (`liveQuoteWeightFacts`), and how many lines a
+				// product weight would have priced. Lets the seller's order page say
+				// "priced at the 1 kg floor — 2 items had no weight" and point at
+				// the fix, instead of a fee that silently under-collects. Widen-only
+				// (23 Oct 2026); absent = not floored or minted before the stamp.
+				weightFloored: v.optional(v.boolean()),
+				unweighedLines: v.optional(v.number()),
 			}),
 		),
 		// Order-level mirror of `deliverySnapshot.fee` (minor units) for cheap
@@ -2603,7 +2654,7 @@ export default defineSchema({
 		// provider-aware. Rows are transient (consumed at create, purged daily),
 		// so this narrows to required on its own within a day of deploy —
 		// widen → migrate → narrow, with the migration being the clock.
-		provider: v.optional(v.union(v.literal("lalamove"), v.literal("delyva"))),
+		provider: v.optional(courierProviderValidator),
 		// Lalamove quotation id — reused at create for the snapshot audit trail.
 		// Optional since z8r3fdbvdy: a Delyva quote has no id to bind to (its
 		// prices are indicative and never expire; dispatch re-prices anyway).
@@ -2639,7 +2690,7 @@ export default defineSchema({
 		considered: v.optional(
 			v.array(
 				v.object({
-					provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+					provider: courierProviderValidator,
 					fee: v.number(),
 					currency: v.string(),
 				}),
@@ -2648,10 +2699,128 @@ export default defineSchema({
 		// Destination coords the quote priced — orders.create verifies the order's
 		// delivery address matches (a quote for a near/cheap pin can't be replayed
 		// against a far delivery address).
-		latitude: v.number(),
-		longitude: v.number(),
+		// The buyer's pin — the replay control for a pin-priced quote. A lane
+		// quote EasyParcel priced on the POSTCODE (z8r3fdr5yy: an overseas
+		// address is often typed, with no pin) carries the postcode instead.
+		latitude: v.optional(v.number()),
+		longitude: v.optional(v.number()),
+		postcode: v.optional(v.string()),
 		quotedAt: v.number(),
+		// The cart was quoted at the one-kilo floor (`liveQuoteWeightFacts`) and
+		// how many of its lines had no product weight — copied onto the order's
+		// deliverySnapshot at create. Absent = not floored (or a row minted
+		// before the stamp; rows live a day, so this narrows itself).
+		weightFloored: v.optional(v.boolean()),
+		unweighedLines: v.optional(v.number()),
 	}).index("by_retailer", ["retailerId"]),
+
+	// Lalamove's carrying limit per vehicle, per market and environment, read
+	// from `GET /v3/cities` (25 Oct 2026, `convex/lib/lalamoveVehicle.ts`).
+	// Lalamove prices by vehicle and never refuses an overweight trip, so the
+	// rider quote picks the smallest vehicle that can carry the cart from
+	// these. A market-level catalogue fact (no seller data), refreshed in the
+	// background once a day; `loads` is a list of pairs, never an object keyed
+	// by the vehicle name. Own table, not a retailer field: every store in a
+	// market shares one row.
+	lalamoveVehicleLoads: defineTable({
+		market: v.union(v.literal("MY"), v.literal("SG")),
+		env: v.union(v.literal("sandbox"), v.literal("production")),
+		loads: v.array(v.object({ key: v.string(), loadKg: v.number() })),
+		fetchedAt: v.number(),
+		// When a background refresh was last scheduled for a stale row. A
+		// stale row is read by every quote and dispatch; this stamp lets one
+		// refresh go per market per few minutes instead of one per checkout
+		// (and a failing `/v3/cities` retry at that pace, not per buyer).
+		refreshScheduledAt: v.optional(v.number()),
+	}).index("by_market_env", ["market", "env"]),
+
+	// EasyParcel connection per store (z8r3fdcje2) — the Open API's OAuth
+	// grant. The seller signs in at EasyParcel and picks which of their
+	// accounts (Live or Demo) Kedaipal may book with; we hold the resulting
+	// tokens, `enc.v1.`-encrypted in the callback ACTION so no plaintext ever
+	// passes through a mutation. Kedaipal's own app credentials are Convex env
+	// (`EASYPARCEL_CLIENT_ID` / `_SECRET`), never a table.
+	//
+	// Its own table, deliberately NOT a `retailers` field: the access token
+	// refreshes every ~10h and the wallet snapshot moves on every booking, and
+	// a retailer patch re-runs every open storefront tab; tokens also stay off
+	// every retailer read; and new `retailers` fields break other branches'
+	// deploys to the shared dev deployment. See docs/delivery-easyparcel.md.
+	easyparcelConnections: defineTable({
+		retailerId: v.id("retailers"),
+		// Fulfilment → Courier booking switch. Connecting sets it; pausing
+		// keeps the grant.
+		enabled: v.boolean(),
+		accessToken: v.string(),
+		// Absent only if EasyParcel ever issues a grant without one — the
+		// connection then lives until the access token expires.
+		refreshToken: v.optional(v.string()),
+		accessExpiresAt: v.number(),
+		refreshExpiresAt: v.optional(v.number()),
+		// Stamped when EasyParcel refuses our refresh: the grant is dead and
+		// dispatch blocks with "Reconnect EasyParcel" until a fresh connect
+		// clears it. Never inferred from a single failed call.
+		revokedAt: v.optional(v.number()),
+		// Who the token belongs to (account info), shown on the settings card
+		// as proof the right account was linked.
+		accountName: v.optional(v.string()),
+		accountType: v.optional(v.string()),
+		// Sandbox vs live. No API field reports it — the token is bound to the
+		// account picked at sign-in — so this is set only when the token
+		// itself carries the claim (`tokenEnvironment`); undefined = unknown,
+		// rendered as unknown, never as live.
+		environment: v.optional(
+			v.union(v.literal("sandbox"), v.literal("live")),
+		),
+		// Prepaid wallet snapshot (minor units) from the last /wallet read —
+		// connect, every quote, every booking, and the card's refresh.
+		balanceMinor: v.optional(v.number()),
+		balanceCurrency: v.optional(v.string()),
+		balanceCheckedAt: v.optional(v.number()),
+		// Where couriers collect. Imported from the EasyParcel account at
+		// connect as a PREFILL (fill-if-unset), then the seller's own. `unit`
+		// is the SG unit number, folded into address line 1 at booking.
+		pickupAddress: v.optional(
+			v.object({
+				unit: v.optional(v.string()),
+				address1: v.string(),
+				address2: v.optional(v.string()),
+				city: v.string(),
+				state: v.optional(v.string()),
+				postcode: v.string(),
+			}),
+		),
+		connectedAt: v.number(),
+		updatedAt: v.number(),
+	}).index("by_retailer", ["retailerId"]),
+
+	// One OAuth connect attempt (z8r3fdcje2). `nonce` is the `state` we hand
+	// the provider — crypto-random, single-use, 10-minute TTL — so a replayed
+	// or forged callback never reaches a token exchange. The attempt's
+	// OUTCOME is recorded here too, which is how the settings card says what
+	// happened at the provider without a URL parameter. Purged after a week.
+	courierOAuthStates: defineTable({
+		provider: courierProviderValidator,
+		retailerId: v.id("retailers"),
+		nonce: v.string(),
+		// Where the browser returns — validated at mint against SITE_URL /
+		// localhost, so the callback can't be turned into an open redirect.
+		returnTo: v.string(),
+		createdAt: v.number(),
+		expiresAt: v.number(),
+		consumedAt: v.optional(v.number()),
+		outcome: v.optional(
+			v.union(
+				v.literal("connected"),
+				v.literal("denied"),
+				v.literal("failed"),
+				v.literal("expired"),
+			),
+		),
+		message: v.optional(v.string()),
+	})
+		.index("by_nonce", ["nonce"])
+		.index("by_retailer_provider", ["retailerId", "provider"]),
 
 	// One rider booking (dispatch) against an order. The ledger row of record:
 	// actual cost the seller's own Lalamove wallet paid (BYO-only — audit +
@@ -2660,25 +2829,52 @@ export default defineSchema({
 	// failed/cancelled jobs stay as history and a rebook inserts a new row.
 	// `by_provider_order` is the webhook lookup; `by_retailer` keeps per-store
 	// range reads cheap.
-	// A seller's courier WALLET as the courier reports it (86eye9xd4, 6A).
-	// Lalamove pushes the balance on a WALLET_BALANCE_CHANGED webhook — there
-	// is no endpoint to poll — and that event carries no order, only the
-	// sender's API key. Stored keys are encrypted at rest (86eyn25gk), so the
-	// key can't be matched against them: `keyFingerprint` (SHA-256 of the
-	// plaintext key, stamped when the key is saved) is what attributes the
-	// event to a store, whose own secret then verifies it. Own table rather
-	// than fields on `retailers`: a balance moves on every booking, and a
-	// retailer patch re-runs every open storefront tab.
+	// A seller's courier WALLET as the courier reports it (86eye9xd4 6A,
+	// widened to every provider by z8r3fdrgxc/z8r3fdx34j). The courier, not
+	// Kedaipal, holds this money — the row is the last balance the provider
+	// told us, so every surface can warn before a booking fails instead of
+	// after. One row per (store, provider), written ONLY through
+	// `courierWallets.recordObservation` (monotonic on observation time, so a
+	// late webhook can't overwrite a newer pull). How each provider reports is
+	// `WALLET_PROVIDERS[provider].model` in convex/lib/courierWallet.ts:
+	// Lalamove PUSHES (webhook); EasyParcel and Delyva are PULLED (Delyva's
+	// insufficient-credit REFUSAL carries it too). Own table rather than fields on
+	// `retailers`: a balance moves on every booking, and a retailer patch
+	// re-runs every open storefront tab.
 	courierWallets: defineTable({
 		retailerId: v.id("retailers"),
-		provider: v.literal("lalamove"),
-		keyFingerprint: v.string(),
-		// Minor units (sen / cents) in `currency`, as of `balanceAt` — the
-		// courier's own event time, so a late event can't overwrite a newer one.
-		// Undefined until the first event arrives.
+		provider: courierProviderValidator,
+		// Lalamove only. Its wallet event carries no order, only the sender's
+		// API key, and stored keys are encrypted at rest (86eyn25gk) so they
+		// can't be matched: this SHA-256 of the plaintext key, stamped when the
+		// key is saved, attributes the event; the store's own secret then
+		// verifies it. A different key = a different account = a fresh row.
+		keyFingerprint: v.optional(v.string()),
+		// Minor units (sen / cents) in `currency` — the PROVIDER's currency —
+		// as of `balanceAt` (ms; the provider's own event time where it gives
+		// one). Undefined until the provider first reports a number.
 		balance: v.optional(v.number()),
 		currency: v.optional(v.string()),
 		balanceAt: v.optional(v.number()),
+		// How `balance` arrived. Only a fresh `pull` may REFUSE a booking
+		// (`walletVerdict`); pushed and refusal-parsed numbers only warn.
+		// Undefined on rows written before z8r3fdrgxc (all Lalamove webhooks).
+		source: v.optional(
+			v.union(v.literal("webhook"), v.literal("pull"), v.literal("refusal")),
+		),
+		// The latest booking the provider refused for lack of funds, when the
+		// refusal named no balance (Lalamove) — the wallet is known to be
+		// short, not by how much. Superseded by any newer balance.
+		refusedAt: v.optional(v.number()),
+		refusedPriceMinor: v.optional(v.number()),
+		// The seller's own "low alert" line for this wallet, minor units in its
+		// currency. Undefined = the currency default (RM 30 / S$ 15,
+		// `defaultLowAlertMinor`). Set on the Courier wallets section.
+		lowAlertMinor: v.optional(v.number()),
+		// When the owner was emailed that this wallet needs a top-up. Set on
+		// the crossing, cleared when the wallet is healthy again — once per
+		// crossing, never once per webhook.
+		lowNotifiedAt: v.optional(v.number()),
 		updatedAt: v.number(),
 	})
 		.index("by_retailer_provider", ["retailerId", "provider"])
@@ -2689,7 +2885,7 @@ export default defineSchema({
 		retailerId: v.id("retailers"),
 		// Which booking provider ran this job. Lalamove = intra-city rider;
 		// Delyva (86eyjpv6z) = nationwide parcel/cold-chain courier aggregator.
-		provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+		provider: courierProviderValidator,
 		// Unset while the row is a pre-call RESERVATION (inserted atomically
 		// before the POST /v3/orders side effect so two concurrent confirms can't
 		// both dispatch a rider); patched in by commitBooking once Lalamove
@@ -2728,12 +2924,18 @@ export default defineSchema({
 		// Delyva only — the courier service actually booked ("DHL eCommerce",
 		// "Ninja Cold"), for the dispatch card + orders.courierName mirror.
 		serviceName: v.optional(v.string()),
-		// Delyva only — the consignment number (AWB) the buyer can track with.
-		// Arrives via the order.created webhook (or the post-process fetch) and
-		// is mirrored onto orders.courierName/trackingNo (86eyehvk4 fields) the
-		// moment it's known. Distinct from providerOrderId (Delyva's internal
-		// order id, which webhooks correlate on).
+		// Delyva + EasyParcel — the consignment number (AWB) the buyer can track
+		// with. Delyva: arrives via the order.created webhook (or the
+		// post-process fetch); EasyParcel: returned by EPPayOrderBulk. Mirrored
+		// onto orders.courierName/trackingNo (86eyehvk4 fields) the moment it's
+		// known. Distinct from providerOrderId (the provider's own order id,
+		// which webhooks/polling correlate on).
 		awb: v.optional(v.string()),
+		// EasyParcel only — the courier AWB label PDF (their `awb_id_link`),
+		// returned by EPPayOrderBulk. The first provider that hands us a real
+		// courier label (the deferred Delyva label work, docs/despatch-labels.md
+		// v2); the dispatch card links it beside Kedaipal's own despatch label.
+		labelUrl: v.optional(v.string()),
 		// Delyva only — the itemType this trip was booked as (PARCEL/CHILLED/
 		// FROZEN), frozen at dispatch for the audit trail.
 		itemType: v.optional(v.string()),
@@ -2780,10 +2982,19 @@ export default defineSchema({
 	})
 		.index("by_order", ["orderId"])
 		.index("by_retailer", ["retailerId"])
+		// Disconnect's rider-out guard (z8r3fdy5ht): "is any of this store's
+		// Lalamove jobs still active?" is one indexed read per active status,
+		// exact — a scheduled booking can sit in `assigning` for 30 days, so a
+		// "newest N" window over `by_retailer` would let it slip past.
+		.index("by_retailer_status", ["retailerId", "status"])
 		// Provider-qualified since Delyva (86eyjpv6z): two providers' order ids
 		// are both opaque strings, so a bare providerOrderId index + .unique()
 		// would let a cross-provider collision throw in a webhook handler.
-		.index("by_provider_order", ["provider", "providerOrderId"]),
+		.index("by_provider_order", ["provider", "providerOrderId"])
+		// The EasyParcel status cron's read (z8r3fdcje2): that API has no
+		// webhook, so a poll sweeps the ACTIVE easyparcel jobs — one indexed
+		// query per active status, never a table scan.
+		.index("by_provider_status", ["provider", "status"]),
 
 	// --- Counter Checkout (in-person order spine, docs/counter-checkout.md) ----
 	// A seller-initiated, in-person checkout session. The seller opens Counter
@@ -2951,6 +3162,11 @@ export default defineSchema({
 				code: v.string(),
 				kind: v.union(v.literal("fixed"), v.literal("percent")),
 				value: v.number(),
+				// Frozen with the code (`z8r3fducfm`) — see `VoucherSnapshot`.
+				usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
+				// The per-order cap of a percent code (`z8r3fdz0pw`), frozen with
+				// the terms so every recompute clamps as the create did.
+				maxDiscount: v.optional(v.number()),
 			}),
 		),
 		// Buyer capability for /claim/<token> — same generator + posture as
@@ -3068,9 +3284,51 @@ export default defineSchema({
 		),
 		// Set together at redemption. `redeemedOrderId` is what lets the list
 		// link a spent voucher to its order — and what a cancel clears when the
-		// voucher goes back to `active`.
+		// voucher goes back to `active`. Both are single-use only and never
+		// written on a SHARED code: its orders and each use's time live in
+		// `voucherRedemptions`.
 		redeemedOrderId: v.optional(v.id("orders")),
 		redeemedAt: v.optional(v.number()),
+		// --- Shared codes (`z8r3fducfm`) -------------------------------------
+		// `shared` = one seller-named code (`SALE345`) many buyers type, bounded
+		// by `maxRedemptions`, `endsAt`, or both (at least one — a public code
+		// with no bound is an open-ended liability, `sharedLimitsError`). Absent
+		// = `single`, the original one-code-one-use voucher: nothing to backfill.
+		//
+		// A shared code is unique PER STORE among its LIVE codes (`by_retailer_
+		// code`), not globally like a single-use one: it is public by design,
+		// so two stores both running `SALE20` is the normal case, and the buyer
+		// always types it at a known store. An ended code's word may be reused
+		// — the lookup picks the live row and the history keeps its own.
+		// `sharedCodeError` refuses any word the single-use parser would claim,
+		// so the two spellings can never collide (`parseVoucherCode`).
+		usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
+		maxRedemptions: v.optional(v.number()),
+		// Orders currently holding a use — incremented at redemption, decremented
+		// when an order is cancelled. A shared row is NEVER stored `redeemed`:
+		// "all used" and "ended" are both judged at read time off this count and
+		// `endsAt` (`resolveVoucherStatus`), so the row and the truth can't
+		// drift. Always equal to the row's `voucherRedemptions` count.
+		redeemedCount: v.optional(v.number()),
+		// Exact end instant (ms). NOT the `expiresAt` day convention — a shared
+		// code is posted for a happy hour, so it ends at a TIME.
+		endsAt: v.optional(v.number()),
+		// --- Shared codes v2 (`z8r3fdz0pw`) ---------------------------------
+		// Exact START instant (ms); until then the row reads `scheduled` and a
+		// buyer is told when it opens. Shared only. Absent = live on create.
+		startsAt: v.optional(v.number()),
+		// Orders ONE WhatsApp number may place with a shared code, counted off
+		// `voucherRedemptions.waPhone`. Absent = no per-buyer limit.
+		perBuyerLimit: v.optional(v.number()),
+		// Least GROSS item subtotal (minor units) an order needs to use this
+		// voucher — single-use or shared. An entry rule judged ONCE at
+		// redemption, never on a later recompute, so a discount already given
+		// is never silently taken back. Absent = no minimum.
+		minSpend: v.optional(v.number()),
+		// The most a PERCENT voucher takes off one order (minor units). Part
+		// of the terms, so it is frozen into `voucherSnapshot` and clamps every
+		// recompute. Never set on a fixed voucher.
+		maxDiscount: v.optional(v.number()),
 		// Set together on void. Soft by design: the row and its history stay,
 		// the code simply stops redeeming. There is no hard delete in v1.
 		voidedAt: v.optional(v.number()),
@@ -3098,7 +3356,42 @@ export default defineSchema({
 		// clock — see `vouchers.list`.
 		.index("by_retailer_status", ["retailerId", "status"])
 		// The list's default order (newest first) and the batch grouping.
-		.index("by_retailer_created", ["retailerId", "createdAt"]),
+		.index("by_retailer_created", ["retailerId", "createdAt"])
+		// A SHARED code's lookup and its live-uniqueness check at create — per
+		// store, because a public word is the same word in every shop.
+		.index("by_retailer_code", ["retailerId", "code"]),
+
+	/**
+	 * One order's use of a SHARED voucher code (`z8r3fducfm`). A single-use
+	 * voucher records its one order on the row itself (`redeemedOrderId`); a
+	 * shared code is spent many times, so each spend is a row here.
+	 *
+	 * Two jobs, both structural: the seller's "who used SALE345" list reads
+	 * `by_voucher`; and `by_order` is what makes the hand-back on cancel
+	 * IDEMPOTENT — a cancel that finds no row for its order has nothing to
+	 * return, so a second cancel seam (or a re-cancel) can't decrement twice.
+	 * The count on the voucher row is the cheap gate; this table is the truth
+	 * it must always equal.
+	 */
+	voucherRedemptions: defineTable({
+		voucherId: v.id("vouchers"),
+		retailerId: v.id("retailers"),
+		orderId: v.id("orders"),
+		// The buyer's WhatsApp number as the order stores it (E.164 digits),
+		// so a per-buyer limit can be counted (`z8r3fdz0pw`). Absent on an
+		// anonymous counter sale — that use counts against the code's total
+		// only — and on every use recorded before the limit existed, which is
+		// why no backfill is needed: those codes carry no per-buyer limit.
+		waPhone: v.optional(v.string()),
+		createdAt: v.number(),
+	})
+		.index("by_voucher", ["voucherId", "createdAt"])
+		// The per-buyer count: "how many orders has THIS number placed with
+		// THIS code" is one bounded range read inside the order mutation.
+		.index("by_voucher_phone", ["voucherId", "waPhone"])
+		.index("by_order", ["orderId"])
+		// Tenant teardown (`accountDeletion`).
+		.index("by_retailer", ["retailerId"]),
 
 	/**
 	 * A bulk promotion (`z8r3fducfd`) — ONE set of terms (percent off, window,
@@ -4201,4 +4494,26 @@ export default defineSchema({
 		.index("by_retailer", ["retailerId"])
 		.index("by_admin", ["adminUserId"])
 		.index("by_ts", ["ts"]),
+
+	// The CAC ledger (86eye3eyp, docs/acquisition-attribution.md): what one
+	// acquisition channel cost Kedaipal in one month. One row per
+	// (periodStart, channel), upserted by `metrics.recordSpend`; a channel
+	// with no row spent nothing. Only ACTUALS live here — CAC itself is
+	// derived at read time (convex/lib/metrics.ts), so a policy change (the
+	// founder hourly rate) recomputes every month. Kedaipal's own spend, so
+	// always MYR sen, whatever the stores it won bill in.
+	acquisitionCosts: defineTable({
+		// MYT midnight on the 1st (monthStartMyt in lib/usagePeriod.ts).
+		periodStart: v.number(),
+		// ACQUISITION_CHANNELS, validated in convex/lib/metrics.ts.
+		channel: v.string(),
+		cashSpend: v.number(), // MYR sen
+		founderHours: v.optional(v.number()),
+		note: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+		updatedBy: v.optional(v.string()), // admin Clerk subject
+	})
+		.index("by_period", ["periodStart"])
+		.index("by_period_channel", ["periodStart", "channel"]),
 });

@@ -26,11 +26,17 @@ import { useDashboardRetailerRead } from "../hooks/useDashboardRetailer";
 import { useExitActAs } from "../hooks/useExitActAs";
 import { OrderNotificationsBridge } from "../hooks/useOrderNotifications";
 import { useOrderToastNotifications } from "../hooks/useOrderToastNotifications";
+import { NOT_FOUND_TITLE, rendersNotFound } from "../lib/not-found";
 import { hasFeature } from "../lib/subscription";
 
 export const Route = createFileRoute("/app")({
-	head: () => ({
-		meta: [{ name: "robots", content: "noindex, nofollow" }],
+	head: ({ match }) => ({
+		meta: [
+			{ name: "robots", content: "noindex, nofollow" },
+			// A dead `/app/...` link renders the not-found page in this layout's
+			// outlet, so this layout titles the tab for it.
+			...(rendersNotFound(match) ? [{ title: NOT_FOUND_TITLE.app }] : []),
+		],
 	}),
 	component: AppLayout,
 });
@@ -78,6 +84,11 @@ function AppShell() {
 	const newOrdersCount = counts?.newOrders ?? 0;
 	const isAdminResult = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
 	const isAdmin = isAdminResult ?? false;
+	// Admin areas OUTSIDE this app (convex/lib/adminAreas.ts) — today only the
+	// blog's video upload page. A blog editor holds it without being an admin.
+	const adminAreas = useQuery(convexQuery(api.adminAccess.mine, {})).data
+		?.areas;
+	const blogVideos = adminAreas?.includes("videos") ?? false;
 	// A Kedaipal admin on their OWN store runs the app for free (never soft-locked
 	// server-side), so the chrome swaps the trial/past-due nag for an "Admin" badge
 	// and suppresses the subscription banner. While acting-as a seller we keep the
@@ -174,6 +185,7 @@ function AppShell() {
 					retailer={retailer}
 					newOrdersCount={newOrdersCount}
 					isAdmin={isAdmin}
+					blogVideos={blogVideos}
 					adminBadge={adminOwnStore}
 				/>
 				{/* min-w-0: this column is a flex item beside the sidebar, and a flex
@@ -245,6 +257,7 @@ function AppShell() {
 						adminNav={!retailer || (isAdmin && onAdminRoute)}
 						// With a store, the admin row leads with an "App" tab back to it.
 						hasStore={!!retailer}
+						blogVideos={blogVideos}
 						crmLocked={
 							!!retailer &&
 							!retailer.actingAsAdmin &&

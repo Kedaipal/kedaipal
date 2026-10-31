@@ -1,6 +1,6 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useStore } from "@tanstack/react-form";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { Package, ShoppingBag, Truck } from "lucide-react";
@@ -16,7 +16,7 @@ import {
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
-import { SG_STATE_LABEL } from "../../../convex/lib/address";
+import { postcodeRule, SG_STATE_LABEL } from "../../../convex/lib/address";
 import { parseBuyerWaPhone } from "../../../convex/lib/buyerPhone";
 import {
 	answerPrompt,
@@ -28,7 +28,12 @@ import {
 	type ClosedDateRange,
 	closureOn,
 } from "../../../convex/lib/closedDates";
-import type { Country } from "../../../convex/lib/country";
+import { type Country, isCountry } from "../../../convex/lib/country";
+import {
+	CROSS_BORDER_MIN_NOTICE_DAYS,
+	countryName,
+	overseasFeeLabel,
+} from "../../../convex/lib/crossBorder";
 import {
 	assertValidFulfilmentDate,
 	defaultFulfilmentTimeMinutes,
@@ -54,6 +59,7 @@ import { type DialIso, isDialIso } from "../../../convex/lib/phoneDial";
 import { distinctPickupNotes } from "../../../convex/lib/pickupNote";
 import { slowestPrep } from "../../../convex/lib/prepFloor";
 import type { UseCart } from "../../hooks/useCart";
+import { useDebounce } from "../../hooks/useDebounce";
 import { usePromoClock } from "../../hooks/usePromoClock";
 import { usePublishedHeight } from "../../hooks/usePublishedHeight";
 import { readAttributionSource } from "../../hooks/useSourceAttribution";
@@ -68,6 +74,7 @@ import {
 	quickPickDays,
 	windowHasUnpickableDay,
 } from "../../lib/checkout-dates";
+import { checkoutFieldIssueLine } from "../../lib/checkout-field-issue";
 import {
 	asksForTime,
 	type FulfilmentKind,
@@ -94,6 +101,7 @@ import {
 	type TimeMove,
 	timeMovedCopy,
 } from "../../lib/fulfilment-time-issue";
+import { liveQuoteAddressHint } from "../../lib/live-quote-copy";
 import { composeCustomerNote } from "../../lib/order-note";
 import { overseasCourierNote } from "../../lib/overseas-courier-note";
 import {
@@ -106,7 +114,10 @@ import {
 	type CheckoutAddressValues,
 	checkoutFormSchemaFor,
 } from "../../lib/schemas";
-import { useLiveDeliveryQuote } from "../../lib/use-live-delivery-quote";
+import {
+	heldDeliveryAnswer,
+	useLiveDeliveryQuote,
+} from "../../lib/use-live-delivery-quote";
 import { submitThenFocusError } from "../forms/focus-error";
 import { useAppForm } from "../forms/form";
 import { CopyText, DayWindowsInline } from "../hours/hours-text";
@@ -122,15 +133,24 @@ import {
 import {
 	type AppliedVoucher,
 	previewDiscount,
+	usePerBuyerRecheck,
 	VoucherField,
+	VoucherNotes,
+	voucherCodeForOrder,
 } from "../vouchers/voucher-field";
 import { AddressFieldset } from "./address-fieldset";
 import { CheckoutHint } from "./checkout-hint";
 import {
+	type CheckoutQuoteView,
 	CheckoutSummary,
 	CheckoutTotals,
 	pendingTotalParts,
 } from "./checkout-summary";
+import {
+	DeliverToSwitch,
+	HomeOnlyItems,
+	OverseasDeliveryNote,
+} from "./deliver-to-switch";
 import { PaymentsPausedNotice } from "./payments-paused-notice";
 import {
 	PickupLocationRadioList,
@@ -163,6 +183,14 @@ interface CheckoutPageProps {
 	 * resolves it to MY); must match what the server enforces in orders.create,
 	 * which reads the same retailer field. */
 	country: Country;
+	/** Countries the store is taking cross-border orders to right now
+	 * (z8r3fdr5yy) — empty for a domestic-only store, which then never sees
+	 * the "Deliver to" switch. */
+	shipsAbroadTo?: readonly Country[];
+	/** The visitor's country from the edge (CF-IPCountry) — preselects
+	 * "Deliver to" when the store delivers there. A guess, so the switch is
+	 * always shown beside it. */
+	visitorCountry?: Country;
 	/** Confirmation-push path active (86eyf1rck): the CTA promises a WhatsApp
 	 * confirmation FROM Kedaipal instead of the wa.me send-it-yourself step. */
 	confirmPushEnabled: boolean;
@@ -279,6 +307,8 @@ export function CheckoutPage({
 	checkoutPhone,
 	locale,
 	country,
+	shipsAbroadTo = [],
+	visitorCountry,
 	confirmPushEnabled,
 	offerSelfCollect,
 	offerDelivery,
@@ -442,6 +472,21 @@ export function CheckoutPage({
 	// soon as the buyer picks one.
 	const [pickupError, setPickupError] = useState<string | null>(null);
 
+	// "Deliver to" (z8r3fdr5yy): the store's own country, unless the store
+	// delivers abroad and the visitor is browsing from there — then theirs.
+	const initialDeliverTo: Country =
+		visitorCountry !== undefined && shipsAbroadTo.includes(visitorCountry)
+			? visitorCountry
+			: country;
+	// The pick, narrowed to a country this store delivers to RIGHT NOW — a
+	// lane that paused since the page loaded falls back to the store's own.
+	const deliverToOf = (raw: string | undefined): Country =>
+		raw !== undefined &&
+		isCountry(raw) &&
+		(raw === country || shipsAbroadTo.includes(raw))
+			? raw
+			: country;
+
 	// Selectable date range for the picker: today + the retailer's notice (the
 	// earliest day) through today + 30. Memoised on the retailer setting so the
 	// "today" anchor is computed once per mount, not on every keystroke. The
@@ -458,21 +503,36 @@ export function CheckoutPage({
 	const hasCustomLine = cart.items.some(
 		(item) => item.isCustom === true || item.quoteOnRequest === true,
 	);
-	const noticeDays = Math.max(minFulfilmentNoticeDays ?? 0, cartNoticeDays);
+	const baseNoticeDays = Math.max(minFulfilmentNoticeDays ?? 0, cartNoticeDays);
+	// An order going ABROAD can't be delivered today whatever the store's own
+	// notice says (`CROSS_BORDER_MIN_NOTICE_DAYS`) — the floor the server
+	// applies at the order door too. The form's initial date reads the
+	// initial Deliver-to pick; the live one (`noticeDays`, below the form)
+	// follows the switch.
+	const overseasNoticeDays = (abroad: boolean) =>
+		Math.max(baseNoticeDays, abroad ? CROSS_BORDER_MIN_NOTICE_DAYS : 0);
+	const initialNoticeDays = overseasNoticeDays(initialDeliverTo !== country);
 	// Keyed on the calendar DAY, so a tab left open past midnight re-floors
 	// instead of offering yesterday.
 	const nowDayKey = ymdFromEpoch(now);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: recomputed per calendar day (nowDayKey), not per render.
-	const { minYmd, maxYmd, todayYmd } = useMemo(() => {
-		const bounds = fulfilmentDateBounds(noticeDays, now);
+	const boundsFor = (days: number) => {
+		const bounds = fulfilmentDateBounds(days, now);
 		return {
 			minYmd: ymdFromEpoch(bounds.min),
 			maxYmd: ymdFromEpoch(bounds.max),
+		};
+	};
+	// biome-ignore lint/correctness/useExhaustiveDependencies: recomputed per calendar day (nowDayKey), not per render.
+	const { initialMinYmd, initialMaxYmd, todayYmd } = useMemo(() => {
+		const { minYmd, maxYmd } = boundsFor(initialNoticeDays);
+		return {
+			initialMinYmd: minYmd,
+			initialMaxYmd: maxYmd,
 			// Today with no notice applied — lets the chips say "Today"/"Tomorrow"
 			// only when those days are genuinely selectable.
 			todayYmd: ymdFromEpoch(fulfilmentDateBounds(0, now).min),
 		};
-	}, [noticeDays, nowDayKey]);
+	}, [initialNoticeDays, nowDayKey]);
 	const noCheckoutPhone = !checkoutPhone;
 
 	// Self-collect surfaces on the storefront only when the retailer opted in
@@ -549,32 +609,43 @@ export function CheckoutPage({
 	// days and a today already used up. Falls back to the plain earliest day
 	// when the whole window is closed (a notice-vs-hours misconfig — the inline
 	// notice and submit copy then explain).
-	const firstSelectableYmd = (schedule: Schedule) => {
-		for (let ymd = minYmd; ymd <= maxYmd; ymd = addDaysYmd(ymd, 1)) {
+	const firstSelectableYmd = (
+		schedule: Schedule,
+		bounds: { minYmd: string; maxYmd: string },
+	) => {
+		for (
+			let ymd = bounds.minYmd;
+			ymd <= bounds.maxYmd;
+			ymd = addDaysYmd(ymd, 1)
+		) {
 			if (isDaySelectable(ymd, schedule)) return ymd;
 		}
-		return minYmd;
+		return bounds.minYmd;
 	};
 	const defaultSchedule = scheduleFor(defaultMethod, "");
-	const defaultYmd = firstSelectableYmd(defaultSchedule);
-	// Typed as the form's `string`, not `Country`: the picker writes any dial
-	// country, and the form's value type is inferred from these defaults.
-	const storeDialCountry: string = country;
-
+	const defaultYmd = firstSelectableYmd(defaultSchedule, {
+		minYmd: initialMinYmd,
+		maxYmd: initialMaxYmd,
+	});
 	const form = useAppForm({
 		defaultValues: {
 			name: "",
 			// Buyer's WhatsApp number (86eyf1rck) — required: the confirmation
 			// push (or the wa.me fallback) is how the order reaches a chat at all.
 			waPhone: "",
-			// The plate's picked dial country (z8r3fdh274) — the store's own until
-			// the buyer picks another or types a `+CC`. A plain string in form
-			// state, like every other value; the schema refuses an unknown one.
-			waDialCountry: storeDialCountry,
+			// The plate's picked dial country (z8r3fdh274) — the country the
+			// parcel goes to (the store's own unless Deliver to starts abroad,
+			// z8r3fdr5yy) until the buyer picks another or types a `+CC`. Typed
+			// as the form's plain `string`, not `Country`: the picker writes any
+			// dial country; the schema refuses an unknown one.
+			waDialCountry: initialDeliverTo as string,
 			deliveryMethod: defaultMethod,
+			// Typed as the form's `string` (the schema narrows it), like
+			// waDialCountry above.
+			deliverTo: initialDeliverTo as string | undefined,
 			// Saved per country (SG-lite) — an MY address can't leak a state or a
 			// 5-digit postcode into an SG form, and vice versa.
-			address: loadSavedAddress(country),
+			address: loadSavedAddress(initialDeliverTo),
 			// Empty when delivery, the chosen id when self-collect with 2+ options,
 			// unused when self-collect with exactly 1 option (auto-resolved at submit).
 			pickupLocationId: "",
@@ -626,9 +697,14 @@ export function CheckoutPage({
 				return;
 			}
 			const effectiveMethod: "delivery" | "self_collect" = value.deliveryMethod;
+			const destination = deliverToOf(value.deliverTo);
 			const sanitizedAddress =
 				effectiveMethod === "delivery"
-					? sanitizeAddress(value.address, country)
+					? {
+							...sanitizeAddress(value.address, destination),
+							// Stamped only when abroad — a domestic payload is unchanged.
+							...(destination !== country ? { country: destination } : {}),
+						}
 					: undefined;
 
 			// Resolve the chosen pickup location id. For the single-location case
@@ -771,14 +847,18 @@ export function CheckoutPage({
 					expectedSubtotal: cartItemSubtotal(cart.items),
 					// Re-validated server-side (the field's check was only for the
 					// tick) — a code that died in the meantime refuses the order
-					// rather than quietly charging full price.
-					voucherCode: voucher?.code,
+					// rather than quietly charging full price. A code still under its
+					// minimum spend is NOT sent — the ticket already shows it taking
+					// nothing off and says how much more it needs (`z8r3fdz0pw`).
+					voucherCode: voucherCodeForOrder(voucher, cart.total),
 				});
 				// Spent — forget the held code, or the next checkout in this tab
 				// re-applies a redeemed voucher and is refused for no visible
 				// reason.
-				if (voucher) clearVoucherParam(storeSlug);
-				if (effectiveMethod === "delivery") saveAddress(country, value.address);
+				if (voucherCodeForOrder(voucher, cart.total))
+					clearVoucherParam(storeSlug);
+				if (effectiveMethod === "delivery")
+					saveAddress(deliverToOf(value.deliverTo), value.address);
 				setSubmitted(true);
 				cart.clearCart();
 				form.reset();
@@ -839,8 +919,21 @@ export function CheckoutPage({
 		form.store,
 		(s) => s.values.pickupLocationId,
 	);
+	// "Deliver to" (z8r3fdr5yy) — the address form, its schema arm, the Places
+	// region and the quote all follow the country the address is IN.
+	const watchedDeliverTo = useStore(form.store, (s) => s.values.deliverTo);
+	const addressCountry = deliverToOf(watchedDeliverTo);
+	const abroad = addressCountry !== country;
+	// The live date floor: the store's and the cart's notice, raised for an
+	// address abroad. Flipping Deliver to re-floors the date (the effect below).
+	const noticeDays = overseasNoticeDays(abroad);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: recomputed per calendar day (nowDayKey), not per render.
+	const { minYmd, maxYmd } = useMemo(
+		() => boundsFor(noticeDays),
+		[noticeDays, nowDayKey],
+	);
 	const watchedSchedule = scheduleFor(watchedMethod, watchedPickupId);
-	const floorYmd = firstSelectableYmd(watchedSchedule);
+	const floorYmd = firstSelectableYmd(watchedSchedule, { minYmd, maxYmd });
 	// biome-ignore lint/correctness/useExhaustiveDependencies: form identity is stable; value read fresh inside.
 	useEffect(() => {
 		const current = form.store.state.values.fulfilmentDate;
@@ -859,6 +952,46 @@ export function CheckoutPage({
 	const dialCountry: DialIso = isDialIso(watchedDialCountry)
 		? watchedDialCountry
 		: country;
+	// The number a per-buyer voucher is judged against (`z8r3fdz0pw`, flow
+	// A): only once it parses, and settled for a moment first, so a buyer
+	// finishing their number doesn't spend the store's check budget on every
+	// keystroke. Undefined until then — the ticket says the code will be
+	// checked against it, and the order door checks it regardless.
+	const watchedWaPhone = useStore(form.store, (s) => s.values.waPhone);
+	const settledWaPhone = useDebounce(watchedWaPhone ?? "", 600);
+	const voucherBuyer = useMemo(() => {
+		const parsed = parseBuyerWaPhone(settledWaPhone, dialCountry);
+		return parsed.ok
+			? {
+					waPhone: settledWaPhone,
+					waDialCountry: dialCountry,
+					digits: parsed.digits,
+					label: formatMobile(parsed.digits),
+				}
+			: undefined;
+	}, [settledWaPhone, dialCountry]);
+	// The code flow A took off for this number, kept typed in the field so
+	// the sentence is visibly about it.
+	const [voucherRefusedCode, setVoucherRefusedCode] = useState<
+		string | undefined
+	>(undefined);
+	const applyRechecked = useCallback((v: AppliedVoucher) => {
+		setVoucherServerRefusal(undefined);
+		setVoucherRefusedCode(undefined);
+		setVoucher(v);
+	}, []);
+	const refuseForBuyer = useCallback((message: string, code: string) => {
+		setVoucher(null);
+		setVoucherServerRefusal(message);
+		setVoucherRefusedCode(code);
+	}, []);
+	usePerBuyerRecheck({
+		retailerId,
+		applied: voucher,
+		buyer: voucherBuyer,
+		onApply: applyRechecked,
+		onRefused: refuseForBuyer,
+	});
 	// The phone box's value as the waPhone listener last left it — the
 	// "previous" `applyBuyerPhoneKeystroke` judges a change against, since a
 	// TanStack listener is handed only the new value. Every edit of the box
@@ -873,7 +1006,8 @@ export function CheckoutPage({
 	const overseasNote = overseasCourierNote({
 		booksCouriers,
 		deliveryMethod: watchedMethod,
-		localNumber: dialCountry === country,
+		// The courier is in the country the parcel goes TO (z8r3fdr5yy).
+		localNumber: dialCountry === addressCountry,
 		collectsFromCustomer,
 		storeCountry: country,
 		storeName,
@@ -1064,8 +1198,11 @@ export function CheckoutPage({
 	const latNum = watchedLat.trim().length > 0 ? Number(watchedLat) : NaN;
 	const lngNum = watchedLng.trim().length > 0 ? Number(watchedLng) : NaN;
 	const hasCoords = Number.isFinite(latNum) && Number.isFinite(lngNum);
-	const deliveryQuote: PublicDeliveryQuote | undefined = useQuery(
-		convexQuery(
+	// Held across a cart edit when the answer is "live" — see
+	// `heldDeliveryAnswer`: without it every quantity tap blanked the
+	// delivery line and reset the live quote for a beat.
+	const deliveryQuoteRead = useQuery({
+		...convexQuery(
 			api.delivery.quote,
 			deliveryAvailable && watchedMethod === "delivery"
 				? {
@@ -1082,10 +1219,16 @@ export function CheckoutPage({
 							quantity: item.quantity,
 						})),
 						subtotal: cart.total,
+						// Abroad: priced by the store's lane, never its domestic
+						// config (z8r3fdr5yy). Domestic carts send nothing new.
+						...(abroad ? { country: addressCountry } : {}),
 					}
 				: "skip",
 		),
-	).data;
+		placeholderData: keepPreviousData,
+	});
+	const deliveryQuote: PublicDeliveryQuote | undefined =
+		heldDeliveryAnswer(deliveryQuoteRead);
 	const rawQuote = watchedMethod === "delivery" ? deliveryQuote : undefined;
 
 	// --- Live Lalamove quote (86eyb5hrf) ------------------------------------
@@ -1093,8 +1236,15 @@ export function CheckoutPage({
 	// answers {kind:"live"} and the real fee comes from the shared
 	// useLiveDeliveryQuote hook (quoteForCheckout action, once per picked pin).
 	const isLiveMode = rawQuote?.kind === "live";
+	const watchedPostcode = useStore(
+		form.store,
+		(s) => s.values.address.postcode,
+	);
 	const liveQuote = useLiveDeliveryQuote({
 		enabled: isLiveMode,
+		// Abroad, the live price is the lane's EasyParcel quote (z8r3fdr5yy).
+		country: abroad ? addressCountry : undefined,
+		postcode: abroad ? watchedPostcode : undefined,
 		// The STORE's mode decides which action prices it — never inferred here.
 		providerAware: rawQuote?.kind === "live" && rawQuote.providerAware,
 		retailerId,
@@ -1135,13 +1285,22 @@ export function CheckoutPage({
 	// below stays a single code path. No pin / no quote is a HARD stop (strict
 	// since 27 Jul): a Lalamove buyer always sees the real rider price before
 	// sending — exactly what orders.create enforces server-side.
-	const quoteForDelivery:
-		| PublicDeliveryQuote
-		| { kind: "calculating" }
-		| undefined = (() => {
+	// Cross-border (z8r3fdr5yy) folds in as two more blocks: the cart holds
+	// home-only products (named in `homeOnly` below, each with a Remove), or
+	// the lane closed since the page loaded.
+	const quoteForDelivery: CheckoutQuoteView = (() => {
 		if (!rawQuote) return undefined;
+		if (rawQuote.kind === "home_only")
+			return { kind: "blocked", reason: "home_only" };
+		if (rawQuote.kind === "no_lane")
+			return { kind: "blocked", reason: "no_lane" };
 		if (rawQuote.kind !== "live") return rawQuote;
-		if (!hasCoords) return { kind: "blocked", reason: "no_coords" };
+		// Abroad, the lane's EasyParcel quote is priced on the postal code, so
+		// a typed address is enough — never ask an overseas buyer for a pin.
+		if (abroad) {
+			if (liveQuote.state === "idle")
+				return { kind: "blocked", reason: "no_postcode" };
+		} else if (!hasCoords) return { kind: "blocked", reason: "no_coords" };
 		switch (liveQuote.state) {
 			case "quoted":
 				return liveQuote.fee === 0
@@ -1161,6 +1320,10 @@ export function CheckoutPage({
 			// "too far", which would send the buyer editing a good address.
 			case "no_cold_service":
 				return { kind: "blocked", reason: "no_cold_service" };
+			// Too heavy for any rider vehicle and no courier priced it — the
+			// order is the problem, never the address.
+			case "too_heavy":
+				return { kind: "blocked", reason: "too_heavy" };
 			case "unavailable":
 				return { kind: "blocked", reason: "unquotable" };
 			default:
@@ -1173,6 +1336,7 @@ export function CheckoutPage({
 	const deliveryBlocked =
 		quoteForDelivery?.kind === "blocked" ||
 		quoteForDelivery?.kind === "calculating";
+	const homeOnly = rawQuote?.kind === "home_only" ? rawQuote.products : null;
 
 	// --- Can this store accept a hand-typed address? (86eye50qv) ------------
 	// While the buyer has NO pin, the live quote already answers exactly that
@@ -1193,9 +1357,10 @@ export function CheckoutPage({
 			quoteForDelivery.reason === "unquotable" ||
 			quoteForDelivery.reason === "out_of_range" ||
 			quoteForDelivery.reason === "store_unavailable" ||
-			quoteForDelivery.reason === "no_cold_service");
+			quoteForDelivery.reason === "no_cold_service" ||
+			quoteForDelivery.reason === "too_heavy");
 	const allowManualAddressEntry =
-		rawQuote !== undefined && !(!hasCoords && pinRequiredBlock);
+		rawQuote !== undefined && (abroad || !(!hasCoords && pinRequiredBlock));
 
 	// Stock eroded under a persisted cart (qty 5, seller drops to 2): the line
 	// shows "Only 2 in stock" with `+` disabled, but the order would still be
@@ -1278,6 +1443,19 @@ export function CheckoutPage({
 	const watchedLine1 = useStore(form.store, (s) => s.values.address.line1);
 	const addressIncomplete =
 		watchedMethod === "delivery" && watchedLine1.trim().length === 0;
+	// The form's own refusal: once touched, any field error turns `canSubmit`
+	// false and disables Place order, so the reason line must name the field —
+	// a blank name, or a postal code the Google pick didn't carry, used to
+	// disable the button with nothing said. No `canSubmit` gate needed: the form
+	// holds field errors only once validation has run, which is exactly when
+	// `canSubmit` drops, so an untouched form (whose press reveals every error
+	// inline) has nothing here to name.
+	const fieldIssueLine = useStore(form.store, (s) =>
+		checkoutFieldIssueLine(s.fieldMeta, s.values, {
+			country,
+			collectsFromCustomer,
+		}),
+	);
 
 	// ------------------------------------------------------------------ render
 
@@ -1327,13 +1505,28 @@ export function CheckoutPage({
 	const deliveryBlockedLine = (() => {
 		if (quoteForDelivery?.kind !== "blocked") return null;
 		switch (quoteForDelivery.reason) {
+			case "home_only":
+				return `Some items can't go to ${countryName(addressCountry)} — see the delivery step`;
+			case "no_lane":
+				return `${storeName} isn't delivering to ${countryName(addressCountry)} right now`;
 			case "no_state":
 				return `Choose your state so we can calculate your ${feeNounShort}`;
+			case "no_postcode":
+				return `Add your ${postcodeRule(addressCountry).label.toLowerCase()} so we can calculate your ${feeNounShort}`;
 			case "over_bands":
 				return "This order is too heavy for the store's delivery rates — see your order summary";
 			case "missing_weights":
 			case "custom_item":
 				return `Your ${feeNounShort} can't be worked out for this order — see your order summary`;
+			// The address is fine for these three — the default below used to
+			// say "We can't deliver to this address" for all of them, under a
+			// summary that said otherwise (found driving a 41 kg cart).
+			case "too_heavy":
+				return "This order is too heavy for a rider — see your order summary";
+			case "no_cold_service":
+				return "Chilled or frozen delivery isn't available right now — see your order summary";
+			case "store_unavailable":
+				return `${collectsFromCustomer ? "Collection" : "Delivery"} pricing isn't working for this store — see your order summary`;
 			default:
 				return collectsFromCustomer
 					? "We can't collect from this address — see your order summary"
@@ -1342,8 +1535,8 @@ export function CheckoutPage({
 	})();
 
 	// Why the CTA is disabled, in the buyer's words. Ordered by what they'd fix
-	// first. `null` = nothing blocking (or the only gap is a field the form
-	// already marks inline, like the name).
+	// first. `null` = nothing blocking. Every reason the button can be disabled
+	// for has a rung here — a field error included (`fieldIssueLine`).
 	const blockedReason: string | null = neitherAvailable
 		? "This store isn't accepting orders right now"
 		: noCheckoutPhone
@@ -1360,15 +1553,17 @@ export function CheckoutPage({
 								: "Prices changed while you were checking out — review your order before paying"
 							: unansweredLine?.missing
 								? `${answerPrompt(unansweredLine.missing.label)} for ${unansweredLine.item.name}`
-								: addressIncomplete
-									? collectsFromCustomer
-										? "Add your collection address to continue"
-										: "Add your delivery address to continue"
-									: quoteForDelivery?.kind === "calculating"
+								: fieldIssueLine
+									? fieldIssueLine
+									: addressIncomplete
 										? collectsFromCustomer
-											? "Calculating your collection fee…"
-											: "Calculating your delivery fee…"
-										: (deliveryBlockedLine ?? null);
+											? "Add your collection address to continue"
+											: "Add your delivery address to continue"
+										: quoteForDelivery?.kind === "calculating"
+											? collectsFromCustomer
+												? "Calculating your collection fee…"
+												: "Calculating your delivery fee…"
+											: (deliveryBlockedLine ?? null);
 
 	const submitButton = (
 		<form.Subscribe
@@ -1598,6 +1793,12 @@ export function CheckoutPage({
 							const blockedCopy = (() => {
 								if (quote?.kind !== "blocked") return undefined;
 								switch (quote.reason) {
+									// Cross-border (z8r3fdr5yy): the delivery step names
+									// the items with a Remove each; the summary just says so.
+									case "home_only":
+										return `Some items can't go to ${countryName(addressCountry)}. Remove them on the delivery step, or deliver to ${countryName(country)}.`;
+									case "no_lane":
+										return `${storeName} isn't delivering to ${countryName(addressCountry)} right now. Deliver to ${countryName(country)}${selfCollectAvailable ? ", or choose pickup" : ""}.`;
 									case "out_of_range":
 										// Live-quote stores: the COURIER doesn't reach here, and
 										// retrying the same address never will — say so, and point
@@ -1624,6 +1825,19 @@ export function CheckoutPage({
 												? " Pickup is still available, or message"
 												: " Message"
 										} ${storeName} to arrange delivery.`;
+									case "too_heavy":
+										// Heavier than any rider vehicle carries, and no courier
+										// bid. The address is fine — say what IS the problem and
+										// the two ways through it.
+										return `This order is too heavy for a ${
+											collectsFromCustomer ? "collection" : "delivery"
+										} rider.${
+											selfCollectAvailable
+												? " Choose pickup, or message"
+												: " Message"
+										} ${storeName} to arrange ${
+											collectsFromCustomer ? "collection" : "delivery"
+										}.`;
 									case "store_unavailable":
 										// Seller-side breakage — not the buyer's fault, not
 										// fixable by retrying. Give them the two real ways out.
@@ -1635,7 +1849,13 @@ export function CheckoutPage({
 												: "Message"
 										} the store on WhatsApp to sort it out.`;
 									case "unquotable":
-										return `We couldn't calculate the ${feeNoun} right now — re-pick your address to retry, or try again shortly.`;
+										return abroad
+											? `We couldn't get a ${feeNoun} to ${countryName(addressCountry)} for this address — check your ${postcodeRule(addressCountry).label.toLowerCase()}, or try again shortly.`
+											: `We couldn't calculate the ${feeNoun} right now — re-pick your address to retry, or try again shortly.`;
+									case "no_postcode":
+										return addressIncomplete
+											? undefined
+											: `Add your ${postcodeRule(addressCountry).label.toLowerCase()} so we can calculate your ${feeNoun}.`;
 									// Weight-mode blocks (86eyeea1n) ------------------------
 									case "unserved_state":
 										return `${storeName} doesn't ${
@@ -1700,9 +1920,22 @@ export function CheckoutPage({
 											collectsFromCustomer={
 												deliveryMethod === "delivery" && collectsFromCustomer
 											}
+											overseasFeeLabel={
+												deliveryMethod === "delivery"
+													? overseasFeeLabel(addressCountry, country)
+													: undefined
+											}
 											awaitingQuote={hasCustomLine}
 											voucherDiscount={previewDiscount(voucher, cart.total)}
 											voucherCode={voucher?.code}
+											voucherNote={
+												<VoucherNotes
+													applied={voucher}
+													itemSubtotal={cart.total}
+													currency={cart.currency}
+													buyer={voucherBuyer}
+												/>
+											}
 											voucherField={
 												acceptsVouchers ? (
 													<VoucherField
@@ -1713,14 +1946,18 @@ export function CheckoutPage({
 														applied={voucher}
 														onApply={(v) => {
 															setVoucherServerRefusal(undefined);
+															setVoucherRefusedCode(undefined);
 															setVoucher(v);
 														}}
 														onRemove={() => {
 															setVoucherServerRefusal(undefined);
+															setVoucherRefusedCode(undefined);
 															setVoucher(null);
 														}}
 														serverRefusal={voucherServerRefusal}
 														initialCode={initialVoucherCode}
+														buyer={voucherBuyer}
+														refusedCode={voucherRefusedCode}
 													/>
 												) : null
 											}
@@ -2039,11 +2276,48 @@ export function CheckoutPage({
 													items up at this address and brings them to the store.
 												</p>
 											) : null}
+											{shipsAbroadTo.length > 0 && !collectsFromCustomer ? (
+												<DeliverToSwitch
+													storeCountry={country}
+													countries={shipsAbroadTo}
+													value={addressCountry}
+													onChange={(next) => {
+														if (next === addressCountry) return;
+														form.setFieldValue("deliverTo", next);
+														// The phone plate follows the destination while
+														// the box is empty — a buyer delivering to
+														// Malaysia most often has a +60 number — and
+														// never rewrites a number already typed.
+														if (form.getFieldValue("waPhone").trim() === "") {
+															form.setFieldValue("waDialCountry", next);
+														}
+														// A Malaysian address can't be half-reused as a
+														// Singapore one — swap in what this buyer last
+														// used for THAT country (empty if never).
+														form.setFieldValue(
+															"address",
+															loadSavedAddress(next),
+														);
+													}}
+												/>
+											) : null}
+											{homeOnly ? (
+												<HomeOnlyItems
+													storeCountry={country}
+													destination={addressCountry}
+													products={homeOnly}
+													lines={cart.items}
+													onRemove={cart.removeItem}
+												/>
+											) : null}
 											<AddressFieldset
+												// Remount on a country switch: the Places session,
+												// the region lock and the manual fields all follow it.
+												key={addressCountry}
 												form={form}
 												fields="address"
 												retailerId={retailerId}
-												country={country}
+												country={addressCountry}
 												allowManualEntry={allowManualAddressEntry}
 												// Only when the section heading is the method question
 												// ("How do you want to get it?") — a delivery-only store
@@ -2063,13 +2337,24 @@ export function CheckoutPage({
 											    pickup point is owner-only data (never in the public
 											    payload), and Lalamove's coverage is a city zone, not
 											    a radius we could quote. */}
-											{isLiveMode ? (
+											{rawQuote?.kind === "live" ? (
 												<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-													{collectsFromCustomer
-														? "Collection is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be collected from"
-														: "Delivery is by rider, so the fee depends on your address — you'll see it here once you pick a suggestion. Addresses outside the rider's coverage can't be delivered"}
-													{selfCollectAvailable ? " — pick up instead" : ""}.
+													{liveQuoteAddressHint({
+														collectsFromCustomer,
+														riders: rawQuote.riders,
+														couriers: rawQuote.couriers,
+														selfCollectAvailable,
+														overseasPostcodeLabel: abroad
+															? postcodeRule(addressCountry).label.toLowerCase()
+															: undefined,
+													})}
 												</p>
+											) : null}
+											{abroad ? (
+												<OverseasDeliveryNote
+													storeCountry={country}
+													destination={addressCountry}
+												/>
 											) : null}
 											{/* Overseas WhatsApp number at a courier-booking store
 											    (z8r3fdh274): the rider is handed the store's number,
@@ -2245,12 +2530,19 @@ export function CheckoutPage({
 																			? ` Items in your cart need at least ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice.`
 																			: ""
 																	}`
-																: cartNoticeDays >
-																		(minFulfilmentNoticeDays ?? 0)
-																	? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
-																	: isDropOff
-																		? "Pick the date you'll meet at the drop-off point."
-																		: "Pick the date you need this order."
+																: abroad &&
+																		CROSS_BORDER_MIN_NOTICE_DAYS >
+																			Math.max(
+																				minFulfilmentNoticeDays ?? 0,
+																				cartNoticeDays,
+																			)
+																	? `A parcel to ${countryName(addressCountry)} needs ${CROSS_BORDER_MIN_NOTICE_DAYS} days' notice — that's the earliest date you can pick.`
+																	: cartNoticeDays >
+																			(minFulfilmentNoticeDays ?? 0)
+																		? `An item in your cart needs ${cartNoticeDays} day${cartNoticeDays === 1 ? "" : "s"}' notice — that's the earliest date you can pick.`
+																		: isDropOff
+																			? "Pick the date you'll meet at the drop-off point."
+																			: "Pick the date you need this order."
 														}
 													/>
 												)}

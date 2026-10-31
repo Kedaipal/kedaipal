@@ -120,6 +120,8 @@ function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
 		createdAt: at(-20),
 		unclaimed: false,
 		referralEditable: true,
+		hasPaidInvoice: false,
+		acquisition: { suggested: null },
 		purging: false,
 		marketplace: { internal: false },
 		country: "MY",
@@ -883,7 +885,7 @@ describe("directory — credits", () => {
 		for (const column of [
 			"Credits left",
 			"Plan credits",
-			"Bought credits",
+			"Extra credits",
 			"Out of credits since",
 			"Custom grant",
 		])

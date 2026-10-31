@@ -164,7 +164,52 @@ describe("bookings.availability", () => {
 	});
 });
 
+/** Files a product under a named category, straight into the tables. */
+async function fileUnder(
+	t: { run: ReturnType<typeof setup>["run"] },
+	productId: Id<"products">,
+	name: string,
+) {
+	await t.run(async (ctx) => {
+		const product = await ctx.db.get(productId);
+		if (!product) throw new Error("product missing");
+		const now = Date.now();
+		const categoryId = await ctx.db.insert("categories", {
+			retailerId: product.retailerId,
+			name,
+			slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+			active: true,
+			sortOrder: 0,
+			createdAt: now,
+			updatedAt: now,
+		});
+		await ctx.db.insert("productCategories", {
+			productId,
+			categoryId,
+			retailerId: product.retailerId,
+			sortOrder: 0,
+			createdAt: now,
+		});
+	});
+}
+
 describe("bookings.requestBooking", () => {
+	test("freezes the listing's categories onto every line (86eyrtz74)", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup());
+		await fileUnder(t, productId, "Riverside");
+		const result = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			customer: guest(1),
+		});
+		const order = await asOwner.query(api.orders.get, {
+			shortId: result.shortId,
+		});
+		expect(order?.items.map((i) => i.categoryNames)).toEqual([["Riverside"]]);
+	});
+
 	test("lands as booking_requested with the stay priced × nights", async () => {
 		const { t, asOwner, retailer, productId } = await seedBookingStore(setup());
 		const result = await t.mutation(api.bookings.requestBooking, {

@@ -40,6 +40,7 @@ import {
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 
 /** The credit ledger's own ceiling (`ADMIN_CREDIT_LIMIT`, convex/credits.ts) —
@@ -332,11 +333,11 @@ export function EnterpriseContractForm({
 					<label htmlFor="ent-template" className="text-sm font-medium">
 						Start from another contract
 					</label>
-					<select
+					<Select
 						id="ent-template"
 						value={startedFrom}
 						onChange={(e) => startFrom(e.target.value)}
-						className="min-h-11 rounded-xl border border-input bg-background px-3 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						variant="field"
 					>
 						<option value="">Start from scratch</option>
 						{templates.map((t) => (
@@ -346,7 +347,7 @@ export function EnterpriseContractForm({
 								{t.contract.includedCredits.toLocaleString("en")} credits
 							</option>
 						))}
-					</select>
+					</Select>
 					{moneyNotCopied ? (
 						<p className="text-xs font-medium text-amber-700 dark:text-amber-400">
 							{/* The SYMBOL, never the ISO code — the code is data and the

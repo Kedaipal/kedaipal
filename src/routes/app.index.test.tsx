@@ -32,6 +32,7 @@ const state = {
 	},
 	dueByDay: [] as { start: number; count: number }[],
 	balance: null as Record<string, unknown> | null,
+	referCard: undefined as Record<string, unknown> | null | undefined,
 	canSeeInsights: true,
 	search: {} as Record<string, unknown>,
 };
@@ -48,12 +49,20 @@ vi.mock("@tanstack/react-router", () => ({
 		children,
 		to,
 		search,
+		...rest
 	}: {
 		children: ReactNode;
 		to?: string;
 		search?: unknown;
+		className?: string;
+		"data-testid"?: string;
 	}) => (
-		<a href={to ?? "/"} data-search={JSON.stringify(search ?? null)}>
+		<a
+			href={to ?? "/"}
+			data-search={JSON.stringify(search ?? null)}
+			className={rest.className}
+			data-testid={rest["data-testid"]}
+		>
 			{children}
 		</a>
 	),
@@ -73,6 +82,7 @@ vi.mock("@tanstack/react-query", () => ({
 			return { data: state.dueByDay };
 		if (name.startsWith("pickupLocations:")) return { data: { hasAny: false } };
 		if (name.startsWith("credits:getBalance")) return { data: state.balance };
+		if (name === "referrals:myCard") return { data: state.referCard };
 		return { data: undefined };
 	},
 }));
@@ -161,6 +171,7 @@ beforeEach(() => {
 	};
 	state.dueByDay = [];
 	state.balance = null;
+	state.referCard = undefined;
 	state.canSeeInsights = true;
 	state.search = {};
 });
@@ -437,5 +448,70 @@ describe("the period lives in the URL", () => {
 		const v = (Route as unknown as { validateSearch: (s: object) => object })
 			.validateSearch;
 		expect(v({ p: "90d" })).toEqual({ p: "7d" });
+	});
+});
+
+describe("Refer & earn sits in the first view", () => {
+	const referCard = {
+		offer: { pro: 60 },
+		earns: true,
+		pending: 0,
+		standing: { canRefer: true, earnsReward: true },
+	};
+
+	it("puts a header button AND a phone row under the greeting, both into /app/refer", () => {
+		state.referCard = referCard;
+		render(<Home />);
+		const button = screen.getByTestId("home-refer-button");
+		const row = screen.getByTestId("home-refer-row");
+		expect(button.getAttribute("href")).toBe("/app/refer");
+		expect(row.getAttribute("href")).toBe("/app/refer");
+		// The phone row stands in for the header buttons, which are
+		// desktop-only — it must never double up beside them on desktop.
+		expect(row.className).toContain("lg:hidden");
+		// Above everything operational: the doors come before the action strip.
+		const strip = screen.getByTestId("sales-section");
+		expect(
+			row.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+	});
+
+	it("both doors sit inside the What's-new anchor, ringed on ?spot=refer", () => {
+		state.referCard = referCard;
+		state.search = { spot: "refer" };
+		const { container } = render(<Home />);
+		const anchor = container.querySelector("#home-refer");
+		expect(anchor?.contains(screen.getByTestId("home-refer-button"))).toBe(
+			true,
+		);
+		expect(anchor?.contains(screen.getByTestId("home-refer-row"))).toBe(true);
+		for (const id of ["home-refer-button", "home-refer-row"])
+			expect(screen.getByTestId(id).className).toContain(
+				"animate-kp-spotlight",
+			);
+	});
+
+	it("no ring without the deep link", () => {
+		state.referCard = referCard;
+		render(<Home />);
+		expect(screen.getByTestId("home-refer-button").className).not.toContain(
+			"animate-kp-spotlight",
+		);
+	});
+
+	it("draws no door while the card loads, or for a reader with no store", () => {
+		for (const value of [undefined, null]) {
+			state.referCard = value;
+			render(<Home />);
+			expect(screen.queryByTestId("home-refer-button")).toBeNull();
+			expect(screen.queryByTestId("home-refer-row")).toBeNull();
+			cleanup();
+		}
+	});
+
+	it("a waiting referee shows on the door, not only on the page", () => {
+		state.referCard = { ...referCard, pending: 2 };
+		render(<Home />);
+		expect(screen.getAllByTestId("refer-waiting")).toHaveLength(2);
 	});
 });

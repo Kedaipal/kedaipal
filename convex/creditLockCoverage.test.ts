@@ -71,6 +71,7 @@ const MIXED_MODULES = [
 	"bookings",
 	"lalamove",
 	"delyva",
+	"easyparcel",
 	"awb",
 	"vouchers",
 ];
@@ -98,6 +99,8 @@ const GATED_FUNCTIONS = [
 	"lalamove.addPriorityFee",
 	"delyva.prepareBooking",
 	"delyva.confirmBooking",
+	"easyparcel.prepareBooking",
+	"easyparcel.confirmBooking",
 	// Chasing and documents.
 	"orders.sendPaymentReminder",
 	"orders.generateReceiptPdf",
@@ -173,10 +176,21 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 		"withdrawing a whole run is like cancel: always open, never trapped",
 	"vouchers.renameBatch":
 		"renaming a run changes a private label, not an order — nothing to meter",
+	"vouchers.extendShared":
+		"giving a live code more room is marketing like issuing it — the orders it is spent on pay their own credits",
 	// Settings are always open.
 	"delyva.connect": "settings: connecting a courier account",
+	"easyparcel.startConnect": "settings: starts the courier sign-in (OAuth) for the account",
+	"easyparcel.disconnect": "settings: removing a courier account is never trapped",
+	"easyparcel.updateSettings": "settings: courier pickup address and on/off",
+	"easyparcel.refreshBalance": "settings: re-reads the prepaid wallet snapshot",
+	"delyva.refreshBalance": "settings: re-reads the prepaid wallet balance",
+	"easyparcel.cancelBooking": "cancelling a courier releases the order",
+	"easyparcel.refreshJobStatus": "status poll: reads provider truth, moves nothing the webhooks wouldn't",
 	"delyva.resubscribeWebhooks": "settings: re-registers the courier webhooks",
 	"lalamove.registerWebhook": "settings: registers the rider webhook",
+	"lalamove.verifyKeys":
+		"settings: asks Lalamove whether a pasted key pair works — writes nothing",
 	"delyva.refreshEnvironment": "settings: re-reads the courier account's mode",
 	"delyva.disconnect": "settings: removing a courier account is never trapped",
 	"delyva.updateSettings": "settings: courier defaults and preferences",
@@ -212,6 +226,9 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 // `orderClaims` joined with it: its list grew an `order.total` read.
 // `deliveries` (86eye9xd4, 6A) lists bookings and parcels by order, with
 // destinations and tracking links that lead back to the buyer.
+// `schedule` (`z8r3fdjv0d`) counts registered vs paid per programme date, so
+// it reads every order in its window — a waiting order is counted as waiting
+// and nothing else about it is read.
 const READ_MODULES = [
 	"orders",
 	"customers",
@@ -221,6 +238,7 @@ const READ_MODULES = [
 	"vouchers",
 	"orderClaims",
 	"deliveries",
+	"schedule",
 ];
 
 const OPEN_READS: Record<string, string> = {
@@ -235,6 +253,10 @@ const OPEN_READS: Record<string, string> = {
 		"per-day counts only, no order data — and like the nav badge, a waiting order SHOULD be counted: Home is what tells the seller Saturday is heavy, and hiding the work would misstate the week",
 	"bookingBlocks.hasBookingListings":
 		"a boolean — does this store sell bookings at all; reads products, never an order",
+	"schedule.hasDatedListings":
+		"a boolean — does this store sell events or bookings at all; reads products, never an order",
+	"vouchers.sharedCodeAvailable":
+		"a yes/no about the store's own voucher words (`z8r3fducfm`) — reads the vouchers table, never an order",
 	"orderClaims.getByToken":
 		"buyer door only (unguessable claim token, never enumerable) — the credit gate withholds an order from the SELLER, never from the buyer who placed it, so redacting here would hide a buyer's own ticket from them",
 };

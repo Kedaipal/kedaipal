@@ -26,7 +26,10 @@ import {
 	synthesizeDefaultStages,
 	type StatusLabels,
 } from "./lib/orderStatus";
-import { createCategoryNameMemo, resolveCategoryNames } from "./orders";
+import {
+	createCategoryNameMemo,
+	resolveCategoryNames,
+} from "./lib/orderCategoryNames";
 
 const BATCH_SIZE = 50;
 

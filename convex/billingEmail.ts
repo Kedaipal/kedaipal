@@ -25,15 +25,17 @@ import { monthlyCreditGrant } from "./lib/credits";
 import { sendEmail } from "./lib/email";
 import { gatewayPaymentMethodLabel } from "./lib/hitpayBilling";
 import { formatDocDate } from "./lib/pdf/document";
+import { referralHref, referralRewardCredits } from "./lib/referral";
+import { referralReceiptFooter } from "./lib/referralEmailCopy";
 import { HOLD_LABEL } from "./lib/seasonalHold";
 import type { Locale } from "./lib/emailCopy";
 import {
-	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
 	FOUNDING_PRO_CREDIT_GRANT,
 	HOLD_MONTHLY_PRICES,
 	PLAN_CREDIT_GRANT,
 	renewalQuote,
+	storeBillingCurrency,
 } from "./lib/plans";
 
 
@@ -93,6 +95,8 @@ type InvoiceEmailMeta = {
 	// Kedaipal Credits (T5): what the billed plan gives THIS store a month —
 	// undefined for a hold invoice, which grants nothing.
 	includedCredits: number | undefined;
+	// The store's slug — the receipt's referral footer builds the link from it.
+	slug: string;
 };
 
 /** Loads everything the billing-email action needs in one roundtrip: invoice +
@@ -168,6 +172,7 @@ export const getInvoiceForEmail = internalQuery({
 			crossBorder,
 			payNowUrl: invoice.gatewayPayment?.url,
 			includedCredits,
+			slug: retailer.slug,
 		};
 	},
 });
@@ -638,7 +643,7 @@ export const getHoldEmailContext = internalQuery({
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			plan: sub?.plan ?? "pro",
-			currency: BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"],
+			currency: storeBillingCurrency(retailer.country),
 		};
 	},
 });
@@ -664,6 +669,18 @@ export const notifyPaymentReceived = internalAction({
 			planLabel: invoicePlanLabel(meta.plan, meta.billingCycle, meta.kind),
 			totalFormatted: formatMoney(meta.total, meta.currency),
 			dashboardUrl: billingPageUrl(),
+			// A paid PLAN invoice makes the store active, so its referral link
+			// counts from this moment — the one email every paying store gets
+			// every month carries the invitation (docs/referrals.md, the push).
+			// A hold receipt doesn't: a paused store's link is paused too.
+			...(meta.kind === "plan"
+				? {
+						referralFooter: referralReceiptFooter(meta.locale, {
+							link: referralHref(meta.slug),
+							proCredits: referralRewardCredits("pro"),
+						}),
+					}
+				: {}),
 		});
 		try {
 			await sendEmail(meta.notifyEmail, subject, html, text);
@@ -708,7 +725,6 @@ export const getAutoRenewEmailContext = internalQuery({
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.order("desc")
 			.collect();
-		const lastPaid = invoices.find((inv) => inv.status === "paid");
 		const pending = invoices.find((inv) => inv.status === "pending");
 		// The heads-up must quote exactly what the renewal will charge, so it
 		// reads the same author as the cron's invoice (z8r3fdfty4): a scheduled
@@ -726,7 +742,6 @@ export const getAutoRenewEmailContext = internalQuery({
 			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
 			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			paidThrough: sub.currentPeriodEnd,
-			lastPaidCurrency: lastPaid?.currency,
 			country: retailer.country,
 			enterprise: sub.enterprise,
 			now: Date.now(),

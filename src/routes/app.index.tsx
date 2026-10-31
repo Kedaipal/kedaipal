@@ -16,22 +16,24 @@ import {
 import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Country } from "../../convex/lib/country";
-import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import { todayMytMidnight } from "../../convex/lib/fulfilmentDate";
-import { CreditMeter } from "../components/credits/credit-meter";
 import { FirstOrderCelebration } from "../components/dashboard/first-order-celebration";
 import { GreetingChecklistRow } from "../components/dashboard/greeting-checklist-row";
 import { ShareLinkChecklistRow } from "../components/dashboard/share-link-checklist-row";
 import { StorefrontQrDialog } from "../components/dashboard/storefront-qr-dialog";
 import { WhiteGloveCard } from "../components/dashboard/white-glove-card";
-import { LowWalletBanner } from "../components/deliveries/deliveries-view";
 import { ActionStrip } from "../components/home/action-strip";
+import {
+	BalancesCard,
+	balancesPlacement,
+	balancesWalletsFirst,
+} from "../components/home/balances-card";
 import { DeliveriesHomeCard } from "../components/home/deliveries-card";
 import { EmptySalesCard } from "../components/home/empty-sales-card";
 import { ExceptionRows } from "../components/home/exception-rows";
 import { HomeSkeleton } from "../components/home/home-skeleton";
 import { PlanAheadCard } from "../components/home/plan-ahead-card";
-import { ReferCard } from "../components/home/refer-card";
+import { ReferralWelcomeCard } from "../components/home/referral-welcome-card";
 import { SalesSection } from "../components/home/sales-section";
 import {
 	type ChecklistItem,
@@ -41,13 +43,22 @@ import {
 import { ShareCard } from "../components/home/share-card";
 import { HomeGreeting } from "../components/home/store-avatar";
 import { WelcomeCard } from "../components/home/welcome-card";
+import {
+	HOME_REFER_BUTTON_CLASS,
+	HomeReferButtonContent,
+	REFER_ROW_CLASS,
+	ReferEntryRowContent,
+} from "../components/referrals/refer-entry";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
 import { Button } from "../components/ui/button";
 import { useChecklistStamp } from "../hooks/useChecklistStamp";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { usePermission } from "../hooks/usePermission";
-import { revealAnchorWhenMounted } from "../lib/country-setup-copy";
-import { creditPlacement, creditTone } from "../lib/credits-ui";
+import {
+	highlightRingClass,
+	revealAnchorWhenMounted,
+} from "../lib/country-setup-copy";
+import { creditTone } from "../lib/credits-ui";
 import { type HomePeriod, parseHomePeriod } from "../lib/home-copy";
 import {
 	type HomeSpotlightKey,
@@ -57,6 +68,7 @@ import {
 import { storefrontUrl as buildStorefrontUrl } from "../lib/storefront-url";
 import { subscribeStepCopy } from "../lib/subscribe-step";
 import { freePeriodState, hasSubscribed } from "../lib/subscription";
+import { cn } from "../lib/utils";
 
 /**
  * Dashboard Home (z8r3fdrgzj) — sales first.
@@ -97,8 +109,11 @@ export const Route = createFileRoute("/app/")({
 // Named per store country (z8r3fdbmc9) — DuitNow is a Malaysian rail; an SG
 // store's confirmation carries PayNow instead.
 const PAYMENT_STEP_WHY: Record<Country, string> = {
-	MY: "Your bank account or DuitNow QR is included automatically in the order confirmation message sent to every shopper.",
-	SG: "Your bank account or PayNow QR is included automatically in the order confirmation message sent to every shopper.",
+	// Not "in the WhatsApp message": raw bank details left the chat in July
+	// 2026 (86ey98ju1). The confirmation carries the order link; the details
+	// sit on that page, where the buyer pays and uploads the receipt.
+	MY: "Your bank account or DuitNow QR shows on every buyer's order page — the link in their WhatsApp confirmation.",
+	SG: "Your bank account or PayNow QR shows on every buyer's order page — the link in their WhatsApp confirmation.",
 };
 
 /**
@@ -119,9 +134,21 @@ function DashboardHome() {
 	const search = Route.useSearch();
 	const period: HomePeriod = parseHomePeriod(search.p);
 	// Deep link to one section: scroll to it once it is on the page and ring
-	// its card in the brand mint — the Refer card mounts only after its query
-	// answers, so wait for IT, not a frame (the Settings route's rule).
+	// it in the brand mint — wait for the anchor, not a frame (the Settings
+	// route's rule).
 	const spot = search.spot;
+	// Refer & earn's doors (z8r3fdfp97 follow-up): the same card read the
+	// profile menu makes, so the cache answers both.
+	const referCard = useQuery(
+		convexQuery(
+			api.referrals.myCard,
+			retailer
+				? { retailerId: retailer.actingAsAdmin ? retailer._id : undefined }
+				: "skip",
+		),
+	).data;
+	const referRing =
+		spot === "refer" ? highlightRingClass("spotlight") : undefined;
 	useEffect(() => {
 		if (!spot) return;
 		return revealAnchorWhenMounted(SPOTLIGHT_ANCHOR[spot].anchor);
@@ -143,8 +170,9 @@ function DashboardHome() {
 				: "skip",
 		),
 	).data;
-	// The Deliveries page's own read (86eye9xd4, 6A) — Home's card and the
-	// low-wallet banner share its cache, so the page opens instantly.
+	// The Deliveries page's own read (86eye9xd4, 6A) — Home's deliveries card
+	// and the courier wallets in the Balances card share its cache, so the
+	// page opens instantly.
 	const deliveries = useQuery(
 		convexQuery(
 			api.deliveries.overview,
@@ -189,7 +217,7 @@ function DashboardHome() {
 	if (products === undefined) return <HomeSkeleton />;
 
 	const storefrontUrl = buildStorefrontUrl(retailer.slug);
-	const currency = retailer.currency ?? DEFAULT_CURRENCY;
+	const currency = retailer.currency;
 
 	function stampShare() {
 		void markLinkShared().catch(() => {
@@ -332,10 +360,18 @@ function DashboardHome() {
 		creditBalance && creditBalance !== null
 			? creditTone(creditBalance.total, creditBalance.periodGrant)
 			: null;
-	const placement = tone ? creditPlacement(tone) : null;
-	const creditCard = creditBalance ? (
-		<CreditMeter variant="card" retailer={retailer} />
-	) : null;
+	// One Balances card (z8r3fdx34j): credits + courier wallets, placed by
+	// whichever half is more urgent.
+	const wallets = deliveries?.wallets ?? [];
+	const placement = balancesPlacement(tone, wallets);
+	const creditCard = (
+		<BalancesCard
+			retailer={retailer}
+			wallets={wallets}
+			showCredits={Boolean(creditBalance)}
+			walletsFirst={balancesWalletsFirst(tone, wallets)}
+		/>
+	);
 	const outOfCredits = tone === "out";
 
 	const renderChecklistRow = (
@@ -459,29 +495,59 @@ function DashboardHome() {
 		 * inside it, which is the rail the board draws.
 		 */
 		<div className="mx-auto flex w-full max-w-5xl flex-col gap-6 lg:gap-8">
-			<HomeGreeting
-				retailer={retailer}
-				actions={
-					<>
-						<Button asChild variant="outline" size="sm" className="h-10">
-							<a
-								href={`/${retailer.slug}`}
-								target="_blank"
-								rel="noopener noreferrer"
-							>
-								<ExternalLink className="size-4" aria-hidden="true" />
-								Open store
-							</a>
-						</Button>
-						<Button asChild size="sm" className="h-10">
-							<Link to="/app/checkout">
-								<Plus className="size-4" aria-hidden="true" />
-								New order
-							</Link>
-						</Button>
-					</>
-				}
-			/>
+			{/* Refer & earn sits in the FIRST view (Zaki, 31 Oct 2026) — a door
+			    to /app/refer beside Open store and New order on desktop, the
+			    profile menu's own row under the greeting on a phone (where the
+			    header buttons live in the bottom nav). It replaced the card at the
+			    foot of Home; the page holds everything that card did. The
+			    wrapper carries the What's-new anchor (`?spot=refer`), so the link
+			    lands here and the ring goes on whichever door is showing. */}
+			<div
+				id={SPOTLIGHT_ANCHOR.refer.anchor}
+				className="flex scroll-mt-24 flex-col gap-4"
+			>
+				<HomeGreeting
+					retailer={retailer}
+					actions={
+						<>
+							{referCard ? (
+								<Link
+									to="/app/refer"
+									className={cn(HOME_REFER_BUTTON_CLASS, referRing)}
+									data-testid="home-refer-button"
+								>
+									<HomeReferButtonContent card={referCard} />
+								</Link>
+							) : null}
+							<Button asChild variant="outline" size="sm" className="h-10">
+								<a
+									href={`/${retailer.slug}`}
+									target="_blank"
+									rel="noopener noreferrer"
+								>
+									<ExternalLink className="size-4" aria-hidden="true" />
+									Open store
+								</a>
+							</Button>
+							<Button asChild size="sm" className="h-10">
+								<Link to="/app/checkout">
+									<Plus className="size-4" aria-hidden="true" />
+									New order
+								</Link>
+							</Button>
+						</>
+					}
+				/>
+				{referCard ? (
+					<Link
+						to="/app/refer"
+						className={cn(REFER_ROW_CLASS, "lg:hidden", referRing)}
+						data-testid="home-refer-row"
+					>
+						<ReferEntryRowContent card={referCard} />
+					</Link>
+				) : null}
+			</div>
 
 			{/* Out of credits: above everything, because nothing below it can be
 			    acted on until it is fixed. */}
@@ -496,8 +562,12 @@ function DashboardHome() {
 					navigate({ to: "/app/settings", search: { tab, fix: key } })
 				}
 			/>
-			{/* Before the next booking fails, not after (86eye9xd4, 6A). */}
-			<LowWalletBanner wallet={deliveries?.wallet ?? null} />
+
+			{/* A REFERRED store, until its first invoice is paid: who invited it
+			    and what starting the plan brings — above the welcome card and
+			    the checklist, the first thing it reads (docs/referrals.md § The
+			    push). Renders nothing for everyone else. */}
+			<ReferralWelcomeCard retailerId={retailer._id} />
 
 			{phase === "new" ? <WelcomeCard slug={retailer.slug} /> : null}
 
@@ -551,14 +621,6 @@ function DashboardHome() {
 					{phase === "waiting" ? null : shareCard}
 				</div>
 			</section>
-
-			{/* Referring another SELLER (z8r3fdfp97) — its own section, not part
-			    of "Your store" (that card shares the store with buyers), and
-			    last because it is never urgent. Renders nothing on a trial. */}
-			<ReferCard
-				retailerId={retailer._id}
-				highlight={spot === "refer" ? "spotlight" : undefined}
-			/>
 
 			<StorefrontQrDialog
 				open={qrOpen}

@@ -14,7 +14,7 @@ const BASE = {
 describe("overseasCourierNote — only when a courier would be handed the store's number", () => {
 	it("a foreign number on a courier-booking delivery gets the note", () => {
 		expect(overseasCourierNote(BASE)).toBe(
-			"Your WhatsApp number is from outside Malaysia, so the rider will contact Kek Mama instead of you. Kek Mama can still reach you on WhatsApp, and your order page shows every update.",
+			"Your WhatsApp number is from outside Malaysia, so the courier will contact Kek Mama instead of you. Kek Mama can still reach you on WhatsApp, and your order page shows every update.",
 		);
 	});
 

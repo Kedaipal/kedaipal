@@ -12,10 +12,12 @@ import {
 	UserPlus,
 } from "lucide-react";
 import type { AdminSellerRow } from "../../../convex/admin";
+import { channelLabel } from "../../../convex/lib/metrics";
 import {
 	type CreditsTone,
 	type ExpiryTone,
 	highlightedThroughLabel,
+	isUntaggedPayer,
 	SELLER_STATUS_LABEL,
 	type SellerBucket,
 	type SellerCredits,
@@ -142,15 +144,44 @@ export function MarketplacePill({
 	);
 }
 
-/** Acquisition tag the signup arrived with (z8r3fdd1v0), plus the store whose
- * badge it came through (z8r3fdcwd0). Absent = direct, so nothing renders. */
+/** How the store arrived, in one pill: the channel (86eye3eyp) when it's
+ * tagged, then the link tag the signup carried (z8r3fdd1v0) and the store
+ * whose badge it came through (z8r3fdcwd0). A PAYING store with no confirmed
+ * channel says "Untagged" in amber — it's missing from CAC until tagged. A
+ * seller's own unconfirmed answer reads with a "?" (amber on a payer, for the
+ * same reason). Nothing to say → nothing renders. */
 export function ViaPill({ seller }: { seller: AdminSellerRow }) {
-	if (!seller.signupSource) return null;
+	const { channel, setBy } = seller.acquisition;
+	const untaggedPayer = isUntaggedPayer(seller);
+	const channelText =
+		channel !== undefined
+			? `${channelLabel(channel)}${setBy === "seller" ? "?" : ""}`
+			: null;
+	const via = seller.signupSource
+		? `via ${seller.signupSource}${seller.signupReferrer ? ` · /${seller.signupReferrer.slug}` : ""}`
+		: null;
+	if (!channelText && !via && !untaggedPayer) return null;
 	return (
 		<span className="inline-flex max-w-full items-center rounded-md bg-muted px-1.5 py-px text-[11px] text-muted-foreground">
 			<span className="truncate">
-				via {seller.signupSource}
-				{seller.signupReferrer ? ` · /${seller.signupReferrer.slug}` : null}
+				{channelText ? (
+					<span
+						className={cn(
+							"font-semibold",
+							untaggedPayer
+								? "text-amber-700 dark:text-amber-400"
+								: "text-foreground",
+						)}
+					>
+						{channelText}
+					</span>
+				) : untaggedPayer ? (
+					<span className="font-semibold text-amber-700 dark:text-amber-400">
+						Untagged
+					</span>
+				) : null}
+				{(untaggedPayer || channelText) && via ? " · " : null}
+				{via}
 			</span>
 		</span>
 	);
@@ -192,7 +223,7 @@ const CREDITS_TONE: Record<CreditsTone, string> = {
 };
 
 /**
- * A store's credits (Kedaipal Credits T5): "130 left" over "plan 80 · bought
+ * A store's credits (Kedaipal Credits T5): "130 left" over "plan 80 · extra
  * 50", red with "out since 3 Oct" once the total reaches zero — the fact the
  * seller lock keys off. Comped and admin stores read muted: they can be at
  * zero but are never locked.
@@ -215,7 +246,7 @@ export function CreditsText({
 				{credits.headline}
 			</span>
 			{/* Wraps rather than truncates: the breakdown is the point of the
-			    column, and "plan 10 · bought 0 · custom 1000/mo" must read whole. */}
+			    column, and "plan 10 · extra 0 · custom 1000/mo" must read whole. */}
 			<span className="text-[11px] leading-snug text-pretty break-words text-muted-foreground">
 				{credits.outSince !== undefined
 					? `Out since ${formatShortDate(credits.outSince)}`

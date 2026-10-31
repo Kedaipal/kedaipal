@@ -2,10 +2,23 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HOLDING_LEAVES } from "../../../convex/lib/orderBuckets";
 import { type EventHeadcount, EventRsvpPanel } from "./event-rsvp-panel";
 
 vi.mock("@tanstack/react-router", () => ({
-	Link: ({ children }: { children: ReactNode }) => <a href="/">{children}</a>,
+	Link: ({
+		children,
+		to,
+		search,
+	}: {
+		children: ReactNode;
+		to: string;
+		search?: unknown;
+	}) => (
+		<a href={to} data-search={JSON.stringify(search ?? null)}>
+			{children}
+		</a>
+	),
 }));
 
 afterEach(cleanup);
@@ -23,6 +36,7 @@ describe("EventRsvpPanel — buyer-question tallies (z8r3fdkjek)", () => {
 	it("tallies each choice question without opening an order", () => {
 		render(
 			<EventRsvpPanel
+				productId="p_falls"
 				productName="Into The Falls"
 				headcount={{
 					...BASE,
@@ -46,7 +60,37 @@ describe("EventRsvpPanel — buyer-question tallies (z8r3fdkjek)", () => {
 	});
 
 	it("an event that asks nothing looks exactly as before", () => {
-		render(<EventRsvpPanel productName="Breakfast" headcount={BASE} />);
+		render(
+			<EventRsvpPanel
+				productId="p_bfast"
+				productName="Breakfast"
+				headcount={BASE}
+			/>,
+		);
 		expect(screen.queryByText("What are you bringing?")).toBeNull();
+	});
+});
+
+describe("EventRsvpPanel — the way into these RSVPs' orders", () => {
+	it("opens the inbox on exactly this listing and day, not a name search", () => {
+		// A name search also caught "Breakfast Club" and missed RSVPs frozen
+		// under the event's old name (z8r3fdjv0d).
+		render(
+			<EventRsvpPanel
+				productId="p_bfast"
+				productName="Breakfast"
+				headcount={BASE}
+			/>,
+		);
+		const link = screen.getByText(/Open these RSVPs in the inbox/).closest("a");
+		expect(JSON.parse(link?.getAttribute("data-search") ?? "null")).toEqual({
+			listing: "p_bfast",
+			ffrom: BASE.date,
+			fto: BASE.date,
+			// `taken` is counted with holdsSeats, so a cancelled RSVP must not
+			// appear behind "Open these RSVPs".
+			st: HOLDING_LEAVES,
+		});
+		expect(HOLDING_LEAVES).not.toContain("cancelled");
 	});
 });

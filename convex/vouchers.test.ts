@@ -423,8 +423,11 @@ describe("vouchers.list", () => {
 			redeemed: 1,
 			voided: 1,
 			expired: 1,
+			scheduled: 0,
 		});
 		expect(all.vouchers).toHaveLength(4);
+		// One spent single-use voucher is one order used.
+		expect(all.used).toBe(1);
 
 		// Every row comes back with its RESOLVED status — the lapsed one reads
 		// `expired` with no cron having touched it, which is what lets the
@@ -553,6 +556,8 @@ describe("vouchers.checkCode", () => {
 			ok: true,
 			code: vouchers[0].code,
 			terms: { kind: "percent", value: 15 },
+			// No entry rules on this one (`z8r3fdz0pw`).
+			conditions: {},
 		});
 	});
 
@@ -564,9 +569,16 @@ describe("vouchers.checkCode", () => {
 			code: "KP-ZZZZ-ZZZZ",
 		});
 		expect(unknown).toMatchObject({ ok: false, refusal: "not_found" });
-		const junk = await t.mutation(api.vouchers.checkCode, {
+		// A word nobody issued is a shared-code SHAPE (`z8r3fducfm`), so it is
+		// "not found" — only something too short to be any code is malformed.
+		const unissued = await t.mutation(api.vouchers.checkCode, {
 			retailerId: retailer._id,
 			code: "hello",
+		});
+		expect(unissued).toMatchObject({ ok: false, refusal: "not_found" });
+		const junk = await t.mutation(api.vouchers.checkCode, {
+			retailerId: retailer._id,
+			code: "hi",
 		});
 		expect(junk).toMatchObject({ ok: false, refusal: "malformed" });
 	});
@@ -769,7 +781,8 @@ describe("counter checkout", () => {
 		// Mid-keystroke. Refusing the save would lose the rest of the cart.
 		await asUser.mutation(api.counterCheckout.saveSessionDraft, {
 			sessionId,
-			draft: { items: [{ variantId, quantity: 1 }], voucherCode: "KP-7F" },
+			// Too short for either spelling (`parseVoucherCode`).
+			draft: { items: [{ variantId, quantity: 1 }], voucherCode: "K7" },
 		});
 		const session = await t.run((ctx) => ctx.db.get(sessionId));
 		expect(session?.draft?.voucherCode).toBeUndefined();
@@ -827,6 +840,7 @@ describe("claim link", () => {
 			code: voucher.code,
 			kind: "fixed",
 			value: 500,
+			usage: "single",
 		});
 		// An abandoned link must not burn a voucher.
 		expect((await t.run((ctx) => ctx.db.get(voucher.id)))?.status).toBe(

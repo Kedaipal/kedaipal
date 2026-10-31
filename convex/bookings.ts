@@ -57,6 +57,7 @@ import {
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import { withCategoryNames } from "./lib/orderCategoryNames";
 import { logAdminAction } from "./lib/auth";
 import {
 	effectiveKind,
@@ -535,7 +536,11 @@ export const requestBooking = mutation({
 			// is an invariant of the form rather than of the mutation. Stamping
 			// here makes the answer independent of it, and makes the doc's
 			// "every create path stamps it" literally true of all four.
-			items: items.map((line) => ({ ...line, stockReserved: false })),
+			// Categories frozen at booking, like every order door (86eyrtz74).
+			items: await withCategoryNames(
+				ctx,
+				items.map((line) => ({ ...line, stockReserved: false })),
+			),
 			subtotal,
 			total,
 			currency: product.currency,

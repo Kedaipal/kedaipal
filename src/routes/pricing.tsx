@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
@@ -46,6 +45,7 @@ import { MoneyMathRow } from "../components/landing/money-math";
 import { Nav } from "../components/landing/nav";
 import { ReferralInvitePill } from "../components/landing/referral-invite-pill";
 import { Button } from "../components/ui/button";
+import { useAuthState } from "../hooks/useAuthState";
 import { useLandingRegion } from "../hooks/useLandingRegion";
 import { useMarketingLanding } from "../hooks/useMarketingLanding";
 import { useReferralInvite } from "../hooks/useReferralInvite";
@@ -56,6 +56,7 @@ import {
 } from "../lib/enterprise-contact";
 import { trackEvent, trackSignupCta } from "../lib/ga-events";
 import { jsonLdScript } from "../lib/json-ld";
+import { pageHead } from "../lib/not-found";
 import { resolveTierCta } from "../lib/pricing-cta";
 import { pricingJsonLd } from "../lib/pricing-jsonld";
 import { SITE_URL } from "../lib/site-identity";
@@ -106,30 +107,31 @@ export const Route = createFileRoute("/pricing")({
 	// price is the price the visitor sees (Google flags a mismatch). A
 	// visitor's later toggle re-renders the cards, not the head; the SSR'd
 	// pair is what a crawler reads, and a crawler never toggles.
-	head: ({ matches }) => ({
-		scripts: [
-			jsonLdScript(
-				pricingJsonLd({
-					siteUrl: SITE_URL,
-					currency: BILLING_CURRENCY_FOR_COUNTRY[serverRegion(matches)],
-				}),
-			),
-		],
-		meta: [
-			{ title: SEO_TITLE },
-			{ name: "description", content: SEO_DESC },
-			{ property: "og:type", content: "website" },
-			{ property: "og:url", content: PAGE_URL },
-			{ property: "og:title", content: SEO_TITLE },
-			{ property: "og:description", content: SEO_DESC },
-			{ property: "og:image", content: OG_IMAGE },
-			{ name: "twitter:card", content: "summary_large_image" },
-			{ name: "twitter:title", content: SEO_TITLE },
-			{ name: "twitter:description", content: SEO_DESC },
-			{ name: "twitter:image", content: OG_IMAGE },
-		],
-		links: [{ rel: "canonical", href: PAGE_URL }],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, ({ matches }) => ({
+			scripts: [
+				jsonLdScript(
+					pricingJsonLd({
+						siteUrl: SITE_URL,
+						currency: BILLING_CURRENCY_FOR_COUNTRY[serverRegion(matches)],
+					}),
+				),
+			],
+			meta: [
+				{ title: SEO_TITLE },
+				{ name: "description", content: SEO_DESC },
+				{ property: "og:type", content: "website" },
+				{ property: "og:url", content: PAGE_URL },
+				{ property: "og:title", content: SEO_TITLE },
+				{ property: "og:description", content: SEO_DESC },
+				{ property: "og:image", content: OG_IMAGE },
+				{ name: "twitter:card", content: "summary_large_image" },
+				{ name: "twitter:title", content: SEO_TITLE },
+				{ name: "twitter:description", content: SEO_DESC },
+				{ name: "twitter:image", content: OG_IMAGE },
+			],
+			links: [{ rel: "canonical", href: PAGE_URL }],
+		})),
 	component: PricingPage,
 });
 
@@ -860,20 +862,21 @@ function PricingPage() {
 	}, []);
 	const invite = useReferralInvite();
 	const [cycle, setCycle] = useState<Cycle>("monthly");
-	const { isLoaded, isSignedIn } = useAuth();
+	const auth = useAuthState();
+	const isSignedIn = auth === "signed-in";
 	// Only signed-in sellers need their plan; skip the query for visitors. A
 	// narrow read (plan/status/comped) — not the heavy getMyRetailer payload — on
 	// this public marketing route. null while loading / storeless admin → the
 	// card CTA falls back safely.
 	const planState = useQuery(
-		convexQuery(api.retailers.getMyPlan, isLoaded && isSignedIn ? {} : "skip"),
+		convexQuery(api.retailers.getMyPlan, isSignedIn ? {} : "skip"),
 	).data;
 	const subscription: SubscriptionView | null = planState ?? null;
 	// Until Clerk has loaded AND (for a signed-in seller) the plan query resolves,
 	// the final CTA is unknown — show a spinner in the button rather than flipping
 	// the label through trial → dashboard → final on a single refresh.
 	const ctaPending =
-		!isLoaded || (isSignedIn === true && planState === undefined);
+		auth === "loading" || (isSignedIn && planState === undefined);
 	// Same region model as the landing teaser: detected default, manual MY/SG
 	// override persisted. MY/SG are the only countries, both billable.
 	const [region, setRegion] = useLandingRegion();
@@ -975,7 +978,7 @@ function PricingPage() {
 										tier={tier}
 										cycle={cycle}
 										currency={currency}
-										isSignedIn={isSignedIn ?? false}
+										isSignedIn={isSignedIn}
 										subscription={subscription}
 										pending={ctaPending}
 										supportWa={supportWa}

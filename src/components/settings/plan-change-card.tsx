@@ -90,8 +90,8 @@ type PlanChangeCardProps = {
 	sub: SubscriptionView;
 	/** The store's slug — named in the Enterprise chat's opening line. */
 	slug: string;
-	/** What plan changes and renewals bill in — the gateway's
-	 * `renewalCurrency` (last paid invoice, else the country). */
+	/** What plan changes and renewals bill in — the gateway's `currency`,
+	 * the store's country's (`storeBillingCurrency`). */
 	currency: BillingCurrency;
 	/** SERVER-resolved (`billingGatewayAvailable.foundingPricing`). Never
 	 * `sub.foundingIntent`: that misses every member an admin marked founding

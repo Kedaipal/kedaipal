@@ -13,6 +13,6 @@ export function referralMeta(invite: ReferralInvite): {
 } {
 	return {
 		title: `${invite.storeName} invited you to Kedaipal`,
-		description: `Get ${invite.offer.pro} bonus credits when you start Pro, or ${invite.offer.starter} on Starter. Sell on WhatsApp and never lose an order or a payment.`,
+		description: `Get ${invite.offer.pro} free orders when you start Pro, or ${invite.offer.starter} on Starter. Sell on WhatsApp and never lose an order or a payment.`,
 	};
 }

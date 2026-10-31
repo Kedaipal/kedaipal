@@ -89,7 +89,7 @@ describe("wizard — switching product type away from priced choices", () => {
 	/** An answered draft opens on Review — walk back to the Type question. */
 	const goToTypeStep = () => {
 		for (let i = 0; i < 8; i++) {
-			if (screen.queryByText("What kind of product is it?")) return;
+			if (screen.queryByText("Does the buyer choose anything?")) return;
 			fireEvent.click(screen.getByRole("button", { name: /previous step/i }));
 		}
 		throw new Error("never reached the type step");
@@ -104,7 +104,7 @@ describe("wizard — switching product type away from priced choices", () => {
 		vi.stubGlobal("confirm", nativeConfirm);
 		renderWizard(draftWithPricedChoices(), vi.fn());
 
-		pickType(/just one item/i);
+		pickType(/one item, one price/i);
 		expect(screen.getByText("Change the product type?")).toBeTruthy();
 		expect(
 			screen.getByText("Your choices and their prices will be removed."),
@@ -114,7 +114,7 @@ describe("wizard — switching product type away from priced choices", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(
 			screen
-				.getByRole("button", { name: /buyer picks a choice/i })
+				.getByRole("button", { name: /they pick an option/i })
 				.getAttribute("aria-pressed"),
 		).toBe("true");
 		vi.unstubAllGlobals();
@@ -123,11 +123,11 @@ describe("wizard — switching product type away from priced choices", () => {
 	it("Change type applies the switch it asked about", () => {
 		renderWizard(draftWithPricedChoices(), vi.fn());
 
-		pickType(/just one item/i);
+		pickType(/one item, one price/i);
 		fireEvent.click(screen.getByRole("button", { name: "Change type" }));
 		expect(
 			screen
-				.getByRole("button", { name: /just one item/i })
+				.getByRole("button", { name: /one item, one price/i })
 				.getAttribute("aria-pressed"),
 		).toBe("true");
 		expect(screen.queryByText("Change the product type?")).toBeNull();
@@ -162,11 +162,11 @@ describe("wizard — switching product type away from priced choices", () => {
 			vi.fn(),
 		);
 
-		pickType(/just one item/i);
+		pickType(/one item, one price/i);
 		expect(screen.queryByText("Change the product type?")).toBeNull();
 		expect(
 			screen
-				.getByRole("button", { name: /just one item/i })
+				.getByRole("button", { name: /one item, one price/i })
 				.getAttribute("aria-pressed"),
 		).toBe("true");
 	});

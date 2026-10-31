@@ -60,6 +60,11 @@ export const SPOTLIGHT_ANCHOR = {
 		anchor: "settings-lalamove",
 	},
 	delyva: { page: "settings", tab: "integrations", anchor: "settings-delyva" },
+	easyparcel: {
+		page: "settings",
+		tab: "integrations",
+		anchor: "settings-easyparcel",
+	},
 	hitpay: { page: "settings", tab: "integrations", anchor: "settings-hitpay" },
 	delivery_charge: {
 		page: "settings",
@@ -79,6 +84,15 @@ export const SPOTLIGHT_ANCHOR = {
 		page: "settings",
 		tab: "billing",
 		anchor: "settings-plan-change",
+	},
+	// The self-serve plan PICKER (choosing a first plan, not changing a
+	// running one). It sits below the plan and credits cards, so a "Start
+	// your plan" button that only opened the tab landed the seller above the
+	// fold of the one thing it promised — the referral welcome card links here.
+	choose_plan: {
+		page: "settings",
+		tab: "billing",
+		anchor: "settings-choose-plan",
 	},
 	seasonal_hold: {
 		page: "settings",
@@ -175,9 +189,10 @@ export const SPOTLIGHT_ANCHOR = {
 		tab: "store",
 		anchor: "settings-marketplace",
 	},
-	// The Refer-a-kedai section (z8r3fdfp97) — the last thing on Home, with
-	// the seller's referral link and what each side earns. The id sits on the
-	// section so the scroll lands on its heading; the ring goes on its card.
+	// Refer & earn's door on Home (z8r3fdfp97; moved to the first view
+	// 31 Oct 2026) — the header button on desktop, the row under the greeting
+	// on a phone. The id sits on the block holding both, so the scroll lands
+	// at the top of the page; the ring goes on whichever door is showing.
 	refer: { page: "home", anchor: "home-refer" },
 	// Product-page anchors are QUESTION ROWS since z8r3fdv1z2: the form scrolls
 	// to the row, rings it and opens it, so the seller lands on the field.

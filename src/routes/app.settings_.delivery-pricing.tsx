@@ -90,6 +90,8 @@ function DeliveryPricingRoute() {
 					businessAddress={retailer.businessAddress}
 					deliveryBooking={retailer.deliveryBooking}
 					subscription={retailer.subscription}
+					crossBorderLanes={retailer.crossBorderLanes}
+					offerDelivery={retailer.offerDelivery}
 				/>
 			</AreaGate>
 		</div>

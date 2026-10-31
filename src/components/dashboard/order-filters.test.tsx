@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	BUCKET_LEAVES,
+	HOLDING_LEAVES,
 	INBOX_BUCKETS,
 	INBOX_LEAF_KEYS,
 	leafBucket,
@@ -316,6 +317,45 @@ describe("OrderFilters — status + categories mirror the header filters (86eyrt
 			mockup: false,
 			statuses: [],
 		});
+	});
+
+	it("the seat-holding set (every leaf but cancelled) is ONE token, cleared as one", () => {
+		// The Schedule row and the RSVP panel open the inbox on this exact set
+		// (`listingOrdersSearch`); seven pills for "not cancelled" read as
+		// clutter on a phone (staging test, 31 Oct 2026).
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: [...HOLDING_LEAVES] },
+		});
+		expect(
+			screen.getAllByRole("button", {
+				name: /remove filter: excluding cancelled/i,
+			}),
+		).toHaveLength(1);
+		expect(
+			screen.queryByRole("button", { name: /remove filter: packed/i }),
+		).toBeNull();
+		fireEvent.click(
+			screen.getAllByRole("button", {
+				name: /remove filter: excluding cancelled/i,
+			})[0],
+		);
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ statuses: [] }),
+		);
+	});
+
+	it("any other mix of leaves stays one token per leaf", () => {
+		renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: ["packed", "shipped"] },
+		});
+		expect(
+			screen.queryByRole("button", {
+				name: /remove filter: excluding cancelled/i,
+			}),
+		).toBeNull();
+		expect(
+			screen.getAllByRole("button", { name: /remove filter: packed/i }).length,
+		).toBeGreaterThan(0);
 	});
 
 	it("lets a cards-view seller set a status, which has no table header to click", () => {
@@ -911,5 +951,73 @@ describe("OrderFilters — the due-date axis is one control", () => {
 		// this over the URL, and a missing key leaves the old value in place.
 		expect("dueFrom" in next).toBe(true);
 		expect("dueTo" in next).toBe(true);
+	});
+});
+
+/**
+ * The Schedule's drill-down (`z8r3fdjv0d`): a row opens the inbox narrowed to
+ * ONE listing. No picker writes it, so the panel's whole job is to name it and
+ * let it go — a filter in force that the seller can't see would leave them
+ * wondering where their other orders went.
+ */
+describe("OrderFilters — the listing filter is named and removable", () => {
+	it("counts as one filter and reads the listing's name", () => {
+		expect(activeFilterCount({ ...EMPTY, mockup: false, listing: "p1" })).toBe(
+			1,
+		);
+		renderFilters({
+			value: { ...EMPTY, mockup: false, listing: "p1" },
+			listingName: "Luncheon",
+		});
+		expect(
+			screen.getAllByRole("button", {
+				name: /remove filter: listing: luncheon/i,
+			}).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("says so when the id names no listing, rather than hiding the filter", () => {
+		renderFilters({
+			value: { ...EMPTY, mockup: false, listing: "gone" },
+			listingName: null,
+		});
+		expect(
+			screen.getAllByRole("button", {
+				name: /remove filter: listing not found/i,
+			}).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("removing it clears the listing and nothing else", () => {
+		const DUE = Date.parse("2026-11-13T00:00:00+08:00");
+		const { onChange } = renderFilters({
+			value: {
+				...EMPTY,
+				mockup: false,
+				listing: "p1",
+				dueFrom: DUE,
+				dueTo: DUE,
+			},
+			listingName: "Luncheon",
+		});
+		fireEvent.click(
+			screen.getAllByRole("button", {
+				name: /remove filter: listing: luncheon/i,
+			})[0],
+		);
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.listing).toBeUndefined();
+		// The date the row was about stays — the seller dropped one filter.
+		expect(next.dueFrom).toBe(DUE);
+	});
+
+	it("Clear all drops it too", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, listing: "p1" },
+			listingName: "Luncheon",
+		});
+		fireEvent.click(screen.getAllByRole("button", { name: /^clear all/i })[0]);
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.listing).toBeUndefined();
 	});
 });

@@ -181,6 +181,144 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.10.7",
+		date: "2026-10-31",
+		// Notable (Zaki, 31 Oct 2026): twelve entries carrying three whole new
+		// ways of selling — parcel couriers, delivery abroad, a code the whole
+		// crowd can type — plus a Schedule view and courier balances a seller
+		// would otherwise never find. A dot would reach them; the modal is what
+		// gets them opened.
+		notable: true,
+		entries: [
+			{
+				kind: "feature",
+				title: { en: "Book parcel couriers with EasyParcel" },
+				body: {
+					en: "Singapore stores finally have a parcel lane. Tap Connect EasyParcel in Settings → Integrations, sign in to your EasyParcel account, and you're set — every delivery order's dispatch card then quotes EasyParcel's couriers for the parcel's weight and box, with your prepaid wallet shown beside the rates so a pick you can't afford is greyed out before you tap it. One booking pays, returns the courier's own label PDF and a tracking number your buyer can follow. Malaysian stores connect it too, for orders going abroad (see below). Booking couriers is on Pro.",
+				},
+				href: spotlightHref("easyparcel"),
+				hrefLabel: { en: "Connect EasyParcel" },
+				icon: "truck",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Deliver to Singapore — or to Malaysia — at your own price",
+				},
+				body: {
+					en: 'Buyers across the Causeway kept hitting a wall at the address step. Settings → Overseas delivery now lets you switch on delivery to the other country at a price you choose for it: flat, by weight, free on you, or priced live by EasyParcel at checkout. Products ship abroad unless you mark one "ships within Malaysia only" (frozen goods, same-day cakes) — you sort the whole catalogue in one pass the first time. Buyers get a Deliver to switch at checkout, and your store is listed abroad in Stores while something can go. Delivery abroad is on Pro.',
+				},
+				href: "/app/settings/overseas-delivery",
+				hrefLabel: { en: "Deliver abroad" },
+			},
+			{
+				kind: "feature",
+				title: { en: "One voucher code the whole crowd can type" },
+				body: {
+					en: '"Use SALE20 for 20% off" — now you can say it. Vouchers → New voucher asks who can use it: one buyer, or everyone. A shared code is a word you choose, bounded by a number of uses, an end time, or both; its row shows the tally as it\'s used and who used it. Add a limit per buyer (on by default), a minimum spend, a cap on what a percent code takes off one order, or a start time so a code announced today opens on Friday. A live code can be extended, never changed. Vouchers are on Pro.',
+				},
+				href: "/app/vouchers",
+				hrefLabel: { en: "Create a code" },
+				icon: "megaphone",
+			},
+			{
+				kind: "feature",
+				title: { en: "Schedule: who's registered and who's paid, per date" },
+				body: {
+					en: "Sell events, classes, stays or plans? Orders gains a Schedule view — one row per date and listing for the next 90 days — counting registered seats or bookings against paid, with claimed, unpaid, awaiting approval and free each in their own chip, so the numbers always add up. Tap a row to open exactly those orders in the inbox, through a new listing filter you can also use on its own. Show past 30 days looks back. It appears once you have an event or booking listing. Schedule is on Pro.",
+				},
+				href: "/app/orders/schedule",
+				hrefLabel: { en: "Open Schedule" },
+				icon: "calendar",
+			},
+			{
+				kind: "feature",
+				title: { en: "Your courier wallets, shown before you spend them" },
+				body: {
+					en: "Every courier is prepaid from your own wallet, and an empty one used to show up as a failed booking with a buyer waiting. Now the balance Lalamove, Delyva or EasyParcel last reported sits wherever you're about to spend it: a Balances card on Home, the top of Deliveries, each Integrations card, and right above Book on the order. Set a low-balance line per wallet and we email you once when it's crossed; Top up walks you to the courier's own page. Your Kedaipal credits now ride a ticket in the sidebar and your profile menu, on every page. On every plan.",
+				},
+				href: "/app/deliveries",
+				hrefLabel: { en: "See your wallets" },
+				icon: "wallet",
+			},
+			{
+				kind: "feature",
+				title: {
+					en: "Refer & earn gets its own page, and a door at the top of Home",
+				},
+				body: {
+					en: "The referral card hid at the foot of Home. It's now a Refer & earn button beside New order (under your greeting on a phone) that opens a page of its own: your link, a ready-to-send WhatsApp message, a share image in square and story sizes, and one row per kedai you've referred with where they are — signed up, on trial, or paid — plus Say hi on WhatsApp for anyone still deciding. The terms haven't changed: 60 free orders each on Pro, 30 on Starter, once their first invoice is paid.",
+				},
+				href: spotlightHref("refer"),
+				hrefLabel: { en: "Refer a kedai" },
+				icon: "users",
+			},
+			{
+				kind: "feature",
+				title: { en: "Find any product setting by name" },
+				body: {
+					en: "Know a product has a prep time, an SKU or a parcel weight somewhere in its form, but not under which row? The product form now opens with a Find a setting box. Type a word — weight, berat, discount, kod — and each result says where it lives. Pick it and every section on the way opens, the field is ringed and your cursor is in it. A setting you can't use yet is listed with the reason and the switch that unlocks it. Press / to bring the box back. On every plan.",
+				},
+				href: "/app/products",
+				hrefLabel: { en: "Open a product" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Weigh your whole catalogue in minutes — and a heavy cart gets the right vehicle",
+				},
+				body: {
+					en: "If a courier prices your delivery, a product with no parcel weight is quoted as 1 kg and the difference is yours at booking. The product form now asks for a weight on anything buyable, and Products → Parcel weights lists every unweighed choice with a box each, a fill-every-blank control and one save, so forty tees take two minutes, not forty edits. An order that was priced at the floor says so, with a link to fix it. And a Lalamove order over a motorcycle's load is quoted on a car automatically, by Lalamove's own limits, so nobody finds out at pickup.",
+				},
+				href: "/app/products/weights",
+				hrefLabel: { en: "Fill in weights" },
+				icon: "package",
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "A meal plan, a membership or a class pass finds its card",
+				},
+				body: {
+					en: "The new-product wizard's first question asked two things in one row of cards, so a 20-day meal plan looked like Food. It's now two labelled groups: Buyers order it (Food, Goods, A service) and Buyers book a date or a period (A plan or package, A stay or rental, An event). Each card says what happens next, you can switch until you publish, and a plan starts with unlimited spots rather than one. The old \"What does your store sell?\" picker in Settings → Store is gone — the wizard asks per product now.",
+				},
+				href: "/app/products/new",
+				hrefLabel: { en: "Add a product" },
+			},
+			{
+				kind: "enhancement",
+				title: {
+					en: "Lalamove keys are checked before they're saved — and you can disconnect",
+				},
+				body: {
+					en: "Paste the wrong keys into the Lalamove card and it used to accept them and badge you Live. Now the card checks their shape as you type, names a swapped pair, and asks Lalamove itself on Save, so a key from the wrong country or environment is refused with nothing stored. A new Disconnect removes the keys and everything learned from them while keeping your vehicle and rider preferences, so reconnecting is one paste. It greys out, with the reason, while a rider is still out or Lalamove is the only thing pricing your delivery. Rider booking is on Pro.",
+				},
+				href: spotlightHref("lalamove"),
+				hrefLabel: { en: "Open the Lalamove card" },
+			},
+			{
+				kind: "fix",
+				title: { en: "A Singapore store is billed in dollars, always" },
+				body: {
+					en: "A store's bills used to follow the currency of its last paid invoice, so one ringgit bill issued to a Singapore store made every renewal after it a ringgit one. Now every invoice, renewal, Pay-now link and credit pack is in your country's currency, full stop. Because of that, changing your store's country detaches a saved auto-renew card: the Country card warns before you save, and the post-switch checklist walks you to set it up again in the new currency.",
+				},
+				href: "/app/settings?tab=billing",
+				hrefLabel: { en: "See your billing" },
+			},
+			{
+				kind: "fix",
+				title: {
+					en: "Every order carries its category — even ones placed before you created it",
+				},
+				body: {
+					en: 'Counter sales, claim links and bookings skipped filing their items under a category, so the Orders filter called them Uncategorized whatever you\'d set. Fixed on every kind of order. And when you add a product to a category now, its past orders are filed under it too — the save toast says how many, with a View in orders link — so the Categories filter stops offering "Uncategorized 23" to a store that has filed everything.',
+				},
+				href: "/app/products/categories",
+				hrefLabel: { en: "Manage categories" },
+			},
+		],
+	},
+	{
 		version: "2026.10.6",
 		date: "2026-10-23",
 		// Not notable: a hotfix for one failure. The store it hit sees delivery

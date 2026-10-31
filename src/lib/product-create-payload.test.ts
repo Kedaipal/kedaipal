@@ -29,6 +29,7 @@ describe("product create route — payload completeness", () => {
 		"minQuantity",
 		"booking",
 		"buyerQuestions",
+		"domesticOnly",
 	])("the create call forwards %s", (field) => {
 		expect(source).toMatch(new RegExp(`${field}: values.${field}`));
 	});

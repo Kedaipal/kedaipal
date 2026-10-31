@@ -32,6 +32,7 @@ function state(
 	overrides: Partial<Parameters<typeof resolveAnnualOffer>[0]> = {},
 ): AnnualOfferState {
 	return resolveAnnualOffer({
+		country: "MY",
 		subscription: { plan: "pro", status: "active", billingCycle: "monthly" },
 		invoices: paid("MYR"),
 		now: NOW,
@@ -76,6 +77,8 @@ describe("AnnualBillingCard — the number on screen is the number on the invoic
 			subscription: { plan, status: "active", billingCycle: "monthly" },
 			invoices: paid(currency),
 			founding,
+			// The currency is the store's country's now, never the invoices'.
+			country: currency === "SGD" ? "SG" : "MY",
 		});
 		renderCard(s, founding);
 		const expected = formatPrice(
@@ -169,6 +172,7 @@ describe("AnnualBillingCard — framing rules", () => {
 			subscription: { plan: "pro", status: "active", billingCycle: "monthly" },
 			invoices: paid("SGD"),
 			now: NOW,
+			country: "SG",
 		});
 		cleanup();
 		const { container: sgdBox } = renderCard(sgd);

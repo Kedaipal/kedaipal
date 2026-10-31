@@ -593,6 +593,7 @@ const FEATURE_LABEL: Record<PlanFeature, string> = {
 	events: "Event RSVPs",
 	promo: "Promo and flash-sale prices",
 	vouchers: "Issuing voucher codes",
+	crossBorder: "Delivering to another country",
 };
 
 /**

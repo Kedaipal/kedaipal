@@ -14,6 +14,7 @@ import {
 	OrderingPausedProvider,
 	SeasonalBreakNotice,
 } from "../components/storefront/seasonal-break";
+import { HomeOnlyLabelProvider } from "../components/storefront/ships-abroad";
 import {
 	StoreUnavailable,
 	type StoreUnavailableLoaderData,
@@ -29,6 +30,7 @@ import { breadcrumbListJsonLd, categoryCrumbs } from "../lib/breadcrumbs";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { absoluteProxiedImageUrl } from "../lib/image-proxy";
 import { jsonLdScript } from "../lib/json-ld";
+import { pageHead } from "../lib/not-found";
 import { seoDescription } from "../lib/seo-text";
 import { ssrRead } from "../lib/ssr-read";
 
@@ -128,90 +130,94 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			locale: retailer.locale ?? "en",
 		};
 	},
-	head: ({ loaderData }) => {
-		if (!loaderData) return {};
-		if ("unavailable" in loaderData)
-			return storeUnavailableHead(loaderData.storeName);
-		const {
-			storeName,
-			slug,
-			categoryName,
-			categorySlug,
-			description,
-			canonicalUrl,
-			indexable,
-			productSlugs,
-			ogImageUrl,
-			locale,
-		} = loaderData;
-		const title = `${categoryName} — ${storeName} | Kedaipal`;
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData }) => {
+			if (!loaderData) return {};
+			if ("unavailable" in loaderData)
+				return storeUnavailableHead(loaderData.storeName);
+			const {
+				storeName,
+				slug,
+				categoryName,
+				categorySlug,
+				description,
+				canonicalUrl,
+				indexable,
+				productSlugs,
+				ogImageUrl,
+				locale,
+			} = loaderData;
+			const title = `${categoryName} — ${storeName} | Kedaipal`;
 
-		const meta = [
-			{ title },
-			{ name: "description", content: description },
-			{
-				name: "robots",
-				content: indexable ? "index, follow" : "noindex, follow",
-			},
-			{ property: "og:type", content: "website" },
-			{ property: "og:site_name", content: "Kedaipal" },
-			{ property: "og:locale", content: OG_LOCALE[locale] },
-			{ property: "og:title", content: title },
-			{ property: "og:description", content: description },
-			{ property: "og:url", content: canonicalUrl },
-			{
-				name: "twitter:card",
-				content: ogImageUrl ? "summary_large_image" : "summary",
-			},
-			{ name: "twitter:title", content: title },
-			{ name: "twitter:description", content: description },
-		];
-		if (ogImageUrl) {
-			meta.push(
-				{ property: "og:image", content: ogImageUrl },
-				{ property: "og:image:alt", content: `${categoryName} — ${storeName}` },
-				{ name: "twitter:image", content: ogImageUrl },
-			);
-		}
-		const store = `${SITE_URL}/${slug}`;
-		return {
-			meta,
-			// No cover preload here (z8r3fdegb5): the compact app bar carries no
-			// cover image, so the page's LCP element is a product photo — the old
-			// hint made every category deep link download a banner it never shows.
-			links: [{ rel: "canonical", href: canonicalUrl }],
-			// Store › Category, so the result reads as a trail, not a URL path
-			// (z8r3fdh2z3).
-			scripts: [
-				jsonLdScript(
-					breadcrumbListJsonLd(
-						categoryCrumbs({
-							siteUrl: SITE_URL,
-							storeName,
-							storeSlug: slug,
-							categoryName,
-							categorySlug,
-						}),
+			const meta = [
+				{ title },
+				{ name: "description", content: description },
+				{
+					name: "robots",
+					content: indexable ? "index, follow" : "noindex, follow",
+				},
+				{ property: "og:type", content: "website" },
+				{ property: "og:site_name", content: "Kedaipal" },
+				{ property: "og:locale", content: OG_LOCALE[locale] },
+				{ property: "og:title", content: title },
+				{ property: "og:description", content: description },
+				{ property: "og:url", content: canonicalUrl },
+				{
+					name: "twitter:card",
+					content: ogImageUrl ? "summary_large_image" : "summary",
+				},
+				{ name: "twitter:title", content: title },
+				{ name: "twitter:description", content: description },
+			];
+			if (ogImageUrl) {
+				meta.push(
+					{ property: "og:image", content: ogImageUrl },
+					{
+						property: "og:image:alt",
+						content: `${categoryName} — ${storeName}`,
+					},
+					{ name: "twitter:image", content: ogImageUrl },
+				);
+			}
+			const store = `${SITE_URL}/${slug}`;
+			return {
+				meta,
+				// No cover preload here (z8r3fdegb5): the compact app bar carries no
+				// cover image, so the page's LCP element is a product photo — the old
+				// hint made every category deep link download a banner it never shows.
+				links: [{ rel: "canonical", href: canonicalUrl }],
+				// Store › Category, so the result reads as a trail, not a URL path
+				// (z8r3fdh2z3).
+				scripts: [
+					jsonLdScript(
+						breadcrumbListJsonLd(
+							categoryCrumbs({
+								siteUrl: SITE_URL,
+								storeName,
+								storeSlug: slug,
+								categoryName,
+								categorySlug,
+							}),
+						),
 					),
-				),
-				// The category's products as an ItemList of URLs: the body is
-				// client-rendered, so this is how a crawler that runs no JS learns
-				// the product pages exist from here (storefront SEO audit).
-				jsonLdScript({
-					"@context": "https://schema.org",
-					"@type": "ItemList",
-					name: categoryName,
-					url: canonicalUrl,
-					numberOfItems: productSlugs.length,
-					itemListElement: productSlugs.map((productSlug, i) => ({
-						"@type": "ListItem",
-						position: i + 1,
-						url: `${store}/p/${productSlug}`,
-					})),
-				}),
-			],
-		};
-	},
+					// The category's products as an ItemList of URLs: the body is
+					// client-rendered, so this is how a crawler that runs no JS learns
+					// the product pages exist from here (storefront SEO audit).
+					jsonLdScript({
+						"@context": "https://schema.org",
+						"@type": "ItemList",
+						name: categoryName,
+						url: canonicalUrl,
+						numberOfItems: productSlugs.length,
+						itemListElement: productSlugs.map((productSlug, i) => ({
+							"@type": "ListItem",
+							position: i + 1,
+							url: `${store}/p/${productSlug}`,
+						})),
+					}),
+				],
+			};
+		}),
 	notFoundComponent: CategoryNotFound,
 	component: CategoryRoute,
 });
@@ -302,57 +308,62 @@ function CategoryRoute() {
 			paused={retailer.orderingPaused === true}
 			pausedBy={retailer.orderingPausedBy}
 		>
-			{/* pb-28 keeps ≥96px clear for the floating cart pill (z8r3fdegb5). */}
-			<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-28">
-				{/* Compact app bar (z8r3fdegb5): whose store this is, the way back,
+			<HomeOnlyLabelProvider
+				storeCountry={retailer.country}
+				shipsAbroadTo={retailer.shipsAbroadTo}
+			>
+				{/* pb-28 keeps ≥96px clear for the floating cart pill (z8r3fdegb5). */}
+				<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-28">
+					{/* Compact app bar (z8r3fdegb5): whose store this is, the way back,
 			    and share — the 176px cover hero stays on the store home so this
 			    deep link's first screen belongs to the category. The bar owns
 			    "back", so the old "← All products" text link is gone. */}
-				<StorefrontAppBar
-					retailer={retailer}
-					slug={retailer.slug}
-					shareUrl={`/${retailer.slug}/c/${page.category.slug}`}
-				/>
-				<SeasonalBreakNotice storeName={retailer.storeName} />
+					<StorefrontAppBar
+						retailer={retailer}
+						slug={retailer.slug}
+						shareUrl={`/${retailer.slug}/c/${page.category.slug}`}
+					/>
+					<SeasonalBreakNotice storeName={retailer.storeName} />
 
-				{/* Category identity: its own name + blurb. */}
-				<div className="flex flex-col gap-2 px-5 pt-4 lg:px-8">
-					<div className="flex flex-col gap-1">
-						{/* This page's own subject, so it owns the <h1>; the app bar
+					{/* Category identity: its own name + blurb. */}
+					<div className="flex flex-col gap-2 px-5 pt-4 lg:px-8">
+						<div className="flex flex-col gap-1">
+							{/* This page's own subject, so it owns the <h1>; the app bar
 					    above renders the store name as plain text. */}
-						<h1 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
-							{page.category.name}
-						</h1>
-						{page.category.description ? (
-							<p className="line-clamp-3 whitespace-pre-line text-sm text-muted-foreground">
-								{page.category.description}
-							</p>
-						) : null}
+							<h1 className="font-heading text-2xl font-extrabold leading-tight tracking-tight">
+								{page.category.name}
+							</h1>
+							{page.category.description ? (
+								<p className="line-clamp-3 whitespace-pre-line text-sm text-muted-foreground">
+									{page.category.description}
+								</p>
+							) : null}
+						</div>
 					</div>
-				</div>
 
-				<section className="mt-2 px-5 lg:px-8">
-					{/* No category rail here. Once a buyer is inside a category the page
+					<section className="mt-2 px-5 lg:px-8">
+						{/* No category rail here. Once a buyer is inside a category the page
 				    already names it (h1 + blurb above) and the only move that
 				    matters is browsing what's in it; a row of sibling image tiles
 				    just competes with the products it sits on top of. The app
 				    bar's back is the way out — T3 (z8r3fdegb5) adds sibling
 				    CHIPS to this page instead. */}
-					<ProductGrid
-						retailerId={retailer._id}
-						cart={cart}
-						products={page.products}
-						storeSlug={retailer.slug}
+						<ProductGrid
+							retailerId={retailer._id}
+							cart={cart}
+							products={page.products}
+							storeSlug={retailer.slug}
+						/>
+					</section>
+
+					<StorefrontFooter
+						slug={slug}
+						discover={retailer.marketplaceUnlisted !== true}
 					/>
-				</section>
 
-				<StorefrontFooter
-					slug={slug}
-					discover={retailer.marketplaceUnlisted !== true}
-				/>
-
-				<CartBar cart={cart} storeSlug={retailer.slug} />
-			</div>
+					<CartBar cart={cart} storeSlug={retailer.slug} />
+				</div>
+			</HomeOnlyLabelProvider>
 		</OrderingPausedProvider>
 	);
 }

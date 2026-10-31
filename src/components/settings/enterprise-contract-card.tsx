@@ -88,7 +88,7 @@ export function EnterpriseContractCard({
 					Blocks of {block} at{" "}
 					{formatPrice(contract.overageRateMinor, contract.currency)} a credit —{" "}
 					{formatPrice(enterpriseBlockPrice(contract), contract.currency)} a
-					block. Bought credits last 12 months.
+					block. Block credits join your extra credits and last 12 months.
 				</dd>
 				{sub.currentPeriodEnd !== undefined && !moving ? (
 					<>

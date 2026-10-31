@@ -86,6 +86,7 @@ function renderNav(props: Partial<BottomNavProps> = {}, initialPath = "/app") {
 		stub("/app/settings"),
 		stub("/app/admin/sellers"),
 		stub("/app/admin/billing"),
+		stub("/app/admin/acquisition"),
 		stub("/app/admin/showcases"),
 		stub("/app/admin/waba"),
 	]);
@@ -187,10 +188,11 @@ describe("BottomNav — 5-tab bar + More sheet", () => {
 		expect(screen.getByText("Home").className).not.toContain("font-bold");
 	});
 
-	it("admin nav keeps the 4 admin tabs and no More (storeless admin)", async () => {
+	it("admin nav keeps the 5 admin tabs and no More (storeless admin)", async () => {
 		renderNav({ adminNav: true }, "/app/admin/sellers");
 		await waitFor(() => expect(screen.getByText("Sellers")).toBeTruthy());
 		expect(screen.getByText("Billing")).toBeTruthy();
+		expect(screen.getByText("Acquisition")).toBeTruthy();
 		expect(screen.getByText("Showcases")).toBeTruthy();
 		expect(screen.getByText("WABA")).toBeTruthy();
 		expect(screen.queryByText("More")).toBeNull();
@@ -207,6 +209,26 @@ describe("BottomNav — 5-tab bar + More sheet", () => {
 		expect(screen.getByText("Sellers")).toBeTruthy();
 		fireEvent.click(screen.getByText("App"));
 		await waitFor(() => expect(router.state.location.pathname).toBe("/app"));
+	});
+});
+
+describe("BottomNav — Blog videos in the More sheet (admin areas, z8r3fdwwpe)", () => {
+	it("shows a Blog videos row out to admin.kedaipal.com when the caller holds the area", async () => {
+		renderNav({ blogVideos: true });
+		await waitFor(() => expect(screen.getByText("More")).toBeTruthy());
+		fireEvent.click(screen.getByText("More"));
+		const row = await screen.findByText("Blog videos");
+		expect(row.closest("a")?.getAttribute("href")).toBe(
+			"https://admin.kedaipal.com/videos",
+		);
+	});
+
+	it("has no such row for a seller without the area", async () => {
+		renderNav();
+		await waitFor(() => expect(screen.getByText("More")).toBeTruthy());
+		fireEvent.click(screen.getByText("More"));
+		await screen.findByText("Settings");
+		expect(screen.queryByText("Blog videos")).toBeNull();
 	});
 });
 

@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { LegalLayout } from "../components/legal/legal-layout";
 import { AUP_VERSION, LEGAL_CONTACT_EMAIL } from "../lib/legal";
+import { pageHead } from "../lib/not-found";
 
 const SEO_TITLE = "Acceptable Use Policy — Kedaipal";
 const SEO_DESC =
@@ -19,22 +20,23 @@ const contactLink = (
 );
 
 export const Route = createFileRoute("/acceptable-use")({
-	head: () => ({
-		meta: [
-			{ title: SEO_TITLE },
-			{ name: "description", content: SEO_DESC },
-			{ property: "og:type", content: "website" },
-			{ property: "og:url", content: PAGE_URL },
-			{ property: "og:title", content: SEO_TITLE },
-			{ property: "og:description", content: SEO_DESC },
-			{ property: "og:image", content: OG_IMAGE },
-			{ name: "twitter:card", content: "summary_large_image" },
-			{ name: "twitter:title", content: SEO_TITLE },
-			{ name: "twitter:description", content: SEO_DESC },
-			{ name: "twitter:image", content: OG_IMAGE },
-		],
-		links: [{ rel: "canonical", href: PAGE_URL }],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, () => ({
+			meta: [
+				{ title: SEO_TITLE },
+				{ name: "description", content: SEO_DESC },
+				{ property: "og:type", content: "website" },
+				{ property: "og:url", content: PAGE_URL },
+				{ property: "og:title", content: SEO_TITLE },
+				{ property: "og:description", content: SEO_DESC },
+				{ property: "og:image", content: OG_IMAGE },
+				{ name: "twitter:card", content: "summary_large_image" },
+				{ name: "twitter:title", content: SEO_TITLE },
+				{ name: "twitter:description", content: SEO_DESC },
+				{ name: "twitter:image", content: OG_IMAGE },
+			],
+			links: [{ rel: "canonical", href: PAGE_URL }],
+		})),
 	component: AcceptableUsePage,
 });
 

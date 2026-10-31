@@ -46,6 +46,7 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "../ui/sheet";
+import { AcquisitionCell } from "./acquisition-cell";
 import { CreditLedgerBody, periodLabel } from "./credit-ledger-sheet";
 import {
 	EnterpriseContractPage,
@@ -818,6 +819,9 @@ function SellerSheetBody({
 							)}
 						</Row>
 					) : null}
+					<Row label="Channel">
+						<AcquisitionCell seller={seller} now={now} />
+					</Row>
 					<Row label="Signup source">
 						{seller.signupSource ? (
 							<Plain>

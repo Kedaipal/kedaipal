@@ -1,4 +1,6 @@
 import { v } from "convex/values";
+import { storeLanes } from "./crossBorder";
+import { type CrossBorderLane, shipsAbroad } from "./lib/crossBorder";
 import { takesBuyerOrders } from "./lib/storeAvailability";
 import { availabilityResolver, storeAvailabilityOf } from "./storeAvailability";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -60,6 +62,9 @@ export type MarketplaceStoreCard = {
 	/** Off-Season Hold — the card says "browse only" instead of "Open now",
 	 * matching what the buyer will find on the storefront itself. */
 	orderingPaused: boolean;
+	/** Set when the card is listed in ANOTHER country's directory because the
+	 * store delivers there (z8r3fdr5yy) — the "Ships from Malaysia" chip. */
+	shipsFrom?: Country;
 	createdAt: number;
 };
 
@@ -69,16 +74,21 @@ export type MarketplaceStoreCard = {
  * not hidden-by-category, not a finished event — because "listed on the
  * directory, empty on arrival" is a dead end we send buyers into.
  *
- * `take(20)` bounds the read: the first 20 active rows almost always contain
- * a visible one, and a store whose first 20 active products are ALL
- * storefront-hidden (finished events / counter-only) reads as not listable —
- * which is the honest answer for what a buyer would find.
+ * Walks the index and returns on the first hit, like the sitemap's
+ * `storefrontIndex.hasVisibleProduct` — a window (`take(20)`) was wrong once
+ * a predicate ran AFTER it (PR #431 review): a frozen seller whose oldest 20
+ * visible products stay home vanished from the other country's directory
+ * though newer dry goods could make the trip. The scan is bounded by the
+ * catalogue cap, and the common case still reads ~1 document.
  */
 export async function hasVisibleProduct(
 	ctx: QueryCtx,
 	retailerId: Id<"retailers">,
+	/** Narrow "visible" further — the cross-border listing asks for a visible
+	 * product that can also go abroad (z8r3fdr5yy). */
+	alsoRequire: (row: Doc<"products">) => boolean = () => true,
 ): Promise<boolean> {
-	const candidates = await ctx.db
+	for await (const row of ctx.db
 		.query("products")
 		.withIndex("by_retailer_active", (q) =>
 			q.eq("retailerId", retailerId).eq("active", true),
@@ -88,9 +98,10 @@ export async function hasVisibleProduct(
 				q.neq(q.field("hidden"), true),
 				q.neq(q.field("hiddenByCategory"), true),
 			),
-		)
-		.take(20);
-	return candidates.some((row) => !hiddenFromStorefront(row));
+		)) {
+		if (!hiddenFromStorefront(row) && alsoRequire(row)) return true;
+	}
+	return false;
 }
 
 /**
@@ -252,11 +263,23 @@ export const listStores = query({
 		const cards: Array<{ card: MarketplaceStoreCard; row: Doc<"retailers"> }> =
 			[];
 		for (const row of rows) {
-			if (
-				args.country !== undefined &&
-				(row.country ?? DEFAULT_COUNTRY) !== args.country
-			)
-				continue;
+			const rowCountry = row.country ?? DEFAULT_COUNTRY;
+			// A store from the other country is listed here only when it is
+			// taking orders TO this country right now (z8r3fdr5yy) — a saved lane
+			// is the cheap pre-check before any subscription read.
+			const abroad =
+				args.country !== undefined && rowCountry !== args.country;
+			if (abroad) {
+				const country = args.country;
+				const savedLane = (
+					row.crossBorderLanes as CrossBorderLane[] | undefined
+				)?.some((lane) => lane.country === country);
+				if (!savedLane) continue;
+				const live = (await storeLanes(ctx, row)).effective.some(
+					(lane) => lane.country === country,
+				);
+				if (!live) continue;
+			}
 			// The subscription is read for TWO store facts — is this an internal
 			// store, and is it comped into Store highlights — and never shipped:
 			// the card says "sponsored", not why.
@@ -271,8 +294,21 @@ export const listStores = query({
 				})
 			)
 				continue;
-			if (!(await hasVisibleProduct(ctx, row._id))) continue;
+			// Abroad, "something to buy" means something that can make the trip
+			// — a store whose whole visible shelf is home-only would be a
+			// dead end for this country's buyers.
+			if (
+				!(await hasVisibleProduct(
+					ctx,
+					row._id,
+					abroad ? shipsAbroad : undefined,
+				))
+			)
+				continue;
+			// A highlight is bought for the store's own market; abroad it lists
+			// on its merits, with the "Ships from" chip instead.
 			const sponsored =
+				!abroad &&
 				highlightSource(
 					{
 						sponsoredUntil: row.marketplaceSponsoredUntil,
@@ -298,7 +334,8 @@ export const listStores = query({
 					storeName: row.storeName,
 					storeDescription: row.storeDescription,
 					storeArea: row.storeArea,
-					country: row.country ?? DEFAULT_COUNTRY,
+					country: rowCountry,
+					...(abroad ? { shipsFrom: rowCountry } : {}),
 					logoUrl,
 					coverImageUrl,
 					offersDelivery: row.offerDelivery !== false,

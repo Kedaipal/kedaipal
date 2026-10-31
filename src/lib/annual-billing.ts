@@ -11,14 +11,14 @@
 //
 // See docs/pricing.md § Annual billing.
 
+import type { Country } from "../../convex/lib/country";
 import {
 	type AnnualQuote,
 	annualQuote,
-	BILLING_CURRENCIES,
 	type BillingCurrency,
-	DEFAULT_BILLING_CURRENCY,
 	type ListedPlan,
 	type Plan,
+	storeBillingCurrency,
 } from "../../convex/lib/plans";
 import { daysUntil } from "./subscription";
 
@@ -114,29 +114,6 @@ export type AnnualOfferState =
 			quote: AnnualQuote;
 	  };
 
-function isBillingCurrency(value: string): value is BillingCurrency {
-	return (BILLING_CURRENCIES as readonly string[]).includes(value);
-}
-
-/**
- * Which currency to quote this seller in.
- *
- * Their own settled invoices, not the visitor geo-detection the marketing pages
- * use: a seller who has paid us twice has already told us what we bill them in,
- * and a VPN or a trip must not re-price their subscription. Falls back to the
- * default billing currency for a seller with no readable invoice currency — who
- * cannot reach the offer anyway, since it needs two paid invoices.
- */
-export function offerCurrency(
-	invoices: readonly AnnualOfferInvoice[],
-): BillingCurrency {
-	for (const invoice of invoices) {
-		if (invoice.status === "paid" && isBillingCurrency(invoice.currency))
-			return invoice.currency;
-	}
-	return DEFAULT_BILLING_CURRENCY;
-}
-
 /**
  * What the annual card should render for this seller.
  *
@@ -164,6 +141,12 @@ export function resolveAnnualOffer(input: {
 	/** A Kedaipal admin on their OWN store runs the app for free and is on no
 	 * tier — the tab replaces the whole plan apparatus for them. */
 	adminOwnAccount?: boolean;
+	/** The store's country — the ONE thing that decides what Kedaipal bills it
+	 * in (`storeBillingCurrency`, 86eyp7hn7). This used to follow the last PAID
+	 * invoice with an MYR default, so a Singapore store read "RM 149.00 a
+	 * month" on the same tab as its S$ hold and renewal (staging test, 31 Oct
+	 * 2026). Undefined reads as Malaysia, the default country. */
+	country: Country | undefined;
 }): AnnualOfferState {
 	const {
 		subscription: sub,
@@ -171,6 +154,7 @@ export function resolveAnnualOffer(input: {
 		now,
 		founding = false,
 		adminOwnAccount,
+		country,
 	} = input;
 
 	if (adminOwnAccount) return { kind: "hidden" };
@@ -198,7 +182,7 @@ export function resolveAnnualOffer(input: {
 	const paidCount = invoices.filter((i) => i.status === "paid").length;
 	if (paidCount < ANNUAL_MIN_PAID_INVOICES) return { kind: "hidden" };
 
-	const currency = offerCurrency(invoices);
+	const currency = storeBillingCurrency(country);
 	const quote = annualQuote(sub.plan, founding, currency);
 
 	if (pendingInvoice) {
