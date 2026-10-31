@@ -11,10 +11,12 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type MutationCtx, mutation, query } from "./_generated/server";
 import { logAdminAction, requireRetailerAccess } from "./lib/auth";
-import { storeCurrencyOf } from "./lib/country";
+import { DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
+import { parseBuyerWaPhone, resolveBuyerDialCountry } from "./lib/buyerPhone";
 import { rateLimiter } from "./lib/rateLimiter";
 import { creditGateFor, forSeller } from "./creditLock";
 import {
+	holdsSharedWord,
 	liveSharedVoucher,
 	resolveVoucherForOrder,
 	storeCanUseVouchers,
@@ -22,12 +24,16 @@ import {
 import {
 	generateVoucherCode,
 	isVoucherExpired,
+	minSpendError,
 	normalizeSharedCode,
 	resolveVoucherStatus,
 	SHARED_USES_LISTED,
 	sharedCodeError,
+	sharedExtendError,
 	sharedLimitsError,
+	type VoucherConditions,
 	type VoucherKind,
+	type VoucherRefusalDetail,
 	VOUCHER_BATCH_MAX,
 	VOUCHER_NOTE_MAX,
 	type VoucherRefusal,
@@ -72,6 +78,12 @@ export type VoucherRow = {
 	maxRedemptions?: number;
 	redeemedCount?: number;
 	endsAt?: number;
+	/** Shared only (`z8r3fdz0pw`). */
+	startsAt?: number;
+	perBuyerLimit?: number;
+	/** Any voucher (`z8r3fdz0pw`). `maxDiscount` is percent only. */
+	minSpend?: number;
+	maxDiscount?: number;
 };
 
 /** What the list's filter chips count, so a tab can show its number and an
@@ -112,6 +124,10 @@ function toRow(
 		maxRedemptions: voucher.maxRedemptions,
 		redeemedCount: voucher.redeemedCount,
 		endsAt: voucher.endsAt,
+		startsAt: voucher.startsAt,
+		perBuyerLimit: voucher.perBuyerLimit,
+		minSpend: voucher.minSpend,
+		maxDiscount: voucher.maxDiscount,
 	};
 }
 
@@ -176,6 +192,7 @@ export const list = query({
 			redeemed: 0,
 			voided: 0,
 			expired: 0,
+			scheduled: 0,
 		};
 		for (const voucher of all) counts[resolveVoucherStatus(voucher, now)]++;
 
@@ -229,37 +246,113 @@ export const list = query({
  * for a buyer to have, and it must not read as an error on the page.
  */
 export const checkCode = mutation({
-	args: { retailerId: v.id("retailers"), code: v.string() },
+	args: {
+		retailerId: v.id("retailers"),
+		code: v.string(),
+		/**
+		 * The buyer's WhatsApp number as typed so far, when the field has one
+		 * (`z8r3fdz0pw`). A per-buyer code can only be judged against a number;
+		 * without one the code applies and the field re-checks once the number
+		 * arrives. Parsed with the checkout's own rule — an unparseable number
+		 * is treated as no number, never as a refusal, because the phone field
+		 * already owns that sentence.
+		 */
+		waPhone: v.optional(v.string()),
+		waDialCountry: v.optional(v.string()),
+	},
 	handler: async (
 		ctx,
-		{ retailerId, code },
+		{ retailerId, code, waPhone, waDialCountry },
 	): Promise<
-		| { ok: true; code: string; terms: VoucherTerms }
-		| { ok: false; refusal: VoucherRefusal; usedOnOrder?: string }
+		| {
+				ok: true;
+				code: string;
+				terms: VoucherTerms;
+				/** The entry rules the field shows and judges locally
+				 * (`z8r3fdz0pw`) — the minimum against the live basket, the
+				 * per-buyer note until a number has been checked. */
+				conditions: VoucherConditions;
+				/** The number this answer was judged for, as stored — set only
+				 * when the code IS per-buyer, so the field can say "checked
+				 * for …" and know when a changed number needs a re-check. */
+				checkedFor?: string;
+		  }
+		| {
+				ok: false;
+				refusal: VoucherRefusal;
+				usedOnOrder?: string;
+				detail?: VoucherRefusalDetail;
+		  }
 	> => {
 		await rateLimiter.limit(ctx, "voucherCheck", {
 			key: retailerId,
 			throws: true,
 		});
+		const buyer = await buyerNumberFor(ctx, retailerId, waPhone, waDialCountry);
 		const resolved = await resolveVoucherForOrder(ctx, {
 			retailerId,
 			code,
 			now: Date.now(),
+			// No basket here — the field judges the minimum locally with the
+			// shared helper — and "unknown" for a missing number, because the
+			// buyer may simply not have reached step 1 yet.
+			entry: { itemSubtotal: undefined, waPhone: buyer, phoneless: "unknown" },
 		});
 		if (!resolved.ok)
 			return {
 				ok: false,
 				refusal: resolved.refusal,
 				usedOnOrder: resolved.usedOnOrder,
+				detail: resolved.detail,
 			};
+		const conditions: VoucherConditions = {
+			minSpend: resolved.voucher.minSpend,
+			perBuyerLimit:
+				voucherUsageOf(resolved.voucher) === "shared"
+					? resolved.voucher.perBuyerLimit
+					: undefined,
+		};
 		// The CODE comes back canonical so the field can correct what was typed
 		// in place — the buyer sees `KP-7F3K-Q2WM`, not `kp7f3kq2wm`. The sen
 		// figure is NOT computed here: the client knows the basket and computes
 		// it with the same shared helper the server uses, so there is no
 		// round-trip on every quantity change.
-		return { ok: true, code: resolved.voucher.code, terms: resolved.terms };
+		return {
+			ok: true,
+			code: resolved.voucher.code,
+			terms: resolved.terms,
+			conditions,
+			checkedFor:
+				conditions.perBuyerLimit !== undefined && buyer !== undefined
+					? buyer
+					: undefined,
+		};
 	},
 });
+
+/** The buyer's number as an order would store it, or `undefined` when there
+ * is none or it doesn't parse yet. */
+async function buyerNumberFor(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	raw: string | undefined,
+	dialCountry: string | undefined,
+): Promise<string | undefined> {
+	if (raw === undefined || raw.trim() === "") return undefined;
+	const retailer = await ctx.db.get(retailerId);
+	if (!retailer) return undefined;
+	let picked: ReturnType<typeof resolveBuyerDialCountry>;
+	try {
+		picked = resolveBuyerDialCountry(
+			dialCountry,
+			retailer.country ?? DEFAULT_COUNTRY,
+		);
+	} catch {
+		return undefined;
+	}
+	const parsed = parseBuyerWaPhone(raw, picked);
+	return parsed.ok ? parsed.digits : undefined;
+}
 
 /**
  * Is this word free for a new SHARED code? (`z8r3fducfm`)
@@ -289,16 +382,11 @@ export const sharedCodeAvailable = query({
 			return { available: false, code: canonical };
 		const live = await liveSharedVoucher(ctx, retailerId, canonical, Date.now());
 		return {
-			available: live === null || !isLive(live, Date.now()),
+			available: live === null || !holdsSharedWord(live, Date.now()),
 			code: canonical,
 		};
 	},
 });
-
-/** Is this row still spendable — the one predicate "taken" is built on. */
-function isLive(voucher: Doc<"vouchers">, now: number): boolean {
-	return resolveVoucherStatus(voucher, now) === "active";
-}
 
 /**
  * Mint one voucher, a batch of them, or one SHARED code.
@@ -333,6 +421,14 @@ export const create = mutation({
 		maxRedemptions: v.optional(v.number()),
 		/** Shared only: exact end instant (ms). */
 		endsAt: v.optional(v.number()),
+		/** Shared only: exact start instant (ms). Omit = starts now. */
+		startsAt: v.optional(v.number()),
+		/** Shared only: orders per WhatsApp number. */
+		perBuyerLimit: v.optional(v.number()),
+		/** Any voucher: least gross item subtotal (minor units). */
+		minSpend: v.optional(v.number()),
+		/** Percent only: the most it takes off one order (minor units). */
+		maxDiscount: v.optional(v.number()),
 	},
 	handler: async (
 		ctx,
@@ -347,6 +443,10 @@ export const create = mutation({
 			code,
 			maxRedemptions,
 			endsAt,
+			startsAt,
+			perBuyerLimit,
+			minSpend,
+			maxDiscount,
 		},
 	): Promise<{ vouchers: VoucherRow[]; batchId?: string }> => {
 		const access = await requireRetailerAccess(ctx, retailerId, {
@@ -363,8 +463,10 @@ export const create = mutation({
 			await assertPlanFeature(ctx, retailerId, "vouchers");
 		}
 
-		const valueError = voucherValueError({ kind, value });
+		const valueError = voucherValueError({ kind, value, maxDiscount });
 		if (valueError !== null) throw new ConvexError(valueError);
+		const spendError = minSpendError(minSpend);
+		if (spendError !== null) throw new ConvexError(spendError);
 
 		if (usage === "shared") {
 			const row = await insertSharedCode(ctx, {
@@ -375,6 +477,10 @@ export const create = mutation({
 				code,
 				maxRedemptions,
 				endsAt,
+				startsAt,
+				perBuyerLimit,
+				minSpend,
+				maxDiscount,
 				count,
 				expiresAt,
 				note,
@@ -383,6 +489,13 @@ export const create = mutation({
 			await logAdminAction(ctx, access, "vouchers.create", retailerId);
 			return { vouchers: [toRow(row, row.createdAt, undefined)] };
 		}
+
+		// The start and the per-buyer limit count a crowd's uses; a single-use
+		// code has one use and one holder, so either is a client bug here.
+		if (startsAt !== undefined || perBuyerLimit !== undefined)
+			throw new ConvexError(
+				"A start time and a per-buyer limit are for shared codes only.",
+			);
 
 		const howMany = count ?? 1;
 		if (!Number.isInteger(howMany) || howMany < 1)
@@ -419,6 +532,8 @@ export const create = mutation({
 				expiresAt,
 				note: cleanNote,
 				batchId,
+				minSpend,
+				maxDiscount,
 				createdByUserId: access.role === "admin" ? undefined : userId,
 				now,
 			});
@@ -463,6 +578,10 @@ async function insertSharedCode(
 		code?: string;
 		maxRedemptions?: number;
 		endsAt?: number;
+		startsAt?: number;
+		perBuyerLimit?: number;
+		minSpend?: number;
+		maxDiscount?: number;
 		count?: number;
 		expiresAt?: number;
 		note?: string;
@@ -483,14 +602,21 @@ async function insertSharedCode(
 	if (code === null) throw new ConvexError(sharedCodeError("") ?? "Type a code");
 
 	const now = Date.now();
-	const limits = { maxRedemptions: args.maxRedemptions, endsAt: args.endsAt };
+	const limits = {
+		maxRedemptions: args.maxRedemptions,
+		endsAt: args.endsAt,
+		startsAt: args.startsAt,
+		perBuyerLimit: args.perBuyerLimit,
+	};
 	const limitsError = sharedLimitsError(limits, now);
 	if (limitsError !== null) throw new ConvexError(limitsError);
 
 	const live = await liveSharedVoucher(ctx, args.retailerId, code, now);
-	if (live !== null && isLive(live, now))
+	if (live !== null && holdsSharedWord(live, now))
 		throw new ConvexError(
-			`${code} is already running — void it or let it end before reusing the word.`,
+			resolveVoucherStatus(live, now) === "scheduled"
+				? `${code} is already set up to start later — void it before reusing the word.`
+				: `${code} is already running — void it or let it end before reusing the word.`,
 		);
 
 	const id = await ctx.db.insert("vouchers", {
@@ -504,6 +630,10 @@ async function insertSharedCode(
 		maxRedemptions: args.maxRedemptions,
 		redeemedCount: 0,
 		endsAt: args.endsAt,
+		startsAt: args.startsAt,
+		perBuyerLimit: args.perBuyerLimit,
+		minSpend: args.minSpend,
+		maxDiscount: args.maxDiscount,
 		note: args.note?.trim().slice(0, VOUCHER_NOTE_MAX) || undefined,
 		createdByUserId: args.createdByUserId,
 		createdAt: now,
@@ -576,6 +706,8 @@ async function insertWithUniqueCode(
 		expiresAt?: number;
 		note?: string;
 		batchId?: string;
+		minSpend?: number;
+		maxDiscount?: number;
 		createdByUserId?: string;
 		now: number;
 	},
@@ -597,6 +729,8 @@ async function insertWithUniqueCode(
 			status: "active",
 			note: args.note,
 			batchId: args.batchId,
+			minSpend: args.minSpend,
+			maxDiscount: args.maxDiscount,
 			createdByUserId: args.createdByUserId,
 			createdAt: args.now,
 			updatedAt: args.now,
@@ -643,6 +777,100 @@ export const voidVoucher = mutation({
 			updatedAt: now,
 		});
 		await logAdminAction(ctx, access, "vouchers.voidVoucher", voucherId);
+	},
+});
+
+/**
+ * Give a SHARED code more room — a later end, a higher cap, or one of the two
+ * bounds dropped while the other stays (`z8r3fdz0pw`).
+ *
+ * Only ever more generous (`sharedExtendError`): a shared code is a promise
+ * already on a poster, and every buyer who used it was told its value, so
+ * the value, the per-buyer limit, the minimum spend and the start are not
+ * editable here at all. Before this existed the seller's only move was to
+ * void the code and mint a new row with the same word, which split its
+ * history in two and reset the per-buyer count.
+ *
+ * Works on a code that has already run out or ended, because "it sold out
+ * by lunch — add 20 more" is the commonest reason to reach for it. That
+ * REVIVES the row, so it refuses when another code has taken the word since
+ * (two live rows on one word is exactly what `liveSharedVoucher` must never
+ * have to choose between). A voided code stays voided: the seller withdrew
+ * it on purpose.
+ *
+ * Pro-gated like `create`, because a raised cap gives more away, and on the
+ * same per-caller limiter bucket.
+ */
+export const extendShared = mutation({
+	args: {
+		voucherId: v.id("vouchers"),
+		/** The new cap, or omit to drop it (an end must then remain). */
+		maxRedemptions: v.optional(v.number()),
+		/** The new end instant (ms), or omit to drop it (a cap must remain). */
+		endsAt: v.optional(v.number()),
+	},
+	handler: async (
+		ctx,
+		{ voucherId, maxRedemptions, endsAt },
+	): Promise<VoucherRow> => {
+		const voucher = await ctx.db.get(voucherId);
+		if (!voucher) throw new ConvexError("Voucher not found");
+		const access = await requireRetailerAccess(ctx, voucher.retailerId, {
+			area: "vouchers",
+			level: "write",
+		});
+		await rateLimiter.limit(ctx, "voucherIssue", {
+			key: access.userId,
+			throws: true,
+		});
+		if (!access.actingAsAdmin) {
+			await assertSubscriptionActive(ctx, voucher.retailerId);
+			await assertPlanFeature(ctx, voucher.retailerId, "vouchers");
+		}
+		if (voucherUsageOf(voucher) !== "shared")
+			throw new ConvexError(
+				"A single-use voucher has one use — there's nothing to extend.",
+			);
+		if (voucher.status === "voided")
+			throw new ConvexError(
+				"This code was voided — create a new one instead.",
+			);
+
+		const now = Date.now();
+		const next = { maxRedemptions, endsAt };
+		const extendError = sharedExtendError(voucher, next, now);
+		if (extendError !== null) throw new ConvexError(extendError);
+		// The cap may not drop under a per-buyer limit the code already has —
+		// unreachable by raising, but dropping the cap is not raising.
+		const limitsError = sharedLimitsError(
+			{ ...next, perBuyerLimit: voucher.perBuyerLimit },
+			now,
+		);
+		if (limitsError !== null) throw new ConvexError(limitsError);
+
+		if (!holdsSharedWord(voucher, now)) {
+			const holder = await liveSharedVoucher(
+				ctx,
+				voucher.retailerId,
+				voucher.code,
+				now,
+			);
+			if (
+				holder !== null &&
+				holder._id !== voucher._id &&
+				holdsSharedWord(holder, now)
+			)
+				throw new ConvexError(
+					`${voucher.code} is in use by a newer code — extend that one instead.`,
+				);
+		}
+
+		await ctx.db.patch(voucherId, { maxRedemptions, endsAt, updatedAt: now });
+		await logAdminAction(ctx, access, "vouchers.extendShared", voucherId);
+		const fresh = await ctx.db.get(voucherId);
+		if (!fresh) throw new ConvexError("Voucher not found");
+		// A shared row never carries `redeemedOrderId`, so nothing to redact.
+		return toRow(fresh, now, undefined);
 	},
 });
 

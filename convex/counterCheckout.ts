@@ -1170,6 +1170,18 @@ export const createOrderFromSession = mutation({
 				retailerId: retailer._id,
 				code: args.voucherCode,
 				now,
+				// An ANONYMOUS walk-in has no number to count against, so a
+				// per-buyer code's use counts against its total only
+				// (`z8r3fdz0pw`) — refusing would turn away a buyer standing at
+				// the till, and the panel says so before the seller taps Create.
+				entry: {
+					itemSubtotal: snapshotItems.reduce(
+						(sum, item) => sum + item.price * item.quantity,
+						0,
+					),
+					waPhone: session.waPhone,
+					phoneless: "total_only",
+				},
 			});
 			voucherTerms = terms;
 			redeemedVoucherId = voucher._id;
@@ -1283,7 +1295,12 @@ export const createOrderFromSession = mutation({
 		// Spend the code in the transaction that created the order (OCC makes the
 		// race safe — see lib/voucherRedemption.ts).
 		if (redeemedVoucherId)
-			await redeemVoucher(ctx, { voucherId: redeemedVoucherId, orderId, now });
+			await redeemVoucher(ctx, {
+				voucherId: redeemedVoucherId,
+				orderId,
+				now,
+				waPhone: session.waPhone,
+			});
 
 		const actorUserId = access.role === "admin" ? undefined : access.userId;
 		await ctx.db.insert("orderEvents", {

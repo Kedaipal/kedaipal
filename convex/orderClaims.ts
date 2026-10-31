@@ -378,6 +378,14 @@ export const sendClaim = mutation({
 				retailerId: retailer._id,
 				code: args.voucherCode,
 				now,
+				// Judged for the buyer the link goes to and the lines being
+				// frozen (`z8r3fdz0pw`): a send refuses here, at the counter,
+				// rather than promising a discount the claim page then drops.
+				entry: {
+					itemSubtotal: claimItemsTotal(lines),
+					waPhone: session.waPhone,
+					phoneless: "refuse",
+				},
 			});
 			voucherId = resolved.voucher._id;
 			voucherSnapshot = {
@@ -1341,6 +1349,7 @@ export const commit = mutation({
 				voucherId: voucherState.voucherId,
 				orderId,
 				now,
+				waPhone: claim.waPhone,
 			});
 
 		await ctx.db.insert("orderEvents", {

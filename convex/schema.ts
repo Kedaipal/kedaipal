@@ -1745,6 +1745,9 @@ export default defineSchema({
 				value: v.number(),
 				// Frozen with the code (`z8r3fducfm`) — see `VoucherSnapshot`.
 				usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
+				// The per-order cap of a percent code (`z8r3fdz0pw`), frozen with
+				// the terms so every recompute clamps as the create did.
+				maxDiscount: v.optional(v.number()),
 			}),
 		),
 		voucherDiscount: v.optional(v.number()),
@@ -3161,6 +3164,9 @@ export default defineSchema({
 				value: v.number(),
 				// Frozen with the code (`z8r3fducfm`) — see `VoucherSnapshot`.
 				usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
+				// The per-order cap of a percent code (`z8r3fdz0pw`), frozen with
+				// the terms so every recompute clamps as the create did.
+				maxDiscount: v.optional(v.number()),
 			}),
 		),
 		// Buyer capability for /claim/<token> — same generator + posture as
@@ -3307,6 +3313,22 @@ export default defineSchema({
 		// Exact end instant (ms). NOT the `expiresAt` day convention — a shared
 		// code is posted for a happy hour, so it ends at a TIME.
 		endsAt: v.optional(v.number()),
+		// --- Shared codes v2 (`z8r3fdz0pw`) ---------------------------------
+		// Exact START instant (ms); until then the row reads `scheduled` and a
+		// buyer is told when it opens. Shared only. Absent = live on create.
+		startsAt: v.optional(v.number()),
+		// Orders ONE WhatsApp number may place with a shared code, counted off
+		// `voucherRedemptions.waPhone`. Absent = no per-buyer limit.
+		perBuyerLimit: v.optional(v.number()),
+		// Least GROSS item subtotal (minor units) an order needs to use this
+		// voucher — single-use or shared. An entry rule judged ONCE at
+		// redemption, never on a later recompute, so a discount already given
+		// is never silently taken back. Absent = no minimum.
+		minSpend: v.optional(v.number()),
+		// The most a PERCENT voucher takes off one order (minor units). Part
+		// of the terms, so it is frozen into `voucherSnapshot` and clamps every
+		// recompute. Never set on a fixed voucher.
+		maxDiscount: v.optional(v.number()),
 		// Set together on void. Soft by design: the row and its history stay,
 		// the code simply stops redeeming. There is no hard delete in v1.
 		voidedAt: v.optional(v.number()),
@@ -3355,9 +3377,18 @@ export default defineSchema({
 		voucherId: v.id("vouchers"),
 		retailerId: v.id("retailers"),
 		orderId: v.id("orders"),
+		// The buyer's WhatsApp number as the order stores it (E.164 digits),
+		// so a per-buyer limit can be counted (`z8r3fdz0pw`). Absent on an
+		// anonymous counter sale — that use counts against the code's total
+		// only — and on every use recorded before the limit existed, which is
+		// why no backfill is needed: those codes carry no per-buyer limit.
+		waPhone: v.optional(v.string()),
 		createdAt: v.number(),
 	})
 		.index("by_voucher", ["voucherId", "createdAt"])
+		// The per-buyer count: "how many orders has THIS number placed with
+		// THIS code" is one bounded range read inside the order mutation.
+		.index("by_voucher_phone", ["voucherId", "waPhone"])
 		.index("by_order", ["orderId"])
 		// Tenant teardown (`accountDeletion`).
 		.index("by_retailer", ["retailerId"]),

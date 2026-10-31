@@ -1,8 +1,8 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { useMutation } from "convex/react";
-import { Check, Loader2, Lock, RefreshCw } from "lucide-react";
-import { type ReactNode, useMemo, useState } from "react";
+import { AlertTriangle, Check, Loader2, Lock, RefreshCw } from "lucide-react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -14,14 +14,19 @@ import {
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import {
+	minSpendError,
+	perBuyerLimitError,
 	SHARED_CODE_MAX,
 	SHARED_CODE_MIN,
+	SHARED_PERCENT_CAUTION,
 	SHARED_USES_MAX,
 	sharedCodeError,
 	sharedLimitsError,
+	sharedStartError,
 	suggestSharedCodes,
 	VOUCHER_BATCH_MAX,
 	VOUCHER_NOTE_MAX,
+	type VoucherStatus,
 	type VoucherUsage,
 	voucherValueError,
 } from "../../../convex/lib/vouchers";
@@ -42,7 +47,7 @@ import { Input } from "../ui/input";
 import { InputPrefixFrame } from "../ui/input-prefix-frame";
 import { ModeButton } from "../ui/mode-button";
 import { TimePicker } from "../ui/time-picker";
-import { ToggleSwitch } from "../ui/toggle-switch";
+import { LimitRow } from "./limit-row";
 
 /**
  * Issue one voucher, a run of them, or one SHARED code (`z8r3fdr617`,
@@ -83,7 +88,7 @@ export function IssueVoucherDialog({
 	currency: string;
 	/** Hands back the freshly minted run so the page can open the share sheet
 	 * on a single voucher — issuing and sending are one errand. */
-	onIssued: (vouchers: Array<{ code: string }>) => void;
+	onIssued: (vouchers: Array<{ code: string; status: VoucherStatus }>) => void;
 }) {
 	const createVoucher = useMutation(api.vouchers.create);
 	const [usage, setUsage] = useState<VoucherUsage>("single");
@@ -102,6 +107,19 @@ export function IssueVoucherDialog({
 	const [endOn, setEndOn] = useState(false);
 	const [endYmd, setEndYmd] = useState("");
 	const [endHhmm, setEndHhmm] = useState("23:59");
+	// v2 (`z8r3fdz0pw`). The per-buyer limit is ON by default for a shared
+	// code: without it a public code is reusable by one buyer until the cap,
+	// which is the abuse case the limit exists for — the safe answer is the
+	// one a seller gets without reading anything.
+	const [startLater, setStartLater] = useState(false);
+	const [startYmd, setStartYmd] = useState("");
+	const [startHhmm, setStartHhmm] = useState("09:00");
+	const [perBuyerOn, setPerBuyerOn] = useState(true);
+	const [perBuyer, setPerBuyer] = useState("1");
+	const [minSpendOn, setMinSpendOn] = useState(false);
+	const [minSpendText, setMinSpendText] = useState("");
+	const [maxDiscOn, setMaxDiscOn] = useState(false);
+	const [maxDiscText, setMaxDiscText] = useState("");
 	const [saving, setSaving] = useState(false);
 
 	function reset() {
@@ -119,6 +137,15 @@ export function IssueVoucherDialog({
 		setEndOn(false);
 		setEndYmd("");
 		setEndHhmm("23:59");
+		setStartLater(false);
+		setStartYmd("");
+		setStartHhmm("09:00");
+		setPerBuyerOn(true);
+		setPerBuyer("1");
+		setMinSpendOn(false);
+		setMinSpendText("");
+		setMaxDiscOn(false);
+		setMaxDiscText("");
 	}
 
 	const shared = usage === "shared";
@@ -132,7 +159,34 @@ export function IssueVoucherDialog({
 	const value = Number.isFinite(parsed) ? parsed : 0;
 	const touched =
 		kind === "fixed" ? amount.trim() !== "" : percent.trim() !== "";
+	// The per-order cap only exists on a percentage — a fixed amount is its
+	// own cap — so switching to "An amount" drops it rather than hiding a
+	// value the server would refuse (`z8r3fdz0pw`).
+	const maxDiscount =
+		kind === "percent" && maxDiscOn ? sen(maxDiscText) : undefined;
 	const valueError = touched ? voucherValueError({ kind, value }) : null;
+	// The cap's own sentence, under the cap — judged by the same helper with
+	// the cap in, once the value itself is fine.
+	const maxDiscError =
+		maxDiscount !== undefined && valueError === null
+			? voucherValueError({ kind, value: touched ? value : 1, maxDiscount })
+			: null;
+	const minSpend = minSpendOn ? sen(minSpendText) : undefined;
+	const spendError = minSpendOn ? minSpendError(minSpend) : null;
+	// Arif's 50% ceiling, decided as a CAUTION and not a refusal (docs/
+	// vouchers.md "The percent ceiling"): "first 10 orders free" is a real
+	// promotion, and the bounds — not the percentage — are what limit a
+	// public code. The line names those bounds.
+	const caution =
+		usage === "shared" &&
+		kind === "percent" &&
+		value >= SHARED_PERCENT_CAUTION &&
+		valueError === null &&
+		!maxDiscOn
+			? perBuyerOn
+				? `${value}% off for anyone with the word. Consider capping it per order, so one big basket can't take most of it.`
+				: `${value}% off for anyone with the word, as many times as they like. Consider a per-buyer limit or a cap per order.`
+			: null;
 
 	const howMany = Number.parseInt(count, 10);
 	const countError =
@@ -185,6 +239,14 @@ export function IssueVoucherDialog({
 					timeMinutesFromHhmm(endHhmm),
 				)
 			: undefined;
+	const startsAt =
+		startLater && startYmd !== ""
+			? composeFulfilmentMoment(
+					mytMidnightFromYmd(startYmd),
+					timeMinutesFromHhmm(startHhmm),
+				)
+			: undefined;
+	const perBuyerNumber = Number.parseInt(perBuyer, 10);
 	const limitsError = shared
 		? sharedLimitsError(
 				{
@@ -196,18 +258,37 @@ export function IssueVoucherDialog({
 				Date.now(),
 			)
 		: null;
+	// Split from the bounds' check so each sentence sits under the control
+	// it is about; the server runs them as one (`sharedLimitsError`).
+	const startError =
+		shared && startLater
+			? sharedStartError(
+					startsAt ?? Number.NaN,
+					endOn ? endsAt : undefined,
+					Date.now(),
+				)
+			: null;
+	const perBuyerError =
+		shared && perBuyerOn
+			? perBuyerLimitError(perBuyerNumber, capOn ? capNumber : undefined)
+			: null;
 
 	const blocked = !touched
 		? "Enter what the voucher is worth"
 		: valueError !== null
 			? valueError
-			: shared
-				? !codeTouched
-					? "Name the code, or pick a suggestion"
-					: (codeError ??
-						(taken ? `${answeredCode} is already running` : null) ??
-						limitsError)
-				: (countError ?? expiryError);
+			: maxDiscError !== null
+				? maxDiscError
+				: shared
+					? !codeTouched
+						? "Name the code, or pick a suggestion"
+						: (codeError ??
+							(taken ? `${answeredCode} is already taken` : null) ??
+							startError ??
+							limitsError ??
+							perBuyerError ??
+							spendError)
+					: (countError ?? expiryError ?? spendError);
 
 	async function submit() {
 		if (blocked !== null) return;
@@ -223,6 +304,10 @@ export function IssueVoucherDialog({
 							code: sharedCode.trim().toUpperCase(),
 							maxRedemptions: capOn ? capNumber : undefined,
 							endsAt,
+							startsAt,
+							perBuyerLimit: perBuyerOn ? perBuyerNumber : undefined,
+							minSpend,
+							maxDiscount,
 							note: note.trim() || undefined,
 						}
 					: {
@@ -235,11 +320,15 @@ export function IssueVoucherDialog({
 									: undefined,
 							note: note.trim() || undefined,
 							count: howMany > 1 ? howMany : undefined,
+							minSpend,
+							maxDiscount,
 						},
 			);
 			toast.success(
 				shared
-					? `${vouchers[0].code} is live — share it anywhere`
+					? startsAt !== undefined
+						? `${vouchers[0].code} is set up — it starts working at the time you picked`
+						: `${vouchers[0].code} is live — share it anywhere`
 					: vouchers.length === 1
 						? `Voucher ${vouchers[0].code} created`
 						: `${vouchers.length} vouchers created`,
@@ -373,6 +462,60 @@ export function IssueVoucherDialog({
 									: "Taken off the item total, after any promo prices."}
 							</FieldDescription>
 						)}
+						{/* Part of the TERMS, so it lives with the value it bounds
+						    rather than among the entry rules below: it shapes the
+						    figure on every order, and is frozen with it. A fixed
+						    amount is already its own cap, so it is offered on a
+						    percentage only. */}
+						{kind === "percent" ? (
+							<LimitRow
+								on={maxDiscOn}
+								onChange={setMaxDiscOn}
+								title="Cap the discount"
+								subtitle="The most it takes off one order."
+							>
+								<InputPrefixFrame
+									prefix={currencySymbol(currency)}
+									invalid={maxDiscError !== null && maxDiscText.trim() !== ""}
+									className={VALUE_FIELD_WIDTH}
+								>
+									<Input
+										aria-label="Most it takes off one order"
+										variant="bare"
+										inputMode="decimal"
+										placeholder="20.00"
+										value={maxDiscText}
+										onChange={(e) => setMaxDiscText(e.target.value)}
+										isError={maxDiscError !== null && maxDiscText.trim() !== ""}
+									/>
+								</InputPrefixFrame>
+								{maxDiscError !== null && maxDiscText.trim() !== "" ? (
+									<p
+										role="alert"
+										className="text-xs font-medium text-destructive"
+									>
+										{maxDiscError}
+									</p>
+								) : (
+									<p className="text-xs text-muted-foreground">
+										{maxDiscount !== undefined &&
+										maxDiscError === null &&
+										value > 0
+											? `${value}% off, up to ${formatPrice(maxDiscount, currency)}. A basket over ${formatPrice(Math.ceil((maxDiscount * 100) / value), currency)} gets the full ${formatPrice(maxDiscount, currency)}.`
+											: "Buyers see the cap next to the code."}
+									</p>
+								)}
+							</LimitRow>
+						) : null}
+						{caution ? (
+							<p className="flex items-start gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+								<AlertTriangle
+									className="mt-px size-3.5 shrink-0"
+									aria-hidden
+								/>
+								{caution}
+							</p>
+						) : null}
 					</Field>
 
 					{shared ? (
@@ -451,6 +594,65 @@ export function IssueVoucherDialog({
 									capitals don't matter. It isn't secret: anyone who has the
 									word, or guesses it, can use it.
 								</FieldDescription>
+							</Field>
+
+							{/* When it STARTS — a pick-one, like the single-use expiry
+							    (`z8r3fdz0pw`). Before the bounds, because that is the
+							    order a sale runs in. */}
+							<Field>
+								<FieldLabel>When it starts</FieldLabel>
+								<div className="grid grid-cols-2 gap-2">
+									<ModeButton
+										active={!startLater}
+										onClick={() => setStartLater(false)}
+										title="Right away"
+										subtitle="Works as soon as it's created"
+									/>
+									<ModeButton
+										active={startLater}
+										onClick={() => {
+											setStartLater(true);
+											if (startYmd === "")
+												setStartYmd(
+													ymdFromEpoch(todayMytMidnight() + 86_400_000),
+												);
+										}}
+										title="Later…"
+										subtitle="Set it up ahead"
+									/>
+								</div>
+								{startLater ? (
+									<>
+										<div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,10rem)]">
+											<DatePicker
+												id="voucher-start-date"
+												label="First day"
+												value={startYmd}
+												onChange={setStartYmd}
+												min={ymdFromEpoch(todayMytMidnight())}
+												isError={startError !== null}
+											/>
+											<TimePicker
+												aria-label="Start time"
+												value={startHhmm}
+												onChange={setStartHhmm}
+											/>
+										</div>
+										{startError ? (
+											<p
+												role="alert"
+												className="text-xs font-medium text-destructive"
+											>
+												{startError}
+											</p>
+										) : (
+											<FieldDescription>
+												Until then it shows as Scheduled, and a buyer who types
+												it early is told when it starts.
+											</FieldDescription>
+										)}
+									</>
+								) : null}
 							</Field>
 
 							{/* The bounds. Two switches, not a pick-one: a cap, an end
@@ -599,6 +801,95 @@ export function IssueVoucherDialog({
 						</>
 					)}
 
+					{/* WHO QUALIFIES — the entry rules (`z8r3fdz0pw`), judged once
+					    when an order uses the code. Their own group, apart from
+					    the value (what it takes off) and the bounds (when the code
+					    stops for everyone): these are about one buyer and one
+					    basket. The per-buyer limit only means something for a
+					    code many people share. */}
+					<Field>
+						<FieldLabel>Who qualifies</FieldLabel>
+						<div className="flex flex-col gap-2">
+							{shared ? (
+								<LimitRow
+									on={perBuyerOn}
+									onChange={setPerBuyerOn}
+									title="Limit per buyer"
+									subtitle="Counted by WhatsApp number."
+								>
+									<div className="flex items-center gap-3">
+										<Input
+											aria-label="Orders per buyer"
+											variant="field"
+											inputMode="numeric"
+											value={perBuyer}
+											onChange={(e) => setPerBuyer(e.target.value)}
+											isError={perBuyerError !== null}
+											className="max-w-20"
+										/>
+										<span className="text-sm text-muted-foreground">
+											{perBuyerNumber === 1 ? "order" : "orders"} per buyer
+										</span>
+									</div>
+									{perBuyerError ? (
+										<p
+											role="alert"
+											className="text-xs font-medium text-destructive"
+										>
+											{perBuyerError}
+										</p>
+									) : (
+										<p className="text-xs text-muted-foreground">
+											Checked against the buyer's WhatsApp number at checkout. A
+											counter sale with no number counts toward the total only.
+										</p>
+									)}
+								</LimitRow>
+							) : null}
+							<LimitRow
+								on={minSpendOn}
+								onChange={setMinSpendOn}
+								title="Minimum spend"
+								subtitle="On the items, before any discount."
+							>
+								<InputPrefixFrame
+									prefix={currencySymbol(currency)}
+									invalid={spendError !== null}
+									className={VALUE_FIELD_WIDTH}
+								>
+									<Input
+										aria-label="Least a buyer spends on items"
+										variant="bare"
+										inputMode="decimal"
+										placeholder="50.00"
+										value={minSpendText}
+										onChange={(e) => setMinSpendText(e.target.value)}
+										isError={spendError !== null}
+									/>
+								</InputPrefixFrame>
+								{spendError ? (
+									<p
+										role="alert"
+										className="text-xs font-medium text-destructive"
+									>
+										{spendError}
+									</p>
+								) : (
+									<p className="text-xs text-muted-foreground">
+										Checked once, when the order is placed. A buyer below it is
+										told how much more to add.
+									</p>
+								)}
+							</LimitRow>
+						</div>
+						{shared && !perBuyerOn ? (
+							<FieldDescription>
+								With no per-buyer limit, one buyer can use it again and again
+								until it stops working.
+							</FieldDescription>
+						) : null}
+					</Field>
+
 					{/* For a RUN this is the batch's name: the list groups a batch
 					    under it, so it is the handle the seller gets the whole run
 					    back by. Still optional — an unnamed run falls back to its
@@ -681,41 +972,11 @@ export function IssueVoucherDialog({
 	);
 }
 
-/**
- * One switchable bound: a title, a one-line consequence, the house switch,
- * and — only while on — its own control. The card tints like an active
- * `ModeButton` so "which bounds are on" reads at a glance, but it is a
- * SWITCH and not a radio because the two bounds compose.
- */
-function LimitRow({
-	on,
-	onChange,
-	title,
-	subtitle,
-	children,
-}: {
-	on: boolean;
-	onChange: (on: boolean) => void;
-	title: string;
-	subtitle: string;
-	children: ReactNode;
-}) {
-	return (
-		<div
-			className={`flex flex-col gap-3 rounded-xl border-2 p-3 transition-colors ${
-				on ? "border-accent bg-accent/5" : "border-border bg-card"
-			}`}
-		>
-			<div className="flex items-center justify-between gap-3">
-				<div className="min-w-0">
-					<p className="text-sm font-semibold">{title}</p>
-					<p className="text-xs text-muted-foreground">{subtitle}</p>
-				</div>
-				<ToggleSwitch on={on} onChange={onChange} label={title} />
-			</div>
-			{on ? children : null}
-		</div>
-	);
+/** A typed money amount in minor units, or NaN while it isn't one — the
+ * shared validators then say why. */
+function sen(text: string): number {
+	const parsed = Math.round(Number.parseFloat(text.replace(/,/g, "")) * 100);
+	return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
 /** One width for both modes — wide enough for `1,000.00` behind an `RM`

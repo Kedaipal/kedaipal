@@ -26,6 +26,7 @@ import {
 import { Field, FieldDescription, FieldLabel } from "../components/ui/field";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
+import { ExtendSharedDialog } from "../components/vouchers/extend-shared-dialog";
 import { IssueVoucherDialog } from "../components/vouchers/issue-voucher-dialog";
 import { VoucherBatchCard } from "../components/vouchers/voucher-batch-card";
 import {
@@ -75,6 +76,10 @@ type BatchGroup = Extract<VoucherGroup<VoucherRowView>, { kind: "batch" }>;
 
 const FILTERS: Array<{ key: VoucherStatus | "all"; label: string }> = [
 	{ key: "active", label: "Active" },
+	// Next to Active, by meaning: a code waiting for its start is the next
+	// one to go live (`z8r3fdz0pw`). Shown only while it holds something —
+	// see `visibleFilters`.
+	{ key: "scheduled", label: "Scheduled" },
 	{ key: "redeemed", label: "Used" },
 	{ key: "expired", label: "Expired" },
 	{ key: "voided", label: "Voided" },
@@ -98,6 +103,7 @@ function VouchersRoute() {
 		null,
 	);
 	const [voiding, setVoiding] = useState<VoucherRowView | null>(null);
+	const [extending, setExtending] = useState<VoucherRowView | null>(null);
 	const [voidingBatch, setVoidingBatch] = useState<BatchGroup | null>(null);
 	const [renaming, setRenaming] = useState<BatchGroup | null>(null);
 	const [renameText, setRenameText] = useState("");
@@ -162,7 +168,9 @@ function VouchersRoute() {
 	const subtitle = loading
 		? "Loading…"
 		: counts
-			? `${counts.active} active · ${counts.redeemed} used`
+			? `${counts.active} active${
+					counts.scheduled > 0 ? ` · ${counts.scheduled} scheduled` : ""
+				} · ${counts.redeemed} used`
 			: undefined;
 
 	async function confirmVoid() {
@@ -256,7 +264,7 @@ function VouchersRoute() {
 			{/* Filter chips carry their counts, so a chip can show its number
 			    while its tab is empty. */}
 			<FilterChipRow>
-				{FILTERS.map((f) => (
+				{visibleFilters(counts, filter).map((f) => (
 					<FilterChip
 						key={f.key}
 						selected={filter === f.key}
@@ -264,10 +272,7 @@ function VouchersRoute() {
 						count={
 							counts
 								? f.key === "all"
-									? counts.active +
-										counts.redeemed +
-										counts.expired +
-										counts.voided
+									? totalOf(counts)
 									: counts[f.key]
 								: undefined
 						}
@@ -309,6 +314,7 @@ function VouchersRoute() {
 								onShare={(v) => setSharing(v)}
 								onVoid={(v) => setVoiding(v)}
 								onShowUses={(v) => setShowingUses(v)}
+								onExtend={(v) => setExtending(v)}
 							/>
 						),
 					)}
@@ -325,7 +331,11 @@ function VouchersRoute() {
 					// sending are one errand. A BATCH doesn't: there is no one code to
 					// share, and the list is where a run is worked through.
 					if (created.length === 1) {
-						setFilter("active");
+						// A code set up to start later lands under Scheduled —
+						// the filter that will actually show it.
+						setFilter(
+							created[0].status === "scheduled" ? "scheduled" : "active",
+						);
 						const row = created[0];
 						setSharing({ ...row, currency } as ShareableVoucher);
 					} else {
@@ -339,6 +349,11 @@ function VouchersRoute() {
 				storeName={retailer.storeName}
 				slug={retailer.slug}
 				onClose={() => setSharing(null)}
+			/>
+
+			<ExtendSharedDialog
+				voucher={extending}
+				onClose={() => setExtending(null)}
 			/>
 
 			<VoucherUsesDialog
@@ -441,7 +456,30 @@ function VouchersRoute() {
 
 function hasAny(counts: Record<VoucherStatus, number> | undefined): boolean {
 	if (!counts) return false;
-	return counts.active + counts.redeemed + counts.expired + counts.voided > 0;
+	return totalOf(counts) > 0;
+}
+
+/** Every voucher in the book, whatever its state. */
+function totalOf(counts: Record<VoucherStatus, number>): number {
+	return Object.values(counts).reduce((sum, n) => sum + n, 0);
+}
+
+/**
+ * The chips worth showing. Scheduled appears only while a code is waiting to
+ * start (or while it is the chip in use): a store that never schedules one
+ * would otherwise carry a permanently empty chip, and the moment one exists
+ * the chip is there with its count (`z8r3fdz0pw`).
+ */
+export function visibleFilters(
+	counts: Record<VoucherStatus, number> | undefined,
+	filter: VoucherStatus | "all",
+): typeof FILTERS {
+	return FILTERS.filter(
+		(f) =>
+			f.key !== "scheduled" ||
+			filter === "scheduled" ||
+			(counts?.scheduled ?? 0) > 0,
+	);
 }
 
 /**
