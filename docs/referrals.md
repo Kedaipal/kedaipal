@@ -9,7 +9,7 @@ subscription discount anywhere**: rewards are credits only.
 | --- | --- | --- |
 | [z8r3fdetf5](https://app.clickup.com/t/z8r3fdetf5) — T1 | The link, the durable capture, the `referrals` record, the referee's invite surfaces, the admin fix-up | **this doc** |
 | [86ey82hke](https://app.clickup.com/t/86ey82hke) — T2 | The two credit grants at the referee's first paid invoice, the reward emails, the Credit activity rows | **this doc** |
-| [z8r3fdfp97](https://app.clickup.com/t/z8r3fdfp97) — T3 | The "Refer a kedai" Home card: copy link, WhatsApp share, signed-up / started / earned counts | **this doc** |
+| [z8r3fdfp97](https://app.clickup.com/t/z8r3fdfp97) — T3 | The "Refer a kedai" Home card: copy link, WhatsApp share, signed-up / started / earned counts (since 31 Oct a first-view door — § On Home) | **this doc** |
 
 Management-level write-up (terms, reasons, what each person sees): the
 ClickUp doc [Referral programme — how it works, who gets what, and why](https://app.clickup.com/90182681518/docs/2kzmx0xe-638).
@@ -173,28 +173,41 @@ above once approved (`referrals.sendRewardWhatsApp`, WABA-gated, retried on
 a transient failure). The referee's billing note goes quiet once the invoice
 is paid; `referrals.mine.reward` carries what landed.
 
-## The card (T3) — now a teaser
+## On Home — a door, not a card (31 Oct 2026)
 
-`src/components/home/refer-card.tsx`, read from `referrals.myCard` (any
-member: the link is public and the card shows counts, never a referee's
-earnings). Its **own section at the foot of Home** — not inside the "Your
-store" card, which shares the store with buyers; this refers another seller,
-and it is never urgent.
+T3 put a card at the **foot** of Home; the push (below) turned it into a
+teaser; on 31 Oct it went, because a seller never scrolled to it. Referrals
+now sit in Home's **first view**, as a door into `/app/refer` — the page
+holds everything the card did (link, WhatsApp + Copy, the counts, the fine
+print). Mockups: the
+[Home: referral + live wallets](https://claude.ai/artifact/5tTKwdXJ2A58FZeh6mtBG2)
+canvas, option A.
 
-Since the push (below) the card is a **teaser**: the headline in orders, the
-pending line when a referee is waiting, WhatsApp + Copy link, a one-line
-count, and "See all" into `/app/refer`. Half the T3 card's height; the page
-carries what it dropped.
+| Screen | Where | Looks like |
+| --- | --- | --- |
+| Desktop | Home's header, **first** of the three buttons, before Open store and New order | Dashed mint pill: 🎁 "Refer & earn · 60 free orders each" |
+| Phone | Directly under the greeting (the header buttons are desktop-only) | The profile menu's own featured row — gift tile, "Refer & earn", one line, chevron |
+| Profile menu | Featured row under the store name | The same row |
 
-| Store | Card |
-| --- | --- |
-| Active paid | "60 orders on us. For both of you.", the pending line, WhatsApp + Copy, "2 signed up · 1 started · 60 orders earned" |
-| Comped / Kedaipal-owned | "60 orders on us, for every kedai you refer.", told plainly it earns nothing; the pending chip reads "waiting", never "60 waiting" |
-| On hold / lapsed | **Paused**, saying why and linking to Billing — a link that silently stopped counting would be hidden behaviour |
-| Trial | A dashed **"Refer & earn unlocks with your plan"** card (was: nothing). The rule is unchanged — refer once the plan is paid — it is now *said*, because a feature a seller can't see is one they never plan around |
+One component — `src/components/referrals/refer-entry.tsx` — draws all three
+from `referrals.myCard` (same args as the menu, so one cache entry answers
+both). The words follow the store's standing:
 
-Zero sign-ups is a sentence, not a row of zeros. The counts read
-`referrals.by_referrer_created`, capped at 500 ("500+").
+| Store | Line (row) | Hint (button) |
+| --- | --- | --- |
+| Active paid | "Refer a kedai, you both get 60 free orders" | "60 free orders each" |
+| Comped / Kedaipal-owned | "Refer a kedai, they get 60 free orders" | "they get 60" |
+| Trial / no plan | "Starts once your plan is active" | "starts with your plan" |
+| On hold / lapsed | "Paused until your plan is active again" | "paused" |
+
+A referee who signed up and hasn't paid replaces the chevron/hint with an
+amber **"N waiting"** badge — the one piece of news that brings a seller back
+to the page — never on a paused link, where nothing counts. A trial or paused
+store still sees the door: the page explains its standing, so the rule is
+said, not hidden. No door while the card loads, or for a reader with no store.
+
+The What's-new deep link (`?spot=refer`) lands on the block holding both
+doors (`SPOTLIGHT_ANCHOR.refer`, on the route) and rings whichever is showing.
 
 ## The push (28 Oct 2026)
 
@@ -219,9 +232,9 @@ What changed, and why each piece is where it is:
   rule is never a surprise. Not plan-walled and not in `RouteAreaGuard`.
 - **The pending state is the engine.** A referee who signed up and hasn't
   paid is a reward *waiting*, and the one thing the referrer can still act
-  on. `myCard` now carries `pending` and `latestPending` (the newest, by
-  name — a referee's store name is public, it is their storefront's) for the
-  Home teaser's one line; the page's pending rows lead, amber, and carry
+  on. `myCard` carries `pending` — the "N waiting" badge on every door
+  into the page (§ On Home; the Home teaser's named `latestPending` line went
+  with the teaser on 31 Oct); the page's pending rows lead, amber, and carry
   **"Say hi on WhatsApp"** to the referee's public number — a word from a
   friend converts where an email from us doesn't. Each waiting row says
   **where the referee actually stands** — `stage` on `MyReferralRow`, from
@@ -233,12 +246,12 @@ What changed, and why each piece is where it is:
   state, and the one a nudge matters most for. How a waiting row pays out is
   said **once**, above the list, not on every row; a started row that paid
   this store nothing ("Same owner", "On the house") says why **on the row** —
-  a hover tooltip is invisible on a phone. The page does not repeat Home's
-  pending line: its own list leads with the same rows.
+  a hover tooltip is invisible on a phone. The page's own list leads with the
+  waiting rows.
 - **Entry points.** Sidebar: "Refer & earn" after Insights, before Settings
   (the growth items together, above configuration). Phone More sheet: after
-  Vouchers, above Store poster. The profile-menu row sketched in the balances
-  mockup (z8r3fdx34j) should link here when that menu lands.
+  Vouchers, above Store poster. The profile menu's featured row and Home's door
+  (above) link here too.
 - **Moments.** The credit meter's LOW and OUT states carry one line under the
   top-up — "Or earn 60 free orders: refer a kedai that starts Pro" — only for
   a store that earns the referrer half, never on a healthy meter. Every

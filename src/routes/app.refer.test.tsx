@@ -83,7 +83,6 @@ const live: MyReferralCard = {
 	creditsEarned: 60,
 	capped: false,
 	pending: 1,
-	latestPending: { storeName: "Che Ta Nasi Kerabu", createdAt: Date.now() },
 };
 const rows: MyReferralRow[] = [
 	{

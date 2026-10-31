@@ -680,14 +680,10 @@ export type MyReferralCard = {
 	 * whose store has since been deleted can never pay, so it is not
 	 * "waiting" (the list still shows its row, labelled). */
 	pending: number;
-	/** The newest of those, for the Home teaser's one line ("Che Ta signed
-	 * up 3 days ago · 60 waiting"). A referee's store name is public — it is
-	 * their storefront's — so any member may read it. */
-	latestPending: { storeName: string; createdAt: number } | null;
 };
 
 /**
- * The caller's store as a REFERRER, for the Home card. Any member may read it:
+ * The caller's store as a REFERRER, for its doors into /app/refer (Home, the profile menu). Any member may read it:
  * the link is public and the counts are counts — no referee is named. `null`
  * when signed out or storeless.
  */
@@ -702,7 +698,6 @@ export const myCard = query({
 		const retailer = access?.retailer ?? null;
 		if (!retailer) return null;
 		const standing = await standingOf(ctx, retailer);
-		// Newest first, so the first unrewarded row IS the latest pending one.
 		const rows = await ctx.db
 			.query("referrals")
 			.withIndex("by_referrer_created", (q) => q.eq("referrerId", retailer._id))
@@ -711,7 +706,6 @@ export const myCard = query({
 		let started = 0;
 		let pending = 0;
 		let creditsEarned = 0;
-		let latestPending: MyReferralCard["latestPending"] = null;
 		for (const r of rows) {
 			if (r.rewardedAt !== undefined) {
 				started += 1;
@@ -719,13 +713,7 @@ export const myCard = query({
 				// One get per unrewarded row (≤ STATS_CAP): a deleted referee's
 				// row would otherwise read "waiting" forever.
 				const referee = await ctx.db.get(r.refereeId);
-				if (referee) {
-					pending += 1;
-					latestPending ??= {
-						storeName: referee.storeName,
-						createdAt: r.createdAt,
-					};
-				}
+				if (referee) pending += 1;
 			}
 			creditsEarned += r.referrerCredits ?? 0;
 		}
@@ -741,7 +729,6 @@ export const myCard = query({
 			creditsEarned,
 			capped: rows.length >= STATS_CAP,
 			pending,
-			latestPending,
 		};
 	},
 });
