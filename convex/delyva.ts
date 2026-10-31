@@ -51,7 +51,7 @@ import { encryptSecret } from "./lib/credentialCrypto";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { isColdItemType } from "./lib/liveQuote";
 import { COUNTRY_CURRENCY, DEFAULT_COUNTRY, type Country } from "./lib/country";
-import { clearCourierWallet } from "./courierWallets";
+import { clearCourierWallet, forgetWalletBalance } from "./courierWallets";
 import {
 	delyvaBookingArmed,
 	servesOrderDestination,
@@ -255,9 +255,12 @@ export const storeConnection = internalMutation({
 		// booking on, or a key rotation would silently stop Delyva quoting at
 		// checkout (PR #416 review).
 		// A key for a DIFFERENT Delyva account (customer id) describes a
-		// different wallet: forget the old one's last-seen balance.
+		// different wallet: forget the old one's last-seen balance. The seller's
+		// alert line is the store's, not the account's, and stays.
 		if (prev?.customerId !== args.customerId)
-			await clearCourierWallet(ctx, args.retailerId, "delyva");
+			await forgetWalletBalance(ctx, args.retailerId, "delyva", {
+				sameAccount: false,
+			});
 		const alreadyArmed = prev?.enabled === true;
 		const unweighed =
 			!alreadyArmed &&

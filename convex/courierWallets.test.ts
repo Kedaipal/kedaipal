@@ -604,6 +604,144 @@ describe("a country switch resets every wallet", () => {
 		});
 		expect(rows[0]?.balance).toBeUndefined();
 	});
+
+	test("EasyParcel's connection snapshot goes too — or the forgotten balance would come straight back", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("easyparcelConnections", {
+				retailerId,
+				enabled: true,
+				environment: "live",
+				accessToken: "access",
+				accessExpiresAt: Date.now() + 3_600_000,
+				balanceMinor: 1980,
+				balanceCurrency: "MYR",
+				balanceCheckedAt: 5_000,
+				connectedAt: 1,
+				updatedAt: 1,
+			});
+		});
+		await record(t, {
+			retailerId,
+			provider: "easyparcel",
+			at: 6_000,
+			observation: {
+				kind: "balance",
+				balanceMinor: 1980,
+				currency: "MYR",
+				source: "pull",
+			},
+		});
+		await t.run((ctx) => resetWalletsForCountrySwitch(ctx, retailerId));
+		vi.stubEnv("EASYPARCEL_CLIENT_ID", "client-id-test");
+		vi.stubEnv("EASYPARCEL_CLIENT_SECRET", "client-secret-test");
+		vi.stubEnv("CONVEX_SITE_URL", "https://site.test");
+		try {
+			const easyparcel = (await list(t, retailerId)).find(
+				(w) => w.provider === "easyparcel",
+			);
+			expect(easyparcel).toMatchObject({
+				state: "unreported",
+				balanceMinor: null,
+				at: null,
+			});
+			// The account's currency survives: the country-mismatch warning on
+			// the EasyParcel card reads it, and a switch is when it matters.
+			const conn = await t.run((ctx) =>
+				ctx.db.query("easyparcelConnections").unique(),
+			);
+			expect(conn).toMatchObject({ balanceCurrency: "MYR" });
+			expect(conn?.balanceMinor).toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+});
+
+describe("a reconnect forgets the balance, never the seller's alert line", () => {
+	const connect = (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		account: { accountName: string; environment: "sandbox" | "live" },
+	) =>
+		t.mutation(internal.easyparcel.storeConnection, {
+			retailerId,
+			accessToken: "enc.v1.access",
+			accessExpiresAt: Date.now() + 3_600_000,
+			...account,
+			balanceMinor: 500,
+			balanceCurrency: "MYR",
+		});
+	const epRow = (t: ReturnType<typeof setup>) =>
+		t.run(async (ctx) =>
+			(await ctx.db.query("courierWallets").collect()).find(
+				(r) => r.provider === "easyparcel",
+			),
+		);
+
+	test("EasyParcel: the same account signing in again keeps the line AND the once-per-crossing stamp", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await connect(t, retailerId, { accountName: "Kedai A", environment: "live" });
+		const seeded = await epRow(t);
+		if (!seeded) throw new Error("seed");
+		await t.run((ctx) =>
+			ctx.db.patch(seeded._id, { lowAlertMinor: 8000, lowNotifiedAt: 42 }),
+		);
+		await connect(t, retailerId, { accountName: "Kedai A", environment: "live" });
+		expect(await epRow(t)).toMatchObject({
+			balance: 500,
+			lowAlertMinor: 8000,
+			lowNotifiedAt: 42,
+		});
+	});
+
+	test("EasyParcel: a different account keeps the line but starts the email over", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await connect(t, retailerId, { accountName: "Kedai A", environment: "live" });
+		const seeded = await epRow(t);
+		if (!seeded) throw new Error("seed");
+		await t.run((ctx) =>
+			ctx.db.patch(seeded._id, { lowAlertMinor: 8000, lowNotifiedAt: 42 }),
+		);
+		await connect(t, retailerId, { accountName: "Kedai B", environment: "live" });
+		const row = await epRow(t);
+		expect(row).toMatchObject({ balance: 500, lowAlertMinor: 8000 });
+		// Below the RM 80 line, so the fresh account's crossing emails anew —
+		// the stamp is the one just written, not the old 42.
+		expect(row?.lowNotifiedAt).not.toBe(42);
+	});
+
+	test("Delyva: a key for another customer id drops the balance, keeps the line", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await connectDelyva(t, retailerId);
+		await t.mutation(internal.courierWallets.recordDelyvaRefusal, {
+			retailerId,
+			message: "Bal: 3.10, Price: 5.00",
+		});
+		await t.run(async (ctx) => {
+			const row = (await ctx.db.query("courierWallets").collect()).find(
+				(r) => r.provider === "delyva",
+			);
+			if (!row) throw new Error("seed");
+			await ctx.db.patch(row._id, { lowAlertMinor: 8000 });
+		});
+		await t.mutation(internal.delyva.storeConnection, {
+			retailerId,
+			apiKey: "enc.v1.other",
+			apiSecret: "enc.v1.other-secret",
+			apiKeyHint: "ther",
+			customerId: 999,
+		});
+		const row = (
+			await t.run((ctx) => ctx.db.query("courierWallets").collect())
+		).find((r) => r.provider === "delyva");
+		expect(row).toMatchObject({ lowAlertMinor: 8000 });
+		expect(row?.balance).toBeUndefined();
+	});
 });
 
 describe("topUpSuggestion — from this store's own bookings with the courier", () => {

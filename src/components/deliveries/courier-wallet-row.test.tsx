@@ -328,6 +328,39 @@ describe("CourierWalletRow", () => {
 			screen.getByRole("button", { name: /I've topped up — check again/ }),
 		).toBeTruthy();
 	});
+
+	it("a reader without the integrations grant sees the re-check greyed with the reason, and no return re-read (PR #441 review)", async () => {
+		// `refreshBalance` is an integrations READ — the same grant the row's
+		// Refresh hides behind. An orders-only teammate still sees Top up.
+		s.canReadIntegrations = false;
+		row(
+			v({
+				provider: "easyparcel",
+				state: "low",
+				balanceMinor: 1500,
+				source: "pull",
+				at: Date.now() - 60_000,
+			}),
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Top up EasyParcel" }));
+		const dialog = screen.getByRole("dialog");
+		const recheck = screen.getByRole("button", {
+			name: /I've topped up — check again/,
+		});
+		expect(recheck).toHaveProperty("disabled", true);
+		expect(screen.getByTestId("recheck-reason").textContent).toMatch(
+			/integrations access/,
+		);
+		// Step 3 no longer tells them to tap a button they can't use.
+		expect(dialog.textContent).not.toMatch(/tap “I've topped up/);
+		expect(dialog.textContent).toMatch(/next time the wallet is read/);
+		// Coming back from EasyParcel asks nothing on their behalf either.
+		fireEvent.click(screen.getByRole("link", { name: /Open EasyParcel/ }));
+		await act(async () => {
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		expect(s.refresh).not.toHaveBeenCalled();
+	});
 });
 
 describe("DispatchWalletLine", () => {

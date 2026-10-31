@@ -8,8 +8,8 @@
  *    the money is theirs and Kedaipal can't move it;
  *  - set the "low alert" line (integrations write; read-only otherwise, said
  *    in place rather than a dead button);
- *  - Refresh, for a provider we can ASK (EasyParcel). Lalamove pushes and
- *    Delyva never shares, so a refresh button there would do nothing.
+ *  - Refresh, for a provider we can ASK (EasyParcel, Delyva). Lalamove
+ *    pushes, so a refresh button there would do nothing.
  */
 
 import { useMutation } from "convex/react";

@@ -2837,8 +2837,8 @@ export default defineSchema({
 	// `courierWallets.recordObservation` (monotonic on observation time, so a
 	// late webhook can't overwrite a newer pull). How each provider reports is
 	// `WALLET_PROVIDERS[provider].model` in convex/lib/courierWallet.ts:
-	// Lalamove PUSHES (webhook), EasyParcel is PULLED, Delyva only reveals it
-	// in an insufficient-credit REFUSAL. Own table rather than fields on
+	// Lalamove PUSHES (webhook); EasyParcel and Delyva are PULLED (Delyva's
+	// insufficient-credit REFUSAL carries it too). Own table rather than fields on
 	// `retailers`: a balance moves on every booking, and a retailer patch
 	// re-runs every open storefront tab.
 	courierWallets: defineTable({

@@ -11,10 +11,14 @@
  *    insufficient-balance booking refusal (no amount: the wallet goes `short`).
  *  - EasyParcel: every GET /wallet — connect, the settings refresh, each
  *    dispatch quote.
- *  - Delyva: an insufficient-credit refusal, whose message carries the balance.
+ *  - Delyva: its customer profile (`GET /customer/{id}`) — connect, Refresh,
+ *    each dispatch quote — plus an insufficient-credit refusal, whose message
+ *    carries the balance.
  * Row lifecycle: `syncLalamoveWallet` follows the Lalamove key;
- * `clearCourierWallet` runs on a Delyva/EasyParcel (re)connect to a different
- * account and on every disconnect; a country switch clears them all.
+ * `forgetWalletBalance` runs on a Delyva/EasyParcel (re)connect — the balance
+ * belongs to the account, the alert line to the store, so only the balance
+ * goes; `clearCourierWallet` runs on every disconnect; a country switch resets
+ * them all.
  */
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -124,14 +128,57 @@ export async function clearCourierWallet(
 }
 
 /**
+ * A (re)connect of a Delyva or EasyParcel account: the balance described the
+ * account that was connected, so it goes; the "low alert" line is the store's
+ * preference about money at this courier and stays — exactly as a Lalamove
+ * key rotation keeps it (`syncLalamoveWallet`). The once-per-crossing email
+ * stamp follows the account: the SAME account signing in again is not a new
+ * crossing (or a reconnect while low would email twice), a different account
+ * starts fresh. No row = nothing to forget.
+ */
+export async function forgetWalletBalance(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	provider: Exclude<CourierProviderId, "lalamove">,
+	opts: { sameAccount: boolean },
+): Promise<void> {
+	const existing = await walletRow(ctx.db, retailerId, provider);
+	if (!existing) return;
+	await ctx.db.replace(existing._id, {
+		retailerId,
+		provider,
+		lowAlertMinor: existing.lowAlertMinor,
+		lowNotifiedAt: opts.sameAccount ? existing.lowNotifiedAt : undefined,
+		updatedAt: Date.now(),
+	});
+}
+
+/**
  * A country switch (countrySetup checklist): every wallet belonged to the old
  * country's accounts. Lalamove keeps its row but loses the balance — the key
  * (and so the fingerprint) is still saved, and its next event repopulates it.
+ * EasyParcel's connection row carries its own copy of the balance
+ * (`withConnectionSnapshot` reads it), so that copy goes too — or the wallet
+ * the row just forgot would come straight back from the snapshot. Its
+ * CURRENCY stays: it names the account's country, which the switch didn't
+ * change, and `accountCountryMismatch` needs it right after the move — the
+ * one moment that warning matters most.
  */
 export async function resetWalletsForCountrySwitch(
 	ctx: MutationCtx,
 	retailerId: Id<"retailers">,
 ): Promise<void> {
+	const epConn = await ctx.db
+		.query("easyparcelConnections")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.unique();
+	if (epConn && epConn.balanceCheckedAt !== undefined) {
+		await ctx.db.patch(epConn._id, {
+			balanceMinor: undefined,
+			balanceCheckedAt: undefined,
+			updatedAt: Date.now(),
+		});
+	}
 	for (const provider of COURIER_PROVIDER_IDS) {
 		const existing = await walletRow(ctx.db, retailerId, provider);
 		if (!existing) continue;
@@ -282,10 +329,11 @@ export const record = internalMutation({
 });
 
 /**
- * Delyva's insufficient-credit refusal, the one place its balance appears
+ * Delyva's insufficient-credit refusal also carries its balance
  * ("Bal: 0, Price: 5.00" — major units, in the account's currency, which is
- * the store's: Delyva serves one country per account). A refusal that names
- * no number still records that the wallet came up short.
+ * the store's: Delyva serves one country per account); the profile read is
+ * the main source. A refusal that names no number still records that the
+ * wallet came up short.
  */
 export const recordDelyvaRefusal = internalMutation({
 	args: { retailerId: v.id("retailers"), message: v.optional(v.string()) },

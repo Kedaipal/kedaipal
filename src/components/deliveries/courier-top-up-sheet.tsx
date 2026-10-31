@@ -3,12 +3,15 @@
  * book through exposes a top-up API, and Kedaipal never holds a seller's
  * delivery money, so "Top up" can only ever be a guided trip to the
  * courier's own account. This sheet makes that trip obvious: what the wallet
- * holds now, the three steps at the courier, the link out — and, for the one
- * courier we can ASK (EasyParcel), a way to confirm the new balance landed.
+ * holds now, the three steps at the courier, the link out — and, for the
+ * couriers we can ASK (EasyParcel, Delyva), a way to confirm the new balance
+ * landed.
  *
  * Lalamove pushes its balance on every top-up, so it needs no "I've topped
- * up" button (there is nothing to re-ask). Delyva never shares it, so the
- * sheet says the number here stays what Delyva last showed us.
+ * up" button (there is nothing to re-ask). EasyParcel and Delyva can be asked,
+ * so the sheet re-reads them — for a reader with the integrations grant, which
+ * is what `refreshBalance` checks; anyone else sees the button greyed with the
+ * reason, never a "Not authorized" toast (PR #441 review).
  *
  * Arif's 24 Oct additions: a suggested amount from the store's own bookings
  * ("RM 130 · ~4 trips"), EasyParcel's own auto top-up as the way to never run
@@ -28,6 +31,7 @@ import type { Country } from "../../../convex/lib/country";
 import type { CourierProviderId } from "../../../convex/lib/courierProviders";
 import { WALLET_PROVIDERS } from "../../../convex/lib/courierWallet";
 import { useActAsRetailerId } from "../../hooks/useActAs";
+import { usePermission } from "../../hooks/usePermission";
 import { useWalletRefresh } from "../../hooks/useWalletRefresh";
 import {
 	type CourierWalletView,
@@ -56,8 +60,25 @@ import {
 	DialogTitle,
 } from "../ui/dialog";
 
-/** The steps at each courier — what the seller does on THEIR screen. */
-export function topUpSteps(provider: CourierProviderId): string[] {
+/** Why a reader without the integrations grant can't re-read a wallet. */
+export const RECHECK_NEEDS_INTEGRATIONS =
+	"Ask the store owner for integrations access to re-read the balance.";
+
+/** The last step of a pull wallet: the re-read, or what happens instead
+ * for a reader who can't ask. */
+function pullLastStep(canRecheck: boolean): string {
+	return canRecheck
+		? "Come back here and tap “I've topped up — check again”."
+		: "Come back here. The new balance shows the next time the wallet is read — a booking quote, or a Refresh by someone with integrations access.";
+}
+
+/** The steps at each courier — what the seller does on THEIR screen.
+ * `canRecheck` = this reader may ask the courier for its balance. */
+export function topUpSteps(
+	provider: CourierProviderId,
+	opts: { canRecheck?: boolean } = {},
+): string[] {
+	const canRecheck = opts.canRecheck ?? true;
 	switch (provider) {
 		case "lalamove":
 			return [
@@ -69,13 +90,13 @@ export function topUpSteps(provider: CourierProviderId): string[] {
 			return [
 				"Open EasyParcel and sign in to the account connected to this store.",
 				"Tap Top Up under your profile name, pick a package and pay.",
-				"Come back here and tap “I've topped up — check again”.",
+				pullLastStep(canRecheck),
 			];
 		case "delyva":
 			return [
 				"Open Delyva and sign in to the account connected to this store.",
 				"Under Finance, open Top-up, choose a plan and pay.",
-				"Come back here and tap “I've topped up — check again”.",
+				pullLastStep(canRecheck),
 			];
 	}
 }
@@ -98,7 +119,10 @@ export function CourierTopUpSheet({
 	const name = walletProviderName(view);
 	const { appUrl, guideUrl, autoTopUpUrl } = walletTopUpLinks(view, country);
 	const p = presentWallet(view, now);
-	const steps = topUpSteps(view.provider);
+	// Re-reading a balance is `refreshBalance`, an integrations READ — the same
+	// grant the wallet row's Refresh hides behind. One rule for one action.
+	const canRecheck = usePermission("integrations").canRead;
+	const steps = topUpSteps(view.provider, { canRecheck });
 	const trip = useTopUpTrip(view.provider);
 	const waiting = awaitingTopUp(trip, view, now);
 	// The wallets we can ASK — EasyParcel and Delyva — get the re-check.
@@ -115,7 +139,7 @@ export function CourierTopUpSheet({
 
 	return (
 		<>
-			{waiting && pullable && view.isTest !== true ? (
+			{waiting && pullable && canRecheck && view.isTest !== true ? (
 				<RecheckOnReturn
 					view={view}
 					balanceBefore={trip?.balanceBefore ?? null}
@@ -245,8 +269,28 @@ export function CourierTopUpSheet({
 						</a>
 					) : null}
 
+					{pullable && !canRecheck ? (
+						<p
+							id={`recheck-reason-${view.provider}`}
+							className="text-xs leading-5 text-muted-foreground"
+							data-testid="recheck-reason"
+						>
+							{RECHECK_NEEDS_INTEGRATIONS}
+						</p>
+					) : null}
 					<DialogFooter>
-						{pullable ? (
+						{pullable && !canRecheck ? (
+							<Button
+								type="button"
+								variant="outline"
+								className="tap-target"
+								disabled
+								aria-describedby={`recheck-reason-${view.provider}`}
+							>
+								<RefreshCw className="size-4" />
+								I've topped up — check again
+							</Button>
+						) : pullable ? (
 							<RecheckButton view={view} onLanded={() => onOpenChange(false)} />
 						) : (
 							<Button

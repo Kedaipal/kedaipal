@@ -64,6 +64,12 @@ vi.mock("@tanstack/react-router", () => ({
 		<a href={String(to)} {...props} />
 	),
 }));
+vi.mock("../../hooks/usePermission", () => ({
+	// The top-up sheet inside `DispatchWalletLine` gates its re-check on the
+	// integrations grant; these tests are about the card, so the reader has it.
+	usePermission: () => ({ canRead: true, canWrite: true, role: "owner" }),
+	useStoreRole: () => "owner",
+}));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { EasyparcelDispatchCard } from "./easyparcel-dispatch-card";

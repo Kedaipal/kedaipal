@@ -119,13 +119,25 @@ re-reads the wallet first, so a top-up that lands in between cancels it.
   (`syncLalamoveWallet`). A different key is a different account and starts
   `unreported`. Clearing the key deletes the row. The seller's alert line
   survives a key rotation.
-- **Delyva**: a connect to a different customer id, and every disconnect,
-  clear the row (`clearCourierWallet`).
-- **EasyParcel**: every (re)connect clears it and records the balance that
-  sign-in just read; disconnect clears it.
+- **Delyva**: a connect to a different customer id forgets the balance
+  (`forgetWalletBalance`) and keeps the seller's alert line — the balance is
+  the account's, the line is the store's, as with a Lalamove key rotation.
+  Disconnect deletes the row (`clearCourierWallet`).
+- **EasyParcel**: every (re)connect forgets the balance and records the one
+  that sign-in just read; the alert line stays. The once-per-crossing email
+  stamp stays only for the SAME account (same name on the same environment —
+  EasyParcel gives no account id), so a reconnect while low doesn't email
+  twice; a different account starts fresh. Disconnect deletes the row.
 - **Country switch**: `resetWalletsForCountrySwitch` drops every balance from
-  the old country's accounts. Lalamove keeps its fingerprint so its next event
-  attributes. A custom alert line goes too, since it was in the old currency.
+  the old country's accounts — including the copy on `easyparcelConnections`,
+  which `withConnectionSnapshot` would otherwise read straight back (its
+  currency stays, for the card's account-country warning). Lalamove
+  keeps its fingerprint so its next event attributes. A custom alert line goes
+  too, since it was in the old currency.
+- **Re-reading needs the integrations grant.** `refreshBalance` is an
+  integrations READ, so the wallet row's Refresh and the top-up sheet's "I've
+  topped up — check again" (and its return re-read) show only for a reader
+  with it; an orders-only teammate sees the button greyed with the reason.
 
 ### A trap found in passing
 

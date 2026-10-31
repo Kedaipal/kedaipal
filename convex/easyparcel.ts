@@ -29,7 +29,11 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
-import { clearCourierWallet, recordObservation } from "./courierWallets";
+import {
+	clearCourierWallet,
+	forgetWalletBalance,
+	recordObservation,
+} from "./courierWallets";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { checkoutRate } from "./lib/easyparcelRates";
 import { collectUnweighedChoices } from "./lib/parcelWeights";
@@ -346,8 +350,17 @@ export const storeConnection = internalMutation({
 		const prev = await connectionFor(ctx, args.retailerId);
 		const now = Date.now();
 		// A (re)connect may be a different EasyParcel account: its wallet starts
-		// from what this sign-in just read, never from the old account's.
-		await clearCourierWallet(ctx, args.retailerId, "easyparcel");
+		// from what this sign-in just read, never from the old account's. The
+		// seller's alert line stays either way (a store preference); the low
+		// email's once-per-crossing stamp stays only for the SAME account —
+		// EasyParcel gives no account id, so same = same name on the same
+		// environment (PR #441 review).
+		await forgetWalletBalance(ctx, args.retailerId, "easyparcel", {
+			sameAccount:
+				prev !== null &&
+				prev.accountName === args.accountName &&
+				prev.environment === args.environment,
+		});
 		if (args.balanceMinor !== undefined && args.balanceCurrency) {
 			await recordObservation(ctx, {
 				retailerId: args.retailerId,

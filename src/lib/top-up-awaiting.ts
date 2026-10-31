@@ -71,7 +71,8 @@ type Seen = Pick<CourierWalletView, "provider" | "at" | "balanceMinor">;
 function live(trip: TopUpTrip | null, view: Seen, now: number): boolean {
 	return (
 		trip !== null &&
-		// Delyva never reports its balance, so there is nothing to wait for.
+		// A refusal-only courier never reports its balance, so there is
+		// nothing to wait for (none today — Delyva is askable since 31 Oct).
 		WALLET_PROVIDERS[view.provider].model !== "refusal" &&
 		now - trip.at <= AWAIT_TOP_UP_MS
 	);

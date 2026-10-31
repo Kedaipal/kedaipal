@@ -522,9 +522,9 @@ export function DelyvaCard({
 							</SetupStep>
 						</SetupChecklist>
 
-						{/* Delyva shares no balance, so this row is honest about it:
-						    "Not shared", or the last balance a refusal showed us
-						    (z8r3fdrgxc). Same row as every other surface. */}
+						{/* The wallet Delyva's profile reports (read on connect, Refresh and
+						    every dispatch quote) — the same row as every other surface
+						    (z8r3fdrgxc). */}
 						<IntegrationWalletBlock
 							retailerId={retailerId}
 							country={country}
