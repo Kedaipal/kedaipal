@@ -215,7 +215,7 @@ function AdminBillingContent() {
 					    open above the card they came for — folded, it still says
 					    how many are waiting. */}
 					<PendingInvoices defaultOpen={hash !== "onboard"} />
-					<OnboardClientCard defaultOpen={hash === "onboard"} />
+					<OnboardClientCard deepLinked={hash === "onboard"} />
 					<IssueInvoiceForm />
 					<AutoRenewOverview />
 					<FoundingMembersList />
@@ -264,7 +264,7 @@ const SETTLE_MS = 800;
  *   disclosure the error helpers know how to open.
  * - **The whole header is the button** — 56px tall, `aria-expanded`.
  */
-function CollapsibleAdminCard({
+export function CollapsibleAdminCard({
 	id,
 	icon,
 	title,
@@ -273,6 +273,7 @@ function CollapsibleAdminCard({
 	summaryTone = "muted",
 	aside,
 	defaultOpen = false,
+	deepLinked = false,
 	children,
 }: {
 	/** Deep-link anchor (`#onboard`). */
@@ -284,10 +285,17 @@ function CollapsibleAdminCard({
 	/** `set` = something is in progress in here (a draft, a waiting list). */
 	summaryTone?: "muted" | "set" | "attention";
 	aside?: ReactNode;
+	/** Start open. Initial state only — it never moves the page. */
 	defaultOpen?: boolean;
+	/** The URL asked for THIS card (`#onboard`): open it and bring it into
+	 * view. Kept apart from `defaultOpen` on purpose — Pending invoices is
+	 * open by default on every visit, and keying the scroll on that pulled
+	 * the page past the stat tiles and the tab fork on every plain load
+	 * (review, 2 Nov). */
+	deepLinked?: boolean;
 	children: ReactNode;
 }) {
-	const [open, setOpen] = useState(defaultOpen);
+	const [open, setOpen] = useState(defaultOpen || deepLinked);
 	const panelId = useId();
 	const panelRef = useRef<HTMLDivElement>(null);
 	const cardRef = useRef<HTMLElement>(null);
@@ -299,7 +307,7 @@ function CollapsibleAdminCard({
 	// layout shift re-scrolls until the page is still for a beat, or the admin
 	// scrolls or taps — their own move always wins.
 	useEffect(() => {
-		if (!defaultOpen) return;
+		if (!deepLinked) return;
 		setOpen(true);
 		const card = cardRef.current;
 		if (!card) return;
@@ -321,7 +329,7 @@ function CollapsibleAdminCard({
 			for (const e of userMoves) window.removeEventListener(e, stop);
 		}
 		return stop;
-	}, [defaultOpen]);
+	}, [deepLinked]);
 
 	useEffect(() => {
 		const panel = panelRef.current;
@@ -639,10 +647,10 @@ function topUpTile(revenue: TopUpRevenue | undefined): StatTileProps {
 }
 
 function OnboardClientCard({
-	defaultOpen = false,
+	deepLinked = false,
 }: {
-	/** Opened by the `#onboard` deep link. */
-	defaultOpen?: boolean;
+	/** Opened and scrolled to by the `#onboard` deep link. */
+	deepLinked?: boolean;
 }) {
 	// Which door. Held here rather than in the URL: it is a scratch choice
 	// inside one form, and nothing links to a half-filled card.
@@ -786,7 +794,7 @@ function OnboardClientCard({
 			}
 			summary={onboardSummary}
 			summaryTone={onboardDraft ? "set" : "muted"}
-			defaultOpen={defaultOpen}
+			deepLinked={deepLinked}
 		>
 			{/* The mode picker sits FIRST because it changes what every field below
 			    means (the email is a send-to address in one mode and a handover

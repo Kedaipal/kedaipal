@@ -68,7 +68,9 @@ vi.mock("../components/admin/enterprise-contract-sheet", () => ({
 	},
 }));
 
-const { IssueInvoiceForm } = await import("./app.admin.billing");
+const { CollapsibleAdminCard, IssueInvoiceForm } = await import(
+	"./app.admin.billing"
+);
 
 afterEach(() => {
 	cleanup();
@@ -447,7 +449,21 @@ describe("Issue an invoice — folded to one line", () => {
 // Hands-on test, 2 Nov: a deep-linked card scrolled into view once, then the
 // sections above it loaded and pushed it out of sight. It now follows every
 // layout shift until the page settles — and stops the moment the admin moves.
+// Only a DEEP-LINKED card does this: a card that merely starts open (Pending
+// invoices, every visit) must leave the page where it is.
 describe("a deep-linked card stays in view while the page settles", () => {
+	const deepLinkedCard = () => (
+		<CollapsibleAdminCard
+			icon={null}
+			title="Onboard a client"
+			description="How to use it"
+			summary="Nothing in progress"
+			deepLinked
+		>
+			<p>panel</p>
+		</CollapsibleAdminCard>
+	);
+
 	it("re-scrolls on each layout shift and stops once the admin scrolls", () => {
 		vi.useFakeTimers();
 		const scroll = vi.fn();
@@ -465,8 +481,7 @@ describe("a deep-linked card stays in view while the page settles", () => {
 				}
 			},
 		);
-		state.retailers = [store()];
-		render(<IssueInvoiceForm defaultOpen />);
+		render(deepLinkedCard());
 		expect(scroll).toHaveBeenCalledTimes(1);
 
 		// The list above it loads: the card is brought back.
@@ -498,8 +513,7 @@ describe("a deep-linked card stays in view while the page settles", () => {
 				}
 			},
 		);
-		state.retailers = [store()];
-		render(<IssueInvoiceForm defaultOpen />);
+		render(deepLinkedCard());
 		vi.advanceTimersByTime(1000);
 		shift();
 		expect(scroll).toHaveBeenCalledTimes(1);
@@ -513,6 +527,22 @@ describe("a deep-linked card stays in view while the page settles", () => {
 		state.retailers = [store()];
 		render(<IssueInvoiceForm />);
 		fireEvent.click(screen.getByRole("button", { name: /^Issue an invoice/ }));
+		expect(scroll).not.toHaveBeenCalled();
+	});
+
+	// Review, 2 Nov: the scroll was keyed on `defaultOpen`, so Pending invoices
+	// — open by default on EVERY visit — pulled the page past the stat tiles
+	// and the tab fork on a plain load. Starting open is not a deep link.
+	it("a card that merely starts open leaves the page where it is", () => {
+		const scroll = vi.fn();
+		Element.prototype.scrollIntoView = scroll;
+		state.retailers = [store()];
+		render(<IssueInvoiceForm defaultOpen />);
+		expect(
+			screen
+				.getByRole("button", { name: /^Issue an invoice/ })
+				.getAttribute("aria-expanded"),
+		).toBe("true");
 		expect(scroll).not.toHaveBeenCalled();
 	});
 });

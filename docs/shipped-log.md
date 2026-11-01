@@ -22,6 +22,7 @@ This log lives here, not in [`CLAUDE.md`](../CLAUDE.md), because it is reference
   - **The hands-on test found two problems, both fixed in this PR.**
     1. **The `#onboard` link landed in the middle of the pending list.** The card scrolled into view once, then the sections above it loaded and pushed it down. Now Pending starts folded on that link, and the card follows layout shifts until the page settles or the admin moves.
     2. **Pending invoice rows were cramped on tablet-width windows.** Below `lg` the app is a phone-width column, but `sm:` had already switched the rows to two columns. The sections now use container queries, so each row reads its card's own width.
+  - **Review trap (PR #449):** the scroll-follow was keyed on `defaultOpen`, and Pending invoices is open by default on every visit — so every plain load pulled the page past the stat tiles and the tab fork. "Starts open" and "the URL asked for this card" are two props now (`defaultOpen` / `deepLinked`), and a test pins that a default-open card never scrolls.
   - **Rejected:** a chips-only clear button beside "All". It would do exactly what tapping All does.
 
   See [`docs/admin-console.md`](./admin-console.md#admin--billing-sections-fold-to-one-line-z8r3fdzn6r).
