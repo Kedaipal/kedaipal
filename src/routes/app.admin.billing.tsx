@@ -1,12 +1,17 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	useLocation,
+	useNavigate,
+} from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	Award,
 	Banknote,
 	CalendarClock,
 	Check,
+	ChevronDown,
 	Coins,
 	CreditCard,
 	FilePlus2,
@@ -24,7 +29,7 @@ import {
 	TrendingDown,
 	UserPlus,
 } from "lucide-react";
-import { type ReactNode, useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -76,6 +81,10 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
+import {
+	DISCLOSURE_PANEL_ATTR,
+	REVEAL_EVENT,
+} from "../components/ui/question-row";
 import { Select } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { useActAs } from "../hooks/useActAs";
@@ -91,6 +100,7 @@ import { buildOnboardingInviteLink } from "../lib/onboarding-link";
 import { slugify, validateStoreName } from "../lib/slug";
 import { uploadImage } from "../lib/storage-upload";
 import { PLAN_LABEL } from "../lib/subscription";
+import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/admin/billing")({
 	component: AdminBillingRoute,
@@ -125,6 +135,9 @@ function AdminBillingRoute() {
 function AdminBillingContent() {
 	// Invoicing is the frequent task → default tab. Payment details are set-once.
 	const [tab, setTab] = useState<"invoices" | "payment">("invoices");
+	// The Sellers page's "Invite seller" lands on `#onboard` — that card opens
+	// itself rather than leaving the admin on a folded row.
+	const hash = useLocation({ select: (l) => l.hash });
 	const tabs = [
 		{
 			id: "invoices",
@@ -191,10 +204,19 @@ function AdminBillingContent() {
 			</div>
 
 			{tab === "invoices" ? (
-				<div className="flex flex-col gap-6">
-					<OnboardClientCard />
+				// Every section folds to one line so the tab reads as a list of
+				// jobs, not a wall of forms (z8r3fdzn6r). Pending invoices leads
+				// and stays open: it is the only section that is money someone
+				// is waiting on. The two forms that START something sit below
+				// it, closed, and open on the Sellers page's "Invite seller"
+				// link (`#onboard`).
+				<div className="flex flex-col gap-4">
+					{/* Arriving to onboard someone, the pending list would sit
+					    open above the card they came for — folded, it still says
+					    how many are waiting. */}
+					<PendingInvoices defaultOpen={hash !== "onboard"} />
+					<OnboardClientCard deepLinked={hash === "onboard"} />
 					<IssueInvoiceForm />
-					<PendingInvoices />
 					<AutoRenewOverview />
 					<FoundingMembersList />
 				</div>
@@ -222,6 +244,162 @@ function AdminCard({
 			className={`flex flex-col gap-4 rounded-2xl border border-border bg-card p-5 shadow-sm lg:p-6 ${className}`}
 		>
 			{children}
+		</section>
+	);
+}
+
+/** How long the page must hold still before a deep-linked card stops
+ * following it into view. */
+const SETTLE_MS = 800;
+
+/**
+ * A billing section folded to one line (z8r3fdzn6r). The Edit product form's
+ * `QuestionRow`, at card scale, and on the same rules:
+ * - **Closed shows STATE, open shows guidance.** `summary` is what the section
+ *   holds right now ("3 waiting · 1 overdue", "Draft · Kuih Mak Long"), so a
+ *   folded tab still says where things stand; `description` — how to use the
+ *   section — only matters once it is open.
+ * - **The panel stays mounted while closed** (`hidden`), so a half-filled form
+ *   survives a fold, and it answers {@link REVEAL_EVENT} like every other
+ *   disclosure the error helpers know how to open.
+ * - **The whole header is the button** — 56px tall, `aria-expanded`.
+ */
+export function CollapsibleAdminCard({
+	id,
+	icon,
+	title,
+	description,
+	summary,
+	summaryTone = "muted",
+	aside,
+	defaultOpen = false,
+	deepLinked = false,
+	children,
+}: {
+	/** Deep-link anchor (`#onboard`). */
+	id?: string;
+	icon: ReactNode;
+	title: string;
+	description: ReactNode;
+	summary: ReactNode;
+	/** `set` = something is in progress in here (a draft, a waiting list). */
+	summaryTone?: "muted" | "set" | "attention";
+	aside?: ReactNode;
+	/** Start open. Initial state only — it never moves the page. */
+	defaultOpen?: boolean;
+	/** The URL asked for THIS card (`#onboard`): open it and bring it into
+	 * view. Kept apart from `defaultOpen` on purpose — Pending invoices is
+	 * open by default on every visit, and keying the scroll on that pulled
+	 * the page past the stat tiles and the tab fork on every plain load
+	 * (review, 2 Nov). */
+	deepLinked?: boolean;
+	children: ReactNode;
+}) {
+	const [open, setOpen] = useState(defaultOpen || deepLinked);
+	const panelId = useId();
+	const panelRef = useRef<HTMLDivElement>(null);
+	const cardRef = useRef<HTMLElement>(null);
+
+	// A deep link opens the card and brings it into view — and KEEPS it there
+	// while the page settles. Everything above it (the stat tiles, the gateway
+	// queue, the pending list) loads after this mounts and pushes it down, so
+	// one scroll on mount landed the admin mid-list (hands-on test, 2 Nov). Each
+	// layout shift re-scrolls until the page is still for a beat, or the admin
+	// scrolls or taps — their own move always wins.
+	useEffect(() => {
+		if (!deepLinked) return;
+		setOpen(true);
+		const card = cardRef.current;
+		if (!card) return;
+		const toCard = () => card.scrollIntoView?.({ block: "start" });
+		toCard();
+		if (typeof ResizeObserver === "undefined") return;
+		let settle = window.setTimeout(stop, SETTLE_MS);
+		const observer = new ResizeObserver(() => {
+			toCard();
+			window.clearTimeout(settle);
+			settle = window.setTimeout(stop, SETTLE_MS);
+		});
+		observer.observe(document.body);
+		const userMoves = ["wheel", "touchstart", "keydown", "pointerdown"];
+		for (const e of userMoves) window.addEventListener(e, stop, { once: true });
+		function stop() {
+			observer.disconnect();
+			window.clearTimeout(settle);
+			for (const e of userMoves) window.removeEventListener(e, stop);
+		}
+		return stop;
+	}, [deepLinked]);
+
+	useEffect(() => {
+		const panel = panelRef.current;
+		if (!panel) return;
+		const reveal = () => setOpen(true);
+		panel.addEventListener(REVEAL_EVENT, reveal);
+		return () => panel.removeEventListener(REVEAL_EVENT, reveal);
+	}, []);
+
+	return (
+		<section
+			ref={cardRef}
+			id={id}
+			className="@container/card scroll-mt-24 overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
+		>
+			<button
+				type="button"
+				aria-expanded={open}
+				aria-controls={panelId}
+				onClick={() => setOpen((v) => !v)}
+				className="flex min-h-14 w-full items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 lg:px-6"
+			>
+				<span
+					aria-hidden="true"
+					className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent"
+				>
+					{icon}
+				</span>
+				<span className="flex min-w-0 flex-1 flex-col">
+					<span className="text-sm font-semibold leading-snug">{title}</span>
+					<span
+						className={cn(
+							"mt-0.5 line-clamp-2 text-xs leading-snug",
+							summaryTone === "set" && "font-medium text-accent-emphasis",
+							summaryTone === "attention" &&
+								"font-medium text-amber-700 dark:text-amber-400",
+							summaryTone === "muted" && "text-muted-foreground",
+						)}
+					>
+						{summary}
+					</span>
+				</span>
+				{aside ? (
+					<span className="hidden shrink-0 @md/card:block">{aside}</span>
+				) : null}
+				<ChevronDown
+					aria-hidden="true"
+					className={cn(
+						"size-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
+						open && "rotate-180",
+					)}
+				/>
+			</button>
+			<div
+				ref={panelRef}
+				id={panelId}
+				hidden={!open}
+				{...{ [DISCLOSURE_PANEL_ATTR]: "" }}
+				// `@container`: the sections live in a column that is phone-narrow
+				// up to the desktop breakpoint, so their two-column rows switch on
+				// THIS panel's width, never the window's — `sm:` made a 1000px
+				// window cram a 330px card into two columns.
+				className="@container flex flex-col gap-4 border-t border-border px-5 pt-4 pb-5 lg:px-6 lg:pb-6"
+			>
+				<p className="text-xs leading-relaxed text-muted-foreground">
+					{description}
+				</p>
+				{aside ? <div className="@md/card:hidden">{aside}</div> : null}
+				{children}
+			</div>
 		</section>
 	);
 }
@@ -468,7 +646,12 @@ function topUpTile(revenue: TopUpRevenue | undefined): StatTileProps {
 	};
 }
 
-function OnboardClientCard() {
+function OnboardClientCard({
+	deepLinked = false,
+}: {
+	/** Opened and scrolled to by the `#onboard` deep link. */
+	deepLinked?: boolean;
+}) {
 	// Which door. Held here rather than in the URL: it is a scratch choice
 	// inside one form, and nothing links to a half-filled card.
 	const [mode, setMode] = useState<"link" | "build">("link");
@@ -588,18 +771,31 @@ function OnboardClientCard() {
 		}
 	}
 
-	return (
-		<AdminCard id="onboard">
-			<AdminSectionHeading
-				icon={<UserPlus className="size-5" />}
-				title="Onboard a client"
-				description={
-					mode === "link"
-						? "Fill what you know, copy the invite link, and send it manually. They confirm under their own login before invoicing."
-						: "Create the store now and set it up yourself. They claim it later by signing up with the handover email — no form for them to fill."
-				}
-			/>
+	// Folded, the card still says when there is work in it — a draft a fold
+	// kept is a draft the admin must not forget they started.
+	const onboardDraft =
+		storeName.trim() !== "" ||
+		slug.trim() !== "" ||
+		waPhone.trim() !== "" ||
+		email.trim() !== "";
+	const onboardSummary = onboardDraft
+		? `Draft in progress${storeName.trim() ? ` · ${storeName.trim()}` : ""}`
+		: "Send a new seller an invite link, or build their store for them";
 
+	return (
+		<CollapsibleAdminCard
+			id="onboard"
+			icon={<UserPlus className="size-5" />}
+			title="Onboard a client"
+			description={
+				mode === "link"
+					? "Fill what you know, copy the invite link, and send it manually. They confirm under their own login before invoicing."
+					: "Create the store now and set it up yourself. They claim it later by signing up with the handover email — no form for them to fill."
+			}
+			summary={onboardSummary}
+			summaryTone={onboardDraft ? "set" : "muted"}
+			deepLinked={deepLinked}
+		>
 			{/* The mode picker sits FIRST because it changes what every field below
 			    means (the email is a send-to address in one mode and a handover
 			    target in the other). Each option states its consequence — an admin
@@ -609,7 +805,7 @@ function OnboardClientCard() {
 				<legend className="text-sm font-medium">
 					How are they onboarding?
 				</legend>
-				<div className="grid gap-2 sm:grid-cols-2">
+				<div className="grid gap-2 @md:grid-cols-2">
 					{[
 						{
 							key: "link" as const,
@@ -704,7 +900,7 @@ function OnboardClientCard() {
 				</span>
 			</div>
 
-			<div className="grid gap-4 sm:grid-cols-2">
+			<div className="grid gap-4 @md:grid-cols-2">
 				<label
 					htmlFor="new-retailer-wa-phone"
 					className="flex flex-col gap-1 text-sm font-medium"
@@ -833,7 +1029,7 @@ function OnboardClientCard() {
 								: "Add the handover email — nobody can claim the store without it."}
 				</p>
 			) : null}
-		</AdminCard>
+		</CollapsibleAdminCard>
 	);
 }
 
@@ -904,7 +1100,11 @@ function currencyChoiceLabel(currency: BillingCurrency): string {
  * Founding-10 member (founding toggle). Built for minimal typing: amount is
  * derived from plan + cycle + founding; the due date defaults to +14 days.
  */
-export function IssueInvoiceForm() {
+export function IssueInvoiceForm({
+	defaultOpen = false,
+}: {
+	defaultOpen?: boolean;
+} = {}) {
 	const retailerSelectId = useId();
 	const retailerList = useQuery(
 		convexQuery(api.invoices.listRetailersForAdmin, {}),
@@ -1135,21 +1335,30 @@ export function IssueInvoiceForm() {
 		}
 	}
 
-	return (
-		<AdminCard>
-			<AdminSectionHeading
-				icon={<FilePlus2 className="size-5" />}
-				title="Issue an invoice"
-				description="Pick a retailer, plan and cycle — the amount and due date (14 days) are set automatically. The paid cycle starts when you mark it paid."
-				aside={
-					spotsRemaining !== undefined ? (
-						<span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
-							{spotsRemaining}/10 founding left
-						</span>
-					) : null
-				}
-			/>
+	const issueDraftStore =
+		retailerId !== ""
+			? (retailers?.find((r) => r._id === retailerId)?.storeName ?? "a store")
+			: undefined;
+	const issueSummary = issueDraftStore
+		? `Draft in progress · ${issueDraftStore}`
+		: "Bill an existing store for a plan — amount and due date fill in";
 
+	return (
+		<CollapsibleAdminCard
+			icon={<FilePlus2 className="size-5" />}
+			title="Issue an invoice"
+			description="Pick a retailer, plan and cycle — the amount and due date (14 days) are set automatically. The paid cycle starts when you mark it paid."
+			aside={
+				spotsRemaining !== undefined ? (
+					<span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+						{spotsRemaining}/10 founding left
+					</span>
+				) : null
+			}
+			summary={issueSummary}
+			summaryTone={issueDraftStore ? "set" : "muted"}
+			defaultOpen={defaultOpen}
+		>
 			<div className="flex flex-col gap-1">
 				<label htmlFor={retailerSelectId} className="text-sm font-medium">
 					Retailer
@@ -1207,7 +1416,7 @@ export function IssueInvoiceForm() {
 									founding && p !== "pro" && p !== "enterprise"
 								}
 								onClick={() => setPlan(p)}
-								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold @md:gap-1.5 @md:px-2 capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
 									effectivePlan === p
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
 										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
@@ -1233,7 +1442,7 @@ export function IssueInvoiceForm() {
 								type="button"
 								disabled={billsContract}
 								onClick={() => setCycle(c)}
-								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 capitalize transition-all disabled:cursor-not-allowed ${
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold @md:gap-1.5 @md:px-2 capitalize transition-all disabled:cursor-not-allowed ${
 									!noContract && effectiveCycle === c
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
 										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
@@ -1282,7 +1491,7 @@ export function IssueInvoiceForm() {
 			    Set up / Edit opens the SAME form the seller sheet renders, so a
 			    deal is negotiated in one place however you got there. */}
 			{!billsContract ? null : !contract ? (
-				<div className="flex flex-col gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+				<div className="flex flex-col gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3 @lg:flex-row @lg:items-center @lg:justify-between @lg:p-4">
 					<div className="flex min-w-0 items-start gap-2.5">
 						<FileSignature
 							aria-hidden="true"
@@ -1298,13 +1507,13 @@ export function IssueInvoiceForm() {
 						type="button"
 						variant="outline"
 						onClick={() => setContractSheetOpen(true)}
-						className="h-11 w-full shrink-0 sm:w-auto"
+						className="h-11 w-full shrink-0 @lg:w-auto"
 					>
 						Set up contract
 					</Button>
 				</div>
 			) : (
-				<div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+				<div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-muted/20 p-3 @lg:flex-row @lg:items-center @lg:justify-between @lg:p-4">
 					<div className="flex min-w-0 items-start gap-2.5">
 						<FileSignature
 							aria-hidden="true"
@@ -1327,7 +1536,7 @@ export function IssueInvoiceForm() {
 						type="button"
 						variant="outline"
 						onClick={() => setContractSheetOpen(true)}
-						className="h-11 w-full shrink-0 sm:w-auto"
+						className="h-11 w-full shrink-0 @lg:w-auto"
 					>
 						Edit contract
 					</Button>
@@ -1360,7 +1569,7 @@ export function IssueInvoiceForm() {
 				</span>
 			</label>
 
-			<div className="grid gap-4 rounded-2xl border border-accent/20 bg-accent/5 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+			<div className="grid gap-4 rounded-2xl border border-accent/20 bg-accent/5 p-4 @lg:grid-cols-[minmax(0,1fr)_auto] @lg:items-center">
 				<div className="min-w-0">
 					<p className="text-xs text-muted-foreground">Amount</p>
 					<p className="text-xl font-bold tabular-nums">
@@ -1413,7 +1622,7 @@ export function IssueInvoiceForm() {
 						noContract ||
 						replaceRefusal !== null
 					}
-					className="h-11 w-full sm:w-auto sm:px-6"
+					className="h-11 w-full @lg:w-auto @lg:px-6"
 				>
 					{busy ? "Issuing…" : openBill ? "Replace open bill" : "Issue invoice"}
 				</Button>
@@ -1484,11 +1693,16 @@ export function IssueInvoiceForm() {
 				open={contractSheetOpen}
 				onOpenChange={setContractSheetOpen}
 			/>
-		</AdminCard>
+		</CollapsibleAdminCard>
 	);
 }
 
-function PendingInvoices() {
+function PendingInvoices({
+	defaultOpen = true,
+}: {
+	/** Open unless the page was opened for another card (`#onboard`). */
+	defaultOpen?: boolean;
+}) {
 	const invoices = useQuery(convexQuery(api.invoices.listPending, {})).data;
 	// One clock per render, so a row's pill and its line can't disagree.
 	const now = Date.now();
@@ -1536,13 +1750,23 @@ function PendingInvoices() {
 		}
 	}
 
+	const overdueCount = invoices?.filter((inv) => inv.dueDate < now).length ?? 0;
+	const pendingSummary =
+		invoices === undefined
+			? "Loading…"
+			: invoices.length === 0
+				? "None — all settled"
+				: `${invoices.length} waiting${overdueCount > 0 ? ` · ${overdueCount} overdue` : ""}`;
+
 	return (
-		<AdminCard>
-			<AdminSectionHeading
-				icon={<ListChecks className="size-5" />}
-				title="Pending invoices"
-				description="Settle invoices only after the payment has landed. Marking paid activates access and may claim a founding rank."
-			/>
+		<CollapsibleAdminCard
+			icon={<ListChecks className="size-5" />}
+			title="Pending invoices"
+			description="Settle invoices only after the payment has landed. Marking paid activates access and may claim a founding rank."
+			summary={pendingSummary}
+			summaryTone={overdueCount > 0 ? "attention" : "muted"}
+			defaultOpen={defaultOpen}
+		>
 			{invoices === undefined ? (
 				<Skeleton className="h-16 w-full rounded-xl" />
 			) : invoices.length === 0 ? (
@@ -1554,7 +1778,7 @@ function PendingInvoices() {
 					{invoices.map((inv) => (
 						<li
 							key={inv._id}
-							className="grid gap-3 rounded-xl border border-border bg-background p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+							className="grid gap-3 rounded-xl border border-border bg-background p-3 @xl:grid-cols-[minmax(0,1fr)_auto]"
 						>
 							<div className="min-w-0 space-y-2">
 								<div className="flex flex-wrap items-center gap-2">
@@ -1635,7 +1859,7 @@ function PendingInvoices() {
 									/>
 								) : null}
 							</div>
-							<div className="flex items-center justify-between gap-3 sm:justify-end">
+							<div className="flex items-center justify-between gap-3 @xl:justify-end">
 								<span className="text-sm font-semibold tabular-nums">
 									{formatPrice(inv.total, inv.currency)}
 								</span>
@@ -1758,7 +1982,7 @@ function PendingInvoices() {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
-		</AdminCard>
+		</CollapsibleAdminCard>
 	);
 }
 
@@ -1803,12 +2027,18 @@ function AutoRenewOverview() {
 	const now = Date.now();
 
 	return (
-		<AdminCard>
-			<AdminSectionHeading
-				icon={<RefreshCw className="size-5" />}
-				title="Auto-renewal"
-				description="Retailers with a saved payment method. Their renewals charge themselves; failures dun by email and fall back to the Pay-now link."
-			/>
+		<CollapsibleAdminCard
+			icon={<RefreshCw className="size-5" />}
+			title="Auto-renewal"
+			description="Retailers with a saved payment method. Their renewals charge themselves; failures dun by email and fall back to the Pay-now link."
+			summary={
+				rows === undefined
+					? "Loading…"
+					: rows.length === 0
+						? "Nobody yet — sellers turn it on in Settings → Billing"
+						: `${rows.length} ${rows.length === 1 ? "store charges itself" : "stores charge themselves"} at renewal`
+			}
+		>
 			{rows === undefined ? (
 				<Skeleton className="h-16 w-full rounded-xl" />
 			) : rows.length === 0 ? (
@@ -1850,7 +2080,7 @@ function AutoRenewOverview() {
 					))}
 				</ul>
 			)}
-		</AdminCard>
+		</CollapsibleAdminCard>
 	);
 }
 
@@ -1919,19 +2149,25 @@ function FoundingMembersList() {
 	}
 
 	return (
-		<AdminCard>
-			<AdminSectionHeading
-				icon={<Award className="size-5" />}
-				title="Founding members"
-				description="The 10-slot cohort — who's reserved, where they are in the pay cycle, and whether their founding benefits still stand. Rank and badge are permanent; benefits end 90 days past paid-through."
-				aside={
-					spotsRemaining !== undefined ? (
-						<span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-							{10 - spotsRemaining}/10 claimed
-						</span>
-					) : null
-				}
-			/>
+		<CollapsibleAdminCard
+			icon={<Award className="size-5" />}
+			title="Founding members"
+			description="The 10-slot cohort — who's reserved, where they are in the pay cycle, and whether their founding benefits still stand. Rank and badge are permanent; benefits end 90 days past paid-through."
+			aside={
+				spotsRemaining !== undefined ? (
+					<span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+						{10 - spotsRemaining}/10 claimed
+					</span>
+				) : null
+			}
+			summary={
+				members === undefined
+					? "Loading…"
+					: members.length === 0
+						? "No founding members yet"
+						: "The 10-slot cohort — rank, pay cycle and whether benefits still stand"
+			}
+		>
 			{members === undefined ? (
 				<Skeleton className="h-16 w-full rounded-xl" />
 			) : members.length === 0 ? (
@@ -1974,7 +2210,7 @@ function FoundingMembersList() {
 						return (
 							<li
 								key={m.rank}
-								className="flex flex-col gap-3 rounded-xl border border-border bg-background p-3 sm:flex-row sm:items-start sm:justify-between"
+								className="flex flex-col gap-3 rounded-xl border border-border bg-background p-3 @lg:flex-row @lg:items-start @lg:justify-between"
 							>
 								{/* Stacked on a phone, side-by-side from sm. Side-by-side all
 								    the way down squeezed the name column between the pill and
@@ -1983,7 +2219,7 @@ function FoundingMembersList() {
 								    items-START, not center: the benefit line makes this block
 								    two or three lines tall, and a centred rank pill drifts down
 								    beside the SLUG instead of the store name it labels. */}
-								<div className="flex w-full items-start gap-2.5 sm:min-w-0 sm:flex-1">
+								<div className="flex w-full items-start gap-2.5 @lg:min-w-0 @lg:flex-1">
 									<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
 										#{m.rank}
 									</span>
@@ -2020,7 +2256,7 @@ function FoundingMembersList() {
 										) : null}
 									</span>
 								</div>
-								<div className="flex shrink-0 items-center gap-2 pl-[38px] sm:pl-0">
+								<div className="flex shrink-0 items-center gap-2 pl-[38px] @lg:pl-0">
 									<span
 										className={`rounded-full px-2.5 py-1 text-xs font-medium ${s.className}`}
 									>
@@ -2095,7 +2331,7 @@ function FoundingMembersList() {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
-		</AdminCard>
+		</CollapsibleAdminCard>
 	);
 }
 

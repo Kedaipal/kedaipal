@@ -313,7 +313,7 @@ export function MonthLedger({ month }: { month: AcquisitionMonth }) {
 					>
 						<Link
 							to="/app/admin/sellers"
-							search={{ status: "untagged_payers" }}
+							search={{ status: ["untagged_payers"] }}
 						>
 							Tag them
 						</Link>
