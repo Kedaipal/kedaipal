@@ -40,13 +40,14 @@ import {
 	type QueryCtx,
 	query,
 } from "./_generated/server";
+import { assertCounterSaleFunded } from "./creditLock";
 import { linkOrderToCustomer, refreshWaProfileName } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
 import {
 	assertValidBuyerWaPhone,
 	resolveBuyerDialCountry,
 } from "./lib/buyerPhone";
-import { DEFAULT_COUNTRY } from "./lib/country";
+import { DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { recordOrderCreated } from "./subscriptionUsage";
 import {
@@ -89,6 +90,7 @@ import {
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import { withCategoryNames } from "./lib/orderCategoryNames";
 import {
 	claimVoucherState,
 	redeemVoucher,
@@ -97,8 +99,9 @@ import {
 } from "./lib/voucherRedemption";
 import {
 	claimVoucherDiscount,
-	normalizeVoucherCode,
+	parseVoucherCode,
 	type VoucherSnapshot,
+	voucherUsageOf,
 	type VoucherTerms,
 } from "./lib/vouchers";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
@@ -307,6 +310,15 @@ export const getCheckoutSession = query({
 			 * live, since a live claim's voucher is by definition unspent.
 			 */
 			total: number;
+			/**
+			 * The claim's voucher as it stands RIGHT NOW, when it still applies —
+			 * the line between the items and the locked total that the buyer's
+			 * ticket draws, so the seller's frozen view can't show 15.00 above a
+			 * total of 10.00 with nothing in between (found hands-on, 30 Oct).
+			 * Absent when there is no voucher or it has since DROPPED: the total
+			 * is then the plain items figure, which needs no explaining.
+			 */
+			voucher?: { code: string; discount: number };
 			lines: Array<{
 				name: string;
 				variantLabel: string | undefined;
@@ -361,13 +373,11 @@ export const getCheckoutSession = query({
 		// by definition unspent, so the live state is the right one to ask.
 		const claimItems =
 			claim?.lines.reduce((sum, l) => sum + l.price * l.quantity, 0) ?? 0;
-		const claimLiveTotal = claim
-			? claimItems -
-				claimVoucherDiscount(
-					await claimVoucherState(ctx, claim, now),
-					claimItems,
-				)
-			: 0;
+		const claimVoucher = claim
+			? await claimVoucherState(ctx, claim, now)
+			: undefined;
+		const claimDiscount = claimVoucherDiscount(claimVoucher, claimItems);
+		const claimLiveTotal = claim ? claimItems - claimDiscount : 0;
 
 		const order = session.orderId ? await ctx.db.get(session.orderId) : null;
 
@@ -390,6 +400,10 @@ export const getCheckoutSession = query({
 						windowMinutes: claim.windowMinutes,
 						currency: claim.currency,
 						total: claimLiveTotal,
+						voucher:
+							claimVoucher?.kind === "applied"
+								? { code: claimVoucher.snapshot.code, discount: claimDiscount }
+								: undefined,
 						lines: claim.lines.map((l) => ({
 							name: l.name,
 							variantLabel: l.variantLabel,
@@ -456,6 +470,7 @@ export const bindSessionManualPhone = mutation({
 		await assertSubscriptionActive(ctx, access.retailer._id);
 		const retailer = access.retailer;
 		await assertOrderingNotPaused(ctx, retailer);
+		await assertCounterSaleFunded(ctx, retailer);
 
 		// Only after the store-level gates above: a paused or lapsed store says so
 		// before any complaint about the number (pinned by seasonalHold.test.ts for the pause and counterCheckout.test.ts for the lapse).
@@ -560,6 +575,7 @@ export const startAnonymousSession = mutation({
 		await assertSubscriptionActive(ctx, access.retailer._id);
 		const retailer = access.retailer;
 		await assertOrderingNotPaused(ctx, retailer);
+		await assertCounterSaleFunded(ctx, retailer);
 		const now = Date.now();
 		const openBound = await openBoundSessions(ctx, retailer._id, now);
 
@@ -702,7 +718,7 @@ export const saveSessionDraft = mutation({
 				voucherCode:
 					draft.voucherCode === undefined
 						? undefined
-						: (normalizeVoucherCode(draft.voucherCode) ?? undefined),
+						: (parseVoucherCode(draft.voucherCode)?.code ?? undefined),
 			},
 			expiresAt: now + OPEN_SESSION_TTL_MS, // slide the idle window
 			updatedAt: now,
@@ -866,6 +882,7 @@ export const createOrderFromSession = mutation({
 		await assertSubscriptionActive(ctx, session.retailerId);
 		const retailer = access.retailer;
 		await assertOrderingNotPaused(ctx, retailer);
+		await assertCounterSaleFunded(ctx, retailer);
 		if (session.status !== "buyer_identified")
 			throw new ConvexError(
 				"Bind a buyer to this checkout before creating the order",
@@ -902,7 +919,7 @@ export const createOrderFromSession = mutation({
 			}
 		}
 
-		const currency = retailer.currency ?? "MYR";
+		const currency = storeCurrencyOf(retailer);
 		const now = Date.now();
 
 		// Resolve variants server-side — price + stock are authoritative here.
@@ -1153,10 +1170,26 @@ export const createOrderFromSession = mutation({
 				retailerId: retailer._id,
 				code: args.voucherCode,
 				now,
+				// An ANONYMOUS walk-in has no number to count against, so a
+				// per-buyer code's use counts against its total only
+				// (`z8r3fdz0pw`) — refusing would turn away a buyer standing at
+				// the till, and the panel says so before the seller taps Create.
+				entry: {
+					itemSubtotal: snapshotItems.reduce(
+						(sum, item) => sum + item.price * item.quantity,
+						0,
+					),
+					waPhone: session.waPhone,
+					phoneless: "total_only",
+				},
 			});
 			voucherTerms = terms;
 			redeemedVoucherId = voucher._id;
-			voucherSnapshot = { code: voucher.code, ...terms };
+			voucherSnapshot = {
+				code: voucher.code,
+				...terms,
+				usage: voucherUsageOf(voucher),
+			};
 		}
 
 		const { subtotal, discount, total } = computeOrderTotals(snapshotItems, {
@@ -1215,7 +1248,9 @@ export const createOrderFromSession = mutation({
 			retailerId: retailer._id,
 			shortId,
 			trackingToken: generateTrackingToken(),
-			items: snapshotItems,
+			// Categories frozen at sale, like every order door (86eyrtz74) — without
+			// it a counter sale reads "Uncategorized" in the inbox filter.
+			items: await withCategoryNames(ctx, snapshotItems),
 			subtotal,
 			total,
 			currency,
@@ -1260,7 +1295,12 @@ export const createOrderFromSession = mutation({
 		// Spend the code in the transaction that created the order (OCC makes the
 		// race safe — see lib/voucherRedemption.ts).
 		if (redeemedVoucherId)
-			await redeemVoucher(ctx, { voucherId: redeemedVoucherId, orderId, now });
+			await redeemVoucher(ctx, {
+				voucherId: redeemedVoucherId,
+				orderId,
+				now,
+				waPhone: session.waPhone,
+			});
 
 		const actorUserId = access.role === "admin" ? undefined : access.userId;
 		await ctx.db.insert("orderEvents", {
@@ -1295,9 +1335,10 @@ export const createOrderFromSession = mutation({
 		// real first order — activate the store (one-time stamp).
 		await stampRetailerActivation(ctx, retailer._id, now);
 
-		// Meter against the monthly usage nudge (SOFT cap, never a block) and
-		// use the order's credit — counter orders count like storefront ones,
-		// including while the store is out of credits (intake never stops).
+		// Use the order's credit, like every channel. Unlike the buyer doors the
+		// counter only gets here with a credit in hand (`assertCounterSaleFunded`
+		// above, in this same transaction), so a counter sale is never born
+		// gated — never invisible to the seller who just rang it up (z8r3fdwbbb).
 		await recordOrderCreated(ctx, {
 			retailerId: retailer._id,
 			orderId,

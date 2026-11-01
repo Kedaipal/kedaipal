@@ -38,12 +38,14 @@ import {
 } from "./lib/plans";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
 import {
+	type RefereeStage,
 	type ReferrerIneligibleReason,
 	type ReferrerStanding,
 	looksLikeSelfReferral,
 	referralHref,
 	referralRefereeOffer,
 	referralRewardCredits,
+	refereeStage,
 	referrerStanding,
 } from "./lib/referral";
 import {
@@ -656,6 +658,8 @@ const STATS_CAP = 500;
 export type MyReferralCard = {
 	slug: string;
 	link: string;
+	/** The store's own name — the share message opens with it. */
+	storeName: string;
 	/** Whether this store's link counts right now, and why not. */
 	standing: ReferrerStanding;
 	/** The bonus, per tier the REFEREE starts on — the same number lands on
@@ -671,10 +675,15 @@ export type MyReferralCard = {
 	creditsEarned: number;
 	/** The count hit STATS_CAP. */
 	capped: boolean;
+	/** Referees who signed up and haven't paid their first invoice yet — the
+	 * reward WAITING on them. The state that gets a card opened. A referee
+	 * whose store has since been deleted can never pay, so it is not
+	 * "waiting" (the list still shows its row, labelled). */
+	pending: number;
 };
 
 /**
- * The caller's store as a REFERRER, for the Home card. Any member may read it:
+ * The caller's store as a REFERRER, for its doors into /app/refer (Home, the profile menu). Any member may read it:
  * the link is public and the counts are counts — no referee is named. `null`
  * when signed out or storeless.
  */
@@ -692,16 +701,26 @@ export const myCard = query({
 		const rows = await ctx.db
 			.query("referrals")
 			.withIndex("by_referrer_created", (q) => q.eq("referrerId", retailer._id))
+			.order("desc")
 			.take(STATS_CAP);
 		let started = 0;
+		let pending = 0;
 		let creditsEarned = 0;
 		for (const r of rows) {
-			if (r.rewardedAt !== undefined) started += 1;
+			if (r.rewardedAt !== undefined) {
+				started += 1;
+			} else {
+				// One get per unrewarded row (≤ STATS_CAP): a deleted referee's
+				// row would otherwise read "waiting" forever.
+				const referee = await ctx.db.get(r.refereeId);
+				if (referee) pending += 1;
+			}
 			creditsEarned += r.referrerCredits ?? 0;
 		}
 		return {
 			slug: retailer.slug,
 			link: referralHref(retailer.slug),
+			storeName: retailer.storeName,
 			standing,
 			offer: referralRefereeOffer(),
 			earns: standing.canRefer && standing.earnsReward,
@@ -709,6 +728,86 @@ export const myCard = query({
 			started,
 			creditsEarned,
 			capped: rows.length >= STATS_CAP,
+			pending,
 		};
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Refer & earn page (28 Oct 2026 push): one row per referee
+// ---------------------------------------------------------------------------
+
+export type MyReferralRow = {
+	id: Id<"referrals">;
+	/** The referee's store name — public (it is their storefront's). `null`
+	 * when that store has since been deleted. */
+	storeName: string | null;
+	/** The referee's public WhatsApp number (the one their storefront shows),
+	 * so the referrer can nudge a kedai that signed up but hasn't started —
+	 * a word from a friend converts where an email from us doesn't. */
+	waPhone: string | null;
+	createdAt: number;
+	/** `started` once the referee paid their first plan invoice (the reward
+	 * moment); `signed_up` while the reward waits on them. */
+	status: "signed_up" | "started";
+	/** While `signed_up`: how close the referee is to that first invoice
+	 * (`refereeStage`). `null` once started, or when the store is gone. */
+	stage: RefereeStage | null;
+	rewardedAt: number | null;
+	/** What THIS store received for the row — 0 when nothing did
+	 * (`referrerOutcome` says why), and while the reward waits. */
+	referrerCredits: number;
+	referrerOutcome: Doc<"referrals">["referrerOutcome"] | null;
+};
+
+/**
+ * The caller's referees, newest first, for the Refer & earn page's list.
+ * Credits:read — the rows say what the store EARNED, which is credits-area
+ * data (the Home card stays any-member: counts, no earnings per row). An
+ * admin acting as the store passes `retailerId`. `null` when signed out or
+ * storeless; a member without the grant is refused by the access layer and
+ * the page shows the NeedsAccessNote in the list's place.
+ */
+export const myReferrals = query({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ rows: MyReferralRow[]; capped: boolean } | null> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
+		const access = retailerId
+			? await requireRetailerAccess(ctx, retailerId, {
+					area: "credits",
+					level: "read",
+				})
+			: await resolveMyRetailerFor(ctx, { area: "credits", level: "read" });
+		const retailer = access?.retailer ?? null;
+		if (!retailer) return null;
+		const rows = await ctx.db
+			.query("referrals")
+			.withIndex("by_referrer_created", (q) => q.eq("referrerId", retailer._id))
+			.order("desc")
+			.take(STATS_CAP);
+		const out: MyReferralRow[] = [];
+		for (const r of rows) {
+			const referee = await ctx.db.get(r.refereeId);
+			const started = r.rewardedAt !== undefined;
+			out.push({
+				id: r._id,
+				storeName: referee?.storeName ?? null,
+				waPhone: referee?.waPhone ?? null,
+				createdAt: r.createdAt,
+				status: started ? "started" : "signed_up",
+				stage:
+					started || !referee
+						? null
+						: refereeStage(await loadSubscription(ctx, referee._id)),
+				rewardedAt: r.rewardedAt ?? null,
+				referrerCredits: r.referrerCredits ?? 0,
+				referrerOutcome: r.referrerOutcome ?? null,
+			});
+		}
+		return { rows: out, capped: rows.length >= STATS_CAP };
 	},
 });

@@ -24,6 +24,9 @@ export type LiveClaim = {
 	currency: string;
 	/** Net of the voucher — see `ClaimListRow.total`. */
 	total: number;
+	/** The voucher still applying to this claim, if one does — the line the
+	 * buyer's ticket draws between the items and the total. */
+	voucher?: { code: string; discount: number };
 	lines: Array<{
 		name: string;
 		variantLabel: string | undefined;
@@ -157,6 +160,31 @@ export function WaitingOnBuyerScreen({
 						</li>
 					))}
 				</ul>
+				{/* The voucher's line, exactly as the buyer's ticket draws it: without
+				    it this screen showed the items at full price directly above a
+				    total that didn't add up to them. Items first, so the deduction
+				    has a figure to come off. */}
+				{claim.voucher ? (
+					<>
+						<div className="flex items-center justify-between text-sm">
+							<span className="text-muted-foreground">Items</span>
+							<span className="tabular-nums text-muted-foreground">
+								{formatPrice(
+									claim.total + claim.voucher.discount,
+									claim.currency,
+								)}
+							</span>
+						</div>
+						<div className="flex items-center justify-between text-sm">
+							<span className="truncate text-accent-emphasis">
+								Voucher · {claim.voucher.code}
+							</span>
+							<span className="shrink-0 tabular-nums font-medium text-accent-emphasis">
+								−{formatPrice(claim.voucher.discount, claim.currency)}
+							</span>
+						</div>
+					</>
+				) : null}
 				<div className="flex items-center justify-between text-sm">
 					{/* "Locked total", not "Total": the buyer adds delivery on their own
 					    page, so this figure is the commitment, not the final bill. */}

@@ -84,13 +84,21 @@ export function ledgerRowLabel(row: LedgerRow): string {
 	if (row.type === "expire")
 		return row.bucket === "plan"
 			? "Unused monthly credits"
-			: `Bought credits past their ${PURCHASED_CREDIT_LIFETIME_MONTHS} months`;
+			: `Extra credits past their ${PURCHASED_CREDIT_LIFETIME_MONTHS} months`;
 	if (row.type === "purchase") return "Top-up pack";
 	if (row.reason === "referral_referee" || row.reason === "referral_referrer")
 		return "Referral reward";
 	if (row.reason === "enterprise_block") return "Enterprise overage block";
-	return row.bucket === "plan" ? "Plan credits" : "Bought credits";
+	return row.bucket === "plan" ? "Plan credits" : "Extra credits";
 }
+
+/** Where a lot of extra credits came from — the pot mixes paid packs with
+ * referral bonuses and admin grants, so a lot says which it is. */
+const LOT_SOURCE_LABEL: Record<Doc<"creditLots">["source"], string> = {
+	purchase: "top-up",
+	referral: "referral bonus",
+	adjust: "admin grant / block",
+};
 
 /**
  * The ledger page of the seller sheet. `onBack` returns to the seller's
@@ -170,7 +178,7 @@ export function CreditLedgerBody({
 						{state.lots.length > 0 ? (
 							<div className="flex flex-col gap-1">
 								<p className="text-xs font-medium">
-									Bought credits held for later
+									Extra credits held for later
 								</p>
 								<ul className="flex flex-col divide-y divide-border/60 rounded-xl border border-border text-[13px]">
 									{state.lots.map((lot) => (
@@ -180,6 +188,10 @@ export function CreditLedgerBody({
 										>
 											<span className="tabular-nums">
 												{lot.remaining} of {lot.credits}
+												<span className="text-muted-foreground">
+													{" "}
+													· {LOT_SOURCE_LABEL[lot.source]}
+												</span>
 											</span>
 											<span className="text-muted-foreground">
 												expires {formatShortDate(lot.expiresAt)}
@@ -188,7 +200,7 @@ export function CreditLedgerBody({
 									))}
 								</ul>
 								<p className="text-xs text-muted-foreground">
-									Paid for before this store stopped being metered. They keep
+									Held before this store stopped being metered. They keep
 									expiring on schedule and are spendable again the moment it is
 									metered again — nothing here is deleted.
 								</p>
@@ -281,7 +293,7 @@ function BalanceBlock({ state }: { state: AccountState }) {
 					{view.total < 0 ? `${-view.total} owed` : `${view.total} left`}
 				</p>
 				<p className="text-xs text-muted-foreground">
-					Plan {view.plan} · bought {view.purchased}
+					Plan {view.plan} · extra {view.purchased}
 					{view.exhaustedAt !== null
 						? ` · out since ${formatShortDate(view.exhaustedAt)}`
 						: ""}
@@ -311,7 +323,7 @@ function BalanceBlock({ state }: { state: AccountState }) {
 			</dl>
 			{state.lots.length > 0 ? (
 				<div className="flex flex-col gap-1">
-					<p className="text-xs font-medium">Bought credits, by lot</p>
+					<p className="text-xs font-medium">Extra credits, by lot</p>
 					<ul className="flex flex-col divide-y divide-border/60 rounded-xl border border-border text-[13px]">
 						{state.lots.map((lot) => (
 							<li
@@ -320,6 +332,10 @@ function BalanceBlock({ state }: { state: AccountState }) {
 							>
 								<span className="tabular-nums">
 									{lot.remaining} of {lot.credits}
+									<span className="text-muted-foreground">
+										{" "}
+										· {LOT_SOURCE_LABEL[lot.source]}
+									</span>
 								</span>
 								<span className="text-muted-foreground">
 									expires {formatShortDate(lot.expiresAt)}
@@ -373,14 +389,14 @@ function AdjustForm({
 		"reason" in parsed
 			? parsed.reason
 			: block && amount !== null && amount < 0
-				? "A block adds bought credits — enter a positive number."
+				? "A block adds extra credits — enter a positive number."
 				: bucket === "purchased" && amount !== null && -amount > purchased
-					? `This store holds ${purchased} bought credits — take away at most that many, or adjust the plan credits instead.`
+					? `This store holds ${purchased} extra credits — take away at most that many, or adjust the plan credits instead.`
 					: note.trim().length < NOTE_MIN
 						? "Add a note saying why."
 						: null;
 
-	const noun = bucket === "plan" ? "plan" : "bought";
+	const noun = bucket === "plan" ? "plan" : "extra";
 	const label =
 		amount === null
 			? "Adjust credits"
@@ -410,7 +426,7 @@ function AdjustForm({
 				...(block ? { enterpriseBlock: true } : {}),
 			});
 			toast.success("Credits adjusted", {
-				description: `Now plan ${res.plan} · bought ${res.purchased}.`,
+				description: `Now plan ${res.plan} · extra ${res.purchased}.`,
 			});
 			setRaw("");
 			setNote("");
@@ -458,14 +474,14 @@ function AdjustForm({
 								: "border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
 						)}
 					>
-						{b === "plan" ? "Plan credits" : "Bought credits"}
+						{b === "plan" ? "Plan credits" : "Extra credits"}
 					</button>
 				))}
 			</div>
 			<p className="text-xs text-muted-foreground">
 				{bucket === "plan"
 					? "Plan credits last until this month's reset — right for a one-off correction to this month."
-					: `Added bought credits land as a lot that lasts ${PURCHASED_CREDIT_LIFETIME_MONTHS} months, like a top-up. Taking away uses the oldest lot first and can't go below zero.`}
+					: `Added extra credits land as a lot that lasts ${PURCHASED_CREDIT_LIFETIME_MONTHS} months, like a top-up. Taking away uses the oldest lot first and can't go below zero.`}
 			</p>
 			<div className="flex flex-col gap-1.5">
 				<label htmlFor="credit-adjust-amount" className="text-sm font-medium">
@@ -728,10 +744,10 @@ function LedgerItem({ row }: { row: LedgerRow }) {
 			<div className="flex items-baseline justify-between gap-3 text-[11px] text-muted-foreground">
 				<span>
 					{formatShortDate(row.createdAt)} ·{" "}
-					{row.bucket === "plan" ? "plan" : "bought"}
+					{row.bucket === "plan" ? "plan" : "extra"}
 				</span>
 				<span className="tabular-nums">
-					after: plan {row.planAfter} · bought {row.purchasedAfter}
+					after: plan {row.planAfter} · extra {row.purchasedAfter}
 				</span>
 			</div>
 			{row.note ? (

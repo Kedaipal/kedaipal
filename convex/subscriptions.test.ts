@@ -81,6 +81,7 @@ describe("resolveAccess (pure)", () => {
 			events: false,
 			promo: false,
 			vouchers: false,
+			crossBorder: false,
 		});
 		expect(resolveAccess(sub({ plan: "pro" })).features).toEqual({
 			crm: true,
@@ -94,6 +95,7 @@ describe("resolveAccess (pure)", () => {
 			events: true,
 			promo: true,
 			vouchers: true,
+			crossBorder: true,
 		});
 		// Fail safe: a missing row gets Pro features, never a lockout.
 		expect(resolveAccess(null).features).toEqual({
@@ -108,6 +110,7 @@ describe("resolveAccess (pure)", () => {
 			events: true,
 			promo: true,
 			vouchers: true,
+			crossBorder: true,
 		});
 	});
 
@@ -129,6 +132,7 @@ describe("resolveAccess (pure)", () => {
 		events: true,
 			promo: true,
 		vouchers: true,
+		crossBorder: true,
 		});
 		expect(a.active).toBe(true);
 		expect(a.frozen).toBe(false);

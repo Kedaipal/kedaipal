@@ -107,6 +107,7 @@ describe("products.missingParcelWeights", () => {
 		});
 		expect(result).toEqual({
 			count: 1,
+			choiceCount: 1,
 			named: [{ productId: missing, name: "Brownies" }],
 		});
 	});

@@ -121,8 +121,25 @@ unfindable in the full list.
 `src/routes/stores.tsx` — buyer surface, so it **SSRs** (`ssrRead` loader →
 `head()` meta/canonical/**ItemList JSON-LD**, soft-degrade on upstream
 failure), is in `sitemap.xml`, and the component re-reads through the TanStack
-adapter. Region (MY/SG) reuses the landing's `useLandingRegion` + a
-`RegionToggle` — regions never blend; the count fact names the region; an
+adapter. **One market per buyer, no switch** <a id="one-market-per-buyer"></a>
+([`z8r3fdwduz`](https://app.clickup.com/t/z8r3fdwduz), Zaki 21 Oct 2026):
+`useMarketplaceRegion` picks MY or SG from the edge's `CF-IPCountry` (the
+root loader's geo-only `market`, `readVisitorMarket`) → device time zone
+(only where the edge had no answer — local dev, `XX`/`T1`) → MY. Shopee-style,
+a buyer never browses the other side, and the scope is applied by
+`marketplace.listStores({ country })` itself — the other market's stores are
+not in the payload, not merely hidden. **The pricing toggle's
+`kp_landing_region` cookie is deliberately not a signal:** it is a pricing
+preference, and honouring it would strand a Malaysian who once checked SG
+prices in the SG directory with no way back. The one way across is an
+explicit link — a store's `/<slug>` always opens, and so does a showcase link
+in the other market (below). **Accepted trade-offs:** a wrong geo guess (VPN,
+carrier NAT, a JB commuter on an SG SIM) has no in-page escape; and crawlers
+mostly resolve to MY, so the `/stores` JSON-LD lists MY stores — SG stores
+keep their own indexed `/<slug>` pages, and a per-market URL (`/stores/sg`) is
+the follow-up if SG discovery needs it. `country` is optional on
+`listStores` only so a tab opened before the change keeps rendering; the page
+always passes it. Regions never blend; the count fact names the region; an
 empty region is an acquisition CTA, not a dead end (and the CTA band steps
 aside there — one ask, once). Search + chips (All / Open now / New this
 month / Delivers) are client-side over the one payload (`filterStores`,
@@ -149,8 +166,9 @@ the card's one geographic hint — the profile has no city field.
 
 - **Storefront footer** — "Discover more stores on Kedaipal →" above the
   Powered-by badge (`StorefrontFooter discover`). Opt-in per page and ON only
-  where a buyer is browsing: store home, category, product, and the
-  store-not-found dead end — **plus the order page**. Never at checkout or a
+  where a buyer is browsing: store home, category, product — **plus the order
+  page**. The store-not-found dead end leads with **Browse stores** as its
+  primary action instead ([`not-found.md`](./not-found.md)). Never at checkout or a
   claim page. Hidden for a store that opted out (`marketplaceUnlisted` rides
   the by-slug payload — public-safe — and the order read). **Deliberately NOT a Kedaipal logo top-left**
   (considered, 1 Oct 2026): the top of a storefront is the seller's brand,
@@ -362,8 +380,10 @@ which `listStores` and the showcase functions both read.
   region opens it anyway: the showcase's `country` is this visit's region
   (`resolveShowcaseFocus` — a roaming SG phone at a Malaysian fair must not
   read "isn't on right now"), derived per visit and never written to the
-  visitor's stored pick, which also sets their pricing currency; picking the
-  other region from the link leaves the showcase. A slug that is not live
+  visitor's stored pick, which also sets their pricing currency. On a
+  showcase link the directory query waits for the showcases to load, because
+  until then the market is unknown and fetching the buyer's own would paint
+  the wrong market's stores for a beat. A slug that is not live
   (the event ended, the QR outlived it) lands on the plain page with one
   line saying so; `parseShowcaseSlugParam` degrades anything else to "no showcase".
 - **Searching keeps a store's showcase.** <a id="searching-keeps-a-stores-showcase"></a>
@@ -405,7 +425,7 @@ which `listStores` and the showcase functions both read.
   still-focused input. Everywhere else: once the hero's chips
   scroll out above (one `IntersectionObserver` on a sentinel,
   `useScrolledPast`), a frosted bar takes over with the logo, a floating
-  search, the region switch — and on desktop the chips and the seller CTA.
+  search — and on desktop the chips and the seller CTA.
   It is a second VIEW of the hero's search/filter state, not a second
   control. On a phone an active filter rides inside the search pill as a
   removable token, so the bar stays one row. Shipped in the same PR because

@@ -238,6 +238,7 @@ import {
 	type StoredAwbConfig,
 } from "./lib/awbConfig";
 import { sanitizeAttributionSource } from "./lib/attribution";
+import { isAcquisitionChannel } from "./lib/metrics";
 import { isChoosablePickupPoint } from "./lib/pickupChoice";
 import { sanitizeUnitLine, UNIT_LINE_MAX_LENGTH } from "./lib/address";
 import { sanitizeReferrerSlug } from "./lib/poweredBy";
@@ -295,14 +296,31 @@ import {
 	riderBookingAllowed,
 	sanitizeDeliveryConfig,
 } from "./lib/delivery";
+import { storeLanes } from "./crossBorder";
+import {
+	type CrossBorderLane,
+	crossBorderLanesValidator,
+	sanitizeCrossBorderLanes,
+} from "./lib/crossBorder";
 import { storeBooksCouriers } from "./lib/courierBooking";
+import { loadEasyparcelArming } from "./lib/easyparcelArming";
+import { assertCatalogueWeighed } from "./lib/parcelWeights";
+import { type WeightPricing, weightPricingOf } from "./lib/weightPricing";
 import { isEncrypted } from "./lib/credentialCrypto";
 import {
 	ackableKeys,
 	type CountrySetupItem,
 	resolveCountrySetup,
 } from "./lib/countrySetup";
-import { hasLalamoveCredentials, inferLalamoveEnv } from "./lib/lalamove";
+import {
+	checkLalamoveKeyShape,
+	hasLalamoveCredentials,
+	inferLalamoveEnv,
+} from "./lib/lalamove";
+import {
+	lalamovePricingBlock,
+	lalamoveRiderOutBlock,
+} from "./lib/lalamoveDisconnect";
 import {
 	type HitpayConfig,
 	inferHitpayMode,
@@ -319,13 +337,13 @@ import { ensureCreditAccount } from "./credits";
 import { insertReferral, resolveSignupReferrer } from "./referrals";
 import {
 	assertSupportedCurrency,
-	DEFAULT_CURRENCY,
 	type SupportedCurrency,
 } from "./lib/currency";
 import {
 	type Country,
 	COUNTRY_CURRENCY,
 	DEFAULT_COUNTRY,
+	storeCurrencyOf,
 } from "./lib/country";
 import {
 	adminUserIds,
@@ -338,7 +356,10 @@ import {
 	requireRetailerAccess,
 	storeOwnerIsAdmin,
 } from "./lib/auth";
-import { syncLalamoveWallet } from "./courierWallets";
+import {
+	resetWalletsForCountrySwitch,
+	syncLalamoveWallet,
+} from "./courierWallets";
 import {
 	hasPermission,
 	type MemberPermissions,
@@ -952,6 +973,24 @@ type RetailerPublic = {
 	// Lalamove booking summary (86eyb5hrf) — OWNER-only like the two fields
 	// above, and secret-free (see DeliveryBookingSummary).
 	deliveryBooking?: DeliveryBookingSummary;
+	// WHY this store's delivery charge depends on parcel weight (23 Oct 2026,
+	// `weightPricingOf`): the seller's rate card, or a live courier that
+	// quotes by weight. Unset = it doesn't. One enum derived server-side from
+	// owner-only config (the mode + whether Delyva is armed, which rides on
+	// its credentials), so the product form, the wizard and the Products list
+	// never re-derive it from pieces they can't all see. Only the owner read
+	// sets it; it is harmless but pointless on the storefront payload.
+	weightPricing?: WeightPricing;
+	// Cross-border lanes as SAVED (z8r3fdr5yy) — owner read only, for the
+	// Fulfilment tab's summary row; the settings page reads the paused/live
+	// verdict from `crossBorder.settingsOverview`.
+	crossBorderLanes?: CrossBorderLane[];
+	// The countries this store is TAKING cross-border orders to right now —
+	// the effective lanes (plan, delivery on, own pricing), never the prices.
+	// By-slug payload only: the storefront's "Deliver to" picker and the
+	// "Ships within Malaysia only" labels read it. Public-safe: offering
+	// delivery to a country is the point of telling buyers.
+	shipsAbroadTo?: Country[];
 	// HitPay connection summary (86eyb6z3a) — OWNER-only and secret-free like
 	// deliveryBooking. Buyers learn "gateway available" per-order through
 	// orders.getPaymentMethods, never from a retailer payload.
@@ -1200,7 +1239,7 @@ async function buildRetailerPublic(
 		logoUrl,
 		coverImageStorageId: row.coverImageStorageId,
 		coverImageUrl,
-		currency: (row.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
+		currency: storeCurrencyOf(row),
 		country: row.country ?? DEFAULT_COUNTRY,
 		locale: row.locale ?? DEFAULT_LOCALE,
 		messageTemplates: row.messageTemplates as MessageTemplatesShape | undefined,
@@ -1214,6 +1253,12 @@ async function buildRetailerPublic(
 		businessAddress: row.businessAddress,
 		businessIdentity: row.businessIdentity,
 		deliveryBooking: summarizeDeliveryBooking(row.deliveryBooking),
+		weightPricing:
+			weightPricingOf({
+				...row,
+				easyparcel: await loadEasyparcelArming(ctx, row._id),
+			}) ?? undefined,
+		crossBorderLanes: row.crossBorderLanes as CrossBorderLane[] | undefined,
 		hitpay: summarizeHitpay(row.hitpay as HitpayConfig | undefined),
 		minFulfilmentNoticeDays: row.minFulfilmentNoticeDays,
 		openingHours: row.openingHours,
@@ -1385,13 +1430,15 @@ export const getRetailerBySlug = query({
 							?.deliveryDirection === "collection",
 					// One bit from the courier config, never the config — see the
 					// RetailerPublic comment.
-					booksCouriers: storeBooksCouriers(active),
+					booksCouriers: storeBooksCouriers({
+						...active,
+						easyparcel: await loadEasyparcelArming(ctx, active._id),
+					}),
 					logoStorageId: active.logoStorageId,
 					logoUrl,
 					coverImageStorageId: active.coverImageStorageId,
 					coverImageUrl,
-					currency:
-						(active.currency as SupportedCurrency) ?? DEFAULT_CURRENCY,
+					currency: storeCurrencyOf(active),
 					country: active.country ?? DEFAULT_COUNTRY,
 					locale: active.locale ?? DEFAULT_LOCALE,
 					messageTemplates: active.messageTemplates as
@@ -1403,6 +1450,9 @@ export const getRetailerBySlug = query({
 					openingHours: active.openingHours,
 					closedDates: active.closedDates,
 					minOrderValue: active.minOrderValue,
+					shipsAbroadTo: (await storeLanes(ctx, active)).effective.map(
+						(lane) => lane.country,
+					),
 					// Founding badge is public-safe; subscription state is NOT
 					// included — beyond the one `paymentsPaused` bit.
 					isFoundingMember: active.isFoundingMember,
@@ -1693,6 +1743,11 @@ export const createRetailer = mutation({
 		// server-side key events stitch to their client-side funnel. A hint like
 		// signupSource: validated here (wire format only), dropped otherwise.
 		gaClientId: v.optional(v.string()),
+		// The seller's own answer to "How did you find Kedaipal?" (86eye3eyp) —
+		// one of ACQUISITION_CHANNELS. Optional, and a CLAIM: stored with
+		// acquisitionSetBy "seller" for an admin to confirm or change. An
+		// unknown value is dropped, never stored and never a failed signup.
+		acquisitionSource: v.optional(v.string()),
 	},
 	handler: async (ctx, args): Promise<{ slug: string }> => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -1788,6 +1843,9 @@ export const createRetailer = mutation({
 			(referral ? referralSourceTag(referral.slug) : undefined);
 
 		const now = Date.now();
+		const sellerChannel = isAcquisitionChannel(args.acquisitionSource)
+			? args.acquisitionSource
+			: undefined;
 		// Consent is implied: the onboarding UI gates submission on a required,
 		// not-pre-checked "I agree" checkbox. Stamp the server-side current
 		// versions (never client-supplied) for tamper resistance.
@@ -1805,6 +1863,13 @@ export const createRetailer = mutation({
 			...(signupSource !== undefined ? { signupSource } : {}),
 			...(signupReferrerId !== undefined ? { signupReferrerId } : {}),
 			...(gaClientId !== undefined ? { gaClientId } : {}),
+			...(sellerChannel !== undefined
+				? {
+						acquisitionSource: sellerChannel,
+						acquisitionSetBy: "seller" as const,
+						acquisitionSetAt: now,
+					}
+				: {}),
 			channel: "whatsapp",
 			// Default self-collect ON so new retailers discover the pickup feature
 			// in the onboarding checklist. They can toggle it off from Settings →
@@ -2537,6 +2602,11 @@ const updateSettingsArgs = {
 		// delivery — always allowed, downgrade never traps); undefined = no
 		// change. Setting radius mode is Pro-gated + requires a business address.
 		deliveryConfig: v.optional(v.union(deliveryConfigValidator, v.null())),
+		// Cross-border lanes (z8r3fdr5yy). `null` or `[]` clears — always
+		// allowed, a downgrade never traps; undefined = no change. Setting a
+		// lane is Pro-gated and needs delivery on with the store's OWN pricing
+		// (a live courier quote is domestic-only). See docs/cross-border.md.
+		crossBorderLanes: v.optional(v.union(crossBorderLanesValidator, v.null())),
 		// Business address (radius-mode origin). `null` clears — rejected while
 		// a radius config still depends on it; undefined = no change.
 		businessAddress: v.optional(v.union(businessAddressValidator, v.null())),
@@ -2615,6 +2685,7 @@ const SETTINGS_FIELD_AREA: Record<
 	offerSelfCollect: "fulfilment",
 	offerDelivery: "fulfilment",
 	deliveryConfig: "fulfilment",
+	crossBorderLanes: "fulfilment",
 	businessAddress: "fulfilment",
 	minFulfilmentNoticeDays: "fulfilment",
 	awbConfig: "fulfilment",
@@ -2694,6 +2765,10 @@ export const updateSettings = mutation({
 	): Promise<{
 		ok: true;
 		productsCurrencySynced: number;
+		/** A real country change detached the saved auto-renew method — the
+		 * card HitPay authorised was in the OLD billing currency (86eyp7hn7).
+		 * The country card tells the seller so in the same breath. */
+		autoRenewDetached: boolean;
 	}> => {
 		// Resolve the target store: an explicit `retailerId` is the admin act-as
 		// path; otherwise the store the caller works in. Field-level enforcement
@@ -2750,6 +2825,7 @@ export const updateSettings = mutation({
 			offerSelfCollect: boolean;
 			offerDelivery: boolean;
 			deliveryConfig: DeliveryConfig | undefined;
+			crossBorderLanes: CrossBorderLane[] | undefined;
 			businessAddress: BusinessAddress | undefined;
 			businessIdentity: BusinessIdentity | undefined;
 			deliveryBooking: DeliveryBooking | undefined;
@@ -2765,6 +2841,7 @@ export const updateSettings = mutation({
 		// change wins over the stored row, so "switch to SG + save the SG number"
 		// in one call validates coherently instead of bouncing off the old arm.
 		const effectiveCountry = args.country ?? retailer.country ?? DEFAULT_COUNTRY;
+		let autoRenewDetached = false;
 
 		if (args.storeName !== undefined) {
 			try { patch.storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
@@ -2874,10 +2951,49 @@ export const updateSettings = mutation({
 			if (args.country !== (retailer.country ?? DEFAULT_COUNTRY)) {
 				patch.countryChangedAt = Date.now();
 				patch.countryChangedFrom = retailer.country ?? DEFAULT_COUNTRY;
+				// Every courier wallet balance described an account in the OLD
+				// country (an SG EasyParcel account has its own wallet) — show
+				// "not reported yet" rather than a balance from the wrong one.
+				await resetWalletsForCountrySwitch(ctx, retailer._id);
+				// The overseas lane is the one thing cleared (z8r3fdr5yy, Zaki
+				// 30 Oct). Unlike a rate card it carries nothing the new country
+				// can use: it points at what is now HOME, its price is in the old
+				// currency, and an RM price for MY→SG can't price SG→MY. Left in
+				// place it leaked — a weight lane kept demanding product weights,
+				// and Delivery pricing / the EasyParcel card read it as live or
+				// paused. Re-entering one price is the whole cost. A same-call
+				// lane (args.crossBorderLanes) is judged below as usual.
+				if (args.crossBorderLanes === undefined) {
+					patch.crossBorderLanes = undefined;
+				}
 				// A new move re-opens every question the seller previously
 				// confirmed — their bank details were checked against the OLD
 				// destination.
 				patch.countrySetupAcked = undefined;
+				// The ONE thing the switch does switch off. A store is billed in
+				// its country's currency (`storeBillingCurrency`, 86eyp7hn7), so
+				// this move changes what every bill from the next one is in —
+				// and the recurring session HitPay authorised was in the OLD
+				// currency. Charging that session in the new one is a charge the
+				// seller never agreed to, so the method goes the way it goes on a
+				// store handover: the same helper, reconcile-safe, nothing
+				// deleted that money could still be hanging off. Pay-now keeps
+				// working; the checklist row below sends them to set it up
+				// again.
+				// A setup STARTED but not finished goes too: its HitPay page was
+				// minted in the old currency, and "Finish setting up" after the
+				// move would authorise that session on a store now billed in the
+				// new one (found in the Chrome test, 28 Oct 2026). Only an
+				// ATTACHED method is reported — the toast promises "auto-renewal
+				// is now off", and a half-started setup was never on.
+				const sub = await ctx.db
+					.query("subscriptions")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+					.first();
+				if (sub?.autoRenew !== undefined || sub?.autoRenewSetup !== undefined) {
+					await detachAutoRenewForRetailer(ctx, retailer._id);
+					autoRenewDetached = sub.autoRenew !== undefined;
+				}
 			}
 			patch.country = args.country;
 		}
@@ -3050,6 +3166,31 @@ export const updateSettings = mutation({
 				// decided with Arif 11 Aug). sanitizeDeliveryConfig above already
 				// guarantees ≥1 zone with ≥1 state + ≥1 band, so a stored weight
 				// config can never be dead weight.
+				// Arming weight pricing (23 Oct 2026): switching the charge onto the
+				// weight rate card, or onto live pricing while Delyva is armed,
+				// starts pricing every order by parcel weight — so it refuses
+				// while buyable choices are unweighed, naming the count and the
+				// page that fixes it. Only the SWITCH is gated: a store already on
+				// that mode keeps saving (its policies, its zones) and is pointed
+				// at the fix by the readiness notice instead.
+				const storedMode = (retailer.deliveryConfig as DeliveryConfig | undefined)
+					?.mode;
+				if (clean.mode === "weight" && storedMode !== "weight") {
+					await assertCatalogueWeighed(ctx, retailer._id, "rate_card");
+				}
+				if (
+					clean.mode === "live" &&
+					storedMode !== "live" &&
+					weightPricingOf({
+						...retailer,
+						deliveryConfig: clean,
+						crossBorderLanes: undefined,
+						easyparcel: await loadEasyparcelArming(ctx, retailer._id),
+					}) === "courier"
+				) {
+					// Delyva, or EasyParcel on an SG store — both price by weight.
+					await assertCatalogueWeighed(ctx, retailer._id, "courier");
+				}
 				if (clean.mode === "lalamove") {
 					// Live-quote pricing rides the booking config (credentials +
 					// vehicle + origin) — require booking enabled in the effective
@@ -3074,20 +3215,94 @@ export const updateSettings = mutation({
 				patch.deliveryConfig = clean;
 			}
 		}
+		if (args.crossBorderLanes !== undefined) {
+			if (args.crossBorderLanes === null || args.crossBorderLanes.length === 0) {
+				// Turning overseas delivery off is always allowed — orders already
+				// placed keep their address and price.
+				patch.crossBorderLanes = undefined;
+			} else {
+				const effectiveCountry =
+					(args.country !== undefined ? args.country : retailer.country) ??
+					DEFAULT_COUNTRY;
+				let clean: CrossBorderLane[];
+				try {
+					clean = sanitizeCrossBorderLanes(
+						args.crossBorderLanes,
+						effectiveCountry,
+					);
+				} catch (err) {
+					throw new ConvexError((err as Error).message);
+				}
+				if (!access.actingAsAdmin) {
+					await assertPlanFeature(ctx, retailer._id, "crossBorder");
+				}
+				// The store-wide conditions `lanePause` reads, judged on the state
+				// this save lands in, so a lane can never be stored already paused
+				// by something the seller is changing in the same breath. Home
+				// pricing no longer matters (Zaki, 30 Oct): a lane carries its own.
+				const effectiveOfferDelivery =
+					args.offerDelivery !== undefined
+						? args.offerDelivery
+						: retailer.offerDelivery;
+				if (effectiveOfferDelivery === false) {
+					throw new ConvexError(
+						"Turn on delivery first — overseas delivery is a delivery option.",
+					);
+				}
+				// A weight-banded lane refuses an unweighed cart, and an EasyParcel
+				// live lane prices by weight — so arming either refuses while
+				// buyable products have no weight (the 23 Oct rule, Delyva's
+				// posture). Only the SWITCH into one is gated.
+				const storedLanes = retailer.crossBorderLanes as
+					| CrossBorderLane[]
+					| undefined;
+				const weighs = (lanes: CrossBorderLane[] | undefined, kind: string) =>
+					lanes?.some((lane) => lane.pricing.kind === kind) ?? false;
+				if (weighs(clean, "weight") && !weighs(storedLanes, "weight")) {
+					await assertCatalogueWeighed(ctx, retailer._id, "rate_card");
+				}
+				if (weighs(clean, "live") && !weighs(storedLanes, "live")) {
+					await assertCatalogueWeighed(ctx, retailer._id, "courier");
+				}
+				// A NEW lane waits for the "what can go" step before any buyer
+				// sees it (Zaki, 30 Oct) — every product starts allowed, so frozen
+				// goods must be unticked first. An edited lane keeps its state.
+				patch.crossBorderLanes = clean.map((lane) => {
+					const before = storedLanes?.find((s) => s.country === lane.country);
+					return before
+						? before.awaitingProducts
+							? { ...lane, awaitingProducts: true }
+							: lane
+						: { ...lane, awaitingProducts: true };
+				});
+			}
+		}
 		if (args.deliveryBooking !== undefined) {
 			if (args.deliveryBooking === null) {
-				// Clearing is always allowed — but never leave a live-quote pricing
-				// mode pointing at a booking config that no longer exists.
+				// Disconnect (z8r3fdy5ht). Never plan-gated — refused only where
+				// removing the keys would break something the seller can't see: a
+				// delivery charge Lalamove prices, or a rider still on the road.
+				// One author with the card's disabled-with-reason read.
 				const effectiveConfig =
 					args.deliveryConfig !== undefined
 						? patch.deliveryConfig
 						: (retailer.deliveryConfig as DeliveryConfig | undefined);
-				if (effectiveConfig?.mode === "lalamove") {
-					throw new ConvexError(
-						"Live Lalamove pricing uses this booking setup — switch the delivery charge to another mode first.",
-					);
-				}
-				patch.deliveryBooking = undefined;
+				const block =
+					lalamovePricingBlock(retailer, effectiveConfig?.mode) ??
+					(await lalamoveRiderOutBlock(ctx, retailer._id));
+				if (block) throw new ConvexError(block.message);
+				// The keys (and everything learned from them — env, hint, webhook
+				// stamp) go; the seller's rider preferences stay, so reconnecting
+				// is one paste, not a re-setup (the Delyva posture).
+				const prev = retailer.deliveryBooking as DeliveryBooking | undefined;
+				patch.deliveryBooking = prev
+					? {
+							enabled: false,
+							vehicleType: prev.vehicleType,
+							promptBookOnPacked: prev.promptBookOnPacked,
+							deliveryDirection: prev.deliveryDirection,
+						}
+					: undefined;
 				// No key, no wallet to report (86eye9xd4, 6A).
 				await syncLalamoveWallet(ctx, retailer._id, null);
 			} else {
@@ -3158,6 +3373,17 @@ export const updateSettings = mutation({
 					throw new ConvexError(
 						"Enter both the Lalamove API key and API secret (or clear both).",
 					);
+				}
+				// A NEW paste must look like a Lalamove pair (z8r3fdy5ht) — the
+				// lock behind the card's live check and `lalamove.verifyKeys`.
+				// Stored keys are never re-judged.
+				const typedKey = args.deliveryBooking.apiKey?.trim();
+				if (typedKey) {
+					const shape = checkLalamoveKeyShape(
+						typedKey,
+						args.deliveryBooking.apiSecret ?? "",
+					);
+					if (!shape.ok) throw new ConvexError(shape.message);
 				}
 				if (clean.enabled) {
 					// Country allowlist FIRST, mirroring the deliveryConfig branch
@@ -3427,8 +3653,7 @@ export const updateSettings = mutation({
 		let productsCurrencySynced = 0;
 		if (
 			patch.currency !== undefined &&
-			patch.currency !==
-				((retailer.currency as SupportedCurrency) ?? DEFAULT_CURRENCY)
+			patch.currency !== storeCurrencyOf(retailer)
 		) {
 			const products = await ctx.db
 				.query("products")
@@ -3513,7 +3738,7 @@ export const updateSettings = mutation({
 			);
 		}
 		await logAdminAction(ctx, access, "retailers.updateSettings", retailer._id);
-		return { ok: true, productsCurrencySynced };
+		return { ok: true, productsCurrencySynced, autoRenewDetached };
 	},
 });
 
@@ -3551,11 +3776,14 @@ export const recordConsentAcceptance = mutation({
 });
 
 /**
- * Idempotent: mark the signed-in retailer as having visited the Pickup
- * settings tab at least once. Drives the dashboard checklist's step-4
- * dismissal so a seller who deliberately skips self-collect isn't nagged.
- * No-op if already true.
+ * Whether Kedaipal bills this store at all — the only stores a country switch
+ * changes a bill for (86eyp7hn7). Comped stores get no bill; an Enterprise
+ * contract's currency is frozen with the deal.
  */
+function billedByKedaipal(sub: Doc<"subscriptions"> | null): boolean {
+	return sub !== null && sub.comped !== true && sub.enterprise === undefined;
+}
+
 /**
  * The post-switch setup checklist (86eyqgujv) — what a store still needs to
  * fix after moving country, most costly first.
@@ -3578,6 +3806,10 @@ export const countrySetup = query({
 		changedFrom: Country | undefined;
 		changedAt: number;
 		items: CountrySetupItem[];
+		/** A saved auto-renew method is attached right now — the
+		 * `billing_currency` row says "set it up again" only while there is
+		 * none, and never claims one existed (86eyp7hn7). */
+		autoRenewOn: boolean;
 	} | null> => {
 		// Country-switch checklist is OWNER territory (a country change reprices
 		// the store) — members never see it, matching updateSettings' owner-only
@@ -3593,9 +3825,15 @@ export const countrySetup = query({
 			.query("pickupLocations")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.collect();
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.first();
 		const items = resolveCountrySetup({
 			country: retailer.country,
 			countryChangedAt: retailer.countryChangedAt,
+			countryChangedFrom: retailer.countryChangedFrom,
+			billedByKedaipal: billedByKedaipal(sub),
 			acked: retailer.countrySetupAcked,
 			businessAddress: retailer.businessAddress,
 			pickupLocations: locations.map((l) => ({
@@ -3608,6 +3846,12 @@ export const countrySetup = query({
 			deliveryBookingEnabled:
 				(retailer.deliveryBooking as DeliveryBooking | undefined)?.enabled ===
 				true,
+			easyparcelPickupPostcode: (
+				await ctx.db
+					.query("easyparcelConnections")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+					.unique()
+			)?.pickupAddress?.postcode,
 			waPhone: retailer.waPhone,
 			notifyWaPhone: retailer.notifyWaPhone,
 			hasPaymentMethods: (retailer.paymentMethods?.length ?? 0) > 0,
@@ -3623,6 +3867,7 @@ export const countrySetup = query({
 			changedFrom: retailer.countryChangedFrom,
 			changedAt: retailer.countryChangedAt,
 			items,
+			autoRenewOn: sub?.autoRenew !== undefined,
 		};
 	},
 });
@@ -3659,9 +3904,15 @@ export const ackCountrySetup = mutation({
 			.query("pickupLocations")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
 			.collect();
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+			.first();
 		const items = resolveCountrySetup({
 			country: retailer.country,
 			countryChangedAt: retailer.countryChangedAt,
+			countryChangedFrom: retailer.countryChangedFrom,
+			billedByKedaipal: billedByKedaipal(sub),
 			acked: undefined,
 			businessAddress: retailer.businessAddress,
 			pickupLocations: locations.map((l) => ({
@@ -3674,6 +3925,12 @@ export const ackCountrySetup = mutation({
 			deliveryBookingEnabled:
 				(retailer.deliveryBooking as DeliveryBooking | undefined)?.enabled ===
 				true,
+			easyparcelPickupPostcode: (
+				await ctx.db
+					.query("easyparcelConnections")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+					.unique()
+			)?.pickupAddress?.postcode,
 			waPhone: retailer.waPhone,
 			notifyWaPhone: retailer.notifyWaPhone,
 			hasPaymentMethods: (retailer.paymentMethods?.length ?? 0) > 0,
@@ -3703,6 +3960,12 @@ export const ackCountrySetup = mutation({
 	},
 });
 
+/**
+ * Idempotent: mark the signed-in retailer as having visited the Pickup
+ * settings tab at least once. Drives the dashboard checklist's step-4
+ * dismissal so a seller who deliberately skips self-collect isn't nagged.
+ * No-op if already true.
+ */
 export const markPickupSetupSeen = mutation({
 	args: {},
 	handler: async (ctx): Promise<{ updated: boolean }> => {

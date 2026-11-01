@@ -244,7 +244,6 @@ describe("billing page prices — server-resolved, act-as aware (z8r3fdfty4)", (
 			await my.asUser.query(api.subscriptionPayments.billingGatewayAvailable, {}),
 		).toMatchObject({
 			currency: "MYR",
-			renewalCurrency: "MYR",
 			foundingPricing: true,
 			foundingPricingLapsed: false,
 			nextRenewal: { plan: "pro", founding: true, amount: 10400, currency: "MYR" },
@@ -373,7 +372,7 @@ describe("billing page prices — server-resolved, act-as aware (z8r3fdfty4)", (
 			opts: { founding: true, country: "SG" as const, cycle: "annual" as const },
 		},
 		{
-			name: "MY store billed in SGD (last paid invoice wins)",
+			name: "MY store with a past SGD bill still renews in MYR (86eyp7hn7)",
 			slug: "q-mysgd",
 			opts: { founding: true, lastPaidCurrency: "SGD" as const },
 		},

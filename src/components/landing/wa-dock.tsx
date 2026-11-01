@@ -1,5 +1,5 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { useAuthState } from "../../hooks/useAuthState";
 import { useSectionVisibility } from "../../hooks/useSectionVisibility";
 import { m } from "../../paraglide/messages";
 import { DemoPill } from "./landing-ui";
@@ -26,7 +26,7 @@ import { DemoPill } from "./landing-ui";
  * until the observer reports).
  */
 export function WaDock() {
-	const { isSignedIn } = useAuth();
+	const auth = useAuthState();
 	const heroVisible = useSectionVisibility("top");
 	const finalVisible = useSectionVisibility("final");
 	const footerVisible = useSectionVisibility("site-footer");
@@ -35,7 +35,7 @@ export function WaDock() {
 	// Hidden until the hero has gone — `null` (SSR, first paint, no hero on
 	// the page) counts as "not yet", never as "show".
 	const shown =
-		!isSignedIn &&
+		auth === "signed-out" &&
 		heroVisible === false &&
 		finalVisible !== true &&
 		footerVisible !== true;

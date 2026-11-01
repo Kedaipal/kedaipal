@@ -1,4 +1,4 @@
-// The Orders view switch: Cards · Table · Calendar.
+// The Orders view switch: Cards · Table · Calendar · Schedule.
 //
 // These began as two separate controls — a Cards/Table switch (86eyrtz74) and
 // an Inbox/Calendar one (booking S4) — which landed side by side in the same
@@ -11,12 +11,17 @@
 // render as different elements: a real <Link> for anything that navigates
 // (⌘-click, copy-link-address and crawlers all keep working) and a <button>
 // only where the choice is local state.
+//
+// Schedule (`z8r3fdjv0d`) is the fourth answer: every dated programme — events
+// and bookings — as one list of dates with registered vs paid. It sits after
+// Calendar because both are lenses over WHEN, and the switch reads from "my
+// orders" to "my dates".
 
 import { Link } from "@tanstack/react-router";
-import { CalendarRange, LayoutGrid, Rows3 } from "lucide-react";
+import { CalendarRange, ClipboardList, LayoutGrid, Rows3 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
-export type OrdersView = "cards" | "table" | "calendar";
+export type OrdersView = "cards" | "table" | "calendar" | "schedule";
 
 const segmentClass = (active: boolean) =>
 	cn(
@@ -29,12 +34,16 @@ const segmentClass = (active: boolean) =>
 export function OrdersViewToggle({
 	active,
 	showCalendar,
+	showSchedule,
 	onSelectView,
 }: {
 	active: OrdersView;
 	/** Booking stores only — a store with no booking listings has no calendar
 	 * to show, so it keeps the plain two-segment switch. */
 	showCalendar: boolean;
+	/** Stores selling events or bookings (`schedule.hasDatedListings`) — a store
+	 * with nothing dated has no programme to list. */
+	showSchedule: boolean;
 	/** Supplied by the inbox, where Cards/Table are local view state. Omitted
 	 * on the calendar page, where choosing either navigates back to the list. */
 	onSelectView?: (view: "cards" | "table") => void;
@@ -82,6 +91,17 @@ export function OrdersViewToggle({
 					className={segmentClass(active === "calendar")}
 				>
 					<CalendarRange className="size-4.5" aria-hidden="true" />
+				</Link>
+			) : null}
+			{showSchedule ? (
+				<Link
+					to="/app/orders/schedule"
+					aria-label="Schedule view"
+					title="Schedule view"
+					aria-current={active === "schedule" ? "page" : undefined}
+					className={segmentClass(active === "schedule")}
+				>
+					<ClipboardList className="size-4.5" aria-hidden="true" />
 				</Link>
 			) : null}
 		</div>

@@ -4,11 +4,24 @@ on:
   push:
     branches:
       - main
+  # A manual re-run for when GitHub drops the push event (it did during the
+  # 22 Oct 2026 incident: #411 merged and no run was ever created, so there was
+  # nothing to re-run). Actions → Deploy to Production → Run workflow → `main`.
+  workflow_dispatch:
+
+# One prod deploy at a time, never cancelled mid-flight: a manual run and a push
+# run (or two quick merges) would otherwise race `convex deploy` / `wrangler`.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
   # Same gate as PRs run (typecheck + lint + test) — one definition, no drift.
   gate:
     name: Gate
+    # The Run-workflow form lets you pick any branch. Only `main` is prod, so a
+    # dispatch from anything else stops here and every job after it skips.
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
     uses: ./.github/workflows/ci.yml

@@ -71,8 +71,9 @@ import {
 } from "./subscriptions";
 import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
 import { tallyPromoUnits } from "./lib/promoTally";
-import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import { type Country, DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
 import { storeBooksCouriers } from "./lib/courierBooking";
+import { loadEasyparcelArming } from "./lib/easyparcelArming";
 import { getDisplayName, requireCustomerName } from "./lib/customer";
 import type { CartWeightItem } from "./lib/delivery";
 import {
@@ -93,6 +94,7 @@ import {
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import { withCategoryNames } from "./lib/orderCategoryNames";
 import {
 	claimVoucherState,
 	redeemVoucher,
@@ -102,6 +104,7 @@ import {
 	type ClaimVoucherState,
 	claimVoucherDiscount,
 	type VoucherSnapshot,
+	voucherUsageOf,
 } from "./lib/vouchers";
 import { asksForTime, fulfilmentKind } from "./lib/fulfilmentShape";
 import type { OpeningHours } from "./lib/openingHours";
@@ -112,7 +115,11 @@ import {
 	storablePendingReason,
 	summarizeCartWeight,
 } from "./lib/delivery";
-import { creditGateFor, forSeller } from "./creditLock";
+import {
+	assertCounterSaleFunded,
+	creditGateFor,
+	forSeller,
+} from "./creditLock";
 import { rateLimiter } from "./lib/rateLimiter";
 import {
 	freezeLineAnswers,
@@ -332,6 +339,10 @@ export const sendClaim = mutation({
 		// follows the counter's rule (z8r3fdudf7): open under the seller's own
 		// pause, closed by a hold or Kedaipal's switch.
 		await assertTakesCounterOrders(ctx, retailer, "seller");
+		// The credit is spent when the buyer completes the link, but the SELLER is
+		// the one sending it — so it is refused here, never at the buyer's commit
+		// (z8r3fdwbbb). A link sent at zero would land an order the seller can't see.
+		await assertCounterSaleFunded(ctx, retailer);
 		if (session.status !== "buyer_identified")
 			throw new ConvexError("This checkout isn't open any more");
 		if (!session.waPhone)
@@ -367,9 +378,21 @@ export const sendClaim = mutation({
 				retailerId: retailer._id,
 				code: args.voucherCode,
 				now,
+				// Judged for the buyer the link goes to and the lines being
+				// frozen (`z8r3fdz0pw`): a send refuses here, at the counter,
+				// rather than promising a discount the claim page then drops.
+				entry: {
+					itemSubtotal: claimItemsTotal(lines),
+					waPhone: session.waPhone,
+					phoneless: "refuse",
+				},
 			});
 			voucherId = resolved.voucher._id;
-			voucherSnapshot = { code: resolved.voucher.code, ...resolved.terms };
+			voucherSnapshot = {
+				code: resolved.voucher.code,
+				...resolved.terms,
+				usage: voucherUsageOf(resolved.voucher),
+			};
 		}
 
 		// Supersede: the previous open claim for this session dies with this send
@@ -394,7 +417,7 @@ export const sendClaim = mutation({
 			waPhone: session.waPhone,
 			buyerName: session.waProfileName,
 			lines,
-			currency: retailer.currency ?? "MYR",
+			currency: storeCurrencyOf(retailer),
 			voucherId,
 			voucherSnapshot,
 			token,
@@ -447,6 +470,7 @@ export const resendClaim = mutation({
 		// Re-sending pushes a fresh link into the buyer's chat — a new order
 		// invitation, refused while paused exactly like sendClaim.
 		await assertTakesCounterOrders(ctx, access.retailer, "seller");
+		await assertCounterSaleFunded(ctx, access.retailer);
 		const now = Date.now();
 		if (effectiveClaimStatus(claim, now) !== "open")
 			throw new ConvexError(
@@ -536,6 +560,13 @@ export interface ClaimListRow {
 		| "unavailable";
 	/** Completed claims: the order it became (link target for the seller). */
 	orderShortId?: string;
+	/** Set only when that order is WAITING ON CREDITS — how many open it.
+	 * A link sent while the store had credit can still complete after the
+	 * balance hit zero (`commit` never refuses the buyer), and that order is
+	 * born gated: the one remaining way a counter-originated sale can wait.
+	 * The row must say so rather than read "Completed" over an order the
+	 * seller can't open (z8r3fdwbbb review). */
+	orderCreditsToUnlock?: number;
 	createdAt: number;
 }
 
@@ -604,11 +635,13 @@ export const listClaims = query({
 		for (const claim of [...open, ...settled]) {
 			let orderShortId: string | undefined;
 			let orderTotal: number | undefined;
+			let orderCreditsToUnlock: number | undefined;
 			if (claim.orderId) {
 				const raw = await ctx.db.get(claim.orderId);
 				const order = raw ? forSeller(gate, raw) : null;
 				orderShortId = order?.shortId;
 				orderTotal = order?.total;
+				if (order?.creditGated) orderCreditsToUnlock = order.creditsToUnlock;
 			}
 			const itemsTotal = claimItemsTotal(claim.lines);
 			// See `ClaimListRow.total` for why completed reads the order and
@@ -641,6 +674,7 @@ export const listClaims = query({
 				lastSentAt: claim.lastSentAt,
 				lastSendOutcome: claim.lastSendOutcome,
 				orderShortId,
+				orderCreditsToUnlock,
 				createdAt: claim.createdAt,
 			});
 		}
@@ -781,13 +815,16 @@ export const getByToken = query({
 				waPhone: retailer.waPhone,
 				country: retailer.country ?? DEFAULT_COUNTRY,
 				locale: pickLocale(retailer.locale),
-				currency: retailer.currency ?? "MYR",
+				currency: storeCurrencyOf(retailer),
 				// Same legacy-default posture as the storefront payload.
 				offerDelivery: (retailer.offerDelivery ?? true) === true,
 				offerSelfCollect: retailer.offerSelfCollect === true,
 				collectsFromCustomer:
 					retailer.deliveryBooking?.deliveryDirection === "collection",
-				booksCouriers: storeBooksCouriers(retailer),
+				booksCouriers: storeBooksCouriers({
+					...retailer,
+					easyparcel: await loadEasyparcelArming(ctx, retailer._id),
+				}),
 				minNoticeDays,
 				openingHours: retailer.openingHours as OpeningHours | undefined,
 				closedDates: retailer.closedDates,
@@ -930,6 +967,16 @@ export const commit = mutation({
 				"Delivery orders should not include a pickup location",
 			);
 
+		// A claim link is a counter sale finished on the buyer's phone — it
+		// delivers within the store's country only (z8r3fdr5yy); the lane, its
+		// price and the home-only check are the storefront checkout's.
+		if (
+			args.deliveryAddress?.country !== undefined &&
+			args.deliveryAddress.country !== retailerCountry
+		)
+			throw new ConvexError(
+				"This order can only be delivered within the store's country — message the store to arrange overseas delivery.",
+			);
 		let sanitizedAddress: ReturnType<typeof assertValidAddress> | undefined;
 		if (args.deliveryAddress) {
 			try {
@@ -1231,16 +1278,23 @@ export const commit = mutation({
 			//
 			// This is the THIRD create path to need it (storefront, counter, claim)
 			// — each builds its own snapshot, so a new frozen field has to be
-			// stamped in three places. See docs/stock-adjustments.md.
-			items: claim.lines.map((line) => {
-				const pickupNote = pickupNoteByProduct.get(line.productId);
-				return {
-					...line,
-					stockReserved: requestedByVariant.get(line.variantId)?.block === true,
-					// Frozen from the live product at commit — see the header.
-					...(pickupNote !== undefined ? { pickupNote } : {}),
-				};
-			}),
+			// stamped in every door (booking included). See
+			// docs/stock-adjustments.md.
+			// Categories are frozen at COMMIT too (86eyrtz74), from the live
+			// junctions — the same moment `stockReserved` describes.
+			items: await withCategoryNames(
+				ctx,
+				claim.lines.map((line) => {
+					const pickupNote = pickupNoteByProduct.get(line.productId);
+					return {
+						...line,
+						stockReserved:
+							requestedByVariant.get(line.variantId)?.block === true,
+						// Frozen from the live product at commit — see the header.
+						...(pickupNote !== undefined ? { pickupNote } : {}),
+					};
+				}),
+			),
 			subtotal,
 			total,
 			// Only recorded when the voucher actually applied — an order that
@@ -1295,6 +1349,7 @@ export const commit = mutation({
 				voucherId: voucherState.voucherId,
 				orderId,
 				now,
+				waPhone: claim.waPhone,
 			});
 
 		await ctx.db.insert("orderEvents", {

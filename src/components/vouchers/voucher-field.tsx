@@ -1,13 +1,17 @@
 import { useMutation } from "convex/react";
-import { Check, Loader2, Ticket, Trash2, X } from "lucide-react";
+import { Check, Clock, Loader2, Ticket, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import {
 	formatVoucherTerms,
-	normalizeVoucherCode,
+	minSpendShortfall,
+	parseVoucherCode,
+	SHARED_CODE_MIN,
+	type VoucherConditions,
 	type VoucherTerms,
 	voucherDiscountFor,
+	voucherFinePrint,
 	voucherRefusalMessage,
 } from "../../../convex/lib/vouchers";
 import { formatPrice } from "../../lib/format";
@@ -17,6 +21,38 @@ import { Input } from "../ui/input";
 /** An applied voucher, as both redemption surfaces hold it. */
 export interface AppliedVoucher extends VoucherTerms {
 	code: string;
+	/** The entry rules the server reported (`z8r3fdz0pw`) — judged here
+	 * against the live basket so the surface can say "spend RM12 more"
+	 * without a round trip; the order door judges them for real. */
+	conditions?: VoucherConditions;
+	/** The buyer number a per-buyer code was last checked for, as stored. */
+	checkedFor?: string;
+}
+
+/**
+ * Does the applied voucher's minimum spend hold against this basket?
+ * (`z8r3fdz0pw`) A code below its minimum stays APPLIED — the buyer may be
+ * mid-basket, and the seller at the counter usually keys the code first — but
+ * takes nothing off and is not sent with the order until it qualifies, so
+ * the total on screen is always the total charged.
+ */
+export function voucherQualifies(
+	applied: AppliedVoucher,
+	itemSubtotal: number,
+): boolean {
+	return minSpendShortfall(applied.conditions?.minSpend, itemSubtotal) === 0;
+}
+
+/** The code an order door should receive: the applied code once it
+ * qualifies, otherwise none. The ONE rule every submit path reads, so the
+ * preview and the order can't disagree about whether the discount is on. */
+export function voucherCodeForOrder(
+	applied: AppliedVoucher | null,
+	itemSubtotal: number,
+): string | undefined {
+	return applied && voucherQualifies(applied, itemSubtotal)
+		? applied.code
+		: undefined;
 }
 
 /**
@@ -52,6 +88,9 @@ export function VoucherField({
 	label = "Have a voucher?",
 	serverRefusal,
 	variant = "panel",
+	buyer,
+	anonymousBuyer = false,
+	refusedCode,
 }: {
 	retailerId: Id<"retailers">;
 	currency: string;
@@ -90,6 +129,30 @@ export function VoucherField({
 	 * the thing that must never diverge, and they don't.
 	 */
 	variant?: "panel" | "receipt";
+	/**
+	 * The buyer's WhatsApp number when the surface already knows it — the
+	 * counter's bound session (`z8r3fdz0pw`). Sent with the check so a
+	 * per-buyer code is judged for THIS buyer before the seller rings it up.
+	 */
+	buyer?: {
+		waPhone: string;
+		waDialCountry?: string;
+		/** The number as an order stores it (E.164 digits) — compared with
+		 * `checkedFor` to know whether the applied code was judged for THIS
+		 * number or an earlier one. */
+		digits?: string;
+		/** How the page prints the number ("012-345 6789"). */
+		label?: string;
+	};
+	/**
+	 * An anonymous counter sale: there is no number to count, so a per-buyer
+	 * code's use counts against its total only — and the panel says so,
+	 * because otherwise the seller would assume the limit protected them.
+	 */
+	anonymousBuyer?: boolean;
+	/** The code the host took off with `serverRefusal` — put back in the box
+	 * so the sentence is visibly about it (`z8r3fdz0pw`). */
+	refusedCode?: string;
 }) {
 	const checkCode = useMutation(api.vouchers.checkCode);
 	const [openedByBuyer, setOpen] = useState(initialCode !== undefined);
@@ -100,6 +163,11 @@ export function VoucherField({
 	const [code, setCode] = useState("");
 	const [checking, setChecking] = useState(false);
 	const [ownRefusal, setRefusal] = useState<string | null>(null);
+	// A code the host took off for THIS buyer (`z8r3fdz0pw`, flow A) stays
+	// typed in the box, so the buyer sees which code the sentence is about.
+	useEffect(() => {
+		if (refusedCode !== undefined) setCode(refusedCode);
+	}, [refusedCode]);
 	// The field's own answer wins while it has one — the buyer has typed since
 	// the server spoke, so the newer sentence is the true one.
 	const refusal = ownRefusal ?? serverRefusal ?? null;
@@ -111,19 +179,33 @@ export function VoucherField({
 			setChecking(true);
 			setRefusal(null);
 			try {
-				const result = await checkCode({ retailerId, code: typed });
+				const result = await checkCode({
+					retailerId,
+					code: typed,
+					...(buyer
+						? { waPhone: buyer.waPhone, waDialCountry: buyer.waDialCountry }
+						: {}),
+				});
 				if (result.ok) {
-					onApply({ code: result.code, ...result.terms });
+					onApply({
+						code: result.code,
+						...result.terms,
+						conditions: result.conditions,
+						checkedFor: result.checkedFor,
+					});
 					setCode("");
 				} else {
 					// Including a dead code that arrived on a shared LINK: say so
 					// plainly rather than pricing at full and letting the buyer
 					// wonder where the discount went. The sentence has ONE author
-					// (convex/lib/vouchers.ts), shared with the server's refusal.
+					// (convex/lib/vouchers.ts), shared with the server's refusal —
+					// re-worded here only to spell money the way this page does.
 					setRefusal(
-						voucherRefusalMessage(result.refusal, {
-							usedOnOrder: result.usedOnOrder,
-						}),
+						voucherRefusalMessage(
+							result.refusal,
+							{ usedOnOrder: result.usedOnOrder, ...result.detail },
+							formatPrice,
+						),
 					);
 				}
 			} catch {
@@ -136,7 +218,7 @@ export function VoucherField({
 				setChecking(false);
 			}
 		},
-		[checkCode, onApply, retailerId],
+		[checkCode, onApply, retailerId, buyer],
 	);
 
 	// Apply a link-borne code exactly once.
@@ -148,8 +230,9 @@ export function VoucherField({
 	}, [initialCode, apply]);
 
 	// Typed-but-unapplied guess, so Apply can disable until the code could be
-	// real rather than refusing a half-typed one at the server.
-	const guess = normalizeVoucherCode(code);
+	// real rather than refusing a half-typed one at the server. Either
+	// spelling — a `KP-…` single-use code or a shared word (`z8r3fducfm`).
+	const guess = parseVoucherCode(code);
 	const receipt = variant === "receipt";
 
 	// ── APPLIED ─────────────────────────────────────────────────────────────
@@ -162,37 +245,83 @@ export function VoucherField({
 		const worth = formatVoucherTerms(applied, (sen) =>
 			formatPrice(sen, currency),
 		);
+		const notes = voucherNoteLines({
+			applied,
+			itemSubtotal,
+			currency,
+			buyer,
+			anonymousBuyer,
+			skin: variant,
+		});
 		if (receipt) {
+			// Only the way out: the notes sit under the voucher LINE, where they
+			// are visible without opening it (`VoucherNotes`).
 			return (
-				<div className="flex items-center justify-between gap-3 pb-1 pt-0.5">
-					<button
-						type="button"
-						onClick={onRemove}
-						disabled={disabled}
-						className="flex w-fit items-center gap-1 rounded-lg pr-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-destructive disabled:opacity-50"
-						aria-label={`Remove voucher ${applied.code}`}
-					>
-						<span className="tap-target flex size-8 shrink-0 items-center justify-center">
-							<Trash2 className="size-4" aria-hidden />
+				<div className="flex flex-col">
+					<div className="flex items-center justify-between gap-3 pb-1 pt-0.5">
+						<button
+							type="button"
+							onClick={onRemove}
+							disabled={disabled}
+							className="flex w-fit items-center gap-1 rounded-lg pr-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-destructive disabled:opacity-50"
+							aria-label={`Remove voucher ${applied.code}`}
+						>
+							<span className="tap-target flex size-8 shrink-0 items-center justify-center">
+								<Trash2 className="size-4" aria-hidden />
+							</span>
+							Remove voucher
+						</button>
+						<span className="shrink-0 text-xs text-muted-foreground">
+							{worth}
 						</span>
-						Remove voucher
-					</button>
-					<span className="shrink-0 text-xs text-muted-foreground">
-						{worth}
-					</span>
+					</div>
 				</div>
 			);
 		}
 		return (
-			<div className="flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/5 px-3 py-2.5">
-				<Check className="size-4 shrink-0 text-accent-emphasis" aria-hidden />
+			// Under its minimum the code is held, not applied: no tick and no
+			// accent, or the panel would say "on" beside a total without it.
+			<div
+				className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 ${
+					notes.pending
+						? "border-border bg-muted/40"
+						: "border-accent/40 bg-accent/5"
+				}`}
+			>
+				{notes.pending ? (
+					<Clock
+						className="size-4 shrink-0 text-muted-foreground"
+						aria-hidden
+					/>
+				) : (
+					<Check className="size-4 shrink-0 text-accent-emphasis" aria-hidden />
+				)}
 				<div className="min-w-0 flex-1">
-					<p className="truncate text-sm font-semibold text-accent-emphasis">
-						{worth} applied
+					<p
+						className={`truncate text-sm font-semibold ${
+							notes.pending ? "text-foreground" : "text-accent-emphasis"
+						}`}
+					>
+						{notes.pending ? `${worth} — not yet` : `${worth} applied`}
 					</p>
 					<p className="truncate font-mono text-[11px] text-muted-foreground">
 						{applied.code}
+						{notes.finePrint ? ` · ${notes.finePrint}` : ""}
 					</p>
+					{notes.pending ? (
+						<p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+							{notes.pending}
+						</p>
+					) : null}
+					{notes.perBuyer ? (
+						<p
+							className={`text-xs ${
+								notes.checked ? "text-accent-emphasis" : "text-muted-foreground"
+							}`}
+						>
+							{notes.perBuyer}
+						</p>
+					) : null}
 				</div>
 				<button
 					type="button"
@@ -331,7 +460,7 @@ export function VoucherField({
 					autoCapitalize="characters"
 					autoComplete="off"
 					spellCheck={false}
-					placeholder="KP-XXXX-XXXX"
+					placeholder="Code"
 					value={code}
 					disabled={disabled || checking}
 					isError={refusal !== null}
@@ -378,9 +507,11 @@ export function VoucherField({
 					{refusal}
 				</p>
 			) : code.trim() !== "" && guess === null ? (
+				// Not the `KP-XXXX-XXXX` hint any more: a shared word is a code
+				// too, so the only thing a half-typed one has in common with a
+				// real one is being too short.
 				<p className="text-xs text-muted-foreground">
-					Codes read <span className="font-mono">KP-XXXX-XXXX</span> — keep
-					typing.
+					Keep typing — a code is at least {SHARED_CODE_MIN} letters or numbers.
 				</p>
 			) : itemSubtotal <= 0 ? (
 				// The counter can sit with an empty cart and the field open; the
@@ -404,5 +535,200 @@ export function previewDiscount(
 	applied: AppliedVoucher | null,
 	itemSubtotal: number,
 ): number {
-	return applied ? voucherDiscountFor(applied, itemSubtotal) : 0;
+	return applied && voucherQualifies(applied, itemSubtotal)
+		? voucherDiscountFor(applied, itemSubtotal)
+		: 0;
+}
+
+type VoucherBuyer = {
+	waPhone: string;
+	waDialCountry?: string;
+	digits?: string;
+	label?: string;
+};
+
+/**
+ * The applied code's notes (`z8r3fdz0pw`) — the ONE author for both skins:
+ * what is still needed (`pending`), the fine print (cap, minimum), and what
+ * the per-buyer rule means for THIS buyer. "Checked" only when the code was
+ * judged for the number on the page right now; an edited number reads as
+ * not-yet-checked.
+ */
+export function voucherNoteLines({
+	applied,
+	itemSubtotal,
+	currency,
+	buyer,
+	anonymousBuyer = false,
+	skin,
+}: {
+	applied: AppliedVoucher;
+	itemSubtotal: number;
+	currency: string;
+	buyer?: VoucherBuyer;
+	anonymousBuyer?: boolean;
+	skin: "panel" | "receipt";
+}): {
+	pending: string | null;
+	finePrint: string;
+	perBuyer: string | null;
+	checked: boolean;
+} {
+	const money = (sen: number) => formatPrice(sen, currency);
+	const minSpend = applied.conditions?.minSpend;
+	const shortfall = minSpendShortfall(minSpend, itemSubtotal);
+	const pending =
+		shortfall > 0 && minSpend !== undefined
+			? `Add ${money(shortfall)} more to use ${applied.code} — it needs ${money(minSpend)} of items.`
+			: null;
+	// The minimum is left out of the fine print while `pending` already
+	// states it with the shortfall — said once, where it matters.
+	const finePrint = voucherFinePrint(
+		{
+			maxDiscount: applied.maxDiscount,
+			minSpend: pending === null ? minSpend : undefined,
+		},
+		money,
+	).join(" · ");
+	const limit = applied.conditions?.perBuyerLimit;
+	const checked =
+		applied.checkedFor !== undefined &&
+		buyer?.digits !== undefined &&
+		applied.checkedFor === buyer.digits;
+	const perBuyer =
+		limit === undefined
+			? null
+			: anonymousBuyer
+				? `${limit} per buyer. This sale has no buyer number, so it counts toward the code's total only.`
+				: checked
+					? `✓ ${limit} per buyer · checked for ${buyer?.label ?? "this number"}`
+					: skin === "receipt"
+						? `${limit} per buyer · checked against your WhatsApp number`
+						: `${limit} per buyer.`;
+	return { pending, finePrint, perBuyer, checked };
+}
+
+/**
+ * The applied code's notes on the RECEIPT (`z8r3fdz0pw`), rendered by the
+ * ticket directly under the voucher line — visible without opening it, in
+ * the receipt's own mono caption type, so they read as fine print on that
+ * line. (The applied control itself sits behind the line's disclosure.)
+ */
+export function VoucherNotes(props: {
+	applied: AppliedVoucher | null;
+	itemSubtotal: number;
+	currency: string;
+	buyer?: VoucherBuyer;
+}) {
+	if (!props.applied) return null;
+	const notes = voucherNoteLines({
+		...props,
+		applied: props.applied,
+		skin: "receipt",
+	});
+	if (!notes.pending && !notes.finePrint && !notes.perBuyer) return null;
+	return (
+		<div className="flex flex-col pb-1 pl-5 font-mono text-[11px] leading-5">
+			{notes.pending ? (
+				<p className="text-amber-700 dark:text-amber-400">{notes.pending}</p>
+			) : null}
+			{notes.finePrint ? (
+				<p className="text-muted-foreground">{notes.finePrint}</p>
+			) : null}
+			{notes.perBuyer ? (
+				<p
+					className={
+						notes.checked ? "text-accent-emphasis" : "text-muted-foreground"
+					}
+				>
+					{notes.perBuyer}
+				</p>
+			) : null}
+		</div>
+	);
+}
+
+/**
+ * Flow A's re-check (`z8r3fdz0pw`, Zaki 30 Oct 2026): a per-buyer code
+ * applies before the buyer has given a number — the ticket says it will be
+ * checked against it — and is judged here the moment a parseable number is
+ * in (the host debounces it). A number that has used it takes the code OFF
+ * via `onRefused`, before Place order; the order door enforces the limit
+ * regardless of what this showed.
+ *
+ * A HOOK owned by the page, not logic inside the field, because on the
+ * storefront the field is mounted only while the voucher line is open — a
+ * re-check living there would never run for a buyer who didn't tap it.
+ *
+ * A code taken off for `buyer_limit` is HELD: if the buyer then corrects a
+ * mistyped number, the held code is re-checked for the new one and comes
+ * back without retyping. Anything the buyer applies clears the hold.
+ */
+export function usePerBuyerRecheck({
+	retailerId,
+	applied,
+	buyer,
+	onApply,
+	onRefused,
+}: {
+	retailerId: Id<"retailers">;
+	applied: AppliedVoucher | null;
+	buyer: VoucherBuyer | undefined;
+	onApply: (voucher: AppliedVoucher) => void;
+	onRefused: (message: string, code: string) => void;
+}): void {
+	const checkCode = useMutation(api.vouchers.checkCode);
+	const [held, setHeld] = useState<string | null>(null);
+	const lastRecheck = useRef<string | null>(null);
+	useEffect(() => {
+		if (applied !== null) setHeld(null);
+	}, [applied]);
+	useEffect(() => {
+		if (!buyer) return;
+		const target = applied
+			? applied.conditions?.perBuyerLimit !== undefined &&
+				applied.checkedFor !== buyer.digits
+				? applied.code
+				: null
+			: held;
+		if (target === null) return;
+		const key = `${target}|${buyer.waDialCountry ?? ""}|${buyer.waPhone}`;
+		if (lastRecheck.current === key) return;
+		lastRecheck.current = key;
+		void (async () => {
+			try {
+				const result = await checkCode({
+					retailerId,
+					code: target,
+					waPhone: buyer.waPhone,
+					waDialCountry: buyer.waDialCountry,
+				});
+				// The buyer edited the number while this was in flight: its answer
+				// is about a number that is no longer on the form, so it must not
+				// take the code off (or stamp "checked for" the old number).
+				if (lastRecheck.current !== key) return;
+				if (result.ok) {
+					onApply({
+						code: result.code,
+						...result.terms,
+						conditions: result.conditions,
+						checkedFor: result.checkedFor,
+					});
+					return;
+				}
+				setHeld(result.refusal === "buyer_limit" ? target : null);
+				onRefused(
+					voucherRefusalMessage(
+						result.refusal,
+						{ usedOnOrder: result.usedOnOrder, ...result.detail },
+						formatPrice,
+					),
+					target,
+				);
+			} catch {
+				// The limiter or the network. Leave the ticket as it is — the
+				// order door judges the number for real, and says so if it must.
+			}
+		})();
+	}, [buyer, applied, held, checkCode, retailerId, onApply, onRefused]);
 }

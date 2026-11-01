@@ -12,6 +12,7 @@ covers what exists today.
 | `pull_request` (any base)    | `ci.yml`                                | Gate: lint → typecheck → test                   |
 | `push` to `staging`          | `ci.yml`                                | Same gate on the post-merge result              |
 | `push` to `main`             | `deploy.yml` → calls `ci.yml`           | Gate, then Convex deploy, then Cloudflare deploy |
+| Manual (`workflow_dispatch`) | `deploy.yml`                            | Same prod deploy, **`main` only** — see below   |
 | Manual (`workflow_dispatch`) | `ci.yml`                                | Gate on any branch, from the Actions tab        |
 
 Notes:
@@ -24,6 +25,12 @@ Notes:
   catches that within minutes instead of at the next prod deploy.
 - Superseded runs on the same PR are auto-cancelled (concurrency group);
   branch runs are never cancelled.
+- **A merge to `main` that never deploys** — GitHub occasionally drops the push
+  event during an incident, and then *no run exists*, so there is nothing to
+  re-run (#411, 22 Oct 2026). Use **Actions → Deploy to Production → Run
+  workflow → `main`**. It deploys `main`'s current tip and tags it as usual.
+  Picking any other branch is refused: the `gate` job's
+  `if: github.ref == 'refs/heads/main'` skips it and every job after it.
 
 ## The gate
 
@@ -510,12 +517,11 @@ degrade into it legibly).
   [`biome check`, not `biome lint`](#biome-check-not-biome-lint).
 - **Biome only scans `src/`** (`biome.json` `files.includes`) — `convex/`
   is not linted anywhere, in CI or locally.
-- **`deploy.yml`'s deploy jobs have no concurrency guard** — two rapid
-  merges to `main` still race `convex-deploy`/`deploy`. The *gate* jobs now
-  serialize per-branch, which has a side effect worth recognising: with
-  several merges in quick succession, a superseded queued gate is cancelled,
-  so `needs: gate` skips that run's deploy. That's safer than racing, but it
-  surfaces as a skipped/failed-looking deploy on `main` rather than an
-  explicit "superseded".
+- ~~**`deploy.yml`'s deploy jobs have no concurrency guard**~~ — **closed
+  Oct 2026** with the manual trigger, which made a race likelier: the whole
+  workflow is one `deploy-production` group with `cancel-in-progress: false`,
+  so a running deploy always finishes. GitHub keeps only **one** pending run
+  per group, so with three merges in quick succession the middle one is
+  replaced by the newest — harmless, since the newest carries its commits.
 - The deploy workflow's Convex env-var sync swallows failures
   (`|| echo "Warning..."`).

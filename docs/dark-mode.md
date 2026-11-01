@@ -8,7 +8,9 @@ The palette was not invented for this ticket. `src/styles.css` has carried a com
 
 **Sellers** — Settings → **App → Appearance**: Light, Dark, or Match device, each with a preview swatch. Default is Match device.
 
-**Buyers** — a quiet "Dark mode" / "Light mode" row low on **every** buyer page, in the footer above the powered-by badge and in the same language as "Discover more stores" (a bordered icon disc beside the badge was tried and read as clutter — Zaki, 21 Oct 2026): the storefront family, `/track`, and the open `/claim` checkout. Two states, not three: the page already matched their phone on arrival, so the only thing worth offering is "actually, the other one". Deliberately below the fold — a theme switch must never compete with the buy button.
+**Sellers, desktop sidebar** — icon only too (z8r3fdwc19; it first shipped with a "Dark mode" word beside it). Expanded, it sits at the right end of the profile row, its glyph's right edge on the version pill's below; collapsed, the 68px rail has no room beside the avatar, so it takes its own row above it, on the rail's one icon column. Both forms stay mounted and cross-fade, the hidden one `inert` — the What's-new row's pattern.
+
+**Buyers** — an icon-only sun/moon in the **header** of every buyer page, always the **last icon in the top-right row** (z8r3fdwc19): on the store home it joins the cover's WhatsApp and Share discs and wears their skin (frosted on a photo, outline on the no-cover band), and on desktop — where those two move into the island as labelled buttons — it is the one icon left on the cover; on category, product and checkout it ends the compact app bar after Share; on `/track` it shares the store-eyebrow row; on `/claim` it ends the store header (dead-end screens included). Two states, not three: the page already matched their phone on arrival, so the only thing worth offering is "actually, the other one". It first shipped as a labelled "Dark mode" row in the footer above the powered-by badge; that read as stray chrome sitting on our badge (Zaki, 21 Oct 2026), and a header utility icon is where buyers look for one anyway. An icon in an existing icon row never competes with the buy button.
 
 It has to be on all of them, not just the storefront. A buyer who ordered over WhatsApp may never see a storefront at all: they get a tracking link and nothing else, so `/track` is their only chance to override what their phone picked. And keeping the slot consistent (bottom utility row, next to the privacy link or the powered-by badge) means someone who finds it once finds it everywhere. `theme-routes.test.ts` fails if a buyer route ships without one.
 
@@ -28,6 +30,7 @@ Both write the same key, because they are the same browser on the same device. T
 | React bindings (`useTheme`, `useThemeScope`) | [`src/hooks/useTheme.ts`](../src/hooks/useTheme.ts) |
 | Seller UI | [`src/components/settings/appearance-tab.tsx`](../src/components/settings/appearance-tab.tsx) |
 | Buyer UI | [`src/components/ui/theme-toggle.tsx`](../src/components/ui/theme-toggle.tsx) |
+| The fade's shape | `src/styles.css`, "Theme change" section |
 | Status/notice colours | [`src/lib/tone.ts`](../src/lib/tone.ts) |
 | The gate | [`src/lib/dark-mode-coverage.test.ts`](../src/lib/dark-mode-coverage.test.ts) |
 
@@ -55,6 +58,30 @@ Two decisions worth knowing:
 - **No Content-Security-Policy exists in this repo today.** The day one is added, this inline script needs a hash or a nonce (`script-src 'sha256-…'` over the exact `THEME_INIT_SCRIPT` text, or a per-request nonce threaded through the shell) or every visitor gets the white flash back — silently, since the script fails closed. Named here so it is not rediscovered (PR #241 review).
 - **`useThemeSync` re-applies in a layout effect — from the STORE, never from the rendered value.** During hydration React renders from the server snapshot ("light") and only then re-renders from the store; the effect fires in between. The first cut wrote the rendered value, which stripped `.dark` off a page the script had already darkened and put it back a second later — a white flash on every full load, caught in the 21 Oct hands-on test. The effect now writes `getThemeSnapshot().resolved`, and `useTheme.test.tsx` hydrates a darkened document under a `MutationObserver` to assert it never passes through light. The DOM write is idempotent, so this is free on the happy path.
 
+### The fade
+
+A theme change is a **fade, not a cut**. The first cut flipped the class and the browser repainted everything in the next frame — white to navy between two frames, which reads as a glitch rather than a choice (Zaki, 22 Oct 2026: "feels like a flip"). Now the page **dims down** into dark and **brightens up** into light, the way a room does on a dimmer, and the toggle's incoming glyph turns into place under it.
+
+**How.** `lib/theme.ts` runs the class flip inside `document.startViewTransition()`. The browser snapshots the page as it stands, runs the commit, then crossfades the old snapshot into the live new page: one composited fade over the whole viewport, so photos, borders, shadows and text all travel together. `styles.css` shapes it per direction, which `theme.ts` stamps on `<html>` as `data-theme-transition="to-dark" | "to-light"` from the moment the old snapshot is taken until the fade ends:
+
+| Direction | Duration | Curve | Why |
+| --- | --- | --- | --- |
+| to dark | 520 ms | symmetric ease-in-out | a dimmer turned down |
+| to light | 680 ms | ease-out (`0.2, 0, 0, 1`) | brighter sooner, settles slower — eyes adjusting to a lamp |
+
+Old and new share one curve so their opacities always sum to 1 under the pair's plus-lighter blend; there is no dip in the middle. The glyph (`.kp-theme-glyph`) is CSS-picked, so the incoming one is freshly rendered at the flip and its 560 ms rotate-in starts there. Gating it on the attribute is what stops a page load replaying it — and the stamp goes on **inside** the transition callback, after the old snapshot is taken: stamped before it, the *outgoing* glyph was captured at the keyframe's first frame (opacity 0) and vanished at the start of the fade instead of crossfading out (PR #409 review). The transition's pseudo-elements are built after the callback, so the per-direction durations still see the stamp.
+
+**Rejected:** `transition: background-color, color` on every element. Each element tweens on its own clock, images and gradients do not tween at all (they pop while the page around them fades), it overrides every component's own `transition` mid-gesture, and it costs a style recalculation on every node. The snapshot costs one.
+
+**When it is a cut instead.** Each of these commits synchronously, with no direction stamp: `prefers-reduced-motion: reduce` (a cut is the accessible answer); a browser without the API (Firefox before 144 — exactly what shipped before, nothing lost); a change that resolves to the theme already on screen (choosing "Match device" on a light device, re-tapping the same preference — a blank fade would still block input for its length); a hidden tab, which the browser skips itself. The OS flipping at sunset and another tab's choice **do** fade, through the same `commitPreference`.
+
+**Two ordering traps, both pinned in `theme.dom.test.ts`:**
+
+- **The store updates INSIDE the transition callback, never before it.** `useThemeSync` re-applies the DOM in a layout effect on every store change. Emitted before the snapshot, that effect flips the class before the browser has captured "old", and the fade crossfades dark into dark — invisible. Inside the callback, React's sync re-render lands before the "new" capture and the effect's write is the idempotent no-op it was built to be.
+- **`setThemePreference` hydrates the store before writing storage.** "Fade or cut" compares against the theme on screen; a first read of storage taken after the write mistakes the value just saved for the one being shown and skips the fade. The test caught this on the first run.
+
+A second tap mid-fade is fine: the browser skips the running transition and starts the new one, and a sequence guard stops the first fade's cleanup from stripping the second fade's direction.
+
 ### Inverted surfaces — the softened recipe
 
 In light mode a handful of surfaces invert against the page: `bg-foreground text-background` on the sales hero, the welcome card, a promotion's header, the settings identity card, the primary action buttons, selected chips. Left alone, every one of them flips to a **near-white slab on a dark page**, which reads as a hole punched in the screen. Zaki's call (29 Aug 2026): soften, don't flip. Two recipes, chosen by what the surface IS:
@@ -68,6 +95,10 @@ In light mode a handful of surfaces invert against the page: `bg-foreground text
 `text-background`, not `text-primary-foreground`, on the buttons: the two are not the same colour in light (`#fff` vs `hsl(210 40% 98%)`), and the rule is that adopting the recipe never repaints the theme every current user is in. The one sanctioned exception is `order-bulk-bar.tsx`: a transient floating toolbar is *supposed* to invert, and says so in its file.
 
 Progress-bar fills and dots that use `bg-foreground` as a neutral ink (`customers-card`, `sources-card`) are left alone: a near-white bar on a dark card is a legible neutral, not a slab.
+
+### A dense white fill is a plate, not a scrim
+
+The coverage gate treats translucent `white`/`black` as a scrim that composites over whatever sits behind it, and lets it through without a `dark:` pair. For **white fills that holds only below 40%**. `bg-white/10`–`/30` is a sheen and reads in both themes. From `bg-white/40` up, the white dominates the ground: the admin billing tiles shipped `bg-white/70` icon wells that showed as near-white discs, with a pale icon on them, on a `-950` tile in dark (z8r3fdwf9t). So `bg-white/NN` at **≥40 needs a dark pair** (the stat tiles use `dark:bg-current/15`, a tint of the tile's own ink) or a `dark-ok` marker when the ground really is fixed (a dot over a cover photo). Black scrims stay exempt at any opacity, and borders/rings stay exempt, because a hairline is not a surface. The gate also skips comment lines now, so a comment that names the colour it replaced is never counted.
 
 ### Navy, never black
 
@@ -103,6 +134,13 @@ Turning the storefront dark broke Kedaipal's own marks, which is easy to miss be
 
 **Product photos need no treatment.** They render `object-cover`, filling the box edge to edge, so there is no mat to glow — and the app already shows product photos against near-black in *light* mode via the lightbox overlay. Do not add brightness or dimming filters: they misrepresent the seller's product.
 
+## Third-party brand marks
+
+Partner logos are never recoloured — no light-ink variant of our own making, no `dark:invert` — so a mark drawn in black ink gets a **white plate** in dark mode instead. The landing's logo walls do this in both themes (`logoPillClass`); inline marks that sit bare in light mode get it in dark only.
+
+- **The DelyvaNow wordmark** is black "Delyva" + blue "Now" on transparency, so on a dark card only "Now" survived. Every surface renders it through `DelyvaLogo` (`src/components/ui/delyva-logo.tsx`), which adds `dark:bg-white` padding behind the mark; `delyva-logo.test.tsx` fails if anything else in `src/` references the PNG directly. The same pass fixed the landing dispatch badge, which squeezed the 300×55 wordmark into a 14 px square.
+- **Lalamove's** orange wordmark reads on both grounds and renders bare.
+
 ## Keeping it correct
 
 `src/lib/dark-mode-coverage.test.ts` scans every themed `.tsx` and fails when a raw palette colour has no `dark:` counterpart on the same element. It answers the question every new component raises — no, you do not have to remember.
@@ -118,6 +156,5 @@ KP_WRITE_DARK_BUDGET=1 pnpm vitest run src/lib/dark-mode-coverage.test.ts
 
 ## Known gaps
 
-- The marketing site, sign-in and onboarding stay light (above).
 - `theme-color` meta and `site.webmanifest` stay pinned to `#0F172A`. It is a dark navy that reads correctly against both themes; splitting it per theme is churn for a 2%-lightness seam in the browser chrome.
-- The `/claim` dead-end screens (expired, already claimed, not found) carry no toggle — see the reasoning above. If a buyer ever needs one there, the same three lines drop in.
+- Pages with no store header carry no toggle: the store-not-found page, the buyer loading skeletons, and a `/claim` link whose store can't be resolved. Each is read and left in seconds; the theme still applies from the device or the stored pick.

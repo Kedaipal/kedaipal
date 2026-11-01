@@ -13,6 +13,7 @@ import {
 	ClipboardList,
 	Eye,
 	EyeOff,
+	Globe,
 	Hourglass,
 	Info,
 	Layers3,
@@ -20,6 +21,7 @@ import {
 	MessageSquareText,
 	PackageCheck,
 	Save,
+	Search,
 	ShieldCheck,
 	Store,
 	Tag,
@@ -41,7 +43,9 @@ import type {
 	BuyerQuestion,
 	BuyerQuestionInput,
 } from "../../../convex/lib/buyerQuestions";
+import type { Country } from "../../../convex/lib/country";
 import type { CreditLockErrorData } from "../../../convex/lib/credits";
+import { countryName } from "../../../convex/lib/crossBorder";
 import {
 	MAX_NOTICE_DAYS,
 	MAX_PREP_MINUTES,
@@ -64,6 +68,10 @@ import {
 	MAX_VARIANTS_PER_PRODUCT,
 	overCapMessage,
 } from "../../../convex/lib/variant";
+import {
+	WEIGHT_REQUIRED_COPY,
+	type WeightPricing,
+} from "../../../convex/lib/weightPricing";
 import { usePhotoAutosave } from "../../hooks/usePhotoAutosave";
 import { bookingSpanCounted, bookingSpanNoun } from "../../lib/booking-dates";
 import {
@@ -105,6 +113,7 @@ import {
 	QuestionRow,
 	type QuestionTone,
 } from "../ui/question-row";
+import { Select } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { ToggleSwitch } from "../ui/toggle-switch";
 import {
@@ -158,6 +167,7 @@ import {
 	invalidSalePrices,
 	mockupAnswer,
 	orderRulesAnswer,
+	overseasAnswer,
 	pickupNoteAnswer,
 	promoAnswer,
 	weekendRateAnswer,
@@ -170,6 +180,7 @@ import {
 	type ProductImage,
 	ProductImagesField,
 } from "./product-images-field";
+import { type SettingContext, settingAnchor } from "./product-setting-index";
 import {
 	EMPTY_PROMO_DRAFT,
 	type PromoDraft,
@@ -180,6 +191,7 @@ import {
 	promoDraftValid,
 	promoSubmitValue,
 } from "./promo-fields";
+import { SettingSearch } from "./setting-search";
 import {
 	type CustomLineDraft,
 	CustomLineFields,
@@ -200,6 +212,9 @@ export interface ProductFormSubmitValues {
 	// Storefront visibility. true = hidden from the public store (still sellable
 	// at the counter). See docs/hidden-products.md.
 	hidden: boolean;
+	// Cross-border opt-out (z8r3fdr5yy). Sent only when the store has an
+	// overseas lane — otherwise the question isn't asked and nothing changes.
+	domesticOnly?: boolean;
 	// Product kind (86eyj70z1). Set at create by the wizard; immutable after —
 	// the edit route never sends it to `products.update` (which has no kind arg).
 	kind?: ProductKind;
@@ -294,6 +309,9 @@ export type ProductFormDraft = {
 	name: string;
 	description: string;
 	hidden: boolean;
+	/** Cross-border opt-out (z8r3fdr5yy) — in the draft so flipping it alone
+	 * makes the form dirty. */
+	domesticOnly?: boolean;
 	/** Stored kind (physical default) — round-trips to the wizard's card. */
 	kind: ProductKind;
 	/** Booking capacity, as typed (only meaningful when kind === "booking").
@@ -362,10 +380,14 @@ interface ProductFormProps {
 	/** Live (non-cancelled) RSVPs on this product — locks the date + the toggle
 	 * once > 0, matching the server's refusal. Undefined on create. */
 	eventRsvpCount?: number;
+	/** The store's overseas lane (z8r3fdr5yy), when one is saved: the form then
+	 * asks "Can it go to <country>?" of products with a parcel to send. */
+	overseas?: { destination: Country; storeCountry: Country };
 	initialValues?: {
 		name?: string;
 		description?: string;
 		hidden?: boolean;
+		domesticOnly?: boolean;
 		/** Product kind — routes the form's vocabulary + which cards render.
 		 * Absent = physical (legacy). Immutable in the form (create sets it via
 		 * the wizard; edit displays it in the summary strip only). */
@@ -448,9 +470,11 @@ interface ProductFormProps {
 	currency: string;
 	submitLabel: string;
 	onSubmit: (values: ProductFormSubmitValues) => Promise<void>;
-	/** The store prices delivery by weight/zone (86eyeea1n) — promotes the
-	 * variant parcel-weight inputs out of Advanced (see VariantEditor). */
-	weightMode?: boolean;
+	/** WHY the store prices delivery by weight (`retailers.weightPricing`,
+	 * 23 Oct 2026): promotes the variant parcel-weight inputs out of Advanced
+	 * and makes them required on every buyable choice of a PHYSICAL product
+	 * (see VariantEditor + buildSubmitVariants). Null/unset = optional. */
+	weightPricing?: WeightPricing | null;
 	/** The store's opening hours + closed dates (z8r3fdhpm7) — the "How are
 	 * the days counted?" example is built from them. */
 	storeSchedule?: StoreSchedule;
@@ -666,6 +690,13 @@ export function collectOptionIssues(
 export function buildSubmitVariants(
 	rows: VariantRow[],
 	customLine: CustomLineDraft | null,
+	opts: {
+		/** The store prices delivery by weight (23 Oct 2026): a buyable
+		 * (active, non-custom) row saved with no weight is refused, with the
+		 * reason's own sentence. The caller passes it only for a PHYSICAL
+		 * product — a service or booking has no parcel. */
+		weightRequired?: WeightPricing | null;
+	} = {},
 ): { issues: VariantIssue[] } | { variants: SubmitVariant[] } {
 	const issues: VariantIssue[] = [];
 	const variants: SubmitVariant[] = [];
@@ -696,6 +727,21 @@ export function buildSubmitVariants(
 				message: INT_RE.test(weightStr)
 					? "That's heavier than 1,000 kg — check the number (grams)."
 					: "Whole grams only (e.g. 500 for half a kilo).",
+			});
+		}
+		// Required where pricing depends on it: blank and an explicit 0 are both
+		// "unweighed" (`lacksParcelWeight`), so both refuse on a buyable row.
+		if (
+			row.active &&
+			opts.weightRequired &&
+			weightOk &&
+			(weightStr.length === 0 || Number.parseInt(weightStr, 10) === 0)
+		) {
+			issues.push({
+				where: "row",
+				index,
+				field: "weight",
+				message: WEIGHT_REQUIRED_COPY[opts.weightRequired].issue,
 			});
 		}
 		if (row.active) {
@@ -1008,7 +1054,7 @@ export function ProductForm({
 	currency,
 	submitLabel,
 	onSubmit,
-	weightMode = false,
+	weightPricing = null,
 	storeSchedule,
 	offerSelfCollect = true,
 	liveStock,
@@ -1021,6 +1067,7 @@ export function ProductForm({
 	onImagesAutosave,
 	onUnsavedChange,
 	startsDirty = false,
+	overseas,
 }: ProductFormProps) {
 	// Editing an existing product vs creating a new one — the edit page leads
 	// with the summary strip; create keeps the readiness checklist. The wizard
@@ -1060,6 +1107,9 @@ export function ProductForm({
 	);
 	const [showPreview, setShowPreview] = useState(false);
 	const [hidden, setHidden] = useState(initialValues?.hidden ?? false);
+	const [domesticOnly, setDomesticOnly] = useState(
+		initialValues?.domesticOnly ?? false,
+	);
 	// Kind is IMMUTABLE in the form (86eyj70z1: set at create via the wizard;
 	// archive + recreate is the escape hatch) — read once, routes the booking
 	// rendering below. Capacity is the one booking knob that stays editable.
@@ -1140,6 +1190,11 @@ export function ProductForm({
 			eventDraftFrom(initialValues?.event) ??
 			EMPTY_EVENT_DRAFT,
 	);
+	// Parcel weight is required only of goods that SHIP: a service or booking
+	// has no parcel, and an event RSVP is fulfilled at the venue (never a
+	// delivery cart) — judged by the fulfilment moment, never by kind alone.
+	const weightRequired: WeightPricing | null =
+		kind === "physical" && !eventDraft.on ? weightPricing : null;
 	const [promoDraft, setPromoDraft] = useState<PromoDraft>(
 		() =>
 			initialValues?.promoDraft ??
@@ -1171,6 +1226,11 @@ export function ProductForm({
 	// and photo — the way the event and promotion rows keep their drafts. It
 	// is NOT saved while off: the save sends `editor.customLine`, which is null.
 	const parkedCustomLine = useRef<CustomLineDraft | null>(null);
+	// "Find a setting" (z8r3fdwwy3): every jump is scoped to this form, and
+	// the save bar's search button brings the box back from far down a long
+	// form.
+	const formRef = useRef<HTMLFormElement>(null);
+	const searchInputRef = useRef<HTMLInputElement>(null);
 	// Submit-time validation issues, addressed to the exact editor input (see
 	// VariantIssue). Any edit clears them — they re-validate on the next save.
 	const [editorIssues, setEditorIssues] = useState<VariantIssue[]>([]);
@@ -1236,7 +1296,11 @@ export function ProductForm({
 			// A made-to-order product reconciles to an EMPTY matrix — its custom
 			// line is the whole offer, and `buildSubmitVariants` emits that line
 			// as the product's only variant.
-			const built = buildSubmitVariants(reconciled.rows, editor.customLine);
+			const built = buildSubmitVariants(reconciled.rows, editor.customLine, {
+				// A service or booking has no parcel, and an event RSVP is met at
+				// the venue — only goods that ship are weighed.
+				weightRequired: weightRequired,
+			});
 			// Over the cap, the blank rows the widening just generated are not what
 			// the seller must fix — the axis is. Reporting them alongside would
 			// bury the real blocker under dozens of price errors, the same reason
@@ -1289,6 +1353,7 @@ export function ProductForm({
 					name: parsed.name,
 					description: parsed.description,
 					hidden,
+					...(overseas ? { domesticOnly } : {}),
 					kind,
 					booking: isBooking
 						? {
@@ -1373,6 +1438,7 @@ export function ProductForm({
 			name: formValues.name,
 			description: formValues.description ?? "",
 			hidden,
+			domesticOnly,
 			kind,
 			capacityPerNight: capacityDraft,
 			securityDeposit: depositDraft,
@@ -1636,6 +1702,41 @@ export function ProductForm({
 	const eventPassedNow =
 		!isBooking && eventValue !== null && isEventPassed(eventValue);
 
+	// What "Find a setting" knows about this product — read off the same
+	// drafts the fields edit, so a result's "turn X on first" is true the
+	// moment X is switched (see product-setting-index.ts).
+	const choicesMode = editor.options.length > 0;
+	const settingContext: SettingContext = {
+		kind,
+		hasOptions: choicesMode,
+		madeToOrder,
+		gridReady: cartesian(editor.options).length > 0,
+		tracksStock: editor.rows.some((row) => row.blockWhenOutOfStock),
+		weightRequired: weightRequired !== null,
+		isEvent: eventDraft.on,
+		promoOn: promoDraft.on,
+		promoLocked,
+		groupedPromotion: Boolean(groupedPromotion),
+		eventsLocked,
+		categoriesLocked,
+		customLineOn: editor.customLine !== null,
+		offerSelfCollect,
+		isPackage: packageTrimmed.length > 0,
+		dayPackage: offersDayCounting,
+		countsOpenDays,
+		weekendRateSet: weekendTrimmed.length > 0,
+		choices: choicesMode
+			? editor.rows.map((row) => variantLabel(row.optionValues))
+			: [],
+		choiceNames: choicesMode
+			? editor.options.map((o) => o.name).filter((n) => n.trim().length > 0)
+			: [],
+		buyerQuestions: questionsDraft.map((q) => q.label),
+		categoryNames: (storeCategories ?? [])
+			.filter((c) => categoryIds.includes(c._id))
+			.map((c) => c.name),
+	};
+
 	/** A question row's collapsed line: its answer, unless a save was refused
 	 * for something inside it — then it says so, and `focusFirstInvalidField`
 	 * opens the first such row. */
@@ -1649,7 +1750,14 @@ export function ProductForm({
 	}
 
 	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-5">
+		<form ref={formRef} onSubmit={handleSubmit} className="flex flex-col gap-5">
+			{/* First on the page: a long form of collapsed sections is only
+			    quick to edit if the seller can name what they want. */}
+			<SettingSearch
+				context={settingContext}
+				formRef={formRef}
+				inputRef={searchInputRef}
+			/>
 			{/* Lead-in: the edit page confirms what the product IS in words; the
 			    create path shows what's still needed. */}
 			<form.Subscribe selector={(s) => s.values.name}>
@@ -1686,6 +1794,7 @@ export function ProductForm({
 			</form.Subscribe>
 
 			<ProductStepCard
+				id="product-basics"
 				icon={<PackageCheck className="size-5" />}
 				kicker="The product"
 				title="Product basics"
@@ -1738,6 +1847,7 @@ export function ProductForm({
 			</ProductStepCard>
 
 			<ProductStepCard
+				id="product-photos"
 				icon={<Camera className="size-5" />}
 				kicker="The product"
 				title="Photos"
@@ -1761,6 +1871,7 @@ export function ProductForm({
 				// create; archive + recreate is the escape hatch). What DEFINES the
 				// stay stays open here; its optional extras are questions below.
 				<ProductStepCard
+					id="product-pricing"
 					icon={<Layers3 className="size-5" />}
 					kicker="Selling"
 					title="Pricing & capacity"
@@ -1794,17 +1905,18 @@ export function ProductForm({
 								isError={!packageValid}
 								className="w-32"
 							/>
-							<select
+							<Select
 								aria-label="Package length unit"
 								value={packageUnit}
 								onChange={(e) => setPackageUnit(asPackageUnit(e.target.value))}
-								className="h-11 rounded-xl border border-input bg-background px-2 text-sm"
+								variant="field"
+								className="w-32"
 							>
 								<option value="month">months</option>
 								{/* Same span as days; the word is the seller's trade. */}
 								<option value="night">nights</option>
 								<option value="day">days</option>
-							</select>
+							</Select>
 						</div>
 						{!packageValid ? (
 							<p className="text-xs text-destructive">
@@ -1823,14 +1935,16 @@ export function ProductForm({
 					{/* A DAY package decides what a store closure does to it
 					    (z8r3fdhpm7) — asked right under the length it counts. */}
 					{offersDayCounting && packageLengthNum !== undefined ? (
-						<PackageDayCounting
-							packageLength={packageLengthNum}
-							skipsClosedDays={skipsClosedDays}
-							onChange={setSkipsClosedDays}
-							maxSkips={maxSkipsDraft}
-							onMaxSkipsChange={setMaxSkipsDraft}
-							schedule={storeSchedule}
-						/>
+						<div {...settingAnchor("day-counting")}>
+							<PackageDayCounting
+								packageLength={packageLengthNum}
+								skipsClosedDays={skipsClosedDays}
+								onChange={setSkipsClosedDays}
+								maxSkips={maxSkipsDraft}
+								onMaxSkipsChange={setMaxSkipsDraft}
+								schedule={storeSchedule}
+							/>
+						</div>
 					) : null}
 					<div className="flex flex-col gap-1.5 border-t border-border pt-4">
 						<label htmlFor="booking-price" className="text-sm font-medium">
@@ -1902,6 +2016,7 @@ export function ProductForm({
 				</ProductStepCard>
 			) : (
 				<ProductStepCard
+					id="product-pricing"
 					icon={<Layers3 className="size-5" />}
 					kicker="Selling"
 					title="Pricing & choices"
@@ -1912,16 +2027,18 @@ export function ProductForm({
 						onChange={setEditor}
 						currency={currency}
 						issues={editorIssues}
-						weightMode={weightMode}
+						weightPricing={weightRequired}
 						liveStock={liveStock}
 						productName={liveStock ? form.state.values.name : undefined}
 						stockLocked={saveLock !== undefined}
 						capabilitiesOutside
+						collapseChoices={isEdit}
 					/>
 
 					<Link
 						to="/app/settings"
 						search={{ tab: "store" }}
+						{...settingAnchor("currency")}
 						className="inline-flex items-center gap-1.5 self-start rounded-full bg-muted px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
 					>
 						<Info className="size-3.5" aria-hidden />
@@ -2001,7 +2118,10 @@ export function ProductForm({
 										</p>
 									) : null}
 									{weekendTrimmed.length > 0 ? (
-										<div className="flex flex-col gap-1.5 pt-1">
+										<div
+											className="flex flex-col gap-1.5 pt-1"
+											{...settingAnchor("weekend-nights")}
+										>
 											<span className="text-xs font-medium">
 												Which nights charge this rate?
 											</span>
@@ -2076,6 +2196,7 @@ export function ProductForm({
 				    booking listing: a stay already takes its own dates. */}
 				{isBooking ? null : (
 					<QuestionRow
+						id="product-event"
 						icon={<CalendarClock />}
 						question="Is it a fixed-date event?"
 						badge={eventsLocked ? <ProBadge /> : undefined}
@@ -2105,6 +2226,7 @@ export function ProductForm({
 				    product already IS both, so neither is asked of it. */}
 				{isBooking || madeToOrder ? null : (
 					<QuestionRow
+						id="product-custom-orders"
 						icon={<ChefHat />}
 						question="Do you take custom requests on it?"
 						{...rowAnswer(
@@ -2141,21 +2263,26 @@ export function ProductForm({
 							/>
 						</div>
 						{editor.customLine ? (
-							<CustomLineFields
-								line={editor.customLine}
-								onChange={(next) => setEditor({ ...editor, customLine: next })}
-								currency={currency}
-								priceIssue={
-									editorIssues.find(
-										(i) => i.where === "custom" && i.field === "price",
-									)?.message
-								}
-							/>
+							<div {...settingAnchor("custom-details")}>
+								<CustomLineFields
+									line={editor.customLine}
+									onChange={(next) =>
+										setEditor({ ...editor, customLine: next })
+									}
+									currency={currency}
+									priceIssue={
+										editorIssues.find(
+											(i) => i.where === "custom" && i.field === "price",
+										)?.message
+									}
+								/>
+							</div>
 						) : null}
 					</QuestionRow>
 				)}
 				{isBooking || madeToOrder ? null : (
 					<QuestionRow
+						id="product-mockup"
 						icon={<BadgeCheck />}
 						question="Does the buyer approve a mockup first?"
 						{...rowAnswer(mockupAnswer(editor.rows), false)}
@@ -2165,6 +2292,7 @@ export function ProductForm({
 				)}
 				{isBooking ? (
 					<QuestionRow
+						id="product-instant-book"
 						icon={<Zap />}
 						question="Confirm bookings instantly?"
 						{...rowAnswer(instantBookAnswer(autoAccept), false)}
@@ -2189,6 +2317,7 @@ export function ProductForm({
 				) : null}
 				{isBooking ? (
 					<QuestionRow
+						id="product-deposit"
 						icon={<ShieldCheck />}
 						question="Take a refundable security deposit?"
 						{...rowAnswer(depositAnswer(depositDraft, currency), !depositValid)}
@@ -2232,6 +2361,7 @@ export function ProductForm({
 			<QuestionGroup title="At checkout">
 				{isBooking ? null : (
 					<QuestionRow
+						id="product-buyer-questions"
 						icon={<MessageSquareText />}
 						question="Do buyers answer any questions?"
 						{...rowAnswer(
@@ -2471,6 +2601,7 @@ export function ProductForm({
 				</QuestionRow>
 				{isBooking ? null : (
 					<QuestionRow
+						id="product-pickup-note"
 						icon={<MapPin />}
 						question="Anything to know when collecting?"
 						{...rowAnswer(
@@ -2541,12 +2672,42 @@ export function ProductForm({
 						)}
 					</QuestionRow>
 				)}
+				{/* Overseas (z8r3fdr5yy): asked only when the store delivers abroad
+				    AND this product has a parcel to send — a service, booking or
+				    event never crosses a border, so the question would be noise. */}
+				{overseas && kind === "physical" && !eventDraft.on ? (
+					<QuestionRow
+						id="product-overseas"
+						icon={<Globe />}
+						question={`Can it go to ${countryName(overseas.destination)}?`}
+						{...rowAnswer(
+							overseasAnswer(domesticOnly, countryName(overseas.storeCountry)),
+							false,
+						)}
+					>
+						<div className="flex items-start justify-between gap-3">
+							<p className="text-xs leading-relaxed text-muted-foreground">
+								Your store delivers to {countryName(overseas.destination)}. Turn
+								this off for anything that can't make the trip — frozen, chilled
+								or fresh food, same-day bakes. Buyers in{" "}
+								{countryName(overseas.destination)} then see "Ships within{" "}
+								{countryName(overseas.storeCountry)} only".
+							</p>
+							<ToggleSwitch
+								on={!domesticOnly}
+								onChange={(on) => setDomesticOnly(!on)}
+								label={`Can go to ${countryName(overseas.destination)}`}
+							/>
+						</div>
+					</QuestionRow>
+				) : null}
 			</QuestionGroup>
 
 			{/* Publishing — where the product appears — comes after what the
 			    product IS. */}
 			<QuestionGroup title="Publishing">
 				<QuestionRow
+					id="product-where"
 					icon={<Store />}
 					question="Where does it show?"
 					{...rowAnswer(
@@ -2568,8 +2729,13 @@ export function ProductForm({
 						false,
 					)}
 				>
-					<VisibilityControl hidden={hidden} onChange={setHidden} />
-					<div className="border-t border-border pt-4">
+					<div {...settingAnchor("visibility")}>
+						<VisibilityControl hidden={hidden} onChange={setHidden} />
+					</div>
+					<div
+						className="border-t border-border pt-4"
+						{...settingAnchor("categories")}
+					>
 						<CategoryPicker
 							retailerId={retailerId}
 							selectedIds={categoryIds}
@@ -2615,6 +2781,27 @@ export function ProductForm({
 					const photosHeld = photosFailed > 0 && !isSubmitting;
 					return (
 						<div className="sticky bottom-20 z-10 flex gap-2 lg:static">
+							{/* The search box is at the top of a long form; on a phone
+							    this is the way back to it from anywhere. Desktop has
+							    "/" and a bar that isn't pinned. */}
+							<Button
+								type="button"
+								variant="outline"
+								aria-label="Find a setting"
+								onClick={() => {
+									const input = searchInputRef.current;
+									input?.scrollIntoView?.({ block: "center" });
+									input?.focus({ preventScroll: true });
+									// Whatever they searched last is selected, so typing
+									// starts a new search instead of adding to the old one.
+									input?.select();
+								}}
+								// Opaque in dark too — the outline variant's dark fill is
+								// see-through, and this bar is pinned over the form.
+								className="size-12 shrink-0 rounded-xl bg-background lg:hidden dark:bg-background dark:hover:bg-muted"
+							>
+								<Search className="size-5" />
+							</Button>
 							{stickyAction}
 							<Button
 								type="submit"

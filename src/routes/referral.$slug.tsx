@@ -11,6 +11,7 @@ import { LandingPage } from "../components/landing/landing-page";
 import { useReferralInvite } from "../hooks/useReferralInvite";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
 import { SEO_DESC, SEO_TITLE } from "../lib/landing-seo";
+import { pageHead } from "../lib/not-found";
 import { writeReferralCookie } from "../lib/referral-cookie";
 import { referralMeta } from "../lib/referral-meta";
 import { ssrRead } from "../lib/ssr-read";
@@ -50,34 +51,35 @@ export const Route = createFileRoute("/referral/$slug")({
 		);
 		return { invite: read.ok ? read.value : undefined };
 	},
-	head: ({ loaderData, params }) => {
-		const invite = loaderData?.invite;
-		const { title, description } = invite
-			? referralMeta(invite)
-			: { title: SEO_TITLE, description: SEO_DESC };
-		const url = `${SITE_URL}${referralPath(params.slug)}`;
-		return {
-			meta: [
-				{ title },
-				{ name: "description", content: description },
-				// A share link, not a page: one per seller, all the same pitch.
-				{ name: "robots", content: "noindex, follow" },
-				{ property: "og:type", content: "website" },
-				{ property: "og:url", content: url },
-				{ property: "og:title", content: title },
-				{ property: "og:description", content: description },
-				{ property: "og:image", content: OG_IMAGE },
-				{ property: "og:image:width", content: "1200" },
-				{ property: "og:image:height", content: "630" },
-				{ property: "og:locale", content: "en_MY" },
-				{ name: "twitter:card", content: "summary_large_image" },
-				{ name: "twitter:title", content: title },
-				{ name: "twitter:description", content: description },
-				{ name: "twitter:image", content: OG_IMAGE },
-			],
-			links: [{ rel: "canonical", href: SITE_URL }],
-		};
-	},
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData, params }) => {
+			const invite = loaderData?.invite;
+			const { title, description } = invite
+				? referralMeta(invite)
+				: { title: SEO_TITLE, description: SEO_DESC };
+			const url = `${SITE_URL}${referralPath(params.slug)}`;
+			return {
+				meta: [
+					{ title },
+					{ name: "description", content: description },
+					// A share link, not a page: one per seller, all the same pitch.
+					{ name: "robots", content: "noindex, follow" },
+					{ property: "og:type", content: "website" },
+					{ property: "og:url", content: url },
+					{ property: "og:title", content: title },
+					{ property: "og:description", content: description },
+					{ property: "og:image", content: OG_IMAGE },
+					{ property: "og:image:width", content: "1200" },
+					{ property: "og:image:height", content: "630" },
+					{ property: "og:locale", content: "en_MY" },
+					{ name: "twitter:card", content: "summary_large_image" },
+					{ name: "twitter:title", content: title },
+					{ name: "twitter:description", content: description },
+					{ name: "twitter:image", content: OG_IMAGE },
+				],
+				links: [{ rel: "canonical", href: SITE_URL }],
+			};
+		}),
 	component: ReferralLanding,
 });
 

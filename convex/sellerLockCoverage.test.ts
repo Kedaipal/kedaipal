@@ -74,6 +74,12 @@ const UNLOCKED: Record<string, string> = {
 	"bookings.requestBooking": "buyer: requests a stay",
 	"orderClaims.commit": "buyer: completes a claim link",
 	"lalamove.quoteForCheckout": "buyer: priced at checkout",
+	// Reads dressed as actions (they fetch provider truth and cache it):
+	// nothing a view-only store could spend or change.
+	"easyparcel.refreshBalance": "read: re-snapshots the prepaid wallet balance",
+	"delyva.refreshBalance": "read: re-reads the prepaid wallet balance",
+	"easyparcel.refreshJobStatus":
+		"read: polls one booking's status — the cron does the same unasked",
 	"liveQuote.quoteForCheckout": "buyer: priced at checkout",
 	"google.autocompleteAddress": "buyer + seller: read-only address lookup",
 	"google.getPlaceDetails": "buyer + seller: read-only address lookup",

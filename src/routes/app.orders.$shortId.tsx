@@ -32,6 +32,7 @@ import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { attributionBucket, sourceLabel } from "../../convex/lib/attribution";
 import { DEFAULT_COUNTRY } from "../../convex/lib/country";
+import { overseasFeeLabel } from "../../convex/lib/crossBorder";
 import {
 	formatFulfilmentDate,
 	formatFulfilmentTime,
@@ -77,6 +78,7 @@ import {
 	OrderItemLine,
 	SkippedDayRows,
 } from "../components/order/order-item-line";
+import { OverseasChip } from "../components/order/overseas-chip";
 import { PaymentProofList } from "../components/order/payment-proof-list";
 import { PickupNotes } from "../components/order/pickup-notes";
 import {
@@ -93,6 +95,10 @@ import {
 	ShipmentTrackingCard,
 } from "../components/order/shipment-tracking";
 import { SkipDayCard } from "../components/order/skip-day-card";
+import {
+	pricedWithoutWeight,
+	WeightGapNote,
+} from "../components/order/weight-gap-note";
 import { GatedOrderPage } from "../components/orders/gated-order-page";
 import {
 	DeliveryAddressDisplay,
@@ -392,6 +398,8 @@ function OrderDetailRoute() {
 	// the inbox bulk bar so the two surfaces can't drift — this is discoverability,
 	// the server is the guard.
 	const retailer = useDashboardRetailer();
+	// An overseas address (z8r3fdr5yy) is judged against the store's country.
+	const storeCountry = retailer?.country ?? DEFAULT_COUNTRY;
 	// Settlement rails the seller may hand-pick on "Mark payment received" — the
 	// store's country decides them, so an SG seller is never made to file a
 	// PayNow transfer under "Other" (86eyph341). Undefined while the payload
@@ -448,6 +456,27 @@ function OrderDetailRoute() {
 	).data;
 	const hasActiveDelyvaBooking =
 		!!delyvaInfo?.job && isActiveJobStatus(delyvaInfo.job.status);
+	// And for an EasyParcel booking (z8r3fdcje2) — same dedup, same reason:
+	// riderOwnsTransition on the server covers every provider, so the client
+	// gate has to know about each one too.
+	const easyparcelInfo = useQuery(
+		convexQuery(
+			api.easyparcel.getDispatchState,
+			order?.deliveryMethod === "delivery" && order.shortId
+				? { shortId: order.shortId }
+				: "skip",
+		),
+	).data;
+	const hasActiveEasyparcelBooking =
+		!!easyparcelInfo?.job && isActiveJobStatus(easyparcelInfo.job.status);
+	// The parcel-courier bookings share their copy shape; the rider wording is
+	// Lalamove's own. One variable so the branches below can't disagree about
+	// which courier is on the order.
+	const activeCourierName = hasActiveDelyvaBooking
+		? ("Delyva" as const)
+		: hasActiveEasyparcelBooking
+			? ("EasyParcel" as const)
+			: null;
 	// Rider dispatch IS this vendor's delivery method (they picked Lalamove as
 	// their delivery CHARGE — every checkout was priced as a rider trip). They
 	// never ship parcels, so no manual courier surface is offered anywhere on
@@ -470,13 +499,15 @@ function OrderDetailRoute() {
 	// cancel/delete warnings point the seller AT that card by name.
 	const dispatchCardName = hasActiveDelyvaBooking
 		? "Delyva Courier"
-		: (
-					dispatchInfo?.job
-						? dispatchInfo.job.deliveryDirection === "collection"
-						: dispatchInfo?.deliveryDirection === "collection"
-				)
-			? "Lalamove Collection"
-			: "Lalamove Delivery";
+		: hasActiveEasyparcelBooking
+			? "EasyParcel Courier"
+			: (
+						dispatchInfo?.job
+							? dispatchInfo.job.deliveryDirection === "collection"
+							: dispatchInfo?.deliveryDirection === "collection"
+					)
+				? "Lalamove Collection"
+				: "Lalamove Delivery";
 	// A rider is mid-trip with this order: manual shipped/delivered advances are
 	// gated behind a confirm, so the buyer's order page can't claim "on the way"
 	// before the rider actually has the parcel (or without the tracking link).
@@ -493,15 +524,20 @@ function OrderDetailRoute() {
 	// flow, not shipped/delivered, so this gate would both lie and strand.
 	// Derived from the same signal the tracking card reads, so the stepper gate
 	// and that card can't drift apart.
-	// A live Delyva courier booking gates the same way, with no collection
-	// exclusion to make: Delyva v1 only ever ships TO the buyer.
+	// A live parcel-courier booking (Delyva or EasyParcel) gates the same way,
+	// with no collection exclusion to make: both only ever ship TO the buyer.
 	const riderHandlingTrip =
-		(hasActiveRiderBooking && !collectionService) || hasActiveDelyvaBooking;
+		(hasActiveRiderBooking && !collectionService) ||
+		hasActiveDelyvaBooking ||
+		hasActiveEasyparcelBooking;
 	// Has that booking actually reported yet? Only then can we promise the
-	// status moves on its own — otherwise the seller may have no webhook.
+	// status moves on its own — otherwise the seller may have no webhook (or,
+	// for EasyParcel, the first status poll hasn't landed).
 	const riderWebhookReporting = hasActiveDelyvaBooking
 		? !!delyvaInfo?.job && riderDrivesOrderStatus(delyvaInfo.job)
-		: !!dispatchInfo?.job && riderDrivesOrderStatus(dispatchInfo.job);
+		: hasActiveEasyparcelBooking
+			? !!easyparcelInfo?.job && riderDrivesOrderStatus(easyparcelInfo.job)
+			: !!dispatchInfo?.job && riderDrivesOrderStatus(dispatchInfo.job);
 	// Collection order whose goods are still with the buyer: nothing downstream
 	// ("packed", "cleaning", "ready") can be true yet. Mirrors the server gate
 	// in orders.advanceToStage.
@@ -912,9 +948,9 @@ function OrderDetailRoute() {
 									!blocked &&
 									awaitingCollection &&
 									anchorOrdinal(nextStage.anchor) >= anchorOrdinal("packed");
-								// Delyva ships parcels, Lalamove sends riders — the copy has
+								// Couriers ship parcels, Lalamove sends riders — the copy has
 								// to name what the seller actually booked (86eyjpv6z).
-								const riderMoment = hasActiveDelyvaBooking
+								const riderMoment = activeCourierName
 									? nextStage.anchor === "delivered"
 										? "the courier delivers it"
 										: "the courier collects it"
@@ -1027,21 +1063,23 @@ function OrderDetailRoute() {
 											<p className="text-xs leading-relaxed text-muted-foreground">
 												{riderWebhookReporting ? (
 													<>
-														{hasActiveDelyvaBooking
-															? "A Delyva courier booking is on this order"
+														{activeCourierName
+															? `A${activeCourierName === "EasyParcel" ? "n" : ""} ${activeCourierName} courier booking is on this order`
 															: "A Lalamove rider is on this order"}{" "}
 														— it moves to <b>{stageLabel(nextStage, "en")}</b>{" "}
 														on its own when {riderMoment}.
 													</>
 												) : (
 													<>
-														{hasActiveDelyvaBooking
-															? "A Delyva courier is booked for this order"
+														{activeCourierName
+															? `A${activeCourierName === "EasyParcel" ? "n" : ""} ${activeCourierName} courier is booked for this order`
 															: "A Lalamove rider is booked for this order"}{" "}
 														— it moves to <b>{stageLabel(nextStage, "en")}</b>{" "}
-														on its own once {riderMoment}, as long as your{" "}
-														{hasActiveDelyvaBooking ? "Delyva" : "Lalamove"}{" "}
-														webhook is set up.
+														on its own once {riderMoment}
+														{activeCourierName === "EasyParcel"
+															? " — EasyParcel reports each step, and Kedaipal double-checks every hour"
+															: `, as long as your ${activeCourierName ?? "Lalamove"} webhook is set up`}
+														.
 													</>
 												)}{" "}
 												<button
@@ -1853,7 +1891,8 @@ function OrderDetailRoute() {
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
 						<span>
-							Delivery fee
+							{overseasFeeLabel(order.deliveryAddress?.country, storeCountry) ??
+								"Delivery fee"}
 							{order.deliverySnapshot?.mode === "radius" &&
 							order.deliverySnapshot.distanceKm !== undefined
 								? ` — ${order.deliverySnapshot.distanceKm} km`
@@ -1873,6 +1912,16 @@ function OrderDetailRoute() {
 						<span className="tabular-nums">
 							{formatPrice(order.deliveryFee, order.currency)}
 						</span>
+					</div>
+				) : null}
+				{/* The courier priced without part of the parcel — the one-kilo
+				    floor, or unweighed lines in a heavier cart (23 Oct 2026; PR
+				    #416 review): said HERE, under the fee it explains, so the
+				    seller learns it before booking — not from a blank weight
+				    field. */}
+				{pricedWithoutWeight(order.deliverySnapshot) ? (
+					<div className="px-3">
+						<WeightGapNote snapshot={order.deliverySnapshot} />
 					</div>
 				) : null}
 				{deliveryFeePending ? (
@@ -2055,17 +2104,26 @@ function OrderDetailRoute() {
 			{!isSelfCollect && order.deliveryAddress ? (
 				<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 					<div className="flex items-center justify-between">
-						<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-							{order.deliveryDirection === "collection"
-								? "Collect From"
-								: "Delivery Address"}
-						</p>
+						<div className="flex flex-wrap items-center gap-2">
+							<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+								{order.deliveryDirection === "collection"
+									? "Collect From"
+									: "Delivery Address"}
+							</p>
+							{order.deliveryAddress.country &&
+							order.deliveryAddress.country !== storeCountry ? (
+								<OverseasChip country={order.deliveryAddress.country} />
+							) : null}
+						</div>
 						<div className="flex items-center gap-1">
 							<button
 								type="button"
 								onClick={() => {
 									if (!order.deliveryAddress) return;
-									const text = formatAddressInline(order.deliveryAddress);
+									const text = formatAddressInline(
+										order.deliveryAddress,
+										storeCountry,
+									);
 									navigator.clipboard
 										.writeText(text)
 										.then(() => toast.success("Address copied"))
@@ -2083,7 +2141,7 @@ function OrderDetailRoute() {
 								href={
 									deriveMapsUrl(order.deliveryAddress) ??
 									`https://maps.google.com/?q=${encodeURIComponent(
-										formatAddressInline(order.deliveryAddress),
+										formatAddressInline(order.deliveryAddress, storeCountry),
 									)}`
 								}
 								target="_blank"
@@ -2096,7 +2154,10 @@ function OrderDetailRoute() {
 							</a>
 						</div>
 					</div>
-					<DeliveryAddressDisplay address={order.deliveryAddress} />
+					<DeliveryAddressDisplay
+						address={order.deliveryAddress}
+						storeCountry={storeCountry}
+					/>
 				</section>
 			) : null}
 
@@ -2320,7 +2381,11 @@ function OrderDetailRoute() {
 					// (`z8r3fdr617` — the credit's rule and the voucher's differ, so
 					// they are two sentences, not one).
 					order.voucherSnapshot
-						? `Voucher ${order.voucherSnapshot.code} goes back to active — this buyer can use it again.`
+						? order.voucherSnapshot.usage === "shared"
+							? // A SHARED word (`z8r3fducfm`) was never this buyer's: one use
+								// returns to the pool and whoever types it next takes it.
+								`One use of ${order.voucherSnapshot.code} goes back — the next buyer to type it gets it.`
+							: `Voucher ${order.voucherSnapshot.code} goes back to active — this buyer can use it again.`
 						: null,
 					hasActiveRiderBooking
 						? `⚠️ A Lalamove rider booking is still active on this order — cancel it from the ${dispatchCardName} card too, or you may pay for a wasted trip.`

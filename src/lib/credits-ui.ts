@@ -96,7 +96,7 @@ export function creditRefreshLabel(
 /**
  * The one sentence under the meter that says why the balance behaves the way
  * it does right now — the lock, a store that's never locked, a trial, an
- * unpaid / paused / ended plan (bought credits never stand in for a plan:
+ * unpaid / paused / ended plan (extra credits never stand in for a plan:
  * they're kept, and work again once it's active), or a custom allowance.
  * The exemption comes before the subscription status: an exempt store sits in
  * whatever status it had and must never be told to pay. (An UNMETERED store —
@@ -138,10 +138,10 @@ export function creditStateLine(args: {
 		return "This store is never locked — the balance is here so you can see your volume.";
 	if (args.regime === "trial")
 		return `Your free trial includes ${TRIAL_CREDIT_GRANT} orders, counted from your first order. Pick a plan when they're used or your first invoice comes due.`;
-	const bought = args.purchased;
+	const extra = args.purchased;
 	const kept =
-		bought > 0
-			? ` Your ${bought} bought ${bought === 1 ? "credit is" : "credits are"} kept, and ${bought === 1 ? "works" : "work"} again once your plan is active.`
+		extra > 0
+			? ` Your ${extra} extra ${extra === 1 ? "credit is" : "credits are"} kept, and ${extra === 1 ? "works" : "work"} again once your plan is active.`
 			: "";
 	if (args.status === "past_due")
 		return `Pay your invoice and this month's credits land straight away.${kept}`;
@@ -158,7 +158,7 @@ export function creditStateLine(args: {
 
 /** The rules in plain words, under the meter — the order of use first, since
  * that's what makes the two balances make sense. */
-export const CREDIT_RULES_LINE = `1 credit = 1 order. Monthly credits are used first and reset on the 1st — they don't carry over. Bought credits are used next and last ${PURCHASED_CREDIT_LIFETIME_MONTHS} months. Cancel a new order before you accept it and its credit comes back (up to ${SELLER_CANCEL_REFUNDS_PER_PERIOD} a month).`;
+export const CREDIT_RULES_LINE = `1 credit = 1 order. Monthly credits are used first and reset on the 1st — they don't carry over. Extra credits — top-ups and bonuses — are used next and last ${PURCHASED_CREDIT_LIFETIME_MONTHS} months. Cancel a new order before you accept it and its credit comes back (up to ${SELLER_CANCEL_REFUNDS_PER_PERIOD} a month).`;
 
 /** "42 orders left" / "1 order left" / "0 orders left" / "15 orders owed". */
 export function ordersBalanceLabel(total: number): string {
@@ -309,7 +309,7 @@ export function creditActivityLabel(row: ActivityRow): string {
 		case "expire":
 			if (row.reason === "trial")
 				return "Unused trial orders — your plan's credits took over";
-			if (row.reason === "expiry") return "Bought credits expired (12 months)";
+			if (row.reason === "expiry") return "Extra credits expired (12 months)";
 			return `Unused ${monthName(row.periodKey)} plan credits — they don't carry over`;
 	}
 }

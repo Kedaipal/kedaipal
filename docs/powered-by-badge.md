@@ -23,7 +23,7 @@ is spelled: `poweredByHref(surface, slug)` →
 
 | Surface | `?src=` tag | Where it renders |
 | --- | --- | --- |
-| `storefront` | `powered-by` | store home, category, product, checkout — and their not-found states |
+| `storefront` | `powered-by` | store home, category, product, checkout — and the product / category not-found states |
 | `track` | `powered-by-track` | `/track/<token>` — order page, skeleton, not-found |
 | `claim` | `powered-by-claim` | `/claim/<token>` — every state |
 | `receipt` | `powered-by-receipt` | the order receipt / invoice PDF (a link annotation) |
@@ -59,8 +59,12 @@ in a breakpoint div silently breaks that — it has regressed once already).
 Mounted on:
 
 - **Storefront:** `$slug.tsx`, `$slug_.c.$categorySlug.tsx`,
-  `$slug_.p.$productSlug.tsx`, `$slug_.checkout.tsx` (both states), plus all
-  four not-found components (an unknown slug renders it store-less).
+  `$slug_.p.$productSlug.tsx`, `$slug_.checkout.tsx` (both states), plus the
+  product and category not-found components. **An unknown slug no longer
+  carries it:** `/$slug` and `/$slug/checkout` render the shared not-found page
+  ([`not-found.md`](./not-found.md)), which leads with the Kedaipal wordmark
+  and a **Go to Kedaipal** button instead — a slug that names nobody is no
+  seller's page, so a click there was never a seller-acquired visit.
 - **Order page:** `track.$token.tsx` — the resolved page, the skeleton (so the
   badge never pops in under the content) and `OrderNotFound`. **The page's
   eyebrow is now the store's name, not "Kedaipal":** it's the seller's order

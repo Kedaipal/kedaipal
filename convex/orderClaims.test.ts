@@ -495,6 +495,35 @@ describe("orderClaims — getByToken", () => {
 	});
 });
 
+/** Files a product under a named category, straight into the tables. */
+async function fileUnder(
+	t: { run: ReturnType<typeof setup>["run"] },
+	productId: Id<"products">,
+	name: string,
+) {
+	await t.run(async (ctx) => {
+		const product = await ctx.db.get(productId);
+		if (!product) throw new Error("product missing");
+		const now = Date.now();
+		const categoryId = await ctx.db.insert("categories", {
+			retailerId: product.retailerId,
+			name,
+			slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+			active: true,
+			sortOrder: 0,
+			createdAt: now,
+			updatedAt: now,
+		});
+		await ctx.db.insert("productCategories", {
+			productId,
+			categoryId,
+			retailerId: product.retailerId,
+			sortOrder: 0,
+			createdAt: now,
+		});
+	});
+}
+
 describe("orderClaims — commit", () => {
 	async function sendOne(
 		t: ReturnType<typeof setup>,
@@ -561,6 +590,25 @@ describe("orderClaims — commit", () => {
 				.unique(),
 		);
 		expect(customer?.orderCount).toBe(1);
+	});
+
+	test("a claim order freezes the product's categories at COMMIT (86eyrtz74)", async () => {
+		// Filed AFTER the link went out and still stamped: the commit reads the
+		// live junctions, the same moment every other frozen field describes.
+		const t = setup();
+		const { variantId, claimId, token } = await sendOne(t);
+		const variant = await t.run((ctx) => ctx.db.get(variantId));
+		await fileUnder(t, variant!.productId, "Combo");
+
+		await t.mutation(api.orderClaims.commit, {
+			token,
+			deliveryMethod: "delivery",
+			deliveryAddress: MY_ADDRESS,
+		});
+
+		const orderId = (await getClaim(t, claimId)).orderId as Id<"orders">;
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0].categoryNames).toEqual(["Combo"]);
 	});
 
 	test("a claim order freezes stockReserved — the THIRD create path (86eypn8ye)", async () => {

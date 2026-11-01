@@ -25,9 +25,9 @@ import {
 	requireAdmin,
 } from "./lib/auth";
 import {
-	COUNTRY_CURRENCY,
 	type Country,
 	DEFAULT_COUNTRY,
+	storeCurrencyOf,
 } from "./lib/country";
 import {
 	BUSINESS_REPORT_ORDER_SCAN_CAP,
@@ -48,13 +48,18 @@ import {
 import {
 	type BillingCurrency,
 	isUnlimited,
-	renewalCurrency,
+	storeBillingCurrency,
 } from "./lib/plans";
 import { loadCreditAccount } from "./credits";
 import { referralForReferee } from "./referrals";
 import { storeIsInternal } from "./marketplace";
 import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
 import { contractForAdmin } from "./lib/enterprise";
+import {
+	type AcquisitionChannel,
+	type AcquisitionSetBy,
+	suggestChannel,
+} from "./lib/metrics";
 import { isUnclaimed } from "./lib/unclaimedStore";
 import {
 	cleanAvailabilityNote,
@@ -161,6 +166,20 @@ export type AdminSellerRow = {
 	/** Whether an admin can still set, change or remove the referral: the
 	 * store hasn't paid its first plan invoice (the reward's moment). */
 	referralEditable: boolean;
+	/** Any invoice has ever been paid — a paying store, churned ones
+	 * included. Drives the "Untagged payers" filter. */
+	hasPaidInvoice: boolean;
+	/** Which motion won this store (86eye3eyp): the channel, who set it
+	 * (an admin tag is authoritative; a seller's onboarding answer waits for
+	 * confirmation) and the channel the captured signals point at, for the
+	 * tag dialog to pre-select. `channel` absent = untagged. */
+	acquisition: {
+		channel?: string;
+		setBy?: AcquisitionSetBy;
+		note?: string;
+		at?: number;
+		suggested: AcquisitionChannel | null;
+	};
 	createdAt: number;
 	/** Pre-built store, not yet handed over (docs/prebuilt-stores.md). An admin
 	 * built it before the vendor had an account, so it has no owner: every
@@ -250,9 +269,9 @@ export type AdminSellerRow = {
 		billingCycle: Doc<"subscriptions">["billingCycle"];
 		kind: "plan" | "hold";
 	};
-	/** The currency this store's next bill is in — its last paid invoice's,
-	 * else its country's (`renewalCurrency`). A new Enterprise contract is
-	 * frozen in exactly this, so the form labels the fee with it (T6). */
+	/** The currency this store is billed in — its country's
+	 * (`storeBillingCurrency`). A new Enterprise contract is frozen in exactly
+	 * this, so the form labels the fee with it (T6). */
 	billingCurrency: BillingCurrency;
 	/** The most recently settled bill — "when did they last pay, how much". */
 	lastPaidInvoice?: {
@@ -292,9 +311,9 @@ async function loadInvoiceFacts(
 	fallback: { plan: Doc<"subscriptions">["plan"]; billingCycle: Doc<"subscriptions">["billingCycle"] },
 ): Promise<
 	Pick<AdminSellerRow, "pendingInvoice" | "lastPaidInvoice"> & {
-		/** The last paid bill's currency, stamp or no stamp — what
-		 * `renewalCurrency` (and so `setContract`) reads. */
-		lastPaidCurrency: string | undefined;
+		/** Any bill has been paid, stamp or no stamp — what
+		 * `referralEditable` reads. */
+		hasPaidInvoice: boolean;
 	}
 > {
 	const pending = await ctx.db
@@ -334,7 +353,7 @@ async function loadInvoiceFacts(
 					},
 				}
 			: {}),
-		lastPaidCurrency: paid?.currency,
+		hasPaidInvoice: paid !== null,
 	};
 }
 
@@ -397,7 +416,7 @@ export const listSellersForAdmin = query({
 			const referrer = r.signupReferrerId
 				? await ctx.db.get(r.signupReferrerId)
 				: null;
-			const { lastPaidCurrency, ...invoiceFacts } = await loadInvoiceFacts(
+			const { hasPaidInvoice, ...invoiceFacts } = await loadInvoiceFacts(
 				ctx,
 				r._id,
 				{ plan: sub?.plan ?? "pro", billingCycle: sub?.billingCycle ?? "monthly" },
@@ -508,7 +527,26 @@ export const listSellersForAdmin = query({
 				// bill only ever follows one) — the same answer
 				// `referrals.hasPaidPlanInvoice` gives the mutations that
 				// enforce it.
-				referralEditable: lastPaidCurrency === undefined,
+				referralEditable: !hasPaidInvoice,
+				hasPaidInvoice,
+				acquisition: {
+					...(r.acquisitionSource !== undefined
+						? {
+								channel: r.acquisitionSource,
+								setBy: r.acquisitionSetBy ?? "admin",
+								...(r.acquisitionNote !== undefined
+									? { note: r.acquisitionNote }
+									: {}),
+								...(r.acquisitionSetAt !== undefined
+									? { at: r.acquisitionSetAt }
+									: {}),
+							}
+						: {}),
+					suggested: suggestChannel({
+						signupSource: r.signupSource,
+						hasReferral: referral !== null,
+					}),
+				},
 				createdAt: r._creationTime,
 				unclaimed: isUnclaimed(r),
 				pendingOwnerEmail: r.pendingOwnerEmail,
@@ -539,7 +577,7 @@ export const listSellersForAdmin = query({
 				waPhone: r.waPhone,
 				notifyWaPhone: r.notifyWaPhone,
 				country,
-				currency: r.currency ?? COUNTRY_CURRENCY[country],
+				currency: storeCurrencyOf(r),
 				billingCycle: sub?.billingCycle,
 				trialEndsAt: sub?.trialEndsAt,
 				freePeriodEndedAt: sub?.freePeriodEndedAt,
@@ -557,10 +595,7 @@ export const listSellersForAdmin = query({
 						}
 					: undefined,
 				...invoiceFacts,
-				billingCurrency: renewalCurrency({
-					lastPaidCurrency,
-					country: r.country,
-				}),
+				billingCurrency: storeBillingCurrency(r.country),
 				lastActAsAt,
 				...(creditAccount
 					? {

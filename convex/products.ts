@@ -85,7 +85,8 @@ import {
 	POPULAR_TOP_CANDIDATES,
 	rankPopularProducts,
 } from "./lib/popularProducts";
-import { lacksParcelWeight } from "./lib/delivery";
+import { collectUnweighedChoices } from "./lib/parcelWeights";
+import { PARCEL_WEIGHTS_BATCH_MAX } from "./lib/weightPricing";
 import { rateLimiter } from "./lib/rateLimiter";
 import { SLUG_MAX, SLUG_MIN, slugify } from "./lib/slug";
 import {
@@ -107,6 +108,7 @@ import {
 	normalizeOptions,
 	sameOptionValues,
 	variantLabel,
+	PARCEL_WEIGHT_MAX_G,
 } from "./lib/variant";
 
 /** Per-product fulfilment-notice override (made-to-order items). Integer days
@@ -1006,15 +1008,18 @@ export const hasEventListings = query({
 export const MISSING_WEIGHT_NAMED_MAX = 5;
 
 /**
- * The weight & zone readiness check (86eye9xd4, 4A): live, active, physical
+ * The weight readiness check (86eye9xd4, 4A): live, active, physical
  * products with at least one live non-custom choice that has no parcel
- * weight. Checkout refuses (or holds for WhatsApp) any cart holding one, so
- * the delivery-pricing page names them up front instead of leaving the seller
- * to find out from a stranded order.
+ * weight. Weight-zone checkout refuses (or holds for WhatsApp) any cart
+ * holding one, and a live courier quotes it at the one-kilo floor
+ * (`liveQuoteWeightKg`), so the delivery-pricing page and the Products list
+ * name them up front instead of leaving the seller to find out from a
+ * stranded order or an under-collected courier bill.
  *
- * Bounded by the product cap (z8r3fdjmf4q): one indexed variant read per
- * active product. Custom choices never count — their weight is unknowable by
- * design, and the "When the weight can't be calculated" rule covers them.
+ * The walk itself is `collectUnweighedChoices` (convex/lib/parcelWeights.ts),
+ * shared with the bulk fill and the arming gates so the three can't disagree
+ * about a row. Bounded by the product cap: one indexed variant read per
+ * active product.
  */
 export const missingParcelWeights = query({
 	args: { retailerId: v.id("retailers") },
@@ -1023,30 +1028,102 @@ export const missingParcelWeights = query({
 		{ retailerId },
 	): Promise<{
 		count: number;
+		/** Buyable choices across those products — the number the fill page
+		 * will list, so a notice can say "3 products · 7 choices". */
+		choiceCount: number;
 		named: Array<{ productId: Id<"products">; name: string }>;
 	}> => {
 		await requireRetailerOwnership(ctx, retailerId, "read");
-		const products = await ctx.db
-			.query("products")
-			.withIndex("by_retailer_active", (q) =>
-				q.eq("retailerId", retailerId).eq("active", true),
-			)
-			.collect();
-		const missing: Array<{ productId: Id<"products">; name: string }> = [];
-		for (const product of products) {
-			if (effectiveKind(product.kind) !== "physical") continue;
-			const variants = await ctx.db
-				.query("productVariants")
-				.withIndex("by_product", (q) => q.eq("productId", product._id))
-				.collect();
-			if (variants.some((v) => v.active && lacksParcelWeight(v))) {
-				missing.push({ productId: product._id, name: product.name });
-			}
-		}
+		const missing = await collectUnweighedChoices(ctx, retailerId);
 		return {
 			count: missing.length,
-			named: missing.slice(0, MISSING_WEIGHT_NAMED_MAX),
+			choiceCount: missing.reduce((n, p) => n + p.choices.length, 0),
+			named: missing
+				.slice(0, MISSING_WEIGHT_NAMED_MAX)
+				.map((p) => ({ productId: p.productId, name: p.name })),
 		};
+	},
+});
+
+/**
+ * The bulk weight fill's list (Products → Parcel weights): every live
+ * physical product with an unweighed buyable choice, those choices named, in
+ * catalogue order. The same walk as `missingParcelWeights`, un-truncated.
+ */
+export const unweighedChoices = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<
+		Array<{
+			productId: Id<"products">;
+			name: string;
+			choices: Array<{ variantId: Id<"productVariants">; label: string }>;
+		}>
+	> => {
+		await requireRetailerOwnership(ctx, retailerId, "read");
+		return collectUnweighedChoices(ctx, retailerId);
+	},
+});
+
+/**
+ * Set parcel weights on many choices at once — the bulk fill's one save.
+ *
+ * Bounded (`PARCEL_WEIGHTS_BATCH_MAX` rows a call; the page sends batches),
+ * every row checked against the calling store (a variant id from another
+ * store refuses the whole batch — nothing is written), and the payload is a
+ * list of ids and grams, never an object keyed by a choice's name. Writes
+ * `parcelWeightG` and nothing else, the same field `updateVariant` edits,
+ * through the same validation.
+ */
+export const setParcelWeights = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		weights: v.array(
+			v.object({
+				variantId: v.id("productVariants"),
+				parcelWeightG: v.number(),
+			}),
+		),
+	},
+	handler: async (ctx, { retailerId, weights }): Promise<{ updated: number }> => {
+		const userId = await requireUserId(ctx);
+		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
+		await requireRetailerOwnership(ctx, retailerId, "write");
+		await assertSubscriptionActive(ctx, retailerId);
+		if (weights.length === 0) return { updated: 0 };
+		if (weights.length > PARCEL_WEIGHTS_BATCH_MAX)
+			throw new ConvexError(
+				`Save at most ${PARCEL_WEIGHTS_BATCH_MAX} weights at a time.`,
+			);
+		for (const { parcelWeightG } of weights) {
+			if (
+				!Number.isInteger(parcelWeightG) ||
+				parcelWeightG <= 0 ||
+				parcelWeightG > PARCEL_WEIGHT_MAX_G
+			)
+				throw new ConvexError(
+					"Each parcel weight must be a whole number of grams, above 0 and at most 1,000 kg.",
+				);
+		}
+		// Resolve every row before writing any: a foreign or vanished id refuses
+		// the batch whole rather than half-applying it.
+		const rows = await Promise.all(
+			weights.map(async (w) => {
+				const variant = await ctx.db.get(w.variantId);
+				if (!variant || variant.retailerId !== retailerId)
+					throw new ConvexError(
+						"One of these choices isn't in your store any more — reload and try again.",
+					);
+				return { variant, parcelWeightG: w.parcelWeightG };
+			}),
+		);
+		const now = Date.now();
+		for (const { variant, parcelWeightG } of rows) {
+			await ctx.db.patch(variant._id, { parcelWeightG, updatedAt: now });
+		}
+		return { updated: rows.length };
 	},
 });
 
@@ -1197,6 +1274,9 @@ export const create = mutation({
 		prepMinutes: v.optional(v.number()),
 		pickupNote: v.optional(v.string()),
 		hidden: v.optional(v.boolean()),
+		// Cross-border opt-out (z8r3fdr5yy): true = ships within the store's
+		// country only. `false` clears it back to "inherits the store's lane".
+		domesticOnly: v.optional(v.boolean()),
 		// Minimum order quantity (summed across variants). 0/1 normalize to unset.
 		minQuantity: v.optional(v.number()),
 		// Buyer questions (`z8r3fdkjek`) — asked at checkout, answers frozen on
@@ -1414,6 +1494,8 @@ export const create = mutation({
 			prepMinutes: sanitizePrepMinutes(args.prepMinutes),
 			pickupNote: sanitizePickupNote(args.pickupNote),
 			hidden: args.hidden,
+			// One spelling of the default: only "stays home" is stored.
+			domesticOnly: args.domesticOnly === true ? true : undefined,
 			minQuantity: sanitizeMinQuantity(args.minQuantity),
 			// "physical" stays UNSET (the legacy default) so pre-kind and post-kind
 			// rows read identically — one spelling for the default, minQuantity's
@@ -1642,6 +1724,9 @@ export const update = mutation({
 		prepMinutes: v.optional(v.number()),
 		pickupNote: v.optional(v.string()),
 		hidden: v.optional(v.boolean()),
+		// Cross-border opt-out (z8r3fdr5yy): true = ships within the store's
+		// country only. `false` clears it back to "inherits the store's lane".
+		domesticOnly: v.optional(v.boolean()),
 		// Minimum order quantity. 0 (or 1) clears the rule; undefined = no change.
 		minQuantity: v.optional(v.number()),
 		// Buyer questions (`z8r3fdkjek`) — asked at checkout, answers frozen on
@@ -1753,6 +1838,8 @@ export const update = mutation({
 		if (fields.pickupNote !== undefined)
 			updates.pickupNote = sanitizePickupNote(fields.pickupNote);
 		if (fields.hidden !== undefined) updates.hidden = fields.hidden;
+		if (fields.domesticOnly !== undefined)
+			updates.domesticOnly = fields.domesticOnly ? true : undefined;
 		if (fields.minQuantity !== undefined)
 			// 0/1 sanitize to undefined, which patch treats as "remove the field" —
 			// so sending 0 clears the rule (one spelling for "no minimum").
@@ -2057,9 +2144,13 @@ export const updateVariant = mutation({
 			throw new ConvexError("Price must be non-negative");
 		if (
 			fields.parcelWeightG !== undefined &&
-			(!Number.isInteger(fields.parcelWeightG) || fields.parcelWeightG < 0)
+			(!Number.isInteger(fields.parcelWeightG) ||
+				fields.parcelWeightG < 0 ||
+				fields.parcelWeightG > PARCEL_WEIGHT_MAX_G)
 		)
-			throw new ConvexError("Parcel weight must be a non-negative integer");
+			throw new ConvexError(
+				"Parcel weight must be a whole number of grams, at most 1,000 kg",
+			);
 		if (
 			fields.imageStorageIds !== undefined &&
 			fields.imageStorageIds.length > MAX_IMAGES_PER_VARIANT

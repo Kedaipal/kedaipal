@@ -1,8 +1,8 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Check, Globe, Menu, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { Locale } from "../../../convex/lib/locale";
+import { useAuthState } from "../../hooks/useAuthState";
 import { trackSignupCta } from "../../lib/ga-events";
 import { BLOG_URL } from "../../lib/site-links";
 import { cn } from "../../lib/utils";
@@ -10,9 +10,10 @@ import { m } from "../../paraglide/messages";
 import { getLocale, locales, setLocale } from "../../paraglide/runtime";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { Skeleton } from "../ui/skeleton";
 import { ThemeToggle } from "../ui/theme-toggle";
 import { Wordmark } from "../ui/wordmark";
-import { DemoPill } from "./landing-ui";
+import { AuthCtaPlaceholder, DemoPill } from "./landing-ui";
 
 // Short trigger label + full dropdown label per locale — keeps the button
 // compact in the nav bar while the menu itself is unambiguous.
@@ -72,8 +73,17 @@ function LanguageSwitcher() {
 }
 
 function NavAuthCta() {
-	const { isSignedIn } = useAuth();
-	if (isSignedIn) {
+	const auth = useAuthState();
+	if (auth === "loading") {
+		// Log-in + demo pill footprint, so the bar doesn't reflow either way.
+		return (
+			<AuthCtaPlaceholder className="hidden items-center gap-2 md:flex">
+				<Skeleton className="h-11 w-20 rounded-full" />
+				<Skeleton className="h-11 w-36 rounded-full" />
+			</AuthCtaPlaceholder>
+		);
+	}
+	if (auth === "signed-in") {
 		return (
 			<Button
 				asChild
@@ -109,8 +119,17 @@ function NavAuthCta() {
 }
 
 function MobileMenuAuthCta({ onClose }: { onClose: () => void }) {
-	const { isSignedIn } = useAuth();
-	if (isSignedIn) {
+	const auth = useAuthState();
+	if (auth === "loading") {
+		return (
+			<AuthCtaPlaceholder className="flex flex-col gap-2">
+				<Skeleton className="h-12 w-full rounded-full" />
+				<Skeleton className="h-12 w-full rounded-full" />
+				<Skeleton className="h-12 w-full rounded-full" />
+			</AuthCtaPlaceholder>
+		);
+	}
+	if (auth === "signed-in") {
 		return (
 			<Button asChild size="lg" className="h-12 w-full rounded-full">
 				<Link to="/app" onClick={onClose}>

@@ -4,9 +4,12 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
-import { COUNTRY_LABELS, type Country } from "../../convex/lib/country";
+import {
+	COUNTRY_LABELS,
+	type Country,
+	DEFAULT_COUNTRY,
+} from "../../convex/lib/country";
 import type { PublicShowcase } from "../../convex/showcases";
-import { RegionToggle } from "../components/landing/landing-ui";
 import { FoundingShelf } from "../components/marketplace/founding-shelf";
 import {
 	ShowcaseBand,
@@ -26,8 +29,9 @@ import { Button } from "../components/ui/button";
 import { Skeleton } from "../components/ui/skeleton";
 import { ThemeToggle } from "../components/ui/theme-toggle";
 import { Wordmark } from "../components/ui/wordmark";
-import { useLandingRegion } from "../hooks/useLandingRegion";
+import { useMarketplaceRegion } from "../hooks/useMarketplaceRegion";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { readVisitorMarket } from "../lib/geo-region";
 import { jsonLdScript } from "../lib/json-ld";
 import {
 	filterStores,
@@ -36,6 +40,7 @@ import {
 	partitionStores,
 	SEARCH_QUERY_MAX,
 } from "../lib/marketplace";
+import { pageHead } from "../lib/not-found";
 import {
 	joinShowcaseMembers,
 	matchShowcases,
@@ -52,6 +57,13 @@ import { ssrRead } from "../lib/ssr-read";
  * SSRs (the loader feeds head()'s meta + ItemList JSON-LD and the first
  * paint); the component re-reads the same query through the TanStack adapter
  * for the live view, the `$slug.tsx` posture exactly.
+ *
+ * One market per buyer (z8r3fdwduz): the edge's geo answer picks MY or SG and
+ * the page has no switch — Shopee-style, a buyer never browses the other
+ * side. The scope is applied by `listStores` itself, so the other market's
+ * stores are never in the payload. The one way across is an explicit link:
+ * `?showcase=` for a showcase in the other market shows that market for the
+ * visit, the way a `/<slug>` store link always opens.
  *
  * Search + filter live in the URL (`?q=`, `?filter=`), so Back from a
  * storefront lands on the view the buyer left. The loader takes no deps from
@@ -86,14 +98,19 @@ export const Route = createFileRoute("/stores")({
 		const client = getConvexHttpClient();
 		// Soft-degrade like every buyer loader (86eyheqzv): a transient upstream
 		// failure renders the shell and the client query paints the directory.
-		const read = await ssrRead(() => client.query(api.marketplace.listStores));
-		if (!read.ok) return null;
 		const showcases = deps.showcase
 			? await ssrRead(() => client.query(api.showcases.listShowcases))
 			: null;
 		const focused = showcases?.ok
 			? showcases.value.find((s) => s.slug === deps.showcase)
 			: undefined;
+		// The same market the page will show: a live showcase link's own, else
+		// the buyer's geo answer (`resolveShowcaseFocus` + `useMarketplaceRegion`).
+		const country = focused?.country ?? readVisitorMarket() ?? DEFAULT_COUNTRY;
+		const read = await ssrRead(() =>
+			client.query(api.marketplace.listStores, { country }),
+		);
+		if (!read.ok) return null;
 		return {
 			stores: read.value
 				.slice(0, JSON_LD_STORE_CAP)
@@ -109,54 +126,55 @@ export const Route = createFileRoute("/stores")({
 				: {}),
 		};
 	},
-	head: ({ loaderData }) => {
-		const canonicalUrl = `${SITE_URL}/stores`;
-		const focused = loaderData?.focusedShowcase;
-		// A shared showcase link unfurls as the EVENT ("Malaysia Campfest 2026
-		// on Kedaipal"), cover and all; the canonical stays the bare directory.
-		const title = focused ? `${focused.title} on Kedaipal` : PAGE_TITLE;
-		const description = focused?.tagline ?? PAGE_DESCRIPTION;
-		const meta = [
-			{ title },
-			{ name: "description", content: description },
-			{ name: "robots", content: "index, follow" },
-			{ property: "og:type", content: "website" },
-			{ property: "og:site_name", content: "Kedaipal" },
-			{ property: "og:title", content: title },
-			{ property: "og:description", content: description },
-			{ property: "og:url", content: canonicalUrl },
-			...(focused?.coverImageUrl
-				? [{ property: "og:image", content: focused.coverImageUrl }]
-				: []),
-			{
-				name: "twitter:card",
-				content: focused?.coverImageUrl ? "summary_large_image" : "summary",
-			},
-			{ name: "twitter:title", content: title },
-			{ name: "twitter:description", content: description },
-		];
-		const scripts =
-			loaderData && loaderData.stores.length > 0
-				? [
-						jsonLdScript({
-							"@context": "https://schema.org",
-							"@type": "ItemList",
-							name: PAGE_TITLE,
-							itemListElement: loaderData.stores.map((store, i) => ({
-								"@type": "ListItem",
-								position: i + 1,
-								name: store.storeName,
-								url: `${SITE_URL}/${store.slug}`,
-							})),
-						}),
-					]
-				: [];
-		return {
-			meta,
-			links: [{ rel: "canonical", href: canonicalUrl }],
-			scripts,
-		};
-	},
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData }) => {
+			const canonicalUrl = `${SITE_URL}/stores`;
+			const focused = loaderData?.focusedShowcase;
+			// A shared showcase link unfurls as the EVENT ("Malaysia Campfest 2026
+			// on Kedaipal"), cover and all; the canonical stays the bare directory.
+			const title = focused ? `${focused.title} on Kedaipal` : PAGE_TITLE;
+			const description = focused?.tagline ?? PAGE_DESCRIPTION;
+			const meta = [
+				{ title },
+				{ name: "description", content: description },
+				{ name: "robots", content: "index, follow" },
+				{ property: "og:type", content: "website" },
+				{ property: "og:site_name", content: "Kedaipal" },
+				{ property: "og:title", content: title },
+				{ property: "og:description", content: description },
+				{ property: "og:url", content: canonicalUrl },
+				...(focused?.coverImageUrl
+					? [{ property: "og:image", content: focused.coverImageUrl }]
+					: []),
+				{
+					name: "twitter:card",
+					content: focused?.coverImageUrl ? "summary_large_image" : "summary",
+				},
+				{ name: "twitter:title", content: title },
+				{ name: "twitter:description", content: description },
+			];
+			const scripts =
+				loaderData && loaderData.stores.length > 0
+					? [
+							jsonLdScript({
+								"@context": "https://schema.org",
+								"@type": "ItemList",
+								name: PAGE_TITLE,
+								itemListElement: loaderData.stores.map((store, i) => ({
+									"@type": "ListItem",
+									position: i + 1,
+									name: store.storeName,
+									url: `${SITE_URL}/${store.slug}`,
+								})),
+							}),
+						]
+					: [];
+			return {
+				meta,
+				links: [{ rel: "canonical", href: canonicalUrl }],
+				scripts,
+			};
+		}),
 	component: MarketplacePage,
 });
 
@@ -173,14 +191,23 @@ const RAIL_CLASS =
 	"flex snap-x gap-3 overflow-x-auto scrollbar-none scroll-px-5 px-5 pb-1 lg:scroll-px-8 lg:px-8";
 
 function MarketplacePage() {
-	const cards = useQuery(convexQuery(api.marketplace.listStores, {})).data;
 	const showcases = useQuery(convexQuery(api.showcases.listShowcases, {})).data;
-	const [storedRegion, setStoredRegion] = useLandingRegion();
+	const market = useMarketplaceRegion();
 	const { q, filter, showcase: focusedSlug } = Route.useSearch();
 	// A `?showcase=` link shows its showcase's region for this visit (see
 	// `resolveShowcaseFocus`); everything below reads `region`.
-	const focus = resolveShowcaseFocus(showcases, focusedSlug, storedRegion);
+	const focus = resolveShowcaseFocus(showcases, focusedSlug, market);
 	const region = focus.viewRegion;
+	// The directory is fetched for ONE market. On a showcase link that market
+	// isn't known until the showcases load — fetching the buyer's own first
+	// would paint the wrong market's stores for a beat, so it waits (skeleton).
+	const marketKnown = focusedSlug === undefined || showcases !== undefined;
+	const cards = useQuery(
+		convexQuery(
+			api.marketplace.listStores,
+			marketKnown ? { country: region } : "skip",
+		),
+	).data;
 	// The compact header takes over once the hero's chips scroll out above.
 	const [heroEndRef, scrolledPast] = useScrolledPast<HTMLDivElement>();
 	const navigate = Route.useNavigate();
@@ -284,13 +311,6 @@ function MarketplacePage() {
 			replace: true,
 		});
 	}
-	// Picking the other region from a showcase link leaves the showcase: the
-	// showcase holds this visit's region, so otherwise the switch would do
-	// nothing visible.
-	function setRegion(next: Country) {
-		if (focusedSlug !== undefined && next !== region) leaveShowcase();
-		setStoredRegion(next);
-	}
 	// An empty REGION carries its own "be the first" CTA; the band below it
 	// would repeat the identical button, so it steps aside (one ask, once).
 	const regionEmpty = !refined && matched.length === 0;
@@ -308,7 +328,6 @@ function MarketplacePage() {
 								<Wordmark aspect="h-7 w-auto" priority />
 							</Link>
 							<div className="flex items-center gap-2.5">
-								<RegionToggle region={region} onChange={setRegion} />
 								<ThemeToggle variant="ghost" />
 								{/* One seller CTA up here — "learn" and "sign up" land on the
 							    same funnel, so two adjacent buttons would be noise; the
@@ -417,8 +436,6 @@ function MarketplacePage() {
 				chip={chip}
 				chips={CHIPS}
 				onChip={setChip}
-				region={region}
-				onRegion={setRegion}
 				maxLength={SEARCH_QUERY_MAX}
 				placeholder={searchPlaceholder.compact}
 			/>

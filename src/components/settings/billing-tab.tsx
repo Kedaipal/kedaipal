@@ -255,6 +255,7 @@ export function BillingTab({
 				now,
 				founding: foundingPricing,
 				adminOwnAccount,
+				country: retailer.country,
 			})
 		: ({ kind: "hidden" } as const);
 	// Founding Members stay on Founding Pro — named as such wherever the plan is.
@@ -547,7 +548,7 @@ export function BillingTab({
 					highlight={ring(SPOTLIGHT_ANCHOR.plan_change.anchor)}
 					sub={sub}
 					slug={retailer.slug}
-					currency={gateway.renewalCurrency}
+					currency={gateway.currency}
 					foundingPricing={gateway.foundingPricing}
 					ownerOnly={ownerOnly}
 					openInvoiceNumber={pending?.invoiceNumber}
@@ -822,21 +823,30 @@ export function BillingTab({
 								or on day 15. Pick a plan now only if you'd rather start today.
 							</p>
 						) : null}
-						<PlanPickerCard
-							sub={sub}
-							slug={retailer.slug}
-							currency={gateway.currency}
-							// A store whose comp ended is choosing its FIRST plan, not
-							// renewing one it never had.
-							renewing={sub.status !== "trialing" && !compEnded}
-							foundingPricing={gateway.foundingPricing}
-							foundingPricingLapsed={gateway.foundingPricingLapsed}
-							foundingBenefitsRevoked={gateway.foundingBenefitsRevoked}
-							ownerOnly={ownerOnly}
-							onRedirectingChange={setRedirecting}
-							balance={creditBalance}
-							referral={referral}
-						/>
+						{/* The deep-link target ("Start your plan" from the referral
+						    welcome card / trial notice) is the picker itself — the
+						    ring hugs the card, not the "No rush" line above it. */}
+						<div
+							id={SPOTLIGHT_ANCHOR.choose_plan.anchor}
+							data-fix-highlight={ring(SPOTLIGHT_ANCHOR.choose_plan.anchor)}
+							className={`rounded-2xl scroll-mt-24 ${highlightRingClass(ring(SPOTLIGHT_ANCHOR.choose_plan.anchor))}`}
+						>
+							<PlanPickerCard
+								sub={sub}
+								slug={retailer.slug}
+								currency={gateway.currency}
+								// A store whose comp ended is choosing its FIRST plan, not
+								// renewing one it never had.
+								renewing={sub.status !== "trialing" && !compEnded}
+								foundingPricing={gateway.foundingPricing}
+								foundingPricingLapsed={gateway.foundingPricingLapsed}
+								foundingBenefitsRevoked={gateway.foundingBenefitsRevoked}
+								ownerOnly={ownerOnly}
+								onRedirectingChange={setRedirecting}
+								balance={creditBalance}
+								referral={referral}
+							/>
+						</div>
 					</div>
 				) : (
 					<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5 lg:p-6">

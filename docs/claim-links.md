@@ -537,7 +537,7 @@ outcome.
   from the counter session — a scan, or a manual bind that takes any country —
   so it can be foreign, and a courier only takes a contact number from the
   store's own country. When the store books couriers and the buyer picks
-  delivery, the delivery section says the rider will contact the store instead
+  delivery, the delivery section says the courier will contact the store instead
   of them, that the store can still reach them on WhatsApp, and that their
   order page shows every update — never a promise of a stream of WhatsApp
   updates (one message per order); collection wording and BM included. The number is already known here, so the test is the
@@ -580,6 +580,28 @@ a lie about their own purchase.
 Ranking on the page: the pause outranks `expired` (it's the truer, more
 actionable reason) but never `completed`. It reads as the shop resting, not as
 the seller withdrawing this particular order — that's what `cancelled` says.
+
+## Sending needs a credit in hand; finishing never does (z8r3fdwbbb)
+
+`sendClaim` and `resendClaim` refuse while the store can't pay for the sale's
+credit (`assertCounterSaleFunded` — the counter's rule, since a claim is a
+counter sale finished on the buyer's phone). "Send link" and "Retry" are
+disabled with the reason on the Counter page. The credit is still spent at
+`commit`, and `commit` is **never** refused over the seller's balance: a link
+already out when the balance hits zero completes for the buyer, and that order
+waits on credits like any other below-zero order. See
+[`credits.md`](./credits.md#the-counter-needs-a-credit-in-hand-z8r3fdwbbb).
+
+That is the **one remaining way a counter-originated sale can wait**, so both
+seller surfaces say so instead of reading as a finished sale:
+
+- **The claims panel row:** `listClaims` carries `orderCreditsToUnlock` (set
+  only on a gated order, from the same `forSeller` redaction the row already
+  ran) — "Buyer finished · Waiting on 1 credit · ORD-X", with a lock in place of the
+  success tick.
+- **The session's done screen:** reading the order's `creditGated`, it shows
+  "Waiting on N credits" and the way back, and leaves out the receipt and the
+  one-tap close — the server refuses both for a gated order.
 
 ## WhatsApp send
 

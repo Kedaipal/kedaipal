@@ -1,4 +1,5 @@
 import type { Country } from "../../convex/lib/country";
+import type { CourierProviderId } from "../../convex/lib/courierProviders";
 
 /**
  * The couriers a Kedaipal seller can book from an order, as one config array
@@ -43,7 +44,7 @@ import type { Country } from "../../convex/lib/country";
 export type CourierGroup = "parcel" | "cold" | "sameday";
 
 /** The integration that quotes and books the row — see PROVIDER above. */
-export type CourierProvider = "delyva" | "lalamove";
+export type CourierProvider = CourierProviderId;
 
 export interface Courier {
 	/** Stable handle — React key and test anchor. */

@@ -6,7 +6,6 @@ import { Lock, Plus, Ticket } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
-import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
 import {
 	VOUCHER_NOTE_MAX,
 	type VoucherStatus,
@@ -27,6 +26,7 @@ import {
 import { Field, FieldDescription, FieldLabel } from "../components/ui/field";
 import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
+import { ExtendSharedDialog } from "../components/vouchers/extend-shared-dialog";
 import { IssueVoucherDialog } from "../components/vouchers/issue-voucher-dialog";
 import { VoucherBatchCard } from "../components/vouchers/voucher-batch-card";
 import {
@@ -38,6 +38,10 @@ import {
 	type ShareableVoucher,
 	VoucherShareSheet,
 } from "../components/vouchers/voucher-share-sheet";
+import {
+	type UsesDialogVoucher,
+	VoucherUsesDialog,
+} from "../components/vouchers/voucher-uses-dialog";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { usePermission } from "../hooks/usePermission";
 import { useAreaLock } from "../hooks/useStoreLock";
@@ -72,6 +76,10 @@ type BatchGroup = Extract<VoucherGroup<VoucherRowView>, { kind: "batch" }>;
 
 const FILTERS: Array<{ key: VoucherStatus | "all"; label: string }> = [
 	{ key: "active", label: "Active" },
+	// Next to Active, by meaning: a code waiting for its start is the next
+	// one to go live (`z8r3fdz0pw`). Shown only while it holds something —
+	// see `visibleFilters`.
+	{ key: "scheduled", label: "Scheduled" },
 	{ key: "redeemed", label: "Used" },
 	{ key: "expired", label: "Expired" },
 	{ key: "voided", label: "Voided" },
@@ -91,7 +99,11 @@ function VouchersRoute() {
 	const [filter, setFilter] = useState<VoucherStatus | "all">("active");
 	const [issuing, setIssuing] = useState(false);
 	const [sharing, setSharing] = useState<ShareableVoucher | null>(null);
+	const [showingUses, setShowingUses] = useState<UsesDialogVoucher | null>(
+		null,
+	);
 	const [voiding, setVoiding] = useState<VoucherRowView | null>(null);
+	const [extending, setExtending] = useState<VoucherRowView | null>(null);
 	const [voidingBatch, setVoidingBatch] = useState<BatchGroup | null>(null);
 	const [renaming, setRenaming] = useState<BatchGroup | null>(null);
 	const [renameText, setRenameText] = useState("");
@@ -124,7 +136,7 @@ function VouchersRoute() {
 	// Captured after the guard above: the batch handlers are hoisted function
 	// declarations, so TS can't carry the narrowing into them.
 	const retailerId = retailer._id;
-	const currency = retailer.currency ?? DEFAULT_CURRENCY;
+	const currency = retailer.currency;
 	const loading = result === undefined;
 	const vouchers = result?.vouchers ?? [];
 	const counts = result?.counts;
@@ -156,7 +168,9 @@ function VouchersRoute() {
 	const subtitle = loading
 		? "Loading…"
 		: counts
-			? `${counts.active} active · ${counts.redeemed} used`
+			? `${counts.active} active${
+					counts.scheduled > 0 ? ` · ${counts.scheduled} scheduled` : ""
+				} · ${result?.used ?? counts.redeemed} used`
 			: undefined;
 
 	async function confirmVoid() {
@@ -227,7 +241,7 @@ function VouchersRoute() {
 						Vouchers
 					</h2>
 					<p className="text-[13px] text-muted-foreground">
-						{subtitle ?? "Single-use discount codes"}
+						{subtitle ?? "Discount codes — one buyer, or everyone"}
 					</p>
 				</div>
 				{issueButton}
@@ -250,7 +264,7 @@ function VouchersRoute() {
 			{/* Filter chips carry their counts, so a chip can show its number
 			    while its tab is empty. */}
 			<FilterChipRow>
-				{FILTERS.map((f) => (
+				{visibleFilters(counts, filter).map((f) => (
 					<FilterChip
 						key={f.key}
 						selected={filter === f.key}
@@ -258,10 +272,7 @@ function VouchersRoute() {
 						count={
 							counts
 								? f.key === "all"
-									? counts.active +
-										counts.redeemed +
-										counts.expired +
-										counts.voided
+									? totalOf(counts)
 									: counts[f.key]
 								: undefined
 						}
@@ -302,6 +313,8 @@ function VouchersRoute() {
 								paused={redemptionPaused}
 								onShare={(v) => setSharing(v)}
 								onVoid={(v) => setVoiding(v)}
+								onShowUses={(v) => setShowingUses(v)}
+								onExtend={(v) => setExtending(v)}
 							/>
 						),
 					)}
@@ -318,7 +331,11 @@ function VouchersRoute() {
 					// sending are one errand. A BATCH doesn't: there is no one code to
 					// share, and the list is where a run is worked through.
 					if (created.length === 1) {
-						setFilter("active");
+						// A code set up to start later lands under Scheduled —
+						// the filter that will actually show it.
+						setFilter(
+							created[0].status === "scheduled" ? "scheduled" : "active",
+						);
 						const row = created[0];
 						setSharing({ ...row, currency } as ShareableVoucher);
 					} else {
@@ -332,6 +349,16 @@ function VouchersRoute() {
 				storeName={retailer.storeName}
 				slug={retailer.slug}
 				onClose={() => setSharing(null)}
+			/>
+
+			<ExtendSharedDialog
+				voucher={extending}
+				onClose={() => setExtending(null)}
+			/>
+
+			<VoucherUsesDialog
+				voucher={showingUses}
+				onClose={() => setShowingUses(null)}
 			/>
 
 			{/* Rename — the one bulk UPDATE a run needs (a voucher's value is
@@ -410,7 +437,15 @@ function VouchersRoute() {
 				open={voiding !== null}
 				onOpenChange={(o) => !o && setVoiding(null)}
 				title={`Void ${voiding?.code ?? ""}?`}
-				description="The code stops working straight away. It stays in your list with its history, and anyone you've already sent it to will be told it's no longer valid."
+				description={
+					voiding?.usage === "shared"
+						? `The code stops working straight away for everyone — orders that already used it keep their discount. It stays in your list with its history${
+								(voiding.redeemedCount ?? 0) > 0
+									? ` (${voiding.redeemedCount} ${voiding.redeemedCount === 1 ? "order" : "orders"} so far)`
+									: ""
+							}, and anyone who types it from now on is told it's no longer valid.`
+						: "The code stops working straight away. It stays in your list with its history, and anyone you've already sent it to will be told it's no longer valid."
+				}
 				confirmLabel="Void it"
 				destructive
 				onConfirm={confirmVoid}
@@ -421,7 +456,30 @@ function VouchersRoute() {
 
 function hasAny(counts: Record<VoucherStatus, number> | undefined): boolean {
 	if (!counts) return false;
-	return counts.active + counts.redeemed + counts.expired + counts.voided > 0;
+	return totalOf(counts) > 0;
+}
+
+/** Every voucher in the book, whatever its state. */
+function totalOf(counts: Record<VoucherStatus, number>): number {
+	return Object.values(counts).reduce((sum, n) => sum + n, 0);
+}
+
+/**
+ * The chips worth showing. Scheduled appears only while a code is waiting to
+ * start (or while it is the chip in use): a store that never schedules one
+ * would otherwise carry a permanently empty chip, and the moment one exists
+ * the chip is there with its count (`z8r3fdz0pw`).
+ */
+export function visibleFilters(
+	counts: Record<VoucherStatus, number> | undefined,
+	filter: VoucherStatus | "all",
+): typeof FILTERS {
+	return FILTERS.filter(
+		(f) =>
+			f.key !== "scheduled" ||
+			filter === "scheduled" ||
+			(counts?.scheduled ?? 0) > 0,
+	);
 }
 
 /**
@@ -458,8 +516,9 @@ function EmptyState({
 				<div className="max-w-sm">
 					<p className="font-medium">No vouchers yet</p>
 					<p className="mt-1 text-sm text-muted-foreground">
-						A voucher is a single-use code you give one buyer — say, to make up
-						for a late order, or as a giveaway at a stall. They enter it at
+						A voucher is a discount code. Give one buyer a unique code — say, to
+						make up for a late order — or post one shared code, like SALE345,
+						that everyone can use until it runs out or ends. Buyers enter it at
 						checkout, or show you its QR at the counter.
 					</p>
 				</div>

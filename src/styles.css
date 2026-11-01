@@ -428,9 +428,50 @@
 	.animate-kp-marquee-slow,
 	.animate-kp-marquee-slow-reverse,
 	.animate-kp-highlight-sweep,
-	.animate-kp-spotlight {
+	.animate-kp-spotlight,
+	html[data-theme-transition] .kp-theme-glyph {
 		animation: none;
 	}
+}
+
+/* =============================================
+   Theme change — the lights dim, they don't cut
+   =============================================
+   `lib/theme.ts` runs the class flip inside a view transition and stamps the
+   direction on <html> for its duration (docs/dark-mode.md, "The fade"). The
+   browser's own crossfade is 250ms — a softened cut, not a feeling. Going
+   dark is a dimmer turned down: a symmetric ease over half a second. Coming
+   back is brighter sooner and settles slower, the way eyes adjust to a lamp
+   coming on. Old and new share one curve so their opacities always sum to 1
+   under the pair's plus-lighter blend — no dip in the middle.
+   Reduced motion never arrives here: theme.ts commits without a transition. */
+html[data-theme-transition="to-dark"]::view-transition-old(root),
+html[data-theme-transition="to-dark"]::view-transition-new(root) {
+	animation-duration: 520ms;
+	animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+}
+html[data-theme-transition="to-light"]::view-transition-old(root),
+html[data-theme-transition="to-light"]::view-transition-new(root) {
+	animation-duration: 680ms;
+	animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* The toggle's incoming glyph (sun or moon) turns into place under the fade.
+   The glyphs are CSS-picked (`dark:hidden` / `hidden dark:block`), so the
+   incoming one is freshly rendered at the flip and its animation starts
+   there; gated on the attribute so a page load never replays it. */
+@keyframes kp-theme-glyph-in {
+	from {
+		opacity: 0;
+		transform: rotate(-90deg) scale(0.5);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+html[data-theme-transition] .kp-theme-glyph {
+	animation: kp-theme-glyph-in 560ms cubic-bezier(0.2, 0, 0, 1) both;
 }
 
 /* Highlighter swipe behind accent words — mint */
@@ -465,6 +506,118 @@
 /* Dashed "ticket" border */
 @utility kp-ticket-border {
 	border: 2px dashed hsl(222 47% 11% / 0.2);
+}
+
+/* The Kedaipal-credits stub in the profile menu (z8r3fdx34j, option 2A): a
+   torn receipt with NO fill — the paper is the menu's own surface, and only
+   the outline (a solid zigzag tear top and bottom, solid sides) says "stub".
+   The tear is an SVG tile because a zigzag can't be a border; a data URI
+   can't read a CSS variable, so its stroke is spelled per theme here, matched
+   to `--stub-edge` (the side borders and the dashed rules inside). The ink
+   carries the state (amber / red) — the outline never changes colour, so the
+   stub stays one object through every tone. Plain rules, not `@utility`:
+   pseudo-elements and a dark half. */
+.kp-credit-stub {
+	--stub-edge: hsl(214 20% 78%);
+	position: relative;
+	padding-block: 8px;
+}
+.kp-credit-stub::before,
+.kp-credit-stub::after {
+	content: "";
+	position: absolute;
+	inset-inline: 0;
+	height: 8px;
+	/* `round`: whole teeth at any width — repeat-x cut the last one off. */
+	background-size: 14px 8px;
+	background-repeat: round no-repeat;
+	pointer-events: none;
+}
+.kp-credit-stub::before {
+	top: 0;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8'%3E%3Cpolyline points='0,7.25 7,0.75 14,7.25' fill='none' stroke='%23c3cbd6' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.kp-credit-stub::after {
+	bottom: 0;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8'%3E%3Cpolyline points='0,0.75 7,7.25 14,0.75' fill='none' stroke='%23c3cbd6' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.dark .kp-credit-stub {
+	--stub-edge: hsl(217 25% 30%);
+}
+.dark .kp-credit-stub::before {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8'%3E%3Cpolyline points='0,7.25 7,0.75 14,7.25' fill='none' stroke='%2339475f' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.dark .kp-credit-stub::after {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8'%3E%3Cpolyline points='0,0.75 7,7.25 14,0.75' fill='none' stroke='%2339475f' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* The always-on credits TICKET (z8r3fdx34j, Zaki 31 Oct): the menu stub's torn
+   edge at chrome size — under the plan pill in the rail (`.kp-credit-ticket`,
+   torn top and bottom) and beside it in the phone header
+   (`.kp-credit-ticket-side`, torn left and right, because there it reads as a
+   ticket lying on its side next to the pill). `round` scales the tile so the
+   edge always ends on a whole tooth, whatever the width. */
+.kp-credit-ticket {
+	--stub-edge: hsl(214 20% 78%);
+	position: relative;
+	padding-block: 6px;
+}
+.kp-credit-ticket::before,
+.kp-credit-ticket::after {
+	content: "";
+	position: absolute;
+	inset-inline: 0;
+	height: 6px;
+	background-size: 10px 6px;
+	background-repeat: round no-repeat;
+	pointer-events: none;
+}
+.kp-credit-ticket::before {
+	top: 0;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpolyline points='0,5.25 5,0.75 10,5.25' fill='none' stroke='%23c3cbd6' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.kp-credit-ticket::after {
+	bottom: 0;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpolyline points='0,0.75 5,5.25 10,0.75' fill='none' stroke='%23c3cbd6' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.kp-credit-ticket-side {
+	--stub-edge: hsl(214 20% 78%);
+	position: relative;
+	padding-inline: 5px;
+}
+.kp-credit-ticket-side::before,
+.kp-credit-ticket-side::after {
+	content: "";
+	position: absolute;
+	inset-block: 0;
+	width: 5px;
+	background-size: 5px 6px;
+	background-repeat: no-repeat round;
+	pointer-events: none;
+}
+.kp-credit-ticket-side::before {
+	left: 0;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='6' viewBox='0 0 5 6'%3E%3Cpolyline points='4.25,0 0.75,3 4.25,6' fill='none' stroke='%23c3cbd6' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.kp-credit-ticket-side::after {
+	right: 0;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='6' viewBox='0 0 5 6'%3E%3Cpolyline points='0.75,0 4.25,3 0.75,6' fill='none' stroke='%23c3cbd6' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.dark .kp-credit-ticket,
+.dark .kp-credit-ticket-side {
+	--stub-edge: hsl(217 25% 30%);
+}
+.dark .kp-credit-ticket::before {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpolyline points='0,5.25 5,0.75 10,5.25' fill='none' stroke='%2339475f' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.dark .kp-credit-ticket::after {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpolyline points='0,0.75 5,5.25 10,0.75' fill='none' stroke='%2339475f' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.dark .kp-credit-ticket-side::before {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='6' viewBox='0 0 5 6'%3E%3Cpolyline points='4.25,0 0.75,3 4.25,6' fill='none' stroke='%2339475f' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.dark .kp-credit-ticket-side::after {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5' height='6' viewBox='0 0 5 6'%3E%3Cpolyline points='0.75,0 4.25,3 0.75,6' fill='none' stroke='%2339475f' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 /* =============================================

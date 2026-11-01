@@ -39,10 +39,12 @@ import {
  *    from Billing, or switch plan first".
  *  - free period's backstop within 5 days → amber warning, dismissable (red +
  *    persistent only if the period ended and no invoice is on file).
- *  - out of credits (Credits T3) → red, persistent, ranked right under
- *    past-due: accepting/updating orders and editing products are paused
- *    while orders keep arriving; one button to the way back (top up / pick a
- *    plan / pay the invoice), or "ask the owner" for a teammate.
+ *  - orders waiting on credits (Credits T3.1) → red, persistent, ranked right
+ *    under past-due: the waiting orders can't be opened (oldest first as
+ *    credits land) and the counter is closed, while online orders, products
+ *    and settings carry on; one button to the way back (top up / pick a plan
+ *    / pay the invoice), or "ask the owner" for a teammate. Stands down on
+ *    the Counter, which carries its own (`yieldCredits`, z8r3fdwbbb).
  *  - credits running low (the last 20% of the month's credits — the meter's
  *    amber and the low email's line) → amber, dismissable (keyed by the month,
  *    so a new month's warning shows even in the same session), with
@@ -56,9 +58,16 @@ import {
 export function SubscriptionBanner({
 	subscription,
 	slug,
+	yieldCredits = false,
 }: {
 	subscription?: SubscriptionView;
 	slug: string;
+	/** The page shows its OWN credit banner, so the two credit states stand
+	 * down here. The Counter does (z8r3fdwbbb): there the consequence of a
+	 * low or empty balance is the till itself, said in the till's words with
+	 * its own way back — stacking this one on top said the same thing twice,
+	 * in two units, and on a phone filled the first screen. */
+	yieldCredits?: boolean;
 }) {
 	// Who is reading this banner decides what it can ask them to do.
 	const isMember = useStoreRole() === "member";
@@ -116,6 +125,11 @@ export function SubscriptionBanner({
 	const supportWa = useSupportWaNumber();
 
 	if (state.kind === "none") return null;
+	if (
+		yieldCredits &&
+		(state.kind === "creditsLow" || state.kind === "creditsWaiting")
+	)
+		return null;
 
 	// Off-Season Hold: not a warning — the seller chose this — but ordering is
 	// off, which is exactly the kind of state that gets forgotten. Persistent,
@@ -157,9 +171,12 @@ export function SubscriptionBanner({
 					<span className="font-medium">{waiting}.</span>{" "}
 					{/* A teammate who may buy packs can take the way back
 					    themselves (T2); one who can't is told who can. */}
+					{/* "Everything else carries on" stopped being true for the
+					    counter (z8r3fdwbbb) — it can't ring up a sale while
+					    orders are waiting — so the sentence names what does. */}
 					{creditLock.canAct
-						? "You can't open them until credits land — they open oldest first. Everything else carries on, and cancelling always works."
-						: "The owner needs to add credits before they can be opened. Everything else carries on."}
+						? "You can't open them until credits land — they open oldest first. Online orders, products and settings carry on, and cancelling always works; the counter reopens once credits land."
+						: "The owner needs to add credits before they can be opened, and the counter stays closed until then. Online orders, products and settings carry on."}
 				</p>
 				<div className="flex w-fit shrink-0 items-center gap-2">
 					<Link
@@ -220,12 +237,18 @@ export function SubscriptionBanner({
 					    be wrong in a second way too: a store can be below zero with
 					    nothing waiting at all. */}
 					{canBuy
-						? "Top up to stay ahead — bought credits carry over for 12 months, so nothing goes to waste."
+						? "Top up to stay ahead — credits you buy carry over for 12 months, so nothing goes to waste."
 						: onTrial
 							? "Orders past your trial's allowance come off your first month's credits — pick a plan when you're ready."
 							: creditLock.canAct
-								? "Orders keep coming in; anything past your balance comes off your next credits."
-								: "Orders keep coming in; anything past the balance comes off the store's next credits — the owner tops up."}
+								? "Online orders keep coming in; anything past your balance comes off your next credits."
+								: "Online orders keep coming in; anything past the balance comes off the store's next credits — the owner tops up."}{" "}
+					{/* The one door that does stop (z8r3fdwbbb), said wherever
+					    the balance is — not only on the Counter page, where a
+					    seller finds out the moment a walk-in is waiting. */}
+					{state.total > 0
+						? "The counter stops ringing up sales at 0."
+						: "The counter can't ring up a sale until credits land."}
 				</p>
 				<div className="flex shrink-0 items-center gap-2">
 					{canBuy ? (

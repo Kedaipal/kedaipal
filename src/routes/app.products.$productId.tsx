@@ -40,6 +40,8 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { convexErrorMessage } from "../lib/format";
+import { overseasOf } from "../lib/overseas-delivery";
+import { pastOrderFilingMessage } from "../lib/past-order-filing";
 import type { UnsavedState } from "../lib/product-form-dirty";
 import { draftPreviewOverlay } from "../lib/product-preview";
 import { type ProductStatus, productStatus } from "../lib/product-status";
@@ -312,7 +314,11 @@ function EditProductRoute() {
 			    Breakfast" the morning of the event, "18 RSVPs · 11 Set A" is what
 			    she came for — not the name field. Absent on every other product. */}
 			{headcount ? (
-				<EventRsvpPanel headcount={headcount} productName={product.name} />
+				<EventRsvpPanel
+					headcount={headcount}
+					productId={product._id}
+					productName={product.name}
+				/>
 			) : null}
 
 			{/* Mobile header — back button, title, storefront preview + the honest
@@ -348,6 +354,7 @@ function EditProductRoute() {
 			<ProductForm
 				key={product._id}
 				retailerId={product.retailerId}
+				overseas={retailer ? overseasOf(retailer) : undefined}
 				saveLock={saveLock}
 				draftRef={formDraftRef}
 				onUnsavedChange={setUnsaved}
@@ -378,6 +385,7 @@ function EditProductRoute() {
 					name: product.name,
 					description: product.description,
 					hidden: product.hidden,
+					domesticOnly: product.domesticOnly,
 					kind: product.kind,
 					capacityPerNight: product.booking
 						? capacityDraftFromListing(product.booking.capacityPerNight)
@@ -430,10 +438,10 @@ function EditProductRoute() {
 						customPrompt: vr.customPrompt,
 					})),
 				}}
-				// Weight/zone-priced store (86eyeea1n): parcel weight is promoted to
-				// a first-class field in the editor — a weightless item strands that
-				// store's checkout on "missing weights".
-				weightMode={retailer.deliveryConfig?.mode === "weight"}
+				// A store that prices delivery by weight (its rate card, or a live
+				// courier — `weightPricingOf`): parcel weight is promoted to a
+				// first-class, required field in the editor.
+				weightPricing={retailer.weightPricing ?? null}
 				storeSchedule={{
 					openingHours: retailer.openingHours,
 					closedDates: retailer.closedDates,
@@ -456,12 +464,14 @@ function EditProductRoute() {
 					// Labelled, and NOT tinted red — an icon-only red button here read
 					// as "delete", when archive is the reversible, gentle action. The
 					// word is the disambiguation; red is reserved for the true
-					// destructive CTA below the form.
+					// destructive CTA below the form. Opaque in dark too: the outline
+					// variant's dark fill is see-through, and the bar is sticky over
+					// the form on a phone.
 					product.active ? (
 						<Button
 							type="button"
 							variant="outline"
-							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4"
+							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4 dark:bg-background dark:hover:bg-muted"
 							disabled={locked}
 							onClick={() => void archiveProduct()}
 						>
@@ -472,7 +482,7 @@ function EditProductRoute() {
 						<Button
 							type="button"
 							variant="outline"
-							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4"
+							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4 dark:bg-background dark:hover:bg-muted"
 							disabled={locked}
 							onClick={() => void restoreProduct()}
 						>
@@ -490,6 +500,7 @@ function EditProductRoute() {
 						name: values.name,
 						description: values.description ?? null,
 						hidden: values.hidden,
+						domesticOnly: values.domesticOnly,
 						minNoticeDays: values.minNoticeDays,
 						prepMinutes: values.prepMinutes ?? 0,
 						pickupNote: values.pickupNote ?? "",
@@ -515,7 +526,7 @@ function EditProductRoute() {
 					});
 					// Category membership last — a plan-gate error here can't block
 					// the core save above. Server diffs, so unchanged = no-op.
-					await setProductCategories({
+					const filing = await setProductCategories({
 						productId: product._id,
 						categoryIds: values.categoryIds,
 					});
@@ -523,7 +534,26 @@ function EditProductRoute() {
 					// page changing — and now that stock confirms its own writes with
 					// a toast, a silent product save read as the one that didn't
 					// land. Same confirmation as delete, which already had one.
-					toast.success("Product saved.");
+					// Adding a category also filed this product's earlier
+					// uncategorized orders server-side — say so, or the inbox filter
+					// changing under the seller is behaviour they never asked for.
+					const filed = pastOrderFilingMessage(filing);
+					toast.success(
+						"Product saved.",
+						filed
+							? {
+									description: filed,
+									action: {
+										label: "View in orders",
+										onClick: () =>
+											navigate({
+												to: "/app/orders",
+												search: { cat: filing.categoryNames },
+											}),
+									},
+								}
+							: undefined,
+					);
 					// Everything just saved, so the leave guard has nothing to protect.
 					navigate({ to: "/app/products", ignoreBlocker: true });
 				}}

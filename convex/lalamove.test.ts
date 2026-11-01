@@ -358,8 +358,8 @@ describe("getWebhookContext (secret resolution)", () => {
 				deliveryBooking: {
 					enabled: true,
 					vehicleType: "MOTORCYCLE" as const,
-					apiKey: "pk_byo",
-					apiSecret: "sk_byo",
+					apiKey: "pk_prod_byo",
+					apiSecret: "sk_prod_byo",
 				},
 			});
 		});
@@ -368,10 +368,10 @@ describe("getWebhookContext (secret resolution)", () => {
 
 		const context = await t.query(internal.lalamove.getWebhookContext, {
 			providerOrderId: "LLM-1",
-			apiKey: "pk_byo",
+			apiKey: "pk_prod_byo",
 		});
 		expect(context.jobId).toBe(jobId);
-		expect(context.secrets).toEqual(["sk_byo"]);
+		expect(context.secrets).toEqual(["sk_prod_byo"]);
 	});
 
 	test("no job: no secrets — unmatched traffic is unverifiable by design", async () => {
@@ -379,7 +379,7 @@ describe("getWebhookContext (secret resolution)", () => {
 		await seedRetailer(t);
 		const foreign = await t.query(internal.lalamove.getWebhookContext, {
 			providerOrderId: "UNKNOWN",
-			apiKey: "pk_somebody_else",
+			apiKey: "pk_prod_somebody_else",
 		});
 		expect(foreign.jobId).toBeNull();
 		expect(foreign.secrets).toEqual([]);
@@ -398,13 +398,13 @@ describe("getWebhookContext (secret resolution)", () => {
 		try {
 			const t = setup();
 			const retailer = await seedRetailer(t);
-			const storedSecret = await encryptSecret("sk_byo");
+			const storedSecret = await encryptSecret("sk_prod_byo");
 			await t.run(async (ctx) => {
 				await ctx.db.patch(retailer._id, {
 					deliveryBooking: {
 						enabled: true,
 						vehicleType: "MOTORCYCLE" as const,
-						apiKey: await encryptSecret("pk_byo"),
+						apiKey: await encryptSecret("pk_prod_byo"),
 						apiSecret: storedSecret,
 						apiKeyHint: "_byo",
 					},
@@ -415,12 +415,12 @@ describe("getWebhookContext (secret resolution)", () => {
 
 			const context = await t.query(internal.lalamove.getWebhookContext, {
 				providerOrderId: "LLM-1",
-				apiKey: "pk_byo",
+				apiKey: "pk_prod_byo",
 			});
 			expect(context.secrets).toHaveLength(1);
 			expect(isEncrypted(context.secrets[0])).toBe(true);
-			expect(context.secrets[0]).not.toContain("sk_byo");
-			expect(await decryptSecret(context.secrets[0])).toBe("sk_byo");
+			expect(context.secrets[0]).not.toContain("sk_prod_byo");
+			expect(await decryptSecret(context.secrets[0])).toBe("sk_prod_byo");
 		} finally {
 			vi.unstubAllEnvs();
 		}
@@ -686,7 +686,7 @@ describe("updateSettings — deliveryBooking guards", () => {
 				deliveryBooking: {
 					enabled: false,
 					vehicleType: "MOTORCYCLE",
-					apiKey: "pk_byo_only",
+					apiKey: "pk_prod_byo_only",
 				},
 			}),
 		).rejects.toThrow(/both/i);
@@ -695,8 +695,8 @@ describe("updateSettings — deliveryBooking guards", () => {
 			deliveryBooking: {
 				enabled: true,
 				vehicleType: "CAR",
-				apiKey: "pk_byo_abcd",
-				apiSecret: "sk_byo_secret",
+				apiKey: "pk_prod_byo_abcd",
+				apiSecret: "sk_prod_byo_secret",
 			},
 		});
 		const retailer = await asUser(t).query(api.retailers.getMyRetailer);
@@ -711,7 +711,7 @@ describe("updateSettings — deliveryBooking guards", () => {
 			env: "production",
 		});
 		// The raw secret must never appear anywhere in the owner payload.
-		expect(JSON.stringify(retailer)).not.toContain("sk_byo_secret");
+		expect(JSON.stringify(retailer)).not.toContain("sk_prod_byo_secret");
 	});
 
 	test("a pk_test_ key is stamped and reported as sandbox (86eypncfy)", async () => {
@@ -804,8 +804,8 @@ describe("updateSettings — deliveryBooking guards", () => {
 			deliveryBooking: {
 				enabled: true,
 				vehicleType: "MOTORCYCLE",
-				apiKey: "pk_byo_abcd",
-				apiSecret: "sk_byo_secret",
+				apiKey: "pk_prod_byo_abcd",
+				apiSecret: "sk_prod_byo_secret",
 			},
 		});
 		const me = await asUser(t).query(api.retailers.getMyRetailer);
@@ -829,8 +829,8 @@ describe("updateSettings — deliveryBooking guards", () => {
 			deliveryBooking: {
 				enabled: true,
 				vehicleType: "MOTORCYCLE",
-				apiKey: "pk_byo_abcd",
-				apiSecret: "sk_byo_secret",
+				apiKey: "pk_prod_byo_abcd",
+				apiSecret: "sk_prod_byo_secret",
 			},
 		});
 		const orderId = await seedOrder(t, retailer._id, {
@@ -865,8 +865,8 @@ describe("updateSettings — deliveryBooking guards", () => {
 			deliveryBooking: {
 				enabled: true,
 				vehicleType: "MOTORCYCLE",
-				apiKey: "pk_byo_abcd",
-				apiSecret: "sk_byo_secret",
+				apiKey: "pk_prod_byo_abcd",
+				apiSecret: "sk_prod_byo_secret",
 			},
 		});
 		await t.run(async (ctx) => {
@@ -903,8 +903,8 @@ describe("updateSettings — deliveryBooking guards", () => {
 			deliveryBooking: {
 				enabled: true,
 				vehicleType: "MOTORCYCLE",
-				apiKey: "pk_byo_abcd",
-				apiSecret: "sk_byo_secret",
+				apiKey: "pk_prod_byo_abcd",
+				apiSecret: "sk_prod_byo_secret",
 			},
 		});
 		const orderId = await seedOrder(t, retailer._id, {
@@ -937,8 +937,8 @@ describe("updateSettings — deliveryBooking guards", () => {
 				deliveryBooking: {
 					enabled: false,
 					vehicleType: "MOTORCYCLE" as const,
-					apiKey: "pk_byo_abcd",
-					apiSecret: "sk_byo_secret",
+					apiKey: "pk_prod_byo_abcd",
+					apiSecret: "sk_prod_byo_secret",
 				},
 			});
 		});
@@ -959,8 +959,8 @@ describe("updateSettings — deliveryBooking guards", () => {
 			deliveryBooking: {
 				enabled: true,
 				vehicleType: "MOTORCYCLE",
-				apiKey: "pk_byo_abcd",
-				apiSecret: "sk_byo_secret",
+				apiKey: "pk_prod_byo_abcd",
+				apiSecret: "sk_prod_byo_secret",
 			},
 		});
 		// Vehicle flip, keys omitted → keys survive.
@@ -1014,8 +1014,8 @@ describe("updateSettings — deliveryBooking guards", () => {
 			deliveryBooking: {
 				enabled: true,
 				vehicleType: "MOTORCYCLE",
-				apiKey: "pk_byo",
-				apiSecret: "sk_byo",
+				apiKey: "pk_prod_byo",
+				apiSecret: "sk_prod_byo",
 			},
 		});
 		await expect(
@@ -1040,8 +1040,8 @@ describe("updateSettings — deliveryBooking guards", () => {
 			deliveryBooking: {
 				enabled: true,
 				vehicleType: "MOTORCYCLE",
-				apiKey: "pk_byo",
-				apiSecret: "sk_byo",
+				apiKey: "pk_prod_byo",
+				apiSecret: "sk_prod_byo",
 			},
 		});
 		await asUser(t).mutation(api.retailers.updateSettings, {

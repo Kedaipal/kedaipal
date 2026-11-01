@@ -6,7 +6,6 @@ import {
 	poweredByHref,
 } from "../../../convex/lib/poweredBy";
 import { AppImage } from "../ui/app-image";
-import { ThemeToggle } from "../ui/theme-toggle";
 
 /**
  * "Powered by Kedaipal" buyer-facing footer badge (ticket 86ey8zh3r, on
@@ -35,14 +34,14 @@ export function StorefrontFooter({
 	locale = "en",
 }: {
 	/** The store whose page this is. Omit only where none is in scope yet
-	 * (a loading skeleton, a not-found page for an unknown slug). */
+	 * (a loading skeleton). */
 	slug?: string;
 	/** Which buyer surface the badge sits on — picks the `?src=` tag. */
 	surface?: PoweredBySurface;
 	/**
 	 * Show "Discover more stores" — the buyer's door to the /stores directory
 	 * (z8r3fdkmyp). Opt-in per page: ON where a buyer is BROWSING (store home,
-	 * category, product, store-not-found) AND on the order page, in every
+	 * category, product) AND on the order page, in every
 	 * state, unpaid included (Arif, 14 Oct 2026, z8r3fducgw: the order page was
 	 * a dead end, and below every payment card it doesn't compete with one).
 	 * Still OFF at checkout and on a claim page, where it would only pull a
@@ -91,16 +90,6 @@ export function StorefrontFooter({
 					</Link>
 				</div>
 			) : null}
-			{/* The buyer's theme control, deliberately down here: the page already
-			    matched their device on arrival, so this is an override, not a
-			    decision they owe us above the fold. Its own quiet row in the same
-			    language as "Discover more stores" — a bordered disc beside the
-			    Powered-by badge read as clutter (Zaki, 21 Oct 2026). This footer is
-			    on every buyer surface (z8r3fdcwd0), so the control rides it
-			    everywhere: one slot, found once, found everywhere. */}
-			<div className="mb-5 flex justify-center">
-				<ThemeToggle variant="text" />
-			</div>
 			<div className="flex justify-center">
 				<a
 					href={poweredByHref(surface, slug)}

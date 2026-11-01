@@ -1,12 +1,15 @@
-import { MessageCircle, Share2, Store, Truck } from "lucide-react";
+import { Globe, MessageCircle, Share2, Store, Truck } from "lucide-react";
 import type { ClosedDateRange } from "../../../convex/lib/closedDates";
+import { deliversToLabel } from "../../../convex/lib/crossBorder";
 import type { Locale } from "../../../convex/lib/locale";
 import type { OpeningHours } from "../../../convex/lib/openingHours";
 import { shareLink } from "../../lib/share";
 import { buildStoreChatLink } from "../../lib/store-chat";
 import { AppImage } from "../ui/app-image";
+import { ThemeToggle } from "../ui/theme-toggle";
 import { FoundingMemberBadge } from "./founding-member-badge";
 import { hasHoursLine, OpeningHoursLine } from "./opening-hours-line";
+import { useAbroadVisitor } from "./ships-abroad";
 
 /** The public-safe retailer fields the header renders — a structural subset of
  * `getRetailerBySlug`'s payload so both the home and category routes can pass
@@ -206,7 +209,9 @@ const ISLAND_ACTION =
  * left the hero in the same pass: the footer already carries "Powered by".
  *
  * Everything here is static markup from the payload — no client state — so
- * SSR paints the island and the cover icons on the first byte.
+ * SSR paints the island and the cover icons on the first byte. The theme flip
+ * is the one exception, and it is SSR-safe too: both glyphs render and CSS
+ * picks one (see ThemeToggle).
  */
 export function StorefrontHeader({
 	retailer,
@@ -224,7 +229,10 @@ export function StorefrontHeader({
 	const iconClass = `${COVER_ICON_BASE} ${hasCover ? COVER_ICON_FROSTED : COVER_ICON_OUTLINE}`;
 	const showHours = hasHoursLine(retailer.openingHours, retailer.closedDates);
 	const fulfilment = fulfilmentLabel(retailer);
-	const hasFacts = showHours || fulfilment !== null;
+	// A visitor from a country the store delivers to (z8r3fdr5yy) is told so
+	// up front — otherwise "Delivery" reads as local-only until checkout.
+	const abroadVisitor = useAbroadVisitor();
+	const hasFacts = showHours || fulfilment !== null || abroadVisitor !== null;
 
 	return (
 		<header>
@@ -267,34 +275,36 @@ export function StorefrontHeader({
 						className="absolute inset-0 opacity-15 [background-image:radial-gradient(var(--color-accent)_1px,transparent_1px)] [background-size:18px_18px]"
 					/>
 				)}
-				{/* Mobile actions: WhatsApp then Share, right-aligned at the
-				    cover's top-right. Desktop carries them labelled inside the
-				    island instead, so the cover stays clean there. */}
-				{chatHref || share ? (
-					<div className="absolute inset-x-4 top-3.5 flex items-center justify-end gap-2 lg:hidden">
-						{chatHref ? (
-							<a
-								href={chatHref}
-								target="_blank"
-								rel="noopener"
-								aria-label={chatLabel}
-								className={iconClass}
-							>
-								<MessageCircle className="size-5" aria-hidden />
-							</a>
-						) : null}
-						{share ? (
-							<button
-								type="button"
-								onClick={share}
-								aria-label="Share this store"
-								className={iconClass}
-							>
-								<Share2 className="size-5" aria-hidden />
-							</button>
-						) : null}
-					</div>
-				) : null}
+				{/* The cover's top-right icon row. Mobile: WhatsApp, Share, then the
+				    theme flip. Desktop carries WhatsApp and Share labelled inside the
+				    island instead, so only the theme flip stays up here — it is chrome
+				    for the PAGE, not an action about the store, so it never moves into
+				    the island. Last in the row at every width, the way it is last in
+				    every buyer header (z8r3fdwc19). */}
+				<div className="absolute inset-x-4 top-3.5 flex items-center justify-end gap-2 lg:inset-x-8 lg:top-5">
+					{chatHref ? (
+						<a
+							href={chatHref}
+							target="_blank"
+							rel="noopener"
+							aria-label={chatLabel}
+							className={`${iconClass} lg:hidden`}
+						>
+							<MessageCircle className="size-5" aria-hidden />
+						</a>
+					) : null}
+					{share ? (
+						<button
+							type="button"
+							onClick={share}
+							aria-label="Share this store"
+							className={`${iconClass} lg:hidden`}
+						>
+							<Share2 className="size-5" aria-hidden />
+						</button>
+					) : null}
+					<ThemeToggle variant="ghost" className={iconClass} />
+				</div>
 			</div>
 
 			{/* The island: overlaps the band by 72px (88px on lg), inset 16px
@@ -375,6 +385,17 @@ export function StorefrontHeader({
 											{retailer.storeArea}
 										</span>
 									) : null}
+								</span>
+							</p>
+						) : null}
+						{abroadVisitor ? (
+							<p className="flex min-h-6 items-center gap-2 text-[13px] leading-snug lg:text-sm">
+								<Globe
+									className="size-4 shrink-0 text-muted-foreground"
+									aria-hidden
+								/>
+								<span className="font-medium">
+									{deliversToLabel(abroadVisitor)}
 								</span>
 							</p>
 						) : null}

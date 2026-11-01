@@ -46,6 +46,7 @@ import { reorderByIds } from "../../lib/reorder";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { Input } from "../ui/input";
+import { Select } from "../ui/select";
 import { SortableList } from "../ui/sortable-list";
 import {
 	Card,
@@ -624,26 +625,30 @@ function StageEditor({
 					</label>
 				</div>
 
-				<label className="flex flex-col gap-1">
-					<span className="text-xs font-medium text-muted-foreground">
+				<div className="flex flex-col gap-1">
+					<label
+						htmlFor={`stage-anchor-${d._key}`}
+						className="text-xs font-medium text-muted-foreground"
+					>
 						Counts as{" "}
 						<span className="font-normal">
 							— which milestone this step represents
 						</span>
-					</span>
-					<select
+					</label>
+					<Select
+						id={`stage-anchor-${d._key}`}
 						value={d.anchor}
 						onChange={(e) =>
 							update(d._key, { anchor: e.target.value as StageAnchor })
 						}
-						className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+						variant="field"
 					>
 						{STAGE_ANCHORS.map((a) => (
 							<option key={a} value={a}>
 								{ANCHOR_UI_LABELS[a]}
 							</option>
 						))}
-					</select>
+					</Select>
 					<span className="text-xs text-muted-foreground">
 						{d.anchor === "confirmed"
 							? "The order has been accepted. Use this for your first step."
@@ -651,7 +656,7 @@ function StageEditor({
 								? "The order is complete. Use this for your last step."
 								: "A step while you're fulfilling the order."}
 					</span>
-				</label>
+				</div>
 
 				<div className="grid grid-cols-1 gap-2">
 					<label className="flex flex-col gap-1">

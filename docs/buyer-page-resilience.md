@@ -133,6 +133,10 @@ re-run the failed loaders (that order is load-bearing). Raw error text renders
 only in dev builds. This is the backstop for everything `ssrRead` doesn't
 cover (render errors, non-buyer routes).
 
+Its sibling for a URL nothing claims is `defaultNotFoundComponent` — the
+designed 404 with a way out per context, still served as HTTP 404. See
+[`not-found.md`](./not-found.md).
+
 ### 3. Buyer surfaces are Clerk-free
 
 `src/lib/buyer-routes.ts` (`BUYER_ROUTE_IDS`) + a provider branch in

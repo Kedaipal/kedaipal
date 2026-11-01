@@ -28,8 +28,9 @@ export function detectCountryFromTimeZone(timeZone: string): Country {
 	return timeZone === "Asia/Singapore" ? "SG" : DEFAULT_COUNTRY;
 }
 
-/** The time-zone guess, or `null` where `Intl` can't be reached at all. */
-function readTimeZoneCountry(): Country | null {
+/** The time-zone guess, or `null` where `Intl` can't be reached at all.
+ * Shared with `useMarketplaceRegion`, which has the same last resort. */
+export function readTimeZoneCountry(): Country | null {
 	try {
 		return detectCountryFromTimeZone(
 			Intl.DateTimeFormat().resolvedOptions().timeZone,

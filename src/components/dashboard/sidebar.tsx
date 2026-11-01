@@ -1,9 +1,12 @@
-import { UserButton, useUser } from "@clerk/tanstack-react-start";
+import { useUser } from "@clerk/tanstack-react-start";
 import { Link, type LinkProps } from "@tanstack/react-router";
 import type { FunctionReturnType } from "convex/server";
 import {
+	ArrowUpRight,
 	ChevronLeft,
+	Clapperboard,
 	GalleryHorizontalEnd,
+	Gift,
 	Home,
 	LineChart,
 	type LucideIcon,
@@ -12,6 +15,7 @@ import {
 	Settings,
 	ShieldCheck,
 	ShoppingBag,
+	Signpost,
 	Siren,
 	Store,
 	Tag,
@@ -29,12 +33,15 @@ import type { api } from "../../../convex/_generated/api";
 import { useActAs } from "../../hooks/useActAs";
 import { usePermission } from "../../hooks/usePermission";
 import { useSidebarCollapsed } from "../../hooks/useSidebarCollapsed";
+import { BLOG_VIDEOS_URL } from "../../lib/admin-sites";
 import { hasFeature } from "../../lib/subscription";
 import { cn } from "../../lib/utils";
 import { ProBadge } from "../app/pro-gate";
 import { AppImage } from "../ui/app-image";
 import { ThemeToggle } from "../ui/theme-toggle";
 import { AppVersionRow } from "./app-version-row";
+import { CreditTicket, CreditTicketPlaceholder } from "./credit-ticket";
+import { ProfileAvatar, ProfileMenu, useCreditStub } from "./profile-menu";
 import { TierPill } from "./tier-pill";
 import { WhatsNewNavItem } from "./whats-new";
 
@@ -50,6 +57,9 @@ interface SidebarProps {
 	// note on BottomNavProps: a badge is a notification, not a pipeline gauge.
 	newOrdersCount: number;
 	isAdmin?: boolean;
+	// Holds the "videos" admin area (an admin, or a blog editor who is not one) —
+	// shows the "Blog videos" shortcut out to admin.kedaipal.com/videos.
+	blogVideos?: boolean;
 	// True when an admin is viewing their OWN store — the tier pill reads "Admin"
 	// instead of the store's trial/plan state. False while acting-as a seller.
 	adminBadge?: boolean;
@@ -59,6 +69,7 @@ export function Sidebar({
 	retailer,
 	newOrdersCount,
 	isAdmin,
+	blogVideos,
 	adminBadge,
 }: SidebarProps) {
 	// Team members (86exr91r4): hide sections this MEMBER can't read — the
@@ -85,6 +96,19 @@ export function Sidebar({
 		? "transition-[width,max-width,max-height,padding,opacity,transform,color,background-color] duration-200 motion-reduce:transition-none"
 		: "";
 	const { user } = useUser();
+	const [menuOpen, setMenuOpen] = useState(false);
+	const stub = useCreditStub(retailer);
+	// The plan pill as it rides the credits ticket's top tear (compact copy).
+	const railPill = retailer ? (
+		<TierPill
+			subscription={retailer.subscription}
+			foundingRank={retailer.foundingMemberRank}
+			admin={adminBadge}
+			unclaimed={retailer?.unclaimed === true}
+			compact
+			className="py-0 text-[9px]"
+		/>
+	) : null;
 	const userEmail = user?.primaryEmailAddress?.emailAddress ?? null;
 	const userName =
 		user?.fullName ||
@@ -99,11 +123,18 @@ export function Sidebar({
 	const { setActAs } = useActAs();
 	const exitActAs = () => setActAs(undefined);
 
+	// 216px expanded (z8r3fdwc19; was 240). Every nav label is one short word,
+	// so the old width was mostly empty row. The binding constraint is the foot's
+	// meta line — "What's new" + dot beside the version pill — which needs 178px
+	// for a two-digit release (`2026.12.12`): 208px clipped it by a pixel, 216
+	// leaves ~6px. Store names truncate a little sooner; the full name is the
+	// storefront's job, not the rail's. Fixed, not resizable: a ten-link nav
+	// has two useful widths, and collapse already gives the second one.
 	return (
 		<aside
 			className={cn(
 				"sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-border bg-card lg:flex print:hidden",
-				collapsed ? "w-[68px]" : "w-60",
+				collapsed ? "w-[68px]" : "w-54",
 				motion,
 			)}
 			aria-label="Dashboard navigation"
@@ -141,7 +172,9 @@ export function Sidebar({
 
 			{/* Subscription tier pill — always-visible chrome (links to billing).
 			    Hidden for a storeless admin (no subscription to show). Reads "Admin"
-			    on an admin's own store. */}
+			    on an admin's own store. With a credits balance to show it rides
+			    the top tear of the credits ticket (z8r3fdx34j): your plan and
+			    what's left on it, as one object; without one, its own row. */}
 			{retailer ? (
 				// `inert`, not just hidden: the pill is a link (billing / admin
 				// console), so a clipped, invisible copy would still be a Tab stop
@@ -151,16 +184,42 @@ export function Sidebar({
 					inert={collapsed}
 					className={cn(
 						"shrink-0 overflow-hidden border-b border-border px-4",
-						collapsed ? "max-h-0 py-0 opacity-0" : "max-h-12 py-2 opacity-100",
+						collapsed
+							? "max-h-0 py-0 opacity-0"
+							: stub?.ticket || stub === undefined
+								? "max-h-32 pt-3 pb-3 opacity-100"
+								: "max-h-12 py-2 opacity-100",
 						motion,
 					)}
 				>
-					<TierPill
-						subscription={retailer.subscription}
-						foundingRank={retailer.foundingMemberRank}
-						admin={adminBadge}
-						unclaimed={retailer?.unclaimed === true}
-					/>
+					{stub?.ticket ? (
+						<CreditTicket stub={stub} variant="rail" plan={railPill} />
+					) : stub === undefined ? (
+						<CreditTicketPlaceholder plan={railPill} />
+					) : (
+						<TierPill
+							subscription={retailer.subscription}
+							foundingRank={retailer.foundingMemberRank}
+							admin={adminBadge}
+							unclaimed={retailer?.unclaimed === true}
+						/>
+					)}
+				</div>
+			) : null}
+			{/* Collapsed, the pill goes but the balance stays: the ticket shrinks
+			    to its figure and the one word it counts. */}
+			{retailer && stub?.ticket ? (
+				<div
+					inert={!collapsed}
+					className={cn(
+						"shrink-0 overflow-hidden border-border",
+						collapsed
+							? "max-h-20 border-b py-2.5 opacity-100"
+							: "max-h-0 py-0 opacity-0",
+						motion,
+					)}
+				>
+					<CreditTicket stub={stub} variant="collapsed" />
 				</div>
 			) : null}
 
@@ -306,6 +365,19 @@ export function Sidebar({
 								}
 							/>
 						) : null}
+						{/* Refer & earn (docs/referrals.md § The push) — last of the
+						    growth items, above Settings: it brings another SELLER in,
+						    so it sits with Vouchers and Insights (what grows the
+						    store), not with the operational tabs. Every member: the
+						    link is public, and the page explains itself to a trial or
+						    paused store rather than hiding. */}
+						<SidebarLink
+							to="/app/refer"
+							icon={Gift}
+							label="Refer & earn"
+							collapsed={collapsed}
+							motion={motion}
+						/>
 						<SidebarLink
 							to="/app/settings"
 							search={{ tab: "store" }}
@@ -319,8 +391,10 @@ export function Sidebar({
 				{/* Admin group — visually separated + labelled so it's unmistakable from
 				    the vendor nav while acting-as. Server `requireAdmin` is the real gate;
 				    these links just save typing the URL. They END the act-as session
-				    (leaving the vendor-operation view). */}
-				{isAdmin ? (
+				    (leaving the vendor-operation view).
+				    A blog editor who is NOT an admin sees the group with only the
+				    "Blog videos" row: the in-app console stays admin-only. */}
+				{isAdmin || blogVideos ? (
 					<div
 						className={cn(
 							"mt-2 flex flex-col gap-1 border-t border-border pt-3",
@@ -339,38 +413,64 @@ export function Sidebar({
 						>
 							Admin
 						</span>
-						<SidebarLink
-							to="/app/admin/sellers"
-							onClick={exitActAs}
-							icon={Store}
-							label="All sellers"
-							collapsed={collapsed}
-							motion={motion}
-						/>
-						<SidebarLink
-							to="/app/admin/billing"
-							onClick={exitActAs}
-							icon={ShieldCheck}
-							label="Billing"
-							collapsed={collapsed}
-							motion={motion}
-						/>
-						<SidebarLink
-							to="/app/admin/showcases"
-							onClick={exitActAs}
-							icon={GalleryHorizontalEnd}
-							label="Showcases"
-							collapsed={collapsed}
-							motion={motion}
-						/>
-						<SidebarLink
-							to="/app/admin/waba"
-							onClick={exitActAs}
-							icon={Siren}
-							label="WABA Safety"
-							collapsed={collapsed}
-							motion={motion}
-						/>
+						{isAdmin ? (
+							<>
+								<SidebarLink
+									to="/app/admin/sellers"
+									onClick={exitActAs}
+									icon={Store}
+									label="All sellers"
+									collapsed={collapsed}
+									motion={motion}
+								/>
+								<SidebarLink
+									to="/app/admin/billing"
+									onClick={exitActAs}
+									icon={ShieldCheck}
+									label="Billing"
+									collapsed={collapsed}
+									motion={motion}
+								/>
+								{/* Kedaipal's own spend, beside Billing (money in) and never
+								    inside it (86eye3eyp). */}
+								<SidebarLink
+									to="/app/admin/acquisition"
+									onClick={exitActAs}
+									icon={Signpost}
+									label="Acquisition"
+									collapsed={collapsed}
+									motion={motion}
+								/>
+								<SidebarLink
+									to="/app/admin/showcases"
+									onClick={exitActAs}
+									icon={GalleryHorizontalEnd}
+									label="Showcases"
+									collapsed={collapsed}
+									motion={motion}
+								/>
+								<SidebarLink
+									to="/app/admin/waba"
+									onClick={exitActAs}
+									icon={Siren}
+									label="WABA Safety"
+									collapsed={collapsed}
+									motion={motion}
+								/>
+							</>
+						) : null}
+						{/* Last: it is the one row that LEAVES the app (its own site on
+						    admin.kedaipal.com, signed in with this same account). */}
+						{blogVideos ? (
+							<SidebarExternalLink
+								href={BLOG_VIDEOS_URL}
+								icon={Clapperboard}
+								label="Blog videos"
+								hint="Opens admin.kedaipal.com"
+								collapsed={collapsed}
+								motion={motion}
+							/>
+						) : null}
 					</div>
 				) : null}
 			</nav>
@@ -398,39 +498,31 @@ export function Sidebar({
 						strokeWidth={2.5}
 					/>
 				</button>
-				{/* Quick theme flip, the same control the mobile header carries. The
-				    word fades with the rail like the user's name below; both words are
-				    in the DOM and CSS picks one, so SSR's light-first pass never prints
-				    the wrong verb for a frame. The three-way picker (match device)
-				    stays in Settings → App → Appearance.
+				{/* Quick theme flip, the same control the mobile header carries —
+				    icon only, like every other theme control in the app (z8r3fdwc19;
+				    the "Dark mode" word beside it was dropped). The three-way picker
+				    (match device) stays in Settings → App → Appearance.
 
-				    ONE ICON COLUMN. Every glyph in this rail — nav icons, the avatar
-				    below — centres 22px in from the row when expanded and 26px when
-				    collapsed. The toggle's 44px hit disc would centre its glyph 8px
-				    further right under the same padding, and it shipped that way
-				    once: the sun sat visibly off the column in both states (Zaki,
-				    21 Oct 2026). `-ml-2` pulls the disc back onto the column, and
-				    `gap-0` lets the word start where the user's name does (the disc's
-				    own right half is the gap). */}
+				    It has TWO homes, cross-faded like the What's-new row below, with
+				    the hidden one `inert`:
+				    - expanded: the right end of the profile row. A lone icon on a row
+				      of its own reads as an unlabelled nav item; beside the profile
+				      is where a utility control belongs (ClickUp, Linear).
+				    - collapsed: its own row above the avatar, because the 68px rail
+				      has no room beside it.
+				    ONE ICON COLUMN in the collapsed form: every glyph in the rail
+				    centres 26px in. The 44px disc would centre its glyph 8px further
+				    right under the row's padding (it shipped that way once — Zaki,
+				    21 Oct 2026), so `-ml-2` pulls it back onto the column. */}
 				<div
+					inert={!collapsed}
 					className={cn(
-						"flex items-center gap-0 rounded-lg py-1 pr-2",
-						collapsed ? "pl-3" : "pl-2",
+						"flex items-center overflow-hidden rounded-lg pr-2 pl-3",
+						collapsed ? "max-h-14 py-1 opacity-100" : "max-h-0 py-0 opacity-0",
 						motion,
 					)}
 				>
 					<ThemeToggle variant="ghost" className="-ml-2" />
-					<span
-						aria-hidden={collapsed || undefined}
-						className={cn(
-							"overflow-hidden whitespace-nowrap text-xs font-medium text-muted-foreground",
-							collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
-							motion,
-						)}
-					>
-						<span className="dark:hidden">Dark mode</span>
-						<span className="hidden dark:inline">Light mode</span>
-					</span>
 				</div>
 				<div
 					className={cn(
@@ -439,26 +531,64 @@ export function Sidebar({
 						motion,
 					)}
 				>
-					<UserButton />
-					{userName || userEmail ? (
-						<div
-							aria-hidden={collapsed || undefined}
-							className={cn(
-								"flex min-w-0 flex-col overflow-hidden",
-								collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
-								motion,
-							)}
-						>
-							{userName ? (
-								<span className="truncate text-xs font-medium">{userName}</span>
-							) : null}
-							{userEmail ? (
-								<span className="truncate text-[10px] text-muted-foreground">
-									{userEmail}
+					{/* The profile menu (z8r3fdx34j): the avatar row IS its trigger —
+					    name and email; the balance is the ticket at the top of the
+					    rail, said once. */}
+					<ProfileMenu
+						retailer={retailer}
+						side="right"
+						align="end"
+						open={menuOpen}
+						onOpenChange={setMenuOpen}
+						trigger={
+							<button
+								type="button"
+								aria-label="Account menu"
+								data-testid="profile-trigger"
+								className="-my-1 -ml-1 flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg py-1 pl-1 text-left outline-none hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50"
+							>
+								<ProfileAvatar size="sm" />
+								<span
+									aria-hidden={collapsed || undefined}
+									className={cn(
+										"flex min-w-0 flex-1 flex-col overflow-hidden",
+										collapsed ? "max-w-0 opacity-0" : "max-w-44 opacity-100",
+										motion,
+									)}
+								>
+									{userName ? (
+										<span className="truncate text-xs font-medium">
+											{userName}
+										</span>
+									) : null}
+									{userEmail ? (
+										<span className="truncate text-[10px] text-muted-foreground">
+											{userEmail}
+										</span>
+									) : null}
 								</span>
-							) : null}
-						</div>
-					) : null}
+							</button>
+						}
+					/>
+					{/* The expanded home. `-my-2` keeps the row at the avatar's
+					    height, and `-mr-4` lands the glyph's right edge on the version
+					    pill's below — one right-hand edge for the foot — while giving
+					    the name every pixel it can; `p-0.5` inside the clip
+					    leaves room for the disc's focus ring. */}
+					<div
+						inert={collapsed}
+						className={cn(
+							"-my-2 ml-auto shrink-0 overflow-hidden",
+							// Collapsed, the margin and padding go too: at zero width they
+							// would still push the rail 20px wider than its 68px.
+							collapsed
+								? "mr-0 max-w-0 p-0 opacity-0"
+								: "-mr-4 max-w-12 p-0.5 opacity-100",
+							motion,
+						)}
+					>
+						<ThemeToggle variant="ghost" />
+					</div>
 				</div>
 				{/* One meta line, not three stacked rows: "what changed" on the
 				    left, "what am I running" on the right — the two questions this
@@ -599,6 +729,54 @@ function SidebarLink({
 				</>
 			)}
 		</Link>
+	);
+}
+
+/**
+ * A sidebar row that leaves the app (a sibling site on admin.kedaipal.com). Same
+ * look as `SidebarLink`, never "active", and an ↗ so it doesn't pass for an
+ * in-app page.
+ */
+function SidebarExternalLink({
+	href,
+	icon: Icon,
+	label,
+	hint,
+	collapsed,
+	motion,
+}: {
+	href: string;
+	icon: LucideIcon;
+	label: string;
+	hint: string;
+	collapsed: boolean;
+	motion: string;
+}) {
+	return (
+		<a
+			href={href}
+			title={collapsed ? `${label} — ${hint}` : hint}
+			className={cn(
+				"group relative flex h-10 items-center gap-3 overflow-hidden rounded-lg text-sm text-muted-foreground hover:bg-accent/10 hover:text-foreground",
+				collapsed ? "pl-4" : "px-3",
+				motion || "transition-colors",
+			)}
+		>
+			<span className="relative shrink-0">
+				<Icon className="size-5 stroke-current" strokeWidth={1.75} />
+			</span>
+			<span
+				aria-hidden={collapsed || undefined}
+				className={cn(
+					"flex min-w-0 flex-1 items-center gap-3 whitespace-nowrap",
+					collapsed ? "opacity-0" : "opacity-100",
+					motion,
+				)}
+			>
+				<span className="flex-1">{label}</span>
+				<ArrowUpRight className="size-4 shrink-0" strokeWidth={1.75} />
+			</span>
+		</a>
 	);
 }
 

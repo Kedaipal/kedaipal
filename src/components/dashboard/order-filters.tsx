@@ -14,6 +14,7 @@ import {
 } from "../../../convex/lib/fulfilmentDate";
 import {
 	BUCKET_LEAVES,
+	HOLDING_LEAVES,
 	INBOX_BUCKETS,
 	INBOX_LEAF_KEYS,
 	type InboxStatusLeaf,
@@ -146,6 +147,12 @@ export interface OrderFilterValue {
 	 * optional so that is the common case (PR #235 review). */
 	categoriesUnspecified: boolean;
 	/**
+	 * ONE listing's orders (`z8r3fdjv0d`), as a `products._id`. Like the due
+	 * span, no picker writes it: it arrives on the URL from a Schedule row, so
+	 * the panel's job is to show it — by name — and let it go.
+	 */
+	listing?: string;
+	/**
 	 * Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys, e.g.
 	 * "tiktok" / "direct" / "counter". Multi-select: several channels OR
 	 * together, because "how did my socials do" spans more than one. Empty =
@@ -172,6 +179,7 @@ export function activeFilterCount(v: OrderFilterValue): number {
 		v.bookingPeriods.length +
 		v.categories.length +
 		(v.categoriesUnspecified ? 1 : 0) +
+		(v.listing != null ? 1 : 0) +
 		v.attributionSources.length
 	);
 }
@@ -302,6 +310,14 @@ function dueToken(v: OrderFilterValue): FilterToken | null {
 }
 
 /** One applied-filter token: its label + how to clear just that filter. */
+/** True when the picked leaves are exactly the seat-holding set. */
+function isHoldingSet(statuses: readonly string[]): boolean {
+	return (
+		statuses.length === HOLDING_LEAVES.length &&
+		HOLDING_LEAVES.every((l) => statuses.includes(l))
+	);
+}
+
 type FilterToken = {
 	key: string;
 	label: string;
@@ -314,9 +330,35 @@ function activeFilterTokens(
 	/** Resolves a raw status to the retailer's own stage wording, so a token
 	 * reads the same as the Status column it came from. */
 	statusLabel?: (status: string) => string,
+	/** The `listing` filter's name: a string once resolved, `null` when the id
+	 * names no listing of this store, `undefined` while loading. */
+	listingName?: string | null,
 ): FilterToken[] {
 	const tokens: FilterToken[] = [];
-	for (const st of v.statuses) {
+	// First: when present it is the subject of the whole list ("the Luncheon's
+	// orders"), and every other token narrows within it.
+	if (v.listing != null) {
+		tokens.push({
+			key: "listing",
+			label:
+				listingName === null
+					? "Listing not found"
+					: `Listing: ${listingName ?? "…"}`,
+			clear: (x) => ({ ...x, listing: undefined }),
+		});
+	}
+	// The Schedule row and the RSVP panel open the inbox on every leaf but
+	// cancelled (`listingOrdersSearch`): seven pills for "not cancelled" read as
+	// clutter on a phone, so that exact set is ONE token, cleared as one. Any
+	// other mix stays per-leaf — the seller chose those by hand.
+	if (isHoldingSet(v.statuses)) {
+		tokens.push({
+			key: "status-holding",
+			label: "Excluding cancelled",
+			clear: (x) => ({ ...x, statuses: [] }),
+		});
+	}
+	for (const st of isHoldingSet(v.statuses) ? [] : v.statuses) {
 		tokens.push({
 			key: `status-${st}`,
 			// Through `leafLabel`, or the unseen leaf prints its raw key —
@@ -440,6 +482,7 @@ export function clearedFilters(): OrderFilterValue {
 		statuses: [],
 		categories: [],
 		categoriesUnspecified: false,
+		listing: undefined,
 		attributionSources: [],
 	};
 }
@@ -498,6 +541,7 @@ export function OrderFilters({
 	country,
 	availableSources,
 	availableCategories,
+	listingName,
 	statusLabel,
 	facets,
 	mockupCount,
@@ -521,6 +565,8 @@ export function OrderFilters({
 	/** Category names present in the seller's window, most-used first — the same
 	 * list the Categories header filter offers (86eyrtz74). */
 	availableCategories?: string[];
+	/** Name for the `listing` token, from `searchOrders.listingName`. */
+	listingName?: string | null;
 	/** Per-option row counts from `searchOrders`, tallied over the UNFILTERED
 	 * window. Optional so the dialog still renders while the query is in
 	 * flight — a missing facet shows 0 rather than blocking the panel. */
@@ -552,7 +598,12 @@ export function OrderFilters({
 		INBOX_LEAF_KEYS.length +
 		(showBookingPeriods ? BOOKING_PERIOD_CHIPS.length : 0);
 	const showMockup = (mockupCount ?? 0) > 0 || value.mockup;
-	const tokens = activeFilterTokens(value, mockupCount, statusLabel);
+	const tokens = activeFilterTokens(
+		value,
+		mockupCount,
+		statusLabel,
+		listingName,
+	);
 	const clearFilters = () => onChange(clearedFilters());
 
 	function togglePayment(p: PaymentStatus) {

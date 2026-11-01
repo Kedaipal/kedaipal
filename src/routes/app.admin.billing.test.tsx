@@ -75,7 +75,7 @@ describe("CreditTotals", () => {
 		expect(screen.getAllByText("...")).toHaveLength(3);
 	});
 
-	it("counts unused bought credits and orders owed, across how many stores", () => {
+	it("counts unused extra credits and orders owed, across how many stores", () => {
 		state.totals = totals({
 			purchasedUnused: 1250,
 			storesWithPurchased: 4,
@@ -85,7 +85,7 @@ describe("CreditTotals", () => {
 		render(<CreditTotals />);
 		expect(screen.getByText("1,250")).toBeTruthy();
 		expect(
-			screen.getByText("Across 4 stores — service still owed"),
+			screen.getByText("Across 4 stores — top-ups, bonuses and grants"),
 		).toBeTruthy();
 		expect(screen.getByText("37")).toBeTruthy();
 		expect(
@@ -94,8 +94,22 @@ describe("CreditTotals", () => {
 			),
 		).toBeTruthy();
 		// Credits, never money: no currency on either credit tile.
-		for (const label of [/Unused bought credits/, /Orders owed/])
+		for (const label of [/Unused extra credits/, /Orders owed/])
 			expect(tileText(label)).not.toMatch(/RM|S\$|MYR|SGD/);
+	});
+
+	// Scenario 3 of the z8r3fdwf9t test: red only while a store is below zero.
+	it("orders owed reads red while any store is below zero, neutral at zero", () => {
+		const tileOf = (label: RegExp) =>
+			screen.getByText(label).closest('[class*="@container"]')?.className ?? "";
+		state.totals = totals({ ordersOwed: 5, storesOwing: 1 });
+		render(<CreditTotals />);
+		expect(tileOf(/Orders owed/)).toContain("bg-red-50");
+		cleanup();
+		state.totals = totals();
+		render(<CreditTotals />);
+		expect(tileOf(/Orders owed/)).not.toContain("red");
+		expect(tileOf(/Orders owed/)).toContain("bg-muted/50");
 	});
 
 	it("top-up revenue: this month's paid packs, summed per currency — never flattened", () => {
@@ -124,7 +138,7 @@ describe("CreditTotals", () => {
 		state.totals = totals({ purchasedUnused: 50, storesWithPurchased: 1 });
 		render(<CreditTotals />);
 		expect(
-			screen.getByText("Across 1 store — service still owed"),
+			screen.getByText("Across 1 store — top-ups, bonuses and grants"),
 		).toBeTruthy();
 		expect(screen.getByText("0")).toBeTruthy();
 		// Never "across 0 stores".
