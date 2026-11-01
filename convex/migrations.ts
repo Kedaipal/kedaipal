@@ -23,6 +23,11 @@ import { capsForPlan } from "./lib/plans";
 import { legacyClaimFromOrder } from "./lib/paymentClaims";
 import { isOrderPaymentMethod } from "./lib/paymentMethod";
 import {
+	ensurePromoRunCounter,
+	loadPromoRunUnits,
+	tallyPromoUnits,
+} from "./lib/promoTally";
+import {
 	synthesizeDefaultStages,
 	type StatusLabels,
 } from "./lib/orderStatus";
@@ -609,6 +614,102 @@ export const backfillPaymentClaims = internalMutation({
 			);
 		}
 		return { inserted, isDone: page.isDone };
+	},
+});
+
+/**
+ * Mint the flash-sale units counter (`promoRunUnits`, 86eyjv002) for every
+ * capped run that went live BEFORE the table existed — the MIGRATE step.
+ * Until a run has a row the catalogue falls back to tallying orders, which is
+ * correct but is the scan this ticket removed; the NARROW (deleting that
+ * fallback from `promoUnitsTaken`) waits on this having run on prod.
+ *
+ * Also a drift check, so it is safe to re-run at any time: a run that already
+ * has a row is recounted from the orders, and a row that disagrees is SET to
+ * the tally (the doors' authority) and reported. A clean run reports
+ * `drifted: 0` in every product's log line — anything else means a seam was
+ * missed and is a bug.
+ *
+ * ONE PRODUCT PER TRANSACTION. Each capped product costs one collect of the
+ * store's orders in its sale window — measured at ~2.5 KB an order, so ten of
+ * them in one page blew the 16 MiB read limit on a 2,000-order store (Phase 1,
+ * 2 Nov). The page mutation only finds capped products and schedules
+ * `backfillPromoRunUnitsOne` for each, so no transaction reads more than the
+ * order door already reads for that product on every sale.
+ *
+ * Run: `npx convex run migrations:backfillPromoRunUnits`
+ */
+export const backfillPromoRunUnits = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (
+		ctx,
+		{ cursor },
+	): Promise<{ scanned: number; scheduled: number; isDone: boolean }> => {
+		const page = await ctx.db
+			.query("products")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+		let scheduled = 0;
+		for (const product of page.page) {
+			if (product.promo?.unitCap === undefined) continue;
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillPromoRunUnitsOne,
+				{ productId: product._id },
+			);
+			scheduled++;
+		}
+		console.log("[promoRunUnits] backfill page", {
+			scanned: page.page.length,
+			scheduled,
+			isDone: page.isDone,
+		});
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillPromoRunUnits,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { scanned: page.page.length, scheduled, isDone: page.isDone };
+	},
+});
+
+/** One capped product's mint-or-recount — see `backfillPromoRunUnits`. Also
+ * scheduled by the promotion apply queue for a KEPT run with no counter yet,
+ * so a batch of members never tallies more than one product per transaction. */
+export const backfillPromoRunUnitsOne = internalMutation({
+	args: { productId: v.id("products") },
+	handler: async (
+		ctx,
+		{ productId },
+	): Promise<{ minted: boolean; drifted: boolean }> => {
+		const now = Date.now();
+		const product = await ctx.db.get(productId);
+		const promo = product?.promo;
+		if (!product || promo?.unitCap === undefined)
+			return { minted: false, drifted: false };
+		if (await ensurePromoRunCounter(ctx, product, now, "unknown")) {
+			console.log("[promoRunUnits] minted", { productId, runId: promo.runId });
+			return { minted: true, drifted: false };
+		}
+		const row = await loadPromoRunUnits(ctx, productId, promo.runId);
+		if (row === null) return { minted: false, drifted: false };
+		const tally = await tallyPromoUnits(ctx, {
+			retailerId: product.retailerId,
+			productId,
+			runId: promo.runId,
+			startsAt: promo.startsAt ?? 0,
+			endsAt: promo.endsAt,
+		});
+		if (row.units === tally) return { minted: false, drifted: false };
+		console.warn("[promoRunUnits] counter drifted from the tally — reset", {
+			productId,
+			runId: promo.runId,
+			counter: row.units,
+			tally,
+		});
+		await ctx.db.patch(row._id, { units: tally, updatedAt: now });
+		return { minted: false, drifted: true };
 	},
 });
 

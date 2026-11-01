@@ -70,7 +70,7 @@ import {
 	sanitizePromo,
 	DEFAULT_PROMO_LABEL,
 } from "./lib/promo";
-import { tallyPromoUnits } from "./lib/promoTally";
+import { ensurePromoRunCounter, promoUnitsTaken } from "./lib/promoTally";
 import { productPromotion } from "./promotions";
 import {
 	assertProductCap,
@@ -412,8 +412,10 @@ export async function productWithVariants(
 	// isEventPassed precedent — no cron; the ticking countdown is the client's
 	// clock, the server stays the authority at create). Plan-gated: a paused
 	// promo (Starter) publishes NO state and the variants' sale prices are
-	// stripped, so a buyer never sees a sale the doors won't honour. The flash
-	// tally is one bounded read, only for a live capped sale.
+	// stripped, so a buyer never sees a sale the doors won't honour. Units
+	// left is ONE point read of the run's counter (`promoUnitsTaken`), only for
+	// a live capped sale — never a scan of orders, so a new order elsewhere in
+	// the store doesn't re-run every open catalogue (86eyjv002).
 	const promoNow = Date.now();
 	let promoState:
 		| {
@@ -445,12 +447,9 @@ export async function productWithVariants(
 				phase === "live" && capped
 					? promoUnitsLeft(
 							product.promo.unitCap,
-							await tallyPromoUnits(ctx, {
-								retailerId: product.retailerId,
-								productId: product._id,
-								runId: product.promo.runId,
-								startsAt: product.promo.startsAt ?? 0,
-								endsAt: product.promo.endsAt,
+							await promoUnitsTaken(ctx, {
+								...product,
+								promo: product.promo,
 							}),
 						)
 					: undefined;
@@ -1513,6 +1512,13 @@ export const create = mutation({
 		});
 
 		await insertVariants(ctx, productId, args.retailerId, variants, now);
+		// A capped sale's units counter starts with the run (86eyjv002).
+		await ensurePromoRunCounter(
+			ctx,
+			{ _id: productId, retailerId: args.retailerId, promo },
+			now,
+			undefined,
+		);
 		await logAdminAction(ctx, access, "products.create", productId);
 		return productId;
 	},
@@ -1900,6 +1906,8 @@ export const update = mutation({
 		// a downgraded seller can always turn their paused promo off. Flash
 		// extras refused where capacity/seats already govern, judged on the
 		// POST-save event state so one save can't sneak both in.
+		// The config this save writes, for the units counter below (86eyjv002).
+		let savedPromo: Doc<"products">["promo"];
 		if (fields.promo !== undefined) {
 			// A product inside a bulk promotion (z8r3fducfd) takes its window,
 			// label and flash extras from the PROMOTION — the product form
@@ -1924,11 +1932,12 @@ export const update = mutation({
 					isEvent: willBeEvent,
 				});
 				try {
-					updates.promo = sanitizePromo(
+					savedPromo = sanitizePromo(
 						fields.promo,
 						ownedProduct.promo,
 						Date.now(),
 					);
+					updates.promo = savedPromo;
 				} catch (err) {
 					throw new ConvexError((err as Error).message);
 				}
@@ -1961,6 +1970,19 @@ export const update = mutation({
 		await ctx.db.patch(productId, updates);
 		if (wasVisible !== willVisible)
 			await bumpCategoryCountsForProduct(ctx, productId, willVisible ? 1 : -1);
+		// A new or newly capped run gets its units counter (86eyjv002); a kept
+		// run that already has one is left to the order seams.
+		if (savedPromo !== undefined)
+			await ensurePromoRunCounter(
+				ctx,
+				{
+					_id: productId,
+					retailerId: ownedProduct.retailerId,
+					promo: savedPromo,
+				},
+				Date.now(),
+				ownedProduct.promo?.runId,
+			);
 		await logAdminAction(ctx, access, "products.update", productId);
 	},
 });

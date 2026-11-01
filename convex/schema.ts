@@ -3480,6 +3480,35 @@ export default defineSchema({
 		.index("by_retailer", ["retailerId"]),
 
 	/**
+	 * Flash-sale units sold under ONE promo run (`86eyjv002`) — the O(1) answer
+	 * for "12 of 30 left", so no reader collects the store's orders: that made
+	 * every new order re-run every open storefront tab, and at volume took the
+	 * catalogue over the 16 MiB read limit and refused multi-item flash carts.
+	 *
+	 * What the order DOORS gate on too: every "how many are left" read is one
+	 * point read of this row, held equal to `tallyPromoUnits` (the definition).
+	 * The row is minted at promo save (or by the backfill), then kept equal by
+	 * the two order-lifecycle seams — `recordOrderCreated` adds a new order's
+	 * sale units, `recordOrderCancelled` gives them back — plus the one path
+	 * that drops a line without cancelling (a declined custom line). Absent
+	 * row = a run from before this table: readers fall back to the tally.
+	 * Rules + the equality proof: docs/promo-price.md#units-counter.
+	 */
+	promoRunUnits: defineTable({
+		retailerId: v.id("retailers"),
+		productId: v.id("products"),
+		// `products.promo.runId` — a re-run mints a new id, so a new row.
+		runId: v.string(),
+		// Sale units held by non-cancelled orders under this run.
+		units: v.number(),
+		updatedAt: v.number(),
+	})
+		// The only index: every reader asks for one (product, run). Account
+		// deletion reaches these rows through the products phase
+		// (`deleteProductCascade`), so no per-store index is needed.
+		.index("by_product_run", ["productId", "runId"]),
+
+	/**
 	 * Store availability (`z8r3fdudf7`) — the seller's "Accepting orders"
 	 * switch and Kedaipal's pause / take-offline, ONE row per store that has
 	 * ever used either. Resolved with the Off-Season Hold stamp

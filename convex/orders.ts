@@ -54,7 +54,11 @@ import {
 	resolveCreditGate,
 } from "./creditLock";
 import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
-import { promoUnitsRequested, tallyPromoUnits } from "./lib/promoTally";
+import {
+	promoUnitsRequested,
+	promoUnitsTaken,
+	releasePromoUnits,
+} from "./lib/promoTally";
 import {
 	assertPlanFeature,
 	assertSubscriptionActive,
@@ -1422,14 +1426,15 @@ export const create = mutation({
 						flashApplies && promo.unitCap !== undefined
 							? promoUnitsLeft(
 									promo.unitCap,
-									await tallyPromoUnits(ctx, {
+									// The run's units counter (86eyjv002) — one point
+									// read, not a collect of the sale window's orders.
+									// Racing carts both read the row and both write it,
+									// so OCC serialises them exactly as the range read
+									// used to.
+									await promoUnitsTaken(ctx, {
+										_id: variant.productId,
 										retailerId: args.retailerId,
-										productId: variant.productId,
-										runId: promo.runId,
-										// sanitizePromo guarantees a capped run has a
-										// concrete start; 0 is a never-reached fallback.
-										startsAt: promo.startsAt ?? 0,
-										endsAt: promo.endsAt,
+										promo,
 									}),
 								)
 							: undefined;
@@ -7023,6 +7028,10 @@ export const declineMockupItem = mutation({
 				delta: total - order.total,
 			});
 		await voidStaleGatewayRequest(ctx, order, total);
+		// The only path that drops a line WITHOUT cancelling the order, so the
+		// only one that has to hand that line's flash units back itself (the
+		// cancel above does it through `recordOrderCancelled`).
+		await releasePromoUnits(ctx, order, dropped, now);
 		await ctx.db.patch(order._id, {
 			items: kept,
 			subtotal,
