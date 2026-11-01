@@ -91,6 +91,17 @@ describe("StoresCompactHeader — a takeover on the directory, the header on a b
 		expect(cta.tabIndex).toBe(0);
 	});
 
+	it("the chip row never squeezes into the theme toggle — it is shrink-0 and appears only from xl", async () => {
+		// Staging report (2 Nov): between lg and the width four chips + toggle + CTA
+		// need, the row shrank but its chips didn't, and they painted over the toggle.
+		renderBar({ visible: true });
+		await bar();
+		const row = screen.getByRole("button", { name: "Open now" }).parentElement;
+		expect(row?.className).toContain("shrink-0");
+		expect(row?.className).toContain("xl:flex");
+		expect(row?.className).not.toContain("lg:flex");
+	});
+
 	it("carries no market switch — /stores shows the buyer's own market only", async () => {
 		// z8r3fdwduz: the market comes from the edge's geo answer, Shopee-style.
 		renderBar({ visible: true });
