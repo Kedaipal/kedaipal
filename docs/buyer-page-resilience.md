@@ -116,11 +116,14 @@ product loaders no longer read the store over a bare HTTP client: they go
 through `ssrEnsure` (`src/lib/storefront-ssr.ts`), which seeds the request's
 own query cache so the HTML ships the store and the first client render
 paints from it. The contract above is unchanged — `ssrEnsure` IS `ssrRead`
-plus two things: a **3 s cap** (a slow Convex soft-degrades like a failed one
+plus two things: **one 3 s deadline per loader**, shared by the store read and
+the catalog reads after it (a slow Convex soft-degrades like a failed one
 instead of holding the first byte), and the guarantee that a failed or
 timed-out read ships **nothing** for its key (only answered queries are
 dehydrated), so the browser falls back to the skeleton + live query exactly
-as it did before seeding existed. See
+as it did before seeding existed. The store failing still returns `null`; a
+catalog read failing still renders the store, with only that section painting
+live. See
 [`frontend-caching.md`](./frontend-caching.md#ssr-per-request-clients).
 
 ### 2. Branded error boundary with retry

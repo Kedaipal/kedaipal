@@ -30,7 +30,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
-import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { SITE_URL } from "../lib/convex-server";
 import {
 	absoluteProxiedImageUrl,
 	imageSrcSet,
@@ -39,7 +39,11 @@ import {
 import { jsonLdScript } from "../lib/json-ld";
 import { notFoundHeadMeta, pageHead, rendersNotFound } from "../lib/not-found";
 import { seoDescription } from "../lib/seo-text";
-import { ssrRetailerBySlug } from "../lib/storefront-ssr";
+import {
+	ssrDeadline,
+	ssrRetailerBySlug,
+	ssrStorefrontHome,
+} from "../lib/storefront-ssr";
 
 interface StorefrontLoaderData {
 	storeName: string;
@@ -83,9 +87,15 @@ export const Route = createFileRoute("/$slug")({
 		params,
 		context,
 	}): Promise<StorefrontLoaderData | StoreUnavailableLoaderData | null> => {
-		// Seeds the cache the component reads, so the SSR HTML carries the
-		// store itself, not only its meta (z8r3fdue6f — lib/storefront-ssr.ts).
-		const read = await ssrRetailerBySlug(context.queryClient, params.slug);
+		// Seeds the cache the page renders from, so the SSR HTML carries the
+		// store and its catalog, not only their meta (z8r3fdue6f —
+		// lib/storefront-ssr.ts). One deadline caps the whole loader.
+		const deadline = ssrDeadline();
+		const read = await ssrRetailerBySlug(
+			context.queryClient,
+			params.slug,
+			deadline,
+		);
 		// Transient upstream failure: render the shell (head() falls back to
 		// defaults, the client's reactive query paints the store) instead of
 		// serving the buyer an error page (86eyheqzv). A definitive notFound
@@ -110,6 +120,11 @@ export const Route = createFileRoute("/$slug")({
 			return { unavailable: true, storeName: result.storeName };
 
 		const retailer = result.retailer;
+		const products = await ssrStorefrontHome(
+			context.queryClient,
+			retailer._id,
+			deadline,
+		);
 
 		// Social cards + JSON-LD go through the image proxy too: link unfurlers
 		// are known to skip oversized images outright, and a 4 MB cover is
@@ -118,19 +133,14 @@ export const Route = createFileRoute("/$slug")({
 		// can't resolve a root-relative path.
 		//
 		// OG/social-share image precedence: cover banner (wide, ideal for a
-		// summary_large_image card) → logo → first product image.
-		let ogImageUrl: string | undefined =
-			retailer.coverImageUrl ?? retailer.logoUrl;
-		if (!ogImageUrl) {
-			try {
-				const products = await getConvexHttpClient().query(api.products.list, {
-					retailerId: retailer._id,
-				});
-				ogImageUrl = products.find((p) => p.imageUrls[0])?.imageUrls[0];
-			} catch {
-				ogImageUrl = undefined;
-			}
-		}
+		// summary_large_image card) → logo → first product image (from the
+		// catalog the page just seeded, never a second read).
+		const ogImageUrl: string | undefined =
+			retailer.coverImageUrl ??
+			retailer.logoUrl ??
+			(products.ok
+				? products.value.find((p) => p.imageUrls[0])?.imageUrls[0]
+				: undefined);
 
 		// The seller's own description is the stronger trust/SEO signal — prefer it
 		// for meta tags, collapsing newlines to a single line. Fall back to the

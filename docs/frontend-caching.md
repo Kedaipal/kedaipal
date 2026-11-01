@@ -162,8 +162,10 @@ from there too — never a re-export from the function module (z8r3fdv49m: `USAG
   calls (and two `getRouter()`s) never share a `QueryClient`, `ConvexQueryClient` or
   `ConvexReactClient`, and a store seeded in one request is absent from the next one's
   dehydrated payload. Mutation-tested: memoising the server branch turns all three red.
-- `src/lib/storefront-ssr.test.ts` + `storefront-ssr.hydrate.test.tsx` — the SSR seed end to
-  end; see the section below.
+- `src/lib/storefront-ssr.test.ts` (each loader's seed, the shared deadline, 404/301/blip),
+  `storefront-ssr.hydrate.test.tsx` (first render paints the hydrated seed with no fetch) and
+  `storefront-ssr.keys.test.tsx` (the real home components ask for nothing unseeded) — the SSR
+  seed end to end; see the section below.
 - Component tests that render a migrated read mock the two adapter modules (pass-through
   `convexQuery` + a `useQuery` returning `{ data }`) instead of `convex/react` — see
   `src/components/settings/billing-tab.test.tsx` and `src/components/order/book-delivery-card.test.tsx`
@@ -171,7 +173,7 @@ from there too — never a re-export from the function module (z8r3fdv49m: `USAG
 
 ## SSR: per-request clients
 
-**ClickUp:** [`z8r3fdue6f`](https://app.clickup.com/t/z8r3fdue6f) — infrastructure half.
+**ClickUp:** [`z8r3fdue6f`](https://app.clickup.com/t/z8r3fdue6f).
 
 Until this ticket the `QueryClient` was a module singleton, safe only because nothing fetched
 Convex during SSR (an empty server cache has nothing to leak). Storefront loaders now write into
@@ -186,32 +188,62 @@ met**; the leak test above is what keeps it met.
   `lib/convex.ts`). The integration's own default is "everything", which would also ship a loader
   read that failed (hydrating the tab into an error) and every pending `useQuery` the server render
   touched. Consequence: streaming an un-awaited prefetch is off — loaders `await` their reads.
-- **Today: the retailer.** The `/$slug`, `/$slug/p/*` and `/$slug/c/*` loaders read
-  `retailers.getRetailerBySlug` through `ssrRetailerBySlug` (`src/lib/storefront-ssr.ts`) instead
-  of the bare HTTP client, under the exact key the components subscribe with. The server render
-  paints the store header, hours and category rail; the browser's first render reads the same key
-  from the hydrated cache — no skeleton, no fetch — and the live subscription attaches on hydrate,
-  so the store stays reactive exactly as before.
-- **Not yet: the catalog.** `products.list`, `categories.listActivePublic`,
-  `products.popularProducts`, `products.getPublicBySlug` and `categories.getPublicPage` are still
-  client-fetched (the product/category loaders read the last two over the HTTP client for `head()`
-  and the 404 decision only). Their shape may change under
-  [`86eyjv002`](https://app.clickup.com/t/86eyjv002) (a card-shaped `listForGrid`) and their
-  payload has to be measured first. **The seam:** each one is a single `ssrEnsure(queryClient,
-  api.x, args)` call (`src/lib/storefront-ssr.ts`) in its loader after the retailer resolves —
-  the cache seed, `ssrRead`'s soft-degrade and the time cap travel together, so a prefetch can't
-  forget either guard.
+- **The store and its catalog** — every read the page's first screen renders, under the exact
+  keys its components subscribe with:
+
+  | Page | Seeded reads (`src/lib/storefront-ssr.ts`) |
+  |---|---|
+  | `/$slug` | `retailers.getRetailerBySlug`, then `ssrStorefrontHome`: `products.list`, `categories.listActivePublic`, `products.popularProducts` (`since: popularSince()`) |
+  | `/$slug/c/$categorySlug` | the store, then `ssrCategoryPage`: `categories.getPublicPage`, `categories.listActivePublic` |
+  | `/$slug/p/$productSlug` | the store, then `ssrProductPage`: `products.getPublicBySlug` |
+
+  The server render paints the header, category rail, "Popular this week" shelf and product grid;
+  the browser's first render reads the same keys from the hydrated cache — no skeleton, no fetch —
+  and the live subscriptions attach on hydrate, so price, stock and visibility stay reactive
+  exactly as before. A read only `head()` needs (the product page's breadcrumb category) goes
+  through `ssrHeadRead` instead: same deadline, not seeded, because no render uses it.
+- **Keys must match, and a test renders to prove it.** The hydrated key is
+  `convexQuery|<function>|<JSON args>`, so a component whose args drift from its loader's — a new
+  field, a reordered object, a different `since` — asks for a key the HTML never carried, and the
+  buyer gets a skeleton under a page that promised a catalog. `storefront-ssr.keys.test.tsx` runs
+  the real `$slug` loader and renders the real `CategoryRail`, `FeaturedProduct` and `ProductGrid`
+  on its cache, failing if any of them asks for an unseeded key. **Change a storefront component's
+  read and you change its loader's seed in the same commit.**
+- **Images paint before hydration.** `AppImage` used to hold every photo at `opacity-0` until
+  React's `onLoad`, which made the server-rendered catalog a grid of blank tiles until the bundle
+  hydrated (and kept the cover — the LCP element — off the LCP clock). The server render and the
+  hydration pass now paint the photo opaque above its skeleton; the fade-in resumes after
+  hydration. See `app-image.tsx`'s header.
+
+**Measured payload (2 Nov 2026, dev `herb`: 29 products, 166 variants — the closest dev catalogue
+to Montanic's ~170 variants):** `products.list` is 88 KB of JSON (≈450 B a variant + ≈460 B a
+product; a 56-variant product alone is 25 KB). The whole dehydrated payload for `/herb` is
+**92.6 KB**; the page is 242 KB raw, **26 KB gzipped**. Scaled to Montanic (72 products), about
+120 KB dehydrated — under the ticket's ~300 KB line, so `products.list` ships as is and the
+card-shaped `listForGrid` of [`86eyjv002`](https://app.clickup.com/t/86eyjv002) stays a cost
+optimisation, not an SSR prerequisite. Re-measure with `curl -s <url> | wc -c` if a store's
+catalogue grows an order of magnitude.
 
 ### Failure and slowness
 
-`ssrEnsure` wraps every seeded read in `ssrRead` **and** a 3 s cap (`SSR_READ_TIMEOUT_MS`). A
-throw or a timeout returns `{ ok: false }`, the loader returns `null` exactly as before
-(docs/buyer-page-resilience.md), nothing for that key ships, and the page renders the skeleton
-the live query replaces — never a 500, never a first byte held hostage by a slow Convex. A
-timed-out read keeps running; in the browser its answer still lands in the cache.
+Every seeded read goes through `ssrEnsure` = `ssrRead` + **one deadline per loader**
+(`ssrDeadline()`, `SSR_READ_TIMEOUT_MS` = 3 s), taken at the loader's first line and shared by its
+stages — the store, then the reads that need its id — so a slow store read leaves the catalog only
+what's left of the budget rather than starting a fresh 3 s. A throw or a missed deadline returns
+`{ ok: false }` for that read alone:
+
+- the **store** read failing returns `null` from the loader exactly as before
+  (docs/buyer-page-resilience.md) — the shell renders, the skeleton paints, the live query fills it;
+- a **catalog** read failing still renders the store; only that section paints live.
+
+Nothing un-answered ships, so the browser never hydrates into an error. Never a 500, never a first
+byte held hostage by a slow Convex. A read that misses the deadline keeps running; in the browser
+its answer still lands in the cache.
 
 On a client-side navigation the loader runs in the tab against the one browser `QueryClient`, so
-`ensureQueryData` answers from the warm cache or the live client — never a second fetch.
+`ensureQueryData` answers from the warm cache or the live client — never a second fetch. A cold
+navigation now waits (behind the router's pending component) for the reads that page renders,
+instead of painting a skeleton and fetching them after.
 
 ### Still out of scope
 
