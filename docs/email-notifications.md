@@ -95,7 +95,13 @@ affected. Relaxed alignment (the DMARC default) is what lets the `send.` and
 ### The DMARC record and its ramp
 
 One TXT record at `_dmarc.kedaipal.com`. The `rua` address comes from
-Cloudflare > Email > DMARC Management, which also renders the reports.
+Cloudflare > Email > DMARC Management, which also renders the reports. It is
+`d0a7adf19a4c49cb97e783450b4d469c@dmarc-reports.cloudflare.net` (public in
+DNS anyway). Keep it unchanged when editing the policy, or reports stop.
+
+**Status: Phase 1 live since 2 Nov 2026** (enabled through DMARC Management,
+which published `v=DMARC1; p=none; rua=mailto:…`). Phase 2 is due ~5 Nov.
+Edit the policy in DNS > Records, on the `_dmarc` TXT row.
 
 | Phase | When | Record |
 | --- | --- | --- |

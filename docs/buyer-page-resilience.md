@@ -159,15 +159,17 @@ shape lives in pure `src/lib/sitemap.ts` with tests.
 
 ## Ops follow-ups (not code — tracked on the ticket)
 
-- `www.kedaipal.com` is NXDOMAIN, tracked on
-  [z8r3fdxrx5](https://app.clickup.com/t/z8r3fdxrx5). The fix is Cloudflare
-  only: an `AAAA www 100::` record, **Proxied**, plus a Redirect Rule
-  (`http.host eq "www.kedaipal.com"` to
-  `concat("https://kedaipal.com", http.request.uri.path)`, 301, query string
-  preserved). Do not add `www` as a second Worker custom domain: one canonical
-  host keeps canonical tags and SEO on the apex. Done when
-  `curl -sI "https://www.kedaipal.com/test?x=1"` answers 301 with
-  `location: https://kedaipal.com/test?x=1`.
+- ~~`www.kedaipal.com` is NXDOMAIN~~ **Fixed 2 Nov 2026**
+  ([z8r3fdxrx5](https://app.clickup.com/t/z8r3fdxrx5)), Cloudflare only: an
+  `AAAA www 100::` record, **Proxied**, plus the Redirect Rule
+  "www to apex (z8r3fdxrx5)": custom filter `(http.host eq "www.kedaipal.com")`,
+  dynamic target `concat("https://kedaipal.com", http.request.uri.path)`, 301,
+  query string preserved. It catches `http://www` too, in one hop. Use the
+  custom filter, not the template's wildcard: `https://www.*` misses plain
+  HTTP, and `http*://` is read as a hostname. `www` is deliberately NOT a
+  second Worker custom domain: one canonical host keeps canonical tags and SEO
+  on the apex. Check: `curl -sI "https://www.kedaipal.com/test?x=1"` answers
+  301 with `location: https://kedaipal.com/test?x=1`.
 - No `CLOUDFLARE_API_TOKEN` on the dev machine, so `wrangler tail` (live SSR
   error stream — where these failures actually surface) is unavailable
   non-interactively. Worth setting up; Convex function logs cannot see
