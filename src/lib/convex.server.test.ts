@@ -37,6 +37,17 @@ describe("getQueryClients on the server", () => {
 		);
 	});
 
+	it("a request's cache never schedules a GC timer that outlives the response", async () => {
+		const { getQueryClients } = await import("./convex");
+		const { queryClient } = getQueryClients();
+		// Infinity = TanStack schedules no timer at all; a finite gcTime would
+		// keep every seeded query (and the request's cache) alive past the
+		// response — 10 min per request in node dev.
+		expect(queryClient.getDefaultOptions().queries?.gcTime).toBe(
+			Number.POSITIVE_INFINITY,
+		);
+	});
+
 	it("one request's seeded store never reaches the next request's HTML", async () => {
 		const { getQueryClients } = await import("./convex");
 		const requestA = getQueryClients();

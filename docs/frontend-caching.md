@@ -38,8 +38,12 @@ server** and lets storefront loaders seed the cache the HTML ships — see
   mount **its** `convexClient`, so Clerk's auth token flows to adapter queries with no extra
   wiring.
 - `queryClient` → a `QueryClient` whose default query options are `queryKeyHashFn`/`queryFn`
-  from the bridge (the query key holds a non-serializable `FunctionReference`, so both must come
-  from Convex) plus `gcTime: 10 min`, then `convexQueryClient.connect(queryClient)`.
+  from the bridge plus `gcTime: 10 min` (browser) / `Infinity` (server — a per-request cache never
+  collects, and a finite value schedules a timer per query that outlives the response), then
+  `convexQueryClient.connect(queryClient)`. The key is `["convexQuery", "<module>:<fn>", args]` —
+  the function's **name**, not its `FunctionReference` — so it is plain JSON and survives the SSR
+  dehydrate → HTML → hydrate round trip; the bridge still owns the hash (args go through
+  `convexToJson`) and the fetch (the key carries no fetcher).
 
 **Server: fresh per call. Browser: one instance.** `getRouter()` (`src/router.tsx`) calls it once
 per request on the Worker and once in the tab, passes the pair as **router context**
@@ -243,7 +247,16 @@ its answer still lands in the cache.
 On a client-side navigation the loader runs in the tab against the one browser `QueryClient`, so
 `ensureQueryData` answers from the warm cache or the live client — never a second fetch. A cold
 navigation now waits (behind the router's pending component) for the reads that page renders,
-instead of painting a skeleton and fetching them after.
+instead of painting a skeleton and fetching them after — a deliberate call: a page that arrives
+filled beats a skeleton that fills.
+
+**A preload of the store home seeds the store only.** `defaultPreload: "intent"` runs a route's
+loader on hover/touchstart, and every store card on `/stores`, the showcases and sponsored slots
+links to `/$slug` — so seeding the catalog there would cost ~100 KB and three Convex reads per
+card a cursor merely crossed. The `/$slug` loader checks `preload` and resolves the store alone; a
+click inside the 30 s preload window reuses that match, so the store paints at once and the grid
+fills live (as before SSR seeding). Category and product preloads still seed their one read —
+small, and the click is likely. Server renders never preload.
 
 ### Still out of scope
 

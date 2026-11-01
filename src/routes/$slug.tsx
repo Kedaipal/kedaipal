@@ -86,6 +86,7 @@ export const Route = createFileRoute("/$slug")({
 	loader: async ({
 		params,
 		context,
+		preload,
 	}): Promise<StorefrontLoaderData | StoreUnavailableLoaderData | null> => {
 		// Seeds the cache the page renders from, so the SSR HTML carries the
 		// store and its catalog, not only their meta (z8r3fdue6f —
@@ -120,11 +121,15 @@ export const Route = createFileRoute("/$slug")({
 			return { unavailable: true, storeName: result.storeName };
 
 		const retailer = result.retailer;
-		const products = await ssrStorefrontHome(
-			context.queryClient,
-			retailer._id,
-			deadline,
-		);
+		// A hover or touchstart on a store link (every card on /stores, the
+		// showcases, a sponsored slot) PRELOADS this route. Seeding the whole
+		// catalog there would cost ~100 KB and three Convex reads per card a
+		// cursor merely crossed, for stores most visitors never open — so a
+		// preload resolves the store (cheap; it settles redirect/404 early) and
+		// the catalog is read on the visit itself. Server renders never preload.
+		const products = preload
+			? ({ ok: false } as const)
+			: await ssrStorefrontHome(context.queryClient, retailer._id, deadline);
 
 		// Social cards + JSON-LD go through the image proxy too: link unfurlers
 		// are known to skip oversized images outright, and a 4 MB cover is

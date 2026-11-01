@@ -123,7 +123,15 @@ timed-out read ships **nothing** for its key (only answered queries are
 dehydrated), so the browser falls back to the skeleton + live query exactly
 as it did before seeding existed. The store failing still returns `null`; a
 catalog read failing still renders the store, with only that section painting
-live. See
+live.
+
+**Reading `wrangler tail` during a slow-Convex incident:** a read that misses
+the deadline keeps running, and when it settles after the response has gone
+the SSR-query integration logs `tried to stream query … after stream was
+already closed`. It always follows our own `SSR read failed … SsrReadTimeoutError`
+line for the same request and means nothing more than that — the buyer got the
+shell and the live query, as designed. The timeout line is the signal; the
+stream line is its echo. See
 [`frontend-caching.md`](./frontend-caching.md#ssr-per-request-clients).
 
 ### 2. Branded error boundary with retry

@@ -184,6 +184,7 @@ describe("ssrStorefrontHome — one deadline for the whole loader", () => {
 type Loader = (ctx: {
 	params: Record<string, string>;
 	context: ReturnType<typeof getQueryClients>;
+	preload?: boolean;
 }) => Promise<unknown>;
 
 async function loaderOf(
@@ -231,6 +232,25 @@ describe("$slug loader — the store home", () => {
 		expect(data).toMatchObject({
 			ogImageUrl: expect.stringContaining("yeti.jpg"),
 		});
+	});
+
+	it("a hover/touch PRELOAD resolves the store only — the catalog waits for the visit", async () => {
+		const wire = stubConvex(HOME);
+		const context = getQueryClients();
+		const loader = await loaderOf("$slug");
+
+		const data = await loader({
+			params: { slug: "montanic" },
+			context,
+			preload: true,
+		});
+
+		// A cursor crossing a /stores card costs one small read, not a catalog.
+		expect(data).toMatchObject({ storeName: "Montanic" });
+		expect(wire).toHaveBeenCalledTimes(1);
+		expect(seeded(context.queryClient)).toEqual([
+			"retailers:getRetailerBySlug",
+		]);
 	});
 
 	it("a failed catalog read still renders the store — the grid paints live", async () => {

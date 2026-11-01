@@ -49,16 +49,24 @@ const QUERY_GC_TIME_MS = 1000 * 60 * 10;
  * client's sync layer is lazy — so a server render never dials a WebSocket;
  * on the server the bridge answers loader reads over its own HTTP client.
  */
-function createQueryClients(url: string): QueryClients {
+function createQueryClients(url: string, onServer: boolean): QueryClients {
 	const convexQueryClient = new ConvexQueryClient(new ConvexReactClient(url));
 	const queryClient = new QueryClient({
 		defaultOptions: {
 			queries: {
-				// convexQuery's queryKey carries a non-serializable FunctionReference,
-				// so the hash + fetch both must come from the Convex bridge.
+				// convexQuery's key is `["convexQuery", "<module>:<fn>", args]` — the
+				// function's NAME, never the FunctionReference — so it is plain JSON
+				// and survives the SSR dehydrate → HTML → hydrate round trip. The
+				// bridge still owns both: its hash encodes args through
+				// `convexToJson` (Ids, bigints), and the key carries no fetcher.
 				queryKeyHashFn: convexQueryClient.hashFn(),
 				queryFn: convexQueryClient.queryFn(),
-				gcTime: QUERY_GC_TIME_MS,
+				// A server cache lives exactly one request, so it never collects:
+				// any finite gcTime would schedule a timer per seeded query that
+				// outlives the response (Cloudflare drops it; node dev would hold
+				// each request's cache for 10 min). TanStack's own server default
+				// is Infinity for the same reason — no timer is scheduled at all.
+				gcTime: onServer ? Number.POSITIVE_INFINITY : QUERY_GC_TIME_MS,
 			},
 			// What the SSR-query integration ships into the HTML. Only answers:
 			// a loader read that failed or timed out stays OUT of the payload, so
@@ -86,7 +94,7 @@ export function getQueryClients(): QueryClients {
 	const url = clientEnv.VITE_CONVEX_URL;
 	if (!url) return { queryClient: new QueryClient(), convexQueryClient: null };
 	// Same test the Convex bridge itself uses to pick its server path.
-	if (typeof window === "undefined") return createQueryClients(url);
-	_browserClients ??= createQueryClients(url);
+	if (typeof window === "undefined") return createQueryClients(url, true);
+	_browserClients ??= createQueryClients(url, false);
 	return _browserClients;
 }
