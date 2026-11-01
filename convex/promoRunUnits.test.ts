@@ -471,15 +471,18 @@ describe("the seams mirror the tally's window", () => {
 			"./lib/promoTally"
 		);
 		await t.run(async (ctx) => {
-			// The sale closed a moment ago — same run, so a claim sent during it
-			// still commits its locked sale line now, AFTER `endsAt`.
+			// The sale closed right after the first order — same run, so a claim
+			// sent during it still commits its locked sale line now, AFTER
+			// `endsAt`. Pinned to the order's own `_creationTime` rather than the
+			// wall clock: convex-test can stamp creation times a hair ahead of
+			// `Date.now()`, which made a `Date.now() - 1` end flaky.
 			const product = await ctx.db.get(productId);
 			if (!product?.promo) throw new Error("no promo");
-			await ctx.db.patch(productId, {
-				promo: { ...product.promo, endsAt: Date.now() - 1 },
-			});
 			const template = await ctx.db.get(orderId);
 			if (!template) throw new Error("no order");
+			await ctx.db.patch(productId, {
+				promo: { ...product.promo, endsAt: template._creationTime },
+			});
 			const { _id, _creationTime, ...rest } = template;
 			const lateId = await ctx.db.insert("orders", {
 				...rest,
@@ -533,6 +536,60 @@ describe("the catalogue reads the counter, never the orders", () => {
 		await buy(t, retailer._id, productId, 1);
 		expect((await counterAndTally(t, productId)).counter).toBeNull();
 		expect(await unitsLeftOnStorefront(t, retailer._id, productId)).toBe(5);
+	});
+});
+
+describe("the order doors gate on the counter", () => {
+	test("checkout reads the counter: a counter at the cap prices the next sale at list", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const productId = await seedPromoProduct(t, retailer._id, { unitCap: 5 });
+		await buy(t, retailer._id, productId, 1);
+		// Skew the row to the cap. A door that still tallied orders would see 1
+		// sold and sell at the sale price.
+		await t.run(async (ctx) => {
+			const product = await ctx.db.get(productId);
+			const row = await loadPromoRunUnits(
+				ctx,
+				productId,
+				product?.promo?.runId ?? "",
+			);
+			if (row) await ctx.db.patch(row._id, { units: 5 });
+		});
+		const { orderId } = await buy(t, retailer._id, productId, 1);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0].price).toBe(4500);
+		expect(order?.items[0].promoRunId).toBeUndefined();
+	});
+
+	test("a run with no row (from before the table) still gates on the tally", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const productId = await seedPromoProduct(t, retailer._id, { unitCap: 3 });
+		await buy(t, retailer._id, productId, 3);
+		await t.run(async (ctx) => {
+			for (const r of await ctx.db.query("promoRunUnits").collect())
+				await ctx.db.delete(r._id);
+		});
+		const { orderId } = await buy(t, retailer._id, productId, 1);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.items[0].price).toBe(4500);
+	});
+
+	test("no Convex function but the backfill scans orders for units (the scan this replaced)", async () => {
+		const { readFileSync, readdirSync } = await import("node:fs");
+		const { join } = await import("node:path");
+		const dir = join(process.cwd(), "convex");
+		const offenders = readdirSync(dir)
+			.filter((f) => f.endsWith(".ts") && !f.includes(".test."))
+			.filter((f) => f !== "migrations.ts")
+			.filter((f) =>
+				/\btallyPromoUnits\s*\(/.test(readFileSync(join(dir, f), "utf8")),
+			);
+		// The doors and the catalogue read `promoUnitsTaken` (one point read);
+		// a direct tally in any of them re-opens the 16 MiB failure measured on
+		// dev (Phase 1, 2 Nov: a 7-product flash cart read 15.8 MiB).
+		expect(offenders).toEqual([]);
 	});
 });
 

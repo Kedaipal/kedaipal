@@ -59,7 +59,7 @@ import {
 } from "./lib/auth";
 import { assertSubscriptionActive, getAccess } from "./subscriptions";
 import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
-import { tallyPromoUnits } from "./lib/promoTally";
+import { promoUnitsTaken } from "./lib/promoTally";
 import {
 	getDisplayName,
 	normalizeOptionalCustomerName,
@@ -1025,12 +1025,10 @@ export const createOrderFromSession = mutation({
 							promo.unitCap !== undefined
 								? promoUnitsLeft(
 										promo.unitCap,
-										await tallyPromoUnits(ctx, {
+										await promoUnitsTaken(ctx, {
+											_id: variant.productId,
 											retailerId: retailer._id,
-											productId: variant.productId,
-											runId: promo.runId,
-											startsAt: promo.startsAt ?? 0,
-											endsAt: promo.endsAt,
+											promo,
 										}),
 									)
 								: undefined;

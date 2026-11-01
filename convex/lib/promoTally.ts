@@ -1,14 +1,19 @@
-// The ONE flash-sale unit tally (z8r3fdcw72), the `eventSeats` posture: the
-// storefront's "12 of 30 left", the seller's products-list badge and
-// `orders.create`'s cap refusal all count through THIS function, so the
-// number a buyer saw and the number the gate enforced can never disagree.
+// Flash-sale units (z8r3fdcw72, 86eyjv002). The storefront's "12 of 30 left",
+// the seller's products-list badge and every order door's cap refusal all
+// read ONE number — `promoUnitsTaken`, the run's `promoRunUnits` counter — so
+// the number a buyer saw and the number the gate enforced can never disagree.
 //
-// No lock table: Convex mutations are OCC transactions, so tallying inside
-// the order mutation IS the lock — two carts racing for the last sale unit
-// serialise, and the loser gets the price-changed refusal. Cancelled and
-// auto-expired orders simply drop out of the tally, which is how their units
-// return to the pool. The doors gate on THIS tally; the public catalogue
-// reads a cache of it (`promoRunUnits`, below) so it doesn't scan orders.
+// No lock table: Convex mutations are OCC transactions, and a door that reads
+// the counter row and a seam that writes it put that row in both carts' read
+// AND write sets, so two carts racing for the last sale unit serialise and
+// the loser gets the price-changed refusal.
+//
+// `tallyPromoUnits` — the original count, a collect of the store's orders in
+// the sale window — is now the DEFINITION the counter is held equal to: it
+// mints a counter for a kept run, backs the backfill/drift check, and answers
+// for a run from before the table. It is no longer called on any hot path:
+// measured on dev (Phase 1, 2 Nov), it took a busy store's whole catalogue
+// over the 16 MiB read limit and left a 7-product flash cart at 15.8 MiB.
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
@@ -25,9 +30,9 @@ export function holdsPromoUnits(status: Doc<"orders">["status"]): boolean {
  * the run's window — from `startsAt` (sanitizePromo guarantees a capped promo
  * has one) to `endsAt` where there is one — so the scan covers one seller's
  * orders inside the sale. Bounded, but it grows with the store's order volume
- * and its read set covers every order in the window, so it belongs in a
- * MUTATION (the doors, the counter mint) — a reactive read wants
- * `promoUnitsTaken`.
+ * — ~2.5 KB an order — so it is never a hot-path read: everything that asks
+ * "how many are left" calls `promoUnitsTaken`. Kept for minting a kept run,
+ * the backfill/drift check, and runs from before the counter existed.
  *
  * The right-hand bound is free correctness-wise: an order created after the
  * window shut cannot carry this run's `promoRunId`, because the doors won't
@@ -101,14 +106,14 @@ export function promoUnitsRequested(
 // ── The units counter (86eyjv002) ──────────────────────────────────────────
 //
 // `tallyPromoUnits` is exact but it COLLECTS the store's orders across the
-// sale window. Inside an order mutation that's the lock and it's fine. Inside
-// the public catalogue read it was the problem: the read set covered the
-// store's order range, so every new order — on any product — re-ran
-// `products.list` and the category page for every open storefront tab, and
-// the cost grew with capped products × orders in the window.
+// sale window, once per capped product. In the public catalogue the read set
+// covered the store's order range, so every new order — on any product —
+// re-ran `products.list` and the category page for every open storefront tab;
+// and in every reader the cost grew with capped products × orders in the
+// window until it hit the 16 MiB read limit (store down; cart refused).
 //
-// So the catalogue reads `promoRunUnits` instead: one row per (product, run),
-// a cache of the tally that is
+// So every reader uses `promoRunUnits` instead: one row per (product, run),
+// held equal to the tally —
 //   - MINTED equal (`ensurePromoRunCounter`, at promo save, or by the
 //     backfill for a run from before the table): 0 for a run id the save just
 //     minted (no order can carry it), the tally otherwise — a cap added to an
@@ -117,9 +122,10 @@ export function promoUnitsRequested(
 //     (`subscriptionUsage.recordOrderCreated` / `recordOrderCancelled`), plus
 //     the one path that drops a line without cancelling the order (a
 //     declined custom line, `orders.declineMockupItem`).
-// The doors keep tallying: the counter never gates a sale, so a seam this
-// misses could only mislabel a badge, never oversell. `promoRunUnits.test.ts`
-// pins counter ≡ tally across create / cancel / expire / hard-delete / drop.
+// The counter IS the gate now (doors included), so a seam that missed it would
+// let a sale over- or under-sell: `promoRunUnits.test.ts` pins counter ≡ tally
+// across create / cancel / expire / hard-delete / drop, mutation-tests every
+// seam, and fails if any Convex function but the backfill calls the tally.
 
 type PromoProduct = Pick<Doc<"products">, "_id" | "retailerId" | "promo">;
 

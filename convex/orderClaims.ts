@@ -70,7 +70,7 @@ import {
 	getAccess,
 } from "./subscriptions";
 import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
-import { tallyPromoUnits } from "./lib/promoTally";
+import { promoUnitsTaken } from "./lib/promoTally";
 import { type Country, DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
 import { storeBooksCouriers } from "./lib/courierBooking";
 import { loadEasyparcelArming } from "./lib/easyparcelArming";
@@ -226,12 +226,10 @@ async function freezeClaimLines(
 						promo.unitCap !== undefined
 							? promoUnitsLeft(
 									promo.unitCap,
-									await tallyPromoUnits(ctx, {
+									await promoUnitsTaken(ctx, {
+										_id: variant.productId,
 										retailerId,
-										productId: variant.productId,
-										runId: promo.runId,
-										startsAt: promo.startsAt ?? 0,
-										endsAt: promo.endsAt,
+										promo,
 									}),
 								)
 							: undefined;

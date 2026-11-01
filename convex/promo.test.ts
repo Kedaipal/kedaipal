@@ -259,16 +259,16 @@ describe("orders.create — flash cap", () => {
 		const atList = await createOrder(t, retailer._id, productId, 1);
 		expect((await orderByShortId(t, atList.shortId)).items[0].price).toBe(4500);
 
-		// Cancel the capped order — the tally skips cancelled orders, so the
-		// units come back with zero bookkeeping.
-		await t.run(async (ctx) => {
-			const o = await ctx.db
-				.query("orders")
-				.withIndex("by_shortId", (q) => q.eq("shortId", first.shortId))
-				.first();
-			if (!o) throw new Error("order missing");
-			await ctx.db.patch(o._id, { status: "cancelled" });
-		});
+		// Cancel the capped order through the seller's real cancel — the seam
+		// (`recordOrderCancelled`) hands its units back to the run's counter,
+		// which is what the door reads (86eyjv002).
+		const firstOrder = await orderByShortId(t, first.shortId);
+		await t
+			.withIdentity({ subject: USER })
+			.mutation(api.orders.updateStatus, {
+				orderId: firstOrder._id,
+				status: "cancelled",
+			});
 		const revived = await createOrder(t, retailer._id, productId, 1);
 		expect((await orderByShortId(t, revived.shortId)).items[0].price).toBe(
 			3150,

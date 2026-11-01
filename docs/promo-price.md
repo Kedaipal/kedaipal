@@ -46,33 +46,41 @@ product, plan, now, unitsLeft)`. Every order door calls it:
 | `orderClaims.sendClaim` | Locks the sale price at send; the unit counts against the pool at **commit** (the price-lock rule wins) |
 | `bookings.requestBooking` | Nightly/package rate only — no flash mechanics (capacity already caps a stay); the weekend surcharge keeps its own rate |
 
-`convex/lib/promoTally.ts` counts units **inside the mutation** — Convex
-mutations are OCC transactions, so the tally *is* the lock. Cancelled and
-auto-expired orders drop out of it, which is how their units return to the
-pool with no bookkeeping at all.
+Every door reads the run's **units counter** (`promoUnitsTaken`, next
+section) inside its mutation. Convex mutations are OCC transactions and the
+counter row is in every racing cart's read and write set, so the row *is* the
+lock: two carts after the last unit serialise and the loser gets the
+price-changed refusal. A cancelled or auto-expired order hands its units back
+through the cancel seam.
 
 ### Units counter
 
-> ClickUp `86eyjv002`. The doors gate on the tally; **the catalogue reads a
-> cache of it** so a public read never scans orders.
+> ClickUp `86eyjv002`. Every "how many are left" — storefront, category page,
+> counter, claim link, checkout — is **one point read of the run's counter**,
+> never a scan of orders.
 
-The tally is right for the doors and wrong for the catalogue. `products.list`
-and `categories.getPublicPage` are public, reactive and on every storefront
-tab — and the tally *collects the store's orders* across the sale window. So
-the catalogue's read set covered the store's whole order range: **every new
-order, on any product, re-ran the catalogue for every open tab**, each re-run
-costing capped products × orders in the window (a bulk promotion multiplies
-the first, an open-ended sale grows the second for as long as it runs).
+The original count, `tallyPromoUnits`, *collects the store's orders* across
+the sale window, once per capped product. That broke in two ways, both
+measured on dev (2 Nov, a 20-product capped sale with 2,000 orders in the
+window):
 
-So the catalogue reads `promoRunUnits` instead — one row per (product, run),
-`units` = sale units held by non-cancelled orders. `promoUnitsTaken` is one
-point read; only a sale of *that* product moves the row, so only that re-runs
-the catalogue.
+- **The catalogue.** `products.list` and `categories.getPublicPage` are public
+  and reactive, so the order range sat in their read set: every new order, on
+  any product, re-ran them for every open tab (51 re-runs across 24 orders),
+  each costing capped products × orders. At that volume they read 17.9 MB, over
+  Convex's **16 MiB per-transaction limit** — the storefront, category page,
+  counter picker and products page all went down. The break point is roughly
+  325 orders in the window for 20 capped products.
+- **Checkout.** Each door tallied once per capped product in the cart: a
+  7-product flash cart read 15.8 MiB. One more sale product, or a longer sale,
+  and the **buyer could not check out** — a limit set by how busy the shop had
+  been, which no seller or buyer could see or reason about.
 
-**It is a cache, never a second authority.** `orders.create`, the counter and
-the claim commit still tally inside their own transaction and stay the gate.
-A seam that forgot the counter could mislabel a badge; it could never
-oversell.
+So everything reads `promoRunUnits` — one row per (product, run), `units` =
+sale units held by non-cancelled orders. One point read whatever the order
+history; only a sale of *that* product moves the row (24 orders → 19 re-runs,
+each a flat cost). And because the doors gate on it, it has to be exactly
+right, which is what the rest of this section is about.
 
 **How it stays equal to the tally** (all in `convex/lib/promoTally.ts`):
 
@@ -93,22 +101,27 @@ older orders must not move the counter, because the tally never counted it.
 (Worth knowing on its own: that means adding a cap mid-sale starts the pool
 fresh, even though the run id is kept.)
 
-**Absent row = a run that was live before the table shipped.** The catalogue
-falls back to the tally for it until the backfill (or the run's next save)
-mints it. A sale doesn't mint it, on purpose: measured on dev, a 7-product
-flash cart on a 2,000-order store already reads 15.8 of the 16 MiB a
-transaction may read, and a second tally would push the buyer's checkout over. This is the
-widen step; `migrations:backfillPromoRunUnits` is the migrate step (mints every
-capped run's row from the tally, **one product per transaction** via
+**Absent row = a run that was live before the table shipped.** Every reader
+(doors included) falls back to the tally for it, so it behaves exactly as
+before this change until the backfill (or the run's next save) mints it. A
+sale doesn't mint it, on purpose: minting there would tally the window a
+second time inside the door that just tallied it. This is the widen step;
+`migrations:backfillPromoRunUnits` is the migrate step (mints every capped
+run's row from the tally, **one product per transaction** via
 `backfillPromoRunUnitsOne` — ten tallies in one page blew the read limit on
-dev). It is **also a drift check**, safe to re-run
-any time: a row that disagrees with the tally is reset to it and reported, so
-`drifted: 0` is the healthy answer. The narrow step, deleting the fallback from
-`promoUnitsTaken`, waits until the backfill has run on prod.
+dev). It is **also a drift check**, safe to re-run any time: a row that
+disagrees with the tally is reset to it and reported, so `drifted: 0` is the
+healthy answer. The narrow step, deleting the fallback from `promoUnitsTaken`,
+waits until the backfill has run on prod — **run it straight after the
+deploy**, because a pre-existing live sale keeps the old, limit-bound reads
+until it does.
 
 `promoRunUnits.test.ts` pins counter ≡ tally across every row of the table,
 through the real public mutations and the cron, and each seam is
-mutation-tested: delete any one of them and a test goes red.
+mutation-tested: delete any one of them and a test goes red. It also proves
+checkout gates on the counter (a counter at the cap prices the next sale at
+list) and **fails if any Convex function but the backfill calls
+`tallyPromoUnits`** — the guard against the scan creeping back into a door.
 
 ### The counter panel quotes a price, so it calls the same helper
 
