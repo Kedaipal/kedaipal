@@ -443,3 +443,76 @@ describe("Issue an invoice — folded to one line", () => {
 		);
 	});
 });
+
+// Hands-on test, 2 Nov: a deep-linked card scrolled into view once, then the
+// sections above it loaded and pushed it out of sight. It now follows every
+// layout shift until the page settles — and stops the moment the admin moves.
+describe("a deep-linked card stays in view while the page settles", () => {
+	it("re-scrolls on each layout shift and stops once the admin scrolls", () => {
+		vi.useFakeTimers();
+		const scroll = vi.fn();
+		Element.prototype.scrollIntoView = scroll;
+		let shift: () => void = () => {};
+		vi.stubGlobal(
+			"ResizeObserver",
+			class {
+				constructor(cb: () => void) {
+					shift = cb;
+				}
+				observe() {}
+				disconnect() {
+					shift = () => {};
+				}
+			},
+		);
+		state.retailers = [store()];
+		render(<IssueInvoiceForm defaultOpen />);
+		expect(scroll).toHaveBeenCalledTimes(1);
+
+		// The list above it loads: the card is brought back.
+		shift();
+		expect(scroll).toHaveBeenCalledTimes(2);
+
+		// The admin's own move wins — no more pulling the page around.
+		window.dispatchEvent(new Event("wheel"));
+		shift();
+		expect(scroll).toHaveBeenCalledTimes(2);
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	it("lets go once the page has held still", () => {
+		vi.useFakeTimers();
+		const scroll = vi.fn();
+		Element.prototype.scrollIntoView = scroll;
+		let shift: () => void = () => {};
+		vi.stubGlobal(
+			"ResizeObserver",
+			class {
+				constructor(cb: () => void) {
+					shift = cb;
+				}
+				observe() {}
+				disconnect() {
+					shift = () => {};
+				}
+			},
+		);
+		state.retailers = [store()];
+		render(<IssueInvoiceForm defaultOpen />);
+		vi.advanceTimersByTime(1000);
+		shift();
+		expect(scroll).toHaveBeenCalledTimes(1);
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	it("a card opened by hand never scrolls the page", () => {
+		const scroll = vi.fn();
+		Element.prototype.scrollIntoView = scroll;
+		state.retailers = [store()];
+		render(<IssueInvoiceForm />);
+		fireEvent.click(screen.getByRole("button", { name: /^Issue an invoice/ }));
+		expect(scroll).not.toHaveBeenCalled();
+	});
+});

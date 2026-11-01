@@ -211,7 +211,10 @@ function AdminBillingContent() {
 				// it, closed, and open on the Sellers page's "Invite seller"
 				// link (`#onboard`).
 				<div className="flex flex-col gap-4">
-					<PendingInvoices />
+					{/* Arriving to onboard someone, the pending list would sit
+					    open above the card they came for — folded, it still says
+					    how many are waiting. */}
+					<PendingInvoices defaultOpen={hash !== "onboard"} />
 					<OnboardClientCard defaultOpen={hash === "onboard"} />
 					<IssueInvoiceForm />
 					<AutoRenewOverview />
@@ -244,6 +247,10 @@ function AdminCard({
 		</section>
 	);
 }
+
+/** How long the page must hold still before a deep-linked card stops
+ * following it into view. */
+const SETTLE_MS = 800;
 
 /**
  * A billing section folded to one line (z8r3fdzn6r). The Edit product form's
@@ -285,12 +292,35 @@ function CollapsibleAdminCard({
 	const panelRef = useRef<HTMLDivElement>(null);
 	const cardRef = useRef<HTMLElement>(null);
 
-	// A deep link can arrive after mount (same page, new hash): open then, and
-	// bring the card into view now that it has its full height.
+	// A deep link opens the card and brings it into view — and KEEPS it there
+	// while the page settles. Everything above it (the stat tiles, the gateway
+	// queue, the pending list) loads after this mounts and pushes it down, so
+	// one scroll on mount landed the admin mid-list (hands-on test, 2 Nov). Each
+	// layout shift re-scrolls until the page is still for a beat, or the admin
+	// scrolls or taps — their own move always wins.
 	useEffect(() => {
 		if (!defaultOpen) return;
 		setOpen(true);
-		cardRef.current?.scrollIntoView?.({ block: "start" });
+		const card = cardRef.current;
+		if (!card) return;
+		const toCard = () => card.scrollIntoView?.({ block: "start" });
+		toCard();
+		if (typeof ResizeObserver === "undefined") return;
+		let settle = window.setTimeout(stop, SETTLE_MS);
+		const observer = new ResizeObserver(() => {
+			toCard();
+			window.clearTimeout(settle);
+			settle = window.setTimeout(stop, SETTLE_MS);
+		});
+		observer.observe(document.body);
+		const userMoves = ["wheel", "touchstart", "keydown", "pointerdown"];
+		for (const e of userMoves) window.addEventListener(e, stop, { once: true });
+		function stop() {
+			observer.disconnect();
+			window.clearTimeout(settle);
+			for (const e of userMoves) window.removeEventListener(e, stop);
+		}
+		return stop;
 	}, [defaultOpen]);
 
 	useEffect(() => {
@@ -305,7 +335,7 @@ function CollapsibleAdminCard({
 		<section
 			ref={cardRef}
 			id={id}
-			className="scroll-mt-24 overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
+			className="@container/card scroll-mt-24 overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
 		>
 			<button
 				type="button"
@@ -335,7 +365,7 @@ function CollapsibleAdminCard({
 					</span>
 				</span>
 				{aside ? (
-					<span className="hidden shrink-0 sm:block">{aside}</span>
+					<span className="hidden shrink-0 @md/card:block">{aside}</span>
 				) : null}
 				<ChevronDown
 					aria-hidden="true"
@@ -350,12 +380,16 @@ function CollapsibleAdminCard({
 				id={panelId}
 				hidden={!open}
 				{...{ [DISCLOSURE_PANEL_ATTR]: "" }}
-				className="flex flex-col gap-4 border-t border-border px-5 pt-4 pb-5 lg:px-6 lg:pb-6"
+				// `@container`: the sections live in a column that is phone-narrow
+				// up to the desktop breakpoint, so their two-column rows switch on
+				// THIS panel's width, never the window's — `sm:` made a 1000px
+				// window cram a 330px card into two columns.
+				className="@container flex flex-col gap-4 border-t border-border px-5 pt-4 pb-5 lg:px-6 lg:pb-6"
 			>
 				<p className="text-xs leading-relaxed text-muted-foreground">
 					{description}
 				</p>
-				{aside ? <div className="sm:hidden">{aside}</div> : null}
+				{aside ? <div className="@md/card:hidden">{aside}</div> : null}
 				{children}
 			</div>
 		</section>
@@ -763,7 +797,7 @@ function OnboardClientCard({
 				<legend className="text-sm font-medium">
 					How are they onboarding?
 				</legend>
-				<div className="grid gap-2 sm:grid-cols-2">
+				<div className="grid gap-2 @md:grid-cols-2">
 					{[
 						{
 							key: "link" as const,
@@ -858,7 +892,7 @@ function OnboardClientCard({
 				</span>
 			</div>
 
-			<div className="grid gap-4 sm:grid-cols-2">
+			<div className="grid gap-4 @md:grid-cols-2">
 				<label
 					htmlFor="new-retailer-wa-phone"
 					className="flex flex-col gap-1 text-sm font-medium"
@@ -1374,7 +1408,7 @@ export function IssueInvoiceForm({
 									founding && p !== "pro" && p !== "enterprise"
 								}
 								onClick={() => setPlan(p)}
-								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold @md:gap-1.5 @md:px-2 capitalize transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
 									effectivePlan === p
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
 										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
@@ -1400,7 +1434,7 @@ export function IssueInvoiceForm({
 								type="button"
 								disabled={billsContract}
 								onClick={() => setCycle(c)}
-								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold sm:gap-1.5 sm:px-2 capitalize transition-all disabled:cursor-not-allowed ${
+								className={`flex min-h-11 items-center justify-center gap-1 rounded-lg border px-1.5 text-sm font-semibold @md:gap-1.5 @md:px-2 capitalize transition-all disabled:cursor-not-allowed ${
 									!noContract && effectiveCycle === c
 										? "border-accent/50 bg-accent/10 text-accent shadow-sm"
 										: "border-transparent bg-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
@@ -1449,7 +1483,7 @@ export function IssueInvoiceForm({
 			    Set up / Edit opens the SAME form the seller sheet renders, so a
 			    deal is negotiated in one place however you got there. */}
 			{!billsContract ? null : !contract ? (
-				<div className="flex flex-col gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+				<div className="flex flex-col gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3 @lg:flex-row @lg:items-center @lg:justify-between @lg:p-4">
 					<div className="flex min-w-0 items-start gap-2.5">
 						<FileSignature
 							aria-hidden="true"
@@ -1465,13 +1499,13 @@ export function IssueInvoiceForm({
 						type="button"
 						variant="outline"
 						onClick={() => setContractSheetOpen(true)}
-						className="h-11 w-full shrink-0 sm:w-auto"
+						className="h-11 w-full shrink-0 @lg:w-auto"
 					>
 						Set up contract
 					</Button>
 				</div>
 			) : (
-				<div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+				<div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-muted/20 p-3 @lg:flex-row @lg:items-center @lg:justify-between @lg:p-4">
 					<div className="flex min-w-0 items-start gap-2.5">
 						<FileSignature
 							aria-hidden="true"
@@ -1494,7 +1528,7 @@ export function IssueInvoiceForm({
 						type="button"
 						variant="outline"
 						onClick={() => setContractSheetOpen(true)}
-						className="h-11 w-full shrink-0 sm:w-auto"
+						className="h-11 w-full shrink-0 @lg:w-auto"
 					>
 						Edit contract
 					</Button>
@@ -1527,7 +1561,7 @@ export function IssueInvoiceForm({
 				</span>
 			</label>
 
-			<div className="grid gap-4 rounded-2xl border border-accent/20 bg-accent/5 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+			<div className="grid gap-4 rounded-2xl border border-accent/20 bg-accent/5 p-4 @lg:grid-cols-[minmax(0,1fr)_auto] @lg:items-center">
 				<div className="min-w-0">
 					<p className="text-xs text-muted-foreground">Amount</p>
 					<p className="text-xl font-bold tabular-nums">
@@ -1580,7 +1614,7 @@ export function IssueInvoiceForm({
 						noContract ||
 						replaceRefusal !== null
 					}
-					className="h-11 w-full sm:w-auto sm:px-6"
+					className="h-11 w-full @lg:w-auto @lg:px-6"
 				>
 					{busy ? "Issuing…" : openBill ? "Replace open bill" : "Issue invoice"}
 				</Button>
@@ -1655,7 +1689,12 @@ export function IssueInvoiceForm({
 	);
 }
 
-function PendingInvoices() {
+function PendingInvoices({
+	defaultOpen = true,
+}: {
+	/** Open unless the page was opened for another card (`#onboard`). */
+	defaultOpen?: boolean;
+}) {
 	const invoices = useQuery(convexQuery(api.invoices.listPending, {})).data;
 	// One clock per render, so a row's pill and its line can't disagree.
 	const now = Date.now();
@@ -1718,7 +1757,7 @@ function PendingInvoices() {
 			description="Settle invoices only after the payment has landed. Marking paid activates access and may claim a founding rank."
 			summary={pendingSummary}
 			summaryTone={overdueCount > 0 ? "attention" : "muted"}
-			defaultOpen
+			defaultOpen={defaultOpen}
 		>
 			{invoices === undefined ? (
 				<Skeleton className="h-16 w-full rounded-xl" />
@@ -1731,7 +1770,7 @@ function PendingInvoices() {
 					{invoices.map((inv) => (
 						<li
 							key={inv._id}
-							className="grid gap-3 rounded-xl border border-border bg-background p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+							className="grid gap-3 rounded-xl border border-border bg-background p-3 @xl:grid-cols-[minmax(0,1fr)_auto]"
 						>
 							<div className="min-w-0 space-y-2">
 								<div className="flex flex-wrap items-center gap-2">
@@ -1812,7 +1851,7 @@ function PendingInvoices() {
 									/>
 								) : null}
 							</div>
-							<div className="flex items-center justify-between gap-3 sm:justify-end">
+							<div className="flex items-center justify-between gap-3 @xl:justify-end">
 								<span className="text-sm font-semibold tabular-nums">
 									{formatPrice(inv.total, inv.currency)}
 								</span>
@@ -2163,7 +2202,7 @@ function FoundingMembersList() {
 						return (
 							<li
 								key={m.rank}
-								className="flex flex-col gap-3 rounded-xl border border-border bg-background p-3 sm:flex-row sm:items-start sm:justify-between"
+								className="flex flex-col gap-3 rounded-xl border border-border bg-background p-3 @lg:flex-row @lg:items-start @lg:justify-between"
 							>
 								{/* Stacked on a phone, side-by-side from sm. Side-by-side all
 								    the way down squeezed the name column between the pill and
@@ -2172,7 +2211,7 @@ function FoundingMembersList() {
 								    items-START, not center: the benefit line makes this block
 								    two or three lines tall, and a centred rank pill drifts down
 								    beside the SLUG instead of the store name it labels. */}
-								<div className="flex w-full items-start gap-2.5 sm:min-w-0 sm:flex-1">
+								<div className="flex w-full items-start gap-2.5 @lg:min-w-0 @lg:flex-1">
 									<span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
 										#{m.rank}
 									</span>
@@ -2209,7 +2248,7 @@ function FoundingMembersList() {
 										) : null}
 									</span>
 								</div>
-								<div className="flex shrink-0 items-center gap-2 pl-[38px] sm:pl-0">
+								<div className="flex shrink-0 items-center gap-2 pl-[38px] @lg:pl-0">
 									<span
 										className={`rounded-full px-2.5 py-1 text-xs font-medium ${s.className}`}
 									>

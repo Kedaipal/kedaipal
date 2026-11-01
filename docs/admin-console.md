@@ -597,8 +597,19 @@ rules as the Edit product form's `QuestionRow`, at card scale:
   Auto-renewal and Founding members follow, all closed. The Payment details tab is a
   single card and stays a plain `AdminCard`.
 - **`#onboard` opens its card.** Sellers → **Invite seller** links to
-  `/app/admin/billing#onboard`, and the card opens and scrolls itself into view
-  (`useLocation` hash → `defaultOpen`).
+  `/app/admin/billing#onboard`. The card opens, and **Pending invoices starts
+  folded** (its line still says how many are waiting). The card then stays in view
+  while the page loads. A single scroll on mount was not enough, and the
+  hands-on test caught it: the stat tiles, the gateway queue and the pending list
+  load after the card mounts and pushed it down, so the admin landed mid-list. A
+  `ResizeObserver` now re-scrolls on each layout shift until the page holds still
+  for `SETTLE_MS`, and stops at once if the admin scrolls, taps or types.
+- **The cards' two-column rows switch on the card's own width, not the
+  window's.** Below `lg` the app is a phone-width column, so `sm:` put a 1000px
+  window's 330px card into two columns. The result was "Balanc…", pills wrapping
+  one word per line, and invoice numbers broken mid-number. Each panel is an
+  `@container`, and its rows use `@md:`/`@lg:`/`@xl:`. Dialogs keep `sm:`
+  because they are sized against the window.
 
 ## Deliberate scope / follow-ups
 
