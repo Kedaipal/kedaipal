@@ -79,7 +79,7 @@ oversell.
 | When | What moves the row | Where |
 |---|---|---|
 | A capped run is saved | **Minted**: 0 for a run id the save just minted (no order can carry it — so a bulk promotion's apply batch reads nothing), the **tally** for a kept run | `ensurePromoRunCounter` ← `products.create` / `products.update` / the promotion apply queue |
-| An order is created | `+` its sale units; a run with no row is minted from the tally (which already includes the order) | `subscriptionUsage.recordOrderCreated` — every door calls it |
+| An order is created | `+` its sale units. A run with **no** row is left alone (see below): minting there would tally the window a second time inside the door, which already did | `subscriptionUsage.recordOrderCreated` — every door calls it |
 | An order is cancelled (seller, buyer, the unpaid-flash expiry, an admin hard-delete of a live order) | `−` its sale units | `subscriptionUsage.recordOrderCancelled` — the one cancel seam |
 | A declined custom line leaves a live order | `−` that line's units | `orders.declineMockupItem` (the only path that drops a line without cancelling) |
 | The product is permanently deleted | Rows deleted | `deleteProductCascade` (also the account-deletion cascade) |
@@ -94,9 +94,14 @@ older orders must not move the counter, because the tally never counted it.
 fresh, even though the run id is kept.)
 
 **Absent row = a run that was live before the table shipped.** The catalogue
-falls back to the tally for it, and the run's next sale mints it. This is the
+falls back to the tally for it until the backfill (or the run's next save)
+mints it. A sale doesn't mint it, on purpose: measured on dev, a 7-product
+flash cart on a 2,000-order store already reads 15.8 of the 16 MiB a
+transaction may read, and a second tally would push the buyer's checkout over. This is the
 widen step; `migrations:backfillPromoRunUnits` is the migrate step (mints every
-capped run's row from the tally). It is **also a drift check**, safe to re-run
+capped run's row from the tally, **one product per transaction** via
+`backfillPromoRunUnitsOne` — ten tallies in one page blew the read limit on
+dev). It is **also a drift check**, safe to re-run
 any time: a row that disagrees with the tally is reset to it and reported, so
 `drifted: 0` is the healthy answer. The narrow step, deleting the fallback from
 `promoUnitsTaken`, waits until the backfill has run on prod.

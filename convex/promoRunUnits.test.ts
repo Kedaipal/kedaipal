@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { loadPromoRunUnits, tallyPromoUnits } from "./lib/promoTally";
@@ -528,18 +528,21 @@ describe("the catalogue reads the counter, never the orders", () => {
 			for (const r of rows) await ctx.db.delete(r._id);
 		});
 		expect(await unitsLeftOnStorefront(t, retailer._id, productId)).toBe(6);
-		// …and the run's next sale mints it from the tally, this order included.
+		// …and a sale does NOT mint it: that would tally the window a second
+		// time inside the door, which already did. The backfill mints it.
 		await buy(t, retailer._id, productId, 1);
-		await expectInSync(t, productId, 5);
+		expect((await counterAndTally(t, productId)).counter).toBeNull();
+		expect(await unitsLeftOnStorefront(t, retailer._id, productId)).toBe(5);
 	});
 });
 
 describe("migrations:backfillPromoRunUnits", () => {
-	test("mints legacy runs from the tally and resets a drifted row", async () => {
+	test("mints legacy runs from the tally and resets a drifted row, one product per transaction", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);
 		const legacy = await seedPromoProduct(t, retailer._id, { unitCap: 10 }, "A");
 		const drifting = await seedPromoProduct(t, retailer._id, { unitCap: 10 }, "B");
+		await seedPromoProduct(t, retailer._id, {}, "Uncapped");
 		await buy(t, retailer._id, legacy, 2);
 		await buy(t, retailer._id, drifting, 3);
 		await t.run(async (ctx) => {
@@ -550,14 +553,28 @@ describe("migrations:backfillPromoRunUnits", () => {
 			}
 		});
 
-		const result = await t.mutation(internal.migrations.backfillPromoRunUnits, {});
-		expect(result).toMatchObject({ minted: 1, drifted: 1, isDone: true });
+		vi.useFakeTimers();
+		try {
+			const page = await t.mutation(
+				internal.migrations.backfillPromoRunUnits,
+				{},
+			);
+			// The page only FINDS capped products; each is its own transaction.
+			expect(page).toMatchObject({ scheduled: 2, isDone: true });
+			await t.finishAllScheduledFunctions(vi.runAllTimers);
+		} finally {
+			vi.useRealTimers();
+		}
 		await expectInSync(t, legacy, 2);
 		await expectInSync(t, drifting, 3);
 
 		// Clean re-run: nothing to mint, nothing drifted.
-		const again = await t.mutation(internal.migrations.backfillPromoRunUnits, {});
-		expect(again).toMatchObject({ minted: 0, drifted: 0 });
+		for (const productId of [legacy, drifting])
+			expect(
+				await t.mutation(internal.migrations.backfillPromoRunUnitsOne, {
+					productId,
+				}),
+			).toEqual({ minted: false, drifted: false });
 	});
 });
 

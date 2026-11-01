@@ -109,10 +109,10 @@ export function promoUnitsRequested(
 //
 // So the catalogue reads `promoRunUnits` instead: one row per (product, run),
 // a cache of the tally that is
-//   - MINTED equal (`ensurePromoRunCounter`, at promo save; or a run's first
-//     sale): 0 for a run id the save just minted (no order can carry it), the
-//     tally otherwise — a cap added to an uncapped run that already sold keeps
-//     its runId and so its pool;
+//   - MINTED equal (`ensurePromoRunCounter`, at promo save, or by the
+//     backfill for a run from before the table): 0 for a run id the save just
+//     minted (no order can carry it), the tally otherwise — a cap added to an
+//     uncapped run that already sold keeps its runId and so its pool;
 //   - KEPT equal at the two seams every order path already calls
 //     (`subscriptionUsage.recordOrderCreated` / `recordOrderCancelled`), plus
 //     the one path that drops a line without cancelling the order (a
@@ -251,9 +251,12 @@ async function tallyCounts(
 
 /**
  * A new order's sale units join its runs' counters. Call AFTER the insert.
- * A run with no row is minted from the tally — which already includes this
- * order, so it is not added twice; an uncapped run gets its row when a cap is
- * added, by the save seam.
+ * A run with NO row is left alone: it is a run from before this table (every
+ * run saved since is minted at save), the catalogue tallies it meanwhile, and
+ * the backfill mints it. Minting here would tally the window a SECOND time
+ * inside the order door, which already tallied it — measured, a busy store's
+ * multi-product flash cart sits close enough to the 16 MiB read limit that
+ * doubling it would fail the buyer's checkout (Phase 1, 2 Nov).
  */
 export async function countPromoUnitsForNewOrder(
 	ctx: MutationCtx,
@@ -261,18 +264,15 @@ export async function countPromoUnitsForNewOrder(
 	now: number,
 ): Promise<void> {
 	for (const group of unitsByRun(order.items).values()) {
-		const product = await tallyCounts(
+		const counted = await tallyCounts(
 			ctx,
 			group.productId,
 			group.runId,
 			order._creationTime,
 		);
-		if (product === null) continue;
+		if (counted === null) continue;
 		const row = await loadPromoRunUnits(ctx, group.productId, group.runId);
-		if (row === null) {
-			await ensurePromoRunCounter(ctx, product, now, "unknown");
-			continue;
-		}
+		if (row === null) continue;
 		await ctx.db.patch(row._id, {
 			units: row.units + group.units,
 			updatedAt: now,
