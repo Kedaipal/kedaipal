@@ -1,8 +1,7 @@
 import { ClerkProvider, useAuth } from "@clerk/tanstack-react-start";
 import { TanStackDevtools } from "@tanstack/react-devtools";
-import { QueryClientProvider } from "@tanstack/react-query";
 import {
-	createRootRoute,
+	createRootRouteWithContext,
 	HeadContent,
 	Scripts,
 	useMatches,
@@ -18,16 +17,16 @@ import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
 import { useTheme, useThemeSync } from "../hooks/useTheme";
 import { isBuyerRouteId } from "../lib/buyer-routes";
 import { clerkAppearance } from "../lib/clerk-appearance";
-import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
 import { readVisitorMarket, readVisitorRegion } from "../lib/geo-region";
 import { notFoundHeadMeta } from "../lib/not-found";
 import { readReferralSlugOnServer } from "../lib/referral-cookie";
 import { THEME_INIT_SCRIPT } from "../lib/theme";
 import { getLocale } from "../paraglide/runtime";
+import type { RouterContext } from "../router";
 import appCss from "../styles.css?url";
 
-export const Route = createRootRoute({
+export const Route = createRootRouteWithContext<RouterContext>()({
 	/**
 	 * The visitor's region — their stored `RegionToggle` pick if they have one,
 	 * otherwise Cloudflare's `CF-IPCountry` — read once at SSR and dehydrated
@@ -125,40 +124,36 @@ function Providers({ children }: { children: React.ReactNode }) {
 	// (PR #241 review).
 	const { resolved } = useTheme();
 	const appearance = useMemo(() => clerkAppearance(resolved), [resolved]);
+	// The render's own clients (per request on the server, one in the
+	// browser — lib/convex.ts). The QueryClientProvider is mounted by the
+	// SSR-query integration around the whole router (src/router.tsx), already
+	// outside the buyer/Clerk switch below, so the query cache survives that
+	// subtree remount and buyer pages' useQuery(convexQuery(...)) reads share it.
+	const { convexQueryClient } = Route.useRouteContext();
 	const publishableKey = clientEnv.VITE_CLERK_PUBLISHABLE_KEY;
-	if (!publishableKey || !clientEnv.VITE_CONVEX_URL) {
+	if (!publishableKey || !convexQueryClient) {
 		return <SetupNotice />;
 	}
-	// Both constructed only past the env guard above — getQueryClient() reaches
-	// getConvexClient(), which throws when VITE_CONVEX_URL is unset.
-	const convex = getConvexClient();
-	const queryClient = getQueryClient();
-	// QueryClientProvider wraps BOTH branches: buyer pages read via
-	// useQuery(convexQuery(...)) too, and keeping the provider outside the
-	// buyer/Clerk switch means the query cache survives that subtree remount.
-	return (
-		<QueryClientProvider client={queryClient}>
-			{isBuyerSurface ? (
-				<ConvexProvider client={convex}>{children}</ConvexProvider>
-			) : (
-				// signInUrl/signUpUrl point every Clerk redirect (RedirectToSignIn on
-				// the /app and /onboarding gates) at OUR pages. Without them Clerk
-				// falls back to its hosted Account Portal, which never sees
-				// `/sign-in`'s `withSignUp`. So the handover email's /app link
-				// dead-ended a brand-new vendor on the hosted page even after the
-				// fix (z8r3fdwdvq; caught driving the gate signed-out).
-				<ClerkProvider
-					publishableKey={publishableKey}
-					appearance={appearance}
-					signInUrl="/sign-in"
-					signUpUrl="/sign-up"
-				>
-					<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
-						{children}
-					</ConvexProviderWithClerk>
-				</ClerkProvider>
-			)}
-		</QueryClientProvider>
+	const convex = convexQueryClient.convexClient;
+	return isBuyerSurface ? (
+		<ConvexProvider client={convex}>{children}</ConvexProvider>
+	) : (
+		// signInUrl/signUpUrl point every Clerk redirect (RedirectToSignIn on
+		// the /app and /onboarding gates) at OUR pages. Without them Clerk
+		// falls back to its hosted Account Portal, which never sees
+		// `/sign-in`'s `withSignUp`. So the handover email's /app link
+		// dead-ended a brand-new vendor on the hosted page even after the
+		// fix (z8r3fdwdvq; caught driving the gate signed-out).
+		<ClerkProvider
+			publishableKey={publishableKey}
+			appearance={appearance}
+			signInUrl="/sign-in"
+			signUpUrl="/sign-up"
+		>
+			<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
+				{children}
+			</ConvexProviderWithClerk>
+		</ClerkProvider>
 	);
 }
 
