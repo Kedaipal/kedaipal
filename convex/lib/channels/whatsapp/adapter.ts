@@ -7,6 +7,7 @@
  * remain the source of truth.
  */
 
+import { isLocalHttpOrigin } from "../../localOrigin";
 import type {
 	ChannelAdapter,
 	ChannelCapabilities,
@@ -31,12 +32,6 @@ import { verifyMetaSignature } from "../../whatsappSignature";
 
 const capabilities: ChannelCapabilities = { ctaButtons: true };
 
-// A LOCAL http:// origin (loopback / private-LAN host). Used only by the dev
-// affordance below — such a host can never be a real public production URL, so
-// matching it is a safe "this is local dev" signal that needs no env flag.
-const LOCAL_HTTP_ORIGIN =
-	/^http:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/i;
-
 /**
  * Resolve the URL an interactive CTA button should point at, or `null` when the
  * CTA must degrade to a plain image/text (no button).
@@ -56,7 +51,7 @@ const LOCAL_HTTP_ORIGIN =
 function ctaButtonUrl(url: string): string | null {
 	if (!capabilities.ctaButtons) return null;
 	if (url.startsWith("https://")) return url;
-	if (LOCAL_HTTP_ORIGIN.test(url)) return `https://${url.slice("http://".length)}`;
+	if (isLocalHttpOrigin(url)) return `https://${url.slice("http://".length)}`;
 	return null;
 }
 

@@ -4,12 +4,18 @@ import {
 } from "@tanstack/react-start/server";
 import { rescuePlaceholderUrl } from "../convex/lib/trackingToken";
 import { serverEnv } from "./lib/env";
+import { httpsRedirectStatus, httpsRedirectTarget } from "./lib/https-redirect";
 import { handleImageRequest } from "./lib/image-route";
 
 /**
  * Custom Worker entry (wrangler.jsonc `main`) — the default TanStack entry
- * plus two pre-router routes.
+ * behind an HTTPS guard and two pre-router routes.
  *
+ * 0. The HTTPS guard (z8r3fdg3bw): an http request to a public host is
+ *    redirected to the identical https URL before anything else runs, so no
+ *    page, image or rescue redirect is ever served over plain http. Cloudflare's
+ *    "Always Use HTTPS" normally answers at the edge first; this is the
+ *    backstop. See `src/lib/https-redirect.ts` + docs/https-enforcement.md.
  * 1. `/img/<uuid>` — Cloudflare Image Transformations in front of Convex
  *    storage (86eypxght). See `src/lib/image-route.ts`.
  * 2. The placeholder-link rescue (86eyheqzv): WhatsApp template buttons sent while
@@ -29,6 +35,14 @@ const startFetch = createStartHandler(defaultStreamHandler);
 
 export default {
 	fetch: (async (request, opts) => {
+		// First: one string check, so the hot image route barely pays for it, and
+		// the rescue below only ever 301s an https request to an https URL — a
+		// single hop each, never a loop.
+		const secure = httpsRedirectTarget(request.url);
+		if (secure) {
+			return Response.redirect(secure, httpsRedirectStatus(request.method));
+		}
+
 		// Before the rescue: the image route is hot (every product photo on every
 		// storefront view) and must never pay for router work it doesn't use.
 		// `opts` is the Worker `env` — wrangler passes CONVEX_URL via
