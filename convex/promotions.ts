@@ -34,7 +34,7 @@ import { logAdminAction, requireRetailerAccess } from "./lib/auth";
 import { featuresForPlan } from "./lib/plans";
 import { effectiveKind } from "./lib/productKind";
 import { promoPhase, sanitizePromo } from "./lib/promo";
-import { ensurePromoRunCounter } from "./lib/promoTally";
+import { ensurePromoRunCounter, loadPromoRunUnits } from "./lib/promoTally";
 import {
 	MAX_PROMOTION_PRICES,
 	MAX_PROMOTION_PRODUCTS,
@@ -252,14 +252,29 @@ async function applyMember(
 		return await clearMember(ctx, member, now);
 	}
 	await ctx.db.patch(product._id, { promo, updatedAt: now });
-	// Same counter rule as a single product's save (86eyjv002). A fresh run
-	// mints at 0 with no read, so a batch of members stays one cheap write each.
-	await ensurePromoRunCounter(
-		ctx,
-		{ ...product, promo },
-		now,
-		product.promo?.runId,
-	);
+	// The run's units counter (86eyjv002). A FRESH run (new window → new id)
+	// mints at 0 with no read, so a batch of members stays one cheap write
+	// each. A KEPT run with no counter yet — a cap added to a running
+	// uncapped promotion, or a run from before the table — must be minted
+	// from the tally, and tallying inline would cost one order-window collect
+	// PER MEMBER in this batch (the read limit, measured at ~10 a
+	// transaction). So it gets a one-product mint of its own; until that runs
+	// (milliseconds), readers fall back to the tally, which is correct.
+	if (promo?.unitCap !== undefined) {
+		if (promo.runId !== product.promo?.runId)
+			await ensurePromoRunCounter(
+				ctx,
+				{ ...product, promo },
+				now,
+				product.promo?.runId,
+			);
+		else if ((await loadPromoRunUnits(ctx, product._id, promo.runId)) === null)
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillPromoRunUnitsOne,
+				{ productId: product._id },
+			);
+	}
 	const prices = new Map(
 		member.prices.map((p) => [p.variantId as string, p.promoPrice]),
 	);

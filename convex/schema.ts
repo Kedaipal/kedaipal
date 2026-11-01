@@ -3503,8 +3503,10 @@ export default defineSchema({
 		units: v.number(),
 		updatedAt: v.number(),
 	})
-		.index("by_product_run", ["productId", "runId"])
-		.index("by_retailer", ["retailerId"]),
+		// The only index: every reader asks for one (product, run). Account
+		// deletion reaches these rows through the products phase
+		// (`deleteProductCascade`), so no per-store index is needed.
+		.index("by_product_run", ["productId", "runId"]),
 
 	/**
 	 * Store availability (`z8r3fdudf7`) — the seller's "Accepting orders"

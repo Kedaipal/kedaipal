@@ -674,7 +674,9 @@ export const backfillPromoRunUnits = internalMutation({
 	},
 });
 
-/** One capped product's mint-or-recount — see `backfillPromoRunUnits`. */
+/** One capped product's mint-or-recount — see `backfillPromoRunUnits`. Also
+ * scheduled by the promotion apply queue for a KEPT run with no counter yet,
+ * so a batch of members never tallies more than one product per transaction. */
 export const backfillPromoRunUnitsOne = internalMutation({
 	args: { productId: v.id("products") },
 	handler: async (

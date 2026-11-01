@@ -86,7 +86,7 @@ right, which is what the rest of this section is about.
 
 | When | What moves the row | Where |
 |---|---|---|
-| A capped run is saved | **Minted**: 0 for a run id the save just minted (no order can carry it — so a bulk promotion's apply batch reads nothing), the **tally** for a kept run | `ensurePromoRunCounter` ← `products.create` / `products.update` / the promotion apply queue |
+| A capped run is saved | **Minted**: 0 for a run id the save just minted (no order can carry it, so nothing is read), the **tally** for a kept run (a cap added on the same window). The promotion apply queue never tallies inline: a kept run with no counter gets `backfillPromoRunUnitsOne` scheduled, one product per transaction, so a batch of members can't add up to the read limit | `ensurePromoRunCounter` ← `products.create` / `products.update`; the promotion apply queue |
 | An order is created | `+` its sale units. A run with **no** row is left alone (see below): minting there would tally the window a second time inside the door, which already did | `subscriptionUsage.recordOrderCreated` — every door calls it |
 | An order is cancelled (seller, buyer, the unpaid-flash expiry, an admin hard-delete of a live order) | `−` its sale units | `subscriptionUsage.recordOrderCancelled` — the one cancel seam |
 | A declined custom line leaves a live order | `−` that line's units | `orders.declineMockupItem` (the only path that drops a line without cancelling) |

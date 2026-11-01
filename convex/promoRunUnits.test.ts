@@ -4,6 +4,7 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { settleScheduled } from "./lib/convexTestSettle";
 import { loadPromoRunUnits, tallyPromoUnits } from "./lib/promoTally";
 import schema from "./schema";
 
@@ -97,6 +98,10 @@ async function buy(
 		if (!o) throw new Error("order missing");
 		return o._id;
 	});
+	// Each order schedules the seller-alert email + WhatsApp; settle them so
+	// a later mutation's writes can't be wiped by convex-test running one of
+	// those actions mid-transaction (see convex/lib/convexTestSettle.ts).
+	await settleScheduled(t);
 	return { orderId, shortId };
 }
 
@@ -206,6 +211,75 @@ describe("minting — the counter starts equal to the tally", () => {
 			loadPromoRunUnits(ctx, productId, oldRun ?? ""),
 		);
 		expect(oldRow?.units).toBe(2);
+	});
+
+	test("a promotion that KEEPS a run with no counter mints it in its own transaction, not inline", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const productId = await t.run(async (ctx) => {
+			const now = Date.now();
+			return ctx.db.insert("products", {
+				retailerId: retailer._id,
+				name: "Kuih lapis",
+				currency: "MYR",
+				imageStorageIds: [],
+				active: true,
+				blockWhenOutOfStock: false,
+				channel: "whatsapp",
+				sortOrder: 0,
+				createdAt: now,
+				updatedAt: now,
+			});
+		});
+		const variantId = await t.run((ctx) =>
+			ctx.db.insert("productVariants", {
+				productId,
+				retailerId: retailer._id,
+				optionValues: [],
+				price: 2000,
+				onHand: 10,
+				reserved: 0,
+				parcelWeightG: 0,
+				imageStorageIds: [],
+				active: true,
+				sortOrder: 0,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+			}),
+		);
+		const asUser = t.withIdentity({ subject: USER });
+		const endsAt = Date.now() + 60 * 60 * 1000;
+		const members = [{ productId, prices: [{ variantId, promoPrice: 1600 }] }];
+		const promotionId = await asUser.mutation(api.promotions.create, {
+			retailerId: retailer._id,
+			percentOff: 20,
+			endsAt,
+			members,
+		});
+		await buy(t, retailer._id, productId, 2); // uncapped: no counter
+		const before = await t.run((ctx) => ctx.db.get(productId));
+
+		vi.useFakeTimers();
+		try {
+			// Same window, now capped — sanitizePromo keeps the run.
+			await asUser.mutation(api.promotions.update, {
+				promotionId,
+				percentOff: 20,
+				endsAt,
+				unitCap: 5,
+				members,
+			});
+			await t.finishAllScheduledFunctions(vi.runAllTimers);
+		} finally {
+			vi.useRealTimers();
+		}
+		const after = await t.run((ctx) => ctx.db.get(productId));
+		expect(after?.promo?.runId).toBe(before?.promo?.runId);
+		expect(after?.promo?.unitCap).toBe(5);
+		// Minted by the scheduled one-product mint, equal to the tally.
+		const { counter, tally } = await counterAndTally(t, productId);
+		expect(counter).not.toBeNull();
+		expect(counter).toBe(tally);
 	});
 
 	test("an edit that KEEPS a legacy run (no row yet) mints it from the tally, not 0", async () => {
@@ -576,19 +650,34 @@ describe("the order doors gate on the counter", () => {
 		expect(order?.items[0].price).toBe(4500);
 	});
 
-	test("no Convex function but the backfill scans orders for units (the scan this replaced)", async () => {
+	test("no Convex code but the counter module and the backfill calls the tally (the scan this replaced)", async () => {
 		const { readFileSync, readdirSync } = await import("node:fs");
-		const { join } = await import("node:path");
-		const dir = join(process.cwd(), "convex");
-		const offenders = readdirSync(dir)
-			.filter((f) => f.endsWith(".ts") && !f.includes(".test."))
-			.filter((f) => f !== "migrations.ts")
+		const { join, relative } = await import("node:path");
+		const root = join(process.cwd(), "convex");
+		// Recursive: a helper under convex/lib/ calling the tally is as much a
+		// hot-path scan as a door calling it directly.
+		const files: string[] = [];
+		const walk = (dir: string) => {
+			for (const entry of readdirSync(dir, { withFileTypes: true })) {
+				const path = join(dir, entry.name);
+				if (entry.isDirectory()) {
+					if (entry.name !== "_generated") walk(path);
+				} else if (entry.name.endsWith(".ts") && !entry.name.includes(".test."))
+					files.push(path);
+			}
+		};
+		walk(root);
+		const allowed = new Set(["lib/promoTally.ts", "migrations.ts"]);
+		const offenders = files
+			.map((f) => relative(root, f))
+			.filter((f) => !allowed.has(f))
 			.filter((f) =>
-				/\btallyPromoUnits\s*\(/.test(readFileSync(join(dir, f), "utf8")),
+				/\btallyPromoUnits\s*\(/.test(readFileSync(join(root, f), "utf8")),
 			);
 		// The doors and the catalogue read `promoUnitsTaken` (one point read);
-		// a direct tally in any of them re-opens the 16 MiB failure measured on
+		// a direct tally anywhere else re-opens the 16 MiB failure measured on
 		// dev (Phase 1, 2 Nov: a 7-product flash cart read 15.8 MiB).
+		expect(files.length).toBeGreaterThan(50); // the walk really walked
 		expect(offenders).toEqual([]);
 	});
 });
