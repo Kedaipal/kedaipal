@@ -49,10 +49,23 @@ login or screen-share, neither of which scales.
      `60187…`). **Status chips** (`FilterChip`, with counts) — All · Past due ·
      Trialing · Active · On hold · Cancelled · Comped · Admin (· No subscription,
      only when non-zero); Past due sits first after All because it is the urgent
-     bucket. **Sort:** Founding rank (default, unchanged), Expiry · soonest first,
+     bucket. **The chips combine with OR** (z8r3fdzn6r, 2 Nov 2026): picking
+     Unclaimed and Cancelled shows stores in either, the orthogonal chips (Wants
+     Enterprise, Paused / offline, Untagged payers) join the same union, and a
+     store in two picked chips shows once. All is the empty selection, and
+     picking every chip on the row folds back to All. The line under the row
+     names the selection ("Filtered to Unclaimed or Cancelled") or, when nothing is
+     picked, says that the chips combine. **Clear all (N)** sits on that line
+     only while something is on, and N counts the chips plus the search box.
+     It is the only clear control: a second one in the empty state was a
+     duplicate a few pixels away. Rules: `toggleSellerStatus`,
+     `filterSellers(rows, filters[], q)`, `sellerSelectionLabel`. **Sort:** Founding rank (default, unchanged), Expiry · soonest first,
      Credits · lowest first (Credits T5 — a sort, not a chip, because "out of
      credits" crosses every status bucket), Newest store, Name A–Z. Filter, sort and search ride the URL
-     (`?status=past_due&sort=expiry&q=…`, validated by `validateSearch`) so a
+     (`?status=[…]&sort=expiry&q=…`, validated by `validateSearch`; `status` is
+     a list, and `parseSellerStatuses` still reads an older single value such
+     as Acquisition's `?status=untagged_payers`, then sorts the list into row
+     order and drops unknown values) so a
      filtered view is a link; defaults are omitted so the plain route stays
      `/app/admin/sellers`. A pasted `?q=9981` parses as a number: the
      validator reads it back as text (`searchText`) and returns every key, so
@@ -567,7 +580,33 @@ kedaipal.com subdomains). The first is the blog's video upload page,
 e.g. `npx convex env set BLOG_EDITOR_USER_IDS user_…`. Unset = no editors (admins still hold
 every area). Ids differ between the dev and prod Clerk instances.
 
+## Admin → Billing: sections fold to one line (z8r3fdzn6r)
+
+The Invoices tab was a stack of full-height forms. Every section is now a
+`CollapsibleAdminCard` (`src/routes/app.admin.billing.tsx`). It follows the same
+rules as the Edit product form's `QuestionRow`, at card scale:
+
+- **When closed, the card shows its state.** Pending invoices shows "3 waiting · 1
+  overdue" (amber when anything is overdue). Auto-renewal shows how many stores
+  charge themselves. A form that holds input shows **"Draft in progress · {store}"**.
+  When the card is open, it shows the how-to description instead.
+- **The panel stays mounted while closed** (`hidden`), so folding a half-filled form
+  keeps the draft. The panel answers `REVEAL_EVENT` like every other disclosure.
+- **Order is by urgency.** Pending invoices leads and is open by default, because it
+  is the only section someone is waiting on. Onboard a client, Issue an invoice,
+  Auto-renewal and Founding members follow, all closed. The Payment details tab is a
+  single card and stays a plain `AdminCard`.
+- **`#onboard` opens its card.** Sellers → **Invite seller** links to
+  `/app/admin/billing#onboard`, and the card opens and scrolls itself into view
+  (`useLocation` hash → `defaultOpen`).
+
 ## Deliberate scope / follow-ups
+
+- **Admin lists are not paginated yet.** The seller directory, pending invoices,
+  auto-renewal, WABA vendors and the store pickers still load in one query. The
+  directory needs a server-indexed row first, because its chips filter on facts
+  derived across tables. Scoped in
+  [`z8r3fdzn6q`](https://app.clickup.com/t/z8r3fdzn6q).
 
 - Admin allowlist stays in `ADMIN_USER_IDS` env (graduates to a Clerk role later, same as
   billing).

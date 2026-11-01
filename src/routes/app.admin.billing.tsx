@@ -1,12 +1,17 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	useLocation,
+	useNavigate,
+} from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	Award,
 	Banknote,
 	CalendarClock,
 	Check,
+	ChevronDown,
 	Coins,
 	CreditCard,
 	FilePlus2,
@@ -24,7 +29,7 @@ import {
 	TrendingDown,
 	UserPlus,
 } from "lucide-react";
-import { type ReactNode, useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -76,6 +81,10 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
+import {
+	DISCLOSURE_PANEL_ATTR,
+	REVEAL_EVENT,
+} from "../components/ui/question-row";
 import { Select } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { useActAs } from "../hooks/useActAs";
@@ -91,6 +100,7 @@ import { buildOnboardingInviteLink } from "../lib/onboarding-link";
 import { slugify, validateStoreName } from "../lib/slug";
 import { uploadImage } from "../lib/storage-upload";
 import { PLAN_LABEL } from "../lib/subscription";
+import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/app/admin/billing")({
 	component: AdminBillingRoute,
@@ -125,6 +135,9 @@ function AdminBillingRoute() {
 function AdminBillingContent() {
 	// Invoicing is the frequent task → default tab. Payment details are set-once.
 	const [tab, setTab] = useState<"invoices" | "payment">("invoices");
+	// The Sellers page's "Invite seller" lands on `#onboard` — that card opens
+	// itself rather than leaving the admin on a folded row.
+	const hash = useLocation({ select: (l) => l.hash });
 	const tabs = [
 		{
 			id: "invoices",
@@ -191,10 +204,16 @@ function AdminBillingContent() {
 			</div>
 
 			{tab === "invoices" ? (
-				<div className="flex flex-col gap-6">
-					<OnboardClientCard />
-					<IssueInvoiceForm />
+				// Every section folds to one line so the tab reads as a list of
+				// jobs, not a wall of forms (z8r3fdzn6r). Pending invoices leads
+				// and stays open: it is the only section that is money someone
+				// is waiting on. The two forms that START something sit below
+				// it, closed, and open on the Sellers page's "Invite seller"
+				// link (`#onboard`).
+				<div className="flex flex-col gap-4">
 					<PendingInvoices />
+					<OnboardClientCard defaultOpen={hash === "onboard"} />
+					<IssueInvoiceForm />
 					<AutoRenewOverview />
 					<FoundingMembersList />
 				</div>
@@ -222,6 +241,123 @@ function AdminCard({
 			className={`flex flex-col gap-4 rounded-2xl border border-border bg-card p-5 shadow-sm lg:p-6 ${className}`}
 		>
 			{children}
+		</section>
+	);
+}
+
+/**
+ * A billing section folded to one line (z8r3fdzn6r). The Edit product form's
+ * `QuestionRow`, at card scale, and on the same rules:
+ * - **Closed shows STATE, open shows guidance.** `summary` is what the section
+ *   holds right now ("3 waiting · 1 overdue", "Draft · Kuih Mak Long"), so a
+ *   folded tab still says where things stand; `description` — how to use the
+ *   section — only matters once it is open.
+ * - **The panel stays mounted while closed** (`hidden`), so a half-filled form
+ *   survives a fold, and it answers {@link REVEAL_EVENT} like every other
+ *   disclosure the error helpers know how to open.
+ * - **The whole header is the button** — 56px tall, `aria-expanded`.
+ */
+function CollapsibleAdminCard({
+	id,
+	icon,
+	title,
+	description,
+	summary,
+	summaryTone = "muted",
+	aside,
+	defaultOpen = false,
+	children,
+}: {
+	/** Deep-link anchor (`#onboard`). */
+	id?: string;
+	icon: ReactNode;
+	title: string;
+	description: ReactNode;
+	summary: ReactNode;
+	/** `set` = something is in progress in here (a draft, a waiting list). */
+	summaryTone?: "muted" | "set" | "attention";
+	aside?: ReactNode;
+	defaultOpen?: boolean;
+	children: ReactNode;
+}) {
+	const [open, setOpen] = useState(defaultOpen);
+	const panelId = useId();
+	const panelRef = useRef<HTMLDivElement>(null);
+	const cardRef = useRef<HTMLElement>(null);
+
+	// A deep link can arrive after mount (same page, new hash): open then, and
+	// bring the card into view now that it has its full height.
+	useEffect(() => {
+		if (!defaultOpen) return;
+		setOpen(true);
+		cardRef.current?.scrollIntoView?.({ block: "start" });
+	}, [defaultOpen]);
+
+	useEffect(() => {
+		const panel = panelRef.current;
+		if (!panel) return;
+		const reveal = () => setOpen(true);
+		panel.addEventListener(REVEAL_EVENT, reveal);
+		return () => panel.removeEventListener(REVEAL_EVENT, reveal);
+	}, []);
+
+	return (
+		<section
+			ref={cardRef}
+			id={id}
+			className="scroll-mt-24 overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
+		>
+			<button
+				type="button"
+				aria-expanded={open}
+				aria-controls={panelId}
+				onClick={() => setOpen((v) => !v)}
+				className="flex min-h-14 w-full items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 lg:px-6"
+			>
+				<span
+					aria-hidden="true"
+					className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent"
+				>
+					{icon}
+				</span>
+				<span className="flex min-w-0 flex-1 flex-col">
+					<span className="text-sm font-semibold leading-snug">{title}</span>
+					<span
+						className={cn(
+							"mt-0.5 line-clamp-2 text-xs leading-snug",
+							summaryTone === "set" && "font-medium text-accent-emphasis",
+							summaryTone === "attention" &&
+								"font-medium text-amber-700 dark:text-amber-400",
+							summaryTone === "muted" && "text-muted-foreground",
+						)}
+					>
+						{summary}
+					</span>
+				</span>
+				{aside ? (
+					<span className="hidden shrink-0 sm:block">{aside}</span>
+				) : null}
+				<ChevronDown
+					aria-hidden="true"
+					className={cn(
+						"size-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
+						open && "rotate-180",
+					)}
+				/>
+			</button>
+			<div
+				ref={panelRef}
+				id={panelId}
+				hidden={!open}
+				{...{ [DISCLOSURE_PANEL_ATTR]: "" }}
+				className="flex flex-col gap-4 border-t border-border px-5 pt-4 pb-5 lg:px-6 lg:pb-6"
+			>
+				<p className="text-xs leading-relaxed text-muted-foreground">
+					{description}
+				</p>
+				{aside ? <div className="sm:hidden">{aside}</div> : null}
+				{children}
+			</div>
 		</section>
 	);
 }
@@ -468,7 +604,12 @@ function topUpTile(revenue: TopUpRevenue | undefined): StatTileProps {
 	};
 }
 
-function OnboardClientCard() {
+function OnboardClientCard({
+	defaultOpen = false,
+}: {
+	/** Opened by the `#onboard` deep link. */
+	defaultOpen?: boolean;
+}) {
 	// Which door. Held here rather than in the URL: it is a scratch choice
 	// inside one form, and nothing links to a half-filled card.
 	const [mode, setMode] = useState<"link" | "build">("link");
@@ -588,18 +729,31 @@ function OnboardClientCard() {
 		}
 	}
 
-	return (
-		<AdminCard id="onboard">
-			<AdminSectionHeading
-				icon={<UserPlus className="size-5" />}
-				title="Onboard a client"
-				description={
-					mode === "link"
-						? "Fill what you know, copy the invite link, and send it manually. They confirm under their own login before invoicing."
-						: "Create the store now and set it up yourself. They claim it later by signing up with the handover email — no form for them to fill."
-				}
-			/>
+	// Folded, the card still says when there is work in it — a draft a fold
+	// kept is a draft the admin must not forget they started.
+	const onboardDraft =
+		storeName.trim() !== "" ||
+		slug.trim() !== "" ||
+		waPhone.trim() !== "" ||
+		email.trim() !== "";
+	const onboardSummary = onboardDraft
+		? `Draft in progress${storeName.trim() ? ` · ${storeName.trim()}` : ""}`
+		: "Send a new seller an invite link, or build their store for them";
 
+	return (
+		<CollapsibleAdminCard
+			id="onboard"
+			icon={<UserPlus className="size-5" />}
+			title="Onboard a client"
+			description={
+				mode === "link"
+					? "Fill what you know, copy the invite link, and send it manually. They confirm under their own login before invoicing."
+					: "Create the store now and set it up yourself. They claim it later by signing up with the handover email — no form for them to fill."
+			}
+			summary={onboardSummary}
+			summaryTone={onboardDraft ? "set" : "muted"}
+			defaultOpen={defaultOpen}
+		>
 			{/* The mode picker sits FIRST because it changes what every field below
 			    means (the email is a send-to address in one mode and a handover
 			    target in the other). Each option states its consequence — an admin
@@ -833,7 +987,7 @@ function OnboardClientCard() {
 								: "Add the handover email — nobody can claim the store without it."}
 				</p>
 			) : null}
-		</AdminCard>
+		</CollapsibleAdminCard>
 	);
 }
 
@@ -904,7 +1058,11 @@ function currencyChoiceLabel(currency: BillingCurrency): string {
  * Founding-10 member (founding toggle). Built for minimal typing: amount is
  * derived from plan + cycle + founding; the due date defaults to +14 days.
  */
-export function IssueInvoiceForm() {
+export function IssueInvoiceForm({
+	defaultOpen = false,
+}: {
+	defaultOpen?: boolean;
+} = {}) {
 	const retailerSelectId = useId();
 	const retailerList = useQuery(
 		convexQuery(api.invoices.listRetailersForAdmin, {}),
@@ -1135,21 +1293,30 @@ export function IssueInvoiceForm() {
 		}
 	}
 
-	return (
-		<AdminCard>
-			<AdminSectionHeading
-				icon={<FilePlus2 className="size-5" />}
-				title="Issue an invoice"
-				description="Pick a retailer, plan and cycle — the amount and due date (14 days) are set automatically. The paid cycle starts when you mark it paid."
-				aside={
-					spotsRemaining !== undefined ? (
-						<span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
-							{spotsRemaining}/10 founding left
-						</span>
-					) : null
-				}
-			/>
+	const issueDraftStore =
+		retailerId !== ""
+			? (retailers?.find((r) => r._id === retailerId)?.storeName ?? "a store")
+			: undefined;
+	const issueSummary = issueDraftStore
+		? `Draft in progress · ${issueDraftStore}`
+		: "Bill an existing store for a plan — amount and due date fill in";
 
+	return (
+		<CollapsibleAdminCard
+			icon={<FilePlus2 className="size-5" />}
+			title="Issue an invoice"
+			description="Pick a retailer, plan and cycle — the amount and due date (14 days) are set automatically. The paid cycle starts when you mark it paid."
+			aside={
+				spotsRemaining !== undefined ? (
+					<span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+						{spotsRemaining}/10 founding left
+					</span>
+				) : null
+			}
+			summary={issueSummary}
+			summaryTone={issueDraftStore ? "set" : "muted"}
+			defaultOpen={defaultOpen}
+		>
 			<div className="flex flex-col gap-1">
 				<label htmlFor={retailerSelectId} className="text-sm font-medium">
 					Retailer
@@ -1484,7 +1651,7 @@ export function IssueInvoiceForm() {
 				open={contractSheetOpen}
 				onOpenChange={setContractSheetOpen}
 			/>
-		</AdminCard>
+		</CollapsibleAdminCard>
 	);
 }
 
@@ -1536,13 +1703,23 @@ function PendingInvoices() {
 		}
 	}
 
+	const overdueCount = invoices?.filter((inv) => inv.dueDate < now).length ?? 0;
+	const pendingSummary =
+		invoices === undefined
+			? "Loading…"
+			: invoices.length === 0
+				? "None — all settled"
+				: `${invoices.length} waiting${overdueCount > 0 ? ` · ${overdueCount} overdue` : ""}`;
+
 	return (
-		<AdminCard>
-			<AdminSectionHeading
-				icon={<ListChecks className="size-5" />}
-				title="Pending invoices"
-				description="Settle invoices only after the payment has landed. Marking paid activates access and may claim a founding rank."
-			/>
+		<CollapsibleAdminCard
+			icon={<ListChecks className="size-5" />}
+			title="Pending invoices"
+			description="Settle invoices only after the payment has landed. Marking paid activates access and may claim a founding rank."
+			summary={pendingSummary}
+			summaryTone={overdueCount > 0 ? "attention" : "muted"}
+			defaultOpen
+		>
 			{invoices === undefined ? (
 				<Skeleton className="h-16 w-full rounded-xl" />
 			) : invoices.length === 0 ? (
@@ -1758,7 +1935,7 @@ function PendingInvoices() {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
-		</AdminCard>
+		</CollapsibleAdminCard>
 	);
 }
 
@@ -1803,12 +1980,18 @@ function AutoRenewOverview() {
 	const now = Date.now();
 
 	return (
-		<AdminCard>
-			<AdminSectionHeading
-				icon={<RefreshCw className="size-5" />}
-				title="Auto-renewal"
-				description="Retailers with a saved payment method. Their renewals charge themselves; failures dun by email and fall back to the Pay-now link."
-			/>
+		<CollapsibleAdminCard
+			icon={<RefreshCw className="size-5" />}
+			title="Auto-renewal"
+			description="Retailers with a saved payment method. Their renewals charge themselves; failures dun by email and fall back to the Pay-now link."
+			summary={
+				rows === undefined
+					? "Loading…"
+					: rows.length === 0
+						? "Nobody yet — sellers turn it on in Settings → Billing"
+						: `${rows.length} ${rows.length === 1 ? "store charges itself" : "stores charge themselves"} at renewal`
+			}
+		>
 			{rows === undefined ? (
 				<Skeleton className="h-16 w-full rounded-xl" />
 			) : rows.length === 0 ? (
@@ -1850,7 +2033,7 @@ function AutoRenewOverview() {
 					))}
 				</ul>
 			)}
-		</AdminCard>
+		</CollapsibleAdminCard>
 	);
 }
 
@@ -1919,19 +2102,25 @@ function FoundingMembersList() {
 	}
 
 	return (
-		<AdminCard>
-			<AdminSectionHeading
-				icon={<Award className="size-5" />}
-				title="Founding members"
-				description="The 10-slot cohort — who's reserved, where they are in the pay cycle, and whether their founding benefits still stand. Rank and badge are permanent; benefits end 90 days past paid-through."
-				aside={
-					spotsRemaining !== undefined ? (
-						<span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-							{10 - spotsRemaining}/10 claimed
-						</span>
-					) : null
-				}
-			/>
+		<CollapsibleAdminCard
+			icon={<Award className="size-5" />}
+			title="Founding members"
+			description="The 10-slot cohort — who's reserved, where they are in the pay cycle, and whether their founding benefits still stand. Rank and badge are permanent; benefits end 90 days past paid-through."
+			aside={
+				spotsRemaining !== undefined ? (
+					<span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+						{10 - spotsRemaining}/10 claimed
+					</span>
+				) : null
+			}
+			summary={
+				members === undefined
+					? "Loading…"
+					: members.length === 0
+						? "No founding members yet"
+						: "The 10-slot cohort — rank, pay cycle and whether benefits still stand"
+			}
+		>
 			{members === undefined ? (
 				<Skeleton className="h-16 w-full rounded-xl" />
 			) : members.length === 0 ? (
@@ -2095,7 +2284,7 @@ function FoundingMembersList() {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
-		</AdminCard>
+		</CollapsibleAdminCard>
 	);
 }
 

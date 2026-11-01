@@ -98,6 +98,65 @@ export function sellerFilterEmptyNoun(filter: SellerFilter): string {
 	return `${SELLER_FILTER_LABEL[filter].toLowerCase()} sellers`;
 }
 
+/** A chip that narrows — everything but "All", which is the empty selection. */
+export type SellerStatusFilter = Exclude<SellerFilter, "all">;
+
+/**
+ * `?status=` as a selection. Accepts the list the chip row writes AND the
+ * single value older links carry (`?status=past_due` from Acquisition, a
+ * pasted bookmark), drops anything unknown, de-duplicates, and returns the
+ * chips in ROW order — so a link reads the same however it was clicked
+ * together. `undefined` when nothing survives, keeping "All" out of the URL.
+ */
+export function parseSellerStatuses(
+	raw: unknown,
+): SellerStatusFilter[] | undefined {
+	const given = Array.isArray(raw) ? raw : raw != null ? [raw] : [];
+	const picked = SELLER_FILTERS.filter(
+		(f): f is SellerStatusFilter => f !== "all" && given.includes(f),
+	);
+	return picked.length > 0 ? picked : undefined;
+}
+
+/** The selection as a phrase — "Unclaimed or Cancelled". Row order, so it
+ * matches the chips left to right. */
+export function sellerSelectionLabel(
+	filters: readonly SellerStatusFilter[],
+): string {
+	const labels = SELLER_FILTERS.filter(
+		(f): f is SellerStatusFilter =>
+			f !== "all" && filters.includes(f as SellerStatusFilter),
+	).map((f) => SELLER_FILTER_LABEL[f]);
+	if (labels.length <= 2) return labels.join(" or ");
+	return `${labels.slice(0, -1).join(", ")} or ${labels[labels.length - 1]}`;
+}
+
+/**
+ * Tap a chip. "All" clears the selection; any other chip toggles. Selecting
+ * every chip the row OFFERS collapses back to "All" — the union of every
+ * bucket is the whole book, and a lit row with a dark "All" beside it would
+ * say otherwise (the inbox's rule, `inbox-status-chips.ts`).
+ */
+export function toggleSellerStatus(
+	selected: readonly SellerStatusFilter[],
+	chip: SellerFilter,
+	offered: readonly SellerFilter[],
+): SellerStatusFilter[] {
+	if (chip === "all") return [];
+	const next = selected.includes(chip)
+		? selected.filter((f) => f !== chip)
+		: [...selected, chip];
+	const offeredChips = offered.filter(
+		(f): f is SellerStatusFilter => f !== "all",
+	);
+	if (offeredChips.every((f) => next.includes(f))) return [];
+	// Row order, for the same reason `parseSellerStatuses` sorts.
+	return SELLER_FILTERS.filter(
+		(f): f is SellerStatusFilter =>
+			f !== "all" && next.includes(f as SellerStatusFilter),
+	);
+}
+
 export function isSellerFilter(value: unknown): value is SellerFilter {
 	return (
 		typeof value === "string" &&
@@ -263,22 +322,34 @@ export function matchesSellerSearch(
 	);
 }
 
+/** One chip's test. Each orthogonal filter (the lead stamp, availability, the
+ * acquisition backfill) reads its own fact; every other chip is a bucket. */
+export function matchesSellerFilter(
+	row: AdminSellerRow,
+	filter: SellerStatusFilter,
+): boolean {
+	if (filter === "wants_enterprise") return isEnterpriseLead(row);
+	if (filter === "unavailable") return row.availability.state !== "open";
+	if (filter === "untagged_payers") return isUntaggedPayer(row);
+	return sellerBucket(row) === filter;
+}
+
+/**
+ * The chips are an OR: a store shows when it matches ANY selected chip, and an
+ * empty selection is "All" (Zaki, 2 Nov — z8r3fdzn6r). A union, so the result
+ * is never the sum of the chip counts: a past-due store with an open
+ * Enterprise ask lands once under "Past due or Wants Enterprise". Search
+ * still narrows whatever the chips let through.
+ */
 export function filterSellers(
 	rows: readonly AdminSellerRow[],
-	filter: SellerFilter,
+	filters: readonly SellerStatusFilter[],
 	query: string,
 ): AdminSellerRow[] {
 	return rows.filter(
 		(row) =>
-			(filter === "all"
-				? true
-				: filter === "wants_enterprise"
-					? isEnterpriseLead(row)
-					: filter === "unavailable"
-						? row.availability.state !== "open"
-						: filter === "untagged_payers"
-							? isUntaggedPayer(row)
-							: sellerBucket(row) === filter) &&
+			(filters.length === 0 ||
+				filters.some((f) => matchesSellerFilter(row, f))) &&
 			matchesSellerSearch(row, query),
 	);
 }

@@ -118,7 +118,7 @@ const planButton = (name: "starter" | "pro" | "enterprise") =>
 describe("Issue an invoice — the Enterprise door", () => {
 	it("lets a store with no contract be picked for Enterprise, and says what's missing", () => {
 		state.retailers = [store()];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 
 		// The whole complaint: this used to be disabled, which told the admin
@@ -140,7 +140,7 @@ describe("Issue an invoice — the Enterprise door", () => {
 
 	it("opens the contract form from the billing card — no second tab", () => {
 		state.retailers = [store()];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 		fireEvent.click(planButton("enterprise"));
 
@@ -151,7 +151,7 @@ describe("Issue an invoice — the Enterprise door", () => {
 
 	it("offers the live contract for editing instead of a dead end", () => {
 		state.retailers = [store({ plan: "enterprise", enterprise: CONTRACT })];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 
 		// A contract store ARMS its contract — Enterprise is already the plan.
@@ -171,7 +171,7 @@ describe("Issue an invoice — the Enterprise door", () => {
 				enterprise: CONTRACT,
 			}),
 		];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 
 		fireEvent.click(screen.getByRole("button", { name: /issue invoice/i }));
@@ -183,7 +183,7 @@ describe("Issue an invoice — the Enterprise door", () => {
 
 	it("still prices a founding store's PRO bill at the founding rate", async () => {
 		state.retailers = [store({ isFoundingMember: true })];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 
 		fireEvent.click(screen.getByRole("button", { name: /issue invoice/i }));
@@ -195,7 +195,7 @@ describe("Issue an invoice — the Enterprise door", () => {
 
 	it("keeps the Enterprise explainer out of an ordinary Pro bill", () => {
 		state.retailers = [store()];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 
 		// Pro is the default for a store with no contract, and an admin billing
@@ -222,7 +222,7 @@ describe("Issue an invoice — correcting an open bill (z8r3fdpm2p)", () => {
 	it("offers to replace the open bill instead of dead-ending", () => {
 		// The old copy sent the admin to another card to void it by hand.
 		state.retailers = [store({ pending: RENEWAL, autoChargeIdle: true })];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 
 		const btn = screen.getByRole("button", { name: /replace open bill/i });
@@ -233,7 +233,7 @@ describe("Issue an invoice — correcting an open bill (z8r3fdpm2p)", () => {
 
 	it("promises the card charge only on a correction that costs no more", () => {
 		state.retailers = [store({ pending: RENEWAL, autoChargeIdle: true })];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 
 		// Default Pro (RM149) replacing a RM149 renewal — inside the mandate.
@@ -252,7 +252,7 @@ describe("Issue an invoice — correcting an open bill (z8r3fdpm2p)", () => {
 		state.retailers = [
 			store({ pending: RENEWAL, autoChargeIdle: false, chargeInFlight: true }),
 		];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 
 		expect(
@@ -273,7 +273,7 @@ describe("Issue an invoice — correcting an open bill (z8r3fdpm2p)", () => {
 		state.retailers = [
 			store({ pending: RENEWAL, autoChargeIdle: false, chargeInFlight: false }),
 		];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 
 		expect(
@@ -290,7 +290,7 @@ describe("Issue an invoice — correcting an open bill (z8r3fdpm2p)", () => {
 
 	it("names the bill it will void before replacing it", async () => {
 		state.retailers = [store({ pending: RENEWAL, autoChargeIdle: true })];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 
 		fireEvent.click(screen.getByRole("button", { name: /replace open bill/i }));
@@ -310,7 +310,7 @@ describe("Issue an invoice — what paying does to the tier (z8r3fdpm2p)", () =>
 		// The surprising half: `settleInvoicePaid` flips the plan at once, while
 		// a seller's own downgrade is scheduled to the period end.
 		state.retailers = [store({ plan: "pro" })];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 		fireEvent.click(planButton("starter"));
 
@@ -320,7 +320,7 @@ describe("Issue an invoice — what paying does to the tier (z8r3fdpm2p)", () =>
 
 	it("says an upgrade lands on payment, never before", () => {
 		state.retailers = [store({ plan: "starter" })];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 		fireEvent.click(planButton("pro"));
 
@@ -329,7 +329,7 @@ describe("Issue an invoice — what paying does to the tier (z8r3fdpm2p)", () =>
 
 	it("says nothing when the bill isn't a tier change at all", () => {
 		state.retailers = [store({ plan: "pro" })];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 		expect(screen.queryByText(/straight away|not before/)).toBeNull();
 	});
@@ -344,7 +344,7 @@ describe("Issue an invoice — the picker's cap (z8r3fdpm2p)", () => {
 		// a batch pushes exactly that many real customers off.
 		state.retailers = [store()];
 		state.capped = true;
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 
 		expect(screen.getByText(/Showing the newest 500 stores/)).toBeTruthy();
 		// The way out, not just the bad news.
@@ -354,7 +354,7 @@ describe("Issue an invoice — the picker's cap (z8r3fdpm2p)", () => {
 	it("stays quiet when the whole book fits", () => {
 		state.retailers = [store()];
 		state.capped = false;
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		expect(screen.queryByText(/Showing the newest/)).toBeNull();
 	});
 });
@@ -367,7 +367,7 @@ describe("Issue an invoice — the currency is the store's country's, never a pi
 
 	it("an SG founding store bills S$41, and the form says its country set that", () => {
 		state.retailers = [sgStore({ isFoundingMember: true })];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 
 		expect(screen.getByText("S$ (SGD)")).toBeTruthy();
@@ -389,7 +389,7 @@ describe("Issue an invoice — the currency is the store's country's, never a pi
 		// The picker that defaulted to MYR is what billed a Singapore store in
 		// ringgit; the rule is structural now, not a default.
 		state.retailers = [sgStore()];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		pickStore();
 		expect(screen.queryByRole("button", { name: /RM \(MYR\)/ })).toBeNull();
 		expect(screen.queryByRole("button", { name: /S\$ \(SGD\)/ })).toBeNull();
@@ -400,7 +400,7 @@ describe("Issue an invoice — the currency is the store's country's, never a pi
 			store(),
 			sgStore({ _id: "r2", storeName: "Lion City Bakes", slug: "lcb" }),
 		];
-		render(<IssueInvoiceForm />);
+		render(<IssueInvoiceForm defaultOpen />);
 		expect(screen.getByText("Follows the store's country.")).toBeTruthy();
 		pickStore();
 		expect(screen.getByText("RM (MYR)")).toBeTruthy();
@@ -408,5 +408,38 @@ describe("Issue an invoice — the currency is the store's country's, never a pi
 		fireEvent.change(screen.getByRole("combobox"), { target: { value: "r2" } });
 		expect(screen.getByText("S$ (SGD)")).toBeTruthy();
 		expect(screen.getByText(/Set by its country \(Singapore\)/)).toBeTruthy();
+	});
+});
+
+// z8r3fdzn6r: the billing tab folds each section to one line that carries its
+// state, so the tab reads as a list of jobs instead of a wall of forms.
+describe("Issue an invoice — folded to one line", () => {
+	const header = () =>
+		screen.getByRole("button", { name: /^Issue an invoice/ });
+
+	it("starts closed with a summary of what it does, and opens from its header", () => {
+		state.retailers = [store()];
+		render(<IssueInvoiceForm />);
+		expect(header().getAttribute("aria-expanded")).toBe("false");
+		expect(header().textContent).toMatch(/Bill an existing store/);
+		// Closed means closed: the picker is not reachable.
+		expect(screen.queryByRole("combobox")).toBeNull();
+
+		fireEvent.click(header());
+		expect(header().getAttribute("aria-expanded")).toBe("true");
+		expect(screen.getByRole("combobox")).toBeTruthy();
+	});
+
+	it("a fold keeps the draft, and the folded line says there is one", () => {
+		state.retailers = [store()];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+		fireEvent.click(header());
+
+		expect(header().textContent).toMatch(/Draft in progress · Hermoolah/);
+		fireEvent.click(header());
+		expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe(
+			"r1",
+		);
 	});
 });
