@@ -34,7 +34,12 @@ import {
 import { jsonLdScript } from "../lib/json-ld";
 import { pageHead } from "../lib/not-found";
 import { seoDescription } from "../lib/seo-text";
-import { ssrRead } from "../lib/ssr-read";
+import {
+	ssrDeadline,
+	ssrHeadRead,
+	ssrProductPage,
+	ssrRetailerBySlug,
+} from "../lib/storefront-ssr";
 import { hasStartingPrice } from "../lib/variant";
 
 interface ProductLoaderData {
@@ -80,10 +85,14 @@ interface ProductLoaderData {
 export const Route = createFileRoute("/$slug_/p/$productSlug")({
 	loader: async ({
 		params,
+		context,
 	}): Promise<ProductLoaderData | StoreUnavailableLoaderData | null> => {
-		const client = getConvexHttpClient();
-		const retailerRead = await ssrRead(() =>
-			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
+		// Seeds the cache the page renders from (z8r3fdue6f — see $slug.tsx).
+		const deadline = ssrDeadline();
+		const retailerRead = await ssrRetailerBySlug(
+			context.queryClient,
+			params.slug,
+			deadline,
 		);
 		// Transient upstream failure: render the shell (client query paints the
 		// product) instead of an error page (86eyheqzv). Definitive notFounds
@@ -110,11 +119,12 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 		const retailer = result.retailer;
 
 		// Unknown, archived, hidden or category-suppressed → 404, never a leak.
-		const productRead = await ssrRead(() =>
-			client.query(api.products.getPublicBySlug, {
-				retailerId: retailer._id,
-				slug: params.productSlug,
-			}),
+		// The same read seeds the page's buy box.
+		const productRead = await ssrProductPage(
+			context.queryClient,
+			retailer._id,
+			params.productSlug,
+			deadline,
 		);
 		if (!productRead.ok) return null;
 		const product = productRead.value;
@@ -124,11 +134,14 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 
 		// The breadcrumb's middle crumb (z8r3fdh2z3). A transient failure here
 		// shortens the trail to Store › Product; it never fails the page.
-		const categoryRead = await ssrRead(() =>
-			client.query(api.categories.primaryPublicForProduct, {
-				retailerId: retailer._id,
-				productId: product._id,
-			}),
+		// head()-only, so it isn't seeded — but it shares the loader's deadline.
+		const categoryRead = await ssrHeadRead(
+			() =>
+				getConvexHttpClient().query(api.categories.primaryPublicForProduct, {
+					retailerId: retailer._id,
+					productId: product._id,
+				}),
+			deadline,
 		);
 		const primaryCategory = categoryRead.ok ? categoryRead.value : null;
 

@@ -27,12 +27,16 @@ import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
 import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
 import { breadcrumbListJsonLd, categoryCrumbs } from "../lib/breadcrumbs";
-import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { SITE_URL } from "../lib/convex-server";
 import { absoluteProxiedImageUrl } from "../lib/image-proxy";
 import { jsonLdScript } from "../lib/json-ld";
 import { pageHead } from "../lib/not-found";
 import { seoDescription } from "../lib/seo-text";
-import { ssrRead } from "../lib/ssr-read";
+import {
+	ssrCategoryPage,
+	ssrDeadline,
+	ssrRetailerBySlug,
+} from "../lib/storefront-ssr";
 
 interface CategoryLoaderData {
 	storeName: string;
@@ -57,10 +61,14 @@ interface CategoryLoaderData {
 export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 	loader: async ({
 		params,
+		context,
 	}): Promise<CategoryLoaderData | StoreUnavailableLoaderData | null> => {
-		const client = getConvexHttpClient();
-		const retailerRead = await ssrRead(() =>
-			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
+		// Seeds the cache the page renders from (z8r3fdue6f — see $slug.tsx).
+		const deadline = ssrDeadline();
+		const retailerRead = await ssrRetailerBySlug(
+			context.queryClient,
+			params.slug,
+			deadline,
 		);
 		// Transient upstream failure: render the shell (client query paints the
 		// category) instead of an error page (86eyheqzv). Definitive notFounds
@@ -86,12 +94,13 @@ export const Route = createFileRoute("/$slug_/c/$categorySlug")({
 			return { unavailable: true, storeName: result.storeName };
 		const retailer = result.retailer;
 
-		// Unknown or archived category → 404, never a silent empty page.
-		const pageRead = await ssrRead(() =>
-			client.query(api.categories.getPublicPage, {
-				retailerId: retailer._id,
-				categorySlug: params.categorySlug,
-			}),
+		// Unknown or archived category → 404, never a silent empty page. The
+		// same read seeds the page's product grid.
+		const pageRead = await ssrCategoryPage(
+			context.queryClient,
+			retailer._id,
+			params.categorySlug,
+			deadline,
 		);
 		if (!pageRead.ok) return null;
 		const page = pageRead.value;
