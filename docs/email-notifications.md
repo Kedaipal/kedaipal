@@ -85,7 +85,7 @@ Audited 2 Nov 2026 from public DNS and a real Resend message's
 | --- | --- | --- | --- | --- |
 | **Resend** (`convex/lib/email.ts`, the app's ONLY mail path) | Order alerts, billing, dunning, Pay-now, trial, handover, admin alerts | `send.kedaipal.com` TXT `v=spf1 include:amazonses.com ~all` + MX `feedback-smtp.ap-northeast-1.amazonses.com` (bounce/return-path only) | `resend._domainkey` | Both pass, both aligned (verified on a real message) |
 | **Google Workspace** | Founder + support mail (`hello@`, `arif.r@`, aliases) | Root TXT `v=spf1 include:_spf.google.com ~all` | `google._domainkey` (published) | Record is published. Confirm signing is **on** (Admin > Apps > Gmail > Authenticate email shows "Authenticating email") |
-| **Clerk** (prod) | Sign-in and verification codes | `clkmail.kedaipal.com` CNAME to `clerk.services` | `clk._domainkey`, `clk2._domainkey` CNAMEs | Records exist. Confirm "Verified" in the Clerk prod dashboard |
+| **Clerk** (prod) | Sign-in and verification codes | `clkmail.kedaipal.com` CNAME to `clerk.services` | `clk._domainkey`, `clk2._domainkey` CNAMEs | Verified in the Clerk prod dashboard, Email 3/3 (checked 2 Nov 2026; Configure > Developers > Domains) |
 
 HitPay, Sanity, ClickUp and Meta send from their own domains and are not
 affected. Relaxed alignment (the DMARC default) is what lets the `send.` and
@@ -105,13 +105,14 @@ Edit the policy in DNS > Records, on the `_dmarc` TXT row.
 
 | Phase | When | Record |
 | --- | --- | --- |
-| 1. Monitor | Day 0 | `v=DMARC1; p=none; rua=mailto:<cloudflare-rua>; fo=1` |
-| 2. Quarantine | Day 3–4, once reports show only the three senders above passing | `v=DMARC1; p=quarantine; sp=quarantine; rua=mailto:<cloudflare-rua>; fo=1` |
-| 3. Reject | ~Day 10, reports still clean | `v=DMARC1; p=reject; sp=reject; rua=mailto:<cloudflare-rua>; fo=1` |
+| 1. Monitor | Day 0 | `v=DMARC1; p=none; rua=mailto:<cloudflare-rua>` |
+| 2. Quarantine | Day 3–4, once reports show only the three senders above passing | `v=DMARC1; p=quarantine; sp=quarantine; rua=mailto:<cloudflare-rua>` |
+| 3. Reject | ~Day 10, reports still clean | `v=DMARC1; p=reject; sp=reject; rua=mailto:<cloudflare-rua>` |
 
 Never jump to `reject` on day 0. An unverified legitimate sender is silently
 dropped at `reject`, and if that sender is Clerk, sellers cannot sign in.
-`sp=` covers spoofed `From: x@<anything>.kedaipal.com`. That is safe because
+No `fo=` tag: it only governs failure (`ruf`) reports, and we request
+aggregate (`rua`) reports only. `sp=` covers spoofed `From: x@<anything>.kedaipal.com`. That is safe because
 no subdomain is a From domain today: `send.` and `clkmail.` are return paths.
 
 Check the live state:
