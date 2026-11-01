@@ -158,3 +158,175 @@ describe("a dead code is struck through, so the list scans", () => {
 		);
 	});
 });
+
+/**
+ * A SHARED code (`z8r3fducfm`) reads differently on every line: it says it is
+ * shared, its outcome is a tally rather than one order, and "who used it" is
+ * a read that stays available after the code has stopped working.
+ */
+describe("a shared code", () => {
+	const shared: VoucherRowView = {
+		...base,
+		code: "SALE345",
+		usage: "shared",
+		maxRedemptions: 50,
+		redeemedCount: 12,
+		endsAt: Date.parse("2026-10-31T18:00:00+08:00"),
+	};
+
+	it("says it is shared, and leads with the tally and the end", () => {
+		renderList([shared]);
+		expect(screen.getByText("Shared")).toBeTruthy();
+		expect(
+			screen.getByText("12 of 50 used · ends 31 Oct 2026, 6:00 PM"),
+		).toBeTruthy();
+	});
+
+	it("with no end time says so, rather than leaving a blank", () => {
+		renderList([{ ...shared, endsAt: undefined }]);
+		expect(screen.getByText("12 of 50 used · no end time")).toBeTruthy();
+	});
+
+	it("a one-use code that is spent reads as a sentence, not 'All 1 uses'", () => {
+		renderList([
+			{
+				...shared,
+				status: "redeemed",
+				maxRedemptions: 1,
+				redeemedCount: 1,
+				endsAt: undefined,
+			},
+		]);
+		expect(screen.getByText("Its only use is taken")).toBeTruthy();
+		expect(screen.queryByText(/All 1 uses/)).toBeNull();
+	});
+
+	it("a full code says the CAP stopped it, not the clock", () => {
+		renderList([{ ...shared, status: "redeemed", redeemedCount: 50 }]);
+		// "Had until", not "was running until": the cap filled while the end
+		// was still ahead, and the past tense read as a lie.
+		expect(
+			screen.getByText(/All 50 uses taken · had until 31 Oct 2026, 6:00 PM/),
+		).toBeTruthy();
+		expect(screen.getByText("Used")).toBeTruthy();
+	});
+
+	it("an ended code names when, and how many got in", () => {
+		renderList([{ ...shared, status: "expired" }]);
+		expect(
+			screen.getByText("Ended 31 Oct 2026, 6:00 PM · 12 of 50 used"),
+		).toBeTruthy();
+	});
+
+	it("offers 'who used it' once anyone has — to readers too, and after it is dead", () => {
+		const onShowUses = vi.fn();
+		render(
+			<VoucherList
+				vouchers={[{ ...shared, status: "expired" }]}
+				onShare={vi.fn()}
+				onVoid={vi.fn()}
+				onShowUses={onShowUses}
+				canWrite={false}
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /12 orders/ }));
+		expect(onShowUses).toHaveBeenCalledWith(
+			expect.objectContaining({ code: "SALE345" }),
+		);
+	});
+
+	it("does not offer it before anyone has used the code", () => {
+		render(
+			<VoucherList
+				vouchers={[{ ...shared, redeemedCount: 0 }]}
+				onShare={vi.fn()}
+				onVoid={vi.fn()}
+				onShowUses={vi.fn()}
+				canWrite
+			/>,
+		);
+		expect(screen.queryByRole("button", { name: /orders?$/ })).toBeNull();
+		// Share and Void are still there — the code is live.
+		expect(screen.getByRole("button", { name: "Share" })).toBeTruthy();
+	});
+});
+
+/**
+ * Shared codes v2 (`z8r3fdz0pw`): a scheduled row is live-in-waiting, the
+ * conditions a buyer meets are printed on the row, and a shared code can be
+ * extended — including one that has run out, which is when it is wanted.
+ */
+describe("v2 — scheduled, fine print, extend", () => {
+	const shared: VoucherRowView = {
+		...base,
+		code: "SALE345",
+		usage: "shared",
+		maxRedemptions: 50,
+		redeemedCount: 0,
+	};
+	const startsAt = Date.parse("2026-11-01T09:00:00+08:00");
+
+	function renderWithExtend(rows: VoucherRowView[], canWrite = true) {
+		const onExtend = vi.fn();
+		render(
+			<VoucherList
+				vouchers={rows}
+				onShare={vi.fn()}
+				onVoid={vi.fn()}
+				onExtend={onExtend}
+				canWrite={canWrite}
+			/>,
+		);
+		return { onExtend };
+	}
+
+	it("a scheduled code says Scheduled, leads with its start, and is not struck through", () => {
+		renderWithExtend([{ ...shared, status: "scheduled", startsAt }]);
+		expect(screen.getByText("Scheduled")).toBeTruthy();
+		expect(
+			screen.getByText("Starts 1 Nov 2026, 9:00 AM · 50 uses"),
+		).toBeTruthy();
+		expect(screen.getByText("SALE345").className).not.toMatch(/line-through/);
+		// Can be shared early and called off before it starts.
+		expect(screen.getByRole("button", { name: /share/i })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Void" })).toBeTruthy();
+	});
+
+	it("prints the conditions a buyer meets", () => {
+		renderWithExtend([
+			{
+				...shared,
+				kind: "percent",
+				value: 20,
+				maxDiscount: 2000,
+				minSpend: 5000,
+				perBuyerLimit: 1,
+			},
+		]);
+		expect(
+			screen.getByText(
+				/up to RM\s20\.00 off · min\. spend RM\s50\.00 · 1 per buyer/,
+			),
+		).toBeTruthy();
+	});
+
+	it("offers Extend on a live shared code and on one that ran out, never on a voided one", () => {
+		const { onExtend } = renderWithExtend([shared]);
+		fireEvent.click(screen.getByRole("button", { name: /extend/i }));
+		expect(onExtend).toHaveBeenCalledWith(shared);
+		cleanup();
+		renderWithExtend([{ ...shared, status: "redeemed", redeemedCount: 50 }]);
+		expect(screen.getByRole("button", { name: /extend/i })).toBeTruthy();
+		cleanup();
+		renderWithExtend([{ ...shared, status: "voided" }]);
+		expect(screen.queryByRole("button", { name: /extend/i })).toBeNull();
+	});
+
+	it("a single-use voucher and a read-only teammate get no Extend", () => {
+		renderWithExtend([base]);
+		expect(screen.queryByRole("button", { name: /extend/i })).toBeNull();
+		cleanup();
+		renderWithExtend([shared], false);
+		expect(screen.queryByRole("button", { name: /extend/i })).toBeNull();
+	});
+});

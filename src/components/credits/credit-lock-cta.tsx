@@ -11,7 +11,13 @@ import { Button } from "../ui/button";
  * Renders nothing for any other error, or for a teammate who can't take the
  * way back — their sentence already says to ask the owner.
  */
-export function CreditLockCta({ lock }: { lock: CreditLockErrorData | null }) {
+export function CreditLockCta({
+	lock,
+}: {
+	/** A typed refusal, or anything else carrying its way back — the closed
+	 * Counter passes its own (z8r3fdwbbb). */
+	lock: Pick<CreditLockErrorData, "audience" | "unlockRoute"> | null;
+}) {
 	if (!lock || lock.audience === "member") return null;
 	const cta = lockCta(lock.unlockRoute);
 	return (

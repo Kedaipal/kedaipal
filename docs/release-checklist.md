@@ -68,7 +68,10 @@ Never leave a row out because it is empty. "None" is the information.
    bump and the notes as one unit.
 2. Merge the release PR.
 3. CI deploys on push to `main` — gate → Convex prod → Cloudflare → tag. Nothing
-   to do by hand.
+   to do by hand. **Check a "Deploy to Production" run actually appeared.** If
+   GitHub dropped the push event there is no run at all; start one from
+   Actions → Deploy to Production → Run workflow → `main` (see
+   [ci.md](./ci.md#what-runs-when)).
 4. Run any backfills — **after** the deploy, because a backfill usually writes a
    field the newly-deployed schema is the first to accept.
 

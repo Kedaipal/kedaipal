@@ -61,7 +61,7 @@ export const PRICING_MODE_UI: Record<
 		title: "Live courier price",
 		short: "Live price",
 		description:
-			"The real Lalamove or Delyva price at checkout and one-tap booking — on the account you connect under Integrations",
+			"The real courier price at checkout and one-tap booking — on the account you connect under Integrations",
 		source: "partner",
 	},
 };

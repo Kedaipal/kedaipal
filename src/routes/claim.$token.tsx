@@ -11,9 +11,11 @@ import { ClaimTimerBar } from "../components/claim/claim-timer-bar";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { AppImage } from "../components/ui/app-image";
 import { Skeleton } from "../components/ui/skeleton";
+import { ThemeToggle } from "../components/ui/theme-toggle";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { formatPrice } from "../lib/format";
+import { pageHead } from "../lib/not-found";
 import { ssrRead } from "../lib/ssr-read";
 
 /**
@@ -39,16 +41,17 @@ export const Route = createFileRoute("/claim/$token")({
 		if (read.value === null) throw notFound();
 		return { storeName: read.value.store.storeName };
 	},
-	head: ({ loaderData }) => ({
-		meta: [
-			{
-				title: loaderData
-					? `Complete your order — ${loaderData.storeName} | Kedaipal`
-					: "Complete your order | Kedaipal",
-			},
-			{ name: "robots", content: "noindex, nofollow" },
-		],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData }) => ({
+			meta: [
+				{
+					title: loaderData
+						? `Complete your order — ${loaderData.storeName} | Kedaipal`
+						: "Complete your order | Kedaipal",
+				},
+				{ name: "robots", content: "noindex, nofollow" },
+			],
+		})),
 	notFoundComponent: ClaimNotFound,
 	component: ClaimRoute,
 });
@@ -119,7 +122,7 @@ function ClaimStoreHeader({
 						{store.storeName.slice(0, 1).toUpperCase()}
 					</span>
 				)}
-				<div className="min-w-0">
+				<div className="min-w-0 flex-1">
 					<p className="truncate font-heading text-[15px] font-extrabold">
 						{store.storeName}
 					</p>
@@ -127,6 +130,10 @@ function ClaimStoreHeader({
 						<p className="truncate text-xs text-muted-foreground">{subtitle}</p>
 					) : null}
 				</div>
+				{/* The theme flip, at the right edge like every buyer header
+				    (z8r3fdwc19). `-my-1 -mr-3` keeps the bar's height and puts the
+				    glyph on the content's right edge. */}
+				<ThemeToggle variant="ghost" className="-my-1 -mr-3" />
 			</div>
 		</div>
 	);

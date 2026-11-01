@@ -20,7 +20,8 @@ import { isBuyerRouteId } from "../lib/buyer-routes";
 import { clerkAppearance } from "../lib/clerk-appearance";
 import { getConvexClient, getQueryClient } from "../lib/convex";
 import { clientEnv } from "../lib/env";
-import { readVisitorRegion } from "../lib/geo-region";
+import { readVisitorMarket, readVisitorRegion } from "../lib/geo-region";
+import { notFoundHeadMeta } from "../lib/not-found";
 import { readReferralSlugOnServer } from "../lib/referral-cookie";
 import { THEME_INIT_SCRIPT } from "../lib/theme";
 import { getLocale } from "../paraglide/runtime";
@@ -37,15 +38,23 @@ export const Route = createRootRoute({
 	 * is a header lookup — no I/O — so authenticated `/app` renders that never
 	 * use it are not measurably slower for carrying it.
 	 */
-	loader: (): { region: Country | null; referralSlug: string | null } => ({
+	loader: (): {
+		region: Country | null;
+		market: Country | null;
+		referralSlug: string | null;
+	} => ({
 		region: readVisitorRegion(),
+		// `/stores`' market (z8r3fdwduz): geo-IP ONLY. Unlike `region` it never
+		// reads the pricing toggle's cookie — the directory has no switch, so a
+		// stored pricing pick must not decide which market a buyer browses.
+		market: readVisitorMarket(),
 		// The referral the visitor arrived with (z8r3fdetf5), when they hold
 		// the cookie — so the landing reserves the invite's place in the first
 		// paint rather than pushing the hero down when it resolves. A cookie
 		// read, no I/O, same cost posture as the region above.
 		referralSlug: readReferralSlugOnServer(),
 	}),
-	head: () => ({
+	head: ({ match }) => ({
 		meta: [
 			{ charSet: "utf-8" },
 			{
@@ -53,9 +62,15 @@ export const Route = createRootRoute({
 				content: "width=device-width, initial-scale=1, viewport-fit=cover",
 			},
 			{ name: "theme-color", content: "#0F172A" },
-			{ name: "robots", content: "index, follow" },
 			{ property: "og:site_name", content: "Kedaipal" },
-			{ title: "Kedaipal — Order Hub for Small Retailers" },
+			// A URL nothing claims, with no layout under it to own the miss, is
+			// the root's to title (the page itself is `RouteNotFound`).
+			...(match.globalNotFound
+				? notFoundHeadMeta("site")
+				: [
+						{ name: "robots", content: "index, follow" },
+						{ title: "Kedaipal — Order Hub for Small Retailers" },
+					]),
 		],
 		links: [
 			{ rel: "stylesheet", href: appCss },
@@ -126,7 +141,18 @@ function Providers({ children }: { children: React.ReactNode }) {
 			{isBuyerSurface ? (
 				<ConvexProvider client={convex}>{children}</ConvexProvider>
 			) : (
-				<ClerkProvider publishableKey={publishableKey} appearance={appearance}>
+				// signInUrl/signUpUrl point every Clerk redirect (RedirectToSignIn on
+				// the /app and /onboarding gates) at OUR pages. Without them Clerk
+				// falls back to its hosted Account Portal, which never sees
+				// `/sign-in`'s `withSignUp`. So the handover email's /app link
+				// dead-ended a brand-new vendor on the hosted page even after the
+				// fix (z8r3fdwdvq; caught driving the gate signed-out).
+				<ClerkProvider
+					publishableKey={publishableKey}
+					appearance={appearance}
+					signInUrl="/sign-in"
+					signUpUrl="/sign-up"
+				>
 					<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
 						{children}
 					</ConvexProviderWithClerk>

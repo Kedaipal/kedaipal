@@ -16,7 +16,11 @@
  * least as often as after.
  */
 
-import { displayAddressState, formatBusinessAddress } from "../address";
+import {
+	addressCountryLine,
+	displayAddressState,
+	formatBusinessAddress,
+} from "../address";
 import { type Country, DEFAULT_COUNTRY } from "../country";
 import { formatPhone } from "../customer";
 import { formatFulfilmentDateTime } from "../fulfilmentDate";
@@ -295,6 +299,7 @@ type AddressForAwb = {
 	state: string;
 	postcode: string;
 	notes?: string;
+	country?: Country;
 };
 
 export type OrderForAwb = {
@@ -337,13 +342,20 @@ export type RetailerForAwb = {
  * `clampLines`' job, deliberately kept separate so this stays a pure statement
  * about how a Malaysian or Singaporean address is laid out.
  */
-export function addressLines(address: AddressForAwb): string[] {
+export function addressLines(
+	address: AddressForAwb,
+	/** The store's country — a parcel going abroad (z8r3fdr5yy) gets its
+	 * country as the last line, the one a courier sorts on. */
+	storeCountry: Country = DEFAULT_COUNTRY,
+): string[] {
 	const lines = [address.line1.trim()];
 	const line2 = address.line2?.trim();
 	if (line2) lines.push(line2);
 	lines.push(`${address.postcode.trim()} ${address.city.trim()}`.trim());
 	const state = displayAddressState(address);
 	if (state) lines.push(state);
+	const country = addressCountryLine(address, storeCountry);
+	if (country) lines.push(country.toUpperCase());
 	return lines.filter((l) => l.length > 0);
 }
 
@@ -440,7 +452,11 @@ export function orderToAwbLabelData(args: {
 				: undefined,
 	};
 
-	const buyerAddress = clampLines(address ? addressLines(address) : []);
+	const buyerAddress = clampLines(
+		address
+			? addressLines(address, retailer.country ?? DEFAULT_COUNTRY)
+			: [],
+	);
 	// Address notes are addressing information (gate codes, landmarks), so losing
 	// them counts against the same warning as losing a street.
 	const notesLost = address?.notes !== undefined && losesCharacters(address.notes);

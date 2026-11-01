@@ -5,7 +5,7 @@
 // shell is intentionally local here because invoices need a richer summary +
 // payment-details layout than order alerts.
 
-import { escapeHtml, type Locale, logoHeader, wrapHtml } from "./emailCopy";
+import { ctaButton, escapeHtml, type Locale, logoHeader, wrapHtml } from "./emailCopy";
 import {
 	ENTERPRISE_FROM_ORDERS,
 	INVOICE_DUE_GRACE_DAYS,
@@ -242,7 +242,7 @@ function holdBlock(locale: Locale, v: BillingEmailVars): string {
 	return `<div style="border:1px solid #c7d2fe;background:#eef2ff;border-radius:16px;padding:16px;margin:0 0 12px 0;">
 <p style="margin:0 0 6px 0;font-size:13px;font-weight:800;color:#3730a3;">${escapeHtml(L.holdHeading)} · ${escapeHtml(v.holdPriceFormatted)}</p>
 <p style="margin:0 0 12px 0;font-size:13px;line-height:1.6;color:#3730a3;">${escapeHtml(body)}</p>
-<a href="${escapeHtml(v.billingUrl)}" style="display:inline-block;background:#4338ca;color:#ffffff;text-decoration:none;font-size:14px;font-weight:800;padding:10px 16px;border-radius:10px;">${escapeHtml(L.holdCta)}</a>
+${ctaButton(v.billingUrl, L.holdCta, { background: "#4338ca", fontWeight: 800, radius: 10 })}
 </div>`;
 }
 
@@ -340,9 +340,8 @@ function paymentRow(label: string, value: string, strong = false): string {
 function payNowBlock(locale: Locale, v: BillingEmailVars): string {
 	if (!v.payNowUrl) return "";
 	const L = t[locale];
-	const safeUrl = escapeHtml(v.payNowUrl);
 	return `<div style="border:1px solid #a7f3d0;background:#ecfdf5;border-radius:16px;padding:16px;margin:0 0 12px 0;">
-<a href="${safeUrl}" style="display:inline-block;background:#059669;color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;padding:12px 18px;border-radius:12px;">${escapeHtml(L.payNow)}</a>
+${ctaButton(v.payNowUrl, L.payNow, { background: "#059669", fontSize: 15, fontWeight: 800, radius: 12 })}
 <p style="margin:10px 0 0 0;font-size:12px;line-height:1.5;color:#047857;">${escapeHtml(L.payNowHint)}</p>
 </div>`;
 }
@@ -391,14 +390,13 @@ function wrapBillingHtml(
 ): string {
 	const L = t[locale];
 	const tone = invoiceStatusTone(key);
-	const safeUrl = escapeHtml(v.billingUrl);
 	// Empty for every key but `recoveryFinal` — and when empty its whole row is
 	// omitted, so the six pre-existing billing emails keep their exact spacing.
 	const hold = holdBlock(locale, v);
 	return `<!doctype html><html><body style="margin:0;padding:0;background:#f6f8fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f8fb;padding:28px 14px;">
 <tr><td align="center">
-<table role="presentation" width="640" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;background:#ffffff;border:1px solid #e5e7eb;border-radius:20px;overflow:hidden;box-shadow:0 10px 30px rgba(15,23,42,.06);">
+<table role="presentation" width="640" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;overflow-wrap:anywhere;word-break:break-word;background:#ffffff;border:1px solid #e5e7eb;border-radius:20px;overflow:hidden;box-shadow:0 10px 30px rgba(15,23,42,.06);">
 <tr><td style="height:6px;background:${tone.accent};font-size:0;line-height:0;">&nbsp;</td></tr>
 <tr><td style="padding:28px 28px 20px 28px;">
 ${logoHeader(18)}
@@ -434,7 +432,7 @@ ${paymentPanel(locale, v)}
 </td></tr>
 ${hold ? `<tr><td style="padding:12px 28px 0 28px;">${hold}</td></tr>` : ""}
 <tr><td style="padding:24px 28px 30px 28px;">
-<a href="${safeUrl}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;padding:13px 18px;border-radius:12px;">${escapeHtml(ctaLabel)}</a>
+${ctaButton(v.billingUrl, ctaLabel, { background: "#0f172a", fontSize: 15, fontWeight: 800, radius: 12 })}
 </td></tr>
 </table>
 <p style="margin:16px 0 0 0;font-size:12px;line-height:1.5;color:#94a3b8;">Sent by Kedaipal — your WhatsApp-first order hub.</p>
@@ -990,7 +988,22 @@ export type PaymentEmailVars = {
 	planLabel: string; // e.g. "Pro · Monthly"
 	totalFormatted: string; // e.g. "MYR 104.00"
 	dashboardUrl: string;
+	/** The referral invitation under the CTA (`referralReceiptFooter`) — on a
+	 * PLAN receipt, where the store can refer from this moment on; a hold
+	 * receipt carries none (a paused store's link is paused too). */
+	referralFooter?: { html: string; text: string };
 };
+
+/** The receipt's footer slot and its plain-text tail, when a footer rides. */
+function receiptFooter(v: PaymentEmailVars): {
+	after: string | undefined;
+	text: string;
+} {
+	return {
+		after: v.referralFooter?.html,
+		text: v.referralFooter ? `\n\n${v.referralFooter.text}` : "",
+	};
+}
 
 const paymentRender: Record<
 	Locale,
@@ -998,67 +1011,73 @@ const paymentRender: Record<
 > = {
 	en: {
 		welcome: (v) => {
+			const footer = receiptFooter(v);
 			const subject = `🎉 Welcome to Kedaipal ${v.planLabel.split(" ")[0]}`;
 			const lines = [
 				`Hi ${escapeHtml(v.storeName)}, your payment landed — your <strong>${escapeHtml(v.planLabel)}</strong> plan is now active.`,
 				`Welcome aboard, and thank you for choosing Kedaipal. Here's to growing your store.`,
 			];
-			const html = wrapHtml("🎉", "Payment received — welcome!", lines, v.dashboardUrl, "Open dashboard");
-			const text = `🎉 Welcome to Kedaipal\nYour payment landed — your ${v.planLabel} plan is now active.\nThank you for choosing Kedaipal.\n\n${v.dashboardUrl}`;
+			const html = wrapHtml("🎉", "Payment received — welcome!", lines, v.dashboardUrl, "Open dashboard", footer.after);
+			const text = `🎉 Welcome to Kedaipal\nYour payment landed — your ${v.planLabel} plan is now active.\nThank you for choosing Kedaipal.\n\n${v.dashboardUrl}${footer.text}`;
 			return { subject, html, text };
 		},
 		thanks: (v) => {
+			const footer = receiptFooter(v);
 			const subject = "🙏 Thanks for your payment";
 			const lines = [
 				`Hi ${escapeHtml(v.storeName)}, we've received your <strong>${escapeHtml(v.planLabel)}</strong> payment of ${escapeHtml(v.totalFormatted)}.`,
 				`Thanks for your continued support — it genuinely means a lot.`,
 			];
-			const html = wrapHtml("🙏", "Payment received — thank you", lines, v.dashboardUrl, "Open dashboard");
-			const text = `🙏 Thanks for your payment\nWe've received your ${v.planLabel} payment of ${v.totalFormatted}.\nThanks for your continued support.\n\n${v.dashboardUrl}`;
+			const html = wrapHtml("🙏", "Payment received — thank you", lines, v.dashboardUrl, "Open dashboard", footer.after);
+			const text = `🙏 Thanks for your payment\nWe've received your ${v.planLabel} payment of ${v.totalFormatted}.\nThanks for your continued support.\n\n${v.dashboardUrl}${footer.text}`;
 			return { subject, html, text };
 		},
 	},
 	ms: {
 		welcome: (v) => {
+			const footer = receiptFooter(v);
 			const subject = `🎉 Selamat datang ke Kedaipal ${v.planLabel.split(" ")[0]}`;
 			const lines = [
 				`Hai ${escapeHtml(v.storeName)}, pembayaran anda telah diterima — pelan <strong>${escapeHtml(v.planLabel)}</strong> anda kini aktif.`,
 				`Selamat menyertai, dan terima kasih kerana memilih Kedaipal. Semoga kedai anda terus berkembang.`,
 			];
-			const html = wrapHtml("🎉", "Pembayaran diterima — selamat datang!", lines, v.dashboardUrl, "Buka dashboard");
-			const text = `🎉 Selamat datang ke Kedaipal\nPembayaran anda telah diterima — pelan ${v.planLabel} anda kini aktif.\nTerima kasih kerana memilih Kedaipal.\n\n${v.dashboardUrl}`;
+			const html = wrapHtml("🎉", "Pembayaran diterima — selamat datang!", lines, v.dashboardUrl, "Buka dashboard", footer.after);
+			const text = `🎉 Selamat datang ke Kedaipal\nPembayaran anda telah diterima — pelan ${v.planLabel} anda kini aktif.\nTerima kasih kerana memilih Kedaipal.\n\n${v.dashboardUrl}${footer.text}`;
 			return { subject, html, text };
 		},
 		thanks: (v) => {
+			const footer = receiptFooter(v);
 			const subject = "🙏 Terima kasih atas pembayaran anda";
 			const lines = [
 				`Hai ${escapeHtml(v.storeName)}, kami telah menerima pembayaran <strong>${escapeHtml(v.planLabel)}</strong> anda sebanyak ${escapeHtml(v.totalFormatted)}.`,
 				`Terima kasih atas sokongan berterusan anda — ia amat bermakna.`,
 			];
-			const html = wrapHtml("🙏", "Pembayaran diterima — terima kasih", lines, v.dashboardUrl, "Buka dashboard");
-			const text = `🙏 Terima kasih atas pembayaran anda\nKami telah menerima pembayaran ${v.planLabel} anda sebanyak ${v.totalFormatted}.\nTerima kasih atas sokongan anda.\n\n${v.dashboardUrl}`;
+			const html = wrapHtml("🙏", "Pembayaran diterima — terima kasih", lines, v.dashboardUrl, "Buka dashboard", footer.after);
+			const text = `🙏 Terima kasih atas pembayaran anda\nKami telah menerima pembayaran ${v.planLabel} anda sebanyak ${v.totalFormatted}.\nTerima kasih atas sokongan anda.\n\n${v.dashboardUrl}${footer.text}`;
 			return { subject, html, text };
 		},
 	},
 	zh: {
 		welcome: (v) => {
+			const footer = receiptFooter(v);
 			const subject = `🎉 欢迎加入 Kedaipal ${v.planLabel.split(" ")[0]}`;
 			const lines = [
 				`您好 ${escapeHtml(v.storeName)}，我们已收到您的付款 —— 您的 <strong>${escapeHtml(v.planLabel)}</strong> 套餐现已生效。`,
 				`欢迎加入，感谢您选择 Kedaipal。祝您的商店生意兴隆。`,
 			];
-			const html = wrapHtml("🎉", "已收到付款 —— 欢迎加入！", lines, v.dashboardUrl, "打开后台");
-			const text = `🎉 欢迎加入 Kedaipal\n我们已收到您的付款 —— 您的 ${v.planLabel} 套餐现已生效。\n感谢您选择 Kedaipal。\n\n${v.dashboardUrl}`;
+			const html = wrapHtml("🎉", "已收到付款 —— 欢迎加入！", lines, v.dashboardUrl, "打开后台", footer.after);
+			const text = `🎉 欢迎加入 Kedaipal\n我们已收到您的付款 —— 您的 ${v.planLabel} 套餐现已生效。\n感谢您选择 Kedaipal。\n\n${v.dashboardUrl}${footer.text}`;
 			return { subject, html, text };
 		},
 		thanks: (v) => {
+			const footer = receiptFooter(v);
 			const subject = "🙏 感谢您的付款";
 			const lines = [
 				`您好 ${escapeHtml(v.storeName)}，我们已收到您 <strong>${escapeHtml(v.planLabel)}</strong> 套餐的付款，金额 ${escapeHtml(v.totalFormatted)}。`,
 				`感谢您一直以来的支持 —— 这对我们意义重大。`,
 			];
-			const html = wrapHtml("🙏", "已收到付款 —— 谢谢", lines, v.dashboardUrl, "打开后台");
-			const text = `🙏 感谢您的付款\n我们已收到您 ${v.planLabel} 套餐的付款，金额 ${v.totalFormatted}。\n感谢您一直以来的支持。\n\n${v.dashboardUrl}`;
+			const html = wrapHtml("🙏", "已收到付款 —— 谢谢", lines, v.dashboardUrl, "打开后台", footer.after);
+			const text = `🙏 感谢您的付款\n我们已收到您 ${v.planLabel} 套餐的付款，金额 ${v.totalFormatted}。\n感谢您一直以来的支持。\n\n${v.dashboardUrl}${footer.text}`;
 			return { subject, html, text };
 		},
 	},

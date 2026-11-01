@@ -3,7 +3,7 @@
 // `low` (into the last 20% of the month's credits, once a period), `locked` (out
 // of credits), `stillLocked`
 // (a monthly refresh left the store below zero), `unlocked` (back above zero)
-// and `expiring` (bought credits expire in 14 days).
+// and `expiring` (extra credits — top-ups, bonuses, grants — expire in 14 days).
 //
 // Rules the copy keeps (register item 7): order counts only — never an RM
 // balance, "wallet", "fee", "commission", a percentage or "pay as you go"; a
@@ -90,13 +90,13 @@ const copy: Record<
 				const subject = `🔔 ${n} orders left on Kedaipal`;
 				const lines = [
 					`Hi ${escapeHtml(v.storeName)}, you have <strong>${n} orders left</strong>.`,
-					"If you run out, your storefront stays open and new orders keep coming in — but you won't be able to open the new ones until credits land. Everything you've already paid a credit for carries on, as do your products and settings.",
+					"If you run out, your storefront stays open and online orders keep coming in — but you won't be able to open the new ones until credits land, and the counter can't ring up a walk-in sale until then. Everything you've already paid a credit for carries on, as do your products and settings.",
 					copy.en.action(v),
 				];
 				return {
 					subject,
 					html: wrapHtml("🔔", `${n} orders left`, lines, v.billingUrl, copy.en.cta[v.route]),
-					text: `🔔 You have ${n} orders left on Kedaipal.\nIf you run out, new orders keep coming in, but you won't be able to open them until credits land. Your existing orders, products and settings carry on.\n\n${v.billingUrl}`,
+					text: `🔔 You have ${n} orders left on Kedaipal.\nIf you run out, online orders keep coming in, but you won't be able to open them until credits land, and the counter can't ring up a walk-in sale until then. Your existing orders, products and settings carry on.\n\n${v.billingUrl}`,
 				};
 			},
 			locked: (v) => {
@@ -104,13 +104,13 @@ const copy: Record<
 				const subject = "⚠️ New orders are waiting on credits";
 				const lines = [
 					`Hi ${escapeHtml(v.storeName)}, you've used all your Kedaipal credits${debt > 0 ? ` (${debt} orders owed)` : ""}, so the orders arriving now are <strong>waiting on credits</strong>.`,
-					"Your storefront stays open and new orders keep coming in — you just can't open a waiting one until credits land, and they open <strong>oldest first</strong>. <strong>Carrying on as normal:</strong> every order you've already paid a credit for, your products, and your settings. You can also cancel a waiting order to release the buyer.",
+					"Your storefront stays open and online orders keep coming in — you just can't open a waiting one until credits land, and they open <strong>oldest first</strong>. The counter can't ring up a walk-in sale until credits land either. <strong>Carrying on as normal:</strong> every order you've already paid a credit for, your products, and your settings. You can also cancel a waiting order to release the buyer.",
 					copy.en.action(v),
 				];
 				return {
 					subject,
 					html: wrapHtml("⚠️", "New orders are waiting on credits", lines, v.billingUrl, copy.en.cta[v.route]),
-					text: `⚠️ You're out of Kedaipal credits${debt > 0 ? ` (${debt} orders owed)` : ""}, so new orders are waiting on credits.\nThey open oldest first once credits land. Your existing orders, products and settings carry on, and cancelling always works.\n\n${v.billingUrl}`,
+					text: `⚠️ You're out of Kedaipal credits${debt > 0 ? ` (${debt} orders owed)` : ""}, so new orders are waiting on credits.\nThey open oldest first once credits land, and the counter reopens then too. Your existing orders, products and settings carry on, and cancelling always works.\n\n${v.billingUrl}`,
 				};
 			},
 			stillLocked: (v) => {
@@ -123,13 +123,13 @@ const copy: Record<
 					debt > 0
 						? `Hi ${escapeHtml(v.storeName)}, this month's credits have arrived, but the orders you took after running out last month were more than they cover, so you're still <strong>${debt} orders short</strong>.`
 						: `Hi ${escapeHtml(v.storeName)}, this month's credits have arrived, but they only just covered the orders you took after running out last month, so you're at <strong>0 orders left</strong>.`,
-					"Until you're back above zero, the orders that arrived after you ran out stay waiting — they open oldest first as credits land. New orders keep coming in, your products and settings are untouched, and cancelling always works.",
+					"Until you're back above zero, the orders that arrived after you ran out stay waiting — they open oldest first as credits land. Online orders keep coming in, your products and settings are untouched, and cancelling always works — but the counter can't ring up a walk-in sale until you're back above zero.",
 					copy.en.action(v),
 				];
 				return {
 					subject,
 					html: wrapHtml("⚠️", debt > 0 ? `Still ${debt} orders short` : "Still at 0 orders left", lines, v.billingUrl, copy.en.cta[v.route]),
-					text: `Your credits refreshed, but you're ${where}.\nThe orders that arrived after you ran out stay waiting until you're back above zero — oldest first.\n\n${v.billingUrl}`,
+					text: `Your credits refreshed, but you're ${where}.\nThe orders that arrived after you ran out stay waiting until you're back above zero — oldest first — and the counter reopens then too.\n\n${v.billingUrl}`,
 				};
 			},
 			unlocked: (v) => {
@@ -148,15 +148,15 @@ const copy: Record<
 			expiring: (v) => {
 				const c = v.expiring?.credits ?? 0;
 				const on = escapeHtml(v.expiring?.onFormatted ?? "soon");
-				const subject = `⏳ ${c} bought credits expire on ${v.expiring?.onFormatted ?? "soon"}`;
+				const subject = `⏳ ${c} extra credits expire on ${v.expiring?.onFormatted ?? "soon"}`;
 				const lines = [
-					`Hi ${escapeHtml(v.storeName)}, <strong>${c} of the credits you bought expire on ${on}</strong>.`,
-					"Credits you buy last 12 months. Your plan's monthly credits are always used first, then your oldest bought credits — so these are next in line once this month's plan credits run out.",
+					`Hi ${escapeHtml(v.storeName)}, <strong>${c} of your extra credits expire on ${on}</strong>.`,
+					"Extra credits — top-ups and bonuses — last 12 months. Your plan's monthly credits are always used first, then your oldest extra credits — so these are next in line once this month's plan credits run out.",
 				];
 				return {
 					subject,
 					html: wrapHtml("⏳", `${c} credits expire on ${on}`, lines, v.billingUrl, copy.en.cta.open),
-					text: `⏳ ${c} of the credits you bought expire on ${v.expiring?.onFormatted ?? "soon"}.\nBought credits last 12 months; plan credits are used first, then your oldest bought credits.\n\n${v.billingUrl}`,
+					text: `⏳ ${c} of your extra credits expire on ${v.expiring?.onFormatted ?? "soon"}.\nExtra credits (top-ups and bonuses) last 12 months; plan credits are used first, then your oldest extra credits.\n\n${v.billingUrl}`,
 				};
 			},
 		},
@@ -190,13 +190,13 @@ const copy: Record<
 				const subject = `🔔 ${n} pesanan lagi di Kedaipal`;
 				const lines = [
 					`Hai ${escapeHtml(v.storeName)}, anda ada <strong>${n} pesanan lagi</strong>.`,
-					"Jika kredit habis, kedai online anda tetap dibuka dan pesanan baharu terus masuk — tetapi anda tidak boleh membuka pesanan baharu itu sehingga kredit masuk. Pesanan yang sudah berkredit, produk dan tetapan anda tidak terjejas.",
+					"Jika kredit habis, kedai online anda tetap dibuka dan pesanan online terus masuk — tetapi anda tidak boleh membuka pesanan baharu itu sehingga kredit masuk, dan kaunter tidak boleh merekod jualan pelanggan walk-in sehingga itu. Pesanan yang sudah berkredit, produk dan tetapan anda tidak terjejas.",
 					copy.ms.action(v),
 				];
 				return {
 					subject,
 					html: wrapHtml("🔔", `${n} pesanan lagi`, lines, v.billingUrl, copy.ms.cta[v.route]),
-					text: `🔔 Anda ada ${n} pesanan lagi di Kedaipal.\nJika kredit habis, pesanan baharu terus masuk, tetapi anda tidak boleh membukanya sehingga kredit masuk. Pesanan yang sudah berkredit, produk dan tetapan anda tidak terjejas.\n\n${v.billingUrl}`,
+					text: `🔔 Anda ada ${n} pesanan lagi di Kedaipal.\nJika kredit habis, pesanan online terus masuk, tetapi anda tidak boleh membukanya sehingga kredit masuk, dan kaunter tidak boleh merekod jualan pelanggan walk-in sehingga itu. Pesanan yang sudah berkredit, produk dan tetapan anda tidak terjejas.\n\n${v.billingUrl}`,
 				};
 			},
 			locked: (v) => {
@@ -204,13 +204,13 @@ const copy: Record<
 				const subject = "⚠️ Pesanan baharu menunggu kredit";
 				const lines = [
 					`Hai ${escapeHtml(v.storeName)}, anda telah menggunakan semua kredit Kedaipal${debt > 0 ? ` (${debt} pesanan tertunggak)` : ""}, jadi pesanan yang masuk sekarang <strong>menunggu kredit</strong>.`,
-					"Kedai online anda tetap dibuka dan pesanan baharu terus masuk — anda cuma tidak boleh membuka pesanan yang menunggu sehingga kredit masuk, dan ia dibuka <strong>yang paling lama dahulu</strong>. <strong>Tidak terjejas:</strong> semua pesanan yang sudah berkredit, produk anda, dan tetapan anda. Anda juga boleh membatalkan pesanan yang menunggu untuk melepaskan pembeli.",
+					"Kedai online anda tetap dibuka dan pesanan online terus masuk — anda cuma tidak boleh membuka pesanan yang menunggu sehingga kredit masuk, dan ia dibuka <strong>yang paling lama dahulu</strong>. Kaunter juga tidak boleh merekod jualan pelanggan walk-in sehingga kredit masuk. <strong>Tidak terjejas:</strong> semua pesanan yang sudah berkredit, produk anda, dan tetapan anda. Anda juga boleh membatalkan pesanan yang menunggu untuk melepaskan pembeli.",
 					copy.ms.action(v),
 				];
 				return {
 					subject,
 					html: wrapHtml("⚠️", "Pesanan baharu menunggu kredit", lines, v.billingUrl, copy.ms.cta[v.route]),
-					text: `⚠️ Kredit Kedaipal anda telah habis${debt > 0 ? ` (${debt} pesanan tertunggak)` : ""}, jadi pesanan baharu menunggu kredit.\nIa dibuka yang paling lama dahulu sebaik kredit masuk. Pesanan lama, produk dan tetapan anda tidak terjejas, dan pembatalan sentiasa boleh.\n\n${v.billingUrl}`,
+					text: `⚠️ Kredit Kedaipal anda telah habis${debt > 0 ? ` (${debt} pesanan tertunggak)` : ""}, jadi pesanan baharu menunggu kredit.\nIa dibuka yang paling lama dahulu sebaik kredit masuk, dan kaunter dibuka semula ketika itu. Pesanan lama, produk dan tetapan anda tidak terjejas, dan pembatalan sentiasa boleh.\n\n${v.billingUrl}`,
 				};
 			},
 			stillLocked: (v) => {
@@ -222,13 +222,13 @@ const copy: Record<
 					debt > 0
 						? `Hai ${escapeHtml(v.storeName)}, kredit bulan ini telah masuk, tetapi pesanan yang anda terima selepas kredit habis bulan lepas melebihi jumlahnya, jadi anda masih <strong>kurang ${debt} pesanan</strong>.`
 						: `Hai ${escapeHtml(v.storeName)}, kredit bulan ini telah masuk, tetapi hanya cukup untuk pesanan yang anda terima selepas kredit habis bulan lepas, jadi baki anda kini <strong>0 pesanan</strong>.`,
-					"Selagi baki belum melebihi sifar, pesanan yang masuk selepas kredit habis kekal menunggu — ia dibuka yang paling lama dahulu sebaik kredit masuk. Pesanan baharu terus masuk, produk dan tetapan anda tidak terjejas, dan pembatalan sentiasa boleh.",
+					"Selagi baki belum melebihi sifar, pesanan yang masuk selepas kredit habis kekal menunggu — ia dibuka yang paling lama dahulu sebaik kredit masuk. Pesanan online terus masuk, produk dan tetapan anda tidak terjejas, dan pembatalan sentiasa boleh — tetapi kaunter tidak boleh merekod jualan pelanggan walk-in sehingga baki melebihi sifar.",
 					copy.ms.action(v),
 				];
 				return {
 					subject,
 					html: wrapHtml("⚠️", debt > 0 ? `Masih kurang ${debt} pesanan` : "Baki anda 0 pesanan", lines, v.billingUrl, copy.ms.cta[v.route]),
-					text: `Kredit anda telah diperbaharui, tetapi ${where}.\nPesanan yang masuk selepas kredit habis kekal menunggu sehingga baki melebihi sifar — yang paling lama dahulu.\n\n${v.billingUrl}`,
+					text: `Kredit anda telah diperbaharui, tetapi ${where}.\nPesanan yang masuk selepas kredit habis kekal menunggu sehingga baki melebihi sifar — yang paling lama dahulu — dan kaunter dibuka semula ketika itu.\n\n${v.billingUrl}`,
 				};
 			},
 			unlocked: (v) => {
@@ -247,15 +247,15 @@ const copy: Record<
 			expiring: (v) => {
 				const c = v.expiring?.credits ?? 0;
 				const on = escapeHtml(v.expiring?.onFormatted ?? "tidak lama lagi");
-				const subject = `⏳ ${c} kredit yang dibeli tamat tempoh pada ${v.expiring?.onFormatted ?? "tidak lama lagi"}`;
+				const subject = `⏳ ${c} kredit tambahan tamat tempoh pada ${v.expiring?.onFormatted ?? "tidak lama lagi"}`;
 				const lines = [
-					`Hai ${escapeHtml(v.storeName)}, <strong>${c} kredit yang anda beli akan tamat tempoh pada ${on}</strong>.`,
-					"Kredit yang dibeli sah selama 12 bulan. Kredit bulanan pelan anda sentiasa digunakan dahulu, kemudian kredit yang dibeli paling awal — jadi kredit ini yang seterusnya digunakan sebaik kredit pelan bulan ini habis.",
+					`Hai ${escapeHtml(v.storeName)}, <strong>${c} kredit tambahan anda akan tamat tempoh pada ${on}</strong>.`,
+					"Kredit tambahan — tambah nilai dan bonus — sah selama 12 bulan. Kredit bulanan pelan anda sentiasa digunakan dahulu, kemudian kredit tambahan paling awal — jadi kredit ini yang seterusnya digunakan sebaik kredit pelan bulan ini habis.",
 				];
 				return {
 					subject,
 					html: wrapHtml("⏳", `${c} kredit tamat tempoh pada ${on}`, lines, v.billingUrl, copy.ms.cta.open),
-					text: `⏳ ${c} kredit yang anda beli tamat tempoh pada ${v.expiring?.onFormatted ?? "tidak lama lagi"}.\nKredit yang dibeli sah 12 bulan; kredit pelan digunakan dahulu, kemudian kredit yang dibeli paling awal.\n\n${v.billingUrl}`,
+					text: `⏳ ${c} kredit tambahan anda tamat tempoh pada ${v.expiring?.onFormatted ?? "tidak lama lagi"}.\nKredit tambahan (tambah nilai dan bonus) sah 12 bulan; kredit pelan digunakan dahulu, kemudian kredit tambahan paling awal.\n\n${v.billingUrl}`,
 				};
 			},
 		},
@@ -291,13 +291,13 @@ const copy: Record<
 				const subject = `🔔 Kedaipal 还剩 ${n} 点`;
 				const lines = [
 					`${escapeHtml(v.storeName)} 您好，您还剩 <strong>${n} 点</strong>（每张订单用 1 点）。`,
-					"点数用完后，您的网店仍然开放，新订单照常进来 —— 但在点数到账之前，您无法打开这些新订单。已经用过点数的订单、您的商品和设置都不受影响。",
+					"点数用完后，您的网店仍然开放，网上订单照常进来 —— 但在点数到账之前，您无法打开这些新订单，柜台也无法为到店顾客结账。已经用过点数的订单、您的商品和设置都不受影响。",
 					copy.zh.action(v),
 				];
 				return {
 					subject,
 					html: wrapHtml("🔔", `还剩 ${n} 点`, lines, v.billingUrl, copy.zh.cta[v.route]),
-					text: `🔔 您在 Kedaipal 还剩 ${n} 点（每张订单用 1 点）。\n点数用完后新订单照常进来，但在点数到账之前您无法打开它们。已经用过点数的订单、您的商品和设置都不受影响。\n\n${v.billingUrl}`,
+					text: `🔔 您在 Kedaipal 还剩 ${n} 点（每张订单用 1 点）。\n点数用完后网上订单照常进来，但在点数到账之前您无法打开它们，柜台也无法为到店顾客结账。已经用过点数的订单、您的商品和设置都不受影响。\n\n${v.billingUrl}`,
 				};
 			},
 			locked: (v) => {
@@ -305,13 +305,13 @@ const copy: Record<
 				const subject = "⚠️ 新订单正在等待点数";
 				const lines = [
 					`${escapeHtml(v.storeName)} 您好，您的 Kedaipal 点数已全部用完${debt > 0 ? `（欠 ${debt} 点）` : ""}，所以现在进来的订单<strong>正在等待点数</strong>。`,
-					"您的网店仍然开放，新订单照常进来 —— 只是在点数到账之前无法打开等待中的订单，而且会<strong>按最早的先打开</strong>。<strong>不受影响：</strong>所有已经用过点数的订单、您的商品和设置。您也可以取消等待中的订单，让买家不必再等。",
+					"您的网店仍然开放，网上订单照常进来 —— 只是在点数到账之前无法打开等待中的订单，而且会<strong>按最早的先打开</strong>。在点数到账之前，柜台也无法为到店顾客结账。<strong>不受影响：</strong>所有已经用过点数的订单、您的商品和设置。您也可以取消等待中的订单，让买家不必再等。",
 					copy.zh.action(v),
 				];
 				return {
 					subject,
 					html: wrapHtml("⚠️", "新订单正在等待点数", lines, v.billingUrl, copy.zh.cta[v.route]),
-					text: `⚠️ 您的 Kedaipal 点数已用完${debt > 0 ? `（欠 ${debt} 点）` : ""}，所以新订单正在等待点数。\n点数到账后会按最早的先打开。旧订单、商品和设置都不受影响，取消随时可用。\n\n${v.billingUrl}`,
+					text: `⚠️ 您的 Kedaipal 点数已用完${debt > 0 ? `（欠 ${debt} 点）` : ""}，所以新订单正在等待点数。\n点数到账后会按最早的先打开，柜台也会同时重新开放。旧订单、商品和设置都不受影响，取消随时可用。\n\n${v.billingUrl}`,
 				};
 			},
 			stillLocked: (v) => {
@@ -324,13 +324,13 @@ const copy: Record<
 					debt > 0
 						? `${escapeHtml(v.storeName)} 您好，本月点数已到账，但上个月点数用完后收到的订单超过了本月点数，因此您仍欠 <strong>${debt} 点</strong>。`
 						: `${escapeHtml(v.storeName)} 您好，本月点数已到账，但刚好抵消上个月点数用完后收到的订单，因此您的点数为 <strong>0</strong>。`,
-					"在点数回到零以上之前，点数用完后进来的订单会继续等待 —— 点数到账后按最早的先打开。新订单照常进来，您的商品和设置不受影响，取消随时可用。",
+					"在点数回到零以上之前，点数用完后进来的订单会继续等待 —— 点数到账后按最早的先打开。网上订单照常进来，您的商品和设置不受影响，取消随时可用 —— 但在点数回到零以上之前，柜台无法为到店顾客结账。",
 					copy.zh.action(v),
 				];
 				return {
 					subject,
 					html: wrapHtml("⚠️", debt > 0 ? `仍欠 ${debt} 点` : "点数为 0", lines, v.billingUrl, copy.zh.cta[v.route]),
-					text: `点数已更新，但${where}。\n在点数回到零以上之前，点数用完后进来的订单会继续等待 —— 按最早的先打开。\n\n${v.billingUrl}`,
+					text: `点数已更新，但${where}。\n在点数回到零以上之前，点数用完后进来的订单会继续等待 —— 按最早的先打开，柜台也会同时重新开放。\n\n${v.billingUrl}`,
 				};
 			},
 			unlocked: (v) => {
@@ -349,15 +349,15 @@ const copy: Record<
 			expiring: (v) => {
 				const c = v.expiring?.credits ?? 0;
 				const on = escapeHtml(v.expiring?.onFormatted ?? "即将");
-				const subject = `⏳ 您购买的 ${c} 点将于 ${v.expiring?.onFormatted ?? "即将"} 到期`;
+				const subject = `⏳ 您的 ${c} 点额外点数将于 ${v.expiring?.onFormatted ?? "即将"} 到期`;
 				const lines = [
-					`${escapeHtml(v.storeName)} 您好，<strong>您购买的 ${c} 点将于 ${on} 到期</strong>。`,
-					"购买的点数有效期为 12 个月。系统总是先使用套餐的每月点数，再使用最早购买的点数 —— 因此本月套餐点数用完后，会先使用这部分。",
+					`${escapeHtml(v.storeName)} 您好，<strong>您的 ${c} 点额外点数将于 ${on} 到期</strong>。`,
+					"额外点数（充值和奖励）有效期为 12 个月。系统总是先使用套餐的每月点数，再使用最早的额外点数 —— 因此本月套餐点数用完后，会先使用这部分。",
 				];
 				return {
 					subject,
 					html: wrapHtml("⏳", `${c} 点将于 ${on} 到期`, lines, v.billingUrl, copy.zh.cta.open),
-					text: `⏳ 您购买的 ${c} 点将于 ${v.expiring?.onFormatted ?? "即将"} 到期。\n购买的点数有效期 12 个月；先用套餐点数，再用最早购买的点数。\n\n${v.billingUrl}`,
+					text: `⏳ 您的 ${c} 点额外点数将于 ${v.expiring?.onFormatted ?? "即将"} 到期。\n额外点数（充值和奖励）有效期 12 个月；先用套餐点数，再用最早的额外点数。\n\n${v.billingUrl}`,
 				};
 			},
 		},

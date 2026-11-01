@@ -12,7 +12,7 @@
  * pre-existing caller and order keeps today's behaviour byte-identical.
  */
 
-import { type Country, DEFAULT_COUNTRY } from "./country";
+import { COUNTRY_LABELS, type Country, DEFAULT_COUNTRY } from "./country";
 
 export const MY_STATES = [
 	"Johor",
@@ -72,6 +72,25 @@ export function displayAddressState(addr: {
 		: state;
 }
 
+/**
+ * The country line for a delivery address (z8r3fdr5yy) — printed only when the
+ * address is ABROAD from the store, because that is the one case where a
+ * reader (the seller packing it, a courier reading the label) could assume
+ * the wrong country. Skipped when the city already says it ("048616
+ * Singapore") — the `displayAddressState` dedupe, one level up. One author
+ * for the client renderers, the WhatsApp message and the despatch label.
+ */
+export function addressCountryLine(
+	addr: { city: string; country?: Country },
+	storeCountry: Country,
+): string | undefined {
+	if (!addr.country || addr.country === storeCountry) return undefined;
+	const name = COUNTRY_LABELS[addr.country];
+	return addr.city.trim().toLowerCase() === name.toLowerCase()
+		? undefined
+		: name;
+}
+
 const POSTCODE_RULES: Record<Country, { pattern: RegExp; error: string }> = {
 	MY: { pattern: /^\d{5}$/, error: "Postcode must be 5 digits" },
 	SG: { pattern: /^\d{6}$/, error: "Postal code must be 6 digits" },
@@ -127,6 +146,9 @@ export interface RawAddress {
 	latitude?: number;
 	longitude?: number;
 	placeId?: string;
+	/** The address's own country (z8r3fdr5yy). Never trusted here — the
+	 * CALLER decides which country to judge against and passes it in. */
+	country?: Country;
 }
 
 export interface SanitizedAddress {
@@ -140,6 +162,10 @@ export interface SanitizedAddress {
 	latitude?: number;
 	longitude?: number;
 	placeId?: string;
+	/** The country the address was judged against — stamped so every
+	 * renderer and courier booking reads it off the order, never re-derives
+	 * it from the store (z8r3fdr5yy). */
+	country: Country;
 }
 
 function trimmedOrUndefined(raw: string | undefined): string | undefined {
@@ -264,6 +290,7 @@ export function assertValidAddress(
 		latitude,
 		longitude,
 		placeId,
+		country,
 	};
 }
 

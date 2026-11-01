@@ -354,8 +354,12 @@ function QtyStepper({
 /** The checkout form's collapsed quote view (static config + live Lalamove
  * both map onto this — see checkout-form.tsx). */
 export type CheckoutQuoteView =
-	| PublicDeliveryQuote
+	| Exclude<PublicDeliveryQuote, { kind: "home_only" } | { kind: "no_lane" }>
 	| { kind: "calculating" }
+	// Cross-border (z8r3fdr5yy): checkout folds the server's `home_only` /
+	// `no_lane` answers into a block, worded by the caller's `blockedCopy`.
+	// An overseas live quote waits on a complete postal code (`no_postcode`).
+	| { kind: "blocked"; reason: "home_only" | "no_lane" | "no_postcode" }
 	| undefined;
 
 interface CheckoutTotalsProps {
@@ -375,6 +379,10 @@ interface CheckoutTotalsProps {
 	/** Collection-service store (86eyg0n8e) — the rider fee line reads
 	 * "Collection" instead of "Delivery". */
 	collectsFromCustomer?: boolean;
+	/** The fee line's name on an OVERSEAS delivery (z8r3fdr5yy) —
+	 * `overseasFeeLabel`'s "Delivery to Malaysia", so the buyer sees the
+	 * overseas price is the one being charged. Undefined at home. */
+	overseasFeeLabel?: string;
 	/** The cart holds a custom line, so this TOTAL is not the bill: a quote-only
 	 * line contributes nothing yet, and a starting-price line only contributes
 	 * its floor — the seller settles both on the mockup. Prints "+ your quote"
@@ -399,6 +407,10 @@ interface CheckoutTotalsProps {
 	 * states the discount, so a second panel repeating it was noise.
 	 */
 	voucherField?: ReactNode;
+	/** The applied code's notes (`z8r3fdz0pw`) — per-buyer, minimum spend,
+	 * cap. Rendered UNDER the voucher line and outside its disclosure, so a
+	 * buyer reads them without opening it. */
+	voucherNote?: ReactNode;
 }
 
 /**
@@ -433,10 +445,12 @@ export function CheckoutTotals({
 	blockedCopy,
 	minRuleAlerts,
 	collectsFromCustomer = false,
+	overseasFeeLabel,
 	awaitingQuote = false,
 	voucherDiscount = 0,
 	voucherCode,
 	voucherField,
+	voucherNote,
 }: CheckoutTotalsProps) {
 	// The applied voucher line discloses its remove the way an ITEM line
 	// discloses its stepper — same interaction, so the ticket has one idea of
@@ -446,7 +460,9 @@ export function CheckoutTotals({
 	// The discount is CLAMPED to the item subtotal upstream, so it can never
 	// drive this below the fees — the same invariant the server holds.
 	const total = subtotal + pickupFee + deliveryFee - voucherDiscount;
-	const feeLabel = collectsFromCustomer ? "Collection" : "Delivery";
+	const feeLabel = collectsFromCustomer
+		? "Collection"
+		: (overseasFeeLabel ?? "Delivery");
 	const pendingParts = pendingTotalParts({
 		awaitingQuote,
 		quotePending: quote?.kind === "pending",
@@ -502,13 +518,21 @@ export function CheckoutTotals({
 			    applied state needs no panel of its own — this line already says
 			    what is on, and the disclosure is where it comes off
 			    (`z8r3fdr617`, Zaki 12 Oct). */}
-			{voucherDiscount > 0 ? (
+			{/* An applied code that takes nothing off YET (under its minimum
+			    spend, `z8r3fdz0pw`) still gets its line — muted, reading "not
+			    yet" — so the ticket never shows a voucher only as a Remove
+			    button with no code above it. */}
+			{voucherDiscount > 0 || voucherCode !== undefined ? (
 				<>
 					<button
 						type="button"
 						aria-expanded={voucherOpen}
 						onClick={() => setVoucherOpen((v) => !v)}
-						className="flex w-full items-baseline gap-2 py-0.5 text-left font-mono text-[13px] leading-6 text-accent-emphasis"
+						className={`flex w-full items-baseline gap-2 py-0.5 text-left font-mono text-[13px] leading-6 ${
+							voucherDiscount > 0
+								? "text-accent-emphasis"
+								: "text-muted-foreground"
+						}`}
 					>
 						<ChevronDown
 							aria-hidden
@@ -524,9 +548,12 @@ export function CheckoutTotals({
 							className="flex-1 border-b-2 border-dotted border-border"
 						/>
 						<span className="shrink-0 tabular-nums">
-							−{receiptAmount(voucherDiscount)}
+							{voucherDiscount > 0
+								? `−${receiptAmount(voucherDiscount)}`
+								: "not yet"}
 						</span>
 					</button>
+					{voucherNote}
 					{voucherOpen ? voucherField : null}
 				</>
 			) : (

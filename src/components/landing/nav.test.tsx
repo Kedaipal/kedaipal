@@ -13,7 +13,7 @@ import { m } from "../../paraglide/messages";
 import { Nav } from "./nav";
 
 vi.mock("@clerk/tanstack-react-start", () => ({
-	useAuth: () => ({ isSignedIn: false }),
+	useAuth: () => ({ isLoaded: true, isSignedIn: false }),
 }));
 vi.mock("../../hooks/useSupportWaNumber", () => ({
 	useSupportWaNumber: () => "60123456789",

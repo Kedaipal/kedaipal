@@ -319,9 +319,16 @@ function WhatsNewDialog({
 			    Widened past the default `sm:max-w-sm` (384px): the entry cards are
 			    an icon column plus two lines of copy, which reads cramped there. */}
 			<DialogContent className="gap-0 p-0 sm:max-w-lg" showCloseButton={false}>
+				{/* The tile is mint-on-navy in light. In dark the band itself turns
+				    mint (`--primary` and `--accent` share the hue there), so the
+				    same classes render mint-on-mint and the tile disappears — the
+				    dark pair draws it in the band's own foreground instead. */}
 				<div className="flex items-center gap-3 bg-primary p-4">
-					<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent/20">
-						<Sparkles className="size-4.5 text-accent" strokeWidth={2} />
+					<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent/20 dark:bg-primary-foreground/15">
+						<Sparkles
+							className="size-4.5 text-accent dark:text-primary-foreground"
+							strokeWidth={2}
+						/>
 					</span>
 					<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 						<DialogTitle className="text-primary-foreground">

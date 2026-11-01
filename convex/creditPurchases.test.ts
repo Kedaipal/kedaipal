@@ -376,13 +376,13 @@ describe("createTopUp — opening a checkout", () => {
 		});
 	});
 
-	test("the pack currency follows the BILLING currency — the last paid invoice — not the country", async () => {
+	test("the pack currency is the store's country's — a past bill in another currency never moves it (86eyp7hn7)", async () => {
 		const t = setup();
 		installFetch();
 		await makeStore(t, { country: "MY", lastPaidCurrency: "SGD" });
 		const options = await as(t, OWNER).query(api.creditPurchases.topUpOptions, {});
-		expect(options?.currency).toBe("SGD");
-		await expect(buy(t, OWNER, "p50")).rejects.toThrow(/different currency/);
+		expect(options?.currency).toBe("MYR");
+		await expect(buy(t, OWNER, "p50sg")).rejects.toThrow(/different currency/);
 	});
 
 	test("a pack that doesn't exist is refused", async () => {

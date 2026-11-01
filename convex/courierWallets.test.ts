@@ -1,8 +1,11 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import type { FunctionArgs } from "convex/server";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
+import type { Doc, Id } from "./_generated/dataModel";
+import { resetWalletsForCountrySwitch } from "./courierWallets";
 import { keyFingerprint, parseWalletBalance } from "./lib/courierWallet";
 import { computeLalamoveWebhookSignature } from "./lib/lalamoveSignature";
 import schema from "./schema";
@@ -134,7 +137,10 @@ describe("POST /webhook/lalamove — WALLET_BALANCE_CHANGED", () => {
 		expect(await wallet(t, retailerId as never)).toEqual({
 			balance: 1240,
 			currency: "MYR",
-			at: 1_000,
+			// Lalamove's envelope timestamp arrives in SECONDS here; it is
+			// stored in ms like every other event (z8r3fdrgxc), or "updated …
+			// ago" would read 1970 and lose every newer-wins comparison.
+			at: 1_000_000,
 			low: true,
 		});
 	});
@@ -190,3 +196,678 @@ describe("backfillFingerprints", () => {
 		]);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// The seam (z8r3fdrgxc + z8r3fdx34j): one writer, one read model
+// ---------------------------------------------------------------------------
+
+const list = (t: ReturnType<typeof setup>, retailerId: Id<"retailers">) =>
+	t.withIdentity({ subject: USER }).query(api.courierWallets.list, {
+		retailerId,
+	});
+
+/** A keyed store whose Lalamove booking is ARMED on a LIVE key — the only
+ * kind of wallet that emails. */
+async function seedArmedStore(t: ReturnType<typeof setup>) {
+	const seeded = await seedKeyedStore(t);
+	await t.run(async (ctx) => {
+		const retailer = await ctx.db.get(seeded.retailerId);
+		if (!retailer?.deliveryBooking) throw new Error("seed");
+		await ctx.db.patch(seeded.retailerId, {
+			deliveryBooking: {
+				...retailer.deliveryBooking,
+				enabled: true,
+				env: "production",
+			},
+		});
+	});
+	return seeded;
+}
+
+async function connectDelyva(
+	t: ReturnType<typeof setup>,
+	retailerId: Id<"retailers">,
+	isDemo = false,
+) {
+	await t.run(async (ctx) => {
+		await ctx.db.patch(retailerId, {
+			delyva: {
+				enabled: true,
+				apiKey: "dx-test-key",
+				apiSecret: "dx-test-secret",
+				apiKeyHint: "-key",
+				customerId: 128399,
+				isDemo,
+			},
+		});
+	});
+}
+
+const record = (
+	t: ReturnType<typeof setup>,
+	args: FunctionArgs<typeof internal.courierWallets.record>,
+) => t.mutation(internal.courierWallets.record, args);
+
+const scheduledLowEmails = (t: ReturnType<typeof setup>) =>
+	t.run(async (ctx) =>
+		(await ctx.db.system.query("_scheduled_functions").collect()).filter(
+			(f) => f.name.includes("notifyLowWallet"),
+		),
+	);
+
+describe("courierWallets.list — every connected account, never RM 0 for 'unknown'", () => {
+	test("a freshly keyed Lalamove account reads 'unreported', with no amount", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		const [lalamove] = await list(t, retailerId);
+		expect(lalamove).toMatchObject({
+			provider: "lalamove",
+			state: "unreported",
+			balanceMinor: null,
+			// pk_test key: play money, never a top-up prompt.
+			isTest: true,
+		});
+	});
+
+	test("a connected Delyva account reads 'unreported' until its balance is read", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await connectDelyva(t, retailerId);
+		const delyva = (await list(t, retailerId)).find(
+			(w) => w.provider === "delyva",
+		);
+		expect(delyva).toMatchObject({ state: "unreported", balanceMinor: null });
+	});
+
+	test("the default low line follows the wallet's currency (RM 30)", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		const [lalamove] = await list(t, retailerId);
+		expect(lalamove?.lowAlertMinor).toBe(3000);
+		expect(lalamove?.lowAlertCustom).toBe(false);
+	});
+});
+
+describe("EasyParcel — a store connected before the wallet table widened", () => {
+	afterEach(() => vi.unstubAllEnvs());
+
+	async function seedEasyparcelStore(t: ReturnType<typeof setup>) {
+		vi.stubEnv("EASYPARCEL_CLIENT_ID", "client-id-test");
+		vi.stubEnv("EASYPARCEL_CLIENT_SECRET", "client-secret-test");
+		vi.stubEnv("CONVEX_SITE_URL", "https://site.test");
+		const { retailerId } = await seedKeyedStore(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { country: "SG", currency: "SGD" });
+			// The connection's own snapshot, as every pull has written it since
+			// before `courierWallets` knew about EasyParcel — and no wallet row.
+			await ctx.db.insert("easyparcelConnections", {
+				retailerId,
+				enabled: true,
+				environment: "sandbox",
+				accessToken: "access",
+				refreshToken: "refresh",
+				accessExpiresAt: Date.now() + 3_600_000,
+				balanceMinor: 1980,
+				balanceCurrency: "SGD",
+				balanceCheckedAt: 5_000,
+				connectedAt: 1,
+				updatedAt: 1,
+			});
+		});
+		return retailerId;
+	}
+
+	test("reads the balance its connection already holds, as a pull — never '—'", async () => {
+		const t = setup();
+		const retailerId = await seedEasyparcelStore(t);
+		const easyparcel = (await list(t, retailerId)).find(
+			(w) => w.provider === "easyparcel",
+		);
+		expect(easyparcel).toMatchObject({
+			state: "ok",
+			balanceMinor: 1980,
+			currency: "SGD",
+			at: 5_000,
+			source: "pull",
+			isTest: true,
+		});
+	});
+
+	test("a newer wallet observation outranks the snapshot", async () => {
+		const t = setup();
+		const retailerId = await seedEasyparcelStore(t);
+		await record(t, {
+			retailerId,
+			provider: "easyparcel",
+			at: 9_000,
+			observation: {
+				kind: "balance",
+				balanceMinor: 900,
+				currency: "SGD",
+				source: "pull",
+			},
+		});
+		const easyparcel = (await list(t, retailerId)).find(
+			(w) => w.provider === "easyparcel",
+		);
+		expect(easyparcel).toMatchObject({ balanceMinor: 900, at: 9_000 });
+	});
+});
+
+describe("recordObservation — the one writer, monotonic on observation time", () => {
+	test("a late refusal never hides a newer balance; a newer one marks the wallet short", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await record(t, {
+			retailerId,
+			provider: "lalamove",
+			at: 2_000,
+			observation: {
+				kind: "balance",
+				balanceMinor: 8450,
+				currency: "MYR",
+				source: "webhook",
+			},
+		});
+		await record(t, {
+			retailerId,
+			provider: "lalamove",
+			at: 1_000,
+			observation: { kind: "refused" },
+		});
+		expect((await list(t, retailerId))[0]?.state).toBe("ok");
+
+		await record(t, {
+			retailerId,
+			provider: "lalamove",
+			at: 3_000,
+			observation: { kind: "refused" },
+		});
+		const [after] = await list(t, retailerId);
+		expect(after?.state).toBe("short");
+		// Short is not RM 0: the last number stays, the refusal is newer.
+		expect(after?.balanceMinor).toBe(8450);
+		expect(after?.refusedAt).toBe(3_000);
+	});
+
+	test("a Lalamove observation without a keyed row is dropped (no key, no wallet)", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await t.run(async (ctx) => {
+			for (const row of await ctx.db.query("courierWallets").collect())
+				await ctx.db.delete(row._id);
+		});
+		await record(t, {
+			retailerId,
+			provider: "lalamove",
+			at: 1,
+			observation: {
+				kind: "balance",
+				balanceMinor: 1,
+				currency: "MYR",
+				source: "webhook",
+			},
+		});
+		expect(
+			await t.run((ctx) => ctx.db.query("courierWallets").collect()),
+		).toHaveLength(0);
+	});
+});
+
+describe("Delyva — the refusal is the only place its balance appears", () => {
+	test("'Bal: 0, Price: 5.00' records an EMPTY wallet, last seen at the refusal", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await connectDelyva(t, retailerId);
+		await t.mutation(internal.courierWallets.recordDelyvaRefusal, {
+			retailerId,
+			message:
+				"Payment failed, You don't have enough credit balance. Bal: 0, Price: 5.00",
+		});
+		const delyva = (await list(t, retailerId)).find(
+			(w) => w.provider === "delyva",
+		);
+		expect(delyva).toMatchObject({
+			state: "empty",
+			balanceMinor: 0,
+			currency: "MYR",
+			source: "refusal",
+		});
+	});
+
+	test("a refusal with no number still says the wallet came up short", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await connectDelyva(t, retailerId);
+		await t.mutation(internal.courierWallets.recordDelyvaRefusal, {
+			retailerId,
+			message: "Insufficient credit",
+		});
+		const delyva = (await list(t, retailerId)).find(
+			(w) => w.provider === "delyva",
+		);
+		expect(delyva?.state).toBe("short");
+	});
+
+	test("disconnecting forgets the wallet — no stale balance outlives its account", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await connectDelyva(t, retailerId);
+		await t.mutation(internal.courierWallets.recordDelyvaRefusal, {
+			retailerId,
+			message: "Bal: 3.10, Price: 5.00",
+		});
+		await t.mutation(internal.delyva.clearConnection, { retailerId });
+		const rows = await t.run((ctx) =>
+			ctx.db
+				.query("courierWallets")
+				.filter((q) => q.eq(q.field("provider"), "delyva"))
+				.collect(),
+		);
+		expect(rows).toHaveLength(0);
+	});
+});
+
+describe("the low-balance email — once per crossing, never per webhook", () => {
+	const low = (at: number, balanceMinor = 1240) => ({
+		at,
+		observation: {
+			kind: "balance" as const,
+			balanceMinor,
+			currency: "MYR",
+			source: "webhook" as const,
+		},
+	});
+
+	test("crossing into low schedules ONE email; staying low adds none; a top-up re-arms it", async () => {
+		const t = setup();
+		const { retailerId } = await seedArmedStore(t);
+		const r = { retailerId, provider: "lalamove" as const };
+		await record(t, { ...r, ...low(1) });
+		await record(t, { ...r, ...low(2, 900) });
+		expect(await scheduledLowEmails(t)).toHaveLength(1);
+
+		// Topped up: healthy again, and the next crossing is news again.
+		await record(t, { ...r, ...low(3, 10_000) });
+		const [row] = await t.run((ctx) => ctx.db.query("courierWallets").collect());
+		expect(row?.lowNotifiedAt).toBeUndefined();
+		await record(t, { ...r, ...low(4) });
+		expect(await scheduledLowEmails(t)).toHaveLength(2);
+	});
+
+	test("a live wallet whose booking is switched OFF stays quiet — nothing is being booked from it", async () => {
+		const t = setup();
+		const { retailerId } = await seedArmedStore(t);
+		await t.run(async (ctx) => {
+			const r = await ctx.db.get(retailerId);
+			if (!r?.deliveryBooking) throw new Error("seed");
+			await ctx.db.patch(retailerId, {
+				deliveryBooking: { ...r.deliveryBooking, enabled: false },
+			});
+		});
+		await record(t, { retailerId, provider: "lalamove", ...low(1) });
+		expect(await scheduledLowEmails(t)).toHaveLength(0);
+	});
+
+	test("a test (sandbox) wallet never emails — it's play money", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t); // pk_test, not armed
+		await record(t, { retailerId, provider: "lalamove", ...low(1) });
+		expect(await scheduledLowEmails(t)).toHaveLength(0);
+	});
+});
+
+describe("setLowAlert — the seller's own line, per wallet", () => {
+	test("raising the line over today's balance is a crossing: the wallet reads low and the owner hears once", async () => {
+		const t = setup();
+		const { retailerId, asUser } = await seedArmedStore(t);
+		await record(t, {
+			retailerId,
+			provider: "lalamove",
+			at: 1,
+			observation: {
+				kind: "balance",
+				balanceMinor: 4000,
+				currency: "MYR",
+				source: "webhook",
+			},
+		});
+		expect((await list(t, retailerId))[0]?.state).toBe("ok");
+		await asUser.mutation(api.courierWallets.setLowAlert, {
+			retailerId,
+			provider: "lalamove",
+			lowAlertMinor: 5000,
+		});
+		const [after] = await list(t, retailerId);
+		expect(after).toMatchObject({
+			state: "low",
+			lowAlertMinor: 5000,
+			lowAlertCustom: true,
+		});
+		expect(await scheduledLowEmails(t)).toHaveLength(1);
+
+		// null = back to the currency default.
+		await asUser.mutation(api.courierWallets.setLowAlert, {
+			retailerId,
+			provider: "lalamove",
+			lowAlertMinor: null,
+		});
+		expect((await list(t, retailerId))[0]?.lowAlertCustom).toBe(false);
+	});
+
+	test("refuses a line outside the bounds, and a courier that isn't connected", async () => {
+		const t = setup();
+		const { retailerId, asUser } = await seedKeyedStore(t);
+		await expect(
+			asUser.mutation(api.courierWallets.setLowAlert, {
+				retailerId,
+				provider: "lalamove",
+				lowAlertMinor: 0,
+			}),
+		).rejects.toThrow(/between/);
+		await expect(
+			asUser.mutation(api.courierWallets.setLowAlert, {
+				retailerId,
+				provider: "delyva",
+				lowAlertMinor: 2000,
+			}),
+		).rejects.toThrow(/Connect this courier/);
+	});
+});
+
+describe("a country switch resets every wallet", () => {
+	test("Lalamove keeps its key's fingerprint but loses the old balance; others go", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await connectDelyva(t, retailerId);
+		await record(t, {
+			retailerId,
+			provider: "lalamove",
+			at: 1,
+			observation: {
+				kind: "balance",
+				balanceMinor: 8450,
+				currency: "MYR",
+				source: "webhook",
+			},
+		});
+		await t.mutation(internal.courierWallets.recordDelyvaRefusal, {
+			retailerId,
+			message: "Bal: 1.00, Price: 5.00",
+		});
+		await t.run((ctx) => resetWalletsForCountrySwitch(ctx, retailerId));
+		const rows = await t.run((ctx) => ctx.db.query("courierWallets").collect());
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			provider: "lalamove",
+			keyFingerprint: await keyFingerprint(KEY),
+		});
+		expect(rows[0]?.balance).toBeUndefined();
+	});
+
+	test("EasyParcel's connection snapshot goes too — or the forgotten balance would come straight back", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await t.run(async (ctx) => {
+			await ctx.db.insert("easyparcelConnections", {
+				retailerId,
+				enabled: true,
+				environment: "live",
+				accessToken: "access",
+				accessExpiresAt: Date.now() + 3_600_000,
+				balanceMinor: 1980,
+				balanceCurrency: "MYR",
+				balanceCheckedAt: 5_000,
+				connectedAt: 1,
+				updatedAt: 1,
+			});
+		});
+		await record(t, {
+			retailerId,
+			provider: "easyparcel",
+			at: 6_000,
+			observation: {
+				kind: "balance",
+				balanceMinor: 1980,
+				currency: "MYR",
+				source: "pull",
+			},
+		});
+		await t.run((ctx) => resetWalletsForCountrySwitch(ctx, retailerId));
+		vi.stubEnv("EASYPARCEL_CLIENT_ID", "client-id-test");
+		vi.stubEnv("EASYPARCEL_CLIENT_SECRET", "client-secret-test");
+		vi.stubEnv("CONVEX_SITE_URL", "https://site.test");
+		try {
+			const easyparcel = (await list(t, retailerId)).find(
+				(w) => w.provider === "easyparcel",
+			);
+			expect(easyparcel).toMatchObject({
+				state: "unreported",
+				balanceMinor: null,
+				at: null,
+			});
+			// The account's currency survives: the country-mismatch warning on
+			// the EasyParcel card reads it, and a switch is when it matters.
+			const conn = await t.run((ctx) =>
+				ctx.db.query("easyparcelConnections").unique(),
+			);
+			expect(conn).toMatchObject({ balanceCurrency: "MYR" });
+			expect(conn?.balanceMinor).toBeUndefined();
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+});
+
+describe("a reconnect forgets the balance, never the seller's alert line", () => {
+	const connect = (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		account: { accountName: string; environment: "sandbox" | "live" },
+	) =>
+		t.mutation(internal.easyparcel.storeConnection, {
+			retailerId,
+			accessToken: "enc.v1.access",
+			accessExpiresAt: Date.now() + 3_600_000,
+			...account,
+			balanceMinor: 500,
+			balanceCurrency: "MYR",
+		});
+	const epRow = (t: ReturnType<typeof setup>) =>
+		t.run(async (ctx) =>
+			(await ctx.db.query("courierWallets").collect()).find(
+				(r) => r.provider === "easyparcel",
+			),
+		);
+
+	test("EasyParcel: the same account signing in again keeps the line AND the once-per-crossing stamp", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await connect(t, retailerId, { accountName: "Kedai A", environment: "live" });
+		const seeded = await epRow(t);
+		if (!seeded) throw new Error("seed");
+		await t.run((ctx) =>
+			ctx.db.patch(seeded._id, { lowAlertMinor: 8000, lowNotifiedAt: 42 }),
+		);
+		await connect(t, retailerId, { accountName: "Kedai A", environment: "live" });
+		expect(await epRow(t)).toMatchObject({
+			balance: 500,
+			lowAlertMinor: 8000,
+			lowNotifiedAt: 42,
+		});
+	});
+
+	test("EasyParcel: a different account keeps the line but starts the email over", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await connect(t, retailerId, { accountName: "Kedai A", environment: "live" });
+		const seeded = await epRow(t);
+		if (!seeded) throw new Error("seed");
+		await t.run((ctx) =>
+			ctx.db.patch(seeded._id, { lowAlertMinor: 8000, lowNotifiedAt: 42 }),
+		);
+		await connect(t, retailerId, { accountName: "Kedai B", environment: "live" });
+		const row = await epRow(t);
+		expect(row).toMatchObject({ balance: 500, lowAlertMinor: 8000 });
+		// Below the RM 80 line, so the fresh account's crossing emails anew —
+		// the stamp is the one just written, not the old 42.
+		expect(row?.lowNotifiedAt).not.toBe(42);
+	});
+
+	test("Delyva: a key for another customer id drops the balance, keeps the line", async () => {
+		const t = setup();
+		const { retailerId } = await seedKeyedStore(t);
+		await connectDelyva(t, retailerId);
+		await t.mutation(internal.courierWallets.recordDelyvaRefusal, {
+			retailerId,
+			message: "Bal: 3.10, Price: 5.00",
+		});
+		await t.run(async (ctx) => {
+			const row = (await ctx.db.query("courierWallets").collect()).find(
+				(r) => r.provider === "delyva",
+			);
+			if (!row) throw new Error("seed");
+			await ctx.db.patch(row._id, { lowAlertMinor: 8000 });
+		});
+		await t.mutation(internal.delyva.storeConnection, {
+			retailerId,
+			apiKey: "enc.v1.other",
+			apiSecret: "enc.v1.other-secret",
+			apiKeyHint: "ther",
+			customerId: 999,
+		});
+		const row = (
+			await t.run((ctx) => ctx.db.query("courierWallets").collect())
+		).find((r) => r.provider === "delyva");
+		expect(row).toMatchObject({ lowAlertMinor: 8000 });
+		expect(row?.balance).toBeUndefined();
+	});
+});
+
+describe("topUpSuggestion — from this store's own bookings with the courier", () => {
+	let n = 0;
+	async function bookings(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		jobs: Partial<Doc<"deliveryJobs">>[],
+	) {
+		await t.run(async (ctx) => {
+			for (const over of jobs) {
+				const orderId = await ctx.db.insert("orders", {
+					retailerId,
+					shortId: `ORD-S${n++}`,
+					items: [],
+					subtotal: 2500,
+					total: 2500,
+					currency: "MYR",
+					status: "delivered",
+					channel: "whatsapp",
+					customer: { name: "Aisha" },
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+				} as never);
+				await ctx.db.insert("deliveryJobs", {
+					orderId,
+					retailerId,
+					provider: "lalamove",
+					status: "completed",
+					costActual: 1160,
+					quotationId: "q",
+					vehicleType: "MOTORCYCLE",
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+					...over,
+				});
+			}
+		});
+	}
+	const suggest = (t: ReturnType<typeof setup>, retailerId: Id<"retailers">) =>
+		t
+			.withIdentity({ subject: USER })
+			.query(api.courierWallets.topUpSuggestion, {
+				retailerId,
+				provider: "lalamove",
+			});
+
+	test("averages the charged bookings only — never a cancelled one, an old one or another courier's", async () => {
+		const t = setup();
+		const { retailerId } = await seedArmedStore(t);
+		const old = Date.now() - 40 * 24 * 60 * 60 * 1000;
+		await bookings(t, retailerId, [
+			{},
+			{},
+			{ status: "ongoing" },
+			{},
+			{},
+			{ status: "canceled", costActual: 99_900 },
+			{ createdAt: old, costActual: 99_900 },
+			{ provider: "delyva", costActual: 99_900 },
+		]);
+		const s = await suggest(t, retailerId);
+		expect(s?.bookings).toBe(5);
+		expect(s?.currency).toBe("MYR");
+		// Five RM 11.60 trips: "~4 trips" is RM 46.40, rounded up to RM 50.
+		expect(s?.options.find((o) => o.label === "~4 trips")?.minor).toBe(5000);
+	});
+
+	test("too few bookings, or a sandbox key's play money, suggest nothing", async () => {
+		const t = setup();
+		const { retailerId } = await seedArmedStore(t);
+		await bookings(t, retailerId, [{}, {}, {}, {}]);
+		expect(await suggest(t, retailerId)).toBeNull();
+
+		const sandbox = setup();
+		const keyed = await seedKeyedStore(sandbox); // pk_test key: a test wallet
+		await bookings(sandbox, keyed.retailerId, [{}, {}, {}, {}, {}, {}]);
+		expect(await suggest(sandbox, keyed.retailerId)).toBeNull();
+	});
+});
+
+describe("delyva.refreshBalance — Delyva's balance, read with the seller's own key", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	function stubDelyva(profile: unknown) {
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("/customer/128399"))
+				return new Response(JSON.stringify(profile), { status: 200 });
+			return new Response("{}", { status: 404 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		return fetchMock;
+	}
+
+	test("records walletBalance as a fresh pull — Delyva is an ASKABLE wallet now", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedKeyedStore(t);
+		await connectDelyva(t, retailerId);
+		const fetchMock = stubDelyva({
+			data: { id: 128399, walletBalance: "42.50", minBalanceVal: "20.00" },
+		});
+		const result = await asUser.action(api.delyva.refreshBalance, {});
+		expect(result).toEqual({ ok: true, balanceMinor: 4250, currency: "MYR" });
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		const delyva = (await list(t, retailerId)).find(
+			(w) => w.provider === "delyva",
+		);
+		expect(delyva).toMatchObject({
+			state: "ok",
+			balanceMinor: 4250,
+			source: "pull",
+		});
+	});
+
+	test("a profile without a wallet balance says so and records nothing", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedKeyedStore(t);
+		await connectDelyva(t, retailerId);
+		stubDelyva({ data: { id: 128399 } });
+		const result = await asUser.action(api.delyva.refreshBalance, {});
+		expect(result.ok).toBe(false);
+		const delyva = (await list(t, retailerId)).find(
+			(w) => w.provider === "delyva",
+		);
+		expect(delyva?.balanceMinor).toBeNull();
+	});
+});
+

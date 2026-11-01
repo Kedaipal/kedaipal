@@ -9,47 +9,34 @@ import { cn } from "../../lib/utils";
  * preference to this browser; the seller's three-way picker (Settings → App →
  * Appearance) is where "match device" can be chosen again.
  *
- * It rides every piece of chrome — buyer footers, the marketing nav, the
- * /stores header, the dashboard header and sidebar — because a theme toggle
- * that exists on some pages and not others is a page the visitor can't fix.
+ * It rides every piece of chrome — the buyer pages' headers, the marketing
+ * nav, the /stores header, the dashboard header and sidebar — because a theme
+ * toggle that exists on some pages and not others is a page the visitor can't
+ * fix.
  *
- * `ghost` is the icon disc that sits between other icon buttons (nav bars,
- * the dashboard header, the sidebar foot); `text` is the quiet labelled row
- * the buyer footers use — the same visual language as "Discover more stores",
- * because a bordered disc parked beside the Powered-by badge read as clutter
- * (Zaki, 21 Oct 2026); `outline` is the bordered disc for anywhere else.
+ * Icon only, everywhere. `ghost` is the bare disc that sits among other icon
+ * buttons (nav bars, the buyer headers, the sidebar foot) — a caller restyles
+ * it through `className` where the bar's own icons wear a different skin (the
+ * frosted discs on a storefront cover photo); `outline` is the bordered disc
+ * for anywhere else. The buyer footer once carried a labelled "Dark mode" row
+ * above the Powered-by badge; it read as stray chrome there and moved up into
+ * each page's header (z8r3fdwc19).
+ *
+ * The tap is a FADE, not a cut (`lib/theme.ts`, "the fade"): the page dims or
+ * brightens over the whole viewport, and the incoming glyph turns into place
+ * under it (`.kp-theme-glyph` in `styles.css`, live only while <html> carries
+ * `data-theme-transition`, so a page load never replays it).
  */
 export function ThemeToggle({
 	className,
 	variant = "outline",
 }: {
 	className?: string;
-	variant?: "outline" | "ghost" | "text";
+	variant?: "outline" | "ghost";
 }) {
 	const { resolved, setPreference } = useTheme();
 	const goingDark = resolved === "light";
 	const label = goingDark ? "Switch to dark mode" : "Switch to light mode";
-
-	if (variant === "text") {
-		return (
-			<button
-				type="button"
-				onClick={() => setPreference(goingDark ? "dark" : "light")}
-				aria-label={label}
-				className={cn(
-					"group inline-flex min-h-11 items-center gap-1.5 rounded-full px-4 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/10 hover:text-accent-emphasis focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
-					className,
-				)}
-			>
-				<Moon className="size-4 dark:hidden" aria-hidden="true" />
-				<Sun className="hidden size-4 dark:block" aria-hidden="true" />
-				{/* The verb names the ACTION, like the aria-label; CSS picks it so
-				    SSR's light-first pass never prints the wrong one for a frame. */}
-				<span className="dark:hidden">Dark mode</span>
-				<span className="hidden dark:inline">Light mode</span>
-			</button>
-		);
-	}
 
 	return (
 		<button
@@ -68,8 +55,14 @@ export function ThemeToggle({
 			    then, so branching on it here would paint a Moon on an
 			    already-dark page for a frame. The label can use `resolved` safely:
 			    nothing reads it until hydration, and no click is possible before. */}
-			<Moon className="size-4.5 dark:hidden" aria-hidden="true" />
-			<Sun className="hidden size-4.5 dark:block" aria-hidden="true" />
+			<Moon
+				className="kp-theme-glyph size-4.5 dark:hidden"
+				aria-hidden="true"
+			/>
+			<Sun
+				className="kp-theme-glyph hidden size-4.5 dark:block"
+				aria-hidden="true"
+			/>
 		</button>
 	);
 }

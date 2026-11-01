@@ -35,8 +35,21 @@ vi.mock("convex/react", () => ({
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
-vi.mock("@tanstack/react-query", () => ({
-	useQuery: () => ({ data: state.dispatch }),
+vi.mock("@tanstack/react-query", async () => {
+	const { getFunctionName } = await import("convex/server");
+	return {
+		// The courier-wallet line (z8r3fdx34j) reads its own query; everything
+		// else answers with this card's own state.
+		useQuery: (q: { fn: unknown }) => ({
+			data:
+				getFunctionName(q.fn as never) === "courierWallets:list"
+					? walletState.wallets
+					: state.dispatch,
+		}),
+	};
+});
+const walletState = vi.hoisted(() => ({
+	wallets: [] as unknown[],
 }));
 vi.mock("@tanstack/react-router", () => ({
 	Link: (props: Record<string, unknown>) => <a {...props} />,
@@ -245,6 +258,130 @@ describe("BookDeliveryCard — dispatch dialog vehicle choice", () => {
 				vehicleType: "CAR",
 			}),
 		);
+	});
+});
+
+describe("BookDeliveryCard — nothing a rider can carry (26 Oct 2026)", () => {
+	// The /test-code run on PR #418: a 40.6 kg order the buyer paid a DHL
+	// price for opened on "Car", said no rider vehicle fits, then offered
+	// "the difference stays with you" and a primary Confirm & dispatch — and
+	// never mentioned the courier tab one tap away.
+	function heavyQuote(overrides: Record<string, unknown> = {}) {
+		return vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q1",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 5140,
+			buyerPaidFee: 8873,
+			vehicleType: "CAR",
+			buyerContactFallback: false,
+			market: "MY",
+			vehicleAdvice: { kind: "too_heavy", cartKg: 40.6, maxKg: 40 },
+			...overrides,
+		});
+	}
+	const heavyOrder = {
+		...deliveredOrder,
+		status: "confirmed",
+		deliverySnapshot: {
+			mode: "live",
+			fee: 8873,
+			quoteProvider: "delyva",
+			quoteServiceName: "DHL eCommerce",
+		},
+	} as unknown as Doc<"orders">;
+
+	async function openDialog(props: { onUseCourier?: () => void } = {}) {
+		state.dispatch = {
+			promptBookOnPacked: false,
+			blockReason: null,
+			job: null,
+		};
+		render(<BookDeliveryCard order={heavyOrder} {...props} />);
+		fireEvent.click(screen.getByText("Book delivery"));
+		await screen.findByText(/no rider vehicle here can carry it/);
+	}
+
+	it("in the hub: the courier is the way forward, the car an explicit override", async () => {
+		state.action = heavyQuote();
+		const onUseCourier = vi.fn();
+		await openDialog({ onUseCourier });
+
+		expect(
+			screen.getByText(
+				/Your buyer paid a DHL eCommerce price at checkout — book the courier instead\./,
+			),
+		).toBeTruthy();
+		// The price comparison would reward the booking the line advises against.
+		expect(screen.queryByText(/the difference stays with you/)).toBeNull();
+		expect(screen.queryByText("Confirm & dispatch")).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "Book a car anyway" }),
+		).toBeTruthy();
+
+		fireEvent.click(
+			screen.getByRole("button", { name: "Use a Delyva courier" }),
+		);
+		expect(onUseCourier).toHaveBeenCalledTimes(1);
+		// The rider quote is dropped: the dialog closes onto the courier tab.
+		await waitFor(() =>
+			expect(
+				screen.queryByText(/no rider vehicle here can carry it/),
+			).toBeNull(),
+		);
+	});
+
+	it("a rider-priced order in the hub points at the courier without claiming the buyer paid one", async () => {
+		state.action = heavyQuote();
+		state.dispatch = {
+			promptBookOnPacked: false,
+			blockReason: null,
+			job: null,
+		};
+		render(
+			<BookDeliveryCard
+				order={{ ...heavyOrder, deliverySnapshot: undefined } as Doc<"orders">}
+				onUseCourier={vi.fn()}
+			/>,
+		);
+		fireEvent.click(screen.getByText("Book delivery"));
+		expect(
+			await screen.findByText(
+				/Send it by Delyva courier instead, or book a van in the Lalamove app\./,
+			),
+		).toBeTruthy();
+	});
+
+	it("without a courier tab: the van and own-courier ways out, still no 'stays with you'", async () => {
+		state.action = heavyQuote();
+		await openDialog();
+		expect(screen.getByText(/Book a van in the Lalamove app/)).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: "Use a Delyva courier" }),
+		).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "Book a car anyway" }),
+		).toBeTruthy();
+		expect(screen.queryByText(/the difference stays with you/)).toBeNull();
+	});
+
+	it("an order a rider CAN carry keeps Confirm & dispatch and the price comparison", async () => {
+		state.action = heavyQuote({ vehicleAdvice: undefined });
+		state.dispatch = {
+			promptBookOnPacked: false,
+			blockReason: null,
+			job: null,
+		};
+		render(<BookDeliveryCard order={heavyOrder} onUseCourier={vi.fn()} />);
+		fireEvent.click(screen.getByText("Book delivery"));
+		expect(
+			await screen.findByText(/the difference stays with you/),
+		).toBeTruthy();
+		expect(screen.getByText("Confirm & dispatch")).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: "Use a Delyva courier" }),
+		).toBeNull();
 	});
 });
 

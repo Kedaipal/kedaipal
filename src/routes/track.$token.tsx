@@ -32,6 +32,7 @@ import {
 	paymentsPausedOrderLine,
 } from "../../convex/lib/buyerPayments";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
+import { overseasFeeLabel } from "../../convex/lib/crossBorder";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
@@ -69,6 +70,7 @@ import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
 import { LinkifiedText } from "../components/ui/linkified-text";
 import { Skeleton } from "../components/ui/skeleton";
+import { ThemeToggle } from "../components/ui/theme-toggle";
 import { ZoomableImage } from "../components/ui/zoomable-image";
 import { bookingLengthLabel } from "../lib/booking-dates";
 import { getConvexHttpClient } from "../lib/convex-server";
@@ -79,6 +81,7 @@ import {
 	googleMapsNavUrl,
 	wazeNavUrl,
 } from "../lib/google-address";
+import { pageHead } from "../lib/not-found";
 import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
@@ -244,18 +247,19 @@ export const Route = createFileRoute("/track/$token")({
 		// secret token into a title/canonical that could leak via referrer/history.
 		return { shortId: read.value.shortId };
 	},
-	head: ({ loaderData }) => ({
-		meta: [
-			{
-				title: loaderData?.shortId
-					? `Order ${loaderData.shortId} — Kedaipal`
-					: "Your order — Kedaipal",
-			},
-			// noindex + no canonical: the URL carries a capability token, so it must
-			// never be indexed or advertised.
-			{ name: "robots", content: "noindex" },
-		],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData }) => ({
+			meta: [
+				{
+					title: loaderData?.shortId
+						? `Order ${loaderData.shortId} — Kedaipal`
+						: "Your order — Kedaipal",
+				},
+				// noindex + no canonical: the URL carries a capability token, so it must
+				// never be indexed or advertised.
+				{ name: "robots", content: "noindex" },
+			],
+		})),
 	notFoundComponent: OrderNotFound,
 	component: TrackingRoute,
 });
@@ -729,8 +733,23 @@ function TrackingRoute() {
 			    page as far as the buyer is concerned (same as the storefront, where
 			    the store brand leads); Kedaipal's own mark is the powered-by badge
 			    at the foot of the page, so the platform isn't named twice. It links
-			    back into the store (z8r3fducgw): one tap to keep shopping. */}
-			<OrderStoreEyebrow storeName={order.storeName} slug={storeSlug} ms={ms} />
+			    back into the store (z8r3fducgw): one tap to keep shopping. The
+			    theme flip shares its row, at the right edge like every buyer
+			    header (z8r3fdwc19); `-my-3.5` centres the 44px disc on the 16px
+			    eyebrow line without pushing the heading down, and `-mr-3` puts
+			    the glyph on the column's right edge. */}
+			<div className="flex items-center justify-between gap-2">
+				{/* `min-w-0`: a long store name truncates instead of pushing the
+				    toggle off the right edge. */}
+				<div className="flex min-w-0">
+					<OrderStoreEyebrow
+						storeName={order.storeName}
+						slug={storeSlug}
+						ms={ms}
+					/>
+				</div>
+				<ThemeToggle variant="ghost" className="-my-3.5 -mr-3" />
+			</div>
 			<h1 className="mt-3 font-mono text-2xl font-bold tracking-tight">
 				#{order.shortId}
 			</h1>
@@ -1677,7 +1696,10 @@ function TrackingRoute() {
 							</button>
 						) : null}
 					</div>
-					<DeliveryAddressDisplay address={order.deliveryAddress} />
+					<DeliveryAddressDisplay
+						address={order.deliveryAddress}
+						storeCountry={order.retailerCountry}
+					/>
 					{(() => {
 						const mapsUrl = deriveMapsUrl(order.deliveryAddress);
 						return mapsUrl ? (
@@ -1788,7 +1810,9 @@ function TrackingRoute() {
 				token={token}
 				currentAddress={order.deliveryAddress}
 				retailerId={order.retailerId}
-				country={order.retailerCountry}
+				// An overseas order is edited within ITS country (z8r3fdr5yy) — the
+				// address form follows the address, not the store.
+				country={order.deliveryAddress?.country ?? order.retailerCountry}
 				subtotal={order.subtotal}
 				orderItems={order.items}
 				currency={order.currency}
@@ -1874,7 +1898,14 @@ function TrackingRoute() {
 				{/* Frozen delivery charge — same reconciliation rule as the pickup fee. */}
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
-						<span>{isCollection ? "Collection fee" : "Delivery fee"}</span>
+						<span>
+							{isCollection
+								? "Collection fee"
+								: (overseasFeeLabel(
+										order.deliveryAddress?.country,
+										order.retailerCountry,
+									) ?? "Delivery fee")}
+						</span>
 						<span className="tabular-nums">
 							{formatPrice(order.deliveryFee, order.currency)}
 						</span>
@@ -2008,8 +2039,7 @@ function TrackingRoute() {
 			{/* PDPA notice companion (86ey5m3hx item 1): this page is the buyer's
 			    only web surface after checkout — and the ONLY one for counter
 			    buyers, whose consent notice arrives on WhatsApp. Link the policy
-			    that notice names. (The theme toggle rides StorefrontFooter below —
-			    one slot on every buyer page, z8r3fdadub.) */}
+			    that notice names. */}
 			<p className="mt-8 text-center text-xs text-muted-foreground">
 				<a
 					href="/privacy"
@@ -2346,6 +2376,7 @@ function SendOrderCard({
 	const message = buildOrderWaMessage({
 		shortId: order.shortId,
 		storeName: order.storeName,
+		storeCountry: order.retailerCountry,
 		items: order.items,
 		currency: order.currency,
 		total: order.total,

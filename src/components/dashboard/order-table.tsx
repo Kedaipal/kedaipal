@@ -35,6 +35,7 @@ import {
 } from "../../../convex/lib/orderCsv";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
 import { ColumnFilterMenu } from "../ui/column-filter-menu";
 import { useSortableSensors } from "../ui/sortable-list";
 import {
@@ -45,7 +46,10 @@ import {
 	TableHeader,
 	TableRow,
 } from "../ui/table";
-import type { OrderColumnFilterBinding } from "./order-column-filters";
+import type {
+	FilterNote,
+	OrderColumnFilterBinding,
+} from "./order-column-filters";
 import { type OrderStatus, StatusBadge } from "./status-badge";
 
 /**
@@ -319,6 +323,18 @@ function SortableHeader({
 						onChange={filter.onChange}
 						mode={filter.mode}
 						emptyHint={filter.emptyHint}
+						emptyAction={
+							filter.emptyAction ? (
+								<Button asChild className="tap-target w-full">
+									<Link to={filter.emptyAction.to}>
+										{filter.emptyAction.label}
+									</Link>
+								</Button>
+							) : undefined
+						}
+						note={
+							filter.note ? <FilterNoteLine note={filter.note} /> : undefined
+						}
 					/>
 				) : null}
 			</div>
@@ -744,5 +760,25 @@ export function OrderTable({
 				</Table>
 			</DndContext>
 		</div>
+	);
+}
+
+/** A header filter's explanatory line, with its link when it has one. */
+function FilterNoteLine({ note }: { note: FilterNote }) {
+	return (
+		<p>
+			{note.text}
+			{note.link ? (
+				<>
+					{" "}
+					<Link
+						to={note.link.to}
+						className="font-semibold text-accent-emphasis underline-offset-2 hover:underline dark:text-accent"
+					>
+						{note.link.label}
+					</Link>
+				</>
+			) : null}
+		</p>
 	);
 }

@@ -432,6 +432,8 @@ pause flow) is a sensible next step but not yet implemented.
 - `src/components/dashboard/{sidebar,mobile-header,bottom-nav}.tsx` — accept a `null` retailer
   for storeless-admin mode; sidebar's Admin group ends the session.
 - `convex/admin.test.ts` — access, subscription bypass, audit, directory, counter-checkout.
+- `convex/lib/adminAreas.ts` + `convex/adminAccess.ts` (`mine`) — admin AREAS for sites outside
+  the app; `src/lib/admin-sites.ts` — their URLs; `convex/adminAccess.test.ts`.
 
 ## Comp accounts (z8r3fdeub2)
 
@@ -503,23 +505,67 @@ and opens the **credit ledger drawer**
 refunds left, open lots) and the full paginated ledger
 (`credits.adminListLedger`, admin notes included), plus the two levers:
 
-- **Adjust by hand** (`credits.adminAdjust`) — plan or bought credits, a whole
+- **Adjust by hand** (`credits.adminAdjust`) — plan or extra credits, a whole
   number (+ adds, − takes away), and a **mandatory note, said plainly to be
   admin-only**: kept on the ledger, never shown to the seller. Plan
-  adjustments last until the month resets; bought additions land as a
-  12-month lot; bought removals take the oldest lot first and can't overdraw
+  adjustments last until the month resets; extra-credit additions land as a
+  12-month lot; extra-credit removals take the oldest lot first and can't overdraw
   (the drawer says so before the tap — the server refuses it too). The button
-  names its consequence ("Add 50 bought credits").
+  names its consequence ("Add 50 extra credits"). Each open lot in the drawer
+  says its source — top-up, referral bonus, or admin grant / block.
 - **Custom monthly grant** (`credits.adminSetGrantOverride`) — beats every plan
   grant (a partner deal, a pilot); a higher grant lands its difference now, a
   lower one or a clear waits for next month.
 
 Both writes are `requireAdmin`-gated and audited (`credits.adminAdjust` /
 `credits.adminSetGrantOverride`). **Admin → Billing** gains two tiles from
-`credits.adminCreditTotals`: **unused bought credits** (Σ `purchasedBalance` —
-the deferred-revenue figure, service still owed) and **orders owed**
+`credits.adminCreditTotals`: **unused extra credits** (Σ `purchasedBalance` —
+service still owed; NOT deferred revenue, because the pot includes unpaid
+referral bonuses and grants — docs/credits.md § Purchased credits) and **orders owed**
 (Σ min(0, `planBalance`)), each "across N stores". Counts of credits, never
 money. The top-up REVENUE tile needs T2's purchase table and is a follow-up.
+
+## Admin areas — Kedaipal's own sites on admin.kedaipal.com (z8r3fdwwpe)
+
+Some admin tooling lives **outside this app**, on `admin.kedaipal.com`, as separate
+Workers that sign in with **this app's Clerk instance** (same account, same session across
+kedaipal.com subdomains). The first is the blog's video upload page,
+`https://admin.kedaipal.com/videos` (repo `Kedaipal/kedaiblog`, folder `media/`).
+
+**Who may use such a site is decided here, in one place:** `convex/lib/adminAreas.ts`.
+
+| Area | Held by |
+|---|---|
+| `videos` — the blog's video upload page | every Kedaipal admin (`ADMIN_USER_IDS`) **and** every blog editor (`BLOG_EDITOR_USER_IDS`) |
+
+- **A blog editor is not an admin.** `ADMIN_USER_IDS` lets someone act as any seller;
+  writing for the blog must never need that, so editors get their own env list and it grants
+  the `videos` area only (a test pins that `isAdmin` stays false for an editor).
+- **`adminAccess.mine`** returns `{ areas: AdminArea[], hasStore: boolean }` for the caller.
+  Public, because it only ever describes the caller; signed out is
+  `{ areas: [], hasStore: false }`, never an error.
+- **`hasStore` is the app shell's own rule**, reused rather than re-derived:
+  `resolveMyRetailer` (an owned store, or an *active* team membership), the resolver behind
+  `getMyRetailer`. The app sends a caller without one to onboarding, so the admin page must
+  not link a storeless blog editor "back to the app" — it shows a **kedaipal.com** link
+  instead, and the app shell stays unchanged (there is no store-free mode for editors; they
+  never need to enter the app). Kris, the first editor, has no store.
+- **The upload Worker calls it over Convex's HTTP API** — `POST <CONVEX_URL>/api/query`,
+  `{"path":"adminAccess:mine","args":{},"format":"json"}` — with the caller's own
+  `convex`-template Clerk token, after verifying that token itself (iss, exp, `azp` =
+  `https://admin.kedaipal.com`, `aud` = `convex`). No "videos" → 403 page; any Convex error
+  → 503, never a pass.
+- **In the app**, the same answer shows a **Blog videos** shortcut: the last row of the
+  sidebar's Admin group (a blog editor who isn't an admin sees the group with only that
+  row — the console links stay admin-only), and a row below its own rule in the mobile
+  **More** sheet. Both carry an ↗ because they leave the app. The admin site links back to
+  `kedaipal.com/app`.
+- Adding an area later = a literal in `ADMIN_AREAS`, a rule in `adminAreasFor`, and the
+  site that checks it.
+
+**Env (Convex, both deployments):** `BLOG_EDITOR_USER_IDS` — comma-separated Clerk user ids,
+e.g. `npx convex env set BLOG_EDITOR_USER_IDS user_…`. Unset = no editors (admins still hold
+every area). Ids differ between the dev and prod Clerk instances.
 
 ## Deliberate scope / follow-ups
 

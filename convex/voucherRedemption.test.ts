@@ -175,6 +175,7 @@ describe("storefront checkout", () => {
 			code: voucher.code,
 			kind: "fixed",
 			value: 1000,
+			usage: "single",
 		});
 		const row = await readVoucher(t, voucher.id);
 		expect(row?.status).toBe("redeemed");
@@ -244,8 +245,10 @@ describe("storefront checkout", () => {
 		const t = setup();
 		const { retailer, productId } = await scene(t);
 		await expect(
-			placeOrder(t, retailer._id, productId, "not-a-code"),
-		).rejects.toThrow(/KP-XXXX-XXXX/);
+			// Two letters can't be either spelling; "not-a-code" would now be a
+			// plausible SHARED word and refuse as not found.
+			placeOrder(t, retailer._id, productId, "no"),
+		).rejects.toThrow(/doesn.t look like a voucher code/);
 	});
 
 	test("an already-spent code names the order it went to", async () => {

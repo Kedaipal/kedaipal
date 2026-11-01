@@ -61,8 +61,12 @@ const TONE_BAR: Record<CreditTone, string> = {
  * absence.
  *
  * The two balances are always shown apart (Zaki, 1 Oct 2026): MONTHLY credits
- * are used first and reset on the 1st; BOUGHT credits are used next and carry
+ * are used first and reset on the 1st; EXTRA credits are used next and carry
  * over for 12 months. The headline is their sum — what the lock reads.
+ *
+ * "Extra", never "bought": the second pot holds top-up packs AND referral
+ * bonuses AND admin grants, so a referee who never bought anything was being
+ * told "60 bought" (found in the referral hands-on test, 30 Oct 2026).
  */
 type Retailer = NonNullable<
 	FunctionReturnType<typeof api.retailers.getMyRetailer>
@@ -73,7 +77,10 @@ export function CreditMeter({
 	retailer,
 	highlight,
 }: {
-	variant: "card" | "full";
+	/** `card` = Home's framed quick look; `section` = the same body without
+	 * its own frame, inside Home's Balances card (z8r3fdx34j); `full` =
+	 * Settings → Billing. */
+	variant: "card" | "section" | "full";
 	retailer: Retailer | null | undefined;
 	/** Deep-link target — the full variant IS the card a `?spot=credit_balance`
 	 * note rings (see src/lib/spotlight.ts). The frame already carries a bare
@@ -91,6 +98,13 @@ export function CreditMeter({
 		convexQuery(api.creditPurchases.topUpOptions, storeArgs),
 	).data;
 	const lock = useCreditGateFor(retailer);
+	// The referral nudge (docs/referrals.md § The push): the moment a seller
+	// feels the cost of an order is the moment a free 60 means something, so
+	// the LOW and OUT states carry "or refer a kedai" under the top-up — never
+	// a healthy meter. Only for a store that EARNS the referrer half; a comped
+	// store has no meter to begin with.
+	const refer = useQuery(convexQuery(api.referrals.myCard, storeArgs)).data;
+	const canRefer = refer?.standing.canRefer === true && refer.earns;
 	// The burn rate behind "about N days of orders at this week's pace" (T2).
 	// `since` is a MYT midnight minus the window, never `Date.now()`, so the
 	// query is stable within a day and cacheable.
@@ -107,7 +121,7 @@ export function CreditMeter({
 	).data;
 
 	if (balance === undefined)
-		return variant === "card" ? (
+		return variant !== "full" ? (
 			<Skeleton className="h-36 w-full rounded-2xl" />
 		) : (
 			<Skeleton className="h-64 w-full rounded-2xl" />
@@ -140,6 +154,23 @@ export function CreditMeter({
 	const topUpNoWrite = topUp?.viewOnly === "no_write";
 	const canTopUp = topUpReason === null && !topUpNoWrite;
 
+	// One sentence, one link — beside the top-up, never instead of it. Said
+	// in orders, the unit the meter already speaks.
+	const referLine =
+		canRefer && refer && (tone === "out" || tone === "low") ? (
+			<p className="text-xs leading-relaxed text-muted-foreground">
+				Or earn {refer.offer.pro} free orders:{" "}
+				<Link
+					to="/app/refer"
+					className="font-semibold text-foreground underline-offset-2 hover:underline"
+					data-testid="credit-refer-link"
+				>
+					refer a kedai that starts Pro
+				</Link>
+				.
+			</p>
+		) : null;
+
 	const stateLine = creditStateLine({
 		ordersWaiting: lock.ordersWaiting,
 		total: balance.total,
@@ -157,7 +188,7 @@ export function CreditMeter({
 		<div className="flex items-center justify-between gap-3">
 			<p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 				<Gauge className="size-3.5" aria-hidden="true" />
-				Credits
+				{variant === "section" ? "Kedaipal credits" : "Credits"}
 			</p>
 			{founding ? (
 				<span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
@@ -204,7 +235,7 @@ export function CreditMeter({
 		</div>
 	);
 
-	if (variant === "card") {
+	if (variant === "card" || variant === "section") {
 		// One button, by urgency: the way back when locked; otherwise a top-up
 		// from the moment the balance stops being comfortable — `out` as well as
 		// `low`, which are mutually exclusive in `creditTone`. The locked branch
@@ -234,7 +265,13 @@ export function CreditMeter({
 					})
 				: null;
 		return (
-			<section className="flex flex-col gap-3 rounded-2xl border border-input bg-background p-5">
+			<section
+				className={cn(
+					"flex flex-col gap-3",
+					variant === "card" &&
+						"rounded-2xl border border-input bg-background p-5",
+				)}
+			>
 				{header}
 				<div className="flex flex-col gap-2">
 					{headline}
@@ -246,7 +283,7 @@ export function CreditMeter({
 					<MonthlyBar balance={balance} tone={tone} />
 					<p className="text-xs text-muted-foreground tabular-nums">
 						{monthlyFigure(balance)} {monthlyNoun(balance)} ·{" "}
-						{balance.purchased} bought
+						{balance.purchased} extra
 					</p>
 				</div>
 				<p className="text-xs leading-relaxed text-muted-foreground">
@@ -276,14 +313,15 @@ export function CreditMeter({
 						</Link>
 					</Button>
 				</div>
+				{referLine}
 			</section>
 		);
 	}
 
 	// A store that can't buy packs (never locked, or on its trial) and holds no
-	// bought credits has one balance, so "used first / used next" has nothing
+	// extra credits has one balance, so "used first / used next" has nothing
 	// to explain.
-	const showBought =
+	const showExtra =
 		balance.purchased > 0 || (exempt === null && balance.regime !== "trial");
 
 	return (
@@ -299,14 +337,14 @@ export function CreditMeter({
 			<div
 				className={cn(
 					"grid gap-3",
-					showBought ? "sm:grid-cols-2" : "grid-cols-1",
+					showExtra ? "sm:grid-cols-2" : "grid-cols-1",
 				)}
 			>
 				<BalanceTile
 					label={
 						balance.regime === "trial" ? "Trial orders" : "Monthly credits"
 					}
-					order={showBought ? "Used first" : null}
+					order={showExtra ? "Used first" : null}
 					figure={
 						<>
 							{monthlyFigure(balance)}
@@ -322,17 +360,17 @@ export function CreditMeter({
 				>
 					<MonthlyBar balance={balance} tone={tone} />
 				</BalanceTile>
-				{showBought ? (
+				{showExtra ? (
 					<BalanceTile
-						label="Bought credits"
+						label="Extra credits"
 						order="Used next"
 						figure={balance.purchased}
 						detail={
 							balance.purchased > 0 && balance.nextExpiry
 								? `Next ${balance.nextExpiry.credits} expire ${formatShortDate(balance.nextExpiry.at)}`
 								: balance.purchased > 0
-									? "Last 12 months from purchase"
-									: "None yet — packs last 12 months"
+									? "Last 12 months from when they land"
+									: "None yet — top-ups and bonuses land here, for 12 months"
 						}
 					/>
 				) : null}
@@ -346,7 +384,7 @@ export function CreditMeter({
 			) : null}
 			{expirySoon ? (
 				<p className="text-xs text-amber-700 dark:text-amber-400">
-					{expirySoon.credits} bought{" "}
+					{expirySoon.credits} extra{" "}
 					{expirySoon.credits === 1 ? "credit expires" : "credits expire"} on{" "}
 					{formatShortDate(expirySoon.at)}.
 				</p>
@@ -372,6 +410,7 @@ export function CreditMeter({
 					) : topUpNoWrite ? (
 						<NeedsAccessNote area="credits" level="write" />
 					) : null}
+					{referLine}
 				</div>
 			) : null}
 			<p className="border-t border-border pt-3 text-xs leading-relaxed text-muted-foreground">

@@ -23,6 +23,7 @@ import {
 	resolveMyRetailerFor,
 } from "./lib/auth";
 import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
+import { type Country, DEFAULT_COUNTRY } from "./lib/country";
 import { contractForAdmin } from "./lib/enterprise";
 import {
 	autoRenewAfterReplace,
@@ -44,7 +45,6 @@ import {
 } from "./lib/pdf/document";
 import { buildSubscriptionInvoicePdf } from "./lib/pdf/render";
 import {
-	BILLING_CURRENCY_FOR_COUNTRY,
 	type BillingCurrency,
 	type BillingCycle,
 	DEFAULT_BILLING_CURRENCY,
@@ -57,8 +57,8 @@ import {
 	isPlanUpgrade,
 	type Plan,
 	planChangeCarryoverDays,
-	renewalCurrency,
 	renewalQuote,
+	storeBillingCurrency,
 	subscriptionPrice,
 } from "./lib/plans";
 import {
@@ -749,10 +749,6 @@ export const issueInvoice = mutation({
 		),
 		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
 		founding: v.boolean(),
-		// Billing currency (default MYR). SGD serves Singapore-based sellers —
-		// their invoice carries no MY bank/DuitNow block (those rails are MYR-only)
-		// and prices come from the SGD table in lib/plans.
-		currency: v.optional(v.union(v.literal("MYR"), v.literal("SGD"))),
 		// Optional override; normally the system sets it (issue date + grace) so the
 		// admin doesn't pick a date. The actual paid CYCLE starts at mark-paid.
 		dueDate: v.optional(v.number()),
@@ -770,7 +766,6 @@ export const issueInvoice = mutation({
 			plan,
 			billingCycle,
 			founding,
-			currency: currencyArg,
 			dueDate: dueDateArg,
 			replacePendingId,
 		},
@@ -813,10 +808,15 @@ export const issueInvoice = mutation({
 			throw new ConvexError(
 				"Put the store on an Enterprise contract first — an Enterprise invoice bills its contract.",
 			);
+		// Never the admin's pick: a store is billed in its country's currency
+		// (`storeBillingCurrency`), so an SG store can't be handed a ringgit
+		// bill (86eyp7hn7). Billing another currency means changing the store's
+		// country first. An SGD invoice carries no MY bank/DuitNow block (those
+		// rails are MYR-only).
 		const currency: BillingCurrency =
 			plan === "enterprise" && sub.enterprise
 				? sub.enterprise.currency
-				: (currencyArg ?? "MYR");
+				: storeBillingCurrency(retailer.country);
 		const cycle =
 			plan === "enterprise" ? sub.billingCycle : billingCycle;
 
@@ -1110,7 +1110,7 @@ export const subscribeSelf = mutation({
 			);
 
 		const founding = foundingPricingApplies({ ...eligibility, plan });
-		const currency = BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
+		const currency = storeBillingCurrency(retailer.country);
 		const invoiceId = await insertPendingInvoice(ctx, {
 			retailerId: retailer._id,
 			subscriptionId: sub._id,
@@ -1248,16 +1248,7 @@ export const changePlan = mutation({
 				`Settle your open invoice (${existingPending.invoiceNumber}) first — then you can move up a plan.`,
 			);
 		const founding = foundingPricingApplies({ ...eligibility, plan });
-		const invoices = await ctx.db
-			.query("invoices")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
-			.order("desc")
-			.collect();
-		const lastPaid = invoices.find((inv) => inv.status === "paid");
-		const currency = renewalCurrency({
-			lastPaidCurrency: lastPaid?.currency,
-			country: retailer.country,
-		});
+		const currency = storeBillingCurrency(retailer.country);
 		const invoiceId = await insertPendingInvoice(ctx, {
 			retailerId: retailer._id,
 			subscriptionId: sub._id,
@@ -1444,7 +1435,7 @@ export const internalIssueFirstInvoice = internalMutation({
 			paidThrough: sub.currentPeriodEnd,
 			now,
 		});
-		const currency = BILLING_CURRENCY_FOR_COUNTRY[retailer.country ?? "MY"];
+		const currency = storeBillingCurrency(retailer.country);
 		const invoiceId = await insertPendingInvoice(ctx, {
 			retailerId: sub.retailerId,
 			subscriptionId: sub._id,
@@ -1623,11 +1614,6 @@ export const internalIssueRenewalInvoice = internalMutation({
 		if (pending) return { issued: false, autoCharge: false };
 		const retailer = await ctx.db.get(sub.retailerId);
 		if (!retailer) return { issued: false, autoCharge: false };
-		const invoices = await ctx.db
-			.query("invoices")
-			.withIndex("by_retailer", (q) => q.eq("retailerId", sub.retailerId))
-			.order("desc")
-			.collect();
 
 		// What this bill says comes from `renewalQuote` — the same author the
 		// heads-up email, HitPay's authorisation page and the billing page read,
@@ -1656,7 +1642,6 @@ export const internalIssueRenewalInvoice = internalMutation({
 			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
 			foundingIntent: sub.foundingIntent === true,
 			paidThrough: sub.currentPeriodEnd,
-			lastPaidCurrency: invoices.find((inv) => inv.status === "paid")?.currency,
 			country: retailer.country,
 			enterprise: sub.enterprise,
 			now,
@@ -1742,6 +1727,13 @@ export const listRetailersForAdmin = query({
 			 * detached method and a stranded charge — deriving the refusal
 			 * from it refused two states the server allows. */
 			chargeInFlight: boolean;
+			/** The currency this store is billed in — its country's
+			 * (`storeBillingCurrency`), which `issueInvoice` applies itself.
+			 * The form shows it with the country that set it (86eyp7hn7). */
+			billingCurrency: BillingCurrency;
+			/** The store's country (unset ⇒ MY, as `storeBillingCurrency`
+			 * reads it). */
+			country: Country;
 			/** On the house (z8r3fdeub2) — the picker labels these so nobody
 			 * drafts a bill `issueInvoice` will refuse anyway. */
 			comped: boolean;
@@ -1817,6 +1809,8 @@ export const listRetailersForAdmin = query({
 							origin: (pending.origin ?? "admin") as ReplaceableOrigin,
 						}
 					: undefined,
+				billingCurrency: storeBillingCurrency(r.country),
+				country: r.country ?? DEFAULT_COUNTRY,
 				autoChargeIdle: autoChargeIdle(sub?.autoRenew),
 				chargeInFlight: sub?.autoRenew?.lastChargeAttemptAt !== undefined,
 				comped: sub?.comped === true,

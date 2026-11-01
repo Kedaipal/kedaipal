@@ -21,12 +21,17 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getAccess } from "../subscriptions";
 import {
 	type ClaimVoucherState,
-	normalizeVoucherCode,
+	isVoucherRedeemable,
+	minSpendShortfall,
+	parseVoucherCode,
 	refusalForVoucher,
+	resolveVoucherStatus,
 	type VoucherRefusal,
+	type VoucherRefusalDetail,
 	voucherRefusalErrorData,
 	voucherRefusalMessage,
 	type VoucherTerms,
+	voucherUsageOf,
 } from "./vouchers";
 
 /** What a door gets back. A refusal is DATA, not a throw, so the caller
@@ -35,7 +40,100 @@ import {
  * page, where refusing would dead-end a buyer who followed a link). */
 export type VoucherResolution =
 	| { ok: true; voucher: Doc<"vouchers">; terms: VoucherTerms }
-	| { ok: false; refusal: VoucherRefusal; usedOnOrder?: string };
+	| {
+			ok: false;
+			refusal: VoucherRefusal;
+			usedOnOrder?: string;
+			/** What the sentence is built from (`z8r3fdz0pw`). */
+			detail?: VoucherRefusalDetail;
+		};
+
+/**
+ * Who is spending the code, and on what — the ENTRY rules' inputs
+ * (`z8r3fdz0pw`). Required at every resolve, so a door can't forget to pass
+ * the buyer and quietly skip the per-buyer limit.
+ *
+ * - `itemSubtotal` — the GROSS item subtotal the minimum spend is judged
+ *   against. `undefined` only at `checkCode`, which can't see the basket (the
+ *   field judges the minimum locally with the same helper).
+ * - `waPhone` — the buyer's number as the order stores it, or `undefined`.
+ * - `phoneless` — what a MISSING number means for a per-buyer code:
+ *   `refuse` (storefront, claim: the buyer has a number to give),
+ *   `total_only` (an anonymous counter sale: the use counts against the code's
+ *   total and nothing else, and the panel says so), or `unknown` (`checkCode`
+ *   before the buyer has typed one: judge later).
+ */
+export type VoucherEntry = {
+	itemSubtotal: number | undefined;
+	waPhone: string | undefined;
+	phoneless: "refuse" | "total_only" | "unknown";
+};
+
+/** The terms a row resolves to — value plus the per-order cap. One author so
+ * the resolve path and the claim's live state can't build them differently. */
+export function voucherTermsOf(voucher: Doc<"vouchers">): VoucherTerms {
+	return {
+		kind: voucher.kind,
+		value: voucher.value,
+		...(voucher.maxDiscount !== undefined
+			? { maxDiscount: voucher.maxDiscount }
+			: {}),
+	};
+}
+
+/** How many orders this number has placed with this code right now — read
+ * up to `limit`, which is all the answer needs. Counted off the redemption
+ * rows, so a cancelled order (whose row the hand-back deletes) gives the
+ * buyer's use back too. */
+async function buyerUses(
+	ctx: QueryCtx,
+	voucherId: Id<"vouchers">,
+	waPhone: string,
+	limit: number,
+): Promise<number> {
+	const rows = await ctx.db
+		.query("voucherRedemptions")
+		.withIndex("by_voucher_phone", (q) =>
+			q.eq("voucherId", voucherId).eq("waPhone", waPhone),
+		)
+		.take(limit);
+	return rows.length;
+}
+
+/**
+ * The ENTRY rules (`z8r3fdz0pw`): the minimum spend and the per-buyer limit.
+ * A spendable row can still be refused for THIS buyer and THIS basket.
+ * Shared by the resolve path, the claim's live state and the redeem
+ * re-assert, so the three can't disagree about who may use a code.
+ */
+export async function entryRefusal(
+	ctx: QueryCtx,
+	voucher: Doc<"vouchers">,
+	entry: VoucherEntry,
+): Promise<{ refusal: VoucherRefusal; detail: VoucherRefusalDetail } | null> {
+	if (entry.itemSubtotal !== undefined) {
+		const shortfall = minSpendShortfall(voucher.minSpend, entry.itemSubtotal);
+		if (shortfall > 0)
+			return {
+				refusal: "below_min_spend",
+				detail: {
+					minSpend: voucher.minSpend,
+					shortfall,
+					currency: voucher.currency,
+				},
+			};
+	}
+	const limit = voucher.perBuyerLimit;
+	if (limit !== undefined && voucherUsageOf(voucher) === "shared") {
+		if (entry.waPhone !== undefined) {
+			if ((await buyerUses(ctx, voucher._id, entry.waPhone, limit)) >= limit)
+				return { refusal: "buyer_limit", detail: { perBuyerLimit: limit } };
+		} else if (entry.phoneless === "refuse") {
+			return { refusal: "buyer_phone_required", detail: {} };
+		}
+	}
+	return null;
+}
 
 /**
  * Look a typed code up for THIS store and say whether it can be spent.
@@ -118,15 +216,23 @@ export async function storeShowsVoucherEntry(
 
 export async function resolveVoucherForOrder(
 	ctx: QueryCtx,
-	args: { retailerId: Id<"retailers">; code: string; now: number },
+	args: {
+		retailerId: Id<"retailers">;
+		code: string;
+		now: number;
+		entry: VoucherEntry;
+	},
 ): Promise<VoucherResolution> {
-	const code = normalizeVoucherCode(args.code);
-	if (code === null) return { ok: false, refusal: "malformed" };
+	const parsed = parseVoucherCode(args.code);
+	if (parsed === null) return { ok: false, refusal: "malformed" };
 
-	const voucher = await ctx.db
-		.query("vouchers")
-		.withIndex("by_code", (q) => q.eq("code", code))
-		.unique();
+	const voucher =
+		parsed.usage === "single"
+			? await ctx.db
+					.query("vouchers")
+					.withIndex("by_code", (q) => q.eq("code", parsed.code))
+					.unique()
+			: await liveSharedVoucher(ctx, args.retailerId, parsed.code, args.now);
 	if (!voucher || voucher.retailerId !== args.retailerId)
 		return { ok: false, refusal: "not_found" };
 
@@ -144,27 +250,89 @@ export async function resolveVoucherForOrder(
 			refusal === "redeemed" && voucher.redeemedOrderId
 				? ((await ctx.db.get(voucher.redeemedOrderId))?.shortId ?? undefined)
 				: undefined;
-		return { ok: false, refusal, usedOnOrder };
+		return {
+			ok: false,
+			refusal,
+			usedOnOrder,
+			detail: {
+				usedOnOrder,
+				...(refusal === "not_started" ? { startsAt: voucher.startsAt } : {}),
+			},
+		};
 	}
 
-	return {
-		ok: true,
-		voucher,
-		terms: { kind: voucher.kind, value: voucher.value },
-	};
+	const entry = await entryRefusal(ctx, voucher, args.entry);
+	if (entry !== null)
+		return { ok: false, refusal: entry.refusal, detail: entry.detail };
+
+	return { ok: true, voucher, terms: voucherTermsOf(voucher) };
+}
+
+/**
+ * The shared voucher a store's code currently points at (`z8r3fducfm`).
+ *
+ * A shared word is unique per store among LIVE codes only — a seller may run
+ * `SALE20` again after last month's ended — so one `(retailerId, code)` can
+ * hold several rows. The spendable one wins; failing that, the NEWEST dead
+ * one, so the buyer's refusal names what happened to the code they were most
+ * recently told about ("run out", "expired") rather than "not found" for a
+ * word that is plainly on the poster.
+ *
+ * Shared by the resolve path and the create mutation's uniqueness check, so
+ * "is this word taken?" and "which row does this word spend?" are one rule.
+ */
+export async function liveSharedVoucher(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+	code: string,
+	now: number,
+): Promise<Doc<"vouchers"> | null> {
+	const rows = (
+		await ctx.db
+			.query("vouchers")
+			.withIndex("by_retailer_code", (q) =>
+				q.eq("retailerId", retailerId).eq("code", code),
+			)
+			.collect()
+	).filter((row) => voucherUsageOf(row) === "shared");
+	if (rows.length === 0) return null;
+	return (
+		rows.find((row) => isVoucherRedeemable(row, now)) ??
+		// A code set up for Saturday holds its word NOW (`z8r3fdz0pw`): the
+		// buyer who types it early is told when it opens, and the create
+		// can't hand the same word to a second code that would collide with
+		// it the moment it starts.
+		rows.find((row) => resolveVoucherStatus(row, now) === "scheduled") ??
+		rows.reduce((newest, row) =>
+			row.createdAt > newest.createdAt ? row : newest,
+		)
+	);
+}
+
+/** Does this row hold its word — spendable now, or waiting for its start?
+ * The ONE meaning of "taken" for a shared word (`z8r3fdz0pw`). */
+export function holdsSharedWord(voucher: Doc<"vouchers">, now: number): boolean {
+	const status = resolveVoucherStatus(voucher, now);
+	return status === "active" || status === "scheduled";
 }
 
 /** Resolve, or throw the typed refusal. The shape the two doors that REFUSE
  * a bad code (storefront + counter) want, so neither hand-rolls the throw. */
 export async function resolveVoucherOrThrow(
 	ctx: QueryCtx,
-	args: { retailerId: Id<"retailers">; code: string; now: number },
+	args: {
+		retailerId: Id<"retailers">;
+		code: string;
+		now: number;
+		entry: VoucherEntry;
+	},
 ): Promise<{ voucher: Doc<"vouchers">; terms: VoucherTerms }> {
 	const resolved = await resolveVoucherForOrder(ctx, args);
 	if (!resolved.ok)
 		throw new ConvexError(
 			voucherRefusalErrorData(resolved.refusal, {
 				usedOnOrder: resolved.usedOnOrder,
+				...resolved.detail,
 			}),
 		);
 	return { voucher: resolved.voucher, terms: resolved.terms };
@@ -181,13 +349,63 @@ export async function resolveVoucherOrThrow(
  */
 export async function redeemVoucher(
 	ctx: MutationCtx,
-	args: { voucherId: Id<"vouchers">; orderId: Id<"orders">; now: number },
+	args: {
+		voucherId: Id<"vouchers">;
+		orderId: Id<"orders">;
+		now: number;
+		/** The buyer's number as the order stores it — recorded on a shared
+		 * code's redemption row so the per-buyer limit can count it
+		 * (`z8r3fdz0pw`). `undefined` = an anonymous counter sale. */
+		waPhone: string | undefined;
+	},
 ): Promise<void> {
 	const fresh = await ctx.db.get(args.voucherId);
 	if (!fresh) throw new ConvexError(voucherRefusalErrorData("not_found"));
 	const refusal = refusalForVoucher(fresh, args.now);
 	if (refusal !== null)
 		throw new ConvexError(voucherRefusalErrorData(refusal));
+	if (voucherUsageOf(fresh) === "shared") {
+		// The per-buyer half of the re-assert (`z8r3fdz0pw`). The door already
+		// judged it in this transaction; this is what makes a door that ever
+		// resolves in one mutation and redeems in another refuse rather than
+		// silently let a buyer through twice. Minimum spend is NOT re-judged
+		// here — the door judged it against the basket it priced, and that is
+		// the one judgement it gets.
+		if (fresh.perBuyerLimit !== undefined && args.waPhone !== undefined) {
+			const used = await buyerUses(
+				ctx,
+				fresh._id,
+				args.waPhone,
+				fresh.perBuyerLimit,
+			);
+			if (used >= fresh.perBuyerLimit)
+				throw new ConvexError(
+					voucherRefusalErrorData("buyer_limit", {
+						perBuyerLimit: fresh.perBuyerLimit,
+					}),
+				);
+		}
+		// A shared code COUNTS instead of flipping (`z8r3fducfm`). The count
+		// and the row are written in the same transaction, which is the only
+		// thing that keeps them equal; two checkouts racing the last use
+		// conflict on this patch, and the retry reads a full cap and is refused
+		// `exhausted` by `refusalForVoucher` above.
+		await ctx.db.patch(args.voucherId, {
+			// No `redeemedAt`: each use's time is its `voucherRedemptions` row,
+			// and a "last used" stamp would go stale the moment that use was
+			// handed back.
+			redeemedCount: (fresh.redeemedCount ?? 0) + 1,
+			updatedAt: args.now,
+		});
+		await ctx.db.insert("voucherRedemptions", {
+			voucherId: args.voucherId,
+			retailerId: fresh.retailerId,
+			orderId: args.orderId,
+			waPhone: args.waPhone,
+			createdAt: args.now,
+		});
+		return;
+	}
 	await ctx.db.patch(args.voucherId, {
 		status: "redeemed",
 		redeemedOrderId: args.orderId,
@@ -228,9 +446,29 @@ export async function claimVoucherState(
 			kind: "dropped",
 			snapshot,
 			refusal,
-			message: voucherRefusalMessage(refusal, { usedOnOrder }),
+			message: voucherRefusalMessage(refusal, {
+				usedOnOrder,
+				...(refusal === "not_started" ? { startsAt: voucher.startsAt } : {}),
+			}),
 		};
 	}
+	// The entry rules, judged for THIS claim's buyer and frozen basket
+	// (`z8r3fdz0pw`). The lines can't change after send, so the minimum spend
+	// gives the same answer it gave at send; the per-buyer count can — this
+	// number may have used the code at the storefront meanwhile — and the
+	// claim then DROPS it with the sentence, like any other lapse.
+	const entry = await entryRefusal(ctx, voucher, {
+		itemSubtotal: claim.lines.reduce((sum, l) => sum + l.price * l.quantity, 0),
+		waPhone: claim.waPhone,
+		phoneless: "refuse",
+	});
+	if (entry !== null)
+		return {
+			kind: "dropped",
+			snapshot,
+			refusal: entry.refusal,
+			message: voucherRefusalMessage(entry.refusal, entry.detail),
+		};
 	return {
 		kind: "applied",
 		voucherId: voucher._id,
@@ -238,8 +476,12 @@ export async function claimVoucherState(
 		// are the same thing today — a voucher's value is immutable once issued —
 		// but reading the terms off the row keeps this honest if editing a
 		// voucher's value is ever added.
-		snapshot: { code: snapshot.code, kind: voucher.kind, value: voucher.value },
-		terms: { kind: voucher.kind, value: voucher.value },
+		snapshot: {
+			code: snapshot.code,
+			...voucherTermsOf(voucher),
+			usage: voucherUsageOf(voucher),
+		},
+		terms: voucherTermsOf(voucher),
 	};
 }
 
@@ -264,9 +506,27 @@ export async function releaseOrderVoucher(
 ): Promise<void> {
 	if (!order.voucherId) return;
 	const voucher = await ctx.db.get(order.voucherId);
-	// Row gone (tenant teardown mid-cascade), already handed back, or voided
-	// since — nothing to do in any of those.
-	if (!voucher || voucher.status !== "redeemed") return;
+	if (!voucher) return; // tenant teardown mid-cascade
+	if (voucherUsageOf(voucher) === "shared") {
+		// Give ONE use back (`z8r3fducfm`). The redemption row is the
+		// idempotency guard: no row for this order means it was already
+		// returned (or never spent), so a re-cancel can't decrement twice. A
+		// voided shared code still gets its count corrected — the status is
+		// the seller's withdrawal and stays, but "12 used" should mean twelve.
+		const redemption = await ctx.db
+			.query("voucherRedemptions")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.unique();
+		if (!redemption) return;
+		await ctx.db.delete(redemption._id);
+		await ctx.db.patch(voucher._id, {
+			redeemedCount: Math.max(0, (voucher.redeemedCount ?? 0) - 1),
+			updatedAt: now,
+		});
+		return;
+	}
+	// Already handed back, or voided since — nothing to do in either.
+	if (voucher.status !== "redeemed") return;
 	// Only release a voucher THIS order is holding. Without this, cancelling an
 	// order whose voucher had been released and re-spent elsewhere would steal
 	// it back from the order that legitimately holds it now.

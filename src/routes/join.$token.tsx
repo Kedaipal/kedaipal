@@ -18,6 +18,7 @@ import { api } from "../../convex/_generated/api";
 import { OnboardingTopBar } from "../components/onboarding/onboarding-top-bar";
 import { Button } from "../components/ui/button";
 import { convexErrorMessage } from "../lib/format";
+import { pageHead } from "../lib/not-found";
 
 /**
  * /join/<token> — where a team invitation lands (86exr91r4).
@@ -32,12 +33,13 @@ import { convexErrorMessage } from "../lib/format";
  */
 
 export const Route = createFileRoute("/join/$token")({
-	head: () => ({
-		meta: [
-			{ title: "Team invitation — Kedaipal" },
-			{ name: "robots", content: "noindex, nofollow" },
-		],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, () => ({
+			meta: [
+				{ title: "Team invitation — Kedaipal" },
+				{ name: "robots", content: "noindex, nofollow" },
+			],
+		})),
 	component: JoinPage,
 });
 

@@ -67,10 +67,22 @@ see past. A route fixes the architecture, not just the paint:
 7. **Disabled-with-reason on the CTA** — one `blockedReason` line renders
    directly above the button in **both** places it appears (desktop summary
    footer, mobile sticky bar): store not accepting orders → checkout
-   unavailable → below minimum → *"Add your delivery address to continue"* →
+   unavailable → below minimum → stock / price / unanswered question → **the
+   first field in error** → *"Add your delivery address to continue"* →
    calculating → can't deliver here. The quote's own `no_coords` copy is
    suppressed while the address is still empty so the buyer never gets two
    versions of the same nudge.
+   - **Every disabled state has a rung.** Once the form is touched, any field
+     error turns TanStack's `canSubmit` false and disables the button — a
+     cleared name or WhatsApp number, or a postal code the Google pick didn't
+     carry, used to do that with nothing said. `checkoutFieldIssueLine`
+     (`src/lib/checkout-field-issue.ts`) reads the form's own `fieldMeta`
+     errors — the exact state behind `canSubmit`, so it can't disagree with the
+     button — and names the first one in the order the buyer reads the form:
+     *"Add your name to continue"* for a blank field, the rule itself
+     (*"Postal code must be 6 digits"*) for a filled-but-wrong one. An untouched
+     form holds no errors yet, so it says nothing; its press reveals every
+     error inline.
 8. **The Google pin is the single source of truth** (ClickUp `86eye50qv`,
    folded in here so the same form isn't redesigned twice) — the delivery
    address block no longer shows a search *and* a parallel manual form. See

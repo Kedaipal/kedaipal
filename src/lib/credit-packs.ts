@@ -152,3 +152,31 @@ export function afterTopUpLine(total: number, credits: number): string {
 	if (after === 0) return `Covers the ${owed} owed exactly.`;
 	return `Covers ${credits} of the ${owed} owed — ${-after} still owed after it.`;
 }
+
+/**
+ * Which pack gets this store to its next reset at this week's pace
+ * (z8r3fdx34j: "the smallest pack that covers the gap to the reset gets
+ * 'Enough to <date>'"). The gap is what the pace will use before the reset,
+ * minus what the store holds — a debt is part of the gap, since it is paid
+ * first. Null when there's nothing to recommend: no reset to aim at (a trial),
+ * no measurable pace, a balance that already lasts, or a gap bigger than any
+ * pack (then the honest move is the upgrade hint, not a pack that falls short).
+ */
+export function recommendedPack<P extends Pack>(
+	packs: readonly P[],
+	args: {
+		total: number;
+		perDay: number;
+		refreshesAt: number | null;
+		now: number;
+	},
+): { pack: P; needed: number } | null {
+	if (args.refreshesAt === null || args.perDay < 1) return null;
+	const days = Math.max(0, (args.refreshesAt - args.now) / 86_400_000);
+	const needed = Math.ceil(args.perDay * days) - args.total;
+	if (needed <= 0) return null;
+	const covering = [...packs]
+		.sort((a, b) => a.credits - b.credits)
+		.find((p) => p.credits >= needed);
+	return covering ? { pack: covering, needed } : null;
+}

@@ -60,6 +60,8 @@ export function overseasCourierNote(args: {
 	const country = COUNTRY_LABELS[storeCountry];
 	const rider = args.collectsFromCustomer
 		? "the rider collecting from you"
-		: "the rider";
+		: // "courier", not "rider": a parcel courier (EasyParcel, Delyva) phones
+			// the buyer too, and SG stores book only those (test-code F16).
+			"the courier";
 	return `Your WhatsApp number is from outside ${country}, so ${rider} will contact ${storeName} instead of you. ${storeName} can still reach you on WhatsApp, and your order page shows every update.`;
 }

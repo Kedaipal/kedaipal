@@ -17,6 +17,8 @@ import { useAction } from "convex/react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { postcodeRule } from "../../convex/lib/address";
+import type { Country } from "../../convex/lib/country";
 
 export type LiveDeliveryQuoteState =
 	| { state: "idle" }
@@ -33,7 +35,34 @@ export type LiveDeliveryQuoteState =
 	 * address is fine, so the copy must not send the buyer editing it. Riders
 	 * are never substituted: they carry no temperature guarantee. */
 	| { state: "no_cold_service" }
+	/** Heavier than any rider vehicle can carry, and no courier priced it
+	 * (25 Oct 2026). The address is fine — the ORDER is too big for a rider —
+	 * so the copy offers pickup or the store, never a different address. */
+	| { state: "too_heavy" }
 	| { state: "unavailable" };
+
+/**
+ * What the checkout should treat as the store's delivery answer while the
+ * reactive `delivery.quote` re-runs (25 Oct 2026).
+ *
+ * That query takes the cart and subtotal as arguments, so every quantity tap
+ * is a NEW query whose result is empty until it lands. For that moment the
+ * checkout forgot the store was live-priced: the ticket dropped its delivery
+ * line, the total fell by the fee, and the live quote reset — found driving
+ * a quantity stepper on a Delyva store. The caller reads with
+ * `placeholderData: keepPreviousData`; this keeps the held answer ONLY when it
+ * says "live", because a live answer doesn't depend on the cart or the
+ * address (the action prices those). Any other kind is a fee FOR the old
+ * cart or address, so it is dropped exactly as before — a stale flat or
+ * distance fee must never show beside a new address.
+ */
+export function heldDeliveryAnswer<T extends { kind: string }>(read: {
+	data: T | undefined;
+	isPlaceholderData: boolean;
+}): T | undefined {
+	if (!read.isPlaceholderData) return read.data;
+	return read.data?.kind === "live" ? read.data : undefined;
+}
 
 export function useLiveDeliveryQuote({
 	enabled,
@@ -46,6 +75,8 @@ export function useLiveDeliveryQuote({
 	items,
 	fulfilmentDate,
 	fulfilmentTimeMinutes,
+	country,
+	postcode,
 }: {
 	/** False while the store isn't live-priced / the surface is closed. */
 	enabled: boolean;
@@ -83,6 +114,13 @@ export function useLiveDeliveryQuote({
 	 * follow-up) — the quote then prices the exact moment instead of the noon
 	 * heuristic; a time change re-quotes exactly like a date change. */
 	fulfilmentTimeMinutes?: number;
+	/** The Deliver-to country when it's ABROAD (z8r3fdr5yy) — the lane's
+	 * EasyParcel price. Absent = a home delivery. */
+	country?: Country;
+	/** The typed postcode, watched — an overseas address is often entered by
+	 * hand with no pin, and EasyParcel prices (and the order binds) on the
+	 * postcode. Only read for an overseas quote. */
+	postcode?: string;
 }): LiveDeliveryQuoteState {
 	const quoteLalamove = useAction(api.lalamove.quoteForCheckout);
 	const quoteLive = useAction(api.liveQuote.quoteForCheckout);
@@ -94,69 +132,108 @@ export function useLiveDeliveryQuote({
 	labelRef.current = getAddressLabel;
 	const partsRef = useRef(getAddressParts);
 	partsRef.current = getAddressParts;
-	// Read at fire time too: adding a cart line shouldn't re-quote on its own
-	// (the pin hasn't moved), but the quote that DOES fire must price the cart
-	// as it stands.
+	// Read at fire time so the quote that fires prices the cart as it stands.
 	const itemsRef = useRef(items);
 	itemsRef.current = items;
+	// A provider-aware quote is BOUND to the cart it priced (Delyva bids on
+	// the summed weight, and `sameQuotedLines` refuses the row against any
+	// other cart at order create), so a quantity change at checkout must
+	// re-quote — otherwise the buyer sees a stale fee and then a refusal
+	// (Zaki, 23 Oct 2026). Order within the cart is presentation, so the key
+	// is a sorted multiset. A rider-only (single-provider) quote ignores the
+	// cart and never re-fires for it.
+	const linesKey = providerAware
+		? items
+				.map((i) => `${i.variantId}:${i.quantity}`)
+				.sort()
+				.join("|")
+		: "";
+	// Cart edits are debounced LONGER than a pin pick: a buyer tapping + three
+	// times should spend one quote, not three — each call draws on the
+	// store's per-minute quote bucket (`lalamoveQuote`, 10/min, burst 4).
+	const lastRef = useRef<{ pin: string; lines: string } | null>(null);
 
 	const hasCoords = latitude !== undefined && longitude !== undefined;
+	const lanePostcode = country !== undefined ? (postcode ?? "").trim() : "";
+	// An overseas lane quote is priced on the postcode; a home one on the pin.
+	// Only a COMPLETE postcode quotes — "4", "46"… as the buyer types would
+	// each spend a courier quote and flash a refusal.
+	const canQuote =
+		country !== undefined
+			? postcodeRule(country).pattern.test(lanePostcode)
+			: hasCoords;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: fires per picked pin / chosen day; the action identity is stable and the label is read fresh inside the timeout.
 	useEffect(() => {
-		if (!enabled || !retailerId || !hasCoords) {
+		if (!enabled || !retailerId || !canQuote) {
 			seq.current++;
 			setQuote({ state: "idle" });
 			return;
 		}
 		const mySeq = ++seq.current;
 		setQuote({ state: "loading" });
-		const timer = setTimeout(() => {
-			const parts = partsRef.current?.() ?? {};
-			const request = providerAware
-				? quoteLive({
-						retailerId,
-						latitude,
-						longitude,
-						address: labelRef.current(),
-						city: parts.city,
-						state: parts.state,
-						postcode: parts.postcode,
-						items: itemsRef.current,
-						fulfilmentDate,
-						fulfilmentTimeMinutes,
+		const pin = `${country !== undefined ? `pc:${lanePostcode}` : `${latitude},${longitude}`},${fulfilmentDate},${fulfilmentTimeMinutes}`;
+		const linesOnly =
+			lastRef.current !== null &&
+			lastRef.current.pin === pin &&
+			lastRef.current.lines !== linesKey;
+		lastRef.current = { pin, lines: linesKey };
+		const timer = setTimeout(
+			() => {
+				const parts = partsRef.current?.() ?? {};
+				const request = providerAware
+					? quoteLive({
+							retailerId,
+							// An overseas quote binds to the postcode, never a pin.
+							...(country !== undefined
+								? { country }
+								: { latitude, longitude }),
+							address: labelRef.current(),
+							city: parts.city,
+							state: parts.state,
+							postcode: parts.postcode,
+							items: itemsRef.current,
+							fulfilmentDate,
+							fulfilmentTimeMinutes,
+						})
+					: quoteLalamove({
+							retailerId,
+							// The legacy rider-only mode is home-only, so `canQuote`
+							// above already required the pin.
+							latitude: latitude as number,
+							longitude: longitude as number,
+							address: labelRef.current(),
+							fulfilmentDate,
+							fulfilmentTimeMinutes,
+						});
+				request
+					.then((result) => {
+						if (seq.current !== mySeq) return; // superseded by a newer pick
+						setQuote(
+							result.status === "quoted"
+								? { state: "quoted", quoteId: result.quoteId, fee: result.fee }
+								: { state: result.status },
+						);
 					})
-				: quoteLalamove({
-						retailerId,
-						latitude,
-						longitude,
-						address: labelRef.current(),
-						fulfilmentDate,
-						fulfilmentTimeMinutes,
+					.catch(() => {
+						if (seq.current !== mySeq) return;
+						setQuote({ state: "unavailable" });
 					});
-			request
-				.then((result) => {
-					if (seq.current !== mySeq) return; // superseded by a newer pick
-					setQuote(
-						result.status === "quoted"
-							? { state: "quoted", quoteId: result.quoteId, fee: result.fee }
-							: { state: result.status },
-					);
-				})
-				.catch(() => {
-					if (seq.current !== mySeq) return;
-					setQuote({ state: "unavailable" });
-				});
-		}, 400);
+			},
+			linesOnly ? 900 : 400,
+		);
 		return () => clearTimeout(timer);
 	}, [
 		enabled,
 		providerAware,
 		retailerId,
-		hasCoords,
+		canQuote,
 		latitude,
 		longitude,
+		country,
+		lanePostcode,
 		fulfilmentDate,
 		fulfilmentTimeMinutes,
+		linesKey,
 	]);
 
 	return quote;

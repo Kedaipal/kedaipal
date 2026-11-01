@@ -6,7 +6,6 @@ import {
 	ANNUAL_SWAP_MIN_DAYS,
 	type AnnualOfferInvoice,
 	type AnnualOfferSubscription,
-	offerCurrency,
 	resolveAnnualOffer,
 } from "./annual-billing";
 
@@ -52,6 +51,7 @@ function resolve(
 		subscription: sub(),
 		invoices: PROVEN,
 		now: NOW,
+		country: "MY",
 		...overrides,
 	});
 }
@@ -305,23 +305,23 @@ describe("resolveAnnualOffer — the swap window", () => {
 	});
 });
 
-describe("offerCurrency", () => {
-	it("quotes an SGD seller in SGD", () => {
-		expect(offerCurrency(paid(2, "SGD"))).toBe("SGD");
-		const state = resolve({ invoices: paid(2, "SGD") });
+describe("the quote's currency is the store's country's", () => {
+	it("quotes a Singapore store in SGD", () => {
+		const state = resolve({ country: "SG" });
 		expect(state.kind === "offer" && state.currency).toBe("SGD");
 		expect(state.kind === "offer" && state.quote.annualTotal).toBe(59_000);
 	});
 
-	it("reads the seller's own settled invoices, not a pending one", () => {
-		expect(
-			offerCurrency([pendingInvoice({ currency: "SGD" }), ...paid(1, "MYR")]),
-		).toBe("MYR");
+	it("never follows the invoice history — one ringgit bill must not make an SG store a ringgit store", () => {
+		// The bug the staging test found: hold and renewal said S$, this card
+		// said RM 149, because it read the last paid invoice's currency.
+		const state = resolve({ country: "SG", invoices: paid(2, "MYR") });
+		expect(state.kind === "offer" && state.currency).toBe("SGD");
 	});
 
-	it("falls back to MYR on an unknown or missing currency", () => {
-		expect(offerCurrency([])).toBe("MYR");
-		expect(offerCurrency([{ status: "paid", currency: "USD" }])).toBe("MYR");
+	it("reads an unset country as Malaysia", () => {
+		const state = resolve({ country: undefined });
+		expect(state.kind === "offer" && state.currency).toBe("MYR");
 	});
 });
 

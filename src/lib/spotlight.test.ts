@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import { highlightRingClass, SETTINGS_ANCHOR } from "./country-setup-copy";
 import { PRODUCT_SPOTLIGHT } from "./product-spotlight";
 import {
+	isHomeSpotlightKey,
 	isProductSpotlightKey,
 	isSettingsSpotlightKey,
 	isSpotlightKey,
@@ -25,12 +26,17 @@ const SETTINGS_CARD_DIRS = [
 	join(__dirname, "../components/credits"),
 ];
 const PRODUCT_FORM = join(__dirname, "../components/forms/product-form.tsx");
+const HOME_COMPONENTS = join(__dirname, "../components/home");
+const HOME_ROUTE = join(__dirname, "../routes/app.index.tsx");
 
 const settingsEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
 	([, t]) => t.page === "settings",
 );
 const productEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
 	([, t]) => t.page === "product",
+);
+const homeEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
+	([, t]) => t.page === "home",
 );
 
 describe("spotlight registry", () => {
@@ -54,6 +60,30 @@ describe("spotlight registry", () => {
 	test("every page has at least one key, so both branches stay exercised", () => {
 		expect(settingsEntries.length).toBeGreaterThan(0);
 		expect(productEntries.length).toBeGreaterThan(0);
+		expect(homeEntries.length).toBeGreaterThan(0);
+	});
+
+	test("every Home anchor is rendered as a section id on Home", () => {
+		// Same rule as the settings cards: a Home key nothing renders scrolls
+		// nowhere. Home's anchors live in its components, or in the route
+		// itself — Refer & earn's two doors (the header button, the phone row)
+		// sit under the greeting, so the route wraps them in ONE anchored block
+		// and the deep link lands on whichever door the screen shows.
+		const source = [
+			readFileSync(HOME_ROUTE, "utf8"),
+			...readdirSync(HOME_COMPONENTS)
+				.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
+				.map((f) => readFileSync(join(HOME_COMPONENTS, f), "utf8")),
+		].join("\n");
+		for (const [key] of homeEntries) {
+			expect(
+				source.includes(`id={SPOTLIGHT_ANCHOR.${key}.anchor}`),
+				`no Home component renders id={SPOTLIGHT_ANCHOR.${key}.anchor}`,
+			).toBe(true);
+		}
+		expect(source.split("id={SPOTLIGHT_ANCHOR.refer.anchor}").length - 1).toBe(
+			1,
+		);
 	});
 
 	test("every anchor is rendered as a card id somewhere under settings", () => {
@@ -76,6 +106,10 @@ describe("spotlight registry", () => {
 			// asserted equal below, so either spelling proves the card exists.
 			const accepted = [
 				`id={SPOTLIGHT_ANCHOR.${key}.anchor}`,
+				// The courier cards wrap their OWN AccountCard shell (so hiding in
+				// an unserved country takes the border with it) and receive the
+				// anchor as `shellId` — same registry source, different prop.
+				`shellId={SPOTLIGHT_ANCHOR.${key}.anchor}`,
 				...Object.entries(SETTINGS_ANCHOR)
 					.filter(([, id]) => id === anchor)
 					.map(([fixKey]) => `id={SETTINGS_ANCHOR.${fixKey}}`),
@@ -172,6 +206,15 @@ describe("spotlight registry", () => {
 			"/app/products?spot=weekend_rate",
 		);
 		expect(spotlightHref("promo")).toBe("/app/products?spot=promo");
+	});
+
+	test("a Home key lands on Home, with no tab", () => {
+		expect(spotlightHref("refer")).toBe("/app?spot=refer");
+		expect(isHomeSpotlightKey("refer")).toBe(true);
+		expect(isHomeSpotlightKey("delyva")).toBe(false);
+		expect(isSettingsSpotlightKey("refer")).toBe(false);
+		expect(isProductSpotlightKey("refer")).toBe(false);
+		expect(isHomeSpotlightKey("toString")).toBe(false);
 	});
 
 	test("isSpotlightKey admits registry keys only", () => {

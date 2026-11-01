@@ -17,6 +17,7 @@ import { ProBadge } from "../app/pro-gate";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
 import { ToggleSwitch } from "../ui/toggle-switch";
+import { settingAnchor } from "./product-setting-index";
 
 /** Why an event can't be saved on a store with nowhere to hold it — said on
  * the Event card and by the wizard, mirroring the server's refusal.
@@ -458,6 +459,7 @@ export function EventFields({
 						{venues !== undefined && venues.length === 0 ? (
 							<p
 								role="alert"
+								{...settingAnchor("event-venue")}
 								className="w-full rounded-lg bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive"
 							>
 								{EVENT_NO_VENUE_COPY}{" "}
@@ -477,7 +479,10 @@ export function EventFields({
 						    cut; `title` is the desktop recovery (hover), the width is the
 						    real fix. */}
 						{venues !== undefined && venues.length > 1 ? (
-							<div className="flex w-full flex-col gap-1.5 sm:w-64">
+							<div
+								className="flex w-full flex-col gap-1.5 sm:w-64"
+								{...settingAnchor("event-venue")}
+							>
 								<label htmlFor="event-venue" className="text-sm font-medium">
 									Venue
 								</label>
@@ -558,7 +563,10 @@ export function EventFields({
 						) : null;
 					})()}
 					{venues !== undefined && venues.length === 1 ? (
-						<p className="text-xs text-muted-foreground">
+						<p
+							className="text-xs text-muted-foreground"
+							{...settingAnchor("event-venue")}
+						>
 							Venue:{" "}
 							<span className="font-medium text-foreground">
 								{venues[0].label}
@@ -604,7 +612,10 @@ export function EventFields({
 					    that register people (HCM's Into The Falls). Off = today's
 					    flow, RSVPs confirm at checkout. Both states say exactly what
 					    the guest experiences, because the difference is money. */}
-					<div className="flex items-start justify-between gap-4 rounded-xl border border-border p-3">
+					<div
+						className="flex items-start justify-between gap-4 rounded-xl border border-border p-3"
+						{...settingAnchor("event-approve")}
+					>
 						<div className="min-w-0">
 							<p className="text-sm font-medium">
 								Approve each RSVP before they pay

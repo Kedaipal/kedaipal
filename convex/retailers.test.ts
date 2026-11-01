@@ -2570,6 +2570,23 @@ describe("SG delivery-mode allowlist (SG-lite, 86eynw29u)", () => {
 		).toMatchObject({ mode: "weight" });
 	});
 
+	test("a country switch clears the overseas lane — it points at the new home, in the old currency (z8r3fdr5yy)", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "my-lane-flip");
+		const mine = await asA.query(api.retailers.getMyRetailer);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(mine!._id, {
+				crossBorderLanes: [
+					{ country: "SG", pricing: { kind: "weight", bands: [{ maxKg: 1, fee: 1800 }] } },
+				],
+			});
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		const after = await asA.query(api.retailers.getMyRetailer);
+		expect(after?.country).toBe("SG");
+		expect(after?.crossBorderLanes).toBeUndefined();
+	});
+
 	test("one save can flip to SG AND clear/replace the config together", async () => {
 		const t = setup();
 		const asA = await seed(t, USER_A, "my-flip-with-clear");
@@ -3111,8 +3128,12 @@ describe("countrySetup query + ack (86eyqgujv)", () => {
 
 		const first = await asA.query(api.retailers.countrySetup, {});
 		expect(first?.changedFrom).toBe("MY");
+		// `billing_currency` sits with the money rows: a seeded store is on a
+		// trial subscription Kedaipal bills, and the move changed what in
+		// (86eyp7hn7).
 		expect(first?.items.map((i) => i.key)).toEqual([
 			"payment_methods",
+			"billing_currency",
 			"business_address",
 		]);
 
@@ -3127,7 +3148,167 @@ describe("countrySetup query + ack (86eyqgujv)", () => {
 		});
 		expect(
 			(await asA.query(api.retailers.countrySetup, {}))?.items.map((i) => i.key),
-		).toEqual(["payment_methods"]);
+		).toEqual(["payment_methods", "billing_currency"]);
+	});
+
+	test("a country switch detaches the saved auto-renew method and says so (86eyp7hn7)", async () => {
+		// A store is billed in its country's currency, so the switch changes
+		// what the next bill is in — and the recurring session HitPay
+		// authorised was in the OLD currency. Charging it in the new one is a
+		// charge the seller never agreed to: the method goes, the way it goes
+		// on a handover, and the seller is told twice (the mutation result the
+		// toast reads, and the checklist row).
+		vi.useFakeTimers();
+		vi.stubEnv("HITPAY_BILLING_API_KEY", "test_switch_key");
+		vi.stubEnv("HITPAY_BILLING_SALT", "switch_salt");
+		const deleted: string[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: unknown, init?: { method?: string }) => {
+				if (init?.method === "DELETE") deleted.push(String(url));
+				return new Response("{}", { status: 200 });
+			}),
+		);
+		try {
+			const t = setup();
+			const asA = await seed(t, USER_A, "switch-autorenew");
+			const subId = await t.run(async (ctx) => {
+				const row = await ctx.db
+					.query("retailers")
+					.withIndex("by_slug", (q) => q.eq("slug", "switch-autorenew"))
+					.first();
+				if (!row) throw new Error("no retailer");
+				const sub = await ctx.db
+					.query("subscriptions")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", row._id))
+					.first();
+				if (!sub) throw new Error("no sub");
+				await ctx.db.patch(sub._id, {
+					autoRenewSessionId: "rb_switch_1",
+					autoRenew: {
+						provider: "hitpay" as const,
+						method: "card",
+						methodLabel: "Visa ·· 4242",
+						attachedAt: Date.now(),
+					},
+				});
+				return sub._id;
+			});
+
+			// Saving the SAME country is not a move: the method stays.
+			const same = await asA.mutation(api.retailers.updateSettings, {
+				country: "MY",
+			});
+			expect(same.autoRenewDetached).toBe(false);
+			expect(
+				(await t.run((ctx) => ctx.db.get(subId)))?.autoRenew,
+			).toBeDefined();
+
+			const moved = await asA.mutation(api.retailers.updateSettings, {
+				country: "SG",
+			});
+			expect(moved.autoRenewDetached).toBe(true);
+			const after = await t.run((ctx) => ctx.db.get(subId));
+			// No `autoRenew` on the sub ⇒ nothing can charge this store. That is
+			// the whole guarantee — the cron never reaches HitPay for it.
+			expect(after?.autoRenew).toBeUndefined();
+			expect(after?.autoRenewSessionId).toBeUndefined();
+
+			// The remote session is deleted too, so a stale token can't be
+			// charged from HitPay's side either.
+			await t.finishAllScheduledFunctions(vi.runAllTimers);
+			expect(deleted).toEqual([
+				expect.stringContaining("/recurring-billing/rb_switch_1"),
+			]);
+
+			// ...and the checklist sends them to set it up again in SGD — and
+			// says it is OFF, because it is.
+			const list = await asA.query(api.retailers.countrySetup, {});
+			expect(list?.items.map((i) => i.key)).toContain("billing_currency");
+			expect(list?.autoRenewOn).toBe(false);
+
+			// A second switch with nothing attached detaches nothing and says so.
+			const back = await asA.mutation(api.retailers.updateSettings, {
+				country: "MY",
+			});
+			expect(back.autoRenewDetached).toBe(false);
+
+			// Once they set it up again, the row stops saying "turn it on".
+			await t.run(async (ctx) => {
+				await ctx.db.patch(subId, {
+					autoRenewSessionId: "rb_switch_2",
+					autoRenew: {
+						provider: "hitpay" as const,
+						method: "card",
+						attachedAt: Date.now(),
+					},
+				});
+			});
+			expect(
+				(await asA.query(api.retailers.countrySetup, {}))?.autoRenewOn,
+			).toBe(true);
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllGlobals();
+			vi.unstubAllEnvs();
+		}
+	});
+
+	test("a country switch clears a setup started in the old currency — never 'Finish setting up' into the wrong one (86eyp7hn7)", async () => {
+		// The pending setup's HitPay page was minted in SGD; resuming it on a
+		// store now billed in MYR would authorise an SGD session. Found live:
+		// the abandoned SGD page survived the move and offered "Finish setting
+		// up". A half-started setup was never ON, so the toast must not claim
+		// auto-renewal was turned off.
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-pending-setup");
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		const subId = await t.run(async (ctx) => {
+			const row = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "switch-pending-setup"))
+				.first();
+			if (!row) throw new Error("no retailer");
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", row._id))
+				.first();
+			if (!sub) throw new Error("no sub");
+			await ctx.db.patch(sub._id, {
+				autoRenewSetup: {
+					url: "https://sandbox.example/recurring-plan/sgd",
+					createdAt: Date.now(),
+				},
+			});
+			return sub._id;
+		});
+		const moved = await asA.mutation(api.retailers.updateSettings, {
+			country: "MY",
+		});
+		expect(moved.autoRenewDetached).toBe(false);
+		expect((await t.run((ctx) => ctx.db.get(subId)))?.autoRenewSetup).toBeUndefined();
+	});
+
+	test("a comped store's checklist never mentions billing — nothing it pays changed", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "switch-comped");
+		await t.run(async (ctx) => {
+			const row = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "switch-comped"))
+				.first();
+			if (!row) throw new Error("no retailer");
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", row._id))
+				.first();
+			if (!sub) throw new Error("no sub");
+			await ctx.db.patch(sub._id, { comped: true });
+		});
+		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		expect(
+			(await asA.query(api.retailers.countrySetup, {}))?.items.map((i) => i.key),
+		).not.toContain("billing_currency");
 	});
 
 	test("ack retires only what we can't verify, and the query goes quiet", async () => {
@@ -3146,12 +3327,14 @@ describe("countrySetup query + ack (86eyqgujv)", () => {
 			],
 		});
 		await asA.mutation(api.retailers.updateSettings, { country: "SG" });
+		// Bank details + the billing-currency notice: both unverifiable, both
+		// retired by one confirmation.
 		expect(
 			(await asA.query(api.retailers.countrySetup, {}))?.items,
-		).toHaveLength(1);
+		).toHaveLength(2);
 
 		const { acked } = await asA.mutation(api.retailers.ackCountrySetup, {});
-		expect(acked).toBe(1);
+		expect(acked).toBe(2);
 		expect((await asA.query(api.retailers.countrySetup, {}))?.items).toEqual(
 			[],
 		);
@@ -3200,7 +3383,10 @@ describe("countrySetup query + ack (86eyqgujv)", () => {
 		await asA.mutation(api.retailers.updateSettings, { country: "MY" });
 		const reopened = await asA.query(api.retailers.countrySetup, {});
 		expect(reopened?.changedFrom).toBe("SG");
-		expect(reopened?.items.map((i) => i.key)).toEqual(["payment_methods"]);
+		expect(reopened?.items.map((i) => i.key)).toEqual([
+			"payment_methods",
+			"billing_currency",
+		]);
 	});
 
 	test("saving the SAME country is not a switch and records nothing", async () => {
@@ -3701,5 +3887,48 @@ describe("storefront chat action (z8r3fdvwcy)", () => {
 		});
 		if (pub.status !== "ok") throw new Error("expected ok");
 		expect(pub.retailer.storefrontChatEnabled).toBe(true);
+	});
+});
+
+// One fallback for a store's own currency (PR #435 review): the owner read and
+// the public payload — which new products are stamped from — answer the
+// store's country's currency, never a hard-coded MYR.
+describe("a store with no saved currency reads its country's", () => {
+	async function clearCurrency(
+		t: ReturnType<typeof setup>,
+		slug: string,
+		country?: "SG",
+	) {
+		await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.unique();
+			if (!r) throw new Error("no store");
+			await ctx.db.patch(r._id, { currency: undefined, country });
+		});
+	}
+
+	test("an SG store reads SGD on the owner read and the storefront payload", async () => {
+		const t = setup();
+		const asSg = await seedSg(t, "sg-no-currency");
+		await clearCurrency(t, "sg-no-currency", "SG");
+		expect((await asSg.query(api.retailers.getMyRetailer))?.currency).toBe(
+			"SGD",
+		);
+		const store = await t.query(api.retailers.getRetailerBySlug, {
+			slug: "sg-no-currency",
+		});
+		if (store.status !== "ok") throw new Error(`store ${store.status}`);
+		expect(store.retailer.currency).toBe("SGD");
+	});
+
+	test("a row older than both fields (no country, no currency) stays MYR", async () => {
+		const t = setup();
+		const asA = await seed(t, USER_A, "legacy-my");
+		await clearCurrency(t, "legacy-my");
+		expect((await asA.query(api.retailers.getMyRetailer))?.currency).toBe(
+			"MYR",
+		);
 	});
 });

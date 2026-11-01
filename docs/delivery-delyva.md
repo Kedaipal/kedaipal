@@ -161,7 +161,31 @@ and there is no quotation id — order create re-prices. So:
 summariser the weight-zone pricing uses. When the cart is unweighable (a
 custom line, or missing product weights) the dialog asks the seller to type
 the packed weight (`weightKgOverride`); the seller can always override, since
-they know the real packed weight best.
+they know the real packed weight best. The *checkout* quote for such a cart
+was priced at the one-kilo floor (23 Oct 2026, see
+[`delivery-live-pricing.md`](./delivery-live-pricing.md)), so this is also
+where a heavier-than-a-kilo parcel's under-collection becomes visible — the
+card shows "buyer paid X" beside every service price, and when the order's
+snapshot carries the floor stamp (`weightFloored`) the card says so above the
+weight box: "Priced at the 1 kg floor — N items had no weight.", or, for a
+cart over a kilo, "N items had no weight at checkout and were priced without
+it."
+
+**Arming is gated on the catalogue** (23 Oct 2026): on a live-pricing store,
+`updateSettings({ enabled: true })` refuses while any buyable choice has no
+parcel weight (`assertCatalogueWeighed`, `convex/lib/parcelWeights.ts`), and
+`getSettings` reports the count as `bookingHeldForWeights` so the
+Courier-booking toggle greys out with the reason and a link to Products →
+Parcel weights. `storeConnection` (the connect action's save) likewise
+stores the key but keeps `enabled: false` on such a store, returning
+`bookingHeldForWeights` so the Integrations card and the connect toast say
+why booking stayed off. Replacing the key on a store whose booking is
+already ON keeps it on (`alreadyArmed`) — a rotation is maintenance, and
+holding it would stop Delyva quoting at checkout with no switch touched
+(PR #416 review). Disabling is never gated, and a store that is
+already armed keeps editing its address and parcel type — only the OFF→ON
+flip is the gate. See
+[`delivery-live-pricing.md`](./delivery-live-pricing.md#parcel-weight-is-required-where-pricing-depends-on-it-23-oct-2026).
 
 **Wire shapes were probed live** against a demo account (27 Aug 2026), not
 assumed: the waypoint address rides *inside* `contact` (a top-level
@@ -355,6 +379,16 @@ There is no SG demo/sandbox tenant under any obvious name (`demosg`,
 tenants (`demo`, `trydx`) are both Malaysian. If a sandbox is wanted for SG
 it has to come from Delyva support.
 
+### Proof of delivery — a scan, not a photo (z8r3fdytmq)
+
+Parcel couriers confirm delivery with a **tracking scan**; there is no
+drop-off photo like a Lalamove rider's. Delyva sends none, and Kedaipal stores none for it — only `convex/lalamove.ts` writes `deliveryJobs.podImageStorageIds`. The seller is told in two
+places, one author (`src/lib/parcel-courier-copy.ts`): under the card's ✓ list
+before connecting (`PARCEL_NO_PHOTO_NOTE`), and on the order's delivered state
+(`parcelDeliveredCopy`, which points at **Track parcel** when the order has a
+tracking link). Without it, a seller using Lalamove too reads the missing photo
+as a bug.
+
 ## Seller UI
 
 Two surfaces, both vendor-side. **The buyer never sees Delyva** — they pay the
@@ -510,6 +544,38 @@ feature the seller has never heard of), and
 account → credit → cold-chain activation → API key → paste → one real test —
 linked from the settings card, the `hitpay-setup.html` / `lalamove-setup.html`
 precedent.
+
+### Wallet, margin and the couriers-on footer (z8r3fdx34j)
+
+Delyva's **customer profile carries the wallet balance** (found 31 Oct
+2026): `GET /customer/{customerId}` with the seller's own key returns
+`walletBalance` (`parseDelyvaWalletBalance`). It's read on connect, from the
+Refresh icon (`delyva.refreshBalance`), alongside every dispatch quote, and by
+the top-up sheet's re-check, and recorded as a PULL observation. An
+insufficient-credit refusal (`"Bal: 0, Price: 5.00"`, `parseDelyvaRefusal`)
+still records its number too. Top up goes to `my.delyva.app/customer/topup`.
+See [`courier-wallets.md`](./courier-wallets.md).
+
+On the dispatch card:
+
+- **The wallet line** above Book. A balance read with the quote that can't
+  pay **disables Book** with the line as its reason (like EasyParcel); a
+  last-seen (refusal) balance only warns — Delyva has the final say.
+- **Margin per courier**: beside every price, what it leaves of the delivery
+  fee the buyer paid ("+RM 0.80 kept" / "RM 3.40 from your margin",
+  `courierMargin`). The buyer never chose this courier, so its price is the
+  seller's margin. Hidden when the account quotes in another currency.
+- **"Only couriers switched on in your Delyva account show here (N on)"**,
+  with a link to Delyva. A fresh DelyvaNow account has none on, and the
+  count rides alongside every quote (`GET /service` in parallel, never able
+  to fail the quote).
+- **Indicative price**: "the final one is set when the booking goes through".
+- **Weights**: the typed-weight helper links to Products, so setting the
+  weights once fills every later booking in.
+
+**Not built:** grouping instant riders (Grab Express, pandago) apart from
+parcel couriers. It needs a service-code mapping verified on a real account
+with those couriers on; until then it is one list, cheapest first.
 
 ## Testing
 

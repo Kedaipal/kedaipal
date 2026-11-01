@@ -1,11 +1,18 @@
 import type { Doc } from "../../../convex/_generated/dataModel";
-import { displayAddressState } from "../../lib/address-display";
+import type { Country } from "../../../convex/lib/country";
+import {
+	addressCountryLine,
+	displayAddressState,
+} from "../../lib/address-display";
 import { MASK_PII } from "../../lib/analytics-privacy";
 
 type OrderAddress = NonNullable<Doc<"orders">["deliveryAddress"]>;
 
 interface DeliveryAddressDisplayProps {
 	address: OrderAddress;
+	/** The store's country — an address abroad (z8r3fdr5yy) gets its
+	 * country printed as its own line. */
+	storeCountry: Country;
 }
 
 /**
@@ -14,10 +21,12 @@ interface DeliveryAddressDisplayProps {
  */
 export function DeliveryAddressDisplay({
 	address,
+	storeCountry,
 }: DeliveryAddressDisplayProps) {
 	// SG addresses hold "Singapore" as both city and state — the state line is
 	// skipped when it just repeats the city (src/lib/address-display.ts).
 	const stateLine = displayAddressState(address);
+	const countryLine = addressCountryLine(address, storeCountry);
 	return (
 		<div {...MASK_PII} className="flex flex-col gap-0.5 text-sm">
 			<p className="font-medium">{address.line1}</p>
@@ -26,6 +35,7 @@ export function DeliveryAddressDisplay({
 				{address.postcode} {address.city}
 			</p>
 			{stateLine ? <p>{stateLine}</p> : null}
+			{countryLine ? <p className="font-medium">{countryLine}</p> : null}
 			{address.notes ? (
 				<p className="mt-1.5 text-xs text-muted-foreground">
 					<span className="font-medium">Notes:</span> {address.notes}
@@ -35,11 +45,16 @@ export function DeliveryAddressDisplay({
 	);
 }
 
-export function formatAddressInline(address: OrderAddress): string {
+export function formatAddressInline(
+	address: OrderAddress,
+	storeCountry: Country,
+): string {
 	const parts = [address.line1];
 	if (address.line2) parts.push(address.line2);
 	parts.push(`${address.postcode} ${address.city}`);
 	const stateLine = displayAddressState(address);
 	if (stateLine) parts.push(stateLine);
+	const countryLine = addressCountryLine(address, storeCountry);
+	if (countryLine) parts.push(countryLine);
 	return parts.join(", ");
 }

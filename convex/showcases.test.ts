@@ -201,7 +201,7 @@ describe("create → publish → buyers", () => {
 		await asAdmin.mutation(api.showcases.remove, { showcaseId });
 		expect(await asAdmin.query(api.showcases.listForAdmin)).toEqual([]);
 		expect(
-			(await t.query(api.marketplace.listStores)).map((c) => c.slug),
+			(await t.query(api.marketplace.listStores, {})).map((c) => c.slug),
 		).toEqual(["kedai-r"]);
 	});
 });

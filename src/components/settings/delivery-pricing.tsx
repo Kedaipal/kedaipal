@@ -18,19 +18,20 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import {
-	FlaskConical,
-	MapPin,
-	Plus,
-	Trash2,
-	TriangleAlert,
-} from "lucide-react";
+import { FlaskConical, MapPin, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { MY_STATES } from "../../../convex/lib/address";
 import type { Country } from "../../../convex/lib/country";
+import {
+	type CrossBorderLane,
+	countryName,
+	crossBorderPricingSummary,
+	lanePause,
+	liveQuoteCourierNames,
+} from "../../../convex/lib/crossBorder";
 import {
 	DELIVERY_BANDS_MAX,
 	DELIVERY_ZONES_MAX,
@@ -39,6 +40,8 @@ import {
 	deliveryModeAllowed,
 	riderBookingAllowed,
 } from "../../../convex/lib/delivery";
+import { formatKg } from "../../../convex/lib/lalamoveVehicle";
+import { formatFloorKg } from "../../../convex/lib/weightPricing";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { usePermission } from "../../hooks/usePermission";
 import { useUpdateSettings } from "../../hooks/useUpdateSettings";
@@ -52,15 +55,21 @@ import {
 	convexErrorMessage,
 	currencySymbol,
 	formatDraftPrice,
+	formatPrice,
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
+import { laneBlockCopy } from "../../lib/overseas-delivery";
 import { hasFeature, type SubscriptionView } from "../../lib/subscription";
+import { TONE_PANEL } from "../../lib/tone";
 import { cn } from "../../lib/utils";
 import { jntSeedZones } from "../../lib/weight-zone-seed";
 import { ProBadge } from "../app/pro-gate";
+import { MissingWeightsNotice } from "../products/missing-weights-notice";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
+import { DelyvaLogo } from "../ui/delyva-logo";
+import { EasyparcelLogo } from "../ui/easyparcel-logo";
 import { FilterChip } from "../ui/filter-chip";
 import { Input } from "../ui/input";
 import { InputPrefixFrame } from "../ui/input-prefix-frame";
@@ -71,6 +80,7 @@ import {
 	COURIER_BOOKING_ANCHOR,
 	CourierBookingSection,
 } from "./courier-booking-section";
+import { ParcelBoxGuide } from "./parcel-box-guide";
 import {
 	Card,
 	Glance,
@@ -169,7 +179,7 @@ export function zoneSummary(zone: ZoneDraft, currency: string): string {
 // --- Small shared pieces ------------------------------------------------------
 
 /** A money field: the currency plate welded to a bare input. */
-function MoneyInput({
+export function MoneyInput({
 	id,
 	value,
 	onChange,
@@ -211,7 +221,7 @@ function MoneyInput({
 }
 
 /** A number with its unit welded on the right — "3 | kg". */
-function UnitInput({
+export function UnitInput({
 	value,
 	onChange,
 	unit,
@@ -303,16 +313,13 @@ function BusinessAddressReference({
  * five-word detail, and a status chip instead of a paragraph. */
 function ProviderPricingRow({
 	logo,
-	brand,
-	logoHeight,
 	name,
 	detail,
 	status,
 }: {
-	logo: string;
-	/** The logo's alt — the row names the service, the logo names who runs it. */
-	brand: string;
-	logoHeight: string;
+	/** The provider's mark, alt'd with its brand — the row names the service,
+	 * the logo names who runs it. */
+	logo: ReactNode;
 	name: string;
 	detail: string;
 	status: "live" | "test" | "connected" | "paused" | "off";
@@ -327,13 +334,7 @@ function ProviderPricingRow({
 	return (
 		<div className="flex min-h-11 items-center justify-between gap-3">
 			<span className="flex min-w-0 items-center gap-2">
-				<AppImage
-					src={logo}
-					alt={brand}
-					aspect={`${logoHeight} w-auto`}
-					fill={false}
-					className="shrink-0"
-				/>
+				{logo}
 				<span className="truncate text-sm">
 					{name}{" "}
 					<span className="hidden text-xs text-muted-foreground sm:inline">
@@ -353,6 +354,64 @@ function ProviderPricingRow({
 			</span>
 		</div>
 	);
+}
+
+/**
+ * The heavy-cart rule, in the seller's words (25 Oct 2026): Lalamove prices
+ * by vehicle and never refuses an overweight trip, so checkout quotes the
+ * smallest vehicle — from the seller's own — that can carry the cart. With
+ * Lalamove's published numbers when the market has been quoted, the rule
+ * alone before that.
+ */
+export function riderLoadsLine({
+	loads,
+	vehicle,
+	delyvaArmed,
+}: {
+	loads: ReadonlyArray<{ key: string; loadKg: number }> | null;
+	vehicle: "MOTORCYCLE" | "CAR";
+	delyvaArmed: boolean;
+}): string {
+	const kg = (key: string) => loads?.find((l) => l.key === key)?.loadKg;
+	const bike = kg("MOTORCYCLE");
+	const car = kg("CAR");
+	// Conditional on purpose: a Delyva account only prices the weights its
+	// couriers carry (the demo has none between 10 and 40 kg to KL), so
+	// "your couriers price it" would be a promise the store can't keep.
+	const beyond = delyvaArmed
+		? "riders don't bid: a Delyva courier prices it if one carries that weight, otherwise the buyer is asked to pick up or message you"
+		: "riders don't bid and the buyer is asked to pick up or message you";
+	if (vehicle === "CAR") {
+		return car !== undefined
+			? `A car carries up to ${formatKg(car)} — over that, ${beyond}`
+			: `A cart too heavy for a car isn't quoted on one — ${beyond}`;
+	}
+	if (bike !== undefined && car !== undefined)
+		return `A cart over a motorcycle's ${formatKg(bike)} is quoted on a car instead; over a car's ${formatKg(car)}, ${beyond}`;
+	return `A cart too heavy for a motorcycle is quoted on a car instead; too heavy for a car, ${beyond}`;
+}
+
+/**
+ * The line under the Default vehicle picker (26 Oct 2026). "Just the
+ * default" stopped being the whole truth when heavy carts started moving up
+ * to a car on their own, so a motorcycle store is told where it chooses —
+ * not only in the collapsed limits list above.
+ */
+export function vehiclePickerHint({
+	loads,
+	vehicle,
+}: {
+	loads: ReadonlyArray<{ key: string; loadKg: number }> | null;
+	vehicle: "MOTORCYCLE" | "CAR";
+}): string {
+	const base = "Just the default — switch per order when you book.";
+	if (vehicle === "CAR") return base;
+	const bike = loads?.find((l) => l.key === "MOTORCYCLE")?.loadKg;
+	const over =
+		bike !== undefined
+			? `A cart over a motorcycle's ${formatKg(bike)}`
+			: "A cart too heavy for a motorcycle";
+	return `${base} ${over} is priced on a car at checkout, and booking opens on one.`;
 }
 
 /** A pick-one policy, as rows — the same chooser as the modes above it. */
@@ -406,6 +465,8 @@ export function DeliveryPricing({
 	businessAddress,
 	deliveryBooking,
 	subscription,
+	crossBorderLanes,
+	offerDelivery,
 }: {
 	retailerId: Id<"retailers">;
 	country: Country;
@@ -414,6 +475,11 @@ export function DeliveryPricing({
 	businessAddress: BusinessAddress | undefined;
 	deliveryBooking: DeliveryBookingSummary | undefined;
 	subscription: SubscriptionView | undefined;
+	/** Overseas lanes as saved (z8r3fdr5yy) — saving live pricing pauses
+	 * them, and the save block says so. */
+	crossBorderLanes?: CrossBorderLane[];
+	/** With the lanes, decides whether the overseas price is live or paused. */
+	offerDelivery?: boolean;
 }) {
 	const updateSettings = useUpdateSettings();
 	const actAsRetailerId = useActAsRetailerId();
@@ -472,9 +538,32 @@ export function DeliveryPricing({
 	const delyvaSettings = useQuery(
 		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
 	).data;
+	// Lalamove's own carrying limits for this market (25 Oct 2026) — the
+	// "Lalamove's limits" disclosure states the heavy-cart rule with them.
+	const vehicleLoads = useQuery(
+		convexQuery(
+			api.lalamove.vehicleLoads,
+			deliveryBooking?.apiKeyHint ? { retailerId } : "skip",
+		),
+	).data;
 	// What BIDS at checkout is the Courier-booking toggle, not mere keys.
 	const delyvaArmed =
-		delyvaSettings?.connected === true && delyvaSettings.enabled === true;
+		delyvaSettings?.countryAllowed !== false &&
+		delyvaSettings?.connected === true &&
+		delyvaSettings.enabled === true;
+	// EasyParcel bids on HOME deliveries only where it carries them (an SG
+	// store, z8r3fdr5yy) — on a MY store it's the overseas courier only.
+	const easyparcelSettings = useQuery(
+		convexQuery(api.easyparcel.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	const easyparcelAtHome = easyparcelSettings?.destinations === "both";
+	const easyparcelArmed =
+		easyparcelAtHome &&
+		easyparcelSettings?.connected === true &&
+		!easyparcelSettings.needsReconnect &&
+		easyparcelSettings.enabled &&
+		easyparcelSettings.pickupAddress !== undefined &&
+		easyparcelSettings.hasSenderPhone;
 	const lalamoveArmed = hasStoredKey && deliveryBooking?.enabled === true;
 	const liveModeSelected = mode === "live";
 	const storedLiveMode = config?.mode === "live" || config?.mode === "lalamove";
@@ -489,13 +578,18 @@ export function DeliveryPricing({
 	const radiusEditable = mode === "radius" && canUseRadius;
 	const lalamoveLocked = !canUseLalamove;
 
-	// The readiness check (4A) — only while weight is the mode, and only for a
-	// reader who may see product names.
+	// The readiness check (4A) — while weight is the mode, or while a live
+	// store has a courier that prices by weight (Delyva quotes an unweighed
+	// item at the one-kilo floor — the seller must be told WHICH products,
+	// where they chose that courier). Only for a reader who may see product
+	// names.
 	const productsPerm = usePermission("products");
+	const weightMatters =
+		mode === "weight" || (liveModeSelected && (delyvaArmed || easyparcelArmed));
 	const missingWeights = useQuery(
 		convexQuery(
 			api.products.missingParcelWeights,
-			mode === "weight" && productsPerm.canRead ? { retailerId } : "skip",
+			weightMatters && productsPerm.canRead ? { retailerId } : "skip",
 		),
 	).data;
 
@@ -609,8 +703,13 @@ export function DeliveryPricing({
 				onUnpriceable,
 			};
 		} else if (mode === "live") {
-			// Mirrors the server gates so the failure is a helpful message.
-			if (!businessAddress) {
+			// Mirrors the server gates so the failure is a helpful message. An
+			// EasyParcel-only store collects from EasyParcel's own pickup
+			// address, so it isn't asked for a business address here.
+			if (
+				!businessAddress &&
+				!(easyparcelArmed && !lalamoveArmed && !delyvaArmed)
+			) {
 				setError(
 					!lalamoveArmed && delyvaArmed
 						? "Set your business address first — it anchors your store's delivery setup."
@@ -621,11 +720,11 @@ export function DeliveryPricing({
 				return;
 			}
 			// At least ONE provider must be ARMED, or every checkout would block.
-			if (!lalamoveArmed && !delyvaArmed) {
+			if (!lalamoveArmed && !delyvaArmed && !easyparcelArmed) {
 				setError(
 					hasStoredKey || delyvaSettings?.connected
 						? "Turn on at least one service under Courier booking below — live pricing quotes whatever is switched on."
-						: "Connect Lalamove or Delyva under Settings → Integrations first — live prices run on your own accounts.",
+						: `Connect ${liveQuoteCourierNames(country).join(" or ")} under Settings → Integrations first — live prices run on your own accounts.`,
 				);
 				return;
 			}
@@ -696,11 +795,33 @@ export function DeliveryPricing({
 		}
 	}
 
+	// Arming weight pricing (23 Oct 2026): moving the charge ONTO the rate
+	// card, or onto live pricing with Delyva armed, starts pricing every order
+	// by parcel weight — the server refuses it while buyable choices are
+	// unweighed, so the button says so BEFORE the tap (disabled-with-reason)
+	// and the readiness notice above it names the products and the fix. A
+	// store already on that mode keeps saving; the notice points at the fix.
+	const armingByWeight =
+		(mode === "weight" && config?.mode !== "weight") ||
+		(liveModeSelected && delyvaArmed && config?.mode !== "live");
+	const weightsBlockSave =
+		armingByWeight && missingWeights !== undefined && missingWeights.count > 0;
 	const saveDisabled =
 		saving ||
+		weightsBlockSave ||
 		(mode === "radius" && radiusLocked && config?.mode === "radius") ||
 		(liveModeSelected && lalamoveLocked && storedLiveMode);
 
+	// Overseas delivery (z8r3fdr5yy) carries its OWN price, whatever this page
+	// sets — home pricing never pauses it (Zaki, 30 Oct). The note at the top
+	// says what overseas buyers pay; only a store-wide pause is shown here.
+	const overseasLane = crossBorderLanes?.[0];
+	const overseasPause = overseasLane
+		? lanePause({
+				planAllows: hasFeature(subscription, "crossBorder"),
+				offerDelivery,
+			})
+		: null;
 	const saveBlock = (
 		<div className="flex flex-col gap-3">
 			{error ? (
@@ -717,6 +838,19 @@ export function DeliveryPricing({
 			>
 				{liveModeSelected ? "Save live pricing" : "Save delivery pricing"}
 			</Button>
+			{weightsBlockSave && missingWeights ? (
+				<p className="text-xs text-muted-foreground">
+					Saving is off until every product has a parcel weight —{" "}
+					{missingWeights.count} still{" "}
+					{missingWeights.count === 1 ? "needs" : "need"} one.{" "}
+					<Link
+						to="/app/products/weights"
+						className="font-semibold text-foreground underline underline-offset-2"
+					>
+						Set parcel weights
+					</Link>
+				</p>
+			) : null}
 		</div>
 	);
 
@@ -729,9 +863,57 @@ export function DeliveryPricing({
 	const chooser = (
 		<Card>
 			<p className="text-sm text-muted-foreground">
-				What buyers pay for delivery, added at checkout. Pickup orders are never
-				charged this.
+				What buyers pay for delivery
+				{overseasLane ? ` within ${countryName(country)}` : ""}, added at
+				checkout. Pickup orders are never charged this.
 			</p>
+			{/* The overseas lane has its OWN price (z8r3fdr5yy) — said here, so a
+			    store on Free doesn't read "no delivery charge" and assume orders
+			    abroad ship free too. A paused lane says it's paused, never that
+			    its price applies (both found on /test-code passes). */}
+			{overseasLane ? (
+				<div
+					className={cn(
+						"flex flex-col items-start gap-1 rounded-xl border px-3.5 pt-3 pb-1 text-sm",
+						overseasPause ? TONE_PANEL.warn : TONE_PANEL.neutral,
+					)}
+				>
+					{overseasPause ? (
+						<>
+							<p className="font-semibold">
+								Delivery to {countryName(overseasLane.country)} is paused.
+							</p>
+							<p>
+								{laneBlockCopy(overseasPause, overseasLane.country)} Your
+								overseas price —{" "}
+								<span className="whitespace-nowrap">
+									{crossBorderPricingSummary(overseasLane.pricing, (minor) =>
+										formatPrice(minor, currency),
+									)}
+								</span>{" "}
+								— is kept.
+							</p>
+						</>
+					) : (
+						<p>
+							Orders to {countryName(overseasLane.country)} have their own
+							price:{" "}
+							<span className="font-semibold whitespace-nowrap">
+								{crossBorderPricingSummary(overseasLane.pricing, (minor) =>
+									formatPrice(minor, currency),
+								)}
+							</span>
+							.
+						</p>
+					)}
+					<Link
+						to="/app/settings/overseas-delivery"
+						className="inline-flex min-h-11 items-center font-semibold underline underline-offset-2"
+					>
+						{overseasPause ? "Overseas delivery" : "Change overseas price"}
+					</Link>
+				</div>
+			) : null}
 			<ModeRowGroup label="How you charge for delivery" className="gap-2.5">
 				<SourceLabel source="builtin">you set the charge</SourceLabel>
 				{builtinModes.map((m) => (
@@ -797,7 +979,11 @@ export function DeliveryPricing({
 			<Card>
 				<SectionHeading
 					title="Free delivery"
-					description="Buyers pay nothing extra for delivery — it's on you."
+					description={
+						overseasLane
+							? `Buyers in ${countryName(country)} pay nothing extra for delivery — it's on you. Orders to ${countryName(overseasLane.country)} still pay your overseas price.`
+							: "Buyers pay nothing extra for delivery — it's on you."
+					}
 				/>
 				{saveBlock}
 			</Card>
@@ -961,41 +1147,12 @@ export function DeliveryPricing({
 			</>
 		);
 	} else if (mode === "weight") {
-		const readiness =
-			missingWeights && missingWeights.count > 0 ? (
-				<div className="flex flex-col gap-1.5 rounded-xl border border-amber-300 bg-amber-100 px-3 py-2.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
-					<p className="flex items-start gap-2 font-semibold">
-						<TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-						{missingWeights.count} product
-						{missingWeights.count === 1 ? " has" : "s have"} no parcel weight —
-						those orders can&apos;t be priced.
-					</p>
-					<ul className="flex flex-wrap gap-x-3 gap-y-1 pl-5.5">
-						{missingWeights.named.map((p) => (
-							<li key={p.productId}>
-								<Link
-									to="/app/products/$productId"
-									params={{ productId: p.productId }}
-									className="font-medium underline underline-offset-2"
-								>
-									{p.name}
-								</Link>
-							</li>
-						))}
-						{missingWeights.count > missingWeights.named.length ? (
-							<li>
-								<Link
-									to="/app/products"
-									className="font-medium underline underline-offset-2"
-								>
-									+{missingWeights.count - missingWeights.named.length} more in
-									Products
-								</Link>
-							</li>
-						) : null}
-					</ul>
-				</div>
-			) : null;
+		const readiness = (
+			<MissingWeightsNotice
+				missingWeights={missingWeights}
+				reason="rate_card"
+			/>
+		);
 
 		config_ = (
 			<>
@@ -1196,9 +1353,15 @@ export function DeliveryPricing({
 					/>
 					<div className="flex flex-col gap-1 rounded-xl border border-border px-3 py-1">
 						<ProviderPricingRow
-							logo="/img/lalamove-logo.svg"
-							brand="Lalamove"
-							logoHeight="h-3.5"
+							logo={
+								<AppImage
+									src="/img/lalamove-logo.svg"
+									alt="Lalamove"
+									aspect="h-3.5 w-auto"
+									fill={false}
+									className="shrink-0"
+								/>
+							}
 							name="Riders"
 							detail="Same-day, around your city"
 							status={
@@ -1213,24 +1376,47 @@ export function DeliveryPricing({
 										: "off"
 							}
 						/>
-						<ProviderPricingRow
-							logo="/img/delyva-logo.png"
-							brand="Delyva"
-							logoHeight="h-2.5"
-							name="Couriers"
-							detail="Nationwide parcels, cheapest service"
-							status={
-								delyvaArmed
-									? delyvaSettings?.isDemo
-										? "test"
-										: "live"
-									: delyvaSettings?.connected
-										? "paused"
-										: "off"
-							}
-						/>
+						{/* Delyva can't be connected outside Malaysia — never offered
+						    where it can't bid (fixed in passing, z8r3fdr5yy). */}
+						{delyvaSettings?.countryAllowed !== false ? (
+							<ProviderPricingRow
+								logo={<DelyvaLogo heightClass="h-2.5" alt="Delyva" />}
+								name="Couriers"
+								detail="Nationwide parcels, cheapest service"
+								status={
+									delyvaArmed
+										? delyvaSettings?.isDemo
+											? "test"
+											: "live"
+										: delyvaSettings?.connected
+											? "paused"
+											: "off"
+								}
+							/>
+						) : null}
+						{easyparcelAtHome ? (
+							<ProviderPricingRow
+								logo={<EasyparcelLogo heightClass="h-3" alt="EasyParcel" />}
+								name="Couriers"
+								detail="J&T, SingPost, Ninja Van and more"
+								status={
+									easyparcelArmed
+										? easyparcelSettings?.environment === "sandbox"
+											? "test"
+											: "live"
+										: easyparcelSettings?.connected
+											? "paused"
+											: "off"
+								}
+							/>
+						) : null}
 					</div>
-					{!lalamoveArmed && !delyvaArmed ? (
+					{easyparcelArmed ? (
+						<InfoDisclosure summary="Box sizes EasyParcel quotes with">
+							<ParcelBoxGuide />
+						</InfoDisclosure>
+					) : null}
+					{!lalamoveArmed && !delyvaArmed && !easyparcelArmed ? (
 						<p className="rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
 							Nothing can quote yet, so delivery checkout would be refused —
 							connect a courier in{" "}
@@ -1244,8 +1430,15 @@ export function DeliveryPricing({
 							and switch it on under Courier booking below.
 						</p>
 					) : null}
+					{delyvaArmed || easyparcelArmed ? (
+						<MissingWeightsNotice
+							missingWeights={missingWeights}
+							reason="courier"
+						/>
+					) : null}
 					{(lalamoveArmed && deliveryBooking?.env === "sandbox") ||
-					(delyvaArmed && delyvaSettings?.isDemo) ? (
+					(delyvaArmed && delyvaSettings?.isDemo) ||
+					(easyparcelArmed && easyparcelSettings?.environment === "sandbox") ? (
 						<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
 							<FlaskConical aria-hidden className="mt-0.5 size-3.5 shrink-0" />
 							<span>
@@ -1286,6 +1479,11 @@ export function DeliveryPricing({
 								lalamoveArmed && delyvaArmed
 									? "Both couriers quote and the buyer pays the higher — book the cheaper one and the difference is yours"
 									: "Switch both couriers on and the buyer pays the higher quote — book the cheaper one",
+								...(delyvaArmed
+									? [
+											`Couriers price by weight — an item with no parcel weight is quoted as a ${formatFloorKg()} parcel, so add weights in Products if yours are heavier`,
+										]
+									: []),
 								"Your own courier accounts and wallets — Kedaipal never pays for you",
 							]}
 						/>
@@ -1296,6 +1494,11 @@ export function DeliveryPricing({
 								items={[
 									"Serves your city zone, roughly 40–70 km, never across zones",
 									"Bike and car cover the same area — the difference is size and price",
+									riderLoadsLine({
+										loads: vehicleLoads?.loads ?? null,
+										vehicle: vehicleType,
+										delyvaArmed,
+									}),
 									"Far buyers see “too far” and can't pick delivery",
 									delyvaArmed
 										? "Beyond the zone your Delyva couriers still quote, so checkout keeps working as a parcel"
@@ -1346,7 +1549,10 @@ export function DeliveryPricing({
 								/>
 							</div>
 							<p className="text-xs text-muted-foreground">
-								Just the default — switch per order when you book.
+								{vehiclePickerHint({
+									loads: vehicleLoads?.loads ?? null,
+									vehicle: vehicleType,
+								})}
 							</p>
 						</div>
 						<OptionRow

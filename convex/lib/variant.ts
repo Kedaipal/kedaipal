@@ -19,6 +19,11 @@ export const MAX_VALUES_PER_AXIS = 25;
 // across two products. Still well under the axis product (25 × 25 = 625), so
 // the cap — not MAX_VALUES_PER_AXIS — is what refuses a runaway grid.
 export const MAX_VARIANTS_PER_PRODUCT = 100;
+// Parcel weight ceiling, in grams — 1,000 kg, a typo guard, not policy. The
+// one copy for the product form, the CSV import, the bulk weight fill and the
+// server validators (it used to live in src/lib/product-import.ts alone, so
+// the server accepted what the import refused).
+export const PARCEL_WEIGHT_MAX_G = 1_000_000;
 export const MAX_AXIS_NAME_LENGTH = 40;
 export const MAX_VALUE_LENGTH = 60;
 // Custom / made-to-order line (docs/custom-option.md). One per product, lives

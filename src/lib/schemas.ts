@@ -8,6 +8,7 @@ import {
 	COUNTRIES,
 	COUNTRY_LABELS,
 	type Country,
+	isCountry,
 } from "../../convex/lib/country";
 import { isDialIso } from "../../convex/lib/phoneDial";
 import {
@@ -263,6 +264,32 @@ export function strictAddressSchemaFor(country: Country) {
 	return STRICT_ADDRESS_SCHEMAS[country];
 }
 
+/** The fields that say WHERE an address is, in the order the form shows them. */
+export const ADDRESS_LOCATION_FIELDS = [
+	"line1",
+	"postcode",
+	"city",
+	"state",
+] as const;
+export type AddressLocationField = (typeof ADDRESS_LOCATION_FIELDS)[number];
+
+/**
+ * The location fields this address still fails the strict schema on, in form
+ * order. A Google pick fills them from whatever Places returned, and Places
+ * routinely omits one (an SG block with no postal code, an MY street with no
+ * locality, a state spelling `normalizeMyState` doesn't know) — the locked
+ * address card asks for exactly these instead of hiding them.
+ */
+export function addressLocationGaps(
+	address: CheckoutAddressValues,
+	country: Country,
+): AddressLocationField[] {
+	const result = strictAddressSchemaFor(country).safeParse(address);
+	if (result.success) return [];
+	const failing = new Set(result.error.issues.map((issue) => issue.path[0]));
+	return ADDRESS_LOCATION_FIELDS.filter((field) => failing.has(field));
+}
+
 // Loose form-state shape: every field is always present as a string so
 // TanStack Form can mount the inputs whether delivery or self_collect is
 // selected. Strict validation runs only when delivery is chosen.
@@ -305,6 +332,11 @@ function buildCheckoutFormSchema(country: Country) {
 			// table doesn't know, as the server does.
 			waDialCountry: z.string(),
 			deliveryMethod: deliveryMethodSchema,
+			// The "Deliver to" country (z8r3fdr5yy) — the store's own unless the
+			// store delivers abroad and the buyer picked the other one. Picks
+			// which address shape is enforced below. Optional so a form built
+			// before the field existed (and the claim form) still parses.
+			deliverTo: z.union([z.string(), z.undefined()]),
 			address: addressFormFieldsSchema,
 			// Convex id of the chosen pickup location when deliveryMethod is
 			// self_collect and the retailer has 2+ active locations. The
@@ -341,7 +373,16 @@ function buildCheckoutFormSchema(country: Country) {
 				});
 			}
 			if (val.deliveryMethod !== "delivery") return;
-			const result = strictAddressSchemaFor(country).safeParse(val.address);
+			// The address is judged by the country it's IN — the buyer's
+			// "Deliver to" pick on a cross-border store (z8r3fdr5yy), the
+			// store's own otherwise. An unknown value falls back, never throws.
+			const addressCountry =
+				val.deliverTo !== undefined && isCountry(val.deliverTo)
+					? val.deliverTo
+					: country;
+			const result = strictAddressSchemaFor(addressCountry).safeParse(
+				val.address,
+			);
 			if (result.success) return;
 			for (const issue of result.error.issues) {
 				ctx.addIssue({

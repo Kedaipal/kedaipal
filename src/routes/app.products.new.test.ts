@@ -14,8 +14,20 @@ const validate = Route.options.validateSearch as (
 
 describe("/app/products/new — validateSearch", () => {
 	it("keeps a real step-0 card", () => {
-		expect(validate({ card: "event" })).toEqual({ card: "event" });
-		expect(validate({ card: "booking" })).toEqual({ card: "booking" });
+		for (const card of [
+			"food",
+			"physical",
+			"service",
+			"plan",
+			"stay",
+			"event",
+		]) {
+			expect(validate({ card })).toEqual({ card });
+		}
+	});
+
+	it("the retired Booking card still opens — as Stay, its original meaning", () => {
+		expect(validate({ card: "booking" })).toEqual({ card: "stay" });
 	});
 
 	it("drops anything else", () => {

@@ -76,6 +76,11 @@ export function useTheme(): UseThemeResult {
  * dependency because its changes are exactly the moments the DOM may have moved.
  * `useTheme.test.tsx` hydrates a darkened document and asserts it never passes
  * through light.
+ *
+ * It is also why `lib/theme.ts` updates the store INSIDE the view transition's
+ * callback rather than before it: this effect answers every store change, and
+ * answering before the browser had its "old" snapshot would flip the page
+ * ahead of the fade and leave nothing to fade.
  */
 export function useThemeSync(): { resolved: ResolvedTheme } {
 	const { resolved } = useTheme();

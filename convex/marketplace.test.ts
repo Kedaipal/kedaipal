@@ -53,13 +53,35 @@ describe("marketplace.listStores — the listable rule end to end", () => {
 	test("a store with a visible product lists; slugs and card fields ride along", async () => {
 		const t = setup();
 		await seedListableStore(t, "user_mkt_a", "kedai-a");
-		const cards = await t.query(api.marketplace.listStores);
+		const cards = await t.query(api.marketplace.listStores, {});
 		expect(cards.map((c) => c.slug)).toEqual(["kedai-a"]);
 		expect(cards[0].storeName).toBe("Store kedai-a");
 		expect(cards[0].country).toBe("MY");
 		expect(cards[0].sponsored).toBe(false);
 		expect(cards[0].orderingPaused).toBe(false);
 		expect(cards[0].offersDelivery).toBe(true);
+	});
+
+	test("country scopes the directory to ONE market — the other is never sent", async () => {
+		const t = setup();
+		await seedListableStore(t, "user_mkt_my", "kedai-my");
+		const { retailerId: sgId } = await seedListableStore(
+			t,
+			"user_mkt_sg",
+			"kedai-sg",
+		);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(sgId, { country: "SG" });
+		});
+		const slugs = async (country?: "MY" | "SG") =>
+			(await t.query(api.marketplace.listStores, { country }))
+				.map((c) => c.slug)
+				.sort();
+		// A store with no `country` is MY (every pre-SG store).
+		expect(await slugs("MY")).toEqual(["kedai-my"]);
+		expect(await slugs("SG")).toEqual(["kedai-sg"]);
+		// A tab opened before the scope shipped calls with `{}` — still served.
+		expect(await slugs()).toEqual(["kedai-my", "kedai-sg"]);
 	});
 
 	test("no products — not listed (an empty storefront is a dead end)", async () => {
@@ -69,7 +91,7 @@ describe("marketplace.listStores — the listable rule end to end", () => {
 			storeName: "Empty Store",
 			slug: "kedai-kosong",
 		});
-		expect(await t.query(api.marketplace.listStores)).toEqual([]);
+		expect(await t.query(api.marketplace.listStores, {})).toEqual([]);
 	});
 
 	test("only hidden / inactive products — not listed", async () => {
@@ -82,7 +104,7 @@ describe("marketplace.listStores — the listable rule end to end", () => {
 		await t.run(async (ctx) => {
 			await ctx.db.patch(productId, { hidden: true });
 		});
-		expect(await t.query(api.marketplace.listStores)).toEqual([]);
+		expect(await t.query(api.marketplace.listStores, {})).toEqual([]);
 	});
 
 	test("the seller's opt-out delists, and relisting brings the store back", async () => {
@@ -92,7 +114,7 @@ describe("marketplace.listStores — the listable rule end to end", () => {
 		await asUser.mutation(api.retailers.updateSettings, {
 			marketplaceListed: false,
 		});
-		expect(await t.query(api.marketplace.listStores)).toEqual([]);
+		expect(await t.query(api.marketplace.listStores, {})).toEqual([]);
 		// The storefront's public payload carries the bit — it hides the
 		// footer's "Discover more stores" link for an opted-out store.
 		const bySlug = await t.query(api.retailers.getRetailerBySlug, {
@@ -105,7 +127,7 @@ describe("marketplace.listStores — the listable rule end to end", () => {
 			marketplaceListed: true,
 		});
 		expect(
-			(await t.query(api.marketplace.listStores)).map((c) => c.slug),
+			(await t.query(api.marketplace.listStores, {})).map((c) => c.slug),
 		).toEqual(["kedai-optout"]);
 	});
 
@@ -143,7 +165,7 @@ describe("marketplace.listStores — the listable rule end to end", () => {
 		await t.run(async (ctx) => {
 			await ctx.db.patch(retailerId, { purgeStartedAt: Date.now() });
 		});
-		expect(await t.query(api.marketplace.listStores)).toEqual([]);
+		expect(await t.query(api.marketplace.listStores, {})).toEqual([]);
 	});
 
 	test("a live sponsorship window flags the card; an expired one does not", async () => {
@@ -158,13 +180,13 @@ describe("marketplace.listStores — the listable rule end to end", () => {
 				marketplaceSponsoredUntil: Date.now() + 60_000,
 			});
 		});
-		expect((await t.query(api.marketplace.listStores))[0].sponsored).toBe(true);
+		expect((await t.query(api.marketplace.listStores, {}))[0].sponsored).toBe(true);
 		await t.run(async (ctx) => {
 			await ctx.db.patch(retailerId, {
 				marketplaceSponsoredUntil: Date.now() - 1,
 			});
 		});
-		expect((await t.query(api.marketplace.listStores))[0].sponsored).toBe(
+		expect((await t.query(api.marketplace.listStores, {}))[0].sponsored).toBe(
 			false,
 		);
 	});
@@ -172,7 +194,7 @@ describe("marketplace.listStores — the listable rule end to end", () => {
 	test("the payload never carries private storefront facts", async () => {
 		const t = setup();
 		await seedListableStore(t, "user_mkt_leak", "kedai-leak");
-		const [card] = await t.query(api.marketplace.listStores);
+		const [card] = await t.query(api.marketplace.listStores, {});
 		for (const key of [
 			"waPhone",
 			"notifyEmail",
@@ -194,7 +216,7 @@ describe("marketplace.listStores — the listable rule end to end", () => {
 		await t.run(async (ctx) => {
 			await ctx.db.patch(a.retailerId, { activatedAt: Date.now() });
 		});
-		const cards = await t.query(api.marketplace.listStores);
+		const cards = await t.query(api.marketplace.listStores, {});
 		expect(cards.map((c) => c.slug)).toEqual(["kedai-rank-a", "kedai-rank-b"]);
 	});
 });
@@ -267,7 +289,7 @@ describe("updateSettings — storeArea", () => {
 			await t.run(async (ctx) => (await ctx.db.get(retailerId))?.storeArea),
 		).toBe("Ampang, KL");
 		expect(
-			(await t.query(api.marketplace.listStores))[0].storeArea,
+			(await t.query(api.marketplace.listStores, {}))[0].storeArea,
 		).toBe("Ampang, KL");
 		await asUser.mutation(api.retailers.updateSettings, { storeArea: "  " });
 		// `t.run` serializes undefined to null — either spelling means "unset".
@@ -354,7 +376,7 @@ describe("comped stores ride Store highlights; internal stores never list", () =
 		);
 		const asAdmin = t.withIdentity({ subject: ADMIN });
 		const card = async () =>
-			(await t.query(api.marketplace.listStores)).find(
+			(await t.query(api.marketplace.listStores, {})).find(
 				(c) => c.slug === "kedai-comp",
 			);
 
@@ -424,7 +446,7 @@ describe("comped stores ride Store highlights; internal stores never list", () =
 		});
 		const adminOwned = await seedListableStore(t, ADMIN, "kedai-admin");
 
-		const slugs = (await t.query(api.marketplace.listStores)).map(
+		const slugs = (await t.query(api.marketplace.listStores, {})).map(
 			(c) => c.slug,
 		);
 		expect(slugs).not.toContain("kedai-internal");
@@ -460,7 +482,7 @@ describe("admin hide from /stores — moderation over the seller's switch", () =
 		const asSeller = t.withIdentity({ subject: "user_mkt_hide" });
 		const asAdmin = t.withIdentity({ subject: ADMIN });
 		const listed = async () =>
-			(await t.query(api.marketplace.listStores)).map((c) => c.slug);
+			(await t.query(api.marketplace.listStores, {})).map((c) => c.slug);
 
 		await expect(
 			asSeller.mutation(api.admin.hideFromMarketplace, { retailerId }),
