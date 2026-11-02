@@ -135,6 +135,7 @@ import {
 import {
 	counterPrimaryAction,
 	showsSellerPaymentControls,
+	timeAfterDateChange,
 } from "../lib/counter-panel";
 import { centsToRm, rmToCents } from "../lib/counter-price";
 import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
@@ -2366,7 +2367,12 @@ function BuildOrderScreen({
 																id="counter-fulfilment-date"
 																label="Collection date"
 																value={fulfilmentDate}
-																onChange={setFulfilmentDate}
+																onChange={(ymd) => {
+																	setFulfilmentDate(ymd);
+																	setFulfilmentTime((t) =>
+																		timeAfterDateChange(ymd, t),
+																	);
+																}}
 																min={minYmd}
 																max={maxYmd}
 															/>

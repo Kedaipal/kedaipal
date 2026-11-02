@@ -25,6 +25,16 @@ export function showsSellerPaymentControls(mode: CounterPayMode): boolean {
 	return mode === "counter";
 }
 
+/**
+ * The collection time a date change leaves behind (`z8r3fdkugx`). A time only
+ * means something ON a day, so clearing the date clears the time too — never
+ * an orphan clock that silently reappears when a day is picked again. Any real
+ * date keeps the time: often only the day moves.
+ */
+export function timeAfterDateChange(nextDateYmd: string, time: string): string {
+	return nextDateYmd ? time : "";
+}
+
 export interface PrimaryActionInput {
 	mode: CounterPayMode;
 	/** Cart is empty — nothing to sell either way. */
