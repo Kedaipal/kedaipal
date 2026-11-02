@@ -28,10 +28,13 @@ dashboard click reopens the hole and nothing in the code base notices.
 
 - **301** for `GET`/`HEAD`, **308** for anything else. Browsers re-send a 301'd
   POST as a body-less GET, and 308 keeps the method and body.
-- **Path and query survive byte-for-byte.** The target is built by swapping the
-  scheme on the raw request string, never by round-tripping through `URL`.
-  Re-encoding is what 307-looped the `%7B%7B1%7D%7D` placeholder links in
-  `86eyheqzv` (see [buyer-page-resilience.md](./buyer-page-resilience.md)).
+- **Path and query survive byte-for-byte.** The target is the request string
+  with its scheme swapped; `Response.redirect` then parses and serialises it,
+  and the WHATWG serialiser keeps percent-encoded bytes (`%7B%7B1%7D%7D`) as
+  they arrived. That is the property that matters: the `86eyheqzv` loop was the
+  router **decoding** those braces in `Location` (see
+  [buyer-page-resilience.md](./buyer-page-resilience.md)), which this hop never
+  does. A test asserts the final `Location` header, not just the helper.
 - **Single hop, then exactly as before.** An http placeholder link gets 301 →
   https (guard), then 301 → clean URL (rescue). Each hop is https from the
   first one, so it can't loop.

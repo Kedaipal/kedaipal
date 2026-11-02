@@ -25,12 +25,30 @@ describe("httpsRedirectTarget", () => {
 	});
 
 	// The placeholder rescue then 301s the https URL to the clean one — one hop
-	// each. Round-tripping through `URL` re-encodes, which is what 307-looped
-	// these links in 86eyheqzv.
+	// each. The 86eyheqzv loop was the router DECODING the braces in `Location`;
+	// this hop must leave them percent-encoded.
 	it("preserves percent-encoded placeholder paths byte-for-byte", () => {
 		const path = "/track/%7B%7B1%7D%7Dabc123?x=%7B%7D&y=a%20b";
 		expect(httpsRedirectTarget(`http://kedaipal.com${path}`)).toBe(
 			`https://kedaipal.com${path}`,
+		);
+	});
+
+	// `Response.redirect` parses and re-serialises the target before it reaches
+	// `Location` — this pins what the browser actually receives, not just the
+	// helper's string.
+	it("survives Response.redirect's serialisation into Location", () => {
+		const url =
+			"http://kedaipal.com/track/%7B%7B1%7D%7Dabc123?x=%7B%7D&y=a%20b";
+		const target = httpsRedirectTarget(url);
+		expect(target).not.toBeNull();
+		const response = Response.redirect(
+			target as string,
+			httpsRedirectStatus("GET"),
+		);
+		expect(response.status).toBe(301);
+		expect(response.headers.get("location")).toBe(
+			url.replace(/^http:/, "https:"),
 		);
 	});
 

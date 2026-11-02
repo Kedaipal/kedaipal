@@ -16,10 +16,13 @@ const HTTP_AUTHORITY = /^http:\/\/([^/?#]*)/i;
  * The `https://` URL to redirect an http request to, or `null` when it should
  * be served as-is (already https, a local dev host, or not an http URL at all).
  *
- * Built by swapping the scheme on the RAW string — never by round-tripping
- * through `URL` — so path and query survive byte-for-byte. Re-encoding is what
- * 307-looped the placeholder links in 86eyheqzv (`%7B%7B1%7D%7D`). A
- * non-default port is dropped: a public host serves https on 443.
+ * Built by swapping the scheme on the request string; path and query are not
+ * touched. `Response.redirect` then parses and serialises the result, which
+ * keeps percent-encoded bytes (`%7B%7B1%7D%7D`) exactly as they arrived — the
+ * WHATWG serialiser never decodes them. That matters because the 86eyheqzv
+ * loop was the router DECODING those braces in `Location`, which this hop never
+ * does (pinned by the `Location` test). A non-default port is dropped: a public
+ * host serves https on 443.
  */
 export function httpsRedirectTarget(requestUrl: string): string | null {
 	const match = HTTP_AUTHORITY.exec(requestUrl);
