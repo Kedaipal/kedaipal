@@ -1898,11 +1898,15 @@ export const listPending = query({
 					sub?.billingCycle ??
 					"monthly") as BillingCycle,
 				endsContract: sub ? isMoveOffContractBill(inv, sub) : false,
-				carriesScheduledChange:
-					inv.origin === "auto_renewal" &&
-					(inv.kind ?? "plan") === "plan" &&
-					inv.plan !== undefined &&
-					inv.plan !== sub?.plan,
+				// Guarded like `endsContract` above: with no sub row, `inv.plan !==
+				// sub?.plan` was trivially true and the void dialog promised to
+				// keep a scheduled change that cannot exist.
+				carriesScheduledChange: sub
+					? inv.origin === "auto_renewal" &&
+						(inv.kind ?? "plan") === "plan" &&
+						inv.plan !== undefined &&
+						inv.plan !== sub.plan
+					: false,
 			});
 		}
 		return rows;

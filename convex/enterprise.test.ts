@@ -9,6 +9,7 @@ import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ensureCreditAccount } from "./credits";
 import { isUnlimited, PLAN_CAPS, planChangeCarryoverDays, UNLIMITED } from "./lib/plans";
+import { ENTERPRISE_INTEREST_RESTAMP_MS } from "./lib/enterprise";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -1253,5 +1254,131 @@ describe("getContractContext — the contract form's subject (z8r3fdpm2p)", () =
 			billingCycle: "monthly",
 		});
 		expect(ctx?.pendingInvoice?.invoiceNumber).toBeTruthy();
+	});
+});
+
+describe("the owner's money stays off a staff member's payload (PR #326 review FYI)", () => {
+	const MEMBER = "user_ent_member";
+
+	/** A contract store with a saved card, and one active member holding the
+	 * given grants. */
+	async function contractStoreWithMember(
+		t: T,
+		permissions: Record<string, "read" | "write">,
+	) {
+		const s = await activeStore(t);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId: s.retailerId,
+			...HSL,
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(s.subId, {
+				autoRenew: {
+					provider: "hitpay",
+					method: "card",
+					methodLabel: "Visa ·· 4242",
+					attachedAt: Date.now(),
+				},
+			});
+			await ctx.db.insert("retailerMembers", {
+				retailerId: s.retailerId,
+				userId: MEMBER,
+				email: "staff@example.com",
+				status: "active",
+				permissions,
+				invitedBy: OWNER,
+				invitedAt: Date.now(),
+				acceptedAt: Date.now(),
+			});
+		});
+		return s;
+	}
+
+	const payload = (t: T, who: string) =>
+		t.withIdentity({ subject: who }).query(api.retailers.getMyRetailer, {});
+
+	it("a member WITHOUT billing read never receives the contract terms or the card", async () => {
+		const t = setup();
+		await contractStoreWithMember(t, { orders: "write" });
+		const sub = (await payload(t, MEMBER))?.subscription;
+		// The owner's money is gone…
+		expect(sub?.enterprise).toBeUndefined();
+		expect(sub?.autoRenew?.methodLabel).toBeUndefined();
+		// …and everything the shared chrome reads is still there: the plan pill,
+		// the status, and the auto-renewal state the app-wide banner keys off.
+		expect(sub?.plan).toBe("enterprise");
+		expect(sub?.status).toBe("active");
+		expect(sub?.autoRenew).toMatchObject({
+			method: "card",
+			failing: false,
+			stopped: false,
+		});
+	});
+
+	it("a member GRANTED billing read sees exactly what the owner sees", async () => {
+		const t = setup();
+		await contractStoreWithMember(t, { billing: "read" });
+		const sub = (await payload(t, MEMBER))?.subscription;
+		expect(sub?.enterprise?.baseFeeMinor).toBe(HSL.baseFeeMinor);
+		expect(sub?.autoRenew?.methodLabel).toBe("Visa ·· 4242");
+	});
+
+	it("the owner always gets the full view", async () => {
+		const t = setup();
+		await contractStoreWithMember(t, { orders: "write" });
+		const sub = (await payload(t, OWNER))?.subscription;
+		expect(sub?.enterprise?.baseFeeMinor).toBe(HSL.baseFeeMinor);
+		expect(sub?.autoRenew?.methodLabel).toBe("Visa ·· 4242");
+	});
+});
+
+describe("markInterest writes once per lead, not once per tap (PR #326 review FYI)", () => {
+	it("a repeat tap inside the window writes nothing; a later ask restamps", async () => {
+		// The write is the cost: `retailers` is the row every open storefront tab
+		// subscribes to, so each patch re-runs the store's buyer tabs. A rate
+		// limiter would THROW on a best-effort stamp — this just skips.
+		const t = setup();
+		const s = await activeStore(t);
+		const asOwner = t.withIdentity({ subject: OWNER });
+		const stamp = () =>
+			t.run(async (ctx) => (await ctx.db.get(s.retailerId))?.enterpriseInterestAt);
+
+		vi.setSystemTime(OCT_10);
+		await asOwner.mutation(api.enterprise.markInterest, {});
+		expect(await stamp()).toBe(OCT_10);
+
+		vi.setSystemTime(OCT_10 + ENTERPRISE_INTEREST_RESTAMP_MS - 1);
+		await asOwner.mutation(api.enterprise.markInterest, {});
+		expect(await stamp()).toBe(OCT_10); // unchanged — no write
+
+		vi.setSystemTime(OCT_10 + ENTERPRISE_INTEREST_RESTAMP_MS);
+		await asOwner.mutation(api.enterprise.markInterest, {});
+		expect(await stamp()).toBe(OCT_10 + ENTERPRISE_INTEREST_RESTAMP_MS);
+	});
+});
+
+describe("listPending on a bill whose subscription row is gone (PR #326 review FYI)", () => {
+	it("never claims a scheduled change it can't have", async () => {
+		// Guarded like `endsContract` beside it: with no sub, `inv.plan !==
+		// sub?.plan` was trivially true, so the void dialog promised to keep a
+		// scheduled change that cannot exist.
+		const t = setup();
+		const s = await activeStore(t);
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId: s.retailerId,
+			plan: "starter",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		await t.run(async (ctx) => {
+			// The exact shape the old expression tripped on: a machine renewal
+			// at a tier, with its subscription row missing.
+			await ctx.db.patch(invoiceId, { origin: "auto_renewal" });
+			await ctx.db.delete(s.subId);
+		});
+		const rows = await asAdmin(t).query(api.invoices.listPending, {});
+		const row = rows.find((r) => r.retailerId === s.retailerId);
+		expect(row).toBeDefined();
+		expect(row?.carriesScheduledChange).toBe(false);
 	});
 });

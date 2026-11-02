@@ -59,6 +59,18 @@ removal and grant edits bite on the member's next call.
 - **Honesty rule for copy:** `insights: none` hides *totals and trends*, not
   money entirely — a member working orders sees order amounts, because
   collecting payment is the job. Never promise more than that.
+- **`billing` read gates the owner's money on the PAYLOAD, not just the tab**
+  (PR #326 review follow-up, 2 Nov 2026). The store payload
+  (`retailers.getMyRetailer`) reaches every member, so `billingDetailFor`
+  strips two fields for a member without `billing` read: the Enterprise
+  contract's terms (`subscription.enterprise` — fee, overage rate, block) and
+  the saved card's label (`subscription.autoRenew.methodLabel`, "Visa ·· 4242").
+  Everything the shared chrome reads stays — plan, status, caps, features and
+  the auto-renewal STATE booleans the app-wide banner keys off — so no visible
+  surface changes: both fields are read only inside the Billing tab, which
+  `AreaGate`s on the same grant. Owner, admin and a billing-read member get
+  the full view. Hiding a field in the UI is not hiding it: DevTools shows the
+  payload, so a money field a member can't see must not be IN their payload.
 
 ## The gate (convex/lib/auth.ts)
 

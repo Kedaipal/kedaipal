@@ -585,7 +585,11 @@ Unclaimed · Wants Enterprise): an open lead is money on the table and must
 not live at the back of a chip row. It is a predicate, not a bucket — a
 trialing store that asked still counts as trialing. The lead clears when a
 contract lands (`setContract`) or when an admin dismisses it on the seller
-sheet (audited, `enterprise.dismissInterest`); asking again restamps.
+sheet (audited, `enterprise.dismissInterest`); asking again restamps — but
+not within an hour (`ENTERPRISE_INTEREST_RESTAMP_MS`): a repeat tap writes
+nothing, because the stamp lives on `retailers`, the row every open storefront
+tab subscribes to, and the admin reads it by the day anyway. Deliberately not a
+rate limiter — a best-effort stamp beside a chat must never throw.
 Anonymous `/pricing` and landing clicks have no account to stamp — the
 WhatsApp thread is the capture there, and GA still counts the taps
 (`enterprise_talk_clicked`).
@@ -721,7 +725,11 @@ contract store is refused the other way round, so a store is never both), a
 store **on hold**, a store with a pending invoice at **another
 tier**, and a **term change** while a contract bill at the other term is open
 (settle takes the cycle from the bill, so paying it would silently put the old
-term back). One author, `enterpriseTermChangeBlocker`, for the last two. The
+term back). One author, `enterpriseTermChangeBlocker`, for the last two — and
+it names an **Off-Season Hold** bill as one: a held store whose hold bill went
+overdue sits `past_due` (not `on_hold`, so the up-front hold refusal passes
+it), and the hold bill carries the sub's plan, which used to read "it bills
+Pro". The
 form says every one of these before the tap — the admin row carries the open
 bill's tier and term, the founding intent, and **`billingCurrency`**, the exact
 currency (`storeBillingCurrency`: the store's country's) the server

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { enterpriseContractCaps } from "./enterprise";
+import {
+	enterpriseTermChangeBlocker, enterpriseContractCaps } from "./enterprise";
 import { isUnlimited, PLAN_CAPS } from "./plans";
 
 describe("enterpriseContractCaps — the tier's defaults, with this deal's overrides", () => {
@@ -34,5 +35,40 @@ describe("enterpriseContractCaps — the tier's defaults, with this deal's overr
 		expect(enterpriseContractCaps({ teammates: 3 }).orderCap).toBe(
 			PLAN_CAPS.enterprise.orderCap,
 		);
+	});
+});
+
+describe("enterpriseTermChangeBlocker names the bill it's blocking on (PR #326 review FYI)", () => {
+	it("calls an Off-Season Hold bill a hold bill, not the plan it carries", () => {
+		// Reachable: a held store whose hold bill went overdue is `past_due`, not
+		// `on_hold`, so `setContract`'s up-front hold refusal passes it to here —
+		// and the hold bill carries the sub's plan, which read as "it bills Pro".
+		const msg = enterpriseTermChangeBlocker({
+			pending: {
+				invoiceNumber: "INV-202611-HOLD",
+				plan: "pro",
+				billingCycle: "monthly",
+				kind: "hold",
+			},
+			billingCycle: "monthly",
+		});
+		expect(msg).toBe(
+			"Settle or void INV-202611-HOLD first — it's an Off-Season Hold bill, not the contract.",
+		);
+		expect(msg).not.toMatch(/bills Pro/);
+	});
+
+	it("a plan bill at another tier still names the tier", () => {
+		expect(
+			enterpriseTermChangeBlocker({
+				pending: {
+					invoiceNumber: "INV-1",
+					plan: "pro",
+					billingCycle: "monthly",
+					kind: "plan",
+				},
+				billingCycle: "monthly",
+			}),
+		).toMatch(/it bills Pro, not the contract/);
 	});
 });
