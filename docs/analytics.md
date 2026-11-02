@@ -412,8 +412,12 @@ browser's `distinct_id` is carried onto the order at create:
 
 **Privacy shape.** The id is an opaque UUID minted by posthog-js — not PII. The
 join lives in *our* database; PostHog only ever receives the id beside scalar,
-PII-free order properties (total, currency, item count, delivery method,
-attribution source). No name, phone, address, or note is ever sent. Server
+PII-free order properties (total — in **major units**, RM 19.90 not 1990 sen,
+the same convention as GA4's `subscribe_paid` value — plus currency, line and
+item count, delivery method, attribution source). No name, phone, address, or
+note is ever sent. Server events also set `$geoip_disable: true`: their IP is
+the Convex datacentre's, so GeoIP would otherwise tag every order "United
+States". Server
 events also set `$process_person_profile: false` by default, so a buyer never
 mints a durable PostHog *person* record — mirroring `identified_only` on the
 client. `withPersonProfile: true` is opt-in and reserved for genuinely
@@ -424,17 +428,40 @@ unconfigured or blocked, so **there is nothing to backfill**.
 
 ### Config decisions
 
-Every disabled default in [`posthogInitOptions`](../src/lib/posthog.ts) is a
-cost or privacy decision, and each is pinned by a test:
+Every feature PostHog offers that we don't use is **refused in code**, in
+[`posthogInitOptions`](../src/lib/posthog.ts), and each refusal is pinned by a
+test. It is not left to the dashboard: PostHog's *remote config* can switch
+features on for a project with no deploy, and a client that never says "no"
+inherits whatever it is told. That is not hypothetical — testing on 2 Nov 2026,
+a brand-new project arrived with **heatmaps, web vitals, dead clicks and surveys
+switched on**, and `$heatmap` / `$web_vitals` events were already flowing.
 
 | Option | Value | Why |
 | --- | --- | --- |
-| `autocapture` | `false` | It records clicked-element text and attributes — buyer names, addresses, `wa.me` hrefs with phone numbers. **`MASK_PII` is a Clarity attribute PostHog does not honour**, so autocapture would silently bypass all masked surfaces (Privacy §2). It is also the fastest way to exhaust 1M events/mo. |
+| `autocapture`, `capture_dead_clicks`, `capture_heatmaps`, `rageclick` | `false` | All four record what a buyer clicked, element text included — buyer names, the checkout phone-echo line, `wa.me` hrefs. **`MASK_PII` is a Clarity attribute PostHog does not honour**, so any of them would bypass every masked surface (Privacy §2). |
 | `capture_pageview` | `false` | `usePostHog` fires per resolved route instead, so SPA navs count once rather than twice. |
-| `capture_pageleave` | `false` | Roughly doubles event volume to measure bounce/duration, which Clarity already shows. |
+| `capture_pageleave`, `capture_performance` | `false` | Pure event volume against the 1M/mo free tier, measuring what Clarity already shows. |
 | `disable_session_recording` | `true` | Replay is Clarity's job — free and uncapped there. |
+| `capture_exceptions` | `false` | Not our error tool, and exception messages can carry PII. |
+| `disable_surveys`, `disable_product_tours`, `disable_web_experiments` | `true` | Each renders or rewrites UI on a buyer's storefront. Nothing should appear there that the seller didn't put there. |
 | `person_profiles` | `identified_only` | Anonymous shoppers never mint a person record. |
-| `sanitize_properties` | `stripTrackingReferrer` | Blanks any `/track/*` referrer (Privacy §1). |
+| `before_send` | `posthogBeforeSend` | The one gate every event passes — below. |
+
+**`posthogBeforeSend` — the structural guard.** Two jobs, both done per event
+so no feature, reset or future SDK release can route around them:
+
+1. **Drops any event recorded on a capability-token page** (`/track`,
+   `/claim`). `usePostHog` refuses to *boot* there, but checkout reaches
+   `/track/<token>` as an **in-app navigation** — the SDK booted on the
+   storefront is still alive on the token page. The gate judges each event by
+   its own `$current_url` (heatmap and web-vitals batches can flush after the
+   route changed), falling back to the live location.
+2. **Stamps `environment`** (see *The one-project constraint* below). It was
+   first a super property registered at boot — and `posthog.reset()` on
+   sign-out wiped it, so every event after a seller signed out went out
+   untagged. Found in the same test.
+
+It also blanks a referrer pointing at a token page (`stripTrackingReferrer`).
 
 ### Why no SDK on the Convex side
 
@@ -514,7 +541,7 @@ both sides so no call site can forget it:
 
 | Side | Source | Where |
 | --- | --- | --- |
-| Browser | `window.location.hostname` | super property registered at init, before the first `$pageview` |
+| Browser | `window.location.hostname` | stamped on every event by `posthogBeforeSend` — survives `posthog.reset()` on sign-out |
 | Convex | `SITE_URL` | stamped inside the capture action |
 
 `kedaipal.com` and its subdomains are `production`; **everything else, including
@@ -530,11 +557,10 @@ the property becomes redundant rather than wrong.
 
 #### Project settings to check
 
-Client config already sets the important ones ([`posthogInitOptions`](../src/lib/posthog.ts)),
-but several have a **project-side** switch too, and the project side wins for
-anything PostHog decides server-side. Set both — belt and braces, and the
-project side is what protects you if some future page boots PostHog without our
-config.
+Every capture feature is already refused in code ([`posthogInitOptions`](../src/lib/posthog.ts)),
+so the dashboard toggles below are tidiness, not protection — with **one
+exception: IP data capture has no client-side switch.** That one is a required
+pre-production step.
 
 | Setting | Set to | Why |
 | --- | --- | --- |
@@ -544,7 +570,7 @@ config.
 | Web vitals / performance capture | **Off** | Pure event volume against the 1M cap; not a question we're asking. |
 | Exception autocapture / error tracking | **Off** | Not our error tool, and exceptions can carry PII in messages. |
 | Surveys | **Off** | Would render UI to buyers. Nothing should appear on a storefront that the seller didn't put there. |
-| IP data capture | **Consider off** — *Settings → Project → Privacy* | The one path PostHog documents explicitly. An IP is personal data under PDPA; we don't use geo, so collecting it adds disclosure burden for nothing. Turning it off also disables GeoIP. |
+| IP data capture | **Off — required before production** — *Settings → Project → Privacy* | The one setting the client cannot control. Left on, every buyer event stores the IP address beside GeoIP down to postal code and coordinates (seen in testing). An IP is personal data under PDPA. The privacy policy discloses only an *approximate location (city and country)*, which is what remains once IP capture is off. |
 | Bot filtering | **On** (default) | Keeps crawlers and the WhatsApp link unfurler out of buyer counts. |
 | Toolbar authorized URLs | `https://kedaipal.com` | Limits where the PostHog toolbar can be injected. |
 
@@ -638,12 +664,11 @@ anyone with those dashboards' access — for Clarity, alongside a session replay
 of the buyer's checkout.
 
 PostHog is the strictest case of the three: with autocapture or replay on it
-would capture the token from the URL **and** from the DOM. It never loads on
-these routes, and [`stripTrackingReferrer`](../src/lib/posthog.ts) additionally
-blanks any `$referrer` pointing at one — defence in depth for the one channel
-that could still carry a token onto a page PostHog *is* allowed to see (every
-anchor on the tracking page currently sets `rel="noreferrer"`, so this is not a
-live hole today, but it is one a single future `<a href>` would reopen).
+would capture the token from the URL **and** from the DOM. It never *boots* on
+these routes, and — because checkout reaches `/track` in-app, where an SDK
+booted on the storefront is still running — [`posthogBeforeSend`](../src/lib/posthog.ts)
+**drops every event recorded on one**, and blanks any `$referrer` pointing at
+one.
 
 **Any new buyer route with a token in its path belongs in that predicate.**
 `/claim` shipped guarded against Clerk (`BUYER_ROUTE_IDS`) but not against
@@ -660,12 +685,14 @@ into the storefront boots GA on that first non-token pathname.
 **Ops note (GA property setting, not repo):** keep GA4 Enhanced Measurement's
 "Page changes based on browser history events" OFF — if enabled, gtag fires
 its own page_view with the full URL on SPA navigations, bypassing the hook.
-No client-side link navigates into `/track` or `/claim` today, so this is
-defence in depth, not a live hole.
-
-Nothing links to either route client-side (buyers arrive from a WhatsApp link,
-i.e. a fresh document load), so the exclusion is complete rather than
-best-effort.
+**Correction (2 Nov 2026): the exclusion is NOT complete.** This section used
+to say nothing links to `/track` client-side, so refusing to boot was enough.
+That stopped being true when checkout began confirming at create (86eyf1rck):
+placing an order now moves the buyer to `/track/<token>` **in-app**, and any
+tool booted on the storefront keeps running on the token page. PostHog drops
+those events (above). **Clarity and GA4 do not yet** — Clarity tracks SPA route
+changes itself, and GA4's Enhanced measurement (outbound clicks, scrolls)
+attaches the page URL. Tracked in [`z8r3fdzq02`](https://app.clickup.com/t/z8r3fdzq02).
 
 ### 2. PII regions are masked in markup
 
@@ -722,10 +749,19 @@ Clarity and PostHog are both listed as data processors, session recording is
 described under "Information We Collect", and the cookie section names the
 analytics cookies (Clarity's `_clck` and PostHog's identifier each persist ~1
 year) instead of claiming everything is strictly necessary — all in the
-[privacy policy](../src/routes/privacy.tsx). The PostHog entry is explicit that
-it receives an anonymous browser id plus order facts (total, item count) and
-never a shopper's name, phone, or address — that is the contract
-`captureServerEvent`'s scalar-only validator enforces.
+[privacy policy](../src/routes/privacy.tsx). The PostHog entry states what it
+receives — for shoppers, an anonymous browser id, pages visited, an approximate
+location (city and country) and order facts, never a name, phone or delivery
+address, and nothing from a tracking page; for signed-in sellers, their account
+and store ids. Each clause is backed by code: the scalar-only capture
+validator, `posthogBeforeSend`'s token-page drop, and `usePostHogRetailer`.
+The "approximate location" clause additionally depends on **IP data capture
+being off** in the project (Dashboard setup above).
+
+The re-acceptance banner names **only the documents whose version changed**
+(`staleLegalDocuments` in [`src/lib/legal.ts`](../src/lib/legal.ts)). It used
+to list all three on any bump, which would have told every seller their Terms
+and AUP changed when this release only touched the Privacy Policy.
 
 **Changing that page means bumping `PRIVACY_VERSION` in both
 [`src/lib/legal.ts`](../src/lib/legal.ts) and

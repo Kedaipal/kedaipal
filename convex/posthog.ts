@@ -106,6 +106,10 @@ export const capture = internalAction({
 						// SITE_URL is the existing signal (dev has localhost:3000); unset
 						// reads as development, never production.
 						environment: posthogEnvironmentFromUrl(process.env.SITE_URL),
+						// A server event's IP is the Convex datacentre's, so PostHog's
+						// GeoIP would tag every order "United States" and poison any
+						// geography breakdown. Location belongs to the browser half.
+						$geoip_disable: true,
 						$process_person_profile: args.withPersonProfile === true,
 					},
 				}),

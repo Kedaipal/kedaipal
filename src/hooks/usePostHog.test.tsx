@@ -207,17 +207,21 @@ describe("usePostHog", () => {
 	// PostHog free = ONE project, so dev and prod events share a silo. The super
 	// property is the only thing that separates them — and it must be registered
 	// before the first $pageview, or that event lands untagged.
-	it("tags every event with the environment, before the first pageview", async () => {
+	// The tag is stamped by before_send on EVERY event, not registered once:
+	// posthog.reset() on sign-out wiped a registered super property and every
+	// later event went out untagged (found in /test-code, 2 Nov 2026).
+	it("boots with the before_send gate that stamps the environment", async () => {
 		envState.key = "phc_abc123";
 		const Harness = await loadHarness();
 
 		render(<Harness />);
 		await settle();
 
-		expect(registerMock).toHaveBeenCalledWith({ environment: "development" });
-		expect(registerMock.mock.invocationCallOrder[0]).toBeLessThan(
-			captureMock.mock.invocationCallOrder[0],
-		);
+		const { before_send } = initMock.mock.calls[0][1];
+		expect(before_send({ event: "$pageview", properties: {} })).toMatchObject({
+			properties: { environment: "development" },
+		});
+		expect(registerMock).not.toHaveBeenCalled();
 	});
 
 	it("fires a pageview per resolved route", async () => {

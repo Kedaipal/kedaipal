@@ -39,15 +39,29 @@ export type AcceptedLegalVersions = {
 	aupVersion?: string;
 };
 
+/** A legal document the seller re-accepts, in the order the banner names them. */
+export type LegalDocument = "terms" | "privacy" | "aup";
+
 /**
- * Returns true when the retailer's accepted versions don't all match the
- * current document versions — i.e. any document was bumped (or never accepted).
- * Used to gate the re-acceptance banner in the dashboard.
+ * The documents whose current version the retailer has NOT accepted (bumped,
+ * or never accepted), in display order. The re-acceptance banner names exactly
+ * these: telling every seller that their Terms and AUP changed when only the
+ * Privacy Policy did is a false statement about a legal document.
+ */
+export function staleLegalDocuments(
+	accepted: AcceptedLegalVersions,
+): LegalDocument[] {
+	const stale: LegalDocument[] = [];
+	if (accepted.termsVersion !== TERMS_VERSION) stale.push("terms");
+	if (accepted.privacyVersion !== PRIVACY_VERSION) stale.push("privacy");
+	if (accepted.aupVersion !== AUP_VERSION) stale.push("aup");
+	return stale;
+}
+
+/**
+ * Returns true when any document was bumped (or never accepted). Used to gate
+ * the re-acceptance banner in the dashboard.
  */
 export function consentIsStale(accepted: AcceptedLegalVersions): boolean {
-	return (
-		accepted.termsVersion !== TERMS_VERSION ||
-		accepted.privacyVersion !== PRIVACY_VERSION ||
-		accepted.aupVersion !== AUP_VERSION
-	);
+	return staleLegalDocuments(accepted).length > 0;
 }

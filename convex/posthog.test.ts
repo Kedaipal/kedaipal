@@ -92,6 +92,22 @@ describe("posthog.capture", () => {
 		expect(bodyOf(fetchMock).properties.environment).toBe("production");
 	});
 
+	// The Convex datacentre's IP would geolocate every order to the US.
+	test("disables GeoIP on server events", async () => {
+		const t = convexTest(schema, modules);
+		const fetchMock = okFetch();
+		vi.stubGlobal("fetch", fetchMock);
+
+		await t.action(internal.posthog.capture, {
+			event: "order_created",
+			distinctId: DISTINCT_ID,
+			properties: {},
+			timestamp: AT,
+		});
+
+		expect(bodyOf(fetchMock).properties.$geoip_disable).toBe(true);
+	});
+
 	test("an unset SITE_URL is development, never production", async () => {
 		vi.stubEnv("SITE_URL", "");
 		const t = convexTest(schema, modules);
@@ -342,7 +358,9 @@ describe("orders.create → PostHog", () => {
 		expect(args.properties).toMatchObject({
 			retailerId,
 			currency: "MYR",
-			total: 12000,
+			// RM120.00 stored as 12000 sen — sent in MAJOR units, or every PostHog
+			// revenue insight reads it 100x too high.
+			total: 120,
 			lineCount: 1,
 			itemCount: 1,
 			attributionSource: "tiktok",

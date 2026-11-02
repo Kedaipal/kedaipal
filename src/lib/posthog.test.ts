@@ -1,7 +1,9 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	__resetPostHogClientForTests,
 	POSTHOG_DEFAULT_HOST,
+	posthogBeforeSend,
 	posthogInitOptions,
 	readAnalyticsDistinctId,
 	setPostHogClient,
@@ -45,6 +47,29 @@ describe("posthogInitOptions", () => {
 	it("keeps anonymous shoppers out of the person table", () => {
 		expect(posthogInitOptions(POSTHOG_DEFAULT_HOST).person_profiles).toBe(
 			"identified_only",
+		);
+	});
+
+	// A fresh PostHog project shipped heatmaps, web vitals, dead clicks and
+	// surveys switched ON from the dashboard (/test-code, 2 Nov 2026). A client
+	// that never says "no" inherits whatever remote config tells it, so every
+	// one is refused here.
+	it.each([
+		["capture_dead_clicks", false],
+		["capture_heatmaps", false],
+		["rageclick", false],
+		["capture_performance", false],
+		["capture_exceptions", false],
+		["disable_surveys", true],
+		["disable_product_tours", true],
+		["disable_web_experiments", true],
+	] as const)("pins %s to %s regardless of the project's remote config", (key, value) => {
+		expect(posthogInitOptions(POSTHOG_DEFAULT_HOST)[key]).toBe(value);
+	});
+
+	it("routes every event through the before_send gate", () => {
+		expect(posthogInitOptions(POSTHOG_DEFAULT_HOST).before_send).toBe(
+			posthogBeforeSend,
 		);
 	});
 
@@ -173,5 +198,70 @@ describe("env host fallback", () => {
 		expect(clientEnv.VITE_POSTHOG_HOST).toBeUndefined();
 		expect(clientEnv.VITE_POSTHOG_KEY).toBeUndefined();
 		vi.unstubAllEnvs();
+	});
+});
+
+describe("posthogBeforeSend", () => {
+	const ev = (properties: Record<string, unknown>) =>
+		({ event: "$web_vitals", properties }) as never;
+
+	afterEach(() => {
+		window.history.replaceState(null, "", "/");
+	});
+
+	// Checkout reaches /track/<token> as an IN-APP navigation, so an SDK booted
+	// on the storefront is still alive on the token page. Whatever it records
+	// there — heatmap, web vitals, anything a future setting turns on — would
+	// carry the buyer's capability token in its URL.
+	it.each([
+		"http://localhost:3130/track/8f3c09b1a7e24d5c9b0e",
+		"https://kedaipal.com/claim/8f3c09b1a7e24d5c9b0e",
+	])("drops an event whose URL is a capability-token page: %s", (url) => {
+		expect(posthogBeforeSend(ev({ $current_url: url }))).toBeNull();
+	});
+
+	it("drops an event recorded while the browser sits on a token page", () => {
+		window.history.replaceState(null, "", "/track/8f3c09b1a7e24d5c9b0e");
+		expect(posthogBeforeSend(ev({}))).toBeNull();
+	});
+
+	// Heatmap / web-vitals batches can flush AFTER the route changed: the
+	// event's own URL decides, not the page the browser happens to be on now.
+	it("judges by the event's own URL, not the current page", () => {
+		window.history.replaceState(null, "", "/track/8f3c09b1a7e24d5c9b0e");
+		const kept = posthogBeforeSend(
+			ev({ $current_url: "http://localhost:3130/herb/p/kuih" }),
+		);
+		expect(kept).not.toBeNull();
+	});
+
+	it("keeps an ordinary storefront event", () => {
+		const kept = posthogBeforeSend(
+			ev({ $current_url: "http://localhost:3130/tracking-guide" }),
+		);
+		expect(kept).not.toBeNull();
+	});
+
+	// The fix for the sign-out bug: stamped per event, so posthog.reset() —
+	// which wipes registered super properties — can no longer untag anything.
+	it("stamps the environment on every event it keeps", () => {
+		const kept = posthogBeforeSend(
+			ev({ $current_url: "http://localhost:3130/" }),
+		);
+		expect(kept?.properties.environment).toBe("development");
+	});
+
+	it("blanks a referrer that points at a token page", () => {
+		const kept = posthogBeforeSend(
+			ev({
+				$current_url: "http://localhost:3130/herb",
+				$referrer: "https://kedaipal.com/track/8f3c09b1a7e24d5c9b0e",
+			}),
+		);
+		expect(kept?.properties.$referrer).toBe("$direct");
+	});
+
+	it("passes a null event straight through", () => {
+		expect(posthogBeforeSend(null)).toBeNull();
 	});
 });

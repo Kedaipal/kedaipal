@@ -86,3 +86,46 @@ describe("ConsentBanner — only the owner is ever asked", () => {
 		expect(container.innerHTML).toBe("");
 	});
 });
+
+describe("ConsentBanner — names only what changed", () => {
+	test("a Privacy-only bump names the Privacy Policy and nothing else", () => {
+		viewer.role = "owner";
+		render(
+			<ConsentBanner
+				versions={{
+					termsVersion: TERMS_VERSION,
+					privacyVersion: "1970-01-01",
+					aupVersion: AUP_VERSION,
+				}}
+			/>,
+		);
+		const text = document.body.textContent ?? "";
+		expect(text).toContain("We've updated our Privacy Policy. Please");
+		expect(text).not.toContain("Terms");
+		expect(text).not.toContain("Acceptable Use Policy");
+	});
+
+	test("two stale documents read as a pair", () => {
+		viewer.role = "owner";
+		render(
+			<ConsentBanner
+				versions={{
+					termsVersion: "1970-01-01",
+					privacyVersion: "1970-01-01",
+					aupVersion: AUP_VERSION,
+				}}
+			/>,
+		);
+		expect(document.body.textContent).toContain(
+			"We've updated our Terms and Privacy Policy.",
+		);
+	});
+
+	test("all three read as a list with a serial comma", () => {
+		viewer.role = "owner";
+		render(<ConsentBanner versions={STALE} />);
+		expect(document.body.textContent).toContain(
+			"We've updated our Terms, Privacy Policy, and Acceptable Use Policy.",
+		);
+	});
+});

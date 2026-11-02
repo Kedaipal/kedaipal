@@ -2215,7 +2215,11 @@ export const create = mutation({
 			properties: {
 				retailerId: args.retailerId,
 				currency: args.currency,
-				total,
+				// MAJOR units (19.90, not 1990). Order money is stored in sen/cents,
+				// but a PostHog sum or revenue insight reads the number as-is — sen
+				// would make every revenue chart 100x too high. Same convention as
+				// GA4's subscribe_paid `value` (invoices.ts).
+				total: total / 100,
 				// Both, because they answer different questions: lineCount is how
 				// many distinct products the basket held, itemCount is how many
 				// units shipped.

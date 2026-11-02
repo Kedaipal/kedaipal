@@ -185,9 +185,14 @@ function PrivacyPage() {
 					</li>
 					<li>
 						<strong>PostHog</strong> — product analytics: which storefront pages
-						lead to orders, measured per store. PostHog receives an anonymous
-						browser identifier and order facts such as the total and item count
-						— never a shopper's name, phone number, or address.
+						lead to orders, measured per store. For shoppers, PostHog receives
+						an anonymous browser identifier, the pages visited, an approximate
+						location (city and country) inferred from the connection, and order
+						facts such as the total and item count — never a shopper's name,
+						phone number, or delivery address, and nothing from an order's
+						tracking page. For signed-in retailers, it also receives your
+						account and store identifiers, so we can see which dashboard
+						features are used.
 					</li>
 				</ul>
 				<p>
