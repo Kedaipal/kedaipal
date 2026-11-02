@@ -104,6 +104,7 @@ import {
 import { liveQuoteAddressHint } from "../../lib/live-quote-copy";
 import { composeCustomerNote } from "../../lib/order-note";
 import { overseasCourierNote } from "../../lib/overseas-courier-note";
+import { readAnalyticsDistinctId } from "../../lib/posthog";
 import {
 	cartItemSubtotal,
 	type PromoState,
@@ -851,6 +852,10 @@ export function CheckoutPage({
 					// minimum spend is NOT sent — the ticket already shows it taking
 					// nothing off and says how much more it needs (`z8r3fdz0pw`).
 					voucherCode: voucherCodeForOrder(voucher, cart.total),
+					// The browser’s PostHog id (86eyrayux), so this order’s server-fired
+					// events join the anonymous pageviews that led here. Undefined when
+					// PostHog is unconfigured or blocked — never blocks the order.
+					analyticsDistinctId: readAnalyticsDistinctId(),
 				});
 				// Spent — forget the held code, or the next checkout in this tab
 				// re-applies a redeemed voucher and is refused for no visible

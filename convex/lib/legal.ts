@@ -35,7 +35,10 @@ export const TERMS_VERSION = "2026-09-30";
 // 2026-10-20 (Referral, z8r3fdetf5): disclosed the 30-day first-party
 // `kp_referral` cookie that remembers which seller's referral link a visitor
 // opened, so the referral bonus reaches them at signup.
-export const PRIVACY_VERSION = "2026-10-20";
+// 2026-11-02 (PostHog, z8r3fddaq4): named PostHog as a data processor and in
+// the analytics-cookie section — it receives an anonymous browser id and order
+// facts (total, item count), never a shopper's name, phone or address.
+export const PRIVACY_VERSION = "2026-11-02";
 // 2026-10-01 (Credits T6, z8r3fdkp8h): the 50-numbers-in-5-minutes rule
 // exempted "the Scale tier", retired before it went public (it exempted
 // nobody). A higher limit is now "agreed with you in writing" — how an
