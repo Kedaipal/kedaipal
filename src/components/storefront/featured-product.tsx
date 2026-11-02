@@ -8,6 +8,7 @@ import type { UseCart } from "../../hooks/useCart";
 import { minQuantityUnreachable } from "../../lib/variant";
 import { ProductCard, type StorefrontProduct } from "./product-card";
 import { quickAddProductToCart } from "./product-purchase";
+import { SectionHeading } from "./section-heading";
 
 /**
  * "Popular this week" — the store home's merchandising shelf (86eybrhrt PR3):
@@ -104,9 +105,10 @@ function FeaturedProductInner({
 
 	return (
 		<section aria-label="Popular this week" className="flex flex-col">
-			<p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-				Popular this week
-			</p>
+			<SectionHeading
+				title="Popular this week"
+				context="Most ordered, last 7 days"
+			/>
 			{/* Full-bleed scroller: the negative margins let cards run to the
 			    screen edge (the parent section pads px-5 / lg:px-8) so a
 			    part-visible card at the right edge advertises that the row
@@ -119,8 +121,14 @@ function FeaturedProductInner({
 			    padding — the row sat 20px out of line with the search bar and
 			    grid. scroll-padding moves the snapport in to match. (The
 			    trailing edge was always fine; only the snapped rest position
-			    was wrong.) */}
-			<div className="-mx-5 mt-2 flex snap-x scroll-pl-5 gap-3 overflow-x-auto px-5 pb-1 [scrollbar-width:none] lg:-mx-8 lg:scroll-pl-8 lg:px-8 [&::-webkit-scrollbar]:hidden">
+			    was wrong.)
+
+			    `pt-3 pb-3` is load-bearing too: overflow-x: auto clips the Y axis
+			    as well, so a live flash-sale card's pulse (12px, styles.css
+			    kp-flash-glow) was cut off top and bottom and only breathed left
+			    and right. The negative margins give the room back to the layout:
+			    the cards still sit 8px under the heading and 4px above the grid. */}
+			<div className="-mx-5 -mt-1 -mb-2 flex snap-x scroll-pl-5 gap-3 overflow-x-auto px-5 pt-3 pb-3 scrollbar-none lg:-mx-8 lg:scroll-pl-8 lg:px-8">
 				{featured.map((product, index) => (
 					<div
 						key={product._id}
@@ -130,8 +138,8 @@ function FeaturedProductInner({
 							product={product}
 							storeSlug={storeSlug}
 							onQuickAdd={(p) => quickAddProductToCart(cart, p)}
+							onQuickRemove={(p) => cart.quickRemoveProduct(p._id)}
 							cartQuantity={cart.quantityForProduct(product._id)}
-							cartSubtotal={cart.subtotalForProduct(product._id)}
 							// The shelf sits above the grid, so its leading cards are
 							// the storefront's real above-the-fold images.
 							priority={index < 3}

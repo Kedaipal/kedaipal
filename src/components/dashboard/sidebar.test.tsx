@@ -1,0 +1,491 @@
+// @vitest-environment jsdom
+import { act, cleanup, render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Sidebar } from "./sidebar";
+
+// The sidebar's collapse used to be an instant class swap; it now animates.
+// These tests pin the three behaviours that make the motion safe rather than
+// the motion itself: (1) every transition is gated behind
+// prefers-reduced-motion, (2) no transition exists on the first paint, so
+// restoring a saved collapsed state on page load never plays as a slide, and
+// (3) a collapsed rail keeps its old semantics — labels hidden from the
+// accessibility tree, the tier pill inert.
+
+let collapsed = false;
+const setCollapsed = vi.fn();
+vi.mock("../../hooks/useSidebarCollapsed", () => ({
+	useSidebarCollapsed: () => [collapsed, setCollapsed],
+}));
+
+vi.mock("@clerk/tanstack-react-start", () => ({
+	useUser: () => ({
+		user: {
+			fullName: "Zaki",
+			primaryEmailAddress: { emailAddress: "zaki@example.com" },
+		},
+	}),
+	UserButton: () => <div data-slot="user-button" />,
+}));
+
+vi.mock("@tanstack/react-router", () => ({
+	Link: ({
+		children,
+		...props
+	}: {
+		children: ReactNode | ((state: { isActive: boolean }) => ReactNode);
+		[key: string]: unknown;
+	}) => {
+		const {
+			to,
+			search: _search,
+			activeOptions: _a,
+			activeProps: _b,
+			inactiveProps: _c,
+			...rest
+		} = props as Record<string, unknown>;
+		return (
+			<a href={String(to)} {...(rest as Record<string, never>)}>
+				{typeof children === "function"
+					? children({ isActive: false })
+					: children}
+			</a>
+		);
+	},
+}));
+
+vi.mock("../../hooks/useActAs", () => ({
+	useActAs: () => ({ setActAs: vi.fn() }),
+}));
+vi.mock("../../hooks/usePermission", () => ({
+	usePermission: () => ({ canRead: true, canWrite: true }),
+}));
+// The real pill is a Link and the real nav items are buttons — the stubs keep
+// the element TYPE, because what matters here is whether a hidden one can
+// still take focus.
+vi.mock("./tier-pill", () => ({
+	TierPill: () => <a href="/app/settings">Pro</a>,
+}));
+vi.mock("./whats-new", () => ({
+	WhatsNewNavItem: ({ variant }: { variant: string }) => (
+		<button type="button" data-variant={variant}>
+			What's new
+		</button>
+	),
+}));
+// The profile menu reads credits + Clerk; here only its TRIGGER matters (the
+// sidebar's job is the row), so the menu renders its trigger and the stub is
+// whatever the test sets. The ticket draws itself (credit-ticket.test.tsx);
+// here it only has to land in the right place.
+const profile = vi.hoisted(() => ({
+	stub: null as undefined | null | { ticket: { figure: string } | null },
+}));
+vi.mock("./profile-menu", () => ({
+	useCreditStub: () => profile.stub,
+	ProfileMenu: ({ trigger }: { trigger: ReactNode }) => trigger,
+	ProfileAvatar: () => <span data-slot="avatar" />,
+}));
+vi.mock("./credit-ticket", () => ({
+	CreditTicket: ({
+		stub,
+		variant,
+		plan,
+	}: {
+		stub: { ticket: unknown };
+		variant: string;
+		plan?: ReactNode;
+	}) =>
+		stub.ticket ? (
+			<div data-ticket={variant}>
+				{plan}
+				<a href="/billing">ticket</a>
+			</div>
+		) : null,
+	CreditTicketPlaceholder: ({ plan }: { plan: ReactNode }) => (
+		<div data-ticket="placeholder">{plan}</div>
+	),
+}));
+vi.mock("./app-version-row", () => ({
+	AppVersionRow: () => <div data-slot="app-version" />,
+}));
+vi.mock("../ui/app-image", () => ({
+	AppImage: (props: { alt: string }) => <img alt={props.alt} src="/x.svg" />,
+}));
+vi.mock("../app/pro-gate", () => ({
+	ProBadge: () => <span data-slot="pro-badge" />,
+}));
+
+/** Capture rAF callbacks so the test controls when motion arms. */
+let rafQueue: FrameRequestCallback[] = [];
+beforeEach(() => {
+	rafQueue = [];
+	vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+		rafQueue.push(cb);
+		return rafQueue.length;
+	});
+	vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+});
+
+afterEach(() => {
+	cleanup();
+	vi.restoreAllMocks();
+	collapsed = false;
+});
+
+function armMotion() {
+	act(() => {
+		for (const cb of rafQueue.splice(0)) cb(performance.now());
+	});
+}
+
+function asideOf(container: HTMLElement) {
+	return container.querySelector(
+		'[aria-label="Dashboard navigation"]',
+	) as HTMLElement;
+}
+
+describe("Sidebar collapse motion", () => {
+	it("has NO transition on first paint, so a restored collapsed state never plays as a slide on load", () => {
+		const { container } = render(
+			<Sidebar retailer={null} newOrdersCount={0} isAdmin />,
+		);
+		const aside = asideOf(container);
+		expect(aside.className).not.toContain("transition-[");
+
+		armMotion();
+		expect(aside.className).toContain("transition-[");
+	});
+
+	it("gates every armed transition behind prefers-reduced-motion (Tailwind motion-reduce, not a JS branch)", () => {
+		const { container } = render(
+			<Sidebar retailer={null} newOrdersCount={0} isAdmin />,
+		);
+		armMotion();
+		// nwsapi (jsdom) can't parse "[" inside an attribute selector, so
+		// walk the tree instead.
+		const animated = Array.from(container.querySelectorAll("*")).filter((el) =>
+			(el.getAttribute("class") ?? "").includes("transition-["),
+		);
+		// Aside + header text + admin label + 3 admin links with their label
+		// clusters + chevron + user row and name block all animate.
+		expect(animated.length).toBeGreaterThanOrEqual(5);
+		for (const el of animated) {
+			expect(el.getAttribute("class") ?? "").toContain(
+				"motion-reduce:transition-none",
+			);
+		}
+	});
+
+	it("collapsed keeps the old semantics: label clusters are aria-hidden and faded out", () => {
+		collapsed = true;
+		const { container } = render(
+			<Sidebar retailer={null} newOrdersCount={0} isAdmin />,
+		);
+		const hidden = Array.from(
+			container.querySelectorAll('[aria-hidden="true"]'),
+		).filter((el) => (el.getAttribute("class") ?? "").includes("opacity-0"));
+		// Header identity block + admin section label + one cluster per admin
+		// link (3) + the user name block.
+		expect(hidden.length).toBeGreaterThanOrEqual(5);
+		// Deleting the guard that swaps opacity back on expand must go red:
+		expect(
+			container.querySelectorAll('[aria-hidden="false"][class*="opacity-0"]')
+				.length,
+		).toBe(0);
+	});
+
+	it("expanded shows the same clusters: nothing stays aria-hidden or transparent", () => {
+		collapsed = false;
+		const { container } = render(
+			<Sidebar retailer={null} newOrdersCount={0} isAdmin />,
+		);
+		expect(
+			Array.from(container.querySelectorAll('[aria-hidden="true"]')).filter(
+				(el) => (el.getAttribute("class") ?? "").includes("opacity-0"),
+			).length,
+		).toBe(0);
+	});
+
+	it("expanded renders no aria-hidden at all — the same markup as before the motion", () => {
+		collapsed = false;
+		const { container } = render(
+			<Sidebar retailer={null} newOrdersCount={0} isAdmin />,
+		);
+		expect(container.querySelectorAll('[aria-hidden="false"]').length).toBe(0);
+	});
+});
+
+const STORE = { storeName: "Kuih Lab", slug: "kuih-lab" } as never;
+
+describe("hidden controls are out of the focus order, not just invisible (PR #362 review)", () => {
+	it("the collapsed tier pill's link is inert — no invisible Tab stop to billing", () => {
+		collapsed = true;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin={false} />,
+		);
+		const pill = container.querySelector('a[href="/app/settings"]');
+		expect(pill?.textContent).toBe("Pro");
+		expect(pill?.closest("[inert]")).not.toBeNull();
+	});
+
+	it("expanded, the pill is an ordinary link again", () => {
+		collapsed = false;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin={false} />,
+		);
+		const pill = Array.from(container.querySelectorAll("a")).find(
+			(a) => a.textContent === "Pro",
+		);
+		expect(pill?.closest("[inert]")).toBeNull();
+	});
+
+	it("the bottom row keeps exactly one live What's-new control per state", () => {
+		const live = (container: HTMLElement) =>
+			Array.from(container.querySelectorAll("button[data-variant]"))
+				.filter((b) => b.closest("[inert]") === null)
+				.map((b) => b.getAttribute("data-variant"));
+		collapsed = true;
+		const rail = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin={false} />,
+		);
+		expect(live(rail.container)).toEqual(["icon"]);
+		cleanup();
+		collapsed = false;
+		const open = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin={false} />,
+		);
+		expect(live(open.container)).toEqual(["meta"]);
+	});
+});
+
+// jsdom has no layout, so this pins the flex contract that makes a short
+// window work: on a laptop-height screen an admin's 14 links outgrow the rail,
+// and before this every overflow-hidden row flex-shrank instead — the tier
+// pill to a sliver, the links to 2px — while the footer fell off-screen.
+describe("a short window scrolls the link list; the chrome never squashes", () => {
+	it("header, tier pill and footer keep their height; only the nav gives", () => {
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		const rows = Array.from(asideOf(container).children) as HTMLElement[];
+		const nav = rows.find((el) => el.tagName === "NAV");
+		const chrome = rows.filter((el) => el !== nav);
+		expect(chrome).toHaveLength(3);
+		for (const row of chrome) expect(row.classList).toContain("shrink-0");
+
+		expect(nav?.classList).toContain("min-h-0");
+		expect(nav?.classList).toContain("overflow-y-auto");
+		// The links are overflow-hidden too — without this they squash, not scroll.
+		expect(nav?.classList).toContain("*:shrink-0");
+	});
+
+	it("the 68px rail hides its scrollbar so an always-shown one can't push icons off-centre; both states shade the scroll edge", () => {
+		collapsed = true;
+		const rail = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		const railNav = rail.container.querySelector("nav");
+		expect(railNav?.classList).toContain("scrollbar-none");
+		// With no scrollbar, the shadow is the only "there's more".
+		expect(railNav?.classList).toContain("scroll-shadow-y");
+		cleanup();
+		collapsed = false;
+		const open = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		const openNav = open.container.querySelector("nav");
+		expect(openNav?.className).toContain("[scrollbar-width:thin]");
+		expect(openNav?.classList).toContain("scroll-shadow-y");
+	});
+
+	it("the theme flip is icon only: beside the profile when expanded, on its own row when collapsed — never both live (z8r3fdwc19)", () => {
+		collapsed = false;
+		const open = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		const live = () =>
+			Array.from(
+				open.container.querySelectorAll<HTMLButtonElement>(
+					'button[aria-label^="Switch to"]',
+				),
+			).filter((b) => !b.closest("[inert]"));
+		expect(open.container.textContent).not.toMatch(/Dark mode|Light mode/);
+		expect(live()).toHaveLength(1);
+		// Expanded: it lives in the profile row, after the profile trigger.
+		const profileRow = open.container
+			.querySelector('[data-testid="profile-trigger"]')
+			?.closest("div.flex");
+		expect(profileRow?.contains(live()[0])).toBe(true);
+		cleanup();
+
+		collapsed = true;
+		const rail = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		const railLive = Array.from(
+			rail.container.querySelectorAll<HTMLButtonElement>(
+				'button[aria-label^="Switch to"]',
+			),
+		).filter((b) => !b.closest("[inert]"));
+		expect(railLive).toHaveLength(1);
+		const railProfile = rail.container
+			.querySelector('[data-testid="profile-trigger"]')
+			?.closest("div.flex");
+		// Collapsed: the live one is the row above the avatar, not the profile one.
+		expect(railProfile?.contains(railLive[0])).toBe(false);
+	});
+
+	it("expands to 216px, not 240 — the foot's meta line is what sets the floor (z8r3fdwc19)", () => {
+		collapsed = false;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		const aside = container.querySelector("aside");
+		expect(aside?.classList).toContain("w-54");
+		expect(aside?.classList).not.toContain("w-60");
+		cleanup();
+		collapsed = true;
+		const rail = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin />,
+		);
+		expect(rail.container.querySelector("aside")?.classList).toContain(
+			"w-[68px]",
+		);
+	});
+});
+
+describe("Admin group — the Blog videos shortcut (admin areas, z8r3fdwwpe)", () => {
+	const blogLink = (c: HTMLElement) =>
+		c.querySelector<HTMLAnchorElement>(
+			'a[href="https://admin.kedaipal.com/videos"]',
+		);
+
+	it("a blog editor who is NOT an admin sees the group with only Blog videos — never the console", () => {
+		const { container, getByText, queryByText } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} blogVideos />,
+		);
+		expect(getByText("Admin")).toBeTruthy();
+		expect(blogLink(container)?.textContent).toContain("Blog videos");
+		for (const label of [
+			"All sellers",
+			"Billing",
+			"Acquisition",
+			"Showcases",
+			"WABA Safety",
+		])
+			expect(queryByText(label)).toBeNull();
+	});
+
+	it("an admin sees the console links and Blog videos last, as the one row that leaves the app", () => {
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} isAdmin blogVideos />,
+		);
+		const group = blogLink(container)?.parentElement as HTMLElement;
+		const labels = Array.from(group.querySelectorAll("a")).map((a) =>
+			a.textContent?.trim(),
+		);
+		expect(labels[0]).toBe("All sellers");
+		// Acquisition (money out) sits beside Billing (money in), 86eye3eyp.
+		expect(labels.slice(0, 3)).toEqual([
+			"All sellers",
+			"Billing",
+			"Acquisition",
+		]);
+		expect(labels.at(-1)).toBe("Blog videos");
+	});
+
+	it("a seller with no admin area sees no Admin group at all", () => {
+		const { container, queryByText } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(queryByText("Admin")).toBeNull();
+		expect(blogLink(container)).toBeNull();
+	});
+
+	it("collapsed, the external row keeps its name as a tooltip and hides the label cluster", () => {
+		collapsed = true;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} blogVideos />,
+		);
+		const link = blogLink(container);
+		expect(link?.getAttribute("title")).toBe(
+			"Blog videos — Opens admin.kedaipal.com",
+		);
+		expect(link?.querySelector('[aria-hidden="true"]')).not.toBeNull();
+	});
+});
+
+describe("the credits ticket rides the top of the rail (z8r3fdx34j)", () => {
+	afterEach(() => {
+		profile.stub = null;
+	});
+	const ticketBox = (container: HTMLElement, variant: string) =>
+		container.querySelector(`[data-ticket="${variant}"]`)?.parentElement;
+
+	it("expanded: the ticket sits under the plan pill, and the profile row is just the person", () => {
+		collapsed = false;
+		profile.stub = { ticket: { figure: "254" } };
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		const band = ticketBox(container, "rail");
+		expect(band?.hasAttribute("inert")).toBe(false);
+		// The plan pill rides the ticket's top tear — one object, not two rows.
+		expect(
+			container.querySelector('[data-ticket="rail"]')?.textContent,
+		).toContain("Pro");
+		// The collapsed copy is out of the focus order while the rail is wide.
+		expect(ticketBox(container, "collapsed")?.hasAttribute("inert")).toBe(true);
+		// Said once per rail: the foot row is name + email, never the balance.
+		expect(container.textContent).toContain("zaki@example.com");
+		expect(
+			screen.getByTestId("profile-trigger").getAttribute("aria-label"),
+		).toBe("Account menu");
+	});
+
+	it("collapsed: the pill goes, the ticket stays — as its figure", () => {
+		collapsed = true;
+		profile.stub = { ticket: { figure: "3" } };
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(ticketBox(container, "collapsed")?.hasAttribute("inert")).toBe(
+			false,
+		);
+		expect(ticketBox(container, "rail")?.hasAttribute("inert")).toBe(true);
+	});
+
+	it("while the balance loads, the ticket's frame holds the pill on its tear — nothing jumps", () => {
+		collapsed = false;
+		profile.stub = undefined;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(
+			container.querySelector('[data-ticket="placeholder"]')?.textContent,
+		).toContain("Pro");
+	});
+
+	it("without a ticket the plan pill keeps its own row", () => {
+		collapsed = false;
+		profile.stub = null;
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(container.querySelector("[data-ticket]")).toBeNull();
+		expect(container.textContent).toContain("Pro");
+	});
+
+	it("no ticket for a reader without the credits grant, or an unmetered store", () => {
+		collapsed = true;
+		profile.stub = null;
+		const first = render(<Sidebar retailer={STORE} newOrdersCount={0} />);
+		expect(first.container.querySelector("[data-ticket]")).toBeNull();
+		first.unmount();
+		profile.stub = { ticket: null };
+		const { container } = render(
+			<Sidebar retailer={STORE} newOrdersCount={0} />,
+		);
+		expect(container.querySelector("[data-ticket]")).toBeNull();
+	});
+});

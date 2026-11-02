@@ -10,7 +10,8 @@
  * product side.)
  *
  * "Owned" = uploaded for THIS order and referenced nowhere else: the buyer's
- * custom-order reference image, the payment-proof screenshot, and the seller's
+ * custom-order reference image, the payment-proof screenshot(s) — the latest
+ * on the order plus any earlier ones in `paymentClaims` — and the seller's
  * mockup image(s). NOT included, deliberately: order receipt/invoice PDFs are
  * generated on demand and never persisted (nothing to reclaim), and
  * subscription invoices are billing artefacts on their own table, tied to
@@ -38,14 +39,28 @@ export function orderOwnedBlobIds(order: Doc<"orders">): Set<string> {
 }
 
 /**
- * Delete every blob the order owns. Per-blob errors are swallowed — a blob may
+ * Delete every blob the order owns — its own fields plus every screenshot in
+ * its `paymentClaims` history (z8r3fdn2uj), whose rows go with them: a claim
+ * row is nothing but a pointer at an order's blob, so the two are freed in one
+ * place and both cascades get it. Per-blob errors are swallowed — a blob may
  * already be gone, and a missing blob must never abort a deletion cascade.
  */
 export async function deleteOrderOwnedBlobs(
 	ctx: MutationCtx,
 	order: Doc<"orders">,
 ): Promise<void> {
-	for (const id of orderOwnedBlobIds(order)) {
+	const ids = orderOwnedBlobIds(order);
+	// collect(), not the capped reader: the cap is enforced at write time, and
+	// a deletion must free every row even if a race ever slipped one past it.
+	const claims = await ctx.db
+		.query("paymentClaims")
+		.withIndex("by_order_createdAt", (q) => q.eq("orderId", order._id))
+		.collect();
+	for (const claim of claims) {
+		if (claim.proofStorageId) ids.add(claim.proofStorageId);
+		await ctx.db.delete(claim._id);
+	}
+	for (const id of ids) {
 		try {
 			await ctx.storage.delete(id as Id<"_storage">);
 		} catch {

@@ -9,6 +9,7 @@
 
 import { v } from "convex/values";
 import { query } from "./_generated/server";
+import { creditGateFor, forSeller } from "./creditLock";
 import { requireRetailerAccess } from "./lib/auth";
 
 /** Terminal-failure job states — the ones worth interrupting a seller for. */
@@ -20,21 +21,41 @@ export const latestActivity = query({
 		ctx,
 		{ retailerId },
 	): Promise<{
-		newestOrder: { createdAt: number; shortId: string } | null;
+		newestOrder: {
+			createdAt: number;
+			shortId: string;
+			/** Who it's from and what it's worth — the two facts that make the
+			 * alert readable without opening it (z8r3fdff97 test round). Both
+			 * come off the order doc already read below, so they cost nothing.
+			 * Empty when the buyer left no name (counter/anonymous orders). */
+			customerName: string;
+			total: number;
+			currency: string;
+		} | null;
 		newestFailedBooking: {
 			failedAt: number;
 			shortId: string;
 			reason?: string;
 		} | null;
 	}> => {
-		await requireRetailerAccess(ctx, retailerId);
+		await requireRetailerAccess(ctx, retailerId, {
+			area: "orders",
+			level: "read",
+		});
 
-		// Newest order — one indexed row.
-		const newest = await ctx.db
+		// Newest order — one indexed row, REDACTED (Credits T3.1). This alert
+		// carries the buyer's name on purpose ("who it's from"), which makes it
+		// a seller read of order data like any other: an order waiting on
+		// credits still fires the alert — the seller must know work arrived —
+		// but it arrives without the name, and the inbox row it links to says
+		// what it is waiting for.
+		const gate = await creditGateFor(ctx, retailerId);
+		const newestRow = await ctx.db
 			.query("orders")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 			.order("desc")
 			.first();
+		const newest = newestRow ? forSeller(gate, newestRow) : null;
 
 		// Newest failed rider booking — bookings are rare relative to orders, so
 		// a small recency window is plenty (a failure older than the last 10
@@ -63,7 +84,13 @@ export const latestActivity = query({
 
 		return {
 			newestOrder: newest
-				? { createdAt: newest.createdAt, shortId: newest.shortId }
+				? {
+						createdAt: newest.createdAt,
+						shortId: newest.shortId,
+						customerName: newest.customer.name ?? "",
+						total: newest.total,
+						currency: newest.currency,
+					}
 				: null,
 			newestFailedBooking: failedBooking,
 		};

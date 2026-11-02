@@ -1,38 +1,98 @@
+// The admin seller directory (docs/admin-console.md). Redesigned in z8r3fdh37c
+// from a five-fact card list into a findable, copyable book: search by name,
+// slug, email or phone; filter by status bucket; sort by founding rank,
+// expiry, age or name; and every contact and billing fact readable on the row
+// and copyable in the detail sheet. Filter, sort and search ride the URL so a
+// filtered view is a link an admin can paste to another admin.
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMutation } from "convex/react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
-	Award,
-	ChevronRight,
-	Loader2,
+	ArrowUpDown,
+	Check,
+	Download,
+	Search,
 	ShieldCheck,
 	ShieldX,
 	Store,
-	Trash2,
+	UserPlus,
 } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { AdminSellerRow } from "../../convex/admin";
+import { csvDate } from "../../convex/lib/orderCsv";
+import { contractTemplatesFrom } from "../components/admin/enterprise-contract-form";
+import { SellerCard } from "../components/admin/seller-card";
+import { SellerSheet } from "../components/admin/seller-sheet";
+import { SellerTable } from "../components/admin/seller-table";
 import { PageHeader } from "../components/dashboard/page-header";
-import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import { Button } from "../components/ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
+import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
-import { useActAs } from "../hooks/useActAs";
-import { convexErrorMessage } from "../lib/format";
+import { useIsDesktop } from "../hooks/useIsDesktop";
+import {
+	countSellerBuckets,
+	filterSellers,
+	isSellerSort,
+	parseSellerStatuses,
+	SELLER_FILTER_LABEL,
+	SELLER_FILTERS,
+	SELLER_SORTS,
+	type SellerFilter,
+	type SellerSort,
+	type SellerStatusFilter,
+	sellerFilterEmptyNoun,
+	sellerSelectionLabel,
+	sellersToCsv,
+	sortSellers,
+	toggleSellerStatus,
+} from "../lib/admin-seller-view";
+import { downloadCsv } from "../lib/download";
+import { searchText } from "../lib/search-params";
+import { storefrontOrigin } from "../lib/storefront-url";
+
+/** The directory's URL state. Defaults are omitted from the URL so the plain
+ * route stays `/app/admin/sellers`. */
+export interface SellersSearch {
+	/** The selected chips, ORed together (z8r3fdzn6r). Absent = "All". */
+	status?: SellerStatusFilter[];
+	sort?: Exclude<SellerSort, "founding">;
+	q?: string;
+}
 
 export const Route = createFileRoute("/app/admin/sellers")({
+	// Every key is returned, `undefined` when absent or invalid: an omitted key
+	// lets the raw parsed value through, and `?q=9981` parses as a NUMBER that
+	// crashed the page on `q.trim()` (z8r3fdtk87, src/lib/search-params.ts).
+	validateSearch: (search: Record<string, unknown>): SellersSearch => ({
+		// A list, or a single value from links written before the chips
+		// combined — both read as a selection.
+		status: parseSellerStatuses(search.status),
+		sort:
+			isSellerSort(search.sort) && search.sort !== "founding"
+				? search.sort
+				: undefined,
+		q: searchText(search.q),
+	}),
 	component: AdminSellersRoute,
 });
 
 function AdminSellersRoute() {
 	// Client gate is cosmetic — `listSellersForAdmin` is `requireAdmin` server-side.
 	const isAdmin = useQuery(convexQuery(api.billing.amIAdmin, {})).data;
+	const search = Route.useSearch();
+	const navigate = useNavigate({ from: Route.fullPath });
 
 	if (isAdmin === undefined) {
 		return (
-			<div className="flex flex-col gap-4 lg:max-w-3xl">
+			<div className="flex flex-col gap-4">
 				<Skeleton className="h-7 w-40" />
 				<Skeleton className="h-24 w-full rounded-2xl" />
 				<Skeleton className="h-24 w-full rounded-2xl" />
@@ -51,253 +111,368 @@ function AdminSellersRoute() {
 		);
 	}
 
-	return <AdminSellersContent />;
+	return (
+		<AdminSellersContent
+			search={search}
+			onSearchChange={(next) =>
+				navigate({ search: next, replace: true, resetScroll: false })
+			}
+		/>
+	);
 }
 
-function AdminSellersContent() {
-	const sellers = useQuery(convexQuery(api.admin.listSellersForAdmin, {})).data;
+/** Exported for the route test, which drives it with a stateful wrapper in
+ * place of the router. */
+export function AdminSellersContent({
+	search,
+	onSearchChange,
+}: {
+	search: SellersSearch;
+	onSearchChange: (next: SellersSearch) => void;
+}) {
+	const sellerList = useQuery(
+		convexQuery(api.admin.listSellersForAdmin, {}),
+	).data;
+	const sellers = sellerList?.sellers;
+	// The book runs past the cap — this list is the NEWEST stores and the
+	// oldest are missing, so the count below must not read as the whole book.
+	const sellersCapped = sellerList?.capped === true;
 	// Dev deployments only (z8r3fdbmc9) — the server re-checks, this just keeps
 	// a control that would always refuse off the prod screen entirely.
 	const purgeEnabled =
 		useQuery(convexQuery(api.admin.devStorePurgeEnabled, {})).data === true;
-	const [term, setTerm] = useState("");
-
-	const filtered =
-		sellers?.filter((s) => {
-			const q = term.trim().toLowerCase();
-			if (!q) return true;
-			return (
-				s.storeName.toLowerCase().includes(q) ||
-				s.slug.toLowerCase().includes(q)
-			);
-		}) ?? [];
-
 	return (
-		<div className="flex flex-col gap-6 lg:max-w-4xl">
-			<PageHeader
-				title="Admin · Sellers"
-				subtitle="Open any seller's dashboard to set up or operate their store"
-			/>
-			<section className="flex flex-col gap-1 lg:hidden">
-				<h2 className="text-xl font-bold">Admin · Sellers</h2>
-				<p className="text-sm text-muted-foreground">
-					Open any seller's dashboard to set up or operate their store.
-				</p>
-			</section>
-
-			<div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
-				<ShieldCheck className="mt-0.5 size-4 shrink-0" />
-				<p>
-					Opening a store enters <strong>act-as mode</strong>: you operate it as
-					the seller and every change you make is logged to your admin account.
-				</p>
-			</div>
-
-			<Input
-				value={term}
-				onChange={(e) => setTerm(e.target.value)}
-				placeholder="Search by store name or slug"
-				className="max-w-sm"
-			/>
-
-			{sellers === undefined ? (
-				<div className="flex flex-col gap-2">
-					<Skeleton className="h-20 w-full rounded-2xl" />
-					<Skeleton className="h-20 w-full rounded-2xl" />
-					<Skeleton className="h-20 w-full rounded-2xl" />
-				</div>
-			) : filtered.length === 0 ? (
-				<div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border px-6 py-14 text-center">
-					<Store className="size-7 text-muted-foreground" />
-					<p className="font-medium">
-						{sellers.length === 0 ? "No sellers yet" : "No matches"}
-					</p>
-					<p className="max-w-xs text-sm text-muted-foreground">
-						{sellers.length === 0
-							? "Sellers appear here once they've completed onboarding."
-							: "Try a different store name or slug."}
-					</p>
-				</div>
-			) : (
-				<ul className="flex flex-col gap-2">
-					{filtered.map((s) => (
-						<SellerCard key={s._id} seller={s} purgeEnabled={purgeEnabled} />
-					))}
-				</ul>
-			)}
-		</div>
+		<SellerDirectory
+			sellers={sellers}
+			sellersCapped={sellersCapped}
+			purgeEnabled={purgeEnabled}
+			search={search}
+			onSearchChange={onSearchChange}
+		/>
 	);
 }
 
-const STATUS_STYLES: Record<string, string> = {
-	active: "bg-emerald-100 text-emerald-800",
-	trialing: "bg-sky-100 text-sky-800",
-	past_due: "bg-red-100 text-red-800",
-	cancelled: "bg-muted text-muted-foreground",
-};
-
-function SellerCard({
-	seller,
+/** The directory with its data in hand — everything below the query. Split
+ * from the fetch so it can be rendered against fixtures (the design pass
+ * behind Clerk) and driven by the route test without a router. */
+export function SellerDirectory({
+	sellers,
+	sellersCapped = false,
 	purgeEnabled,
+	search,
+	onSearchChange,
 }: {
-	seller: AdminSellerRow;
+	/** `undefined` while loading. */
+	sellers: readonly AdminSellerRow[] | undefined;
+	/** The store book runs past the query's cap, so `sellers` is the NEWEST
+	 * slice of it. Without this the count read "Showing 500 of 500" and
+	 * sounded like the whole book (z8r3fdpm2p). */
+	sellersCapped?: boolean;
 	purgeEnabled: boolean;
+	search: SellersSearch;
+	onSearchChange: (next: SellersSearch) => void;
 }) {
-	const status = seller.subscriptionStatus;
-	const navigate = useNavigate();
-	const { setActAs } = useActAs();
-	const startActAsSession = useMutation(api.admin.startActAsSession);
-	const purgeStore = useMutation(api.admin.purgeStoreForAdmin);
-	const [purgeOpen, setPurgeOpen] = useState(false);
-	// Server truth (`purging` rides the directory row, so every admin session
-	// locks) OR the just-clicked local echo, which bridges the moment before
-	// the reactive query refreshes.
-	const [localPurging, setLocalPurging] = useState(false);
-	const purging = seller.purging || localPurging;
+	const isDesktop = useIsDesktop();
+	const [detailId, setDetailId] = useState<AdminSellerRow["_id"] | null>(null);
 
-	function manage() {
-		if (purging) return;
-		// Start the act-as session, then open the vendor's dashboard. From here the
-		// session holds across all navigation + CRUD until the admin Exits.
-		setActAs(seller._id);
-		// Audit the tenant ENTRY (read-side attributability). Fire-and-forget — a
-		// failed log must never block onboarding.
-		void startActAsSession({ retailerId: seller._id }).catch(() => {});
-		navigate({ to: "/app" });
+	const selected: readonly SellerStatusFilter[] = search.status ?? [];
+	const sort: SellerSort = search.sort ?? "founding";
+	const q = search.q ?? "";
+	// One clock per render so every row's "in N days" agrees.
+	const now = Date.now();
+
+	const all = sellers ?? [];
+	const counts = countSellerBuckets(all);
+	const visible = sortSellers(filterSellers(all, selected, q), sort, now);
+	const detailSeller = all.find((s) => s._id === detailId) ?? null;
+	// Live contracts the open store could be modelled on — built from the list
+	// already on screen, so the "start from" picker costs no second query. The
+	// store being edited is never its own template. Same helper the billing
+	// card's sheet uses (z8r3fdpm2p), so the two pickers can't drift.
+	const contractTemplates = contractTemplatesFrom(all, detailId);
+	const searching = q.trim().length > 0;
+	// What "Clear all (N)" undoes: each chip, plus the search box.
+	const activeCount = selected.length + (searching ? 1 : 0);
+	const filtered = activeCount > 0;
+	// "No subscription" only shows while a store sits in it. The offered row
+	// is what "every chip selected ⇒ All" is judged against.
+	const offeredFilters = SELLER_FILTERS.filter(
+		(f) => f !== "none" || counts.none > 0,
+	);
+	// The only single chip with copy of its own in the empty state.
+	const onlyFilter = selected.length === 1 ? selected[0] : undefined;
+
+	function toggleFilter(chip: SellerFilter) {
+		const next = toggleSellerStatus(selected, chip, offeredFilters);
+		onSearchChange({
+			...search,
+			status: next.length > 0 ? next : undefined,
+		});
+	}
+	function setSort(next: SellerSort) {
+		onSearchChange({
+			...search,
+			sort: next === "founding" ? undefined : next,
+		});
+	}
+	function setQuery(next: string) {
+		onSearchChange({ ...search, q: next.trim() ? next : undefined });
+	}
+	function clearAll() {
+		onSearchChange({ ...search, status: undefined, q: undefined });
+	}
+	function exportCsv() {
+		downloadCsv(
+			`kedaipal-sellers-${csvDate(now)}.csv`,
+			sellersToCsv(visible, storefrontOrigin(), now),
+		);
 	}
 
-	async function confirmPurge() {
-		try {
-			const result = await purgeStore({
-				retailerId: seller._id,
-				confirmSlug: seller.slug,
-			});
-			setLocalPurging(true);
-			// The cascade is async — the row vanishes from this list when the
-			// retailer doc goes in its final phase, usually within seconds.
-			toast.success(
-				`Purging ${result.storeName} — the row disappears once the erase finishes, then that login onboards fresh.`,
-			);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-			// Re-throw so the dialog stays open behind the error toast.
-			throw err;
-		}
-	}
+	const sortLabel =
+		SELLER_SORTS.find((s) => s.key === sort)?.label ?? "Founding rank";
+	const exportDisabledReason =
+		sellers === undefined
+			? "Still loading"
+			: visible.length === 0
+				? "Nothing to export — no rows match"
+				: undefined;
+
+	const headerActions = (
+		<>
+			<Button
+				variant="outline"
+				onClick={exportCsv}
+				disabled={exportDisabledReason !== undefined}
+				title={exportDisabledReason}
+				className="h-10 rounded-xl px-4"
+			>
+				<Download data-icon="inline-start" aria-hidden="true" />
+				Export CSV
+			</Button>
+			{/* The invite form lives on Billing (it needs the founding-spot count
+			    and the invoice picker beside it); this is the door from the page
+			    where an admin actually looks for a seller. */}
+			<Button asChild className="h-10 rounded-xl px-4">
+				<Link to="/app/admin/billing" hash="onboard">
+					<UserPlus data-icon="inline-start" aria-hidden="true" />
+					Invite seller
+				</Link>
+			</Button>
+		</>
+	);
 
 	return (
-		// The purge control sits BESIDE the row, not inside it — the whole row is
-		// already the "Manage" button, and a button can't nest a button.
-		<li className="flex items-center gap-1.5">
-			<button
-				type="button"
-				onClick={manage}
-				disabled={purging}
-				className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border border-border bg-card p-4 text-left transition-all hover:border-accent hover:shadow-sm disabled:pointer-events-none disabled:opacity-60"
-			>
-				<div className="flex min-w-0 flex-1 flex-col gap-1">
-					<div className="flex items-center gap-2">
-						<span className="truncate font-semibold">{seller.storeName}</span>
-						{seller.foundingMemberRank !== undefined ? (
-							<span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
-								<Award className="size-3" />#{seller.foundingMemberRank}
-							</span>
-						) : null}
-					</div>
-					<span className="truncate font-mono text-xs text-muted-foreground">
-						/{seller.slug}
-						{seller.signupSource ? (
-							// Acquisition tag the signup arrived with (z8r3fdd1v0) —
-							// verbatim, these are Kedaipal's own `?src=` tags. Absent =
-							// direct/untagged, so nothing renders for the common case.
-							<span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px]">
-								via {seller.signupSource}
-							</span>
-						) : null}
-					</span>
-					<div className="mt-0.5 flex items-center gap-2">
-						{seller.ownerIsAdmin ? (
-							// Admin-owned store: a single "Admin" pill, not a trial/plan
-							// countdown — admins run the app for free with the highest tier
-							// unlocked. Matches the dashboard tier-pill's `admin` tone.
-							<span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-								<ShieldCheck className="size-3" />
-								Admin
-							</span>
-						) : (
-							<>
-								{status ? (
-									<span
-										className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${
-											STATUS_STYLES[status] ?? "bg-muted text-muted-foreground"
-										}`}
-									>
-										{status.replace("_", " ")}
-									</span>
-								) : (
-									<span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
-										no subscription
-									</span>
-								)}
-								{seller.plan ? (
-									<span className="text-[11px] capitalize text-muted-foreground">
-										{seller.plan}
-									</span>
-								) : null}
-							</>
-						)}
-					</div>
+		<div className="flex flex-col gap-5">
+			<PageHeader
+				title="Sellers"
+				subtitle="Every store on Kedaipal — contact them, see where their billing stands, or open their dashboard."
+				actions={headerActions}
+			/>
+			<section className="flex items-start justify-between gap-3 lg:hidden">
+				<div className="flex min-w-0 flex-col gap-1">
+					<h2 className="text-xl font-bold">Sellers</h2>
+					<p className="text-sm text-muted-foreground">
+						Contact, billing state and the door to every store.
+					</p>
 				</div>
-				{purging ? (
-					<span className="flex shrink-0 items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-muted-foreground">
-						<Loader2 className="size-4 animate-spin" />
-						Purging…
-					</span>
-				) : (
-					<span className="flex shrink-0 items-center gap-1 rounded-lg bg-accent/10 px-3 py-2 text-sm font-semibold text-accent">
-						Manage
-						<ChevronRight className="size-4" />
-					</span>
-				)}
-			</button>
-			{purgeEnabled ? (
-				<>
-					{/* Quiet until hovered — a rare dev tool shouldn't shout red down
-					    the whole directory. Compact square, centered on the row. */}
-					<button
-						type="button"
-						onClick={() => setPurgeOpen(true)}
-						disabled={purging}
-						title="Purge store (dev only)"
-						aria-label={`Purge ${seller.storeName} (dev only)`}
-						className="flex size-11 shrink-0 items-center justify-center self-center rounded-xl text-muted-foreground/60 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-40"
-					>
-						{purging ? (
-							<Loader2 className="size-4 animate-spin" />
-						) : (
-							<Trash2 className="size-4" />
-						)}
-					</button>
-					<ConfirmDialog
-						open={purgeOpen}
-						onOpenChange={setPurgeOpen}
-						destructive
-						title={`Purge ${seller.storeName}?`}
-						description={
-							<>
-								Dev-only test reset. Erases <strong>everything</strong> this
-								store owns — products, orders, customers, settings, images —
-								and the store itself, exactly like the account-deletion
-								cascade. The owner's login survives, so opening /onboarding
-								afterwards starts a fresh store. This cannot be undone.
-							</>
-						}
-						confirmPhrase={seller.slug}
-						confirmLabel="Purge store"
-						onConfirm={confirmPurge}
+				<Button
+					asChild
+					size="icon-lg"
+					className="tap-target shrink-0 rounded-xl"
+					aria-label="Invite seller"
+				>
+					<Link to="/app/admin/billing" hash="onboard">
+						<UserPlus aria-hidden="true" />
+					</Link>
+				</Button>
+			</section>
+
+			<p className="flex items-start gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-[13px] text-foreground/80">
+				<ShieldCheck
+					className="mt-0.5 size-4 shrink-0 text-accent-emphasis"
+					aria-hidden="true"
+				/>
+				<span>
+					<strong className="font-semibold">Open store</strong> enters act-as
+					mode: you operate it as the seller and every change is logged to your
+					admin account.
+				</span>
+			</p>
+
+			<div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+				<div className="relative min-w-0 flex-1 lg:max-w-sm">
+					<Search
+						className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground"
+						aria-hidden="true"
 					/>
-				</>
-			) : null}
-		</li>
+					<label htmlFor="seller-search" className="sr-only">
+						Search sellers
+					</label>
+					<Input
+						id="seller-search"
+						variant="field"
+						type="search"
+						value={q}
+						onChange={(e) => setQuery(e.target.value)}
+						placeholder="Search name, slug, email or phone"
+						className="pl-10 lg:min-h-10"
+					/>
+				</div>
+				<div className="flex items-center justify-between gap-3">
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<Button
+								variant="outline"
+								className="h-11 rounded-xl px-3.5 lg:h-10"
+								aria-label={`Sort: ${sortLabel}`}
+							>
+								<ArrowUpDown data-icon="inline-start" aria-hidden="true" />
+								<span className="text-muted-foreground">Sort</span>
+								<span>{sortLabel}</span>
+							</Button>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="start" className="w-60">
+							{SELLER_SORTS.map((s) => (
+								<DropdownMenuItem
+									key={s.key}
+									onSelect={() => setSort(s.key)}
+									aria-checked={s.key === sort}
+									role="menuitemradio"
+								>
+									<Check
+										className={s.key === sort ? "size-4" : "size-4 opacity-0"}
+										aria-hidden="true"
+									/>
+									{s.label}
+								</DropdownMenuItem>
+							))}
+						</DropdownMenuContent>
+					</DropdownMenu>
+					<span
+						className="text-[13px] text-muted-foreground lg:ml-auto"
+						aria-live="polite"
+					>
+						{sellers === undefined
+							? "Loading…"
+							: sellersCapped
+								? `Showing ${visible.length} of the newest ${all.length}`
+								: `Showing ${visible.length} of ${all.length}`}
+					</span>
+				</div>
+			</div>
+
+			<FilterChipRow>
+				{offeredFilters.map((f) => (
+					<FilterChip
+						key={f}
+						selected={
+							f === "all" ? selected.length === 0 : selected.includes(f)
+						}
+						count={counts[f]}
+						countTone={
+							(f === "past_due" || f === "untagged_payers") && counts[f] > 0
+								? "attention"
+								: "muted"
+						}
+						onClick={() => toggleFilter(f)}
+					>
+						{SELLER_FILTER_LABEL[f]}
+					</FilterChip>
+				))}
+			</FilterChipRow>
+
+			{/* What is on, and the one control that undoes all of it. Without
+			    this line the OR is invisible: nothing on the row says two chips
+			    add up rather than narrow. */}
+			<div className="-mt-2 flex min-h-11 items-center justify-between gap-3">
+				<p className="min-w-0 text-[13px] text-muted-foreground">
+					{selected.length === 0 ? (
+						"Tap chips to combine them — picking two shows stores in either."
+					) : (
+						<>
+							Filtered to{" "}
+							<span className="font-medium text-foreground">
+								{sellerSelectionLabel(selected)}
+							</span>
+							{searching ? <> matching “{q.trim()}”</> : null}
+						</>
+					)}
+				</p>
+				{filtered ? (
+					<Button
+						variant="ghost"
+						onClick={clearAll}
+						className="h-11 shrink-0 rounded-xl px-3 lg:h-9"
+					>
+						Clear all ({activeCount})
+					</Button>
+				) : null}
+			</div>
+
+			{sellers === undefined ? (
+				<div className="flex flex-col gap-2">
+					<Skeleton className="h-[72px] w-full rounded-2xl" />
+					<Skeleton className="h-[72px] w-full rounded-2xl" />
+					<Skeleton className="h-[72px] w-full rounded-2xl" />
+				</div>
+			) : visible.length === 0 ? (
+				<div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border px-6 py-14 text-center">
+					<Store className="size-7 text-muted-foreground" aria-hidden="true" />
+					<p className="font-medium">
+						{all.length === 0
+							? "No sellers yet"
+							: selected.length > 1
+								? `Nothing in ${sellerSelectionLabel(selected)}${searching ? ` matches “${q.trim()}”` : ""}`
+								: onlyFilter
+									? `No ${sellerFilterEmptyNoun(onlyFilter)}${searching ? ` match “${q.trim()}”` : ""}`
+									: `No sellers match “${q.trim()}”`}
+					</p>
+					<p className="max-w-xs text-sm text-muted-foreground">
+						{all.length === 0
+							? "Stores appear here once a seller finishes onboarding."
+							: onlyFilter === "wants_enterprise"
+								? "Nobody's waiting. Sellers land here when they tap “Talk to Arif” in the app, and leave when a contract lands or you dismiss the ask."
+								: onlyFilter === "untagged_payers" && !searching
+									? "Every paying store has a channel. New payers land here until you tag how they arrived."
+									: selected.length > 0
+										? "They may be in another status — clear the filters to search every store."
+										: "Try the store name, its slug, the owner's email or their phone."}
+					</p>
+					{/* No second Clear here: "Clear all (N)" sits on the line just
+					    above, and two identical controls a few pixels apart read as
+					    two different things. */}
+				</div>
+			) : isDesktop ? (
+				<SellerTable
+					sellers={visible}
+					purgeEnabled={purgeEnabled}
+					onViewDetails={(s) => setDetailId(s._id)}
+					now={now}
+				/>
+			) : (
+				<ul className="flex flex-col gap-2">
+					{visible.map((s) => (
+						<SellerCard
+							key={s._id}
+							seller={s}
+							purgeEnabled={purgeEnabled}
+							onViewDetails={(row) => setDetailId(row._id)}
+							now={now}
+						/>
+					))}
+				</ul>
+			)}
+
+			<SellerSheet
+				seller={detailSeller}
+				contractTemplates={contractTemplates}
+				open={detailId !== null}
+				onOpenChange={(open) => {
+					if (!open) setDetailId(null);
+				}}
+				purgeEnabled={purgeEnabled}
+				now={now}
+			/>
+		</div>
 	);
 }

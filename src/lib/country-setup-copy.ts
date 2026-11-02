@@ -7,6 +7,10 @@ import type {
 	CountrySetupItem,
 	CountrySetupItemKey,
 } from "../../convex/lib/countrySetup";
+import {
+	type BillingCurrency,
+	storeBillingCurrency,
+} from "../../convex/lib/plans";
 
 /**
  * Seller-facing copy for the post-switch setup checklist (86eyqgujv).
@@ -32,7 +36,10 @@ export type CountrySetupTab =
 	| "fulfilment"
 	// Third-party accounts (2 Sep IA rework) — HitPay's checklist row lands
 	// on the card's new home.
-	| "integrations";
+	| "integrations"
+	// The store's own subscription — where auto-renewal is set up again after
+	// a switch detached it (86eyp7hn7).
+	| "billing";
 
 type CountrySetupCopy = {
 	title: string;
@@ -40,6 +47,10 @@ type CountrySetupCopy = {
 	body: string;
 	tab: CountrySetupTab;
 	action: string;
+	/** Overrides the severity chip's label. The money chip reads "Payments
+	 * at risk" — the buyer's payments — which is the wrong claim on the
+	 * seller's own subscription row. */
+	chip?: string;
 };
 
 type CopyContext = {
@@ -48,7 +59,25 @@ type CopyContext = {
 	/** Where it was, when we know — the copy degrades to "another country". */
 	from: Country | undefined;
 	count: number;
+	/** A saved auto-renew method is attached right now. */
+	autoRenewOn: boolean;
 };
+
+/**
+ * What a seller can save for auto-renewal in a billing currency, as the
+ * copy names it: the tokenisable rails per currency (`AUTO_RENEW_METHODS`,
+ * docs/hitpay-recurring.md) — MYR takes a card or Touch 'n Go, SGD a card
+ * only. One author, so the toast, the country card and the checklist can't
+ * promise different rails. Includes the article ("an SGD card").
+ */
+const AUTO_RENEW_METHOD_PHRASE: Record<BillingCurrency, string> = {
+	MYR: "a card or Touch 'n Go",
+	SGD: "an SGD card",
+};
+
+export function autoRenewMethodPhrase(currency: BillingCurrency): string {
+	return AUTO_RENEW_METHOD_PHRASE[currency];
+}
 
 const COPY: Record<
 	CountrySetupItemKey,
@@ -67,6 +96,30 @@ const COPY: Record<
 		tab: "integrations",
 		action: "Open Integrations",
 	}),
+	billing_currency: ({ to, from, autoRenewOn }) => {
+		const currency = storeBillingCurrency(to);
+		const was = from ? storeBillingCurrency(from) : undefined;
+		// The three lines below name Kedaipal's BILLING currency as a setting
+		// ("bills in SGD"), the way the Country card says "yours is set to
+		// SGD" — a code, not an amount, so no symbol belongs here.
+		return {
+			// currency-literal-ok: names the billing currency, not an amount
+			title: `Your Kedaipal subscription now bills in ${currency}`,
+			// Never "if auto-renewal was on": the row can't know the past, and
+			// a seller who never had it reads that as a claim about them. It
+			// states the rule and the present: a method saved in the old
+			// currency can't be charged in the new one, so the switch turns it
+			// off — and whether one is attached right now.
+			body: autoRenewOn
+				? // currency-literal-ok: names the billing currency, not an amount
+					`Every invoice from your next one is in ${currency}, at the ${COUNTRY_LABELS[to]} price, and auto-renewal is set up for it.`
+				: // currency-literal-ok: names the billing currency, not an amount
+					`Every invoice from your next one is in ${currency}, at the ${COUNTRY_LABELS[to]} price. Auto-renewal is off: a method saved in ${was ?? "another currency"} can't be charged in ${currency}, so the switch turns it off. Turn it on from Billing with ${autoRenewMethodPhrase(currency)}, or pay each invoice with its Pay-now link.`,
+			tab: "billing",
+			action: "Open Billing",
+			chip: "Your subscription",
+		};
+	},
 	business_address: ({ to, from }) => ({
 		title: "Set your business address",
 		body: `Your business address is still in ${placeName(from)}. It's the return address on every parcel label — we're leaving it off labels rather than sending undelivered parcels to the wrong country, so replace it with a ${COUNTRY_LABELS[to]} address.`,
@@ -100,6 +153,12 @@ const COPY: Record<
 	delivery_booking: ({ to, from }) => ({
 		title: "Your Lalamove keys may belong to the wrong market",
 		body: `Lalamove issues API keys per market, so the keys you pasted${from ? ` for ${COUNTRY_LABELS[from]}` : " before the switch"} can't price or book riders in ${COUNTRY_LABELS[to]} — quotes will fail until you create ${COUNTRY_LABELS[to]} keys on developers.lalamove.com and paste them in Integrations. Booking stays switched on; nothing books until the keys work.`,
+		tab: "integrations",
+		action: "Open Integrations",
+	}),
+	easyparcel_pickup: ({ to, from }) => ({
+		title: "Your EasyParcel pickup address is in the wrong country",
+		body: `EasyParcel still collects from ${placeAdjective(from)} address, so every courier price and booking starts there. Set your ${COUNTRY_LABELS[to]} pickup address on the EasyParcel card — your account stays connected.`,
 		tab: "integrations",
 		action: "Open Integrations",
 	}),
@@ -140,8 +199,14 @@ export function countrySetupCopy(
 	item: CountrySetupItem,
 	to: Country,
 	from: Country | undefined,
+	state: { autoRenewOn: boolean },
 ): CountrySetupCopy {
-	return COPY[item.key]({ to, from, count: item.count ?? 1 });
+	return COPY[item.key]({
+		to,
+		from,
+		count: item.count ?? 1,
+		autoRenewOn: state.autoRenewOn,
+	});
 }
 
 /** Headline for the whole panel — one line that says what happened and how
@@ -165,18 +230,23 @@ export function countrySetupHeadline(
  * letting them hunt is the difference between a checklist they act on and one
  * they close.
  *
- * Two pairs share a card on purpose: a pickup point's address and its manager
- * number are edited in the same place, as are the delivery-charge mode and the
- * Lalamove booking that rides it.
+ * One pair shares a card on purpose: a pickup point's address and its manager
+ * number are edited in the same place. `delivery_booking` is about the
+ * Lalamove KEYS, so it rings the Lalamove card on Integrations — the tab its
+ * own copy sends the seller to. It used to point at the delivery-charge card on
+ * Fulfilment, so the link opened Integrations and rang nothing.
  */
 export const SETTINGS_ANCHOR: Record<CountrySetupItemKey, string> = {
 	payment_methods: "settings-payment-methods",
 	hitpay: "settings-hitpay",
+	// The auto-renewal card — the same anchor `?spot=auto_renewal` rings.
+	billing_currency: "settings-auto-renewal",
 	business_address: "settings-business-address",
 	pickup_addresses: "settings-pickup",
 	delivery_mode: "settings-delivery-charge",
 	pickup_contacts: "settings-pickup",
-	delivery_booking: "settings-delivery-charge",
+	delivery_booking: "settings-lalamove",
+	easyparcel_pickup: "settings-easyparcel",
 	wa_phone: "settings-wa-phone",
 	notify_wa_phone: "settings-wa-alerts",
 	message_copy: "settings-message-templates",
@@ -244,9 +314,56 @@ export function scrollToAnchor(anchorId: string): boolean {
 	const reduced =
 		typeof window !== "undefined" &&
 		window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+	// A hidden tab (a cmd-clicked deep link) never runs a smooth scroll's
+	// animation — it would open at the top. Jump instead.
+	const hidden = document.visibilityState === "hidden";
 	el.scrollIntoView({
-		behavior: reduced ? "auto" : "smooth",
+		behavior: reduced || hidden ? "auto" : "smooth",
 		block: "start",
 	});
 	return true;
+}
+
+/**
+ * Scroll to a deep-linked card ONCE it is on the page — the one way a `?spot=`
+ * / `?fix=` link reveals its target.
+ *
+ * The old caller tried a single frame after mount and gave up. On Settings the
+ * tab body renders behind a skeleton until the store loads, so the card
+ * usually wasn't there yet: the ring pulsed below the fold and the seller
+ * landed on the top of the tab (z8r3fdhpm7 — the booking calendar's "Manage"
+ * link). This watches the DOM until the anchor appears, scrolls once, and
+ * gives up after `timeoutMs` so a card that never renders can't yank the page
+ * later. Returns the cleanup for an effect.
+ */
+export function revealAnchorWhenMounted(
+	anchorId: string,
+	timeoutMs = 5000,
+): () => void {
+	if (typeof document === "undefined") return () => {};
+	let done = false;
+	let observer: MutationObserver | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const stop = () => {
+		done = true;
+		observer?.disconnect();
+		if (timer !== undefined) clearTimeout(timer);
+	};
+	const attempt = () => {
+		if (!done && document.getElementById(anchorId)) {
+			stop();
+			scrollToAnchor(anchorId);
+		}
+	};
+	// A frame first: the target usually mounts in the same commit.
+	const frame = requestAnimationFrame(attempt);
+	if (typeof MutationObserver !== "undefined") {
+		observer = new MutationObserver(attempt);
+		observer.observe(document.body, { childList: true, subtree: true });
+	}
+	timer = setTimeout(stop, timeoutMs);
+	return () => {
+		cancelAnimationFrame(frame);
+		stop();
+	};
 }

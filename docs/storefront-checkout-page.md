@@ -18,9 +18,10 @@ see past. A route fixes the architecture, not just the paint:
   **sticky receipt summary** right with the CTA under the money it commits to.
 - **Mobile** stays single-column: summary first (this page IS the review),
   then the sections, with a **fixed bottom bar** (live total + CTA) always in
-  thumb reach — same `fixed inset-x-0 bottom-0` as `CartBar` and the product
-  page's purchase bar, so the powered-by footer floats above it exactly like
-  every other storefront page (design-system rule #4). An earlier pass tried
+  thumb reach — same `fixed inset-x-0 bottom-0` as the product page's
+  purchase bar (and the browse pages' floating cart pill, which is the same
+  out-of-flow rule in capsule form), so the powered-by footer floats above it
+  exactly like every other storefront page (design-system rule #4). An earlier pass tried
   `sticky` here on the theory that a form needs an in-flow bar; tested on a
   phone it just welded the badge to the bar and made checkout the odd page
   out. The route reserves the bar's **measured** height
@@ -66,10 +67,22 @@ see past. A route fixes the architecture, not just the paint:
 7. **Disabled-with-reason on the CTA** — one `blockedReason` line renders
    directly above the button in **both** places it appears (desktop summary
    footer, mobile sticky bar): store not accepting orders → checkout
-   unavailable → below minimum → *"Add your delivery address to continue"* →
+   unavailable → below minimum → stock / price / unanswered question → **the
+   first field in error** → *"Add your delivery address to continue"* →
    calculating → can't deliver here. The quote's own `no_coords` copy is
    suppressed while the address is still empty so the buyer never gets two
    versions of the same nudge.
+   - **Every disabled state has a rung.** Once the form is touched, any field
+     error turns TanStack's `canSubmit` false and disables the button — a
+     cleared name or WhatsApp number, or a postal code the Google pick didn't
+     carry, used to do that with nothing said. `checkoutFieldIssueLine`
+     (`src/lib/checkout-field-issue.ts`) reads the form's own `fieldMeta`
+     errors — the exact state behind `canSubmit`, so it can't disagree with the
+     button — and names the first one in the order the buyer reads the form:
+     *"Add your name to continue"* for a blank field, the rule itself
+     (*"Postal code must be 6 digits"*) for a filled-but-wrong one. An untouched
+     form holds no errors yet, so it says nothing; its press reveals every
+     error inline.
 8. **The Google pin is the single source of truth** (ClickUp `86eye50qv`,
    folded in here so the same form isn't redesigned twice) — the delivery
    address block no longer shows a search *and* a parallel manual form. See
@@ -85,10 +98,12 @@ chosen design (Zaki, 30 Jul — "follow the design closely, down to the font"):
   letterspaced mono `ORDER TICKET · DRAFT` line.
 - **Receipt lines in monospace** with dotted leaders and **bare amounts**
   (`5× Quantity item ······ 250.00`) — no thumbnails, RM appears only on the
-  TOTAL row, like a printed kedai receipt. Charges (pickup/delivery fees,
-  FREE-threshold, pending, calculating) print as muted receipt lines in the
-  same block; there is **no Subtotal row** (the items above sum in plain
-  sight — per the design).
+  TOTAL row, like a printed kedai receipt. The **variant sits on its own muted
+  line** under the name and the label **wraps** rather than truncating (see
+  [Long names](#long-names-wrap-they-never-truncate-z8r3fdhpaj) below).
+  Charges (pickup/delivery fees, FREE-threshold, pending, calculating) print
+  as muted receipt lines in the same block; there is **no Subtotal row** (the
+  items above sum in plain sight — per the design).
 - **Tap a line to edit** (the design's own caption): the quantity stepper +
   unit price reveal inline; custom lines reveal a Remove chip. A permanent
   mono hint ("TAP AN ITEM TO EDIT") keeps it discoverable, and a line with a
@@ -119,13 +134,17 @@ its button (label now just "Checkout") navigates to the route. The product
 detail sheet's "Go to checkout" exit (86eybhqye) navigates there too, via the
 routes' `onRequestCheckout` seam.
 
-## Page chrome — the same header and footer as everywhere else
+## Page chrome — the same header and footer as every subpage
 
-Checkout renders the shared **`StorefrontHeader`** (cover, logo, store name,
-founding badge, blurb) and the **`StorefrontFooter`** badge, so all four
-storefront surfaces — store home, category, product, checkout — are the same
-page shape. It shipped without a header first and read as bare and off-brand
-next to the others.
+Checkout renders the compact **`StorefrontAppBar`** (`z8r3fdegb5` — back +
+logo tile + store name + founding badge + live hours + share) and the
+**`StorefrontFooter`** badge, so the three storefront subpages — category,
+product, checkout — are the same page shape; the full cover hero is the
+store home's alone. The bar owns "back", replacing the old round back button
+beside the "Checkout" heading; on the **booking flow** (`?booking=`) its
+back points at the *listing* instead of the store home — one back control
+per screen, one level up. (Checkout shipped without any header first and
+read as bare and off-brand next to the others.)
 
 The usual e-commerce instinct is the opposite: strip the chrome on checkout so
 nothing tempts the buyer out of the funnel. That rule is about **payment**
@@ -146,11 +165,12 @@ Two layout consequences:
 
 **Heading rule (applies to every storefront page):** each page's `<h1>` is its
 own subject — store name on the home, category name, product name, "Checkout".
-`StorefrontHeader` takes `asPageHeading` (default `true`, for the home) and
-renders the store name as a `<p>` on the subpages. Without it, adding the
-header here would have given checkout two `<h1>`s, and every page in the store
-would have shared one duplicated heading. Purely semantic — identical styling
-either way.
+The full `StorefrontHeader` renders only on the home, where the store name IS
+the `<h1>`; the subpages' `StorefrontAppBar` renders the store name as plain
+text, so no page ever carries two `<h1>`s or shares one duplicated heading.
+(The header's old `asPageHeading` prop existed to juggle this while every page
+rendered the hero; the home-only split made it dead code and it was removed
+in `z8r3fdegb5`.)
 
 The bottom CTA bar's stacking against the footer (fixed bar, measured
 clearance) is written up once in
@@ -180,6 +200,18 @@ Six fixes from the 31 Jul release, all on this page:
   `+1` is 11 digits) can never be silently rewritten to a Malaysian one. The
   loose `assertValidMyWaPhone` is untouched — the counter's manual bind may
   legitimately key a foreign number.
+  > **Later (2026-09-23, [`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274)):**
+  > the "one valid answer" premise held for the store's own numbers, never for
+  > a buyer's. This field now wears the buyer plate — the same plate with a
+  > native country picker defaulting to the store's country — and is judged by
+  > `assertValidBuyerWaPhone` against the country picked, so a buyer's number
+  > can be from any country. Still no flag barrel and no combobox. Names above
+  > are as of this entry: the strict arm is now country-keyed
+  > (`assertValidMobileForCountry`, with `assertValidMyMobile` left only as the
+  > MY alias for Kedaipal's support line), `myWaPhoneCheckoutSchema` became
+  > the seller-side `waPhoneCheckoutSchema` record, and `assertValidMyWaPhone`
+  > is gone — the counter's manual bind wears the buyer picker too. See
+  > [`phone-numbers.md`](./phone-numbers.md).
 - **Caret on every receipt row.** The rows have been tappable since PR1, but
   the only cue was a caption under the whole list. The chevron sits on the LEFT
   so the money column stays flush, and its ~1rem footprint matches the `pl-4`
@@ -210,6 +242,82 @@ Six fixes from the 31 Jul release, all on this page:
   number; the glyphs alone are the control now (hover fill only). The 44px tap
   target is unchanged — `tap-target` sizes the hit area, the border was
   decoration. Same treatment on the custom line's Remove.
+
+## Long names wrap — they never truncate (`z8r3fdhpaj`)
+
+The receipt is the **last screen before the `wa.me` handoff**, so every
+character of what the buyer is about to order has to be readable there without
+tapping anything. It wasn't: the label was one `truncate`d string built as
+`` `${qty}× ${name} · ${optionLabel}` ``, so a long name ate the variant off
+the end — and for a made-to-order seller (a cake with a size, a flavour and a
+name piped on it) **the variant _is_ the order**. There was no tooltip, and the
+stepper the row opens doesn't repeat the name, so the text was simply gone.
+
+What the rows do now:
+
+- **The variant left the name string.** `receiptLabel()` returns `1× Kek Batik`
+  and nothing else; `optionLabel` renders as its own muted line beneath. No
+  amount of name length can push it out of view, and it no longer matters that
+  `optionLabel` contains its own `·` separators.
+- **The label wraps with `wrap-anywhere`, not `break-words`.** Only
+  `overflow-wrap: anywhere` shrinks a flex item's **min-content** size, so a
+  60-char SKU-style name breaks mid-word instead of forcing the whole ticket to
+  scroll sideways. `break-words` looks equivalent and isn't.
+- **The dotted leader bows out on its own.** It is a `flex-1` item with a `0`
+  basis, so once a long label claims the row there is no free space left for it
+  to grow into — it collapses to zero width with no JS and no measuring, and
+  comes back the moment the name is short enough. `items-baseline` keeps the
+  caret and the amount on the label's **first** line, so the money column still
+  lines up with the fee rows below it whether the name is one line or five.
+- **The note wraps in full** (`whitespace-pre-line wrap-anywhere`) — it is
+  usually the instructions the buyer typed themselves, which is the last text
+  that should be cut. Deliberately not clamped: "readable without tapping" is
+  the point.
+- **44px tap target** (`py-2.5` on a `leading-6` row, replacing `min-h-8`'s
+  32px), and the note/attachment sub-lines moved `pl-4` → `pl-5` so every
+  sub-line shares one text column with the label (the caret's 12px plus the
+  row's 8px gap).
+
+`FeeLine` keeps `truncate` **for the reading, not because the text is short** —
+one charge, one line, is what makes the fee block scannable under the items.
+Its labels are not all fixed: `Pickup · {pickupFeeLabel}` carries a
+seller-authored pickup-point name (up to `LABEL_MAX` = 60 chars,
+`convex/pickupLocations.ts`), so about 33 characters fit at 360px and a long
+point name *is* cut there. That's accepted because the full name is rendered
+unwrapped in the pickup picker directly above it
+(`pickup-location-options.tsx`), so the buyer has already read it in full and
+the fee row is only echoing which one they chose.
+
+The same fix lands on two more surfaces that rendered the identical
+`min-w-0 truncate` + leader row:
+
+- the **booking/stay summary** (`booking-checkout-form.tsx` — "Your stay" /
+  "Your package");
+- the **claim ticket** (`claim/claim-ticket.tsx`) — see below.
+
+### The claim ticket is the second Order Ticket (`z8r3fdhpaj`, PR review)
+
+`/claim/<token>` renders a byte-identical Order Ticket from its own component:
+same mono type, same dotted leaders, masthead reading `Order ticket · To
+complete`. The first pass of this fix swept the booking checkout and **missed
+it**, and there the bug was worse — the label was
+`` `${name} (${variantLabel})` `` plus a **trailing** `` ×${quantity} ``, so a
+long name ate the option *and* how many the buyer was buying, on the last
+screen before they commit to a seller-sent link.
+
+Two changes stop it recurring:
+
+- **One definition.** `src/lib/receipt-line.ts` owns `receiptLineLabel()` plus
+  `RECEIPT_LABEL_CLASS` / `RECEIPT_VARIANT_CLASS`, and both tickets build their
+  label from it. The quantity **leads** there (`4× Name`, always printed,
+  including `1×`) precisely because a trailing `×4` is the first thing a narrow
+  column cuts. A test asserts both tickets use it and that neither re-joins the
+  variant into the name.
+- **The claim ticket became a pure component** (`ClaimTicket`), like
+  `CheckoutSummary` already was. It had drifted *because* it lived inside a
+  page that pulls live quotes, a calendar and a form — the page cannot be
+  rendered in a unit test (it OOMs), so nothing could ever have caught this.
+  `ClaimTicket` takes resolved props and has its own test.
 
 ## Follow-ups (PR2 / PR3 of 86eybrhrt)
 

@@ -12,6 +12,7 @@ import {
 	Download,
 	ListChecks,
 	Loader2,
+	Lock,
 	Pin,
 	Search,
 	ShoppingBag,
@@ -30,7 +31,11 @@ import {
 	describeBookingPeriod,
 	ENDING_SOON_DAYS,
 } from "../../convex/lib/bookingPeriod";
-import type { FulfilmentWindow } from "../../convex/lib/fulfilmentDate";
+import {
+	type FulfilmentWindow,
+	todayMytMidnight,
+	ymdFromEpoch,
+} from "../../convex/lib/fulfilmentDate";
 import {
 	foldLegacyBuckets,
 	formatStatusAge,
@@ -39,7 +44,12 @@ import {
 	type InboxStatusLeaf,
 	type OrderBucket,
 } from "../../convex/lib/orderBuckets";
-import { ORDER_COLUMNS, type OrderColumnKey } from "../../convex/lib/orderCsv";
+import {
+	FULFILMENT_KEYS,
+	type FulfilmentKey,
+	ORDER_COLUMNS,
+	type OrderColumnKey,
+} from "../../convex/lib/orderCsv";
 import {
 	type InboxSort,
 	type PinMode,
@@ -50,6 +60,7 @@ import {
 	type OrderPaymentMethod,
 } from "../../convex/lib/paymentMethod";
 import { ProFeatureTease } from "../components/app/pro-gate";
+import { ViewOnlyNote } from "../components/app/view-only-note";
 import {
 	DeliveryMethodIcon,
 	OrderContextBadge,
@@ -75,6 +86,7 @@ import { PageHeader } from "../components/dashboard/page-header";
 import { PrintLabelsDialog } from "../components/dashboard/print-labels-dialog";
 import { ReadyToShipStrip } from "../components/dashboard/ready-to-ship-strip";
 import { StatusBadge } from "../components/dashboard/status-badge";
+import { OrderTotal } from "../components/order/order-total";
 import { OrdersViewToggle } from "../components/order/orders-view-toggle";
 import { Button } from "../components/ui/button";
 import {
@@ -93,15 +105,24 @@ import {
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
 import { useDebounce } from "../hooks/useDebounce";
+import { resolvePinMode, useInboxPinMode } from "../hooks/useInboxPinMode";
 import {
 	type InboxView,
 	resolveInboxView,
 	useInboxView,
 } from "../hooks/useInboxView";
 import { useOrderColumns } from "../hooks/useOrderColumns";
+import { usePermission } from "../hooks/usePermission";
+import { useAreaLock } from "../hooks/useStoreLock";
 import { canHardDeleteOrders } from "../lib/admin-actions";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { describeAwbPaper } from "../lib/awb-labels";
+import { bulkStatusToast } from "../lib/bulk-skip-reasons";
+import {
+	bulkCreditSkipNote,
+	gatedNameCell,
+	gatedRowLine,
+} from "../lib/credits-ui";
 import { orderCustomerLabel } from "../lib/customer";
 import { downloadCsv } from "../lib/download";
 import {
@@ -109,7 +130,12 @@ import {
 	formatOrderTimestamp,
 	formatPrice,
 } from "../lib/format";
+import { type BulkVocab, buildBulkTargets } from "../lib/inbox-bulk-targets";
 import { type InboxEmptyCopy, inboxEmptyCopy } from "../lib/inbox-empty-copy";
+import {
+	anyInboxFilterActive,
+	clearedInboxFilters,
+} from "../lib/inbox-filter-params";
 import {
 	statusChipSelected as chipSelected,
 	isBucketChip,
@@ -120,13 +146,16 @@ import { summarizeOrderCardItems, withLineKeys } from "../lib/order-card-items";
 import {
 	type DeliveryMethod,
 	displayStatusLabel,
+	type OrderFlowKind,
 	type OrderStatus,
+	orderFlowKind,
 	resolveAnchorLabel,
 	resolveCurrentStage,
 	resolveStages,
 	type StatusLabels,
 	stageLabel,
 } from "../lib/orderStatus";
+import { searchText } from "../lib/search-params";
 import { hasFeature } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
@@ -160,6 +189,12 @@ type InboxSearch = {
 	 * here into `st` and returns `undefined`, so old bookmarks and deep links
 	 * keep working and the param drops out of the URL on the next tap. */
 	bucket?: OrderBucket[];
+	/** Legacy singular `?source=` and `?nopin=`, READ ONLY like `bucket`:
+	 * folded into `sources` / `pin` and returned `undefined`. Returning them
+	 * is what stops the raw value leaking through the router's merge
+	 * (z8r3fdtk87, src/lib/search-params.ts). */
+	source?: undefined;
+	nopin?: undefined;
 	q?: string;
 	pay?: PaymentStatus[];
 	method?: OrderPaymentMethod[];
@@ -171,11 +206,23 @@ type InboxSearch = {
 	mockup?: boolean;
 	/** Fulfilment-date urgency window (Today / Tomorrow / This week). */
 	fwin?: FulfilmentWindow;
+	/** Orders DUE between these two MYT midnights, inclusive — the arbitrary-span
+	 * twin of `fwin`, which only names three windows. Home's Plan ahead tiles
+	 * open one day each through it (z8r3fdrgzj). */
+	ffrom?: number;
+	fto?: number;
 	/** Checkout surfaces to keep (online / counter / claim link). MULTI since
 	 * 86eyrtz74 — "everything that isn't a walk-in" is a real question that one
 	 * value can't ask. A legacy singular `?source=` is still read and folded in,
 	 * so old bookmarks keep working. */
 	sources?: OrderSource[];
+	/** How the order goes OUT (z8r3fdfau9) — `fulfilmentKey` values, carried in
+	 * the URL exactly like `pay`/`method`: the router serialises the array as
+	 * JSON, so it reads `?ful=["delivery","drop_off"]`. A bare `?ful=delivery`
+	 * is still accepted (`toList`) and heals into that form on the next
+	 * navigate, so a hand-written or older link keeps working. The twin of
+	 * `sources`: that one is the surface it came IN through. */
+	ful?: FulfilmentKey[];
 	/**
 	 * THE status axis — status LEAVES, repeated in the URL like `pay`/`method`.
 	 * Written by the chip row (a whole bucket's leaves at a tap), the Filters
@@ -189,6 +236,10 @@ type InboxSearch = {
 	/** Keep orders with NO frozen categories (PR #235 review) — the twin of
 	 * `munspec`. Without it, selecting every category silently drops them. */
 	catunspec?: boolean;
+	/** ONE listing's orders (`z8r3fdjv0d`) — a `products._id`, written only by
+	 * the Schedule view so a row opens exactly the orders it counted. No picker
+	 * sets it; the panel shows it as a removable token. */
+	listing?: string;
 	/** Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys. Repeated
 	 * in the URL (`?asrc=tiktok&asrc=direct`) so a filtered inbox is shareable
 	 * and survives refresh, same as `pay`/`method`. */
@@ -220,6 +271,17 @@ type InboxSearch = {
 	 * so only the non-default reaches the URL — the rule `sort` and `bucket`
 	 * follow. A legacy `?nopin=true` still parses as `"off"`. */
 	pin?: Exclude<PinMode, "top">;
+	/**
+	 * Only the orders WAITING ON CREDITS, or only the ones that aren't (Credits
+	 * T3.1). A seller with 40 waiting needs to see exactly those 40, and its
+	 * twin gets them out of the way so the workable ones can be cleared.
+	 *
+	 * Spelled out in the URL rather than hidden in the filter sheet because
+	 * both the shell banner and the inbox note LINK here — "Show the 40" has to
+	 * land on a view, and a view worth linking is a view worth sharing (the
+	 * same reason `bucket` and `sort` are here).
+	 */
+	creditGated?: boolean;
 };
 
 function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
@@ -228,6 +290,12 @@ function isFulfilmentWindow(x: unknown): x is FulfilmentWindow {
 
 function isOrderSource(x: unknown): x is OrderSource {
 	return x === "storefront" || x === "counter" || x === "claim";
+}
+
+/** Narrowed against the registry, so a hand-edited or stale URL can't push a
+ * value `searchOrders`' validator would reject outright. */
+function isFulfilmentKey(x: unknown): x is FulfilmentKey {
+	return (FULFILMENT_KEYS as readonly string[]).includes(x as string);
 }
 
 function isInboxLeaf(x: unknown): x is InboxStatusLeaf {
@@ -250,6 +318,22 @@ const STATUS_CHIP_HINTS: Partial<Record<StatusChipKey, string>> = {
 	ending_soon: `Active bookings finishing within ${ENDING_SOON_DAYS} days — the renewal and check-out list.`,
 	upcoming: "Booked, but not started yet.",
 };
+
+/**
+ * What the next tap on the "Waiting on credits" chip will do (Credits T3.1).
+ *
+ * THREE states, cycling, exactly like the Pinned chip beside it — because the
+ * two needs are both real: see what my next top-up opens, and get those rows
+ * out of the way so I can work the ones that are open. Two look-alike chips
+ * that cycled different numbers of states would be the "one control, one rule"
+ * failure, so this one matches its neighbour.
+ */
+const CREDIT_GATE_HINTS = {
+	all: "Orders waiting on credits are mixed in with the rest. Tap to see only them.",
+	only: "Showing only the orders waiting on credits — they open oldest first as credits land. Tap to hide them instead.",
+	hidden:
+		"Orders waiting on credits are hidden, so this is just the work you can do now. Tap to show everything.",
+} as const;
 
 /** What the next tap on the Pinned chip will do — the only way a three-state
  * control can be honest about a state the seller hasn't reached yet. */
@@ -334,6 +418,7 @@ export const Route = createFileRoute("/app/orders/")({
 				),
 			),
 		];
+		const ful = [...new Set(toList(search.ful).filter(isFulfilmentKey))];
 		// Legacy `?bucket=` folds into `st` right here, so the rest of the route
 		// only ever sees ONE status field and a stale bookmark heals on the next
 		// navigate. Same helper the server folds with, so a link and the query it
@@ -351,14 +436,22 @@ export const Route = createFileRoute("/app/orders/")({
 		// link to a category that has since been renamed.
 		const cat = [
 			...new Set(
-				toList(search.cat).flatMap((x) =>
-					typeof x === "string" && x.length > 0 && x.length <= 120 ? [x] : [],
-				),
+				toList(search.cat).flatMap((raw) => {
+					// A category can be named "2024", which the URL parses as a number.
+					const x = searchText(raw);
+					return x !== undefined && x.length <= 120 ? [x] : [];
+				}),
 			),
 		];
-		const q =
-			typeof search.q === "string" && search.q.length > 0
-				? search.q
+		// An order number or phone is all digits, and `?q=60123…` parses as a
+		// NUMBER — `searchText` reads it back as the text (z8r3fdtk87).
+		const q = searchText(search.q);
+		// A Convex id is short lowercase base32; anything else can't name a
+		// listing, so it is dropped here rather than sent to match nothing.
+		const listingRaw = searchText(search.listing);
+		const listing =
+			listingRaw !== undefined && /^[a-z0-9]{1,64}$/.test(listingRaw)
+				? listingRaw
 				: undefined;
 		return {
 			// Never written back: it folded into `st` above. Keeping it out of the
@@ -366,6 +459,9 @@ export const Route = createFileRoute("/app/orders/")({
 			// on the seller's next tap instead of lingering as a second source of
 			// truth for the same thing.
 			bucket: undefined,
+			// Folded into `sources` / `pin` below, same as `bucket`.
+			source: undefined,
+			nopin: undefined,
 			q,
 			pay: pay.length > 0 ? pay : undefined,
 			method: method.length > 0 ? method : undefined,
@@ -376,15 +472,19 @@ export const Route = createFileRoute("/app/orders/")({
 			mockup:
 				search.mockup === true || search.mockup === "true" ? true : undefined,
 			fwin: isFulfilmentWindow(search.fwin) ? search.fwin : undefined,
+			ffrom: typeof search.ffrom === "number" ? search.ffrom : undefined,
+			fto: typeof search.fto === "number" ? search.fto : undefined,
 			// A pre-widen `?source=counter` folds into the list, so a bookmark or a
 			// link shared before this shipped still filters (86eyrtz74).
 			sources: sources.length > 0 ? sources : undefined,
+			ful: ful.length > 0 ? ful : undefined,
 			st: st.length > 0 ? st : undefined,
 			cat: cat.length > 0 ? cat : undefined,
 			catunspec:
 				search.catunspec === true || search.catunspec === "true"
 					? true
 					: undefined,
+			listing,
 			asrc: asrc.length > 0 ? asrc : undefined,
 			period: period.length > 0 ? period : undefined,
 			// Only the non-default ("due") is stored; "recent" stays out of the URL.
@@ -411,6 +511,15 @@ export const Route = createFileRoute("/app/orders/")({
 					? search.pin
 					: search.nopin === true || search.nopin === "true"
 						? "off"
+						: undefined,
+			// Three states, not two: absent is "no filtering", and `false` is the
+			// real question "hide the ones I can't open yet". A bare `=== true`
+			// would collapse the last two (the undefined-is-not-false rule).
+			creditGated:
+				search.creditGated === true || search.creditGated === "true"
+					? true
+					: search.creditGated === false || search.creditGated === "false"
+						? false
 						: undefined,
 		};
 	},
@@ -457,15 +566,20 @@ function OrdersRoute() {
 		to,
 		mockup = false,
 		fwin,
+		ffrom,
+		fto,
 		sources = [],
+		ful = [],
 		st = [],
 		cat = [],
 		catunspec = false,
+		listing,
 		sort = "recent",
 		view: urlView,
-		pin: pinMode = "top",
+		pin: urlPin,
 		tsort,
 		tdesc = false,
+		creditGated,
 	} = Route.useSearch();
 	// TanStack Table's own sorting shape, derived from the URL so a sorted table
 	// survives refresh and can be shared.
@@ -478,6 +592,26 @@ function OrdersRoute() {
 	const convex = useConvex();
 
 	const bulkUpdateStatus = useMutation(api.orders.bulkUpdateStatus);
+	// A lapsed store is view-only (z8r3fdeub2) — every bulk action is refused.
+	// Orders is view-only for a lapsed store AND for a teammate granted view
+	// but not edit — one flag, so every disabled-with-reason control below
+	// (select mode, bulk actions, pin, status moves) covers both.
+	const { readOnly, reason } = useAreaLock("orders");
+	// Waiting on credits (Credits T3.1) is not a lock on this screen at all:
+	// a selection is routinely MIXED, and `bulkUpdateStatus` moves what it can
+	// and reports what it skipped. So the bar stays ENABLED and warns instead
+	// — disabling it would strand a seller who selected 20 orders of which 2
+	// are waiting, which is the store-wide lock's failure mode in miniature.
+	// The per-row answer rides on the ROW (`o.creditGated`), stamped by the
+	// server's redaction, so nothing here needs to ask the gate.
+	// Orders export is the ONE export the server genuinely gates (a teammate
+	// can work the inbox all day and still not walk out with the order book),
+	// and it is separate from orders itself — so the button asks the `exports`
+	// grant, not the orders one.
+	const canExport = usePermission("exports").canRead;
+	const exportBlockReason = canExport
+		? undefined
+		: "Ask the store owner for access to data export.";
 	const bulkDeleteOrders = useMutation(api.orders.bulkDeleteOrders);
 	const setPinned = useMutation(api.orders.setPinned);
 	const [pinBusyId, setPinBusyId] = useState<string | null>(null);
@@ -511,6 +645,9 @@ function OrdersRoute() {
 	const { stored: storedView, remember: rememberView } = useInboxView(
 		retailer?._id ?? "",
 	);
+	const { stored: storedPin, remember: rememberPin } = useInboxPinMode(
+		retailer?._id ?? "",
+	);
 	// Order Inbox plan gate (Pro+). Starter keeps the plain list + order detail +
 	// status updates (the all-tier "Order pipeline"); buckets/search/filters/bulk/
 	// export are the gated inbox surfaces — hidden below, and any stale URL filters
@@ -525,12 +662,18 @@ function OrdersRoute() {
 		retailer.actingAsAdmin === true ||
 		hasFeature(retailer.subscription, "orderInbox");
 	const view = resolveInboxView(urlView, storedView, inboxEnabled);
+	// What the pins DO, same posture as the layout above: a mode named in the
+	// URL wins, otherwise the seller resumes what they last chose. Without
+	// this, every Insights drill-in (which builds a fresh search object)
+	// silently reset a seller who had turned pinning off.
+	const pinMode = resolvePinMode(urlPin, storedPin);
 
 	const payKey = pay.join(",");
 	const methodKey = method.join(",");
 	const asrcKey = asrc.join(",");
 	const periodKey = period.join(",");
 	const sourcesKey = sources.join(",");
+	const fulKey = ful.join(",");
 	const stKey = st.join(",");
 	const catKey = cat.join(",");
 	// Mirror the debounced search into the URL (shareable / survives refresh).
@@ -557,10 +700,14 @@ function OrdersRoute() {
 		to,
 		mockup,
 		fwin,
+		ffrom,
+		fto,
 		sourcesKey,
+		fulKey,
 		stKey,
 		catKey,
 		catunspec,
+		listing,
 		// Re-sorting is a view change too — jump back to the top of the new order.
 		sort,
 		// Changing the pin mode changes which rows are in the set.
@@ -583,6 +730,15 @@ function OrdersRoute() {
 		convexQuery(
 			api.bookingBlocks.hasBookingListings,
 			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
+	// Stores with events or bookings get Schedule (`z8r3fdjv0d`) — registered
+	// vs paid per date. Behind the same inbox gate as the rest of the header
+	// actions, because it is a Pro inbox lens.
+	const hasDatedListings = useQuery(
+		convexQuery(
+			api.schedule.hasDatedListings,
+			retailer && inboxEnabled ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
 
@@ -612,10 +768,14 @@ function OrdersRoute() {
 							dateTo: to,
 							mockupPending: mockup || undefined,
 							fulfilmentWindow: fwin,
+							fulfilmentFrom: ffrom,
+							fulfilmentTo: fto,
 							sources: sources.length > 0 ? sources : undefined,
+							fulfilments: ful.length > 0 ? ful : undefined,
 							statuses: st.length > 0 ? st : undefined,
 							categories: cat.length > 0 ? cat : undefined,
 							categoriesUnspecified: catunspec || undefined,
+							listing,
 							attributionSources: asrc.length > 0 ? asrc : undefined,
 							bookingPeriods: period.length > 0 ? period : undefined,
 							searchText: debounced || undefined,
@@ -623,10 +783,17 @@ function OrdersRoute() {
 							// or the CSV would hold different rows than the screen it came
 							// from.
 							pinMode,
+							// Waiting on credits (Credits T3.1).
+							creditGated,
 							// No limit → stable full-window subscription; we paginate below
 							// by slicing to `visibleCount`, so "Load more" never re-queries.
 						}
-					: { retailerId: retailer._id }
+					: // Starter: the inbox surfaces are Pro, but the credit gate
+						// applies at EVERY tier, so this one filter rides along —
+						// paywalling the view that finds the orders a seller is being
+						// asked to pay to open would be absurd (and the server agrees:
+						// `creditGated` is excluded from NARROWING_FILTER_KEYS).
+						{ retailerId: retailer._id, creditGated }
 				: "skip",
 		),
 		placeholderData: keepPreviousData,
@@ -643,11 +810,39 @@ function OrdersRoute() {
 	const retailerMethod: DeliveryMethod = retailer.offerSelfCollect
 		? "self_collect"
 		: "delivery";
-	const stages = resolveStages({
-		orderStages: retailer.orderStages,
-		labels,
-		deliveryMethod: retailerMethod,
-	});
+	// Stages are per flow kind now (z8r3fdh3w1), and one inbox mixes kinds, so
+	// the list is resolved per kind and memoized rather than resolved once for
+	// the store. `stages` stays the RETAILER-GRAIN list — the store's primary
+	// product flow — because the controls that read it (bulk actions, the
+	// status filter, the column header) are store-grain, one control for rows
+	// of every kind. Per-ROW wording comes from `stagesForKind` below.
+	const orderFlows = retailer.orderFlows;
+	const legacyStages = retailer.orderStages;
+	const stagesByKind = new Map<
+		OrderFlowKind,
+		ReturnType<typeof resolveStages>
+	>();
+	function stagesForKind(
+		kind: OrderFlowKind,
+		bookingPackaged?: boolean,
+	): ReturnType<typeof resolveStages> {
+		// A package's defaults differ from a stay's (Active/Ended vs Checked
+		// in/out), so it can't share the booking entry unless the kind is
+		// customised — in which case one config covers both by design.
+		const cacheable = !(kind === "booking" && bookingPackaged);
+		const hit = cacheable ? stagesByKind.get(kind) : undefined;
+		if (hit) return hit;
+		const resolved = resolveStages({
+			orderFlows,
+			orderStages: legacyStages,
+			labels,
+			deliveryMethod: kind,
+			bookingPackaged,
+		});
+		if (cacheable) stagesByKind.set(kind, resolved);
+		return resolved;
+	}
+	const stages = stagesForKind(retailerMethod);
 
 	const loading = result === undefined;
 	// The query returns the whole filtered window, newest-first. We apply the sort
@@ -681,25 +876,38 @@ function OrdersRoute() {
 		currentStageId?: string;
 		deliveryMethod?: string;
 		source?: string;
+		eventRsvp?: boolean;
+		bookingPackaged?: boolean;
 	}): string {
+		// The ROW's flow kind picks its vocabulary — a checked-in RSVP reads
+		// "Checked In", a stay "Checked Out", never the retailer's delivery
+		// wording. Every kind can carry its own configured flow now, so this
+		// asks for the row's kind unconditionally instead of special-casing the
+		// two that used to be exempt; the memo keeps it to one resolve per kind
+		// per render.
+		const kind = orderFlowKind(o);
+		const rowStages = stagesForKind(kind, o.bookingPackaged);
 		const cs = resolveCurrentStage(
 			{ status: o.status as OrderStatus, currentStageId: o.currentStageId },
-			stages,
+			rowStages,
 		);
 		const resolved = cs
 			? stageLabel(cs, "en")
 			: resolveAnchorLabel(o.status as OrderStatus, {
-					stages,
+					stages: rowStages,
 					labels,
-					deliveryMethod: (o.deliveryMethod ?? "delivery") as DeliveryMethod,
+					orderFlows,
+					deliveryMethod: kind,
 					locale: "en",
 				});
 		// Counter sales complete "at the counter", not via delivery — their done
-		// state reads "Completed", never "Delivered".
+		// state reads "Completed", never "Delivered". (An RSVP sold at the
+		// counter is exempt inside displayStatusLabel — the guest attends later.)
 		return displayStatusLabel(
 			{
 				status: o.status as OrderStatus,
 				source: o.source as "storefront" | "counter" | "claim" | undefined,
+				eventRsvp: o.eventRsvp,
 			},
 			resolved,
 		);
@@ -719,6 +927,7 @@ function OrdersRoute() {
 			categories: cat,
 			categoriesUnspecified: catunspec,
 			sources,
+			fulfilments: ful,
 			paymentStatuses: pay,
 			paymentMethods: munspec ? [...method, METHOD_UNSPECIFIED] : method,
 			attributionSources: asrc,
@@ -727,6 +936,7 @@ function OrdersRoute() {
 		facets: result?.facets,
 		availableSources: result?.availableSources ?? [],
 		availableCategories: result?.availableCategories ?? [],
+		storeHasCategories: result?.storeHasCategories,
 		country: retailer.country,
 		// The same resolver the Status column renders with, so the filter offers
 		// the seller's own stage words rather than our internal keys.
@@ -746,24 +956,44 @@ function OrdersRoute() {
 		: undefined;
 	const now = Date.now();
 	const searching = debounced.length > 0;
+	/**
+	 * Already looking at what is due today — through the panel's named window OR
+	 * through Home's Today tile, which sends the same day as an explicit span.
+	 * The due-today banner offers to apply this, so without the second half it
+	 * invites a seller who arrived from the Today tile to filter to today again
+	 * (PR #358 review).
+	 */
+	const todayYmd = ymdFromEpoch(todayMytMidnight());
+	const viewingDueToday =
+		fwin === "today" ||
+		(ffrom != null &&
+			fto != null &&
+			ymdFromEpoch(ffrom) === todayYmd &&
+			ymdFromEpoch(fto) === todayYmd);
+
 	// Every active filter OUTSIDE the status axis. `st`/`period` deliberately
 	// don't count: the chip row is the seller's PLACE — the old bucket segment
 	// control's successor — so a chip tap must not flip the empty state to "No
 	// orders match your filters" (which buried the per-bucket copy, PR #243
 	// review), and "Clear filters" must not throw the seller back to All. The
 	// panel's own "Clear all (N)" is the control that owns the whole axis.
-	const filtersActive =
-		pay.length > 0 ||
-		method.length > 0 ||
-		munspec ||
-		from != null ||
-		to != null ||
-		mockup ||
-		fwin != null ||
-		sources.length > 0 ||
-		cat.length > 0 ||
-		catunspec ||
-		asrc.length > 0;
+	const filtersActive = anyInboxFilterActive({
+		pay,
+		method,
+		munspec,
+		from,
+		to,
+		mockup,
+		fwin,
+		ffrom,
+		fto,
+		sources,
+		ful,
+		cat,
+		catunspec,
+		listing,
+		asrc,
+	});
 
 	// ONE empty-state copy for both views — the table used to hardcode its own,
 	// so the same state read differently depending on which view you were in.
@@ -819,9 +1049,23 @@ function OrdersRoute() {
 	/** Cycle the pin chip: top -> only -> off -> top. "Only" comes second
 	 * because it is the useful next step from the default; "off" is the rarely
 	 * wanted escape hatch, so it sits furthest from the first tap. */
+	// undefined → true (only waiting) → false (hide waiting) → undefined.
+	// Deliberately NOT remembered per device like the pin mode: the gate is a
+	// temporary state a seller is trying to clear, so a store that tops up
+	// should not come back next week to a filter it set while in debt.
+	function cycleCreditGate() {
+		const next =
+			creditGated === undefined ? true : creditGated ? false : undefined;
+		navigate({ search: (prev) => ({ ...prev, creditGated: next }) });
+	}
+
 	function cyclePinMode() {
 		const next: PinMode =
 			pinMode === "top" ? "only" : pinMode === "only" ? "off" : "top";
+		// "top"/"off" is how this seller reads their inbox, so it outlives the
+		// URL; "only" narrows the list, so it is a filter and is deliberately
+		// not remembered (see useInboxPinMode).
+		rememberPin(next);
 		navigate({
 			// The default stays out of the URL; only the two opt-outs persist.
 			search: (prev) => ({ ...prev, pin: next === "top" ? undefined : next }),
@@ -909,6 +1153,11 @@ function OrdersRoute() {
 						? true
 						: undefined;
 				}
+				if (patch.fulfilments)
+					next.ful =
+						patch.fulfilments.length > 0
+							? (patch.fulfilments as FulfilmentKey[])
+							: undefined;
 				if (patch.attributionSources)
 					next.asrc =
 						patch.attributionSources.length > 0
@@ -926,28 +1175,11 @@ function OrdersRoute() {
 	function clearAllFilters() {
 		navigate({
 			replace: true,
-			search: (prev) => ({
-				...prev,
-				pay: undefined,
-				method: undefined,
-				munspec: undefined,
-				from: undefined,
-				to: undefined,
-				mockup: undefined,
-				fwin: undefined,
-				sources: undefined,
-				// The status axis clears too — BOTH halves. This is the table's
-				// "start over below" button, and in table view the axis is set from
-				// the Status column's own filter funnel, so leaving it would strand
-				// the seller on the very filter the row is telling them about. It
-				// used to clear `st` but not `period` — half the chip row (PR #243
-				// review).
-				st: undefined,
-				period: undefined,
-				cat: undefined,
-				catunspec: undefined,
-				asrc: undefined,
-			}),
+			// Every clearable param, from the one list that also decides what
+			// COUNTS as a filter — see lib/inbox-filter-params.ts. Spelling them
+			// out here is how the due span (`ffrom`/`fto`) came to be counted but
+			// never cleared, which made this button a dead end.
+			search: (prev) => ({ ...prev, ...clearedInboxFilters() }),
 		});
 	}
 
@@ -966,11 +1198,17 @@ function OrdersRoute() {
 				to: next.to,
 				mockup: next.mockup ? true : undefined,
 				fwin: next.fwin,
+				ffrom: next.dueFrom,
+				fto: next.dueTo,
 				asrc:
 					next.attributionSources.length > 0
 						? next.attributionSources
 						: undefined,
 				sources: next.sources.length > 0 ? next.sources : undefined,
+				ful:
+					next.fulfilments.length > 0
+						? (next.fulfilments as FulfilmentKey[])
+						: undefined,
 				st:
 					next.statuses.length > 0
 						? (next.statuses as InboxStatusLeaf[])
@@ -979,6 +1217,7 @@ function OrdersRoute() {
 					next.bookingPeriods.length > 0 ? next.bookingPeriods : undefined,
 				cat: next.categories.length > 0 ? next.categories : undefined,
 				catunspec: next.categoriesUnspecified ? true : undefined,
+				listing: next.listing,
 			}),
 		});
 	}
@@ -1031,6 +1270,8 @@ function OrdersRoute() {
 		bookingCheckIn?: number;
 		bookingCheckOut?: number;
 		bookingPackaged?: boolean;
+		bookingSkippedDays?: number[];
+		bookingCustomerSkips?: number[];
 		status: string;
 	}): string | null => describeBookingPeriod(o);
 
@@ -1057,21 +1298,45 @@ function OrdersRoute() {
 		setSelected(allSelected ? new Set() : new Set(visibleIds));
 	}
 
-	// Bulk targets — the canonical forward transitions (resolved to the retailer's
-	// labels, matching the row badges) then the destructive Cancel, all in one
-	// "Update status" dropdown. No primary/overflow split.
-	const bulkActions: BulkAction[] = (
-		["confirmed", "packed", "shipped", "delivered"] as const
-	)
-		.map((s) => ({
-			status: s as BulkAction["status"],
-			label: resolveAnchorLabel(s as OrderStatus, {
-				stages,
-				labels,
-				deliveryMethod: retailerMethod,
-				locale: "en",
+	// Bulk targets — the canonical forward transitions then the destructive
+	// Cancel, all in one "Update status" dropdown. No primary/overflow split.
+	// The list speaks the SELECTION, not the store — see buildBulkTargets.
+	const selectedOrders = orderedOrders.filter((o) => selected.has(o._id));
+	// How many of the ticked rows the batch will SKIP for credits (T3.1). The
+	// server does the skipping and reports it afterwards; this is the same
+	// answer said BEFORE the tap, which is the house rule — a disabled-with-
+	// reason beats a toast, and a will-be-skipped note beats a surprise.
+	const waitingInSelection = selectedOrders.filter(
+		(o) => o.creditGated === true && o.status !== "cancelled",
+	).length;
+	const selectionVocabs = new Map<string, BulkVocab>();
+	for (const o of selectedOrders) {
+		const kind = orderFlowKind(o);
+		const packaged = kind === "booking" && o.bookingPackaged === true;
+		const key = `${kind}:${packaged}`;
+		if (!selectionVocabs.has(key)) {
+			selectionVocabs.set(key, {
+				kind,
+				stages: stagesForKind(kind, packaged || undefined),
+			});
+		}
+	}
+	const { targets, note: bulkActionsNote } = buildBulkTargets(
+		[...selectionVocabs.values()],
+		stages,
+	);
+	const bulkActions: BulkAction[] = targets
+		.map(
+			(t): BulkAction => ({
+				status: t.anchor,
+				label: t.label,
+				// `readOnly` (the view-only lock + permissions), never the credit
+				// gate: a mixed selection is normal now and the batch skips what
+				// it can't do, which the bar's note states before the tap.
+				disabled: t.disabled || readOnly,
+				reason: t.reason,
 			}),
-		}))
+		)
 		.concat([
 			{ status: "cancelled", label: "Cancel orders", destructive: true },
 		] as BulkAction[]);
@@ -1089,23 +1354,10 @@ function OrdersRoute() {
 				status,
 				cancellationNote,
 			});
-			// Name the actionable skip reasons — a bare "skipped 2" leaves the
-			// seller guessing why their bulk action half-worked.
-			const skipReasons = [
-				res.skippedAwaitingCollection > 0
-					? `${res.skippedAwaitingCollection} still with your customer`
-					: null,
-				res.skippedRiderManaged > 0
-					? `${res.skippedRiderManaged} with a rider on the way`
-					: null,
-			].filter(Boolean);
-			toast.success(
-				res.skipped > 0
-					? `Updated ${res.updated} · skipped ${res.skipped}${
-							skipReasons.length > 0 ? ` (${skipReasons.join(", ")})` : ""
-						}`
-					: `Updated ${res.updated} order${res.updated === 1 ? "" : "s"}`,
-			);
+			// Every skip names itself (`bulkStatusToast`), and which reasons exist
+			// is derived from the mutation's own return type — so a new counter
+			// can't be left unread the way `skippedCreditGated` was.
+			toast.success(bulkStatusToast(res));
 			// Clear the selection but STAY in select mode — the bulk bar (and the
 			// Radix layers it owns) must not unmount while a popover/confirm dialog
 			// may still be closing, or `pointer-events:none` leaks onto the body and
@@ -1207,10 +1459,14 @@ function OrdersRoute() {
 					dateTo: to,
 					mockupPending: mockup || undefined,
 					fulfilmentWindow: fwin,
+					fulfilmentFrom: ffrom,
+					fulfilmentTo: fto,
 					sources: sources.length > 0 ? sources : undefined,
+					fulfilments: ful.length > 0 ? ful : undefined,
 					statuses: st.length > 0 ? st : undefined,
 					categories: cat.length > 0 ? cat : undefined,
 					categoriesUnspecified: catunspec || undefined,
+					listing,
 					attributionSources: asrc.length > 0 ? asrc : undefined,
 					// The export MUST send this too, or "what the seller sees" and
 					// "what they export" diverge — the one invariant
@@ -1258,15 +1514,28 @@ function OrdersRoute() {
 			<OrdersViewToggle
 				active={view}
 				showCalendar={hasBookingListings === true}
+				showSchedule={hasDatedListings === true}
 				onSelectView={setView}
 			/>
+			{/* View-only (z8r3fdeub2): select mode exists only to run a bulk
+			    action, every one of which the server now refuses — so the door is
+			    disabled with its reason rather than opening onto dead buttons.
+			    Export stays: reading their own data is never withheld. */}
 			<Button
 				type="button"
 				variant={selectMode ? "secondary" : "outline"}
 				size="icon"
 				className="size-11 rounded-xl"
 				aria-pressed={selectMode}
-				aria-label={selectMode ? "Exit select mode" : "Select orders"}
+				disabled={readOnly}
+				title={readOnly ? reason : undefined}
+				aria-label={
+					readOnly
+						? `Select orders — unavailable, ${reason}`
+						: selectMode
+							? "Exit select mode"
+							: "Select orders"
+				}
 				onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
 			>
 				<ListChecks className="size-5" />
@@ -1286,11 +1555,14 @@ function OrdersRoute() {
 							variant="outline"
 							size="icon"
 							className="size-11 rounded-xl"
-							disabled={exporting}
+							disabled={exporting || !canExport}
+							title={exportBlockReason}
 							aria-label={
-								selected.size > 0
-									? `Export ${selected.size} selected orders`
-									: "Export CSV"
+								exportBlockReason
+									? `Export CSV — unavailable, ${exportBlockReason}`
+									: selected.size > 0
+										? `Export ${selected.size} selected orders`
+										: "Export CSV"
 							}
 						>
 							{exporting ? (
@@ -1316,11 +1588,14 @@ function OrdersRoute() {
 					size="icon"
 					className="size-11 rounded-xl"
 					onClick={() => void handleExport(false)}
-					disabled={exporting}
+					disabled={exporting || !canExport}
+					title={exportBlockReason}
 					aria-label={
-						selected.size > 0
-							? `Export ${selected.size} selected orders`
-							: "Export CSV"
+						exportBlockReason
+							? `Export CSV — unavailable, ${exportBlockReason}`
+							: selected.size > 0
+								? `Export ${selected.size} selected orders`
+								: "Export CSV"
 					}
 				>
 					{exporting ? (
@@ -1346,8 +1621,13 @@ function OrdersRoute() {
 				}
 				actions={inboxEnabled ? headerActions : undefined}
 			/>
-			<div className="flex items-center justify-between gap-3 lg:hidden">
-				<div className="min-w-0">
+			{/* WRAPS rather than squeezes: the five header actions need ~350px,
+			    which only just fits a 393px phone. The title used to be the part
+			    that gave way (`min-w-0`) — on a 375px iPhone the view switch sat
+			    on top of "Orders". Now the title keeps its width and the actions
+			    drop to their own line, still right-aligned, when they don't fit. */}
+			<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-3 lg:hidden">
+				<div className="shrink-0">
 					<h2 className="font-heading text-[22px] font-extrabold leading-tight tracking-tight">
 						Orders
 					</h2>
@@ -1355,10 +1635,13 @@ function OrdersRoute() {
 						{loading ? "Loading…" : `${total} order${total === 1 ? "" : "s"}`}
 					</p>
 				</div>
-				<div className="flex shrink-0 items-center gap-2">
+				<div className="ml-auto flex shrink-0 items-center gap-2">
 					{inboxEnabled ? headerActions : null}
 				</div>
 			</div>
+
+			{/* A lapsed store can read this inbox and act on nothing in it. */}
+			<ViewOnlyNote />
 
 			{/* Starter: the inbox controls are a Pro feature — say so where they'd
 			    be, instead of leaving a silent gap. The order list below still works. */}
@@ -1478,17 +1761,22 @@ function OrdersRoute() {
 								to,
 								mockup,
 								fwin,
+								dueFrom: ffrom,
+								dueTo: fto,
 								sources,
+								fulfilments: ful,
 								statuses: st,
 								bookingPeriods: period,
 								categories: cat,
 								categoriesUnspecified: catunspec,
+								listing,
 								attributionSources: asrc,
 							}}
 							onChange={setFilters}
 							country={retailer.country}
 							availableSources={result?.availableSources}
 							availableCategories={result?.availableCategories}
+							listingName={result?.listingName}
 							facets={result?.facets}
 							// One resolver for both surfaces, so the panel and the Status
 							// column can never call the same state two different things.
@@ -1513,7 +1801,49 @@ function OrdersRoute() {
 					    because it configures the TABLE, not the result set — the same
 					    reason the view switch moved up into the header. */}
 					<div className="flex items-center gap-2">
-						<FilterChipRow className="min-w-0 flex-1">
+						{/* The row bleeds past the page gutter so chips scroll edge to
+						    edge — but with the Columns pill beside it (table view) the
+						    right-hand bleed slid chips 20px UNDER the pill. Stop at
+						    the pill instead; the chips still scroll, cut cleanly. */}
+						<FilterChipRow
+							className={cn("min-w-0 flex-1", tableView && "mr-0 pr-0")}
+						>
+							{/* Waiting on credits LEADS the row (Credits T3.1), ahead of
+						    even the seller's own pins: it is the only chip here that is
+						    about money we are owed and orders the seller cannot open, so
+						    it is the most urgent thing in the inbox whenever it exists.
+						    Appended last it would be the "urgent filter sitting last"
+						    mistake the house rule names.
+
+						    It appears once something is actually waiting — a permanent
+						    "Waiting 0" would advertise a restriction most stores never
+						    hit — and ALSO whenever the filter is on at zero, for the
+						    Pinned chip's reason: topping up empties the list, and a chip
+						    that vanished with it would leave `?creditGated=true` in the
+						    URL, an empty inbox, and no way back on screen. */}
+							{(counts?.creditGated ?? 0) > 0 || creditGated !== undefined ? (
+								<FilterChip
+									tone="accent"
+									selected={creditGated !== undefined}
+									onClick={cycleCreditGate}
+									count={counts?.creditGated}
+									countTone="attention"
+									title={
+										CREDIT_GATE_HINTS[
+											creditGated === undefined
+												? "all"
+												: creditGated
+													? "only"
+													: "hidden"
+										]
+									}
+								>
+									<Lock className="size-3.5" aria-hidden="true" />
+									{creditGated === false
+										? "Waiting hidden"
+										: "Waiting on credits"}
+								</FilterChip>
+							) : null}
 							{/* Pinned leads the row (86eyrtz74) because it is the seller's
 						    OWN mark — the statuses after it are the system's opinion,
 						    this one is theirs. That is also why it is NOT part of the
@@ -1590,13 +1920,22 @@ function OrdersRoute() {
 			{inboxEnabled &&
 			!loading &&
 			(counts?.dueToday ?? 0) > 0 &&
-			fwin !== "today" ? (
+			!viewingDueToday ? (
 				<button
 					type="button"
 					onClick={() =>
-						navigate({ search: (prev) => ({ ...prev, fwin: "today" }) })
+						navigate({
+							search: (prev) => ({
+								...prev,
+								fwin: "today",
+								// Retire any span it replaces: "due when" is one axis, and
+								// a Thursday span ANDed with today matches nothing.
+								ffrom: undefined,
+								fto: undefined,
+							}),
+						})
 					}
-					className="flex items-center gap-2.5 rounded-2xl bg-foreground px-4 py-3 text-left text-background transition-opacity hover:opacity-95"
+					className="flex items-center gap-2.5 rounded-2xl bg-foreground dark:border dark:border-accent/30 dark:bg-accent/12 px-4 py-3 text-left text-background dark:text-foreground transition-opacity hover:opacity-95"
 				>
 					<CalendarDays
 						className="size-5 shrink-0 text-accent"
@@ -1611,23 +1950,17 @@ function OrdersRoute() {
 			) : null}
 
 			{/* Despatch queue (86eyp63mp) — below the due-today banner because a
-			    deadline outranks a task you can finish whenever you like. Shown
-			    even at zero (with a disabled button + the reason): the count is how
-			    a seller learns the feature exists. Held back until the counts land,
-			    so it never claims an empty queue before it knows. Hidden for
-			    pickup-only stores, which have no parcels to label, and it rides the
-			    same Order Inbox plan gate as the bulk actions it sits with. */}
+			    deadline outranks a task you can finish whenever you like. Since
+			    86eye9xd4 it points at Deliveries, where the labels print beside
+			    the To-ship queue. Shown even at zero: the count is how a seller
+			    learns the queue exists. Held back until the counts land, so it
+			    never claims an empty queue before it knows. Hidden for
+			    pickup-only stores, which have no parcels to label. */}
 			{inboxEnabled &&
 			!loading &&
 			retailer &&
 			(retailer.offerDelivery ?? true) ? (
-				<ReadyToShipStrip
-					retailerId={retailer._id}
-					count={counts?.readyToShip ?? 0}
-					paperLabel={describeAwbPaper(
-						resolveAwbConfig(retailer.awbConfig).paperSize,
-					)}
-				/>
+				<ReadyToShipStrip count={counts?.readyToShip ?? 0} />
 			) : null}
 
 			{/* Select-mode hint — the persistent bottom bar carries the actions
@@ -1686,6 +2019,14 @@ function OrdersRoute() {
 						<ul className="flex flex-col gap-2 lg:grid lg:grid-cols-2 lg:gap-3">
 							{visibleOrders.map((o) => {
 								const isSel = selected.has(o._id);
+								// Waiting on credits (Credits T3.1). The row's buyer fields
+								// are ALREADY empty — the server redacted them, this is not a
+								// client-side hide — so the card has to put something in
+								// their place or it reads as a rendering fault. Reference,
+								// money and time survive the redaction on purpose, so the row
+								// still says what arrived and what it's worth; that is both
+								// the honest state of the inbox and the reason to top up.
+								const gated = o.creditGated === true;
 								const statusLabel = statusLabelFor(o);
 								const placedAt = formatOrderTimestamp(o.createdAt, now);
 								const age = formatStatusAge(now - o.createdAt);
@@ -1717,15 +2058,29 @@ function OrdersRoute() {
 												</span>
 											) : null}
 											{/* Mask only the name — items/prices/status are the useful replay signal. */}
-											<span
-												{...MASK_PII}
-												className="min-w-0 flex-1 truncate text-[15px] font-semibold"
-											>
-												{orderCustomerLabel(o.customer)}
-											</span>
-											<span className="shrink-0 text-[15px] font-bold tabular-nums">
-												{formatPrice(o.total, o.currency)}
-											</span>
+											{gated ? (
+												<span className="flex min-w-0 flex-1 items-center gap-1.5 text-[15px] font-semibold text-muted-foreground">
+													<Lock
+														className="size-3.5 shrink-0"
+														aria-hidden="true"
+													/>
+													<span className="truncate">
+														{gatedNameCell(o.status)}
+													</span>
+												</span>
+											) : (
+												<span
+													{...MASK_PII}
+													className="min-w-0 flex-1 truncate text-[15px] font-semibold"
+												>
+													{orderCustomerLabel(o.customer)}
+												</span>
+											)}
+											<OrderTotal
+												total={o.total}
+												securityDeposit={o.securityDeposit}
+												currency={o.currency}
+											/>
 										</div>
 										<div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12.5px] text-muted-foreground">
 											<span className="font-mono">#{o.shortId}</span>
@@ -1756,48 +2111,68 @@ function OrdersRoute() {
 									    can't stretch the card; per-line amounts appear from `sm:`
 									    up (phones keep the grouped list without the price column;
 									    the bold total above is the number that matters there). */}
-										<div className="mt-2 flex flex-col gap-1 rounded-xl bg-muted/50 px-2.5 py-2">
-											{withLineKeys(itemSummary.lines).map(
-												({ key, item: it }) => (
-													<div
-														key={key}
-														className="flex items-center justify-between gap-3 text-[13px] leading-5"
-													>
-														<span className="min-w-0 truncate">
-															<span className="tabular-nums text-muted-foreground">
-																{it.quantity}&times;
-															</span>{" "}
-															<span className="font-medium">{it.name}</span>
-															{it.variantLabel ? (
-																<span className="text-muted-foreground">
-																	{" "}
-																	&middot; {it.variantLabel}
-																</span>
-															) : null}
+										{gated ? (
+											// In place of the item list: what this ROW is waiting
+											// for, counted for itself. "Waiting on 2 credits" tells
+											// a seller buying one credit that it won't be this one
+											// — a store-wide sentence here would not.
+											<div className="mt-2 rounded-xl border border-dashed border-border bg-muted/40 px-2.5 py-2 text-[13px] leading-5 text-muted-foreground">
+												{gatedRowLine(o.creditsToUnlock ?? 1, o.status)}
+											</div>
+										) : (
+											<div className="mt-2 flex flex-col gap-1 rounded-xl bg-muted/50 px-2.5 py-2">
+												{withLineKeys(itemSummary.lines).map(
+													({ key, item: it }) => (
+														<div
+															key={key}
+															className="flex items-center justify-between gap-3 text-[13px] leading-5"
+														>
+															<span className="min-w-0 truncate">
+																<span className="tabular-nums text-muted-foreground">
+																	{it.quantity}&times;
+																</span>{" "}
+																<span className="font-medium">{it.name}</span>
+																{it.variantLabel ? (
+																	<span className="text-muted-foreground">
+																		{" "}
+																		&middot; {it.variantLabel}
+																	</span>
+																) : null}
+															</span>
+															<span className="hidden shrink-0 text-[12.5px] tabular-nums text-muted-foreground sm:block">
+																{formatPrice(it.lineTotal, o.currency)}
+															</span>
+														</div>
+													),
+												)}
+												{itemSummary.moreCount > 0 ? (
+													<div className="flex items-center justify-between gap-3 text-[12px] leading-5 text-muted-foreground">
+														<span>
+															+{itemSummary.moreCount} more item
+															{itemSummary.moreCount === 1 ? "" : "s"}
 														</span>
-														<span className="hidden shrink-0 text-[12.5px] tabular-nums text-muted-foreground sm:block">
-															{formatPrice(it.lineTotal, o.currency)}
+														<span className="hidden shrink-0 text-[12.5px] tabular-nums sm:block">
+															{formatPrice(itemSummary.moreAmount, o.currency)}
 														</span>
 													</div>
-												),
-											)}
-											{itemSummary.moreCount > 0 ? (
-												<div className="flex items-center justify-between gap-3 text-[12px] leading-5 text-muted-foreground">
-													<span>
-														+{itemSummary.moreCount} more item
-														{itemSummary.moreCount === 1 ? "" : "s"}
-													</span>
-													<span className="hidden shrink-0 text-[12.5px] tabular-nums sm:block">
-														{formatPrice(itemSummary.moreAmount, o.currency)}
-													</span>
-												</div>
-											) : null}
-										</div>
+												) : null}
+											</div>
+										)}
 										{/* mt-auto pins this row to the card bottom, so status +
 									    chevron align across a desktop grid row even when the
 									    neighbour card has more item lines (grid stretches all
 									    cells in a row to the tallest; see cardClass h-full). */}
-										<div className="mt-auto flex items-center gap-1.5 pt-2.5">
+										{/* WRAPS. `StatusBadge` ellipsises as a last resort —
+									    deliberately, so a long custom stage name can't break
+									    the pill into two ragged fragments — but on a 393px
+									    card beside a long due-date chip ("Overdue · 8 Oct
+									    2026") that last resort fired on the ordinary case
+									    and "Confirmed" rendered as "Confirm…". The status
+									    word and the due date are both things the seller
+									    came here to read, so neither is the one that gives
+									    way: the row takes a second line instead. Desktop
+									    has the width and is unchanged. */}
+										<div className="mt-auto flex flex-wrap items-center gap-x-1.5 gap-y-1.5 pt-2.5">
 											<StatusBadge
 												status={o.status as OrderStatus}
 												label={statusLabel}
@@ -1821,13 +2196,17 @@ function OrdersRoute() {
 									"group flex h-full w-full gap-3 rounded-2xl border bg-card p-3.5 text-left transition-all",
 									isSel
 										? "border-accent shadow-[0_0_0_3px_hsl(160_84%_39%/0.12)]"
-										: isPinned
-											? // Tinted border rather than a thicker one: a wider edge
-												// would shift this card's text 2px against its grid
-												// neighbours, which reads as a rendering bug, not as
-												// emphasis.
-												"border-accent/40 hover:border-accent hover:shadow-sm"
-											: "border-border hover:border-ring hover:shadow-sm",
+										: gated
+											? // Dashed, not red: this row is waiting, not broken,
+												// and it will open itself the moment credits land.
+												"border-dashed border-border bg-muted/30 hover:border-ring"
+											: isPinned
+												? // Tinted border rather than a thicker one: a wider edge
+													// would shift this card's text 2px against its grid
+													// neighbours, which reads as a rendering bug, not as
+													// emphasis.
+													"border-accent/40 hover:border-accent hover:shadow-sm"
+												: "border-border hover:border-ring hover:shadow-sm",
 								);
 								return (
 									<li key={o._id}>
@@ -1913,6 +2292,17 @@ function OrdersRoute() {
 				<OrderBulkBar
 					count={selected.size}
 					actions={bulkActions}
+					actionsNote={
+						// The credit note wins when the SELECTION actually contains
+						// waiting orders — it is the one the seller is about to be
+						// surprised by. Stacked above the vocabulary note rather than
+						// replacing it when both apply, because both are true.
+						waitingInSelection > 0
+							? [bulkCreditSkipNote(waitingInSelection), bulkActionsNote]
+									.filter(Boolean)
+									.join(" ")
+							: bulkActionsNote
+					}
 					allSelected={allSelected}
 					onApply={applyBulk}
 					onDelete={canHardDelete ? applyBulkDelete : undefined}

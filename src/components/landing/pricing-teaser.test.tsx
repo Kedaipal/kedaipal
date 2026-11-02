@@ -1,0 +1,220 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+	annualQuote,
+	ENTERPRISE_FROM_ORDERS,
+	LISTED_PLANS,
+	PLAN_CREDIT_GRANT,
+	PLAN_MONTHLY_PRICES,
+} from "../../../convex/lib/plans";
+import { m } from "../../paraglide/messages";
+import { PricingTeaser } from "./pricing-teaser";
+
+/**
+ * The landing pricing teaser after the credits release (Credits T5,
+ * z8r3fdfu31) and Enterprise (T6, z8r3fdkp8h): the Starter and Pro cards open
+ * on their monthly credits, the sub says every plan includes an order
+ * allowance, the taglines match `/pricing`, and the third card is Enterprise —
+ * "Custom", no number, a "Get an Enterprise quote" WhatsApp link where the others have a
+ * sign-up, and its unbuilt rows carry "Soon" instead of reading as included.
+ */
+
+const { authState } = vi.hoisted(() => ({
+	authState: { isLoaded: true, isSignedIn: false },
+}));
+
+vi.mock("@clerk/tanstack-react-start", () => ({
+	useAuth: () => authState,
+}));
+vi.mock("../../hooks/useSupportWaNumber", () => ({
+	useSupportWaNumber: () => "60123456789",
+}));
+vi.mock("@tanstack/react-router", () => ({
+	Link: ({ children, to }: { children: ReactNode; to: string }) => (
+		<a href={to}>{children}</a>
+	),
+}));
+// The region is a real piece of state here so the MY/SG toggle drives it.
+vi.mock("../../hooks/useLandingRegion", async () => {
+	const { useState } = await import("react");
+	return {
+		useLandingRegionContext: () => useState<"MY" | "SG">("MY"),
+	};
+});
+// Embla measures a real layout jsdom doesn't have; the rail's behaviour isn't
+// under test.
+vi.mock("embla-carousel-react", () => ({ default: () => [() => {}] }));
+// The price roll's EXIT animation never completes in jsdom, which would leave
+// the outgoing "RM 79" in the DOM after a switch to SG. Reduced motion is a
+// real path the component supports (no exit animation), so take it.
+vi.mock("framer-motion", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("framer-motion")>();
+	return { ...actual, useReducedMotion: () => true };
+});
+
+beforeAll(() => {
+	class NeverInView {
+		observe() {}
+		unobserve() {}
+		disconnect() {}
+		takeRecords() {
+			return [];
+		}
+	}
+	globalThis.IntersectionObserver ??= NeverInView as never;
+});
+
+afterEach(() => {
+	cleanup();
+	authState.isLoaded = true;
+	authState.isSignedIn = false;
+});
+
+/** Rendered text, NBSP-flattened. */
+const text = () => (document.body.textContent ?? "").replace(/ /g, " ");
+
+describe("PricingTeaser — credits, and Enterprise by conversation", () => {
+	it("says every plan includes a monthly order allowance, and states the real trial", () => {
+		render(<PricingTeaser />);
+		expect(text()).toContain("Every plan includes a monthly order allowance");
+		expect(text()).toContain("14 days or 200 orders, whichever comes first");
+	});
+
+	it("opens every listed card on its credits, from PLAN_CREDIT_GRANT", () => {
+		render(<PricingTeaser />);
+		for (const plan of LISTED_PLANS) {
+			expect(text()).toContain(
+				`${PLAN_CREDIT_GRANT[plan]} credits a month — 1 per order`,
+			);
+		}
+		// Enterprise's credits are per contract — no number to print.
+		expect(text()).toContain("Credits sized to your volume");
+	});
+
+	it("carries the taglines, Enterprise's threshold read from the constant", () => {
+		render(<PricingTeaser />);
+		expect(screen.getByText("Take orders on WhatsApp")).toBeTruthy();
+		expect(screen.getByText("Orders, payments and promotions")).toBeTruthy();
+		expect(
+			screen.getByText(
+				`Built for ${ENTERPRISE_FROM_ORDERS.toLocaleString("en")}+ orders a month`,
+			),
+		).toBeTruthy();
+	});
+
+	it("prices Enterprise as Custom and sends it to a quote chat, not a sign-up", () => {
+		render(<PricingTeaser />);
+		expect(screen.getByText("Custom")).toBeTruthy();
+		expect(screen.queryByText(/Coming soon/i)).toBeNull();
+		// Starter and Pro sign up; Enterprise talks.
+		expect(
+			screen.getAllByRole("link", { name: /Start free — pay when you sell/ }),
+		).toHaveLength(2);
+		const talk = screen.getByRole("link", { name: /Get an Enterprise quote/ });
+		const href = talk.getAttribute("href") ?? "";
+		expect(href).toContain("wa.me/60123456789");
+		expect(decodeURIComponent(href)).toContain("Kedaipal Enterprise");
+		expect(talk.getAttribute("target")).toBe("_blank");
+	});
+
+	it("marks Enterprise's unbuilt rows Soon, and its team row unlimited", () => {
+		render(<PricingTeaser />);
+		// Several pickup points on one stock count already ships (the proof
+		// rail says so) — the Soon row names what is NOT built.
+		const outlets = screen
+			.getByText("Per-outlet stock & reporting")
+			.closest("li");
+		expect(screen.queryByText("Multiple outlets")).toBeNull();
+		const broadcast = screen
+			.getByText("Broadcast to customer list")
+			.closest("li");
+		expect(outlets?.textContent).toContain("Soon");
+		expect(broadcast?.textContent).toContain("Soon");
+		expect(
+			screen.getByText("Unlimited teammates").closest("li")?.textContent,
+		).not.toContain("Soon");
+	});
+
+	it("says who's on the team the way /pricing does", () => {
+		render(<PricingTeaser />);
+		expect(screen.getByText("Just you")).toBeTruthy();
+		expect(
+			screen.getByText("You + 2 teammates — each sees only what you allow"),
+		).toBeTruthy();
+		expect(screen.getByText("Unlimited teammates")).toBeTruthy();
+		expect(text()).not.toMatch(/\b\d users?\b/);
+	});
+
+	it("sells promotions, flash sales and vouchers on Pro only", () => {
+		render(<PricingTeaser />);
+		const row = screen
+			.getByText("Promotions, flash sales & voucher codes")
+			.closest("li");
+		expect(row).toBeTruthy();
+		expect(row?.textContent).not.toContain("Soon");
+		// The line sits in the Pro card — the plan that carries the gate.
+		const proCard = screen.getByText("Pro").closest("div");
+		expect(proCard?.textContent).toContain("Promotions, flash sales");
+		const starterCard = screen.getByText("Starter").closest("div");
+		expect(starterCard?.textContent).not.toContain("Promotions, flash sales");
+	});
+
+	it("switches every price to S$ for Singapore, with no ringgit left", () => {
+		render(<PricingTeaser />);
+		fireEvent.click(screen.getByRole("button", { name: "Singapore" }));
+		for (const plan of LISTED_PLANS) {
+			expect(text()).toContain(`S$ ${PLAN_MONTHLY_PRICES.SGD[plan] / 100}`);
+		}
+		expect(text()).not.toMatch(/RM\s?\d/);
+		// Enterprise has no price in either currency.
+		expect(screen.getByText("Custom")).toBeTruthy();
+	});
+
+	it("offers the annual cycle: the toggle swaps the monthly number for the annual-effective one and says the year's total", () => {
+		render(<PricingTeaser />);
+		const annualMonthly = Math.floor(
+			annualQuote("pro", false, "MYR").effectiveMonthly / 100,
+		);
+		const annualTotal = annualQuote("pro", false, "MYR").annualTotal / 100;
+		expect(screen.queryByText(`RM ${annualMonthly}`)).toBeNull();
+		fireEvent.click(
+			screen.getByRole("button", {
+				name: new RegExp(`^${m.pricingpage_toggle_annual()}`),
+			}),
+		);
+		expect(screen.getByText(`RM ${annualMonthly}`)).toBeTruthy();
+		expect(
+			screen.getByText(
+				m.pricingpage_billed_annual({ total: `RM${annualTotal}` }),
+			),
+		).toBeTruthy();
+		expect(screen.getByText(m.pricingpage_annual_badge())).toBeTruthy();
+		// Credits stay monthly on annual, said under the toggle.
+		expect(screen.getByText(m.pricingpage_annual_credits_note())).toBeTruthy();
+	});
+});
+
+describe("PricingTeaser — the door while Clerk resolves (z8r3fdy2m0)", () => {
+	it("holds each self-serve door as a busy button, never a sign-up link", () => {
+		authState.isLoaded = false;
+		render(<PricingTeaser />);
+		expect(
+			screen.queryAllByRole("link", { name: /Start free — pay when you sell/ }),
+		).toHaveLength(0);
+		const busy = screen.getAllByRole("button", { name: m.nav_auth_checking() });
+		expect(busy).toHaveLength(2);
+		for (const b of busy) expect((b as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it("gives a signed-in seller the dashboard on every self-serve card", () => {
+		authState.isSignedIn = true;
+		render(<PricingTeaser />);
+		expect(
+			screen.getAllByRole("link", {
+				name: new RegExp(m.nav_go_to_dashboard()),
+			}),
+		).toHaveLength(2);
+	});
+});

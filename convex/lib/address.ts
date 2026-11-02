@@ -1,7 +1,10 @@
 /**
- * Server-side delivery-address validation. Kept free of Convex imports so it
- * can be unit-tested in isolation and mirrors the client-side Zod schema in
- * `src/lib/schemas.ts`.
+ * Address validation and display. Two halves: the BUYER's delivery address
+ * (validated server-side here, mirroring the client-side Zod schema in
+ * `src/lib/schemas.ts`), and the seller's own premises — the unit/floor line
+ * that rides on a Google-pinned business address or pickup point
+ * (z8r3fdff8r). Kept free of Convex imports so it can be unit-tested in
+ * isolation.
  *
  * Country-keyed since SG-lite (86eynw29u): the caller resolves the RETAILER's
  * country and passes it — an address is judged against the store's country,
@@ -9,7 +12,7 @@
  * pre-existing caller and order keeps today's behaviour byte-identical.
  */
 
-import { type Country, DEFAULT_COUNTRY } from "./country";
+import { COUNTRY_LABELS, type Country, DEFAULT_COUNTRY } from "./country";
 
 export const MY_STATES = [
 	"Johor",
@@ -69,6 +72,25 @@ export function displayAddressState(addr: {
 		: state;
 }
 
+/**
+ * The country line for a delivery address (z8r3fdr5yy) — printed only when the
+ * address is ABROAD from the store, because that is the one case where a
+ * reader (the seller packing it, a courier reading the label) could assume
+ * the wrong country. Skipped when the city already says it ("048616
+ * Singapore") — the `displayAddressState` dedupe, one level up. One author
+ * for the client renderers, the WhatsApp message and the despatch label.
+ */
+export function addressCountryLine(
+	addr: { city: string; country?: Country },
+	storeCountry: Country,
+): string | undefined {
+	if (!addr.country || addr.country === storeCountry) return undefined;
+	const name = COUNTRY_LABELS[addr.country];
+	return addr.city.trim().toLowerCase() === name.toLowerCase()
+		? undefined
+		: name;
+}
+
 const POSTCODE_RULES: Record<Country, { pattern: RegExp; error: string }> = {
 	MY: { pattern: /^\d{5}$/, error: "Postcode must be 5 digits" },
 	SG: { pattern: /^\d{6}$/, error: "Postal code must be 6 digits" },
@@ -124,6 +146,9 @@ export interface RawAddress {
 	latitude?: number;
 	longitude?: number;
 	placeId?: string;
+	/** The address's own country (z8r3fdr5yy). Never trusted here — the
+	 * CALLER decides which country to judge against and passes it in. */
+	country?: Country;
 }
 
 export interface SanitizedAddress {
@@ -137,6 +162,10 @@ export interface SanitizedAddress {
 	latitude?: number;
 	longitude?: number;
 	placeId?: string;
+	/** The country the address was judged against — stamped so every
+	 * renderer and courier booking reads it off the order, never re-derives
+	 * it from the store (z8r3fdr5yy). */
+	country: Country;
 }
 
 function trimmedOrUndefined(raw: string | undefined): string | undefined {
@@ -261,5 +290,66 @@ export function assertValidAddress(
 		latitude,
 		longitude,
 		placeId,
+		country,
 	};
+}
+
+
+// ---------------------------------------------------------------------------
+// Seller premises — the unit/floor line (z8r3fdff8r)
+// ---------------------------------------------------------------------------
+
+/** Cap for a unit/floor/building line. One line of door detail — "Unit 3-1,
+ * Block B, Level 2" is 24 characters; 80 leaves room for a long building name
+ * without letting the field become a second address. */
+export const UNIT_LINE_MAX_LENGTH = 80;
+
+/**
+ * Normalize a seller-typed unit/floor line: collapse every run of whitespace
+ * (newlines included — this prints on ONE line, on a rider's screen and a
+ * parcel label) and trim. Blank → undefined, so "no unit" has one spelling.
+ * Returns `null` when the line is too long, which the caller turns into its
+ * own flavour of error (ConvexError server-side, inline copy client-side).
+ */
+export function sanitizeUnitLine(
+	raw: string | undefined,
+): { ok: true; value: string | undefined } | { ok: false } {
+	if (raw === undefined) return { ok: true, value: undefined };
+	const value = raw.replace(/\s+/g, " ").trim();
+	if (value.length === 0) return { ok: true, value: undefined };
+	if (value.length > UNIT_LINE_MAX_LENGTH) return { ok: false };
+	return { ok: true, value };
+}
+
+/**
+ * THE way a premise address is rendered anywhere a human (rider, courier,
+ * buyer) has to find the door: the unit line first, because that is the part
+ * they read last and need first, then the Google-formatted address. No unit →
+ * byte-identical to the label alone, so every existing surface is untouched.
+ */
+export function formatPremiseAddress(
+	label: string,
+	unit: string | undefined,
+): string {
+	const trimmed = unit?.trim();
+	return trimmed && trimmed.length > 0 ? `${trimmed}, ${label}` : label;
+}
+
+/** The business address as one line — what the rider, the courier and the
+ * despatch label's return block all see. */
+export function formatBusinessAddress(address: {
+	label: string;
+	unit?: string;
+}): string {
+	return formatPremiseAddress(address.label, address.unit);
+}
+
+/** A pickup point's address as one line — what the buyer sees at checkout, on
+ * /track, in email and WhatsApp. Frozen into `orders.pickupSnapshot.address`
+ * at order create, so those surfaces need no further plumbing. */
+export function formatPickupAddress(location: {
+	address: string;
+	unit?: string;
+}): string {
+	return formatPremiseAddress(location.address, location.unit);
 }

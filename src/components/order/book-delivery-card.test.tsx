@@ -35,8 +35,21 @@ vi.mock("convex/react", () => ({
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
-vi.mock("@tanstack/react-query", () => ({
-	useQuery: () => ({ data: state.dispatch }),
+vi.mock("@tanstack/react-query", async () => {
+	const { getFunctionName } = await import("convex/server");
+	return {
+		// The courier-wallet line (z8r3fdx34j) reads its own query; everything
+		// else answers with this card's own state.
+		useQuery: (q: { fn: unknown }) => ({
+			data:
+				getFunctionName(q.fn as never) === "courierWallets:list"
+					? walletState.wallets
+					: state.dispatch,
+		}),
+	};
+});
+const walletState = vi.hoisted(() => ({
+	wallets: [] as unknown[],
 }));
 vi.mock("@tanstack/react-router", () => ({
 	Link: (props: Record<string, unknown>) => <a {...props} />,
@@ -216,6 +229,7 @@ describe("BookDeliveryCard — dispatch dialog vehicle choice", () => {
 			buyerPaidFee: 1110,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 		});
 		state.action = prepare;
 		state.dispatch = {
@@ -244,6 +258,207 @@ describe("BookDeliveryCard — dispatch dialog vehicle choice", () => {
 				vehicleType: "CAR",
 			}),
 		);
+	});
+});
+
+describe("BookDeliveryCard — nothing a rider can carry (26 Oct 2026)", () => {
+	// The /test-code run on PR #418: a 40.6 kg order the buyer paid a DHL
+	// price for opened on "Car", said no rider vehicle fits, then offered
+	// "the difference stays with you" and a primary Confirm & dispatch — and
+	// never mentioned the courier tab one tap away.
+	function heavyQuote(overrides: Record<string, unknown> = {}) {
+		return vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q1",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 5140,
+			buyerPaidFee: 8873,
+			vehicleType: "CAR",
+			buyerContactFallback: false,
+			market: "MY",
+			vehicleAdvice: { kind: "too_heavy", cartKg: 40.6, maxKg: 40 },
+			...overrides,
+		});
+	}
+	const heavyOrder = {
+		...deliveredOrder,
+		status: "confirmed",
+		deliverySnapshot: {
+			mode: "live",
+			fee: 8873,
+			quoteProvider: "delyva",
+			quoteServiceName: "DHL eCommerce",
+		},
+	} as unknown as Doc<"orders">;
+
+	async function openDialog(props: { onUseCourier?: () => void } = {}) {
+		state.dispatch = {
+			promptBookOnPacked: false,
+			blockReason: null,
+			job: null,
+		};
+		render(<BookDeliveryCard order={heavyOrder} {...props} />);
+		fireEvent.click(screen.getByText("Book delivery"));
+		await screen.findByText(/no rider vehicle here can carry it/);
+	}
+
+	it("in the hub: the courier is the way forward, the car an explicit override", async () => {
+		state.action = heavyQuote();
+		const onUseCourier = vi.fn();
+		await openDialog({ onUseCourier });
+
+		expect(
+			screen.getByText(
+				/Your buyer paid a DHL eCommerce price at checkout — book the courier instead\./,
+			),
+		).toBeTruthy();
+		// The price comparison would reward the booking the line advises against.
+		expect(screen.queryByText(/the difference stays with you/)).toBeNull();
+		expect(screen.queryByText("Confirm & dispatch")).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "Book a car anyway" }),
+		).toBeTruthy();
+
+		fireEvent.click(
+			screen.getByRole("button", { name: "Use a Delyva courier" }),
+		);
+		expect(onUseCourier).toHaveBeenCalledTimes(1);
+		// The rider quote is dropped: the dialog closes onto the courier tab.
+		await waitFor(() =>
+			expect(
+				screen.queryByText(/no rider vehicle here can carry it/),
+			).toBeNull(),
+		);
+	});
+
+	it("a rider-priced order in the hub points at the courier without claiming the buyer paid one", async () => {
+		state.action = heavyQuote();
+		state.dispatch = {
+			promptBookOnPacked: false,
+			blockReason: null,
+			job: null,
+		};
+		render(
+			<BookDeliveryCard
+				order={{ ...heavyOrder, deliverySnapshot: undefined } as Doc<"orders">}
+				onUseCourier={vi.fn()}
+			/>,
+		);
+		fireEvent.click(screen.getByText("Book delivery"));
+		expect(
+			await screen.findByText(
+				/Send it by Delyva courier instead, or book a van in the Lalamove app\./,
+			),
+		).toBeTruthy();
+	});
+
+	it("without a courier tab: the van and own-courier ways out, still no 'stays with you'", async () => {
+		state.action = heavyQuote();
+		await openDialog();
+		expect(screen.getByText(/Book a van in the Lalamove app/)).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: "Use a Delyva courier" }),
+		).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "Book a car anyway" }),
+		).toBeTruthy();
+		expect(screen.queryByText(/the difference stays with you/)).toBeNull();
+	});
+
+	it("an order a rider CAN carry keeps Confirm & dispatch and the price comparison", async () => {
+		state.action = heavyQuote({ vehicleAdvice: undefined });
+		state.dispatch = {
+			promptBookOnPacked: false,
+			blockReason: null,
+			job: null,
+		};
+		render(<BookDeliveryCard order={heavyOrder} onUseCourier={vi.fn()} />);
+		fireEvent.click(screen.getByText("Book delivery"));
+		expect(
+			await screen.findByText(/the difference stays with you/),
+		).toBeTruthy();
+		expect(screen.getByText("Confirm & dispatch")).toBeTruthy();
+		expect(
+			screen.queryByRole("button", { name: "Use a Delyva courier" }),
+		).toBeNull();
+	});
+});
+
+describe("BookDeliveryCard — overseas buyer number (z8r3fdh274)", () => {
+	// A buyer may type a WhatsApp number from any country; Lalamove only takes
+	// a contact from the booking's own market, so the rider gets the STORE's
+	// number. The dialog says so, naming the store's market — the old line
+	// hardcoded "Malaysian … +60", which was false on every Singapore store.
+	const confirmedOrder = {
+		...deliveredOrder,
+		status: "confirmed",
+	} as unknown as Doc<"orders">;
+
+	async function openDialog(
+		quote: { buyerContactFallback: boolean; market: "MY" | "SG" },
+		deliveryDirection: "standard" | "collection" = "standard",
+	) {
+		state.action = vi.fn().mockResolvedValue({
+			ok: true,
+			quotationId: "q1",
+			senderStopId: "s1",
+			recipientStopId: "s2",
+			fee: 1110,
+			buyerPaidFee: 1110,
+			vehicleType: "MOTORCYCLE",
+			...quote,
+		});
+		state.dispatch = {
+			promptBookOnPacked: false,
+			bookingEnabled: true,
+			deliveryDirection,
+			blockReason: null,
+			job: null,
+		};
+		render(<BookDeliveryCard order={confirmedOrder} />);
+		fireEvent.click(
+			screen.getByText(
+				deliveryDirection === "collection"
+					? "Send rider to collect"
+					: "Book delivery",
+			),
+		);
+		// The dialog has rendered once the quote's price row is on screen.
+		await screen.findByRole("button", { name: /Motorcycle/ });
+	}
+
+	it("names Malaysia on an MY store: the rider gets the store's number", async () => {
+		await openDialog({ buyerContactFallback: true, market: "MY" });
+		expect(
+			screen.getByText(
+				"This buyer's WhatsApp number isn't a Malaysian number, and Lalamove only takes Malaysian contacts — the rider gets your store's number instead, with the buyer's real number in the rider notes.",
+			),
+		).toBeTruthy();
+	});
+
+	it("names Singapore on an SG store — never '+60'", async () => {
+		await openDialog({ buyerContactFallback: true, market: "SG" });
+		const notice = screen.getByText(/isn't a Singapore number/);
+		expect(notice.textContent).toContain("only takes Singapore contacts");
+		expect(notice.textContent).not.toMatch(/Malaysia|\+60/);
+	});
+
+	it("on a collection store it's the rider collecting FROM the buyer who calls the store", async () => {
+		await openDialog(
+			{ buyerContactFallback: true, market: "MY" },
+			"collection",
+		);
+		expect(
+			screen.getByText(
+				/the rider collecting from the buyer gets your store's number instead/,
+			),
+		).toBeTruthy();
+	});
+
+	it("says nothing when the buyer's number is local", async () => {
+		await openDialog({ buyerContactFallback: false, market: "MY" });
+		expect(screen.queryByText(/isn't a Malaysian number/)).toBeNull();
 	});
 });
 
@@ -629,6 +844,7 @@ describe("BookDeliveryCard — manual advance opens the booking modal", () => {
 		buyerPaidFee: 1110,
 		vehicleType: "MOTORCYCLE",
 		buyerContactFallback: false,
+		market: "MY",
 	};
 	const packedOrder = {
 		shortId: "ORD-JXHF",
@@ -791,6 +1007,7 @@ describe("BookDeliveryCard — rebook date/time + order sync (86eyp63xn)", () =>
 			buyerPaidFee: 1200,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 			scheduledFor: undefined,
 			buyerRequestedMoment: undefined,
 			...overrides,
@@ -976,6 +1193,7 @@ describe("BookDeliveryCard — past pickup moments are refused (86eyp63xn follow
 			buyerPaidFee: 1200,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 			scheduledFor: undefined,
 			buyerRequestedMoment: undefined,
 			...overrides,
@@ -1067,6 +1285,7 @@ describe("BookDeliveryCard — sandbox keys", () => {
 			buyerPaidFee: 2740,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 		});
 		render(<BookDeliveryCard order={bookableOrder} />);
 
@@ -1117,6 +1336,7 @@ describe("BookDeliveryCard — a failed confirm never traps the seller", () => {
 				buyerPaidFee: 2740,
 				vehicleType: "MOTORCYCLE",
 				buyerContactFallback: false,
+				market: "MY",
 			});
 		});
 	}
@@ -1179,6 +1399,7 @@ describe("BookDeliveryCard — a failed confirm never traps the seller", () => {
 			buyerPaidFee: 2740,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 		});
 		fireEvent.click(fresh);
 		await waitFor(() =>
@@ -1207,6 +1428,7 @@ describe("BookDeliveryCard — dispatch can't be tapped by accident (86eypjfuf)"
 			buyerPaidFee: 2740,
 			vehicleType: "MOTORCYCLE",
 			buyerContactFallback: false,
+			market: "MY",
 		});
 		state.action = action;
 		render(<BookDeliveryCard order={bookableOrder} />);
@@ -1228,5 +1450,58 @@ describe("BookDeliveryCard — dispatch can't be tapped by accident (86eypjfuf)"
 		fireEvent.click(confirm);
 		await waitFor(() => expect(action).toHaveBeenCalledTimes(2));
 		expect(action.mock.calls[1][0]).toHaveProperty("quotationId", "q1");
+	});
+});
+
+describe("BookDeliveryCard — out of credits (Credits T3)", () => {
+	const REASON =
+		"You're out of credits, so accepting and updating orders and editing products are paused.";
+	const bookableOrder = {
+		shortId: "ORD-LOCK",
+		deliveryMethod: "delivery",
+		status: "confirmed",
+		currency: "MYR",
+		paymentStatus: "received",
+	} as unknown as Doc<"orders">;
+	const bookable = {
+		promptBookOnPacked: true,
+		bookingEnabled: true,
+		blockReason: null,
+		job: null,
+	};
+
+	it("keeps Book delivery in place, disabled, with the reason under it", () => {
+		state.dispatch = bookable;
+		render(<BookDeliveryCard order={bookableOrder} lockedReason={REASON} />);
+		const book = screen.getByRole("button", { name: /Book delivery/ });
+		expect((book as HTMLButtonElement).disabled).toBe(true);
+		expect(screen.getByText(REASON)).toBeTruthy();
+	});
+
+	it("never auto-opens a quote the server would refuse — not on Packed, not on a manual advance", async () => {
+		const prepare = vi.fn();
+		state.action = prepare;
+		state.dispatch = bookable;
+		const { rerender } = render(
+			<BookDeliveryCard order={bookableOrder} lockedReason={REASON} />,
+		);
+		// A packed transition would normally prompt (paid + due today)…
+		rerender(
+			<BookDeliveryCard
+				order={{ ...bookableOrder, status: "packed" } as Doc<"orders">}
+				lockedReason={REASON}
+			/>,
+		);
+		// …and so would the stepper's book request.
+		rerender(
+			<BookDeliveryCard
+				order={{ ...bookableOrder, status: "packed" } as Doc<"orders">}
+				lockedReason={REASON}
+				bookRequestToken={1}
+			/>,
+		);
+		await waitFor(() => {
+			expect(prepare).not.toHaveBeenCalled();
+		});
 	});
 });

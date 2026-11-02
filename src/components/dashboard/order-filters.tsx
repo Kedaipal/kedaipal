@@ -2,9 +2,26 @@ import { CalendarDays, Palette, SlidersHorizontal, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useState } from "react";
 import { sourceLabel } from "../../../convex/lib/attribution";
-import type { Country } from "../../../convex/lib/country";
-import type { FulfilmentWindow } from "../../../convex/lib/fulfilmentDate";
 import {
+	BOOKING_PERIOD_CHIPS,
+	BOOKING_PERIOD_LABELS,
+	type BookingPeriod,
+} from "../../../convex/lib/bookingPeriod";
+import type { Country } from "../../../convex/lib/country";
+import {
+	type FulfilmentWindow,
+	ymdFromEpoch,
+} from "../../../convex/lib/fulfilmentDate";
+import {
+	BUCKET_LEAVES,
+	HOLDING_LEAVES,
+	INBOX_BUCKETS,
+	INBOX_LEAF_KEYS,
+	type InboxStatusLeaf,
+	leafLabel,
+} from "../../../convex/lib/orderBuckets";
+import {
+	fulfilmentLabel,
 	ORDER_SOURCE_KEYS,
 	ORDER_SOURCE_LABELS,
 	PAYMENT_STATUS_KEYS,
@@ -16,24 +33,18 @@ import {
 	type OrderPaymentMethod,
 	PAYMENT_METHOD_LABELS,
 } from "../../../convex/lib/paymentMethod";
-import {
-	BOOKING_PERIOD_CHIPS,
-	BOOKING_PERIOD_LABELS,
-	type BookingPeriod,
-} from "../../../convex/lib/bookingPeriod";
-import {
-	BUCKET_LEAVES,
-	INBOX_BUCKETS,
-	INBOX_LEAF_KEYS,
-	type InboxStatusLeaf,
-	leafLabel,
-} from "../../../convex/lib/orderBuckets";
 import { cn } from "../../lib/utils";
 import { BulkSelectRow } from "../ui/bulk-select-row";
 import { Button } from "../ui/button";
 import { FilterChip } from "../ui/filter-chip";
 import { FilterOptionRow } from "../ui/filter-option-row";
-import type { OrderFilterFacets } from "./order-column-filters";
+import {
+	CATEGORY_UNCATEGORIZED,
+	categoryCount,
+	fulfilmentChoicesFrom,
+	fulfilmentFilterApplies,
+	type OrderFilterFacets,
+} from "./order-column-filters";
 
 export type PaymentStatus = "unpaid" | "claimed" | "received";
 
@@ -78,12 +89,37 @@ export interface OrderFilterValue {
 	/** Fulfilment-date urgency window (Today / Tomorrow / This week). */
 	fwin?: FulfilmentWindow;
 	/**
+	 * An ARBITRARY due span, inclusive, as MYT midnights — the same axis as
+	 * `fwin` and mutually exclusive with it. "Due when" is ONE question, and two
+	 * controls answering it would AND into a window the seller never asked for
+	 * (`fwin: "today"` plus a Thursday span matches nothing at all).
+	 *
+	 * No picker writes it: it arrives on the URL from Home's Plan ahead tiles,
+	 * which open any single day of the next seven (z8r3fdrgzj) where `fwin` only
+	 * names three windows. The panel's job is therefore to SHOW it and let it
+	 * go, which is why it gets a row of its own in the Due date section instead
+	 * of being a filter silently in force.
+	 */
+	dueFrom?: number;
+	dueTo?: number;
+	/**
 	 * Checkout surfaces to keep (online / counter / claim link). MULTI since
 	 * 86eyrtz74, matching every other enumerable filter — "everything that isn't
 	 * a walk-in" is a real question and one value could not ask it. Empty = all
 	 * surfaces.
 	 */
 	sources: OrderSource[];
+	/**
+	 * How the order goes OUT (z8r3fdfau9) — `fulfilmentKey` values: delivery,
+	 * self_collect, drop_off, collection, booking. Multi-select; empty = every
+	 * kind.
+	 *
+	 * Sits next to `sources` because it is its twin: that field is the surface
+	 * the order came IN through, this one is the trip out. The options offered
+	 * are whatever this seller's window actually contains — see
+	 * `fulfilmentChoicesFrom`.
+	 */
+	fulfilments: string[];
 	/**
 	 * THE status axis — status LEAVES (1 Sep). Written by all three surfaces that
 	 * express it: the chip row above the list (whole groups at a tap), these rows
@@ -111,6 +147,12 @@ export interface OrderFilterValue {
 	 * optional so that is the common case (PR #235 review). */
 	categoriesUnspecified: boolean;
 	/**
+	 * ONE listing's orders (`z8r3fdjv0d`), as a `products._id`. Like the due
+	 * span, no picker writes it: it arrives on the URL from a Schedule row, so
+	 * the panel's job is to show it — by name — and let it go.
+	 */
+	listing?: string;
+	/**
 	 * Marketing origins to keep (86eyq0eq9) — `attributionBucket` keys, e.g.
 	 * "tiktok" / "direct" / "counter". Multi-select: several channels OR
 	 * together, because "how did my socials do" spans more than one. Empty =
@@ -130,12 +172,14 @@ export function activeFilterCount(v: OrderFilterValue): number {
 		(v.methodUnspecified ? 1 : 0) +
 		(v.from != null || v.to != null ? 1 : 0) +
 		(v.mockup ? 1 : 0) +
-		(v.fwin != null ? 1 : 0) +
+		(v.fwin != null || v.dueFrom != null || v.dueTo != null ? 1 : 0) +
 		v.sources.length +
+		v.fulfilments.length +
 		v.statuses.length +
 		v.bookingPeriods.length +
 		v.categories.length +
 		(v.categoriesUnspecified ? 1 : 0) +
+		(v.listing != null ? 1 : 0) +
 		v.attributionSources.length
 	);
 }
@@ -197,7 +241,83 @@ function formatShortDate(ms?: number): string | null {
 	}).format(new Date(ms));
 }
 
+/**
+ * A due span in two renderings: the panel's own row ("Thu 16 Oct") and the
+ * applied-filter chip above the list ("Due Thu 16 Oct"). One function so the
+ * two surfaces can never name the same window differently.
+ *
+ * MYT, like every other date the dashboard prints — and like the Plan ahead
+ * tile the span almost always came from. A seller who tapped "Thu" has to find
+ * the word "Thu" on the list they land on, or the filter is unexplained.
+ */
+export function dueSpanLabels(
+	from?: number,
+	to?: number,
+): { row: string; chip: string } {
+	const day = (ms: number, weekday: boolean) =>
+		new Date(ms).toLocaleDateString("en-GB", {
+			...(weekday ? { weekday: "short" as const } : {}),
+			day: "numeric",
+			month: "short",
+			timeZone: "Asia/Kuala_Lumpur",
+		});
+	if (from != null && to != null) {
+		// One day is the common case (a Plan ahead tile), and a single date wants
+		// its weekday: "Thu 16 Oct" is the tile's own word plus the date.
+		const span =
+			ymdFromEpoch(from) === ymdFromEpoch(to)
+				? day(from, true)
+				: `${day(from, false)} – ${day(to, false)}`;
+		return { row: span, chip: `Due ${span}` };
+	}
+	// Half-open spans are not reachable from any control — only from a
+	// hand-written URL — but they filter, so they get said out loud too.
+	if (from != null)
+		return {
+			row: `From ${day(from, false)}`,
+			chip: `Due from ${day(from, false)}`,
+		};
+	const end = day(to as number, false);
+	return { row: `Until ${end}`, chip: `Due until ${end}` };
+}
+
+/**
+ * The due-date axis as ONE token, whether it came from the three named windows
+ * or from a Home tile's span — and clearing it clears the whole axis, because
+ * the seller sees one filter and expects one tap to end it.
+ */
+function dueToken(v: OrderFilterValue): FilterToken | null {
+	const clear = (x: OrderFilterValue) => ({
+		...x,
+		fwin: undefined,
+		dueFrom: undefined,
+		dueTo: undefined,
+	});
+	if (v.fwin) {
+		const label = DUE_WINDOWS.find((w) => w.value === v.fwin)?.label ?? v.fwin;
+		return {
+			key: `fwin-${v.fwin}`,
+			label: `Due ${label.toLowerCase()}`,
+			clear,
+		};
+	}
+	if (v.dueFrom == null && v.dueTo == null) return null;
+	return {
+		key: "due-span",
+		label: dueSpanLabels(v.dueFrom, v.dueTo).chip,
+		clear,
+	};
+}
+
 /** One applied-filter token: its label + how to clear just that filter. */
+/** True when the picked leaves are exactly the seat-holding set. */
+function isHoldingSet(statuses: readonly string[]): boolean {
+	return (
+		statuses.length === HOLDING_LEAVES.length &&
+		HOLDING_LEAVES.every((l) => statuses.includes(l))
+	);
+}
+
 type FilterToken = {
 	key: string;
 	label: string;
@@ -210,9 +330,35 @@ function activeFilterTokens(
 	/** Resolves a raw status to the retailer's own stage wording, so a token
 	 * reads the same as the Status column it came from. */
 	statusLabel?: (status: string) => string,
+	/** The `listing` filter's name: a string once resolved, `null` when the id
+	 * names no listing of this store, `undefined` while loading. */
+	listingName?: string | null,
 ): FilterToken[] {
 	const tokens: FilterToken[] = [];
-	for (const st of v.statuses) {
+	// First: when present it is the subject of the whole list ("the Luncheon's
+	// orders"), and every other token narrows within it.
+	if (v.listing != null) {
+		tokens.push({
+			key: "listing",
+			label:
+				listingName === null
+					? "Listing not found"
+					: `Listing: ${listingName ?? "…"}`,
+			clear: (x) => ({ ...x, listing: undefined }),
+		});
+	}
+	// The Schedule row and the RSVP panel open the inbox on every leaf but
+	// cancelled (`listingOrdersSearch`): seven pills for "not cancelled" read as
+	// clutter on a phone, so that exact set is ONE token, cleared as one. Any
+	// other mix stays per-leaf — the seller chose those by hand.
+	if (isHoldingSet(v.statuses)) {
+		tokens.push({
+			key: "status-holding",
+			label: "Excluding cancelled",
+			clear: (x) => ({ ...x, statuses: [] }),
+		});
+	}
+	for (const st of isHoldingSet(v.statuses) ? [] : v.statuses) {
 		tokens.push({
 			key: `status-${st}`,
 			// Through `leafLabel`, or the unseen leaf prints its raw key —
@@ -255,6 +401,18 @@ function activeFilterTokens(
 			clear: (x) => ({ ...x, sources: x.sources.filter((y) => y !== src) }),
 		});
 	}
+	for (const f of v.fulfilments) {
+		tokens.push({
+			key: `ful-${f}`,
+			// The registry's label, never a local copy — the token, the section row
+			// and the table cell are three renderings of one word.
+			label: fulfilmentLabel(f),
+			clear: (x) => ({
+				...x,
+				fulfilments: x.fulfilments.filter((y) => y !== f),
+			}),
+		});
+	}
 	for (const a of v.attributionSources) {
 		tokens.push({
 			key: `asrc-${a}`,
@@ -265,14 +423,8 @@ function activeFilterTokens(
 			}),
 		});
 	}
-	if (v.fwin) {
-		const label = DUE_WINDOWS.find((w) => w.value === v.fwin)?.label ?? v.fwin;
-		tokens.push({
-			key: `fwin-${v.fwin}`,
-			label: `Due ${label.toLowerCase()}`,
-			clear: (x) => ({ ...x, fwin: undefined }),
-		});
-	}
+	const due = dueToken(v);
+	if (due) tokens.push(due);
 	if (v.mockup) {
 		tokens.push({
 			key: "mockup",
@@ -323,10 +475,14 @@ export function clearedFilters(): OrderFilterValue {
 		to: undefined,
 		mockup: false,
 		fwin: undefined,
+		dueFrom: undefined,
+		dueTo: undefined,
 		sources: [],
+		fulfilments: [],
 		statuses: [],
 		categories: [],
 		categoriesUnspecified: false,
+		listing: undefined,
 		attributionSources: [],
 	};
 }
@@ -385,6 +541,7 @@ export function OrderFilters({
 	country,
 	availableSources,
 	availableCategories,
+	listingName,
 	statusLabel,
 	facets,
 	mockupCount,
@@ -408,6 +565,8 @@ export function OrderFilters({
 	/** Category names present in the seller's window, most-used first — the same
 	 * list the Categories header filter offers (86eyrtz74). */
 	availableCategories?: string[];
+	/** Name for the `listing` token, from `searchOrders.listingName`. */
+	listingName?: string | null;
 	/** Per-option row counts from `searchOrders`, tallied over the UNFILTERED
 	 * window. Optional so the dialog still renders while the query is in
 	 * flight — a missing facet shows 0 rather than blocking the panel. */
@@ -439,7 +598,12 @@ export function OrderFilters({
 		INBOX_LEAF_KEYS.length +
 		(showBookingPeriods ? BOOKING_PERIOD_CHIPS.length : 0);
 	const showMockup = (mockupCount ?? 0) > 0 || value.mockup;
-	const tokens = activeFilterTokens(value, mockupCount, statusLabel);
+	const tokens = activeFilterTokens(
+		value,
+		mockupCount,
+		statusLabel,
+		listingName,
+	);
 	const clearFilters = () => onChange(clearedFilters());
 
 	function togglePayment(p: PaymentStatus) {
@@ -478,6 +642,11 @@ export function OrderFilters({
 		value.method,
 		methodsPresentIn(facets),
 	);
+
+	// Same single-list discipline for fulfilment: the rows, the select-all set
+	// and the section's total all read this one array, so "every option
+	// selected" can never mean a different set from what select-all writes.
+	const fulfilmentChoices = fulfilmentChoicesFrom(facets, value.fulfilments);
 
 	const showCustomDates =
 		customDates ||
@@ -847,7 +1016,7 @@ export function OrderFilters({
 												<FilterOptionRow
 													key={c}
 													label={c}
-													count={facets?.category[c] ?? 0}
+													count={categoryCount(facets, c)}
 													selected={value.categories.includes(c)}
 													onToggle={() =>
 														onChange({
@@ -864,7 +1033,7 @@ export function OrderFilters({
 											<FilterOptionRow
 												label="Uncategorized"
 												muted
-												count={facets?.category[""] ?? 0}
+												count={categoryCount(facets, CATEGORY_UNCATEGORIZED)}
 												selected={value.categoriesUnspecified}
 												onToggle={() =>
 													onChange({
@@ -904,6 +1073,48 @@ export function OrderFilters({
 											/>
 										))}
 									</FilterSection>
+
+									{/* Directly under Order type, never appended at the end: the
+									    two are one journey read twice — how it came IN, how it
+									    goes OUT — and a seller planning tomorrow ("show me the
+									    deliveries so I can book riders", "show me the pickups so
+									    I can prep the counter") reaches for them together.
+
+									    Hidden entirely unless this seller's window holds more
+									    than one kind, via the SAME helper the column funnel
+									    asks: a delivery-only store gets neither surface rather
+									    than a section whose one row narrows nothing. */}
+									{fulfilmentFilterApplies(facets, value.fulfilments) ? (
+										<FilterSection
+											title="Fulfilment"
+											hint="how it reaches them"
+											selected={value.fulfilments.length}
+											total={fulfilmentChoices.length}
+											onToggleAll={(all) =>
+												onChange({
+													...value,
+													fulfilments: all ? [...fulfilmentChoices] : [],
+												})
+											}
+										>
+											{fulfilmentChoices.map((key) => (
+												<FilterOptionRow
+													key={key}
+													label={fulfilmentLabel(key)}
+													count={facets?.fulfilment?.[key] ?? 0}
+													selected={value.fulfilments.includes(key)}
+													onToggle={() =>
+														onChange({
+															...value,
+															fulfilments: value.fulfilments.includes(key)
+																? value.fulfilments.filter((x) => x !== key)
+																: [...value.fulfilments, key],
+														})
+													}
+												/>
+											))}
+										</FilterSection>
+									) : null}
 
 									{(availableSources?.length ?? 0) > 1 ? (
 										<FilterSection
@@ -947,10 +1158,33 @@ export function OrderFilters({
 													onChange({
 														...value,
 														fwin: value.fwin === w.value ? undefined : w.value,
+														// Picking a named window retires the span — one
+														// axis, one answer. Without this the two AND and
+														// the list empties for no stated reason.
+														dueFrom: undefined,
+														dueTo: undefined,
 													})
 												}
 											/>
 										))}
+										{/* A span Home handed us on the URL. It is the same axis as
+									    the three rows above, so it renders AS one of them —
+									    selected, and switchable off in place — rather than
+									    narrowing the list with nothing on screen saying so. */}
+										{value.dueFrom != null || value.dueTo != null ? (
+											<FilterOptionRow
+												label={dueSpanLabels(value.dueFrom, value.dueTo).row}
+												shape="radio"
+												selected
+												onToggle={() =>
+													onChange({
+														...value,
+														dueFrom: undefined,
+														dueTo: undefined,
+													})
+												}
+											/>
+										) : null}
 									</FilterSection>
 
 									<FilterSection title="Order date">
@@ -1036,7 +1270,7 @@ export function OrderFilters({
 										"flex min-h-11 w-full items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-colors",
 										value.mockup
 											? "border-amber-500 bg-amber-50 dark:bg-amber-950"
-											: "border-amber-200 bg-amber-50/60 hover:bg-amber-50 dark:border-amber-800 dark:bg-amber-950/60",
+											: "border-amber-200 bg-amber-50/60 hover:bg-amber-50 dark:border-amber-800 dark:bg-amber-950/60 dark:hover:bg-amber-950",
 									)}
 								>
 									<span className="flex items-center gap-2.5 text-sm font-semibold text-amber-800 dark:text-amber-300">
@@ -1055,7 +1289,7 @@ export function OrderFilters({
 									>
 										<span
 											className={cn(
-												"absolute top-[3px] size-5 rounded-full bg-white shadow transition-all",
+												"absolute top-[3px] size-5 rounded-full bg-background shadow transition-all",
 												value.mockup ? "left-[21px]" : "left-[3px]",
 											)}
 										/>

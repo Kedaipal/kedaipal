@@ -32,6 +32,7 @@ function state(
 	overrides: Partial<Parameters<typeof resolveAnnualOffer>[0]> = {},
 ): AnnualOfferState {
 	return resolveAnnualOffer({
+		country: "MY",
 		subscription: { plan: "pro", status: "active", billingCycle: "monthly" },
 		invoices: paid("MYR"),
 		now: NOW,
@@ -76,6 +77,8 @@ describe("AnnualBillingCard — the number on screen is the number on the invoic
 			subscription: { plan, status: "active", billingCycle: "monthly" },
 			invoices: paid(currency),
 			founding,
+			// The currency is the store's country's now, never the invoices'.
+			country: currency === "SGD" ? "SG" : "MY",
 		});
 		renderCard(s, founding);
 		const expected = formatPrice(
@@ -169,6 +172,7 @@ describe("AnnualBillingCard — framing rules", () => {
 			subscription: { plan: "pro", status: "active", billingCycle: "monthly" },
 			invoices: paid("SGD"),
 			now: NOW,
+			country: "SG",
 		});
 		cleanup();
 		const { container: sgdBox } = renderCard(sgd);
@@ -207,6 +211,29 @@ describe("AnnualBillingCard — states", () => {
 		expect(waText()).not.toContain("Founding");
 	});
 
+	it("a standard seller is told how plan changes work across a paid year", () => {
+		renderCard(state());
+		expect(
+			screen.getByText(/Move up a plan and we only charge the new price/),
+		).toBeTruthy();
+		expect(screen.getByText(/Move down and the change waits/)).toBeTruthy();
+		expect(screen.queryByText(/stay on Founding Pro/)).toBeNull();
+	});
+
+	it("a Founding Member is never promised a plan change they can't make (z8r3fdfty4)", () => {
+		// Founding Members stay on Founding Pro (Zaki, 17 Sep 2026): the offer
+		// must not describe moving up or down a tier across the year.
+		renderCard(state({ founding: true }), true);
+		expect(
+			screen.getByText(
+				/You stay on Founding Pro for the whole year, at your founding price/,
+			),
+		).toBeTruthy();
+		expect(screen.queryByText(/Move up a plan|Move down/)).toBeNull();
+		// The refund position still stands for them too.
+		expect(screen.getByText(/isn't refunded in cash/)).toBeTruthy();
+	});
+
 	it("pendingAnnual offers no call to action", () => {
 		renderCard(
 			state({
@@ -226,7 +253,7 @@ describe("AnnualBillingCard — states", () => {
 		expect(screen.queryByRole("link")).toBeNull();
 	});
 
-	it("onAnnual states the credit position without promising an email", () => {
+	it("onAnnual states the carry-over position without promising an email", () => {
 		renderCard(
 			state({
 				subscription: {
@@ -237,9 +264,31 @@ describe("AnnualBillingCard — states", () => {
 				},
 			}),
 		);
-		expect(screen.getByText(/credited to the new one/)).toBeTruthy();
+		expect(screen.getByText(/carries over as extra days/)).toBeTruthy();
+		// "Credit" is the order-credit word now (Credits T3) — plan changes speak
+		// in days, never "credited".
+		expect(screen.queryByText(/credited/)).toBeNull();
 		// The renewal chase is a log line today — never promise a reminder here.
 		expect(screen.queryByText(/we'll email|we will email|remind/i)).toBeNull();
+	});
+
+	it("a Founding Member already on annual is told they stay on Founding Pro — no plan-change carry-over", () => {
+		renderCard(
+			state({
+				founding: true,
+				subscription: {
+					plan: "pro",
+					status: "active",
+					billingCycle: "annual",
+					currentPeriodEnd: Date.UTC(2027, 2, 12),
+				},
+			}),
+			true,
+		);
+		const note = screen.getByText(/invoiced once a/).textContent ?? "";
+		expect(note).toMatch(/^Founding Pro, invoiced once a/);
+		expect(note).toContain("you stay on Founding Pro for the whole year");
+		expect(note).not.toMatch(/Move up a plan|extra days/);
 	});
 
 	it("switchDeferred explains the wait instead of a button that misbehaves", () => {

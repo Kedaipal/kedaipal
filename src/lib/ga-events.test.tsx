@@ -91,6 +91,17 @@ describe("trackEvent", () => {
 		expect(eventMock).toHaveBeenCalledWith("view_pricing", {});
 	});
 
+	it("demo_cta carries the placement of the demo link that was tapped", async () => {
+		envState.measurementId = "G-TEST123";
+		const { trackDemoCta } = await loadGaEvents();
+
+		trackDemoCta("hero");
+		trackDemoCta("dock");
+
+		expect(eventMock).toHaveBeenCalledWith("demo_cta", { placement: "hero" });
+		expect(eventMock).toHaveBeenCalledWith("demo_cta", { placement: "dock" });
+	});
+
 	it("never sends on a capability-token path — the URL is the buyer's secret", async () => {
 		envState.measurementId = "G-TEST123";
 		setPath("/track/8f3c09b1a7e24d5c9b0e");
@@ -111,6 +122,20 @@ describe("trackEvent", () => {
 
 		expect(eventMock).toHaveBeenCalledWith("store_created", {
 			src: "spotlight-thg",
+		});
+	});
+
+	it("attaches the powered-by referrer store beside src when the session has one (z8r3fdcwd0)", async () => {
+		envState.measurementId = "G-TEST123";
+		sessionStorage.setItem("kedaipal:marketing-src", "powered-by-track");
+		sessionStorage.setItem("kedaipal:marketing-ref-store", "hermoolah");
+		const { trackEvent } = await loadGaEvents();
+
+		trackEvent("store_created");
+
+		expect(eventMock).toHaveBeenCalledWith("store_created", {
+			src: "powered-by-track",
+			ref_store: "hermoolah",
 		});
 	});
 

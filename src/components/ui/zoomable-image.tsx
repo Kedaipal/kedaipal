@@ -2,7 +2,7 @@ import { X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useState } from "react";
 import { cn } from "#/lib/utils";
-import { AppImage } from "./app-image";
+import { AppImage, type ImageFrame } from "./app-image";
 
 /**
  * Shared tap-to-zoom image lightbox. Built once and reused for storefront
@@ -121,6 +121,8 @@ export function ZoomableImage({
 	caption,
 	sizes,
 	sensitive,
+	priority,
+	frame,
 }: {
 	src: string;
 	alt: string;
@@ -130,6 +132,17 @@ export function ZoomableImage({
 	sizes?: string;
 	/** Order-owned/buyer-linked image — keep it off the resize proxy. See AppImage. */
 	sensitive?: boolean;
+	/**
+	 * Above-the-fold LCP candidate — forwards to AppImage's `priority`
+	 * (`loading="eager"` + `fetchPriority="high"`). Pass it ONLY on an image
+	 * that actually paints at the breakpoint you are optimising: eager loads
+	 * regardless of visibility, so setting it on a `display:none` branch
+	 * downloads bytes that branch never shows.
+	 */
+	priority?: boolean;
+	/** Photo edge + lift — forwards to AppImage's `frame`. The gallery surfaces
+	 * pass `"raised"`: they float straight on the page with no card around them. */
+	frame?: ImageFrame;
 	/** Classes for the wrapping button — use for layout (flex item, snap, etc.). */
 	wrapperClassName?: string;
 	/** Optional caption shown in the lightbox. */
@@ -156,6 +169,8 @@ export function ZoomableImage({
 					fill={false}
 					sizes={sizes}
 					sensitive={sensitive}
+					priority={priority}
+					frame={frame}
 				/>
 			</button>
 			{/* The lightbox deliberately keeps the ORIGINAL, unproxied URL: it

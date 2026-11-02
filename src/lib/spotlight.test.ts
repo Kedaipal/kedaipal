@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import { highlightRingClass, SETTINGS_ANCHOR } from "./country-setup-copy";
 import { PRODUCT_SPOTLIGHT } from "./product-spotlight";
 import {
+	isHomeSpotlightKey,
 	isProductSpotlightKey,
 	isSettingsSpotlightKey,
 	isSpotlightKey,
@@ -14,13 +15,28 @@ import {
 
 const SETTINGS_ROUTE = join(__dirname, "../routes/app.settings.tsx");
 const SETTINGS_COMPONENTS = join(__dirname, "../components/settings");
+// A settings card does not have to live in `components/settings`: the credit
+// balance card is the same component the dashboard renders in its compact
+// variant, so it sits in `components/credits` and the billing tab mounts it.
+// The guarantee this test makes is "a card renders the anchor", not "the file
+// is in one folder" — so the directories a settings TAB mounts cards from are
+// all scanned.
+const SETTINGS_CARD_DIRS = [
+	SETTINGS_COMPONENTS,
+	join(__dirname, "../components/credits"),
+];
 const PRODUCT_FORM = join(__dirname, "../components/forms/product-form.tsx");
+const HOME_COMPONENTS = join(__dirname, "../components/home");
+const HOME_ROUTE = join(__dirname, "../routes/app.index.tsx");
 
 const settingsEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
 	([, t]) => t.page === "settings",
 );
 const productEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
 	([, t]) => t.page === "product",
+);
+const homeEntries = Object.entries(SPOTLIGHT_ANCHOR).filter(
+	([, t]) => t.page === "home",
 );
 
 describe("spotlight registry", () => {
@@ -44,6 +60,30 @@ describe("spotlight registry", () => {
 	test("every page has at least one key, so both branches stay exercised", () => {
 		expect(settingsEntries.length).toBeGreaterThan(0);
 		expect(productEntries.length).toBeGreaterThan(0);
+		expect(homeEntries.length).toBeGreaterThan(0);
+	});
+
+	test("every Home anchor is rendered as a section id on Home", () => {
+		// Same rule as the settings cards: a Home key nothing renders scrolls
+		// nowhere. Home's anchors live in its components, or in the route
+		// itself — Refer & earn's two doors (the header button, the phone row)
+		// sit under the greeting, so the route wraps them in ONE anchored block
+		// and the deep link lands on whichever door the screen shows.
+		const source = [
+			readFileSync(HOME_ROUTE, "utf8"),
+			...readdirSync(HOME_COMPONENTS)
+				.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
+				.map((f) => readFileSync(join(HOME_COMPONENTS, f), "utf8")),
+		].join("\n");
+		for (const [key] of homeEntries) {
+			expect(
+				source.includes(`id={SPOTLIGHT_ANCHOR.${key}.anchor}`),
+				`no Home component renders id={SPOTLIGHT_ANCHOR.${key}.anchor}`,
+			).toBe(true);
+		}
+		expect(source.split("id={SPOTLIGHT_ANCHOR.refer.anchor}").length - 1).toBe(
+			1,
+		);
 	});
 
 	test("every anchor is rendered as a card id somewhere under settings", () => {
@@ -54,9 +94,11 @@ describe("spotlight registry", () => {
 		// anchor can't leave a stale literal behind.
 		const sources = [
 			readFileSync(SETTINGS_ROUTE, "utf8"),
-			...readdirSync(SETTINGS_COMPONENTS)
-				.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
-				.map((f) => readFileSync(join(SETTINGS_COMPONENTS, f), "utf8")),
+			...SETTINGS_CARD_DIRS.flatMap((dir) =>
+				readdirSync(dir)
+					.filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
+					.map((f) => readFileSync(join(dir, f), "utf8")),
+			),
 		].join("\n");
 		for (const [key, { anchor }] of settingsEntries) {
 			// A card the post-switch checklist already anchors keeps taking its
@@ -64,6 +106,10 @@ describe("spotlight registry", () => {
 			// asserted equal below, so either spelling proves the card exists.
 			const accepted = [
 				`id={SPOTLIGHT_ANCHOR.${key}.anchor}`,
+				// The courier cards wrap their OWN AccountCard shell (so hiding in
+				// an unserved country takes the border with it) and receive the
+				// anchor as `shellId` — same registry source, different prop.
+				`shellId={SPOTLIGHT_ANCHOR.${key}.anchor}`,
 				...Object.entries(SETTINGS_ANCHOR)
 					.filter(([, id]) => id === anchor)
 					.map(([fixKey]) => `id={SETTINGS_ANCHOR.${fixKey}}`),
@@ -105,6 +151,19 @@ describe("spotlight registry", () => {
 			false,
 		);
 		expect(PRODUCT_SPOTLIGHT.weekend_rate.applies({})).toBe(false); // legacy = physical
+		// prep_time is the mirror image: everything but a booking, because a
+		// booking's notice row renders neither field.
+		expect(PRODUCT_SPOTLIGHT.prep_time.applies({ kind: "physical" })).toBe(
+			true,
+		);
+		expect(PRODUCT_SPOTLIGHT.prep_time.applies({})).toBe(true); // legacy = physical
+		expect(PRODUCT_SPOTLIGHT.prep_time.applies({ kind: "booking" })).toBe(
+			false,
+		);
+		// promo renders on every kind, so every row forwards — a booking and an
+		// event included, where the card says why the flash extras don't apply.
+		for (const kind of [undefined, "physical", "booking", "service"])
+			expect(PRODUCT_SPOTLIGHT.promo.applies({ kind })).toBe(true);
 	});
 
 	test("anchors shared with the post-switch checklist are the same string", () => {
@@ -113,6 +172,17 @@ describe("spotlight registry", () => {
 		expect(SPOTLIGHT_ANCHOR.hitpay.anchor).toBe(SETTINGS_ANCHOR.hitpay);
 		expect(SPOTLIGHT_ANCHOR.delivery_charge.anchor).toBe(
 			SETTINGS_ANCHOR.delivery_mode,
+		);
+		expect(SPOTLIGHT_ANCHOR.business_address.anchor).toBe(
+			SETTINGS_ANCHOR.business_address,
+		);
+		expect(SPOTLIGHT_ANCHOR.pickup_points.anchor).toBe(
+			SETTINGS_ANCHOR.pickup_addresses,
+		);
+		// The keys fix sends the seller to Integrations, so it must ring the
+		// Lalamove card there — not a Fulfilment card that tab never renders.
+		expect(SPOTLIGHT_ANCHOR.lalamove.anchor).toBe(
+			SETTINGS_ANCHOR.delivery_booking,
 		);
 	});
 
@@ -123,6 +193,10 @@ describe("spotlight registry", () => {
 		expect(spotlightHref("business_details")).toBe(
 			"/app/settings?tab=store&spot=business_details",
 		);
+		// Its own card, not the Pickup card above it (z8r3fdm32x).
+		expect(spotlightHref("event_venues")).toBe(
+			"/app/settings?tab=fulfilment&spot=event_venues",
+		);
 	});
 
 	test("a product-page key lands on the products LIST, not a guessed product", () => {
@@ -131,6 +205,16 @@ describe("spotlight registry", () => {
 		expect(spotlightHref("weekend_rate")).toBe(
 			"/app/products?spot=weekend_rate",
 		);
+		expect(spotlightHref("promo")).toBe("/app/products?spot=promo");
+	});
+
+	test("a Home key lands on Home, with no tab", () => {
+		expect(spotlightHref("refer")).toBe("/app?spot=refer");
+		expect(isHomeSpotlightKey("refer")).toBe(true);
+		expect(isHomeSpotlightKey("delyva")).toBe(false);
+		expect(isSettingsSpotlightKey("refer")).toBe(false);
+		expect(isProductSpotlightKey("refer")).toBe(false);
+		expect(isHomeSpotlightKey("toString")).toBe(false);
 	});
 
 	test("isSpotlightKey admits registry keys only", () => {

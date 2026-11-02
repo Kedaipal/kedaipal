@@ -4,6 +4,7 @@
 // account on 27 Aug 2026.
 import { describe, expect, test } from "vitest";
 import {
+	parseDelyvaWalletBalance,
 	buildCreateOrderBody,
 	buildDelyvaHeaders,
 	buildInstantQuoteBody,
@@ -264,6 +265,19 @@ describe("buildCreateOrderBody", () => {
 		}) as { note: string; destination: { contact: Record<string, unknown> } };
 		expect(body.note).toHaveLength(400);
 		expect(body.destination.contact.email).toBeUndefined();
+	});
+
+	test("an overseas buyer's number leading the note survives the 400-char cut (z8r3fdh274)", () => {
+		// Dispatch puts it FIRST when the courier was handed the store's number
+		// instead; a long address note must only ever lose its own tail.
+		const lead = "Buyer WhatsApp: +447700900123";
+		const body = buildCreateOrderBody({
+			...args,
+			destination: { ...args.destination, phone: "60123456789" },
+			note: `${lead} · ${"x".repeat(500)}`,
+		}) as { note: string };
+		expect(body.note).toHaveLength(400);
+		expect(body.note.startsWith(lead)).toBe(true);
 	});
 });
 
@@ -533,3 +547,25 @@ describe("parseCompanyResponse — the sandbox tenant counts as test too", () =>
 		).toBe(false);
 	});
 })
+
+describe("parseDelyvaWalletBalance — the wallet on Delyva's customer profile", () => {
+	test("reads the decimal string Delyva sends, in sen", () => {
+		expect(parseDelyvaWalletBalance({ data: { walletBalance: "500.00" } })).toBe(
+			50000,
+		);
+		expect(parseDelyvaWalletBalance({ data: { walletBalance: "12.5" } })).toBe(
+			1250,
+		);
+		expect(parseDelyvaWalletBalance({ walletBalance: 7 })).toBe(700);
+	});
+
+	test("an overdrawn wallet reads negative; anything else is no answer", () => {
+		expect(parseDelyvaWalletBalance({ data: { walletBalance: "-3.20" } })).toBe(
+			-320,
+		);
+		expect(parseDelyvaWalletBalance({ data: {} })).toBeNull();
+		expect(parseDelyvaWalletBalance({ data: { walletBalance: "RM5" } })).toBeNull();
+		expect(parseDelyvaWalletBalance(null)).toBeNull();
+	});
+});
+

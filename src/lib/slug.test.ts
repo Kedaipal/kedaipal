@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { slugify, slugSchema, validateSlugShape } from "./slug";
+import { BRAND_NAME_MESSAGE } from "../../convex/lib/reservedSlugs";
+import {
+	slugify,
+	slugSchema,
+	validateSlugShape,
+	validateStoreName,
+} from "./slug";
 
 describe("slugify", () => {
 	it("basic lowercasing and space replacement", () => {
@@ -25,6 +31,35 @@ describe("slugify", () => {
 	it("truncates to 32 chars without trailing dash", () => {
 		const out = slugify("a".repeat(40));
 		expect(out.length).toBeLessThanOrEqual(32);
+	});
+
+	it("cuts back to the last WHOLE word, never mid-word", () => {
+		// A hard slice left the seller looking at a URL ending in a fragment —
+		// the first impression of their own shop reading like a typo.
+		expect(slugify("Something Very Very Long Store Name")).toBe(
+			"something-very-very-long-store",
+		);
+		// The dropped word is the one that didn't fit, not an arbitrary cut.
+		expect(
+			slugify("Something Very Very Long Store Name").length,
+		).toBeLessThanOrEqual(32);
+		expect(slugify("Mak Cik Kuih Homemade Kuih And Catering")).toBe(
+			"mak-cik-kuih-homemade-kuih-and",
+		);
+	});
+
+	it("keeps the fragment when there is no earlier word to fall back to", () => {
+		// One very long word: cutting at "the last dash" would leave nothing, and
+		// an empty field with no explanation is worse than a long fragment.
+		const out = slugify("a".repeat(40));
+		expect(out).toBe("a".repeat(32));
+	});
+
+	it("still lands on a valid slug at the boundary", () => {
+		const out = slugify("Kuala Lumpur Artisanal Sourdough Bakery");
+		expect(out.length).toBeLessThanOrEqual(32);
+		expect(out.endsWith("-")).toBe(false);
+		expect(() => slugSchema.parse(out)).not.toThrow();
 	});
 });
 
@@ -70,5 +105,29 @@ describe("validateSlugShape", () => {
 			ok: true,
 			value: "valid-slug",
 		});
+	});
+});
+
+describe("validateStoreName", () => {
+	it("returns the trimmed value for an ordinary name", () => {
+		expect(validateStoreName("  Mak Cik Kuih ")).toEqual({
+			ok: true,
+			value: "Mak Cik Kuih",
+		});
+	});
+
+	it("refuses the brand with the shared server sentence", () => {
+		for (const name of ["Kedaipal Support", "Kedai Pal", "my kedaipal shop"]) {
+			expect(validateStoreName(name), name).toEqual({
+				ok: false,
+				message: BRAND_NAME_MESSAGE,
+			});
+		}
+	});
+
+	it("mirrors the server length rules", () => {
+		expect(validateStoreName("K").ok).toBe(false);
+		expect(validateStoreName("a".repeat(61)).ok).toBe(false);
+		expect(validateStoreName("ab").ok).toBe(true);
 	});
 });

@@ -1,7 +1,52 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import {
+	buyerQuestionValidator,
+	frozenAnswerValidator,
+	itemAnswerInputValidator,
+} from "./lib/buyerQuestions";
 import { countryValidator } from "./lib/country";
+import { courierProviderValidator } from "./lib/courierProviders";
+import { crossBorderLanesValidator } from "./lib/crossBorder";
 import { orderPaymentMethodValidator } from "./lib/paymentMethod";
+import { showcaseThemeValidator } from "./lib/showcase";
+import { memberPermissionsValidator } from "./lib/permissions";
+
+/**
+ * One buyer-visible order stage, pinned to a canonical anchor. Shared by the
+ * LEGACY flat `retailers.orderStages` and every key of `retailers.orderFlows`,
+ * so the five lists can never drift apart. Mirrors `OrderStage` in
+ * convex/lib/orderStatus.ts; `sanitizeOrderStages` enforces the rules the
+ * validator can't (cap, monotonic anchors, label lengths).
+ */
+const orderStageEntry = v.object({
+	id: v.string(),
+	anchor: v.union(
+		v.literal("confirmed"),
+		v.literal("packed"),
+		v.literal("shipped"),
+		v.literal("delivered"),
+	),
+	label: v.object({
+		en: v.string(),
+		ms: v.optional(v.string()),
+		zh: v.optional(v.string()),
+	}),
+	description: v.optional(
+		v.object({
+			en: v.optional(v.string()),
+			ms: v.optional(v.string()),
+			zh: v.optional(v.string()),
+		}),
+	),
+	// DEPRECATED (86eyd63r8) — the per-stage "WhatsApp the buyer" toggle is
+	// gone: an order sends exactly ONE message (the confirmation push) and
+	// stages are a seller/timeline vocabulary only. Kept optional so
+	// already-saved lists still validate; nothing writes it any more
+	// (sanitizeOrderStages drops it), so it decays to absent on the next save.
+	notify: v.optional(v.boolean()),
+	sortOrder: v.number(),
+});
 
 /**
  * Multi-tenant core. Every order/inventory entity that lands later MUST carry
@@ -19,6 +64,14 @@ export default defineSchema({
 		// plain text with newlines preserved. Empty/unset → nothing renders. No
 		// index — only read alongside the retailer row.
 		storeDescription: v.optional(v.string()),
+		// Short area/locality shown on the store's marketplace card ("Ampang, KL")
+		// — seller-typed free text (z8r3fdkmyp). The profile carries no city field
+		// (country only), and local discovery without a place is weak, so this is
+		// the card's one geographic hint. Trimmed + capped (STORE_AREA_MAX in
+		// convex/lib/marketplaceListing.ts); unset → the card simply omits it.
+		// Deliberately NOT derived from pickup locations: not every store has one,
+		// and a wrong guess about where a home business "is" is worse than none.
+		storeArea: v.optional(v.string()),
 		waPhone: v.optional(v.string()),
 		// Email address for retailer-facing operational notifications
 		// (new orders, payment claims, etc.). Independent of the Clerk auth
@@ -34,10 +87,12 @@ export default defineSchema({
 		// the normalized inbound form ("60…"/"65…", via
 		// assertValidMobileForCountry). Unset ⇒ no WhatsApp alerts.
 		notifyWaPhone: v.optional(v.string()),
-		// Opt-in switch for the seller WhatsApp order alerts (new order +
-		// payment claim, sent as Meta utility templates to notifyWaPhone).
-		// Off/unset by default — each alert is a billable Meta send. Enabling is
-		// Pro-gated (PLAN_FEATURES.waOrderAlerts); disabling is always allowed.
+		// The seller's switch for WhatsApp order alerts (new order + payment
+		// claim + payment received, Meta utility templates to notifyWaPhone).
+		// TRI-STATE (z8r3fdv55f): unset = ON (the default, every plan), only an
+		// explicit `false` (the seller switched it off) = off. Whether an alert
+		// actually sends also needs a number and a subscription that covers it
+		// (`subscriptionCoversWaAlerts`), both checked at send time.
 		orderWaAlerts: v.optional(v.boolean()),
 		// Convex storage ID for the store's logo. Public — surfaced on the
 		// storefront header, dashboard hero, and as the OG image fallback.
@@ -67,6 +122,38 @@ export default defineSchema({
 		// falls back to a synthetic id (events count but don't stitch). Same
 		// posture as signupSource: per-row read only, no index.
 		gaClientId: v.optional(v.string()),
+		// The store whose "Powered by Kedaipal" badge this seller came through
+		// (z8r3fdcwd0) — the `&store=<slug>` half of the badge link, resolved to
+		// a retailer id at createRetailer (a slug naming no store is dropped,
+		// never stored). An id rather than the slug because slugs are renameable
+		// and the admin console wants the referrer's CURRENT name. Absent = not
+		// via a badge. Convex enforces no referential integrity, so the ref
+		// dangles once the referrer is purged — readers treat a missing doc as
+		// "no referrer". Same posture as signupSource: per-row read, no index.
+		signupReferrerId: v.optional(v.id("retailers")),
+		// Which motion won this store, for CAC by channel (86eye3eyp,
+		// docs/acquisition-attribution.md). A CLOSED vocabulary validated in
+		// convex/lib/metrics.ts (ACQUISITION_CHANNELS), not here, so a channel
+		// can be added without a migration. Distinct from `signupSource`: that
+		// is the link tag captured automatically (null for walk-ins, talks and
+		// personal intros); this is the classification, set by an admin or
+		// claimed by the seller at onboarding. `acquisitionSetBy` says which —
+		// an admin tag is authoritative and a seller answer never overwrites
+		// it. Absent = untagged. Per-row read only, no index.
+		acquisitionSource: v.optional(v.string()),
+		acquisitionNote: v.optional(v.string()),
+		acquisitionSetBy: v.optional(
+			v.union(v.literal("admin"), v.literal("seller")),
+		),
+		acquisitionSetAt: v.optional(v.number()),
+		// The owner tapped "Talk to Arif" in-app (Credits T6 follow-up,
+		// z8r3fdkp8h): a signed-in Enterprise lead, stamped so the admin
+		// console can list who asked instead of trusting a WhatsApp scrollback.
+		// Re-asking restamps (latest ask is the useful fact). Cleared when a
+		// contract is attached or an admin dismisses the lead. Anonymous
+		// /pricing clicks can't stamp — no account; the WhatsApp thread is the
+		// capture there.
+		enterpriseInterestAt: v.optional(v.number()),
 		// Store country (SG-lite, 86eynw27f). The one switch every country-shaped
 		// rule reads: checkout phone plate/validator arm, address variant, Places
 		// autocomplete region, and the currency a new store defaults to. Undefined
@@ -152,15 +239,14 @@ export default defineSchema({
 				),
 			}),
 		),
-		// Per-retailer overrides for the SHORT status labels shown on the buyer
-		// tracking-page timeline/pills + the seller dashboard (badges, tabs,
-		// transition buttons). Distinct from `messageTemplates` above, which is
-		// the full WhatsApp message body. Any key omitted (or blank after trim)
-		// falls back to the delivery-method preset, then the base default —
-		// resolved at render time in convex/lib/orderStatus.ts. Phase 1 of
-		// per-retailer status customization; presentation only, the canonical
-		// `orders.status` union is untouched. See
-		// docs/order-status-customization.md.
+		// LEGACY (z8r3fdh3w1) — superseded by `orderFlows` below. A GLOBAL set of
+		// per-status renames with no write UI since 14 Jun (e99dbd3), which made
+		// it permanent and invisible: it outranked every flow kind's own
+		// vocabulary, so a renamed "Delivered" read on a finished stay and a
+		// renamed "Confirmed" on an RSVP. Now read for `delivery`/`self_collect`
+		// ONLY (FLOW_PRESETS[kind].takesLegacyLabels) while un-migrated rows
+		// exist, never written; dropped at the narrow along with the
+		// `statusLabels` arg on `retailers.update`.
 		statusLabels: v.optional(
 			v.object({
 				en: v.optional(
@@ -195,46 +281,41 @@ export default defineSchema({
 				),
 			}),
 		),
-		// Phase 2 of order-status customization: a seller-defined, ordered list of
-		// buyer-visible stages (cap 20), each pinned to ONE canonical anchor
-		// (confirmed/packed/shipped/delivered). `orders.currentStageId` points at
-		// the seller's stage; the canonical `orders.status` is DERIVED from the
-		// stage's anchor. Absent => the resolver synthesizes the 5 default stages
-		// from `statusLabels` (so an un-configured retailer flows through the SAME
-		// stage code path). pending/cancelled are system-managed, never stages.
-		// Bounded (≤20) so it's safe to embed. See docs/order-status-customization.md.
-		orderStages: v.optional(
-			v.array(
-				v.object({
-					id: v.string(),
-					anchor: v.union(
-						v.literal("confirmed"),
-						v.literal("packed"),
-						v.literal("shipped"),
-						v.literal("delivered"),
-					),
-					label: v.object({
-						en: v.string(),
-						ms: v.optional(v.string()),
-						zh: v.optional(v.string()),
-					}),
-					description: v.optional(
-						v.object({
-							en: v.optional(v.string()),
-							ms: v.optional(v.string()),
-							zh: v.optional(v.string()),
-						}),
-					),
-					// DEPRECATED (86eyd63r8) — the per-stage "WhatsApp the buyer" toggle
-					// is gone: an order sends exactly ONE message (the confirmation
-					// push) and stages are a seller/timeline vocabulary only. Widened to
-					// optional so already-saved stage lists still validate; nothing
-					// writes it any more (sanitizeOrderStages drops it), so it decays to
-					// absent on the seller's next save. Narrow it away later.
-					notify: v.optional(v.boolean()),
-					sortOrder: v.number(),
-				}),
-			),
+		// LEGACY (z8r3fdh3w1) — superseded by `orderFlows` below, which holds the
+		// SAME stage shape once per flow kind. This flat list was one flow for the
+		// whole store: it applied to delivery + self-collect orders and was
+		// ignored by bookings/RSVPs. Still READ (for those two kinds only) while
+		// un-migrated rows exist, never written; dropped at the narrow. See the
+		// three-state rule on `OrderFlows` in convex/lib/orderStatus.ts.
+		orderStages: v.optional(v.array(orderStageEntry)),
+		// Per-flow-kind order stages (z8r3fdh3w1) — the seller's own words for the
+		// steps an order goes through, held ONCE PER KIND so one kind's wording can
+		// never reach another. Replaces the `orderStages` + `statusLabels` pair
+		// above, which were a single set of words for the whole store: a cake
+		// shop's "Confirmed → Ok go" rename landed on its campsite bookings, and
+		// no screen could see or clear it.
+		//
+		// A rename IS a one-stage-per-anchor list, so renames and custom steps are
+		// the same mechanism here — there is no second rename field.
+		//
+		// Three states per kind, all load-bearing (see `OrderFlows`):
+		//   absent => no answer for this kind; fall through to the legacy pair
+		//             (delivery/self_collect only), then the kind's preset.
+		//   []     => "Reset to defaults" — an explicit answer that BEATS the
+		//             legacy fallback, so a reset can't silently restore it.
+		//   [...]  => this kind's custom flow.
+		//
+		// Bounded: ≤20 stages per kind (MAX_ORDER_STAGES) × 4 kinds, safe to embed.
+		orderFlows: v.optional(
+			v.object({
+				delivery: v.optional(v.array(orderStageEntry)),
+				self_collect: v.optional(v.array(orderStageEntry)),
+				// One booking config covers stays AND fixed-length packages; the
+				// package's Active/Ended preset applies only while the kind is on
+				// defaults. The settings card states that.
+				booking: v.optional(v.array(orderStageEntry)),
+				event: v.optional(v.array(orderStageEntry)),
+			}),
 		),
 		// DEPRECATED — superseded by `paymentMethods` (multi-method). Kept readable
 		// during the widen→backfill→narrow migration so un-migrated rows still
@@ -295,6 +376,16 @@ export default defineSchema({
 		// settings invariant guarantee a store always keeps ≥1 WORKING fulfilment
 		// method (delivery, or self-collect with ≥1 active pickup location).
 		offerDelivery: v.optional(v.boolean()),
+		// Cross-border delivery lanes (z8r3fdr5yy): "this store also delivers to
+		// <country>", each with the SELLER'S OWN price for that country (flat,
+		// weight bands, or free — never the domestic price). Absent / empty =
+		// domestic only. A list so a future corridor is a new entry, not a
+		// migration; v1 holds at most one (the other country). Stored ≠ live:
+		// `effectiveLanes` (convex/lib/crossBorder.ts) pauses a lane at read time
+		// when the plan lacks `crossBorder`, delivery is off, or domestic pricing
+		// is a live courier quote — so a downgrade or a pricing change never
+		// deletes it. See docs/cross-border.md.
+		crossBorderLanes: v.optional(crossBorderLanesValidator),
 		// Seller's business address — the ORIGIN for radius-based delivery
 		// pricing (straight-line distance to the buyer's address). Captured via
 		// Google autocomplete in Settings → Fulfilment; `label` is the formatted
@@ -308,6 +399,16 @@ export default defineSchema({
 				latitude: v.number(),
 				longitude: v.number(),
 				placeId: v.optional(v.string()),
+				// Unit / floor / building (z8r3fdff8r) — the detail Google's
+				// formatted `label` never carries, typed by the seller. Riders were
+				// arriving at the block and phoning her. Owner-only like the label,
+				// ≤ 80 chars, one line, unset when blank. It is a DISPLAY
+				// composition, not a second address: every surface that prints the
+				// label prints `formatBusinessAddress(...)` instead, and nothing
+				// keys on it (the Lalamove quote keys on lat/lng). Delyva keeps its
+				// own structured `pickupAddress.address2` — deliberately NOT
+				// derived from this.
+				unit: v.optional(v.string()),
 				// The country this address was CAPTURED in (SG-lite, 86eyqgujv).
 				// Stamped at save from the store's country the way
 				// deliveryBooking.env is stamped from the key prefix — never
@@ -396,9 +497,7 @@ export default defineSchema({
 						v.object({
 							name: v.string(),
 							states: v.array(v.string()),
-							bands: v.array(
-								v.object({ maxKg: v.number(), fee: v.number() }),
-							),
+							bands: v.array(v.object({ maxKg: v.number(), fee: v.number() })),
 							freeAbove: v.optional(v.number()),
 						}),
 					),
@@ -465,9 +564,7 @@ export default defineSchema({
 				// surface that spends money has to be able to say so. Undefined =
 				// not yet stamped (pre-backfill row), which the UI treats as
 				// "unknown", never as "production".
-				env: v.optional(
-					v.union(v.literal("sandbox"), v.literal("production")),
-				),
+				env: v.optional(v.union(v.literal("sandbox"), v.literal("production"))),
 				// Opt-in convenience: when the seller marks a paid, due-today
 				// delivery order PACKED, the order page auto-opens the "book a
 				// rider now?" confirm dialog (today's price shown before any
@@ -489,6 +586,14 @@ export default defineSchema({
 				deliveryDirection: v.optional(
 					v.union(v.literal("standard"), v.literal("collection")),
 				),
+				// When this store's Lalamove account is KNOWN to deliver its
+				// webhooks to us (86eye9xd4, 5A): stamped by our one-tap
+				// `PATCH /v3/webhook`, or by the first verified event for one of
+				// its jobs (proof a manual paste worked). Cleared when the key
+				// changes — a different account has its own webhook setting.
+				// Undefined = not known, which the setup checklist shows as the
+				// step still to do.
+				webhookRegisteredAt: v.optional(v.number()),
 			}),
 		),
 		// HitPay online payments (86eyb6z3a) — BYO-ONLY like deliveryBooking above:
@@ -634,6 +739,36 @@ export default defineSchema({
 					open: v.number(),
 					close: v.number(),
 					closed: v.optional(v.boolean()),
+					// Optional SECOND window (z8r3fdff8r) — the lunch/dinner split:
+					// a cafe open 7:30–10:00 for breakfast then 12:00–18:00. An
+					// optional widening, so every pre-existing row is untouched and
+					// there is no migration; a day without the pair behaves exactly
+					// as it always has. Set together or not at all (the sanitizer
+					// drops a half pair), `close < open2 < close2 ≤ 1439`, and never
+					// beside an all-day first window. Read through `dayWindows`,
+					// never field-by-field.
+					open2: v.optional(v.number()),
+					close2: v.optional(v.number()),
+				}),
+			),
+		),
+		// Closed dates (z8r3fdhpm7) — the weekly schedule's exceptions: Raya, a
+		// balik-kampung week, a renovation. MYT midnights, `endDate` INCLUSIVE
+		// (a closed day has no leaving morning — the bookingBlocks posture).
+		// `label` is PUBLIC (buyers read it at checkout + in the header), ≤60
+		// chars. Bounded (≤50 ranges) and self-pruning: every write drops the
+		// ranges that already ended. Overlaps tolerated, unioned at read.
+		// Undefined = no closures (every pre-existing store, zero migration).
+		// Refuses those dates at storefront + claim checkout, makes them
+		// unavailable nights on stay listings, and is skipped by open-days
+		// packages; counter checkout, seller reschedules and event dates are
+		// exempt. See convex/lib/closedDates.ts.
+		closedDates: v.optional(
+			v.array(
+				v.object({
+					startDate: v.number(),
+					endDate: v.number(),
+					label: v.optional(v.string()),
 				}),
 			),
 		),
@@ -650,9 +785,7 @@ export default defineSchema({
 		// See convex/lib/awbConfig.ts + docs/despatch-labels.md.
 		awbConfig: v.optional(
 			v.object({
-				paperSize: v.optional(
-					v.union(v.literal("a6"), v.literal("a4-4up")),
-				),
+				paperSize: v.optional(v.union(v.literal("a6"), v.literal("a4-4up"))),
 				showLogo: v.optional(v.boolean()),
 				showItems: v.optional(v.boolean()),
 				showCod: v.optional(v.boolean()),
@@ -693,6 +826,53 @@ export default defineSchema({
 		// checklist's activation states. See docs/activation-checklist.md.
 		activatedAt: v.optional(v.number()),
 		linkSharedAt: v.optional(v.number()),
+		// Off-Season Hold (z8r3fday24): set while the store's subscription is
+		// `on_hold`, cleared on resume. Denormalized HERE, on the store, so the
+		// buyer-facing storefront payload and every order-create path (storefront,
+		// counter, claim link, booking) read a STORE setting — never the
+		// subscription row. The billing invariant holds: the order pipeline still
+		// never reads subscription status; it refuses on the seller's own
+		// "ordering is paused" switch, like opening hours or a minimum order.
+		orderingPausedAt: v.optional(v.number()),
+		// Marketplace listing opt-OUT (z8r3fdkmyp). Every store with a visible
+		// product is listed on /stores by default — the storefront is already a
+		// public URL and the directory is free distribution — and this stamp is
+		// the seller saying "direct link only". Set/cleared by the Settings →
+		// Store "Marketplace listing" switch (updateSettings.marketplaceListed);
+		// absent = listed. A timestamp, not a boolean, per the house pattern
+		// (orderingPausedAt): "since when" costs nothing and answers support
+		// questions a flag cannot.
+		marketplaceUnlistedAt: v.optional(v.number()),
+		// Storefront chat opt-OUT (z8r3fdvwcy). The store home carries an "Ask
+		// on WhatsApp" action — a buyer-initiated wa.me link to `waPhone` — on by
+		// default; this stamp is the owner saying "not on my store page". Same
+		// shape as the listing stamp above: absent = on, no backfill, "since
+		// when" for free. Set/cleared by `retailers.setStorefrontChat`.
+		storefrontChatDisabledAt: v.optional(v.number()),
+		// Marketplace "Store highlights" sponsorship window (z8r3fdkmyp): the
+		// store rides the labelled sponsored rail on /stores while this epoch-ms
+		// is in the future. ADMIN-set only (admin.setMarketplaceSponsorship,
+		// audited) — v1 is manually invoiced, no self-serve purchase path writes
+		// it. Expiry is read-time (`> now`), so no cron clears it; clearing =
+		// unset. Every placement it buys renders with a visible "Sponsored"
+		// label — the rail is disclosed advertising, never covert ranking.
+		marketplaceSponsoredUntil: v.optional(v.number()),
+		// Comped stores (partner / sponsor / pilot) ride Store highlights
+		// AUTOMATICALLY while comped — derived at read time by
+		// `highlightSource`, never written (z8r3fdkmyp, Zaki 1 Oct 2026). This
+		// stamp is the admin's one override: set = "keep this comped store off
+		// the rail" (admin.setCompHighlight, audited). Unset = the default.
+		// Timestamp, not boolean, per the house pattern.
+		marketplaceCompHighlightOffAt: v.optional(v.number()),
+		// Admin moderation (z8r3fdkmyp, Zaki 1 Oct 2026): set = an admin took
+		// this store OFF /stores, whatever the seller's own switch says (junk
+		// trials, quality, policy). Written only by admin.hideFromMarketplace /
+		// admin.showOnMarketplace, each audited under its own name. `note` is
+		// optional and is SHOWN TO THE SELLER on Settings → Store, so they know
+		// what to fix. The storefront itself is untouched. Unset = not hidden.
+		marketplaceHidden: v.optional(
+			v.object({ at: v.number(), note: v.optional(v.string()) }),
+		),
 		// Highest release version whose "What's new" notes this seller has seen
 		// (86eyqgxv9). A calendar version string (`YYYY.MM.N`), NOT a boolean —
 		// a boolean can only answer "dismissed once", so the next release would
@@ -718,8 +898,31 @@ export default defineSchema({
 		// the retailer's first Pro invoice is marked paid (rank ≤ 10); never revert,
 		// even on cancellation/refund. Source of truth is the `foundingMembers`
 		// ledger. See docs/manual-subscription.md.
+		//
+		// MEMBERSHIP IS PERMANENT, BENEFITS ARE NOT (z8r3fdfyw5). These two fields
+		// are the HONOUR — the storefront badge and the "Founding #N" pill — and the
+		// signed agreement plus the billing ribbon both promise them "for good", so
+		// nothing clears them. What CAN be taken back is the entitlement set (the
+		// 30% price, the Founding-Pro lock, white-glove), and that is
+		// `foundingBenefitsRevokedAt` below. Never conflate the two: clearing
+		// `isFoundingMember` to revoke a price would strip a badge we promised, AND
+		// silently hand the store permanent founding pricing through the
+		// `foundingIntent` fallback in `foundingPriceEligible`.
 		isFoundingMember: v.optional(v.boolean()),
 		foundingMemberRank: v.optional(v.number()),
+		// When this member's founding BENEFITS ended — denormalized from
+		// `foundingMembers.benefitsRevokedAt` so every `foundingPriceEligible`
+		// caller gets it off the retailer doc it already loaded (zero extra reads,
+		// mirroring the flags above). Set = ordinary seller pricing, permanently:
+		// unlike the read-time lapse window, paying does NOT bring the discount
+		// back. Undefined for everyone who never had benefits taken.
+		foundingBenefitsRevokedAt: v.optional(v.number()),
+		// Denormalized mirror of `foundingMembers.benefitsRestoredAt` — the floor
+		// the founding lapse clock measures from, so an admin re-grant actually
+		// restores the price instead of being overwritten by a window that
+		// already ran out. Read off the retailer doc every pricing caller
+		// already loads, exactly like the flag above.
+		foundingBenefitsRestoredAt: v.optional(v.number()),
 		// WABA send guardrails (kill switch, per-seller caps) live in their own
 		// `retailerSendingLimits` table — see docs/waba-protection.md.
 		channel: v.literal("whatsapp"),
@@ -749,6 +952,35 @@ export default defineSchema({
 		// link serves a TikTok Live, a phone order and a DM quote alike, and
 		// only the seller knows which.
 		claimLinkSource: v.optional(v.string()),
+		// Pre-built store handover (docs/prebuilt-stores.md). The email the admin
+		// says will own this store — set while `userId` is still a placeholder
+		// (convex/lib/unclaimedStore.ts). The vendor signs in with it once and
+		// `retailers.claimStore` hands the store over.
+		//
+		// A TARGET, not a credential: holding an address here grants nothing. The
+		// claim only completes for a caller whose Clerk identity carries that
+		// address AS VERIFIED, exactly as a team invite binds (convex/team.ts) —
+		// so a typo'd or guessed address can never take a store, it just leaves
+		// one unclaimed.
+		//
+		// Separate from the placeholder `userId` on purpose: an admin builds
+		// before they have been given the vendor's address, so "built, no email
+		// yet" must be writable. Cleared at claim — which is the whole of
+		// "remove the email we used", because no Clerk account was ever created
+		// for it. Indexed (`by_pending_owner_email`) because every storeless
+		// sign-in asks "is a store waiting for me?".
+		pendingOwnerEmail: v.optional(v.string()),
+		// When the handover invitation was last emailed to `pendingOwnerEmail`
+		// (z8r3fdmy7n). Unset = never sent, which the admin must be able to see:
+		// an address named but never told is the commonest way a handover
+		// stalls. Re-sendable, so this is the LAST send, not a boolean.
+		handoverInviteSentAt: v.optional(v.number()),
+		// When a pre-built store was handed over. Set once by `claimStore`, never
+		// cleared — the console's "handed over 3 Oct" fact, and the only durable
+		// trace that this store did not start life owned (the placeholder
+		// `userId` is overwritten by the claim, so nothing else survives it).
+		// Unset on every ordinary store, which is all of them before this feature.
+		claimedAt: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -760,7 +992,122 @@ export default defineSchema({
 		// Admin "onboard a client" pre-check: is a store already registered to this
 		// email? notifyEmail is stored normalized (trim + lowercase via
 		// assertValidEmail), so an equality lookup is exact. See docs/vendor-identity.md.
-		.index("by_notify_email", ["notifyEmail"]),
+		.index("by_notify_email", ["notifyEmail"])
+		.index("by_pending_owner_email", ["pendingOwnerEmail"]),
+
+	// --- Team members (ClickUp 86exr91r4, docs/team-members.md) ---------------
+	// One row per teammate relationship on a store. The OWNER is `retailers.
+	// userId` and is deliberately NOT a row here — ownership stays 1:1 and this
+	// table can never contradict it. A member's access is the per-area grants
+	// object (see convex/lib/permissions.ts): deny-by-default, owner-managed.
+	// No stored role field — presets in the Team UI are prefills of `permissions`,
+	// so a future "role" is a widen of that UI, not a migration.
+	//
+	// Lifecycle: `invited` (email sent, token live) → `active` (accepted, userId
+	// bound) → `removed`. Removed rows are KEPT, not deleted: the removed user's
+	// next load reads its own row to explain itself ("you no longer have access
+	// to {Store}"), and the order timeline still resolves the actor's name after
+	// removal. `removedReason` says which flow ended it.
+	retailerMembers: defineTable({
+		retailerId: v.id("retailers"),
+		// Invite target, normalized lowercase (assertValidEmail). Compared
+		// case-insensitively against the accepter's Clerk identity email — the
+		// token alone never binds an account (a forwarded link is useless to
+		// anyone but the invited inbox).
+		email: v.string(),
+		// Clerk subject, set on accept. Absent while invited.
+		userId: v.optional(v.string()),
+		// Snapshot of the Clerk identity's name at accept time — the order
+		// timeline's "· by {name}" resolves from here (works even after removal).
+		displayName: v.optional(v.string()),
+		// Per-area grants (convex/lib/permissions.ts). Absent key = no access.
+		// Server-sanitized on every write (sanitizePermissions) — the registry's
+		// MAX_GRANTABLE caps what can be stored, whatever a client sends.
+		permissions: memberPermissionsValidator,
+		status: v.union(
+			v.literal("invited"),
+			v.literal("active"),
+			v.literal("removed"),
+		),
+		// sha256 hex of the URL token (raw token never stored — a DB read must
+		// not mint access). Kept after accept so a re-clicked link can say "this
+		// invite was already used" instead of pretending it never existed.
+		inviteTokenHash: v.optional(v.string()),
+		// Invite expiry (7 days). Only meaningful while status === "invited".
+		expiresAt: v.optional(v.number()),
+		// Resend cooldown anchor (60s) — also what "Invited · sent 5m ago" reads.
+		lastInviteSentAt: v.optional(v.number()),
+		invitedBy: v.string(), // Clerk subject of the owner who invited
+		invitedAt: v.number(),
+		acceptedAt: v.optional(v.number()),
+		removedAt: v.optional(v.number()),
+		// Who ended it: the owner's subject, or the member's own on leave.
+		removedBy: v.optional(v.string()),
+		removedReason: v.optional(
+			v.union(
+				v.literal("removed_by_owner"),
+				// The member's own act, via team.leave — the ONLY way a membership
+				// ends from the member's side, including when what they actually
+				// want is a store of their own (one store per login).
+				v.literal("left"),
+				// Dropped by enforceSeatCap after a plan change below the cap.
+				v.literal("plan_change"),
+				// The store (owner account) was deleted.
+				v.literal("store_deleted"),
+			),
+		),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_retailer_status", ["retailerId", "status"])
+		.index("by_user", ["userId"])
+		.index("by_email", ["email"])
+		.index("by_token", ["inviteTokenHash"]),
+
+	// --- Marketplace showcases (z8r3fdr6mv, docs/marketplace-home.md) ------
+	// An admin-curated, time-boxed section at the top of kedaipal.com/stores:
+	// "Malaysia Campfest 2026" with the stores at the event grouped under it.
+	// One row per showcase; its members ride along as a CAPPED array
+	// (SHOWCASE_MEMBER_CAP in lib/showcase.ts) — a bazaar with more Kedaipal
+	// stores than that is a second showcase, so the document stays bounded.
+	//
+	// The window is read-time (`lib/showcase.ts` showcaseState): no cron takes
+	// a showcase down, the next render after `endsAt` simply drops it.
+	// `publishedAt` unset = draft, never shown whatever the dates say. `slug` is
+	// the `/stores?showcase=` handle, derived from the title ONCE at create and
+	// never rewritten (a printed booth QR must survive a title edit). Member
+	// rows carry no listing state of their own: whether a member actually
+	// SHOWS still goes through the directory's one listable rule, joined by
+	// slug on the client, so nothing here can leak a store the directory hides.
+	marketplaceShowcases: defineTable({
+		slug: v.string(),
+		title: v.string(),
+		tagline: v.optional(v.string()),
+		country: countryValidator,
+		theme: showcaseThemeValidator,
+		// `#rrggbb` — the colour-wheel pick for the `custom` look. Kept when
+		// the admin switches to another look, so switching back restores it.
+		customColor: v.optional(v.string()),
+		// A Convex storage id (string, like retailers.coverImageStorageId);
+		// unset = the theme's own art carries the banner.
+		coverImageStorageId: v.optional(v.string()),
+		startsAt: v.optional(v.number()),
+		endsAt: v.optional(v.number()),
+		publishedAt: v.optional(v.number()),
+		// Position on /stores among the live showcases, ascending; the admin
+		// list's drag-to-reorder rewrites these.
+		sortOrder: v.number(),
+		members: v.array(
+			v.object({
+				retailerId: v.id("retailers"),
+				// "Booth B4" — the one per-store fact a showcase adds.
+				label: v.optional(v.string()),
+			}),
+		),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_slug", ["slug"])
+		.index("by_sortOrder", ["sortOrder"]),
 
 	slugHistory: defineTable({
 		oldSlug: v.string(),
@@ -830,6 +1177,13 @@ export default defineSchema({
 		// lists online. undefined/false = visible (legacy default; no backfill).
 		// See docs/hidden-products.md.
 		hidden: v.optional(v.boolean()),
+		// Cross-border opt-out (z8r3fdr5yy). Products INHERIT the store's
+		// overseas lane; true = "Ships within <store country> only" (frozen
+		// goods, same-day cakes, anything that can't survive the trip or the
+		// courier's prohibited list). A product can only opt OUT — with no lane
+		// on the store nothing ships abroad whatever this says. Undefined =
+		// inherit (no backfill).
+		domesticOnly: v.optional(v.boolean()),
 		// Minimum order quantity (86ey9unyx) — buyers must order at least this many
 		// units of this product per storefront order, SUMMED across the product's
 		// variants (10 + 10 of two flavours satisfies min 20 — deliberately
@@ -872,6 +1226,26 @@ export default defineSchema({
 		// no override (0 is normalized to unset — one spelling). Capped at
 		// MAX_NOTICE_DAYS. Counter checkout ignores notice entirely (unchanged).
 		minNoticeDays: v.optional(v.number()),
+		// How long THIS product takes to make, in MINUTES (z8r3fdff97). The
+		// hours-scale sibling of minNoticeDays, which could only ever move whole
+		// DAYS: notice 0 lets a buyer collect 15 minutes after ordering, notice 1
+		// kills same-day outright, and "ready in 2 hours" is neither. Checkout
+		// takes the MAX across the cart and floors the pickup/delivery TIME with
+		// it, the same way minNoticeDays floors the DATE — and the two compose:
+		// notice moves the day, prep moves the clock, and prep is absorbed
+		// overnight on any day but today. Undefined = no window (0 normalizes to
+		// unset — one spelling). Capped at MAX_PREP_MINUTES. Counter checkout is
+		// exempt, the notice posture: the seller is standing there.
+		prepMinutes: v.optional(v.number()),
+		// One line the buyer must read before collecting THIS product — "side
+		// counter", "bring an ice bag, ice-cream puffs melt in 20 min". Lived in
+		// the description before, where it reached the storefront and then died:
+		// it never rode the order, so it was absent from checkout, the WhatsApp
+		// confirmation and /track, which is exactly where a buyer needs it.
+		// Frozen onto orders.items[].pickupNote at create. Plain text, trimmed,
+		// <= MAX_PICKUP_NOTE_LENGTH; empty -> unset. Shown only where
+		// self-collect is actually on offer.
+		pickupNote: v.optional(v.string()),
 		// What KIND of thing this is — the vocabulary + question router locked in
 		// the booking spec (86eyj70z1 decision 5). Unset = physical (legacy
 		// default, zero migration). "Food" is a wizard card, never a stored value
@@ -912,12 +1286,20 @@ export default defineSchema({
 				packageUnit: v.optional(
 					// `night` is `day` arithmetic with the accommodation word — a
 					// widening, so every existing row stays valid.
-					v.union(
-						v.literal("day"),
-						v.literal("night"),
-						v.literal("month"),
-					),
+					v.union(v.literal("day"), v.literal("night"), v.literal("month")),
 				),
+				// "Only days you're open" (z8r3fdhpm7): a DAY package counted in
+				// open days — a course, a camp, a class pass — skips the store's
+				// weekly day off and its closed dates, so the term ends later.
+				// Only with packageLength + a "day" unit (refused otherwise, never
+				// stored-and-ignored). Unset = every day in a row (every existing
+				// listing). See closureRule / resolveOpenDaysTerm.
+				skipsClosedDays: v.optional(v.boolean()),
+				// "Up to N skips per package" (z8r3fdh3ay) — caps the seller's
+				// "Skip a day" on an open-days package. Only with skipsClosedDays
+				// (refused otherwise). Unset = no limit; 0 normalizes to unset.
+				// Read LIVE at skip time: it is a policy, not a term of the sale.
+				maxSkips: v.optional(v.number()),
 				// "Instant book" (S7 — the spec's named follow-up): set = a request
 				// lands `confirmed` with the payment ask firing straight away,
 				// skipping `booking_requested`. Unset = request-to-book.
@@ -940,6 +1322,57 @@ export default defineSchema({
 				weekendDays: v.optional(v.array(v.number())),
 			}),
 		),
+		// Event RSVP config (`z8r3fdff9u`): a FIXED fulfilment date this product's
+		// orders lock to, instead of each buyer picking their own at checkout.
+		// Present = this product is an event ("BNI Breakfast · 25 Sep"); absent =
+		// every existing product, zero migration.
+		//
+		// An event is deliberately a FLAG on a normal physical/service product,
+		// not a fourth `kind` and not variants-on-booking: the food choice is the
+		// product's existing option axes, the per-dish headcount is derived from
+		// `orders.items[].variantLabel`, and a booking listing has no variants to
+		// hang a choice off (docs/booking.md S1). Refused on `kind === "booking"`.
+		//
+		// Public-safe — buyers read the date, the time and the seats-left count.
+		// See convex/lib/productEvent.ts + docs/event-rsvp.md.
+		event: v.optional(
+			v.object({
+				// MYT midnight epoch (`isMytMidnight`). Immutable once a live
+				// (non-cancelled) RSVP exists — moving the date under 18 guests who
+				// already confirmed a Thursday is not an edit, it's a new event.
+				date: v.number(),
+				// 0..1439. Display + frozen onto every RSVP's
+				// `fulfilmentTimeMinutes`. Unset = an all-day event (date only).
+				timeMinutes: v.optional(v.number()),
+				// Total seats across ALL options; unset = uncapped (per-variant
+				// stock still applies). 0 normalizes to unset at the sanitizer, so
+				// "no limit" has one spelling and can never read as "sold out".
+				seats: v.optional(v.number()),
+				// LAST day of a multi-day event (MYT midnight, after `date`) —
+				// display + listing lifetime only. RSVPs still freeze `date` (the
+				// check-in day), so the seat tally's key never moves. Unset = one
+				// day; the same-day value normalizes to unset.
+				endDate: v.optional(v.number()),
+				// The pickup location HOSTING the event — the venue is the event's
+				// property, never the guest's pick. Unset = the store's only
+				// active point; required at save when there are several. Order
+				// time resolves with a first-active fallback (see resolveEventVenue).
+				venueId: v.optional(v.id("pickupLocations")),
+				// "Approve each RSVP before the guest pays" (`z8r3fdkjek`). true =
+				// a storefront RSVP lands as `booking_requested` (the generic
+				// "awaiting the seller's approval" status bookings already use) —
+				// seat held, no payment asked — until the seller approves it.
+				// Unset = RSVPs confirm at checkout as before. The counter's
+				// walk-in RSVP is never held: the seller is the one keying it.
+				requiresApproval: v.optional(v.boolean()),
+			}),
+		),
+		// Buyer questions (`z8r3fdkjek`) — up to 3 things the buyer is asked at
+		// checkout ("What are you bringing?", "Message on the cake"). Public-safe
+		// (labels + options only). Unset = none; `[]` is normalised to unset by
+		// `sanitizeBuyerQuestions`. Never on a booking listing. Answers freeze
+		// onto `orders.items[].answers`. See docs/buyer-questions.md.
+		buyerQuestions: v.optional(v.array(buyerQuestionValidator)),
 		// DEPRECATED — moved to productVariants.requiresProof (per-variant).
 		requiresProof: v.optional(v.boolean()),
 		// When this product first appeared on a real order (set-if-unset at both
@@ -958,6 +1391,37 @@ export default defineSchema({
 		// products:backfillProductOrderedAt one-shot fills existing rows).
 		// See convex/lib/productCap.ts + docs/product-cap.md.
 		orderedAt: v.optional(v.number()),
+		// Promo price + flash sale config (z8r3fdcw72) — ONE config per product;
+		// the per-variant sale price lives on productVariants.promoPrice, and
+		// whether any of it applies right now is resolved read-time by
+		// convex/lib/promo.ts (isPromoActive/effectivePrice: plan gate + window
+		// + units left). Nothing here is flipped by a cron — an ended promo
+		// simply resolves to the list price everywhere.
+		promo: v.optional(
+			v.object({
+				// Regenerated whenever the seller re-runs the promo (new dates),
+				// so a re-run starts with a fresh unit-cap pool: the flash tally
+				// groups sold units by this id (convex/lib/promoTally.ts).
+				runId: v.string(),
+				// Badge label; render-time default "Promo" (≤20 chars).
+				label: v.optional(v.string()),
+				// Window (ms epoch, store-local semantics). Unset start = already
+				// running; unset end = a plain discount (badge, no countdown).
+				startsAt: v.optional(v.number()),
+				endsAt: v.optional(v.number()),
+				// Flash layer: sell only the first N units at the sale price —
+				// product-level, summed across variants (minQuantity's mental
+				// model). Cap hit ⇒ price snaps to list for everyone.
+				unitCap: v.optional(v.number()),
+				// Per-order quantity ceiling during the sale (orders.create
+				// enforces; the stepper mirrors it pre-submit).
+				maxPerOrder: v.optional(v.number()),
+				// Payment hold for flash orders: order gets paymentDueAt =
+				// now + window at create; the existing cancelUnpaidDueOrders cron
+				// releases unpaid units. Uncapped promos never set a deadline.
+				payWithinMinutes: v.optional(v.number()),
+			}),
+		),
 		channel: v.union(v.literal("whatsapp")),
 		sortOrder: v.number(),
 		createdAt: v.number(),
@@ -984,6 +1448,11 @@ export default defineSchema({
 		optionValues: v.array(v.string()),
 		sku: v.optional(v.string()),
 		price: v.number(),
+		// Sale price in sen (z8r3fdcw72): > 0 and < price, validated at save.
+		// Only speaks while the parent product's `promo` config is active —
+		// resolution is convex/lib/promo.ts `effectivePrice`, never a direct
+		// read. Quote-on-request variants (price 0) never carry one.
+		promoPrice: v.optional(v.number()),
 		onHand: v.number(),
 		// Reserved-but-not-yet-sold count. Stays 0 until HitPay reservation/hold
 		// lands — forward-wired now so no later migration. See §9.
@@ -1109,6 +1578,23 @@ export default defineSchema({
 		totalSpent: v.number(),
 		firstOrderAt: v.number(),
 		lastOrderAt: v.number(),
+		// `creditSeq` of the order that CREATED this customer record (Credits
+		// T3.1, z8r3fdmg4h). Orders are debited in sequence, so the first one is
+		// the lowest: if even that is above `fundedThrough` then every order this
+		// buyer has placed is gated, and the record must not hand the seller a
+		// phone number the gate is holding back. Stamped once, never updated —
+		// one funded order makes a buyer known for good. Absent = visible (every
+		// customer from before the gate).
+		firstOrderCreditSeq: v.optional(v.number()),
+		// The order that created this record was cancelled while GATED, so this
+		// buyer has never been paid for (Credits T3.1, 9 Oct 2026). Same reason as
+		// `orders.neverFunded`: the refund advances the watermark past
+		// `firstOrderCreditSeq`, which would otherwise reveal the name and phone
+		// of a buyer the seller never bought sight of. CLEARED when the buyer
+		// orders again — `linkOrderToCustomer` re-points `firstOrderCreditSeq` at
+		// the new order, so that order's own funding decides, and a returning
+		// buyer who pays is visible again.
+		neverFunded: v.optional(v.boolean()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
@@ -1139,6 +1625,11 @@ export default defineSchema({
 		// for orders that arrive without a phone (link-in-bio checkout); stamped
 		// once the (retailerId, waPhone) pair is known.
 		customerId: v.optional(v.id("customers")),
+		// Clerk subject of the SELLER-SIDE person who created this order (counter
+		// checkout / claim links, 86exr91r4) — with team members, "who rang this
+		// up" is real information. Unset for buyer-originated orders, everything
+		// pre-feature (no backfill), and admin act-as (adminAuditLog traces those).
+		createdByUserId: v.optional(v.string()),
 		items: v.array(
 			v.object({
 				productId: v.id("products"),
@@ -1173,11 +1664,93 @@ export default defineSchema({
 				// approximation rather than something the app does on its own.
 				categoryNames: v.optional(v.array(v.string())),
 				price: v.number(),
+				// List price frozen ONLY when it differed from `price` (sold on
+				// promo/flash, z8r3fdcw72) — receipts, CSV and a later "promo
+				// discount given" KPI state the saving from it. Absent = sold at
+				// list, exactly as before the field existed.
+				listPrice: v.optional(v.number()),
+				// The promo run this line sold under. The flash unit-cap tally
+				// sums quantities grouped by this id over non-cancelled orders
+				// (convex/lib/promoTally.ts) — cancelled/auto-expired orders drop
+				// out and give their units back by construction.
+				promoRunId: v.optional(v.string()),
 				quantity: v.number(),
+				// Whether this line actually RESERVED stock at create — the resolved
+				// `variant.blockWhenOutOfStock ?? product.blockWhenOutOfStock`,
+				// frozen the way `price` and `variantLabel` already are (86eypn8ye).
+				//
+				// Restore used to re-resolve this from the CURRENT docs, so flipping
+				// the flag between create and cancel made the reversal asymmetric:
+				// ordered-while-tracked then flag off → units never come back;
+				// ordered-while-untracked then flag on → phantom units appear out of
+				// nothing. The flag is a property of the ORDER's moment, not of the
+				// product today.
+				//
+				// Optional for orders created before this field existed. Those fall
+				// back to re-resolving, which is the old behaviour — deliberately NOT
+				// backfilled, because backfilling from today's flag would bake in
+				// exactly the wrong answer for any product whose flag has since
+				// changed, and we cannot know what was true then.
+				stockReserved: v.optional(v.boolean()),
+				// The product's pickup note AS IT READ WHEN SOLD (z8r3fdff97) —
+				// frozen like `name`, `price` and `categoryNames`, and for the same
+				// reason: a seller who later edits "side counter" to "front door"
+				// must not rewrite the instruction a buyer was already given and is
+				// still holding in their WhatsApp thread. Undefined = the product
+				// carried no note at the time, which is also every order predating
+				// the field; deliberately NOT backfilled, since today's note is not
+				// evidence of what that buyer was told.
+				pickupNote: v.optional(v.string()),
+				// The buyer's answers to the product's questions (`z8r3fdkjek`),
+				// frozen WITH the label they were asked under — like `variantLabel`,
+				// a seller who later rewords or deletes a question must not rewrite
+				// what this buyer answered. One set per LINE, not per unit. Unset =
+				// no answers (every order predating the field included).
+				answers: v.optional(v.array(frozenAnswerValidator)),
 			}),
 		),
+		// Σ lines, ALWAYS GROSS of the voucher discount. Load-bearing: the
+		// min-order rules and the free-delivery thresholds judge the
+		// PRE-discount subtotal (docs/vouchers.md), and both read this field —
+		// netting the discount in here would silently move every threshold in
+		// the app. `total` is the net figure.
 		subtotal: v.number(),
 		total: v.number(),
+		// The voucher spent on this order (`z8r3fdr617`) — at most one, ever.
+		// Three fields rather than one, each with a different job:
+		//
+		//   voucherId       the row, so the seller's list can link a redeemed
+		//                   voucher to its order and `reverseCancellationEffects`
+		//                   can hand it back on cancel.
+		//   voucherSnapshot the frozen TERMS + code. The terms are what
+		//                   `computeOrderTotals` re-reads on every recompute (a
+		//                   percentage has to follow the live subtotal when the
+		//                   custom-decline drops a line), and freezing them means
+		//                   a later void can never restate a placed order's
+		//                   discount. The code is frozen for the same reason the
+		//                   pickup note is: it is what the buyer was told.
+		//   voucherDiscount the computed sen, mirrored for cheap reads (receipt,
+		//                   CSV, tracking page, inbox) — always equal to
+		//                   `computeOrderTotals(...).discount`, which is why
+		//                   every site that patches `total` patches this too.
+		//
+		// Unset on every order that carries no voucher, which is every order
+		// predating the feature — deliberately not backfilled (there is nothing
+		// to backfill: no voucher was spent).
+		voucherId: v.optional(v.id("vouchers")),
+		voucherSnapshot: v.optional(
+			v.object({
+				code: v.string(),
+				kind: v.union(v.literal("fixed"), v.literal("percent")),
+				value: v.number(),
+				// Frozen with the code (`z8r3fducfm`) — see `VoucherSnapshot`.
+				usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
+				// The per-order cap of a percent code (`z8r3fdz0pw`), frozen with
+				// the terms so every recompute clamps as the create did.
+				maxDiscount: v.optional(v.number()),
+			}),
+		),
+		voucherDiscount: v.optional(v.number()),
 		currency: v.string(),
 		status: v.union(
 			v.literal("pending"),
@@ -1186,8 +1759,10 @@ export default defineSchema({
 			// carve-out from confirm-at-create, because booking inventory is scarce
 			// and needs vetting. Soft-holds capacity from the moment it exists.
 			// Exits: approve → confirmed (+ the ONE payment ask, S3), decline /
-			// 24 h expiry / buyer cancel → cancelled (hold released). Never reached
-			// by non-booking orders.
+			// 24 h expiry / buyer cancel → cancelled (hold released). Also reached
+			// by an RSVP on an event with `event.requiresApproval` (`z8r3fdkjek`) —
+			// the same "awaiting the seller's approval" meaning, holding a seat
+			// instead of dates; `eventRsvp` tells the two apart. No other order.
 			v.literal("booking_requested"),
 			v.literal("confirmed"),
 			v.literal("packed"),
@@ -1298,6 +1873,32 @@ export default defineSchema({
 		// The frozen `variantLabel` ("Weekend nights (Fri & Sat)") names the same
 		// set in prose for the CSV and the PDF; this is that set, machine-readable.
 		bookingWeekendDays: v.optional(v.array(v.number())),
+		// The shut days an OPEN-DAYS package stepped over (z8r3fdhpm7), frozen
+		// at create — the same display-snapshot posture as `bookingWeekendDays`.
+		// The term itself is already frozen in bookingCheckIn/Out; this says
+		// WHICH days inside it weren't counted, so the receipt and order pages
+		// keep naming them after the store edits its hours or closures. Unset
+		// when nothing was skipped (and on every other booking shape).
+		//
+		// Since z8r3fdh3ay it holds EVERY unused day inside the span — the shut
+		// days AND the days the customer skipped (below) — so capacity, the
+		// grid, the calendar feed and every "N days" count stay right without
+		// a second field to union. Kept sorted, deduped.
+		bookingSkippedDays: v.optional(v.array(v.number())),
+		// The days the CUSTOMER skipped (z8r3fdh3ay) — a subset of
+		// `bookingSkippedDays`, in the order the seller logged them, so the
+		// last entry is the one "Undo" reverses. Each skip moved
+		// `bookingCheckOut` out by one open day; check-in, price and quantity
+		// never move. What it adds over `bookingSkippedDays` is the WHY: a
+		// customer skip is labelled as one, counts against the listing's
+		// `maxSkips`, and can be undone. Unset = never skipped.
+		bookingCustomerSkips: v.optional(v.array(v.number())),
+		// Frozen at create: this package counts OPEN days (`closureRule`
+		// "skipped", z8r3fdhpm7), so the seller can skip a day of it. Frozen
+		// because a later listing edit must not take "Skip a day" off a plan
+		// that was sold as days of service. Absent on orders from before
+		// z8r3fdh3ay — those fall back to the listing.
+		bookingOpenDays: v.optional(v.boolean()),
 		// HOW a request left `booking_requested` when it didn't get approved —
 		// "declined" (seller said no, reason below) or "expired" (the 24 h window
 		// lapsed). Both land the order in `cancelled`; this marker is what lets
@@ -1370,6 +1971,12 @@ export default defineSchema({
 				// Google Place ID — when set, maps URLs deep-link to the
 				// named place page instead of raw lat/lng search.
 				placeId: v.optional(v.string()),
+				// The address's own country (z8r3fdr5yy). Stamped on every order
+				// created after cross-border shipped; absent = the store's country
+				// (every older order, zero migration). Differs from the store's
+				// country only on a cross-border order — the one thing every
+				// address renderer, the label and the courier booking key off.
+				country: v.optional(countryValidator),
 			}),
 		),
 		// Reference to the retailer's pickup location when deliveryMethod ===
@@ -1467,22 +2074,25 @@ export default defineSchema({
 				// Which provider's price the buyer actually paid, and every quote
 				// that competed for it (mode "live"). Absent on "lalamove" rows —
 				// there was only ever one bidder.
-				quoteProvider: v.optional(
-					v.union(v.literal("lalamove"), v.literal("delyva")),
-				),
+				quoteProvider: v.optional(courierProviderValidator),
 				quoteServiceName: v.optional(v.string()),
 				quotesConsidered: v.optional(
 					v.array(
 						v.object({
-							provider: v.union(
-								v.literal("lalamove"),
-								v.literal("delyva"),
-							),
+							provider: courierProviderValidator,
 							fee: v.number(),
 							currency: v.string(),
 						}),
 					),
 				),
+				// The courier was asked to price the one-kilo FLOOR rather than the
+				// cart's real weight (`liveQuoteWeightFacts`), and how many lines a
+				// product weight would have priced. Lets the seller's order page say
+				// "priced at the 1 kg floor — 2 items had no weight" and point at
+				// the fix, instead of a fee that silently under-collects. Widen-only
+				// (23 Oct 2026); absent = not floored or minted before the stamp.
+				weightFloored: v.optional(v.boolean()),
+				unweighedLines: v.optional(v.number()),
 			}),
 		),
 		// Order-level mirror of `deliverySnapshot.fee` (minor units) for cheap
@@ -1539,15 +2149,36 @@ export default defineSchema({
 		// WHAT TIME on that day (86eyg0n8e follow-up) — minutes since MYT
 		// midnight (0..1439), captured at checkout for DELIVERY orders (both
 		// directions: the rider's arrival at the buyer, or the collection from
-		// them, shouldn't be an all-day window). Deliberately a separate field:
+		// them, shouldn't be an all-day window) and — since z8r3fdff97 — for
+		// SELF-COLLECT orders at the seller's own pickup point whenever the
+		// store has opening hours or the cart has a prep window (a drop-off
+		// meet-up stays date-only: its schedule note governs). Deliberately a separate field:
 		// `fulfilmentDate` must stay a whole midnight (the validator enforces
 		// it, and the inbox sort / due-today counts / urgency badges all
 		// compare midnights), so the time composes with it via
 		// composeFulfilmentMoment and can never drift from the day. Absent on
-		// legacy, counter and self-collect orders — every consumer treats
-		// "no time" as the old date-only behaviour. Drives the Lalamove
+		// legacy, counter and booking orders, and optional on self-collect —
+		// every consumer treats "no time" as the old date-only behaviour. Drives the Lalamove
 		// scheduled booking default (past moments book "now").
 		fulfilmentTimeMinutes: v.optional(v.number()),
+		// Born as an RSVP to a fixed-date event (`z8r3fdff9u`). FROZEN at create
+		// (all doors that can hold an event line stamp it) and never patched —
+		// the sync flow-kind marker for `orderFlowKind`, which picks the event
+		// status vocabulary (Confirmed → Checked In) on every surface. The
+		// event's own details (endDate) are still read live from the product.
+		eventRsvp: v.optional(v.boolean()),
+		// The seller MOVED this order's moment (z8r3fdff97 test round). The
+		// buyer is never messaged about a reschedule — the dialog says so and
+		// tells the seller to agree it in chat — so `/track` is the only place
+		// they can see it changed, and "Collect on Mon 3:00 PM" alone looks
+		// exactly like the time they chose. These three carry what the page
+		// needs to say so: WHEN it was moved, and the moment it moved FROM
+		// (date-only when the seller cleared the time). Absent = never moved,
+		// which is every order before this shipped. Stamped only when the
+		// moment actually differs, so re-saving the same day is not "changed".
+		rescheduledAt: v.optional(v.number()),
+		rescheduledFromDate: v.optional(v.number()),
+		rescheduledFromTimeMinutes: v.optional(v.number()),
 		// Free-text instruction the shopper attached at checkout ("no onions",
 		// "deliver after 5pm"). Optional; absent on orders created before this
 		// field. Distinct from deliveryAddress.notes (address/gate detail, delivery
@@ -1588,11 +2219,7 @@ export default defineSchema({
 		// A future PSP webhook can short-circuit straight to "received" without
 		// the manual claim step — same end state.
 		paymentStatus: v.optional(
-			v.union(
-				v.literal("unpaid"),
-				v.literal("claimed"),
-				v.literal("received"),
-			),
+			v.union(v.literal("unpaid"), v.literal("claimed"), v.literal("received")),
 		),
 		paymentReference: v.optional(v.string()),
 		// How the order was settled (cash / duitnow / tng / bank_transfer / card /
@@ -1793,10 +2420,41 @@ export default defineSchema({
 		// webhook identifies messages ONLY by this id, so it's the correlation key
 		// that lets a delivery failure find its order (see by_confirmation_wamid).
 		confirmationPushWamid: v.optional(v.string()),
+		// This order's place in the store's credit-debit sequence (Credits T3.1,
+		// z8r3fdmg4h) — stamped by `debitCreditForOrder` when the order spends
+		// its credit. The order is workable iff this is at or below
+		// `creditAccounts.fundedThrough`; ABSENT means workable, always (an
+		// order from before the per-order gate, or one whose debit faulted and
+		// was deliberately kept — the gate fails open, see
+		// `orderCreditFunded`). Never rewritten: an order's position is for life.
+		creditSeq: v.optional(v.number()),
+		// This order's credit was NEVER paid for, and the order is over (Credits
+		// T3.1, 9 Oct 2026). Stamped when a GATED order is cancelled and its
+		// credit refunded.
+		//
+		// It exists because `fundedThrough` is a WATERMARK and a watermark cannot
+		// express "this position is spent but this order stays closed". The
+		// refund is a credit landing, so it advances the watermark one position —
+		// and when the cancelled order held the oldest unfunded position, the
+		// watermark passes its own `creditSeq` and every seller surface un-redacts
+		// it. That handed back the buyer's name, phone, items and tracking token
+		// for an order the seller paid nothing for: the manual-settlement bypass
+		// the whole gate exists to prevent, on demand and repeatable.
+		//
+		// So the gate is `neverFunded === true || creditSeq > fundedThrough`. The
+		// watermark still advances (no dead position left to eat a later credit,
+		// and the next LIVE order opens as it should); this keeps the dead one
+		// closed for good. Absent = judged by the watermark alone, which is every
+		// order that was never cancelled while gated.
+		neverFunded: v.optional(v.boolean()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
+		// The inbox's "Waiting on credits" filter and the admin's reconcile:
+		// every order of one store whose `creditSeq` is above the watermark, in
+		// queue order. A range read, so it costs the backlog and not the table.
+		.index("by_retailer_credit_seq", ["retailerId", "creditSeq"])
 		.index("by_retailer_status", ["retailerId", "status"])
 		.index("by_retailer_payment", ["retailerId", "paymentStatus"])
 		.index("by_retailer_mockup", ["retailerId", "mockupStatus"])
@@ -1840,6 +2498,16 @@ export default defineSchema({
 		retailerId: v.id("retailers"),
 		label: v.string(),
 		address: v.string(),
+		// Unit / floor / building (z8r3fdff8r) — same line as the business
+		// address, same reason: buyers were given a block, not a door. Kept
+		// SEPARATE from `address` rather than typed into it because editing the
+		// address text away from its Google pick drops the coordinates, which
+		// costs the buyer their one-tap Waze/Maps button. Composed back on for
+		// display via `formatPickupAddress`, and frozen INTO
+		// `orders.pickupSnapshot.address` at order create — so every buyer
+		// surface that already prints that string (checkout, /track, email,
+		// WhatsApp, CSV) carries the unit with no further plumbing.
+		unit: v.optional(v.string()),
 		// Optional flat fee (minor units / sen) a buyer pays for choosing this
 		// point — passes on a real collection cost (paid drop-off host, meetup
 		// run, host-stall charge). Unset or 0 → free; legacy rows read as free
@@ -1894,7 +2562,31 @@ export default defineSchema({
 		// historical order snapshots remain meaningful. Inactive rows are
 		// hidden from the storefront picker but still listed in settings under
 		// a "show inactive" toggle.
+		//
+		// NOTE this means "retired", and ONLY that — see `eventsOnly` below for
+		// why that distinction had to be made explicit.
 		isActive: v.boolean(),
+		// This address hosts EVENTS and never appears in the buyer's pickup
+		// picker at checkout. Unset/false = today's behaviour exactly, and such
+		// a point stays fully venue-eligible, so "my shop, which is also where
+		// I run the class" is simply the flag left off. Legacy rows read as
+		// false; no backfill (z8r3fdm32x).
+		//
+		// Before this existed an RSVP-only venue had to masquerade as a
+		// DEACTIVATED pickup point — `isActive` carried two unrelated meanings
+		// ("retired" and "events only"), which buried live venues behind the
+		// settings "Show inactive" disclosure, labelled them "hidden from
+		// buyers" in the venue picker, and could trip "no active points yet" on
+		// a store that had plenty.
+		//
+		// Deliberately NOT a third `locationType`. That value is FROZEN onto
+		// `orders.pickupSnapshot` and read in ~two dozen places — WhatsApp
+		// copy, email, /track, order detail — nearly all as binary
+		// `=== "drop_off" ? … : …` ternaries, so a third literal would fall
+		// silently into the self-collect branch everywhere. It would also force
+		// an either/or the seller doesn't have: kind (where the buyer stands)
+		// and events-eligibility (which flows it is offered in) are orthogonal.
+		eventsOnly: v.optional(v.boolean()),
 		// Ascending integer used to drive the picker order. The settings UI
 		// surfaces up/down arrows that swap sortOrder with the neighbour.
 		sortOrder: v.number(),
@@ -1922,8 +2614,42 @@ export default defineSchema({
 		stageId: v.optional(v.string()),
 		stageLabel: v.optional(v.string()),
 		note: v.optional(v.string()),
+		// Clerk subject of the SELLER-SIDE person who caused this event (owner or
+		// team member, 86exr91r4) — the timeline's "· by {name}". Unset for buyer-
+		// and system-originated events, for everything pre-feature (no backfill),
+		// and for admin act-as writes (an admin is not a teammate; adminAuditLog
+		// already traces those).
+		actorUserId: v.optional(v.string()),
+		// A NON-status event (z8r3fdh3ay) — something happened to the order
+		// without its status moving. The timeline titles the row by this
+		// instead of the status; `note` carries the human detail. Unset = an
+		// ordinary status event (every row before it).
+		action: v.optional(
+			v.union(
+				v.literal("booking_day_skipped"),
+				v.literal("booking_day_skip_undone"),
+			),
+		),
 		createdAt: v.number(),
 	}).index("by_order", ["orderId"]),
+
+	// One row per buyer "I've paid" submission (z8r3fdn2uj) — the HISTORY of
+	// what the buyer sent, so the seller can reopen any screenshot long after
+	// the payment was marked received. `orders.paymentReference` /
+	// `paymentProofStorageId` stay as the latest values (email + WhatsApp read
+	// them); these rows are what used to be overwritten. Each row records only
+	// what THAT submission carried — a reference-only resubmit has no proof.
+	// Capped per order (MAX_PAYMENT_CLAIMS_PER_ORDER in lib/paymentClaims.ts).
+	// Orders claimed before this table existed have no rows until
+	// `migrations:backfillPaymentClaims` runs; readers fall back to the order's
+	// own fields meanwhile. Rows + their blobs are freed with the order
+	// (lib/orderBlobs.ts).
+	paymentClaims: defineTable({
+		orderId: v.id("orders"),
+		reference: v.optional(v.string()),
+		proofStorageId: v.optional(v.string()),
+		createdAt: v.number(),
+	}).index("by_order_createdAt", ["orderId", "createdAt"]),
 
 	// --- Lalamove delivery (docs/delivery-lalamove.md, ClickUp 86eyb5hrf) -----
 	// Server-side record of a live checkout quote. The public quoteForCheckout
@@ -1942,9 +2668,7 @@ export default defineSchema({
 		// provider-aware. Rows are transient (consumed at create, purged daily),
 		// so this narrows to required on its own within a day of deploy —
 		// widen → migrate → narrow, with the migration being the clock.
-		provider: v.optional(
-			v.union(v.literal("lalamove"), v.literal("delyva")),
-		),
+		provider: v.optional(courierProviderValidator),
 		// Lalamove quotation id — reused at create for the snapshot audit trail.
 		// Optional since z8r3fdbvdy: a Delyva quote has no id to bind to (its
 		// prices are indicative and never expire; dispatch re-prices anyway).
@@ -1980,7 +2704,7 @@ export default defineSchema({
 		considered: v.optional(
 			v.array(
 				v.object({
-					provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+					provider: courierProviderValidator,
 					fee: v.number(),
 					currency: v.string(),
 				}),
@@ -1989,10 +2713,128 @@ export default defineSchema({
 		// Destination coords the quote priced — orders.create verifies the order's
 		// delivery address matches (a quote for a near/cheap pin can't be replayed
 		// against a far delivery address).
-		latitude: v.number(),
-		longitude: v.number(),
+		// The buyer's pin — the replay control for a pin-priced quote. A lane
+		// quote EasyParcel priced on the POSTCODE (z8r3fdr5yy: an overseas
+		// address is often typed, with no pin) carries the postcode instead.
+		latitude: v.optional(v.number()),
+		longitude: v.optional(v.number()),
+		postcode: v.optional(v.string()),
 		quotedAt: v.number(),
+		// The cart was quoted at the one-kilo floor (`liveQuoteWeightFacts`) and
+		// how many of its lines had no product weight — copied onto the order's
+		// deliverySnapshot at create. Absent = not floored (or a row minted
+		// before the stamp; rows live a day, so this narrows itself).
+		weightFloored: v.optional(v.boolean()),
+		unweighedLines: v.optional(v.number()),
 	}).index("by_retailer", ["retailerId"]),
+
+	// Lalamove's carrying limit per vehicle, per market and environment, read
+	// from `GET /v3/cities` (25 Oct 2026, `convex/lib/lalamoveVehicle.ts`).
+	// Lalamove prices by vehicle and never refuses an overweight trip, so the
+	// rider quote picks the smallest vehicle that can carry the cart from
+	// these. A market-level catalogue fact (no seller data), refreshed in the
+	// background once a day; `loads` is a list of pairs, never an object keyed
+	// by the vehicle name. Own table, not a retailer field: every store in a
+	// market shares one row.
+	lalamoveVehicleLoads: defineTable({
+		market: v.union(v.literal("MY"), v.literal("SG")),
+		env: v.union(v.literal("sandbox"), v.literal("production")),
+		loads: v.array(v.object({ key: v.string(), loadKg: v.number() })),
+		fetchedAt: v.number(),
+		// When a background refresh was last scheduled for a stale row. A
+		// stale row is read by every quote and dispatch; this stamp lets one
+		// refresh go per market per few minutes instead of one per checkout
+		// (and a failing `/v3/cities` retry at that pace, not per buyer).
+		refreshScheduledAt: v.optional(v.number()),
+	}).index("by_market_env", ["market", "env"]),
+
+	// EasyParcel connection per store (z8r3fdcje2) — the Open API's OAuth
+	// grant. The seller signs in at EasyParcel and picks which of their
+	// accounts (Live or Demo) Kedaipal may book with; we hold the resulting
+	// tokens, `enc.v1.`-encrypted in the callback ACTION so no plaintext ever
+	// passes through a mutation. Kedaipal's own app credentials are Convex env
+	// (`EASYPARCEL_CLIENT_ID` / `_SECRET`), never a table.
+	//
+	// Its own table, deliberately NOT a `retailers` field: the access token
+	// refreshes every ~10h and the wallet snapshot moves on every booking, and
+	// a retailer patch re-runs every open storefront tab; tokens also stay off
+	// every retailer read; and new `retailers` fields break other branches'
+	// deploys to the shared dev deployment. See docs/delivery-easyparcel.md.
+	easyparcelConnections: defineTable({
+		retailerId: v.id("retailers"),
+		// Fulfilment → Courier booking switch. Connecting sets it; pausing
+		// keeps the grant.
+		enabled: v.boolean(),
+		accessToken: v.string(),
+		// Absent only if EasyParcel ever issues a grant without one — the
+		// connection then lives until the access token expires.
+		refreshToken: v.optional(v.string()),
+		accessExpiresAt: v.number(),
+		refreshExpiresAt: v.optional(v.number()),
+		// Stamped when EasyParcel refuses our refresh: the grant is dead and
+		// dispatch blocks with "Reconnect EasyParcel" until a fresh connect
+		// clears it. Never inferred from a single failed call.
+		revokedAt: v.optional(v.number()),
+		// Who the token belongs to (account info), shown on the settings card
+		// as proof the right account was linked.
+		accountName: v.optional(v.string()),
+		accountType: v.optional(v.string()),
+		// Sandbox vs live. No API field reports it — the token is bound to the
+		// account picked at sign-in — so this is set only when the token
+		// itself carries the claim (`tokenEnvironment`); undefined = unknown,
+		// rendered as unknown, never as live.
+		environment: v.optional(
+			v.union(v.literal("sandbox"), v.literal("live")),
+		),
+		// Prepaid wallet snapshot (minor units) from the last /wallet read —
+		// connect, every quote, every booking, and the card's refresh.
+		balanceMinor: v.optional(v.number()),
+		balanceCurrency: v.optional(v.string()),
+		balanceCheckedAt: v.optional(v.number()),
+		// Where couriers collect. Imported from the EasyParcel account at
+		// connect as a PREFILL (fill-if-unset), then the seller's own. `unit`
+		// is the SG unit number, folded into address line 1 at booking.
+		pickupAddress: v.optional(
+			v.object({
+				unit: v.optional(v.string()),
+				address1: v.string(),
+				address2: v.optional(v.string()),
+				city: v.string(),
+				state: v.optional(v.string()),
+				postcode: v.string(),
+			}),
+		),
+		connectedAt: v.number(),
+		updatedAt: v.number(),
+	}).index("by_retailer", ["retailerId"]),
+
+	// One OAuth connect attempt (z8r3fdcje2). `nonce` is the `state` we hand
+	// the provider — crypto-random, single-use, 10-minute TTL — so a replayed
+	// or forged callback never reaches a token exchange. The attempt's
+	// OUTCOME is recorded here too, which is how the settings card says what
+	// happened at the provider without a URL parameter. Purged after a week.
+	courierOAuthStates: defineTable({
+		provider: courierProviderValidator,
+		retailerId: v.id("retailers"),
+		nonce: v.string(),
+		// Where the browser returns — validated at mint against SITE_URL /
+		// localhost, so the callback can't be turned into an open redirect.
+		returnTo: v.string(),
+		createdAt: v.number(),
+		expiresAt: v.number(),
+		consumedAt: v.optional(v.number()),
+		outcome: v.optional(
+			v.union(
+				v.literal("connected"),
+				v.literal("denied"),
+				v.literal("failed"),
+				v.literal("expired"),
+			),
+		),
+		message: v.optional(v.string()),
+	})
+		.index("by_nonce", ["nonce"])
+		.index("by_retailer_provider", ["retailerId", "provider"]),
 
 	// One rider booking (dispatch) against an order. The ledger row of record:
 	// actual cost the seller's own Lalamove wallet paid (BYO-only — audit +
@@ -2001,12 +2843,63 @@ export default defineSchema({
 	// failed/cancelled jobs stay as history and a rebook inserts a new row.
 	// `by_provider_order` is the webhook lookup; `by_retailer` keeps per-store
 	// range reads cheap.
+	// A seller's courier WALLET as the courier reports it (86eye9xd4 6A,
+	// widened to every provider by z8r3fdrgxc/z8r3fdx34j). The courier, not
+	// Kedaipal, holds this money — the row is the last balance the provider
+	// told us, so every surface can warn before a booking fails instead of
+	// after. One row per (store, provider), written ONLY through
+	// `courierWallets.recordObservation` (monotonic on observation time, so a
+	// late webhook can't overwrite a newer pull). How each provider reports is
+	// `WALLET_PROVIDERS[provider].model` in convex/lib/courierWallet.ts:
+	// Lalamove PUSHES (webhook); EasyParcel and Delyva are PULLED (Delyva's
+	// insufficient-credit REFUSAL carries it too). Own table rather than fields on
+	// `retailers`: a balance moves on every booking, and a retailer patch
+	// re-runs every open storefront tab.
+	courierWallets: defineTable({
+		retailerId: v.id("retailers"),
+		provider: courierProviderValidator,
+		// Lalamove only. Its wallet event carries no order, only the sender's
+		// API key, and stored keys are encrypted at rest (86eyn25gk) so they
+		// can't be matched: this SHA-256 of the plaintext key, stamped when the
+		// key is saved, attributes the event; the store's own secret then
+		// verifies it. A different key = a different account = a fresh row.
+		keyFingerprint: v.optional(v.string()),
+		// Minor units (sen / cents) in `currency` — the PROVIDER's currency —
+		// as of `balanceAt` (ms; the provider's own event time where it gives
+		// one). Undefined until the provider first reports a number.
+		balance: v.optional(v.number()),
+		currency: v.optional(v.string()),
+		balanceAt: v.optional(v.number()),
+		// How `balance` arrived. Only a fresh `pull` may REFUSE a booking
+		// (`walletVerdict`); pushed and refusal-parsed numbers only warn.
+		// Undefined on rows written before z8r3fdrgxc (all Lalamove webhooks).
+		source: v.optional(
+			v.union(v.literal("webhook"), v.literal("pull"), v.literal("refusal")),
+		),
+		// The latest booking the provider refused for lack of funds, when the
+		// refusal named no balance (Lalamove) — the wallet is known to be
+		// short, not by how much. Superseded by any newer balance.
+		refusedAt: v.optional(v.number()),
+		refusedPriceMinor: v.optional(v.number()),
+		// The seller's own "low alert" line for this wallet, minor units in its
+		// currency. Undefined = the currency default (RM 30 / S$ 15,
+		// `defaultLowAlertMinor`). Set on the Courier wallets section.
+		lowAlertMinor: v.optional(v.number()),
+		// When the owner was emailed that this wallet needs a top-up. Set on
+		// the crossing, cleared when the wallet is healthy again — once per
+		// crossing, never once per webhook.
+		lowNotifiedAt: v.optional(v.number()),
+		updatedAt: v.number(),
+	})
+		.index("by_retailer_provider", ["retailerId", "provider"])
+		.index("by_fingerprint", ["keyFingerprint"]),
+
 	deliveryJobs: defineTable({
 		orderId: v.id("orders"),
 		retailerId: v.id("retailers"),
 		// Which booking provider ran this job. Lalamove = intra-city rider;
 		// Delyva (86eyjpv6z) = nationwide parcel/cold-chain courier aggregator.
-		provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+		provider: courierProviderValidator,
 		// Unset while the row is a pre-call RESERVATION (inserted atomically
 		// before the POST /v3/orders side effect so two concurrent confirms can't
 		// both dispatch a rider); patched in by commitBooking once Lalamove
@@ -2030,6 +2923,10 @@ export default defineSchema({
 		// the buyer-paid orders.deliveryFee is expected (dispatch re-quotes) and
 		// lives HERE, never rewriting the order.
 		costActual: v.number(),
+		// Tip added while the booking waited for a rider (86eye9xd4) —
+		// Lalamove's priority fee, minor units, cumulative and ALREADY included
+		// in costActual. Undefined = no tip.
+		priorityFee: v.optional(v.number()),
 		// Lalamove: the 5-minute quotation the booking was placed against.
 		// Delyva: the service CODE picked in the dispatch dialog (their quotes
 		// are indicative, not id-bound — create re-prices), so this stays the
@@ -2041,12 +2938,18 @@ export default defineSchema({
 		// Delyva only — the courier service actually booked ("DHL eCommerce",
 		// "Ninja Cold"), for the dispatch card + orders.courierName mirror.
 		serviceName: v.optional(v.string()),
-		// Delyva only — the consignment number (AWB) the buyer can track with.
-		// Arrives via the order.created webhook (or the post-process fetch) and
-		// is mirrored onto orders.courierName/trackingNo (86eyehvk4 fields) the
-		// moment it's known. Distinct from providerOrderId (Delyva's internal
-		// order id, which webhooks correlate on).
+		// Delyva + EasyParcel — the consignment number (AWB) the buyer can track
+		// with. Delyva: arrives via the order.created webhook (or the
+		// post-process fetch); EasyParcel: returned by EPPayOrderBulk. Mirrored
+		// onto orders.courierName/trackingNo (86eyehvk4 fields) the moment it's
+		// known. Distinct from providerOrderId (the provider's own order id,
+		// which webhooks/polling correlate on).
 		awb: v.optional(v.string()),
+		// EasyParcel only — the courier AWB label PDF (their `awb_id_link`),
+		// returned by EPPayOrderBulk. The first provider that hands us a real
+		// courier label (the deferred Delyva label work, docs/despatch-labels.md
+		// v2); the dispatch card links it beside Kedaipal's own despatch label.
+		labelUrl: v.optional(v.string()),
 		// Delyva only — the itemType this trip was booked as (PARCEL/CHILLED/
 		// FROZEN), frozen at dispatch for the audit trail.
 		itemType: v.optional(v.string()),
@@ -2093,10 +2996,19 @@ export default defineSchema({
 	})
 		.index("by_order", ["orderId"])
 		.index("by_retailer", ["retailerId"])
+		// Disconnect's rider-out guard (z8r3fdy5ht): "is any of this store's
+		// Lalamove jobs still active?" is one indexed read per active status,
+		// exact — a scheduled booking can sit in `assigning` for 30 days, so a
+		// "newest N" window over `by_retailer` would let it slip past.
+		.index("by_retailer_status", ["retailerId", "status"])
 		// Provider-qualified since Delyva (86eyjpv6z): two providers' order ids
 		// are both opaque strings, so a bare providerOrderId index + .unique()
 		// would let a cross-provider collision throw in a webhook handler.
-		.index("by_provider_order", ["provider", "providerOrderId"]),
+		.index("by_provider_order", ["provider", "providerOrderId"])
+		// The EasyParcel status cron's read (z8r3fdcje2): that API has no
+		// webhook, so a poll sweeps the ACTIVE easyparcel jobs — one indexed
+		// query per active status, never a table scan.
+		.index("by_provider_status", ["provider", "status"]),
 
 	// --- Counter Checkout (in-person order spine, docs/counter-checkout.md) ----
 	// A seller-initiated, in-person checkout session. The seller opens Counter
@@ -2129,9 +3041,7 @@ export default defineSchema({
 		// store poster (`KPS-`, 86ey5m35w). Undefined → "cashier" (legacy-safe,
 		// same posture as pickupSnapshot.locationType). Drives the "Walk-in scan"
 		// badge; `cashier` only appears on legacy rows from the removed flow.
-		origin: v.optional(
-			v.union(v.literal("cashier"), v.literal("store_qr")),
-		),
+		origin: v.optional(v.union(v.literal("cashier"), v.literal("store_qr"))),
 		// Short human pairing code (e.g. "K7") shown to the buyer on connect AND on
 		// the cashier's open-checkouts list, so the cashier matches "who's this?"
 		// at a glance (there's no order number yet — the order is created later).
@@ -2167,11 +3077,26 @@ export default defineSchema({
 						// catalog price is 0 — the agreed-in-person price. Absent for
 						// normal lines (those resolve to the variant's price at create).
 						unitPrice: v.optional(v.number()),
+						// Buyer-question answers the seller keyed for the walk-in
+						// (`z8r3fdkjek`) — re-validated at createOrderFromSession.
+						answers: v.optional(v.array(itemAnswerInputValidator)),
 					}),
 				),
 				fulfilmentDate: v.optional(v.number()),
 				paidInPerson: v.optional(v.boolean()),
 				paymentMethod: v.optional(orderPaymentMethodValidator),
+				// Voucher code the seller keyed off the buyer's QR or read out
+				// (`z8r3fdr617`). RESTORE ONLY — a scratchpad like the draft
+				// prices above it, so a refresh or a jump to another customer
+				// brings the code back into the field.
+				//
+				// Neither door reads it: `createOrderFromSession` and `sendClaim`
+				// both take the code as an EXPLICIT argument, exactly as they take
+				// `items`. This row is a DEBOUNCED autosave, so a door reading it
+				// would drop a code applied in the second before the seller tapped
+				// the button — after the panel had already shown the discount,
+				// which is the one outcome a money control must never produce.
+				voucherCode: v.optional(v.string()),
 			}),
 		),
 		boundAt: v.optional(v.number()),
@@ -2221,10 +3146,43 @@ export default defineSchema({
 				name: v.string(),
 				variantLabel: v.optional(v.string()),
 				price: v.number(), // sen — LOCKED at send
+				// Promo facts frozen WITH the lock (z8r3fdcw72): when the send
+				// resolved a sale price, commit copies these onto the order line
+				// so the saving prints and the unit joins the flash tally AT
+				// COMMIT (price-lock rule wins over a cap hit in between).
+				listPrice: v.optional(v.number()),
+				promoRunId: v.optional(v.string()),
 				quantity: v.number(),
+				// Buyer-question answers the seller keyed at the counter
+				// (`z8r3fdkjek`), validated + frozen at send; commit copies them.
+				answers: v.optional(v.array(frozenAnswerValidator)),
 			}),
 		),
 		currency: v.string(),
+		// A voucher the seller applied AT SEND (`z8r3fdr617`), frozen like the
+		// line prices above it so the buyer's claim ticket shows the price they
+		// were promised. NOT redeemed yet — the flip happens in the commit, with
+		// the order insert, like every other door.
+		//
+		// Which means the row can stop being redeemable between send and commit
+		// (the seller keys the same code at the counter, or voids it). The claim
+		// page RE-VALIDATES on every read and says so above the ticket rather
+		// than letting the commit dead-end: a buyer who followed a link must
+		// always be able to finish, and the total they confirm is the total they
+		// are charged. See docs/vouchers.md.
+		voucherId: v.optional(v.id("vouchers")),
+		voucherSnapshot: v.optional(
+			v.object({
+				code: v.string(),
+				kind: v.union(v.literal("fixed"), v.literal("percent")),
+				value: v.number(),
+				// Frozen with the code (`z8r3fducfm`) — see `VoucherSnapshot`.
+				usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
+				// The per-order cap of a percent code (`z8r3fdz0pw`), frozen with
+				// the terms so every recompute clamps as the create did.
+				maxDiscount: v.optional(v.number()),
+			}),
+		),
 		// Buyer capability for /claim/<token> — same generator + posture as
 		// orders.trackingToken (unguessable, never the shortId).
 		token: v.string(),
@@ -2288,6 +3246,311 @@ export default defineSchema({
 		// One-live-claim-per-session lookup at send + counter build-screen state.
 		.index("by_session", ["sessionId"]),
 
+	// --- Vouchers (docs/vouchers.md, z8r3fdr617) -----------------------------
+	// A seller-issued, single-use discount: one row = one unique code = one
+	// redemption, deducted from ONE order. The buyer-specific discount lever;
+	// the product-level one (promo price / flash sale) changes the LINE PRICE
+	// and is a separate mechanism that stacks with this.
+	//
+	// Redemption is ATOMIC with order create — the row flips to `redeemed` in
+	// the same mutation that inserts the order, so two checkouts racing one
+	// code serialise on Convex's OCC and exactly one wins. That is the whole
+	// concurrency story; there is no reservation state to leak.
+	vouchers: defineTable({
+		retailerId: v.id("retailers"),
+		// Canonical `KP-XXXX-XXXX` (convex/lib/vouchers.ts). Crypto-random over
+		// an alphabet with no O/0/I/1, because this code gets read down a phone
+		// line and keyed off a buyer's screenshot at a stall.
+		//
+		// Unique GLOBALLY, not per store, and the `by_code` index is what keeps
+		// it so (create retries on collision). Global uniqueness buys a real
+		// property: a code typed at the wrong store resolves to a row whose
+		// `retailerId` does not match and is refused as "not valid for this
+		// store" — it can never silently match a DIFFERENT store's voucher,
+		// which a per-store index would have made possible the moment two
+		// stores minted the same 8 symbols.
+		code: v.string(),
+		// What it is worth. `fixed` → minor units of `currency`; `percent` →
+		// whole percent of the ITEM SUBTOTAL (1–100). The discount itself is
+		// computed by `voucherDiscountFor`, never stored here — a percentage has
+		// no sen value until it meets a basket.
+		kind: v.union(v.literal("fixed"), v.literal("percent")),
+		value: v.number(),
+		// The store's currency at issue — frozen so a store that later switches
+		// country can't restate what an outstanding fixed voucher is worth.
+		// Carried on percentage rows too (they display in it) but unused by the
+		// maths.
+		currency: v.string(),
+		// MYT midnight of the LAST day the code works — the `fulfilmentDate`
+		// convention, so the whole date vocabulary (picker, formatter, ymd
+		// round-trip) is reused. The voucher dies when that day ENDS; see
+		// `isVoucherExpired`. Unset = no expiry, which is a real answer and the
+		// default.
+		expiresAt: v.optional(v.number()),
+		// The three states a row can be IN. `expired` is deliberately NOT one
+		// of them: it is judged at read time against the clock
+		// (`resolveVoucherStatus`), so no cron flips vouchers and there is no
+		// window where the database and the truth disagree.
+		status: v.union(
+			v.literal("active"),
+			v.literal("redeemed"),
+			v.literal("voided"),
+		),
+		// Set together at redemption. `redeemedOrderId` is what lets the list
+		// link a spent voucher to its order — and what a cancel clears when the
+		// voucher goes back to `active`. Both are single-use only and never
+		// written on a SHARED code: its orders and each use's time live in
+		// `voucherRedemptions`.
+		redeemedOrderId: v.optional(v.id("orders")),
+		redeemedAt: v.optional(v.number()),
+		// --- Shared codes (`z8r3fducfm`) -------------------------------------
+		// `shared` = one seller-named code (`SALE345`) many buyers type, bounded
+		// by `maxRedemptions`, `endsAt`, or both (at least one — a public code
+		// with no bound is an open-ended liability, `sharedLimitsError`). Absent
+		// = `single`, the original one-code-one-use voucher: nothing to backfill.
+		//
+		// A shared code is unique PER STORE among its LIVE codes (`by_retailer_
+		// code`), not globally like a single-use one: it is public by design,
+		// so two stores both running `SALE20` is the normal case, and the buyer
+		// always types it at a known store. An ended code's word may be reused
+		// — the lookup picks the live row and the history keeps its own.
+		// `sharedCodeError` refuses any word the single-use parser would claim,
+		// so the two spellings can never collide (`parseVoucherCode`).
+		usage: v.optional(v.union(v.literal("single"), v.literal("shared"))),
+		maxRedemptions: v.optional(v.number()),
+		// Orders currently holding a use — incremented at redemption, decremented
+		// when an order is cancelled. A shared row is NEVER stored `redeemed`:
+		// "all used" and "ended" are both judged at read time off this count and
+		// `endsAt` (`resolveVoucherStatus`), so the row and the truth can't
+		// drift. Always equal to the row's `voucherRedemptions` count.
+		redeemedCount: v.optional(v.number()),
+		// Exact end instant (ms). NOT the `expiresAt` day convention — a shared
+		// code is posted for a happy hour, so it ends at a TIME.
+		endsAt: v.optional(v.number()),
+		// --- Shared codes v2 (`z8r3fdz0pw`) ---------------------------------
+		// Exact START instant (ms); until then the row reads `scheduled` and a
+		// buyer is told when it opens. Shared only. Absent = live on create.
+		startsAt: v.optional(v.number()),
+		// Orders ONE WhatsApp number may place with a shared code, counted off
+		// `voucherRedemptions.waPhone`. Absent = no per-buyer limit.
+		perBuyerLimit: v.optional(v.number()),
+		// Least GROSS item subtotal (minor units) an order needs to use this
+		// voucher — single-use or shared. An entry rule judged ONCE at
+		// redemption, never on a later recompute, so a discount already given
+		// is never silently taken back. Absent = no minimum.
+		minSpend: v.optional(v.number()),
+		// The most a PERCENT voucher takes off one order (minor units). Part
+		// of the terms, so it is frozen into `voucherSnapshot` and clamps every
+		// recompute. Never set on a fixed voucher.
+		maxDiscount: v.optional(v.number()),
+		// Set together on void. Soft by design: the row and its history stay,
+		// the code simply stops redeeming. There is no hard delete in v1.
+		voidedAt: v.optional(v.number()),
+		// The seller's private note on WHY — never shown to a buyer.
+		voidReason: v.optional(v.string()),
+		// The seller's private label ("Raya giveaway", "Apology — late order").
+		// Never shown to a buyer; it exists so a list of 20 identical-looking
+		// codes is still readable in three months.
+		note: v.optional(v.string()),
+		// Groups one "create 20" run so the list can show, share and void a
+		// batch as a unit. Unset on a singly-issued voucher.
+		batchId: v.optional(v.string()),
+		// Clerk subject of whoever issued it (owner or a team member holding
+		// `vouchers: write`) — issuing a voucher gives away money, so "who
+		// minted this" is real information. Unset for admin act-as, which
+		// adminAuditLog traces instead.
+		createdByUserId: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		// Redemption lookup AND the global-uniqueness check at create.
+		.index("by_code", ["code"])
+		// The seller's list, filtered by status. `expired` is not a stored
+		// status, so the expired filter reads the `active` range and judges the
+		// clock — see `vouchers.list`.
+		.index("by_retailer_status", ["retailerId", "status"])
+		// The list's default order (newest first) and the batch grouping.
+		.index("by_retailer_created", ["retailerId", "createdAt"])
+		// A SHARED code's lookup and its live-uniqueness check at create — per
+		// store, because a public word is the same word in every shop.
+		.index("by_retailer_code", ["retailerId", "code"]),
+
+	/**
+	 * One order's use of a SHARED voucher code (`z8r3fducfm`). A single-use
+	 * voucher records its one order on the row itself (`redeemedOrderId`); a
+	 * shared code is spent many times, so each spend is a row here.
+	 *
+	 * Two jobs, both structural: the seller's "who used SALE345" list reads
+	 * `by_voucher`; and `by_order` is what makes the hand-back on cancel
+	 * IDEMPOTENT — a cancel that finds no row for its order has nothing to
+	 * return, so a second cancel seam (or a re-cancel) can't decrement twice.
+	 * The count on the voucher row is the cheap gate; this table is the truth
+	 * it must always equal.
+	 */
+	voucherRedemptions: defineTable({
+		voucherId: v.id("vouchers"),
+		retailerId: v.id("retailers"),
+		orderId: v.id("orders"),
+		// The buyer's WhatsApp number as the order stores it (E.164 digits),
+		// so a per-buyer limit can be counted (`z8r3fdz0pw`). Absent on an
+		// anonymous counter sale — that use counts against the code's total
+		// only — and on every use recorded before the limit existed, which is
+		// why no backfill is needed: those codes carry no per-buyer limit.
+		waPhone: v.optional(v.string()),
+		createdAt: v.number(),
+	})
+		.index("by_voucher", ["voucherId", "createdAt"])
+		// The per-buyer count: "how many orders has THIS number placed with
+		// THIS code" is one bounded range read inside the order mutation.
+		.index("by_voucher_phone", ["voucherId", "waPhone"])
+		.index("by_order", ["orderId"])
+		// Tenant teardown (`accountDeletion`).
+		.index("by_retailer", ["retailerId"]),
+
+	/**
+	 * A bulk promotion (`z8r3fducfd`) — ONE set of terms (percent off, window,
+	 * label, flash extras) applied to many products, edited and ended as one.
+	 *
+	 * The promotion is the GROUPING and EDIT handle, never a second pricing
+	 * path: its writes fan out to each member product's `products.promo` and
+	 * its variants' `promoPrice`, and `convex/lib/promo.ts` stays the one
+	 * read-time authority. Membership lives in `promotionMembers`, not as a
+	 * field on `products`, so a product row never carries anything a branch
+	 * without this feature doesn't declare (the shared-dev-deployment rule).
+	 * See docs/promo-price.md#promotions-bulk.
+	 */
+	promotions: defineTable({
+		retailerId: v.id("retailers"),
+		// Badge label; render-time default "Promo" (≤20 chars, sanitizePromo).
+		label: v.optional(v.string()),
+		// What the review step's prices were computed from. Display + the
+		// default for products added later; the stored per-variant prices on
+		// each member are what actually applies.
+		percentOff: v.number(),
+		// The shared window (ms epoch). Unset start = runs from when it was
+		// applied; unset end = a plain discount (no countdown).
+		startsAt: v.optional(v.number()),
+		endsAt: v.optional(v.number()),
+		// Flash extras, per PRODUCT (the unit cap is each product's own pool —
+		// the tally keys on productId + runId). Skipped on booking/event members.
+		unitCap: v.optional(v.number()),
+		maxPerOrder: v.optional(v.number()),
+		payWithinMinutes: v.optional(v.number()),
+		// Products it holds (or, once ended, ran on) — kept on the row so the
+		// Promotions list reads one document per promotion, never its members.
+		// +1 per product added; −1 per product removed or moved to another
+		// promotion. Ending keeps it: "ran on 12 products" is the history.
+		productCount: v.number(),
+		// Set by "End now". Members are then cleared in batches; the row is
+		// kept as history (and as the source for "Run again").
+		endedAt: v.optional(v.number()),
+		createdByUserId: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	}).index("by_retailer_created", ["retailerId", "createdAt"]),
+
+	/**
+	 * One product inside a promotion, and the work still owed to it.
+	 *
+	 * `state` is a small queue so a promotion of any size is applied and
+	 * cleared in batches that fit a transaction (200 products × up to 100
+	 * choices each is past a single mutation's write budget):
+	 *   pending  → its prices still have to be written     → applied
+	 *   clearing → the promotion ended / it was removed     → cleared
+	 *   moved    → it joined another promotion (terminal; the new one
+	 *              overwrites the product, so nothing is cleared)
+	 * `cleared` and `moved` rows are kept as history for "Run again".
+	 */
+	promotionMembers: defineTable({
+		promotionId: v.id("promotions"),
+		retailerId: v.id("retailers"),
+		productId: v.id("products"),
+		// The sale price per variant, as reviewed (sen). A variant not listed
+		// is "not on promo" and is written WITHOUT a sale price.
+		prices: v.array(
+			v.object({ variantId: v.id("productVariants"), promoPrice: v.number() }),
+		),
+		state: v.union(
+			v.literal("pending"),
+			v.literal("applied"),
+			v.literal("clearing"),
+			v.literal("cleared"),
+			v.literal("moved"),
+		),
+		// The `products.promo.runId` this promotion last wrote. Clearing only
+		// touches the product while its promo is still this run — a product
+		// the seller has since re-priced by hand is left alone.
+		runId: v.optional(v.string()),
+		// Set when the seller took this product OUT with × — as opposed to
+		// the promotion ending, which clears every member the same way. An
+		// ended promotion's history and its "Run again" are the products it
+		// ENDED on, so a product taken out earlier is left out of both.
+		removedAt: v.optional(v.number()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_promotion_state", ["promotionId", "state"])
+		.index("by_product", ["productId"])
+		.index("by_retailer", ["retailerId"]),
+
+	/**
+	 * Flash-sale units sold under ONE promo run (`86eyjv002`) — the O(1) answer
+	 * for "12 of 30 left", so no reader collects the store's orders: that made
+	 * every new order re-run every open storefront tab, and at volume took the
+	 * catalogue over the 16 MiB read limit and refused multi-item flash carts.
+	 *
+	 * What the order DOORS gate on too: every "how many are left" read is one
+	 * point read of this row, held equal to `tallyPromoUnits` (the definition).
+	 * The row is minted at promo save (or by the backfill), then kept equal by
+	 * the two order-lifecycle seams — `recordOrderCreated` adds a new order's
+	 * sale units, `recordOrderCancelled` gives them back — plus the one path
+	 * that drops a line without cancelling (a declined custom line). Absent
+	 * row = a run from before this table: readers fall back to the tally.
+	 * Rules + the equality proof: docs/promo-price.md#units-counter.
+	 */
+	promoRunUnits: defineTable({
+		retailerId: v.id("retailers"),
+		productId: v.id("products"),
+		// `products.promo.runId` — a re-run mints a new id, so a new row.
+		runId: v.string(),
+		// Sale units held by non-cancelled orders under this run.
+		units: v.number(),
+		updatedAt: v.number(),
+	})
+		// The only index: every reader asks for one (product, run). Account
+		// deletion reaches these rows through the products phase
+		// (`deleteProductCascade`), so no per-store index is needed.
+		.index("by_product_run", ["productId", "runId"]),
+
+	/**
+	 * Store availability (`z8r3fdudf7`) — the seller's "Accepting orders"
+	 * switch and Kedaipal's pause / take-offline, ONE row per store that has
+	 * ever used either. Resolved with the Off-Season Hold stamp
+	 * (`retailers.orderingPausedAt`) by `convex/lib/storeAvailability.ts`,
+	 * the one author every order door and surface asks.
+	 *
+	 * Its own table rather than fields on `retailers`: a new field on that row
+	 * poisons the shared dev deployment for every branch without it the moment
+	 * one store uses the feature, and a patch to the retailer row re-runs
+	 * every open storefront subscription. A separate stamp per author (seller,
+	 * admin) so one can never clear the other's.
+	 */
+	storeAvailability: defineTable({
+		retailerId: v.id("retailers"),
+		// Seller pause: buyers browse, can't order; the counter stays open.
+		sellerPausedAt: v.optional(v.number()),
+		// Shown to buyers on the paused banner ("Back on 1 Nov"). ≤140 chars.
+		sellerPauseNote: v.optional(v.string()),
+		// Kedaipal moderation: `paused` = browse-only, counter closed too;
+		// `offline` = storefront gone (neutral unavailable page, off /stores,
+		// off the sitemap). The seller sees the note; buyers never do.
+		adminMode: v.optional(v.union(v.literal("paused"), v.literal("offline"))),
+		adminNote: v.optional(v.string()),
+		adminAt: v.optional(v.number()),
+		adminByUserId: v.optional(v.string()),
+		updatedAt: v.number(),
+	}).index("by_retailer", ["retailerId"]),
+
 	// --- Manual subscription billing (docs/manual-subscription.md) -----------
 	// Per-retailer subscription. One row per retailer (created in-transaction by
 	// createRetailer). Entitlement caps are DENORMALIZED here so feature-gating
@@ -2296,24 +3559,95 @@ export default defineSchema({
 	// pro) → `active` (paid) / `past_due` (lapsed) / `cancelled`.
 	subscriptions: defineTable({
 		retailerId: v.id("retailers"),
-		plan: v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
+		// Starter · Pro · Enterprise (Credits T6, z8r3fdkp8h). `scale` was
+		// narrowed out after a zero-row count on prod — nobody was ever on it.
+		// A row is `enterprise` only while it carries `enterprise` (below).
+		plan: v.union(
+			v.literal("starter"),
+			v.literal("pro"),
+			v.literal("enterprise"),
+		),
 		billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
 		status: v.union(
 			v.literal("trialing"),
 			v.literal("active"),
 			v.literal("past_due"),
 			v.literal("cancelled"),
+			// Off-Season Hold (z8r3fday24): a PAID seller paused between seasons.
+			// Ordering is off (effective orderCap 0 — resolved, never stored), the
+			// storefront / catalog / buyer list / order history stay live, and the
+			// row bills HOLD_MONTHLY_PRICES (RM19 / S$9) each period instead of the
+			// tier price. `plan` keeps the tier they resume to. A status literal,
+			// not a flag: it is mutually exclusive with the others and the cron
+			// already scans `by_status`. Reachable from active / past_due only.
+			v.literal("on_hold"),
 		),
+		// The free period's BACKSTOP deadline (signup + TRIAL_DAYS). Since the
+		// start-when-you-sell reset (z8r3fday24) the free period usually ends
+		// EARLIER, at the store's first live order — see freePeriodEndedAt.
 		trialEndsAt: v.optional(v.number()),
-		// Stamped when the "trial ends in 3 days" email is sent, so the daily cron
-		// sends it at most once.
+		// Stamped when the "free period ends in 3 days" email is sent, so the daily
+		// cron sends it at most once.
 		trialReminderSentAt: v.optional(v.number()),
+		// Start-when-you-sell (z8r3fday24): when the free period ENDED and why —
+		// `first_order` (any order-create channel; stamped from the usage seam)
+		// or `backstop` (the daily cron at trialEndsAt). Set exactly once; the
+		// first invoice is issued in the same beat (invoices.internalIssueFirst
+		// Invoice). The status stays `trialing` until that invoice is paid
+		// (→ active) or overdue (→ past_due) — the invoice's dueDate is the only
+		// lock, exactly like a renewal. Absent = still free.
+		freePeriodEndedAt: v.optional(v.number()),
+		freePeriodEndReason: v.optional(
+			v.union(v.literal("first_order"), v.literal("backstop")),
+		),
+		// Off-Season Hold bookkeeping. `heldAt` = when the current hold began
+		// (cleared on resume). `periodPaidBy` = what bought the CURRENT period —
+		// stamped at settle from the invoice's `kind`; a resume mid-period issues
+		// the tier invoice at once when the period was bought by a hold invoice,
+		// and nothing when it was bought by the plan (they already paid for the
+		// month). Absent = plan (every row that predates holds).
+		heldAt: v.optional(v.number()),
+		periodPaidBy: v.optional(v.union(v.literal("plan"), v.literal("hold"))),
 		currentPeriodStart: v.optional(v.number()),
 		currentPeriodEnd: v.optional(v.number()),
 		cancelledAt: v.optional(v.number()),
-		// Pilot / backfilled retailers: full access, never charged, ineligible for
-		// the Founding rank.
+		// Full access, never charged, ineligible for the Founding rank. The READ
+		// seam every consumer gates on (cron skips, self-serve refuses, meter
+		// hides). Two producers: the missing-row fail-safe (no `comp` object) and
+		// an admin turning the comp upgrade on (z8r3fdeub2 — `comp` stamped below).
 		comped: v.optional(v.boolean()),
+		// Admin-granted comp metadata (z8r3fdeub2): who and why. A comp is a
+		// TOGGLE with no end date — it stays on until an admin turns it off.
+		// Present ⇔ the comp was deliberately granted from /app/admin/sellers — the
+		// backfill heals a `comped` row into a trial ONLY when this is absent
+		// (legacy fail-safe rows), so a stamped comp survives a backfill re-run.
+		comp: v.optional(
+			v.object({
+				kind: v.union(
+					v.literal("partner"),
+					v.literal("sponsor"),
+					v.literal("pilot"),
+					v.literal("internal"),
+				),
+				// Seller-facing sponsor line, e.g. "Sponsored by Maybank SME".
+				label: v.optional(v.string()),
+				// Admin-only context (deal terms, contact) — never on seller payloads.
+				note: v.optional(v.string()),
+				// Admin Clerk subject that FIRST turned the comp on, and when. Edits
+				// keep both (the audit log records every change); a comp turned off
+				// and on again starts fresh.
+				grantedBy: v.string(),
+				grantedAt: v.number(),
+			}),
+		),
+		// When an admin turned this store's comp upgrade OFF (z8r3fdeub2): the row
+		// flipped to `past_due` with no invoice — the same lock a lapsed
+		// subscription is in. Lets the seller's dashboard say "your sponsored
+		// access ended" instead of "your subscription is past due" (they never had
+		// one), and files the store under its own founder-report bucket rather than
+		// as churn. Cleared by every path OUT of past_due (settle, re-comp), so a
+		// later ordinary lapse reads as one.
+		compEndedAt: v.optional(v.number()),
 		// Set at a Founding-10 onboard (1-month trial). Flags the store so the
 		// conversion invoice auto-applies the founding discount + claims the rank,
 		// even before isFoundingMember is true. Cleared/irrelevant once claimed.
@@ -2324,16 +3658,192 @@ export default defineSchema({
 		orderCap: v.number(),
 		userCap: v.number(),
 		broadcastQuota: v.number(),
+		// --- Auto-renewal (HitPay tokenised recurring, 86eyb6z4r) --------------
+		// The HitPay recurring-billing SESSION id for this subscription — set when
+		// the seller starts auto-renewal setup, kept for the life of the saved
+		// method (it IS the id the tokenised-charge endpoint takes). Top-level +
+		// indexed so the recurring webhook can resolve a subscription from the
+		// billing id it carries. Cleared on detach/cancel.
+		autoRenewSessionId: v.optional(v.string()),
+		// Saved-method state. Present ⇒ the seller authorised a card / Touch 'n Go
+		// wallet and renewals auto-charge at period end. All patches to this object
+		// deliberately leave `updatedAt` alone — for a past_due row, `updatedAt` IS
+		// the lock-flip moment the founder report reads (docs/shipped-log.md).
+		autoRenew: v.optional(
+			v.object({
+				provider: v.literal("hitpay"),
+				// HitPay method code from the attach event ("card" / "touch_n_go").
+				method: v.string(),
+				// Display label when the event carries detail (e.g. "Visa ·· 4242").
+				methodLabel: v.optional(v.string()),
+				attachedAt: v.number(),
+				lastChargeAt: v.optional(v.number()),
+				// Successful tokenised charges on this session — compared against
+				// HitPay's charge count (`total_charge` on a save-card session; its
+				// `times_charged` is always null there) to reconcile an attempt whose
+				// outcome was lost mid-action WITHOUT charging twice. See
+				// lib/hitpayBilling.ts `readSessionChargeCount`.
+				timesCharged: v.optional(v.number()),
+				// Dunning state for the CURRENT pending renewal invoice. Reset to
+				// zero/unset on a successful settle.
+				failedAttempts: v.optional(v.number()),
+				nextRetryAt: v.optional(v.number()),
+				lastChargeError: v.optional(v.string()),
+				// Stamped just BEFORE the charge HTTP call; cleared once a definitive
+				// outcome (settle or decline) is recorded — an UNKNOWN outcome keeps
+				// it. A stamp still standing, at ANY age, means "reconcile against
+				// HitPay before charging again"; its age only decides whether the
+				// lock is still held (CHARGE_ATTEMPT_LOCK_MS).
+				lastChargeAttemptAt: v.optional(v.number()),
+				pendingChargeInvoiceId: v.optional(v.id("invoices")),
+				// HitPay's own charge count READ IMMEDIATELY BEFORE this attempt
+				// POSTed — the baseline the reconcile measures against, so the
+				// question is "has the count moved since I fired THIS charge?"
+				// rather than "is HitPay ahead of my success tally?". The tally
+				// only counts our successes, so anything else that moves HitPay's
+				// number (a decline, if their counter counts those — unproven and
+				// unprovable in the sandbox, which approves everything — or any
+				// charge from outside this code) would otherwise be misread as
+				// "your lost charge landed" and settle a bill nobody paid.
+				// Absent ⇒ the baseline could not be read (a GET blip) or the
+				// stamp predates this field: the reconcile falls back to
+				// `timesCharged`, i.e. exactly the previous behaviour, never worse.
+				// Cleared with `lastChargeAttemptAt` — it is meaningless alone.
+				chargeCountAtAttempt: v.optional(v.number()),
+				// A STRANDED charge: HitPay took an auto-charge whose outcome we'd
+				// lost, for a bill that was voided before we found out. The money
+				// is audited on that bill (`gatewayIssue: late_payment`, a refund
+				// conversation), and auto-charging STOPS while this is set — the
+				// money must never be quietly applied to a different bill, and
+				// charging the replacement on top would be the double debit this
+				// whole machine exists to prevent. Any settle of any of the store's
+				// bills clears it (settleInvoicePaid). Admin sees it on the pending
+				// bill's row; the seller sees the auto-renewal card say so.
+				strandedCharge: v.optional(
+					v.object({
+						invoiceId: v.id("invoices"),
+						invoiceNumber: v.string(),
+						amountSen: v.number(),
+						currency: v.string(),
+						// `reconciled:<session>:<n>` or the webhook's payment id —
+						// what the admin looks up in HitPay's dashboard.
+						paymentId: v.string(),
+						at: v.number(),
+					}),
+				),
+			}),
+		),
+		// In-flight authorisation the seller hasn't finished (they were redirected
+		// to HitPay but no method_attached yet). Lets the billing tab offer
+		// "finish setting up" instead of minting a second session. Cleared on
+		// attach or cancel.
+		autoRenewSetup: v.optional(
+			v.object({
+				url: v.string(),
+				createdAt: v.number(),
+				// What the authorisation page at `url` actually DISPLAYS. Attach
+				// charges the open bill only when the pending invoice still matches
+				// both of these — the page's amount IS the consent, so a bill that
+				// appeared, changed or was reissued after the page was minted must
+				// never be charged off it. Absent invoiceId ⇒ the page said
+				// "nothing is charged today", so attach charges nothing.
+				invoiceId: v.optional(v.id("invoices")),
+				amountSen: v.optional(v.number()),
+			}),
+		),
+		// A tier change the seller asked for that takes effect at the END of the
+		// period they already paid for (86eyb6z4r). DOWNGRADES only: they keep
+		// the tier they bought — caps, features and all — until the period runs
+		// out, and the renewal invoice the cron issues then bills the new plan
+		// and clears this. An UPGRADE never lands here; it is immediate, billed
+		// at full price, with the unused remainder credited back as days
+		// (planChangeCarryoverDays). No `billingCycle` on purpose — a cycle
+		// change is a different conversation (the annual offer's void-and-
+		// reissue runbook), and a field that could express it would eventually
+		// be set by a picker that defaults to monthly.
+		pendingPlanChange: v.optional(
+			v.object({
+				// A downgrade lands on a LISTED tier — Enterprise is reached by a
+				// contract, never scheduled (an Enterprise store moving to Pro is
+				// exactly this, set by an admin).
+				plan: v.union(v.literal("starter"), v.literal("pro")),
+				requestedAt: v.number(),
+			}),
+		),
+		// The Enterprise contract (Credits T6, z8r3fdkp8h): what an Enterprise
+		// store is billed and granted, set by a Kedaipal admin
+		// (`enterprise.setContract`, audited). Present iff `plan` is
+		// `enterprise` — setting it flips the plan, and it can't be cleared
+		// while the plan is Enterprise (the way out is a scheduled move to
+		// Pro, which clears it when that bill settles). The TERM is the row's
+		// own `billingCycle` (monthly = a 1-month term, annual = 12), never a
+		// second field that could disagree with what renewals bill.
+		enterprise: v.optional(
+			v.object({
+				// Monthly fee in the contract's currency, minor units (RM888 =
+				// 88800). An annual term bills it × 10 (`enterprisePrice`).
+				baseFeeMinor: v.number(),
+				// Agreed per deal and frozen here — an SG deal is SGD, never
+				// converted, whatever the store's country later says.
+				currency: v.union(v.literal("MYR"), v.literal("SGD")),
+				// Orders included a month. Written through to
+				// `creditAccounts.grantOverride` in the same mutation — the one
+				// included-credits field; changing either changes the other.
+				includedCredits: v.number(),
+				// Overage, per credit, minor units (RM0.60 = 60), sold in blocks
+				// of `blockSize` — billed by hand in v1 and landed as an admin
+				// `enterprise_block` adjustment of bought credits.
+				overageRateMinor: v.number(),
+				blockSize: v.number(),
+				// Per-deal entitlement overrides. ABSENT = the tier default in
+				// `PLAN_CAPS.enterprise` (unlimited teammates, Pro's broadcast
+				// quota) — the contract overrides the table, it never replaces
+				// it, so a lever nobody negotiated keeps one answer in one
+				// place. Resolved by `enterpriseContractCaps` and written onto
+				// the row's denormalized caps on every save.
+				// `teammates` is people BESIDES the owner, the number the
+				// seller's own team page shows ("You + N teammates"), so what
+				// an admin types is what the store reads; `userCap` adds the
+				// owner back.
+				teammates: v.optional(v.number()),
+				broadcastQuota: v.optional(v.number()),
+				contactName: v.string(),
+				notes: v.optional(v.string()),
+				setBy: v.string(),
+				setAt: v.number(),
+				// The listed plan and cycle the store was on when the contract
+				// was attached — what bought the period still running then.
+				// `setContract` flips the plan before any payment, so without
+				// this the first Enterprise settle would value that period's
+				// unused days at the CONTRACT's price and carry them 1:1 (a
+				// month of Pro turning into a month of Enterprise). Read by
+				// `settleInvoicePaid`'s carryover; cleared by the first plan
+				// bill that settles.
+				enteredFrom: v.optional(
+					v.object({
+						plan: v.union(v.literal("starter"), v.literal("pro")),
+						billingCycle: v.union(v.literal("monthly"), v.literal("annual")),
+					}),
+				),
+			}),
+		),
+		// Which `currentPeriodEnd` the pre-charge "renewing soon" notice was sent
+		// for — one notice per cycle, reset naturally when the period rolls.
+		renewalNoticeSentForPeriodEnd: v.optional(v.number()),
 		createdAt: v.number(),
 		updatedAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
-		.index("by_status", ["status"]), // drives the cron status scans
+		.index("by_status", ["status"]) // drives the cron status scans
+		// Recurring-webhook resolution: billing-session id → subscription.
+		.index("by_autorenew_session", ["autoRenewSessionId"]),
 
-	// Per-retailer × MYT-calendar-month order counter — the meter behind the SOFT
-	// orderCap nudge ("X of 100 plan orders used this month"). Keyed by calendar
-	// month (not the billing period) because caps are "orders/mo" while billing
-	// cycles can be annual. High-churn counter split out per the Convex guideline
+	// Per-retailer × MYT-calendar-month order counter — live orders this month.
+	// It once metered the soft orderCap nudge; since Credits T3 the balance is
+	// the meter, and this is what a plan change compares the new allowance
+	// against ("you've had 140 this month, Starter includes 100"). Keyed by
+	// calendar month (not the billing period) because allowances are "orders a
+	// month" while billing cycles can be annual. High-churn counter split out per the Convex guideline
 	// (never `.collect().length`). Incremented on order create (storefront +
 	// counter checkout), decremented on the first transition into cancelled
 	// (keyed to the order's CREATION month, floored at zero). NEVER read to block
@@ -2348,6 +3858,287 @@ export default defineSchema({
 		updatedAt: v.number(),
 	}).index("by_retailer_month", ["retailerId", "monthStart"]),
 
+	// ── Kedaipal Credits (86eye2ccu, docs/credits.md) ──────────────────────────
+	// 1 credit = 1 order. Three tables, and deliberately NO new fields on
+	// `retailers` / `subscriptions`: the storefront reads the retailer doc, so a
+	// balance patched onto it would re-run every open storefront tab on every
+	// order; and on the one shared dev deployment, data in new fields of an
+	// EXISTING table blocks every other branch's `convex dev --once` (Convex
+	// never validates a table a branch doesn't declare).
+
+	// One row per store: the CACHED balances every reader uses (dashboard meter,
+	// seller lock) instead of summing the ledger. Written in the same mutation as
+	// every ledger row, by ONE function (`applyEntry` in convex/credits.ts).
+	creditAccounts: defineTable({
+		retailerId: v.id("retailers"),
+		// The monthly allowance. May be NEGATIVE: orders keep arriving at zero,
+		// and the debt comes off the next refresh (never wiped).
+		planBalance: v.number(),
+		// Packs, referral rewards, admin grants. Never negative, and always the
+		// sum of this store's `creditLots.remaining`.
+		purchasedBalance: v.number(),
+		// The usage period (`YYYY-MM`, MYT calendar month) `planBalance` belongs
+		// to. Sortable, so `by_period` finds every account a boundary has passed.
+		periodKey: v.string(),
+		// Plan credits granted for `periodKey` so far. 0 while a past_due /
+		// on_hold store waits for its grant; raised by an upgrade mid-period.
+		periodGrant: v.number(),
+		// Admin-set custom monthly grant — beats every tier grant.
+		grantOverride: v.optional(v.number()),
+		// The grant an ANNUAL payment locked for its prepaid term (Arif, 17 Sep
+		// 2026): a later cut to PLAN_CREDIT_GRANT reaches an annual seller only
+		// at renewal. Stamped at every annual settle, cleared by a monthly one.
+		annualGrant: v.optional(v.object({ grant: v.number(), until: v.number() })),
+		// Seller cancellations that gave their credit back this period — capped
+		// at SELLER_CANCEL_REFUNDS_PER_PERIOD (lib/plans.ts).
+		sellerRefunds: v.optional(
+			v.object({ periodKey: v.string(), count: v.number() }),
+		),
+		// When the TOTAL balance last fell to 0 or below; cleared when it rises
+		// above 0. A fact about the balance, not a lock — the per-order gate
+		// decides what is actually held. An UNMETERED store (admin-owned or
+		// comped, z8r3fdrph7) never reaches here at all: it takes no debits, so
+		// a legacy row's stamp just sits where the comp found it.
+		exhaustedAt: v.optional(v.number()),
+		// How many order debits this store has ever taken (Credits T3.1,
+		// z8r3fdmg4h). Monotonic, never reset by a period boundary — it is a
+		// sequence, not a balance. Each debit claims the next number and stamps
+		// it on its order as `orders.creditSeq`.
+		debitSeq: v.optional(v.number()),
+		// The high-water mark of debit positions that are PAID FOR. An order is
+		// workable iff `orders.creditSeq <= fundedThrough`, and
+		// `debitSeq - fundedThrough` is how many orders are waiting. Only ever
+		// RISES — which is what makes "expiry never retroactively unfunds an
+		// order already worked" true by construction rather than by a check.
+		fundedThrough: v.optional(v.number()),
+		// Balance notices already sent this period (low / locked …) — the
+		// once-per-period dedupe the notice sender (Credits T3) keeps. Declared
+		// here so every credits branch shares one schema.
+		notices: v.optional(
+			v.object({ periodKey: v.string(), sent: v.array(v.string()) }),
+		),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	})
+		.index("by_retailer", ["retailerId"])
+		.index("by_period", ["periodKey"]),
+
+	// Every credit movement, append-only. The source of truth the cached
+	// balances must always agree with (`recomputeBalance` checks), and what the
+	// seller's "Credit activity" list and the admin ledger read. Kept when a
+	// store is deleted — a financial record, like `invoices`.
+	creditLedger: defineTable({
+		retailerId: v.id("retailers"),
+		type: v.union(
+			v.literal("grant"),
+			v.literal("purchase"),
+			v.literal("debit"),
+			v.literal("refund"),
+			v.literal("adjust"),
+			v.literal("expire"),
+		),
+		bucket: v.union(v.literal("plan"), v.literal("purchased")),
+		// Signed whole credits: + in, − out.
+		amount: v.number(),
+		// Why. `order` is the only spend today; the field is the seam for future
+		// spenders without a migration.
+		reason: v.union(
+			v.literal("plan"),
+			v.literal("trial"),
+			v.literal("order"),
+			v.literal("purchase"),
+			v.literal("referral_referee"),
+			v.literal("referral_referrer"),
+			v.literal("adjust"),
+			// An Enterprise overage block (T6): bought credits an admin lands
+			// once the block's manual invoice is paid — its own reason so the
+			// admin totals can tell blocks from goodwill adjustments.
+			v.literal("enterprise_block"),
+			v.literal("expiry"),
+		),
+		// Idempotency key (with `type`): the order id for debits/refunds, the
+		// purchase / referral id for grants that land once.
+		refId: v.optional(v.string()),
+		// Human handle for the activity list (an order's `ORD-XXXX`), frozen at
+		// write time so the list never joins.
+		refLabel: v.optional(v.string()),
+		orderId: v.optional(v.id("orders")),
+		// The purchased lot a purchased-bucket movement touched.
+		lotId: v.optional(v.id("creditLots")),
+		// The usage period the movement belongs to.
+		periodKey: v.string(),
+		// Refunds only: who ended the order (lib/credits.ts CancelCause).
+		cause: v.optional(
+			v.union(
+				v.literal("seller"),
+				v.literal("system"),
+				v.literal("buyer"),
+				v.literal("admin"),
+			),
+		),
+		// Mandatory on admin adjustments.
+		note: v.optional(v.string()),
+		// "system", or the Clerk subject of the person who caused it.
+		createdBy: v.string(),
+		// Both balances right after this row — the running balance the activity
+		// list shows, and a cheap audit trail.
+		planAfter: v.number(),
+		purchasedAfter: v.number(),
+		createdAt: v.number(),
+	})
+		.index("by_retailer_created", ["retailerId", "createdAt"])
+		.index("by_retailer_ref_type", ["retailerId", "refId", "type"]),
+
+	// Purchased credits in the batches they arrived in, so each can expire 12
+	// months after it landed and be spent oldest-first. `purchasedBalance` is
+	// always the sum of `remaining` across a store's lots.
+	creditLots: defineTable({
+		retailerId: v.id("retailers"),
+		source: v.union(
+			v.literal("purchase"),
+			v.literal("referral"),
+			v.literal("adjust"),
+		),
+		// What created it: the purchase / referral / admin action.
+		refId: v.optional(v.string()),
+		credits: v.number(),
+		remaining: v.number(),
+		// `remaining > 0` — the index key that finds spendable / expirable lots.
+		open: v.boolean(),
+		expiresAt: v.number(),
+		// When the "credits expire in 14 days" email went out (Credits T3).
+		expiryNoticeAt: v.optional(v.number()),
+		createdAt: v.number(),
+	})
+		.index("by_retailer_open_expiry", ["retailerId", "open", "expiresAt"])
+		.index("by_open_expiry", ["open", "expiresAt"]),
+
+	// Top-up pack purchases (Credits T2, z8r3fdf8ht — docs/credits.md#top-up-packs-t2).
+	// One row per checkout a seller (or a teammate with credits write) opens:
+	// a one-off HitPay payment request on KEDAIPAL's own account, settled by the
+	// v1 completion webhook (or the return reconcile) into a 12-month credit lot.
+	// Deliberately NOT the `invoices` table: a pending invoice past its dueDate
+	// locks the store and blocks renewals, and an abandoned top-up must never do
+	// either. Kept when a store is deleted — a financial record, like invoices.
+	creditPurchases: defineTable({
+		retailerId: v.id("retailers"),
+		// The `CreditPackId` bought, frozen with its credits + price below — the
+		// row is never re-priced from `CREDIT_PACKS`.
+		packId: v.string(),
+		credits: v.number(),
+		// Minor units (sen / cents) in `currency` — exactly what HitPay must be
+		// paid, checked on settle.
+		amountMinor: v.number(),
+		// The store's BILLING currency when the checkout was opened.
+		currency: v.union(v.literal("MYR"), v.literal("SGD")),
+		// pending → paid (credits landed) | expired (24h, never paid) | failed
+		// (the checkout could never be created). Expired and failed never credit.
+		status: v.union(
+			v.literal("pending"),
+			v.literal("paid"),
+			v.literal("failed"),
+			v.literal("expired"),
+		),
+		// What opened it: always a person picking a pack. Packs never
+		// auto-reload (Credits T4 was cancelled, 1 Oct 2026 — the subscription
+		// is the only recurring charge); kept so the ledger and the
+		// `credits_topup_paid` event say so explicitly.
+		source: v.literal("manual"),
+		// Clerk subject of whoever opened the checkout — the owner, or a
+		// teammate holding credits write (who pays on HitPay's page themselves;
+		// the owner is emailed a receipt naming them).
+		createdBy: v.string(),
+		// Human reference, `CRD-YYYYMM-XXXX` — HitPay's reference number and the
+		// receipt's number. Never used to route a payment.
+		purchaseNumber: v.string(),
+		// HitPay payment-request id — what the webhook resolves the purchase by.
+		gatewayRequestId: v.optional(v.string()),
+		gatewayPayment: v.optional(
+			v.object({
+				url: v.string(),
+				// The settled payment id — the idempotency key of the settle.
+				paymentId: v.optional(v.string()),
+			}),
+		),
+		// `hitpay_card` / `hitpay_touch_n_go` / bare `hitpay` when the rail is
+		// unknown (lib/hitpayBilling.ts gatewayPaymentMethodTag).
+		paymentMethod: v.optional(v.string()),
+		// An authentic payment we deliberately did NOT credit: it arrived after
+		// the purchase expired (late_payment) or didn't match the pack's amount
+		// or currency (amount_mismatch). An admin reconciles it by hand with a
+		// credits adjustment (or a refund). Stamped once, never auto-cleared.
+		gatewayIssue: v.optional(
+			v.object({
+				kind: v.union(v.literal("amount_mismatch"), v.literal("late_payment")),
+				paymentId: v.string(),
+				amountSen: v.optional(v.number()),
+				at: v.number(),
+			}),
+		),
+		// The lot the paid credits landed in (creditLots).
+		lotId: v.optional(v.id("creditLots")),
+		// The rendered receipt PDF, frozen once paid.
+		receiptPdfStorageId: v.optional(v.id("_storage")),
+		createdAt: v.number(),
+		paidAt: v.optional(v.number()),
+		expiredAt: v.optional(v.number()),
+	})
+		.index("by_retailer_created", ["retailerId", "createdAt"])
+		// Billing history (paid) and the return reconcile (pending), newest first.
+		.index("by_retailer_status_created", ["retailerId", "status", "createdAt"])
+		// v1 completion-webhook resolution: payment-request id → purchase.
+		.index("by_gateway_request", ["gatewayRequestId"])
+		// Admin → Billing's top-up revenue tile: this month's PAID purchases in
+		// one bounded range (Credits T3 × T5).
+		.index("by_status_paid", ["status", "paidAt"]),
+
+	// ── Seller referrals (z8r3fdetf5, docs/referrals.md) ──────────────────────
+	// One row per REFEREE: the store that signed up through another store's
+	// `/referral/<slug>` link, and the store that referred it. Written only when
+	// the referrer could refer at that moment (`referrerStanding` in
+	// lib/referral.ts — an active plan, or comped) — so a row is a promise the
+	// referee was shown, and the reward (credits for both sides when the
+	// referee's first plan invoice is paid) keys off THIS row, never off the
+	// `retailers.signupSource` analytics tag. Its own table rather than fields
+	// on `retailers`: the dashboard card counts a referrer's rows by index, and
+	// new fields on `retailers` poison the shared dev deployment.
+	//
+	// `referrerId` can dangle — a referrer deleted after the signup leaves the
+	// referee's row (and their reward) standing, like an invoice's refs.
+	referrals: defineTable({
+		refereeId: v.id("retailers"),
+		referrerId: v.id("retailers"),
+		// How it was recorded: the link at signup, or an admin putting right a
+		// referral the link didn't capture (closed tab, off-link intro).
+		via: v.union(v.literal("link"), v.literal("admin")),
+		// "system" for the link; the admin's Clerk subject otherwise.
+		recordedBy: v.string(),
+		createdAt: v.number(),
+		// The reward (T2, 86ey82hke) — stamped ONCE, in the same transaction as
+		// the credits, when the referee's first plan invoice is paid. Set =
+		// done: the stamp is the idempotency guard, so a second settle path
+		// (webhook + manual mark-paid) can never pay twice.
+		rewardedAt: v.optional(v.number()),
+		// Credits each side received. `referrerCredits` is absent when the
+		// referrer got nothing — `referrerOutcome` says why.
+		refereeCredits: v.optional(v.number()),
+		referrerCredits: v.optional(v.number()),
+		// `granted`; `unmetered` (a comped or Kedaipal-owned referrer — already
+		// unlimited, so nothing to give); `deleted` (the referrer store is
+		// gone); `self` (the referee shares the referrer's email or WhatsApp
+		// number — one person, two stores, so the referrer half is withheld).
+		referrerOutcome: v.optional(
+			v.union(
+				v.literal("granted"),
+				v.literal("unmetered"),
+				v.literal("deleted"),
+				v.literal("self"),
+			),
+		),
+	})
+		.index("by_referee", ["refereeId"])
+		.index("by_referrer_created", ["referrerId", "createdAt"]),
+
 	// Per-period invoice. Admin marks it paid out-of-band (DuitNow / bank). The
 	// founding pending invoice carries a `dueDate` that drives the active→past_due
 	// overdue cron flip.
@@ -2359,7 +4150,11 @@ export default defineSchema({
 		// subscription) so issuing doesn't change the seller's visible tier before they
 		// pay — mark-paid reconciles the sub from these. Optional for pre-existing rows.
 		plan: v.optional(
-			v.union(v.literal("starter"), v.literal("pro"), v.literal("scale")),
+			v.union(
+				v.literal("starter"),
+				v.literal("pro"),
+				v.literal("enterprise"),
+			),
 		),
 		billingCycle: v.optional(
 			v.union(v.literal("monthly"), v.literal("annual")),
@@ -2371,11 +4166,7 @@ export default defineSchema({
 		periodStart: v.number(),
 		periodEnd: v.number(),
 		dueDate: v.number(),
-		status: v.union(
-			v.literal("pending"),
-			v.literal("paid"),
-			v.literal("void"),
-		),
+		status: v.union(v.literal("pending"), v.literal("paid"), v.literal("void")),
 		markedPaidAt: v.optional(v.number()),
 		markedPaidBy: v.optional(v.string()), // admin Clerk subject
 		paymentMethod: v.optional(v.string()), // "duitnow" / "bank_transfer" — freeform v1
@@ -2387,6 +4178,71 @@ export default defineSchema({
 		// Stamped when the pre-due-date reminder email is sent, so the daily cron
 		// sends it at most once. See convex/billingEmail.ts.
 		reminderSentAt: v.optional(v.number()),
+		// Post-lock recovery chain (z8r3fdg3mh): how far the dunning ladder has
+		// walked for THIS invoice — 1 after the +3d nudge, 2 after the +7d one.
+		// Deliberately stamped on the invoice rather than the subscription:
+		// `subscriptions.updatedAt` is the lock-flip moment the founder report
+		// reads and is moved by any other patch, while this row's `dueDate` IS
+		// the lock's clock and stops existing as "pending + overdue" the moment
+		// the seller pays — so the chain cancels itself with no teardown.
+		recoveryStage: v.optional(v.number()),
+		// Who created this invoice (86eyb6z4r). Absent on rows issued before the
+		// field existed — read as "admin" (the only path that existed then).
+		origin: v.optional(
+			v.union(
+				v.literal("admin"), // Arif, from the admin console
+				v.literal("self_serve"), // the seller's own plan picker / plan switch / hold
+				v.literal("auto_renewal"), // the daily cron's renewal issuance
+				v.literal("free_period_end"), // start-when-you-sell: the first invoice
+			),
+		),
+		// What is being billed (z8r3fday24): the tier (`plan`, the default and
+		// every pre-existing row) or an Off-Season Hold period (`hold`, priced
+		// from HOLD_MONTHLY_PRICES; `plan` then names the tier the seller resumes
+		// to). Settle reads it: a paid hold invoice keeps the sub `on_hold` and
+		// stamps periodPaidBy "hold" instead of activating the tier.
+		kind: v.optional(v.union(v.literal("plan"), v.literal("hold"))),
+		// --- HitPay Pay-now link + gateway settle (86eyb6z4r) ------------------
+		// One-off payment request minted against KEDAIPAL's own HitPay account so
+		// the seller can pay this invoice online. Top-level + indexed so the v1
+		// completion webhook can resolve the invoice from the request id — the
+		// same posture as orders.gatewayRequestId. Unlike buyer order links these
+		// carry NO expiry (they live in emails), and die via DELETE on void/settle.
+		gatewayRequestId: v.optional(v.string()),
+		gatewayPayment: v.optional(
+			v.object({
+				provider: v.literal("hitpay"),
+				url: v.string(),
+				// The settled payment/charge id once money landed via the gateway.
+				paymentId: v.optional(v.string()),
+			}),
+		),
+		// An authentic gateway event we deliberately did NOT settle from — the
+		// admin's audit trail for "seller paid the link after Arif marked it paid"
+		// (late_payment) or "the payment didn't match the invoice total"
+		// (amount_mismatch). Never auto-unsets anything; every stamp is real
+		// money awaiting a human decision (refund, or apply by settling a bill),
+		// so the console's "Payments to review" queue holds it until an admin
+		// marks it resolved — resolution is recorded, never deleted.
+		gatewayIssue: v.optional(
+			v.object({
+				kind: v.union(v.literal("amount_mismatch"), v.literal("late_payment")),
+				paymentId: v.string(),
+				amountSen: v.optional(v.number()),
+				at: v.number(),
+				// The human decision (invoices.resolveGatewayIssue): who closed it,
+				// when, and optionally what they did with the money.
+				resolvedAt: v.optional(v.number()),
+				resolvedBy: v.optional(v.string()),
+				resolvedNote: v.optional(v.string()),
+			}),
+		),
+		// Present (true) exactly while `gatewayIssue` awaits a human — the
+		// "Payments to review" queue reads this index instead of scanning every
+		// invoice ever issued for a rarely-set object. Set beside each stamp,
+		// cleared by resolveGatewayIssue. (`migrations.backfillGatewayIssueOpen`
+		// flags rows stamped before this field existed.)
+		gatewayIssueOpen: v.optional(v.literal(true)),
 		// Rendered PDF of this invoice, frozen at issue time. An invoice is a
 		// financial document, so we store the bytes (rather than regenerate on
 		// demand) — `billingConfig` bank details are a mutable singleton and could
@@ -2405,7 +4261,12 @@ export default defineSchema({
 		createdAt: v.number(),
 	})
 		.index("by_retailer", ["retailerId"])
-		.index("by_status", ["status"]),
+		.index("by_status", ["status"])
+		// v1 completion-webhook resolution: payment-request id → invoice.
+		.index("by_gateway_request", ["gatewayRequestId"])
+		// The admin's "Payments to review" queue: only rows whose gateway issue
+		// still awaits a human (gatewayIssueOpen === true).
+		.index("by_gateway_issue_open", ["gatewayIssueOpen"]),
 
 	// Global Kedaipal payment details (retailers pay Kedaipal). A SINGLETON — one
 	// row, no retailerId. Admin-editable from /app/admin/billing so the boss can
@@ -2426,13 +4287,38 @@ export default defineSchema({
 	foundingMembers: defineTable({
 		retailerId: v.id("retailers"),
 		rank: v.number(), // 1..10
-		plan: v.union(v.literal("pro"), v.literal("scale")), // tier at claim time
+		plan: v.literal("pro"), // tier at claim time — founding is Pro-only
 		// The slot is RESERVED at founding onboard (signup), so these are filled
 		// later when the first founding invoice is actually paid (null until then).
 		paidAt: v.optional(v.number()),
 		firstInvoiceId: v.optional(v.id("invoices")),
 		welcomedAt: v.optional(v.number()),
 		whiteGloveScheduledAt: v.optional(v.number()),
+		// Benefit revocation (z8r3fdfyw5) — the audit record behind the retailer's
+		// denormalized `foundingBenefitsRevokedAt`. The RANK AND BADGE ARE NEVER
+		// TOUCHED: the row stays, so the slot stays claimed (`getSpotsRemaining`
+		// counts rows) and re-granting is a deliberate admin act, not a race for a
+		// freed spot.
+		benefitsRevokedAt: v.optional(v.number()),
+		// Why: the 90-day lapse window ran out, or Arif did it by hand.
+		benefitsRevokedReason: v.optional(
+			v.union(v.literal("lapsed"), v.literal("admin")),
+		),
+		// Arif's free-text note on a manual revoke/restore — shown in the admin
+		// cohort list so "why is #4 revoked?" is answerable a year later.
+		benefitsRevokedNote: v.optional(v.string()),
+		// When an admin last GAVE the benefits back — and the floor the founding
+		// clock is measured from thereafter (z8r3fdfyw5). Without it a re-grant
+		// was a no-op for the only people it exists for: clearing the revocation
+		// stamp leaves `foundingPriceEligible`'s read-time window still expired,
+		// so the seller stayed on list price and the next daily pass re-revoked
+		// them and sent a SECOND "your founding price has ended" email.
+		benefitsRestoredAt: v.optional(v.number()),
+		// The `currentPeriodEnd` the T-14 warning was sent ABOUT, not a bare
+		// timestamp — same idiom as `subscriptions.renewalNoticeSentForPeriodEnd`.
+		// Paying advances the period, so the stamp stops matching and a LATER lapse
+		// warns again, with no clearing logic to forget.
+		benefitsWarningSentForPeriodEnd: v.optional(v.number()),
 	})
 		.index("by_rank", ["rank"])
 		.index("by_retailer", ["retailerId"]),
@@ -2496,6 +4382,50 @@ export default defineSchema({
 		observedAt: v.number(),
 		notes: v.optional(v.string()),
 	}).index("by_observed", ["observedAt"]),
+
+	// Per-TEMPLATE lifecycle history (ClickUp z8r3fddtkh), one row per Meta
+	// template webhook: status changes (APPROVED/PAUSED/DISABLED/…), category
+	// re-classifications (UTILITY → MARKETING is a 6.1× per-send price jump
+	// from 1 Oct 2026, with an appeal window) and quality-score moves (the
+	// warning before a pause). The admin console reads the NEWEST row per
+	// (templateName, language) as that template's live state; `by_template_kind`
+	// serves the panel's per-chip reads and `by_template` the language discovery
+	// walk and the purge's keep-the-newest rule. Retention: 90
+	// days, but the newest row per template is ALWAYS kept — same posture as
+	// wabaHealth (convex/lib/retention.ts).
+	wabaTemplateEvents: defineTable({
+		templateName: v.string(),
+		language: v.string(),
+		kind: v.union(
+			v.literal("status"),
+			v.literal("category"),
+			v.literal("quality"),
+		),
+		event: v.optional(v.string()),
+		previousCategory: v.optional(v.string()),
+		newCategory: v.optional(v.string()),
+		previousQuality: v.optional(v.string()),
+		newQuality: v.optional(v.string()),
+		reason: v.optional(v.string()),
+		alerted: v.boolean(),
+		observedAt: v.number(),
+	})
+		.index("by_observed", ["observedAt"])
+		.index("by_template", ["templateName", "language", "observedAt"])
+		// The admin panel's actual question is "newest row of THIS kind for this
+		// template+language" — status, category and quality are three different
+		// kinds and each is the live value of a different chip. Without `kind` in
+		// the index that read is a scan with a budget, and a noisy kind starves
+		// the others: 200 quality events would hide an older PAUSED and an older
+		// UTILITY→MARKETING, so the panel would report a paused, marketing-billed
+		// template as healthy utility (PR #267 review). With it, each chip is one
+		// indexed `.first()`.
+		.index("by_template_kind", [
+			"templateName",
+			"language",
+			"kind",
+			"observedAt",
+		]),
 
 	// Per-retailer kill switch + cap overrides. Lazily created — absent row means
 	// "tier/age defaults, not paused" (see lib/wabaLimits.ts resolveSendingLimits).
@@ -2607,4 +4537,26 @@ export default defineSchema({
 		.index("by_retailer", ["retailerId"])
 		.index("by_admin", ["adminUserId"])
 		.index("by_ts", ["ts"]),
+
+	// The CAC ledger (86eye3eyp, docs/acquisition-attribution.md): what one
+	// acquisition channel cost Kedaipal in one month. One row per
+	// (periodStart, channel), upserted by `metrics.recordSpend`; a channel
+	// with no row spent nothing. Only ACTUALS live here — CAC itself is
+	// derived at read time (convex/lib/metrics.ts), so a policy change (the
+	// founder hourly rate) recomputes every month. Kedaipal's own spend, so
+	// always MYR sen, whatever the stores it won bill in.
+	acquisitionCosts: defineTable({
+		// MYT midnight on the 1st (monthStartMyt in lib/usagePeriod.ts).
+		periodStart: v.number(),
+		// ACQUISITION_CHANNELS, validated in convex/lib/metrics.ts.
+		channel: v.string(),
+		cashSpend: v.number(), // MYR sen
+		founderHours: v.optional(v.number()),
+		note: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+		updatedBy: v.optional(v.string()), // admin Clerk subject
+	})
+		.index("by_period", ["periodStart"])
+		.index("by_period_channel", ["periodStart", "channel"]),
 });

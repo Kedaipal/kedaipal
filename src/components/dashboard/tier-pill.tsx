@@ -23,6 +23,12 @@ function toneClass(tone: TierTone): string {
 			return "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300";
 		case "admin":
 			return "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300";
+		case "sponsored":
+			return "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300";
+		// Matches the seller directory's Unclaimed chip (seller-cells.tsx) —
+		// one idea, one look, across both admin surfaces.
+		case "unclaimed":
+			return "border border-dashed border-accent/70 bg-accent/5 text-accent-emphasis";
 		case "trial":
 			return "border border-accent/20 bg-accent/10 text-accent dark:bg-accent/15";
 		default:
@@ -39,7 +45,7 @@ function toneClass(tone: TierTone): string {
  *
  * Founding-10 members' status pill reads "Founding #N" (± trial/past-due), which
  * on its own hides their actual tier — so we render a second neutral **tier chip**
- * (Starter/Pro/Scale) next to it, both inside one link to billing. On mobile the
+ * (Starter/Pro/Enterprise) next to it, both inside one link to billing. On mobile the
  * pair wraps as a unit and inherits the header's smaller text so it stays neat.
  * See docs/manual-subscription.md + docs/admin-console.md.
  */
@@ -47,12 +53,15 @@ export function TierPill({
 	subscription,
 	foundingRank,
 	admin = false,
+	unclaimed = false,
 	compact = false,
 	className,
 }: {
 	subscription?: SubscriptionView;
 	foundingRank?: number;
 	admin?: boolean;
+	/** Pre-built store, no owner yet (docs/prebuilt-stores.md). */
+	unclaimed?: boolean;
 	compact?: boolean;
 	className?: string;
 }) {
@@ -62,14 +71,21 @@ export function TierPill({
 		Date.now(),
 		foundingRank,
 		admin,
+		unclaimed,
 	);
 	const displayLabel =
 		compact && subscription.status === "trialing"
-			? label.replace(/(\d+) days? left/i, "$1d left")
+			? label
+					.replace(/(\d+) days? left/i, "$1d left")
+					.replace(/until first order/i, "1st order")
+					.replace(/First invoice due/i, "Invoice due")
 			: label;
 
 	// Admin pill points at the console; the seller-state pill points at billing.
-	if (tone === "admin") {
+	// An UNCLAIMED store goes to the console too — there is no subscriber yet, so
+	// "manage your billing" is a page about nobody, whereas the directory is
+	// where the admin sets the handover email and finishes the job.
+	if (tone === "admin" || tone === "unclaimed") {
 		return (
 			<Link
 				to="/app/admin/sellers"
@@ -89,8 +105,9 @@ export function TierPill({
 	// the plan stays visible (the status chip alone would hide it). One link, two
 	// chips that wrap together rather than overflow on a narrow screen. `className`
 	// (e.g. the mobile header's smaller text) sits on the wrapper only — the chips
-	// carry no font size, so they inherit the wrapper's down to both.
-	if (foundingRank) {
+	// carry no font size, so they inherit the wrapper's down to both. A comped
+	// founding member has no tier to show — "Founding #N · Sponsored" says it all.
+	if (foundingRank && !subscription.comped) {
 		return (
 			<Link
 				to="/app/settings"

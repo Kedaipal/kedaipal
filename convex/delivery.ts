@@ -13,9 +13,23 @@
 // reveals as much). See docs/fulfilment.md.
 
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { query } from "./_generated/server";
+import { storeLanes } from "./crossBorder";
 import { MY_STATES } from "./lib/address";
-import { DEFAULT_COUNTRY } from "./lib/country";
+import { countryValidator, DEFAULT_COUNTRY } from "./lib/country";
+import {
+	laneFor,
+	resolveCrossBorderQuote,
+	shipsAbroad,
+	laneNeedsLiveQuote,
+} from "./lib/crossBorder";
+import { COURIER_DESTINATIONS } from "./lib/courierProviders";
+import { loadEasyparcelQuoteBlock } from "./lib/easyparcelArming";
+import {
+	delyvaBidsAtCheckout,
+	lalamoveBookingArmed,
+} from "./lib/courierBooking";
 import {
 	type CartWeightItem,
 	type DeliveryConfig,
@@ -51,7 +65,22 @@ export type PublicDeliveryQuote =
 	// `lalamove.quoteForCheckout` (mode "lalamove", pre-migration). The client
 	// can't infer it — both modes look identical from here — and calling the
 	// wrong one would price a store by rules it hasn't been moved to yet.
-	| { kind: "live"; providerAware: boolean };
+	// `riders` / `couriers`: WHICH kinds of provider can bid, so the address
+	// helper can say "by rider or courier" and drop "outside the rider's
+	// coverage can't be delivered" when a courier reaches the whole country
+	// (the /test-code pass on PR #415 caught the lie on a Delyva store). One
+	// bit each, derived from owner-only config that never crosses here.
+	| { kind: "live"; providerAware: boolean; riders: boolean; couriers: boolean }
+	// Cross-border (z8r3fdr5yy): the cart holds products that ship within the
+	// store's country only. Named, so checkout can offer a one-tap Remove for
+	// each instead of a submit error — the order never splits silently.
+	| {
+			kind: "home_only";
+			products: Array<{ productId: Id<"products">; name: string }>;
+	  }
+	// Cross-border: the store isn't taking orders to that country right now
+	// (the lane is paused or gone since the page loaded).
+	| { kind: "no_lane" };
 
 export const quote = query({
 	args: {
@@ -78,10 +107,67 @@ export const quote = query({
 		),
 		// Cart line-item subtotal (sen) — drives the free-above thresholds.
 		subtotal: v.number(),
+		// The "Deliver to" country the buyer picked (z8r3fdr5yy). Absent or the
+		// store's own = a domestic quote, exactly as before. Another country is
+		// priced by the store's lane — never the domestic config.
+		country: v.optional(countryValidator),
 	},
 	handler: async (ctx, args): Promise<PublicDeliveryQuote> => {
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) return { kind: "free" };
+		const storeCountry = retailer.country ?? DEFAULT_COUNTRY;
+		if (args.country !== undefined && args.country !== storeCountry) {
+			const lane = laneFor(
+				(await storeLanes(ctx, retailer)).effective,
+				args.country,
+			);
+			if (!lane) return { kind: "no_lane" };
+			const lines = (args.items ?? []).slice(0, MAX_QUOTE_ITEMS);
+			const homeOnly: Array<{ productId: Id<"products">; name: string }> = [];
+			const weightItems: CartWeightItem[] = [];
+			for (const line of lines) {
+				const variant = await ctx.db.get(line.variantId);
+				if (!variant || variant.retailerId !== args.retailerId) {
+					weightItems.push({ parcelWeightG: 0, quantity: line.quantity });
+					continue;
+				}
+				weightItems.push({
+					parcelWeightG: variant.parcelWeightG,
+					quantity: line.quantity,
+					isCustom: variant.isCustom === true,
+				});
+				const product = await ctx.db.get(variant.productId);
+				if (
+					product &&
+					!shipsAbroad(product) &&
+					!homeOnly.some((p) => p.productId === product._id)
+				)
+					homeOnly.push({ productId: product._id, name: product.name });
+			}
+			if (homeOnly.length > 0) return { kind: "home_only", products: homeOnly };
+			// A live lane is priced by EasyParcel for this exact cart and
+			// address — the checkout fetches it (`liveQuote.quoteForCheckout`
+			// with the country), unless the cart has earned free delivery.
+			if (laneNeedsLiveQuote(lane, Math.max(0, args.subtotal))) {
+				return {
+					kind: "live",
+					providerAware: true,
+					riders: false,
+					couriers: true,
+				};
+			}
+			const resolved = resolveCrossBorderQuote({
+				pricing: lane.pricing,
+				subtotal: Math.max(0, args.subtotal),
+				cartWeight:
+					lane.pricing.kind === "weight" && lines.length > 0
+						? summarizeCartWeight(weightItems)
+						: undefined,
+				country: lane.country,
+			});
+			if (resolved.kind === "fee") return { kind: "fee", fee: resolved.fee };
+			return resolved;
+		}
 		// Country/mode mismatch (SG-lite belt-and-braces — updateSettings refuses
 		// storing this): an MY-only pricing mode on an SG store can only misprice
 		// or strand every order fee-pending, so surface it as the seller-side
@@ -99,9 +185,18 @@ export const quote = query({
 			retailer.deliveryConfig?.mode === "lalamove" ||
 			retailer.deliveryConfig?.mode === "live"
 		) {
+			const providerAware = retailer.deliveryConfig.mode === "live";
 			return {
 				kind: "live",
-				providerAware: retailer.deliveryConfig.mode === "live",
+				providerAware,
+				// The legacy single-provider mode is riders by definition.
+				riders: providerAware ? lalamoveBookingArmed(retailer) : true,
+				// Delyva, or EasyParcel where it carries home parcels (SG).
+				couriers:
+					providerAware &&
+					(delyvaBidsAtCheckout(retailer) ||
+						(COURIER_DESTINATIONS.easyparcel[storeCountry] !== "abroad" &&
+							(await loadEasyparcelQuoteBlock(ctx, retailer)) === null)),
 			};
 		}
 		const destination =

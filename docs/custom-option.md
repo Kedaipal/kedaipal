@@ -48,7 +48,7 @@ Coerced server-side on save regardless of client input: `requiresProof: true`,
 `blockWhenOutOfStock: false` (made-to-order, never blocks), `onHand: 0`, no `sku`.
 Price is optional: `0` → "Price on quote" (seller quotes on the mockup); `>0` → a
 "from" base price. **≤1 custom line per product**, and it does **not** count
-toward the `MAX_VARIANTS_PER_PRODUCT` (50) cartesian cap.
+toward the `MAX_VARIANTS_PER_PRODUCT` (100) cartesian cap.
 
 Caps live in `convex/lib/variant.ts`: `MAX_CUSTOM_LABEL_LENGTH` (40),
 `MAX_CUSTOM_PROMPT_LENGTH` (280), `DEFAULT_CUSTOM_LABEL`.

@@ -34,15 +34,23 @@ cards and table search identically and the export matches what's on screen.
 Two deliberate details:
 
 - **Phone keeps its own rule** — trailing-digit matching, so `123456789` finds
-  `+60123456789` however it was stored or typed. Plain substring can't do that.
-- **Categories participate**, because they are frozen onto the order at checkout
+  the stored `60123456789` with or without its country code. Plain substring
+  can't do that. The typed digits are also tried **without leading zeros** (at
+  least 4 left), because a local number is usually typed with its trunk `0`:
+  a UK buyer's `07911 123456` finds the stored `447911123456` (buyers can give
+  a number from any country since `z8r3fdh274` — see
+  [`phone-numbers.md`](./phone-numbers.md)). Malaysia only ever matched by luck
+  — `60` ends in the trunk `0` — and Singapore has no trunk at all.
+- **Categories participate**, because they are frozen onto the order at create by every order door (storefront, counter, claim, booking)
   (see below). That was the one column a live lookup could never have covered.
   Orders placed *before* the field existed need
   `npx convex run migrations:backfillOrderCategoryNames` — see
   [product-categories.md](./product-categories.md).
 
-The haystack is built lazily (only when there IS a term), since it allocates ~36
-strings per order. Expect broader matches than before: a term appearing in a
+The haystack is built lazily (only when there IS a term), since it allocates a
+string per column, per order. Pickup notes participate (`z8r3fdff97`) through the
+same gate as the column — a self-collect order matches "ice bag", a delivery
+order whose line froze the same note does not. Expect broader matches than before: a term appearing in a
 shared field — a city every order ships to — now legitimately matches all of
 them. That breadth is the point.
 
@@ -181,6 +189,39 @@ review: with **every leaf selected, "All statuses" stays lit even when period
 chips are on** — the union already matches every order, and the panel's Status
 select-all on a booking store produces exactly that state.
 
+**A card's total NAMES the refundable deposit inside it.** `OrderTotal`
+(`src/components/order/order-total.tsx`) keeps the bold figure at
+`order.total` — what the buyer paid and what lands in the bank — and adds
+"incl. RM X refundable deposit" beneath it when the order carries one. The
+headline is deliberately **not** netted down to the seller's share: it has to
+match the receipt PDF, the CSV `Total` column, the order detail, the WhatsApp
+confirmation and the actual transfer, and netting it here would be the
+Insights by-source leak pointing the other way. What the deposit needed was a
+NAME, not a subtraction — without it RM110 reads as revenue when RM20 of it is
+held money. Wording matches `booking-request-card.tsx`, trimmed because a card
+is scanned rather than read. Table view needs nothing: the column registry
+already carries a separate **Security deposit** column beside `Total`.
+Renders exactly as before on any order without one.
+
+**`top` and `off` are REMEMBERED per store; `only` is not.** The chip cycles
+three ways but they are not the same kind of thing. `top` vs `off` — whether a
+pin floats above the list or is filtered like any other order — is
+*presentation*, how this seller reads their inbox, so it lives in
+`localStorage` beside the layout (`useInboxView`) and the column set
+(`useOrderColumns`); a mode named in the URL still wins. `only` *narrows the
+list*, so it is a filter: URL-only, deliberately never remembered, because
+carrying it forward would silently hide the results of the seller's next
+drill-in. Precedence lives in one place, `resolvePinMode`
+(`src/hooks/useInboxPinMode.ts`).
+
+Without this, a seller who had turned pinning **off** got it switched back on
+every time they arrived from an Insights drill-in: a drill-in builds a fresh
+search object, so `pin` was absent, and absent meant the `top` default rather
+than "what I last chose". Note the scope of the fix — **ordinary filters are
+still URL state and are still replaced by a drill-in**, on purpose: arriving at
+Orders from the nav and finding last week's payment filter silently applied is
+the worse bug, and it would make every shared link a lie.
+
 **The Pinned chip renders whenever the mode is non-default, even at ZERO**
 (PR #243 re-review). Unpinning the last row while in "only" mode empties the
 list and used to take the chip away with it — leaving `?pin=only` in the URL, an
@@ -307,6 +348,109 @@ is still accepted on the wire and folded in by `toInboxFilterArgs`, and a legacy
   out of In-progress while still being worked. Payment is a multi-select filter.
 - **Phase it:** Phase 1 was the inbox; Phase 2 added bulk actions.
 
+## Fulfilment — how the order goes out ([`z8r3fdfau9`](https://app.clickup.com/t/z8r3fdfau9))
+
+The inbox could filter on every enumerable thing about an order **except the one
+a seller planning tomorrow actually asks**: which of these do I deliver, and
+which are people coming to collect? The `Fulfilment` column had shipped with the
+table and was the only default-visible enumerable column with no header funnel.
+
+Five options, and they are **exactly the values `fulfilmentKey()` can return**
+(`convex/lib/orderCsv.ts`) — the filter is built from the registry rather than
+holding its own list, because the picker offering a word the column can't print
+is the `storefront` / "Online" drift this file already records:
+
+| key | label | rule |
+| --- | --- | --- |
+| `delivery` | Delivery | the method, or no method at all (every legacy order) |
+| `self_collect` | Self-collect | pickup at the seller's own place |
+| `drop_off` | Drop-off | pickup at an agreed meetup point |
+| `collection` | We collect | `deliveryDirection === "collection"` — the opposite trip |
+| `booking` | Booking | nothing ships; the guest turns up on check-in day |
+| `event` | Event | an RSVP to a fixed-moment event — **stored `self_collect`** |
+
+An RSVP to an approval-gated event (`z8r3fdkjek`) waits in the
+`booking_requested` **status** — the one bookings already use — while staying an
+RSVP. Status and fulfilment are different axes and neither bends the other: that
+order is an **Event** awaiting approval, not a Booking. `eventRsvp` is what tells
+the two apart, which is exactly why the key is derived from `orderFlowKind`
+rather than from the status or the method.
+
+**`fulfilmentKey` is built on `orderFlowKind`, and two refinements sit on top of
+it.** The flow kind comes first and that is not tidiness: an **event RSVP is
+stored `deliveryMethod: "self_collect"`** (the buyer collects at the venue) and
+is told apart only by the frozen `orders.eventRsvp` marker, so reading the
+method files every RSVP under "Self-collect" — the exact flattening this
+function exists to undo for drop-off. `orderStatus.ts` states the rule in one
+line: *derive with `orderFlowKind`, never by re-reading products*.
+
+The two refinements are the cases the stage flow doesn't care about but the
+seller's day does, and **each is gated on its own kind**: a `collection` order is
+stored `deliveryMethod: "delivery"` but the rider goes buyer→store
+([`86eyg0n8e`](https://app.clickup.com/t/86eyg0n8e)), and a `drop_off` order is
+stored `self_collect` but the seller is standing at a pasar, not behind their
+counter ([`86ey30yhr`](https://app.clickup.com/t/86ey30yhr)). Gating each on its
+kind is what keeps the flow kind winning — a booking or an RSVP can never be
+relabelled by a stray direction or a snapshot it had no business carrying.
+Writing those two as an early return instead makes the branch **unreachable**
+(the same value falls out of the tail), and an unreachable guard is one no test
+can hold — which is how it was caught.
+
+Because the column, the funnel, the predicate and the CSV all call this one
+function, the rows a tick keeps are exactly the rows whose cell shows the ticked
+word — a structural guarantee, not a convention to remember.
+
+**Adding a flow kind means adding it here too.** `FULFILMENT_KEYS` is a superset
+of `OrderFlowKind` (it adds the two refinements), so a new kind needs a key, a
+label, a `fulfilmentKeyValidator` literal, and — the one that fails silently —
+whatever field identifies it carried through `orderToCsvSource`.
+
+**Drop-off was promoted into the column as part of this.** It is already its own
+word in buyer emails, WhatsApp copy and the Settings pickup badges; only the
+inbox flattened it into "Self-collect", so a seller running three pasar meetups
+could not tell them apart in the table without also adding the Pickup-location
+column, and could not filter to them at all. ⚠️ **The CSV's `Fulfilment` cell
+therefore changed value** from `self_collect` to `drop_off` on those rows — no
+data changed, but a seller with a spreadsheet formula keyed on `self_collect`
+has to widen it. Call it out in release notes.
+
+**The dimension is presence-driven and hides itself.** `fulfilmentChoicesFrom`
+offers the kinds this seller's window actually contains, in registry order
+(never by count — a list that reshuffles as orders land has to be re-read every
+time), plus anything already **selected**: a lit filter with no visible row is a
+filter the seller cannot switch off, the rule `methodChoicesFor` already follows
+for payment rails. `fulfilmentFilterApplies` is the single "is this worth
+showing" test, asked by **both** the panel section and the column funnel, so the
+two appear and disappear together — a delivery-only store sees neither rather
+than a control that can only narrow to what it already has.
+
+Placement is deliberate: the panel section sits **directly under Order type**,
+not appended after Order date. The two are one journey read twice — how it came
+IN, how it goes OUT — and a seller reaches for them together.
+
+Wiring, all of it the same shape every other dimension uses: `?ful=`
+(`?ful=["delivery","drop_off"]` — the router's JSON array form, same as `pay`
+and `asrc`; a bare `?ful=delivery` is accepted and heals into it)
+→ `InboxFilterArgs.fulfilments` → `buildInboxPredicate` → the CSV export through
+the shared predicate. It is in `NARROWING_FILTER_KEYS`, so it sits behind the
+same Pro gate as payment and category (that record is compiler-enforced complete
+— the reason a filter added without touching it can no longer fail the gate open
+silently).
+
+## One listing's orders — `?listing=` (`z8r3fdjv0d`)
+
+`InboxFilterArgs.listing` narrows to the orders of ONE product: a line of it,
+or a booking of it (`bookingProductId`). No picker writes it — it arrives from
+the [Schedule view](./schedule-view.md) and the event RSVP panel, both of which
+open `?listing=<id>&ffrom=<day>&fto=<day>` so the list holds exactly the orders
+they counted. The panel shows it as a removable `Listing: <name>` token (the name
+comes back as `searchOrders.listingName`, resolved for this store's products
+only; a dead id reads *Listing not found*). It narrows, so it is Pro like every
+other inbox filter, rides the export's shared validators, and is a plain
+`v.string()` so a hand-edited URL matches nothing instead of erroring. A gated
+order's lines are stripped before the predicate runs, so it never matches by
+line.
+
 ## Views: Cards and Table (86eyrtz74)
 
 `?view=table` switches the list to a spreadsheet-shaped table. It exists for a
@@ -348,6 +492,16 @@ WhatsApp.
   hard rule for wide content) and its row controls **grow to 44px touch targets
   below `lg`** — with the checkbox's *visual* box staying 18px inside that target,
   since growing the box itself would give a phone a giant empty square.
+- **Narrow phones (found 21 Oct, PR #402 review):** the mobile header's five
+  actions need ~350px, which only just fits a 393px phone — and the title was
+  the part allowed to shrink, so at 375px and below the view switch sat on top
+  of "Orders". The row now WRAPS: the title keeps its width and the actions
+  drop to their own line, right-aligned. In table view the chip row also stops
+  at the Columns pill instead of bleeding 20px under it. Checked at 299 / 320 /
+  375 / 393px.
+  The rows inside every filter and column panel (`FilterOptionRow`,
+  `BulkSelectRow`) are now 44px below `lg` — the house touch target — and stay
+  a compact 36px on desktop; `size="touch"` keeps a row 44px at every width.
 - **Where the controls live** — settled after the first build crowded five of
   them into one row and squeezed the search input down to its own padding:
   - **The view switch is in the PAGE HEADER**, beside Select and Export. Those
@@ -446,6 +600,40 @@ WhatsApp.
   while the key list changes on a toggle, and a separate key means a layout
   written by an older build still loads instead of failing a shape check and
   dropping the seller's arrangement.
+- **Booking span columns — Booking start · Booking last day · Booking days ·
+  Booking skips**
+  (group **Booking**, right after Fulfilment in the picker and right after
+  Fulfilment time in the export). Added as a SET: a booking's Fulfilment date is
+  only its first day, and a lone count with no span would be half a fact.
+  - *Start* is `bookingCheckIn`. *Last day* goes through `bookingLastDay`
+    (`convex/lib/bookingAvailability.ts`, the one author of the S7 rule — also
+    used by `describeBookingSpan` and `describeBookingPeriod`): a **package's**
+    last usable day is the night before its exclusive check-out, a **stay's** is
+    the check-out itself. Never a package's exclusive check-out — that is a day
+    the buyer doesn't have.
+  - *Days* is `countedDays`, so an open-days package counts only the days it
+    uses. The CSV cell is a bare number (it sums); the table reads `2 nights`
+    for a stay and `30 days` for a package, because the units differ.
+  - All three are blank on non-booking orders and sink in a sort. Opt-in, not
+    default-visible — offered to every store, the `Security deposit` precedent.
+  - **Gated (credit) rows print all four.** `bookingCheckIn/Out/Packaged`,
+    `bookingSkippedDays`, `bookingCustomerSkips` and `bookingOpenDays` are on
+    the `GATED_ORDER_FIELDS` allowlist — store closures and seller-logged skips,
+    not buyer data. They joined it with these
+    columns: without them a gated open-days package overcounted everywhere the
+    span is read (Days said 7 for a member who bought 5, and the booking-period
+    chip said "6 days left" with 3 visits to go). Pinned by tests that run the
+    real `redactGatedOrder`.
+  - *Skips* counts `orders.bookingCustomerSkips` — the days the seller skipped
+    for the customer (`z8r3fdh3ay`). It explains the other three: each skip
+    moved the last day out by one open day and is already left out of Days
+    (`bookingSkippedDays` holds every unused day, skips included). Reads `0` /
+    "None" only on a plan that CAN be skipped (`bookingOpenDays`); blank on a
+    stay or calendar package, where "0 skips" would suggest an option it never
+    had. Orders placed before `bookingOpenDays` was frozen read blank until
+    their first skip — the skip mutations fall back to the listing
+    (`isSkippablePlan`), but the registry reads only the order. A count, not "1 of 3": `maxSkips` lives on the listing, so a later
+    edit would rewrite an exported row.
 - **Drag the HEADERS to reorder** — @dnd-kit horizontal, with the header itself
   as the drag handle. No separate grip: the shared `useSortableSensors` starts a
   pointer drag only after 8px and a touch drag only after a 250ms hold, so a
@@ -470,6 +658,12 @@ WhatsApp.
   `FilterOptionRow`): the panel opens with most columns on, so a tint would
   stripe two-thirds of the list without saying anything — unlike a filter, where
   a selected option is exceptional.
+  The panel is capped at Radix's measured
+  `--radix-popover-content-available-height`, with the column list as its one
+  flexible region. A fixed `52vh` on the list alone ignored the header above it
+  and the page banner, so on a 763px laptop window the panel ran 58px past the
+  viewport and its last rows — the Booking group, which sits last — could not be
+  scrolled to.
   The Columns panel is otherwise **show/hide only**, and turning a column on appends
   it to the right-hand end, where the seller can see what they added and drag it
   from there. `resolveOrderColumns` honours the caller's order, so the exported
@@ -532,10 +726,14 @@ WhatsApp.
   "these orders, by total" is worth sharing, unlike a 36-toggle layout.
 - **Filter from the column header** (86eyrtz74). A funnel in the header of
   every filterable column opens a multi-select list of that column's values.
-  Filterable today: **Status, Categories, Order type, Came from, Payment,
-  Payment method** (multi) and **Fulfilment date** (single — the due windows
-  overlap, so offering them as a set would let a seller build a combination that
-  reads like an intersection and behaves like a union).
+  Filterable today: **Status, Categories, Order type, Fulfilment, Came from,
+  Payment, Payment method** (multi) and **Fulfilment date** (single — the due
+  windows overlap, so offering them as a set would let a seller build a
+  combination that reads like an intersection and behaves like a union).
+  **Fulfilment's funnel is conditional** — it is registered only when the window
+  holds more than one kind, so on a delivery-only store the header has no funnel
+  rather than one that opens onto a single row (see the Fulfilment section
+  above).
   - **`ui/column-filter-menu.tsx` is generic** and knows nothing about orders —
     it takes options, a selection and a handler, so the next table reuses it
     whole. Everything order-specific (which columns, where the options come
@@ -591,7 +789,29 @@ WhatsApp.
     option showing `0` is the answer to "why is my list empty?". The picker
     never shrinks as it is used; one that did would read as orders vanishing.
     An order counts **once per category**, never once per line, so the number
-    beside an option is the number of rows it will show.
+    beside an option is the number of rows it will show. **The category facet
+    is a list of `{ name, count }` pairs, not a name-keyed object** (hotfix
+    [`z8r3fdv1r4`](https://app.clickup.com/t/z8r3fdv1r4), 16 Oct 2026): Convex
+    refuses to serialise an object whose field name has a non-ASCII character,
+    and category names are the seller's own words — Her Moolah Collective
+    prefixed theirs with `✦`, and the first order carrying one took the whole
+    inbox down for the store. The other six facets are keyed by enums we own,
+    so they stay objects; the client reads the category one through
+    `categoryCount(facets, name)`, never by index.
+  - **The Categories filter says why a category isn't offered** (28 Oct 2026).
+    Its options come from names frozen on orders, so a seller who files
+    products under a category AFTER taking orders saw only "Uncategorized 23"
+    and nothing explaining it (Dr Niki Trainings). `categoryFilterChoices`
+    (`order-column-filters.ts`) picks one of three states, using
+    `searchOrders.storeHasCategories` (one indexed read: any ACTIVE category):
+    no categories at all → no options, "Group your products into categories…"
+    and a **Set up categories** button; categories but none on these orders →
+    Uncategorized plus "None of these orders is for a product in a category
+    yet. **Manage categories**"; otherwise → the options plus the rule ("Orders
+    are filed under their product's category. Adding a category to a product
+    also files its earlier uncategorized orders."). `ColumnFilterMenu` gained
+    the generic `note` and `emptyAction` slots for this; bindings carry them as
+    data (`FilterNote`/`FilterLink`) and `order-table.tsx` renders the links.
   - **Two new server dimensions.** `statuses` is the status axis, multi. It
     shipped as a *separate* dimension that ANDed with `bucket`, on the reasoning
     that a bucket is the coarse stage you navigate by while this is the precise
@@ -655,7 +875,7 @@ WhatsApp.
   the already-sorted model keeps the active sort applying inside both halves.
   Pinning stays a partition, never a competing sort key.
 - **Export honours the view.** In table view the Export button becomes a
-  two-item menu — *Export visible columns (N)* / *Export all columns (36)* —
+  two-item menu — *Export visible columns (N)* / *Export all columns (N)* —
   rather than a dialog, which would tax a path sellers hit often. In cards view
   there is no column selection to honour, so it stays a one-tap button that
   exports everything.
@@ -790,8 +1010,11 @@ returns **the filtered page plus the per-bucket counts in a single subscription*
     from burying one that just arrived (the old due-date default did exactly that,
     which confused sellers — see the Sort control below).
   - **Due date** — `compareInboxOrder`: fulfilment date ascending (soonest-first,
-    the fulfilment queue), dateless orders sink to the bottom. Relies on the
-    newest-first input for its within-date tiebreaker.
+    the fulfilment queue), dateless orders sink to the bottom. **Same-day orders
+    fall in time order, untimed after timed** (`z8r3fdff97` — pickups carry a
+    time now, so a kitchen's list reads in the order buyers arrive); the table's
+    Fulfilment date column sorts the same way (`fulfilmentMomentSortKey`). Relies
+    on the newest-first input for its tiebreaker between untimed same-day orders.
   Fulfilment urgency is *also* surfaced by the Due chips + due-today banner + Home
   strip, so due-date is a deliberate opt-in, not the default. Export sorts
   independently (still `compareInboxOrder`, a stable bookkeeping order). See
@@ -836,15 +1059,20 @@ and escalates for `pending` **or** unseen.
   `validateSearch`: `bucket`, `q`, `pay[]`, `method[]`, `munspec`, `from`, `to`,
   `mockup`, `fwin`, `sort`; all optional, defaults kept out of the URL — `sort`
   only stores the non-default `"due"`). Debounced search drives the query and
-  mirrors into `?q`. Bucket chips show counts (New highlighted). A **Sort control**
+  mirrors into `?q`. `q` and `cat` are read through `searchText`, so a pasted
+  `?q=60123456789` (which the URL parses as a number) still searches. Legacy
+  `source`/`nopin` are returned `undefined` like `bucket`, so no raw value
+  leaks past the validator (z8r3fdtk87, [url-search-params.md](./url-search-params.md)). Bucket chips show counts (New highlighted). A **Sort control**
   (a Popover on the search row: _Newest first_ / _Due date_) flips the list order
   client-side — see the Sort note above for why Newest is the default. Changing
   sort resets pagination to the first page (it's a view change). A **"Due" chip row** (Today / Tomorrow / This week, driving
   `fwin`) sits inline above the advanced filters — fulfilment urgency is a
   primary axis for F&B sellers, not a buried filter. Each order row carries a
   **fulfilment-date badge** (`fulfilment-date-badge.tsx`) that leads with urgency
-  (Overdue / Today / Tomorrow coloured) — **suppressed to neutral on terminal
-  orders and hidden entirely on counter orders** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734),
+  (Overdue / Today / Tomorrow coloured), with the order's time when it has one
+  ("Today · 3:30 PM", `fulfilmentBadgeLabel`, `z8r3fdff97` — never on the
+  muted or Overdue variants, where the day is the whole message) — **suppressed
+  to neutral on terminal orders and hidden entirely on counter orders** ([`86ey8r734`](https://app.clickup.com/t/86ey8r734),
   see [`fulfilment-date.md`](./fulfilment-date.md)). Each card's meta line shows
   the **absolute placed-at datetime + relative age** (`formatOrderTimestamp` +
   `formatStatusAge`, e.g. "12 Jul, 3:45 PM (3h ago)") so the seller reads both
@@ -875,8 +1103,11 @@ and escalates for `pending` **or** unseen.
 - **`order-time-badge.tsx`** — "time in status" pill (e.g. "2h"). Only **pending**
   escalates: amber >4h, red >24h (the missed-order risk window); other statuses
   are neutral.
-- **`order-filters.tsx`** — one coherent filter set: an **"Order type"** pair
-  (Online / Counter → `source`), a **"Came from"** multi-select (marketing
+- **`order-filters.tsx`** — one coherent filter set: an **"Order type"**
+  multi-select (Storefront / Counter / Claim link → `sources`), a
+  **"Fulfilment"** multi-select directly beneath it (how the order goes out →
+  `fulfilments`, z8r3fdfau9 — the twin of Order type, and hidden entirely on a
+  store with only one kind), a **"Came from"** multi-select (marketing
   origin → `attributionSources`, 86eyq0eq9 — a SEPARATE dimension from Order
   type: that is the checkout surface, this is where the buyer arrived from; its
   chips come from the query's `availableSources` because seller tags are
@@ -910,7 +1141,34 @@ and escalates for `pending` **or** unseen.
   order is never counted. `bottom-nav.test.tsx` covers the badge value + that it
   lands on `?bucket=new` (and doesn't filter when there's nothing new).
 
+- `convex/lib/orderCsv.test.ts` → fulfilment — `fulfilmentKey` precedence
+  (collection beats the method, drop-off beats self-collect, no method reads as
+  delivery) and that every key has a real label rather than falling through to
+  `humanizeEnum`.
+- `convex/lib/orderInboxFilter.test.ts` → "fulfilments" — each kind matches only
+  its own orders, several OR together, an empty list filters nothing, it ANDs
+  with payment, and it gates like every other narrowing filter.
+- `convex/orders.test.ts` → fulfilment — facets tallied over the UNFILTERED
+  window, every registry key accepted by the wire validator, and the CSV's
+  `Fulfilment` cell reading `drop_off` (which catches the export projection
+  silently dropping `pickupSnapshot.locationType`).
+- `order-column-filters.test.ts` — the funnel's options read exactly like the
+  column (the fulfilment case builds the order that produces each key), and the
+  funnel is absent until there is a second kind.
+- `order-filters.test.tsx` → "Fulfilment" — hidden on a one-kind store, shown
+  with registry labels + counts, select-all writes exactly what it offered, a
+  selected-but-absent kind stays pickable, each kind is its own token.
+
 ## Phase 2 — bulk actions (shipped)
+
+> **A lapsed store can't use any of this.** From 19 Sep 2026 an expired seller's
+> dashboard is **view-only** (`z8r3fdeub2`): `updateStatus`/`bulkUpdateStatus`
+> and every other order action are refused server-side. The inbox's **Select**
+> button — the door to bulk actions — is disabled with the reason, and a
+> `ViewOnlyNote` sits under the header. Export stays enabled: a seller's own
+> data is never held hostage. See
+> [`manual-subscription.md`](./manual-subscription.md#soft-lock-past_due).
+
 
 - **`convex/orders.ts`**: the core of `updateStatus` was extracted into a shared
   `applyStatusTransition(ctx, order, status)` helper (stock-restore-on-cancel +

@@ -4,49 +4,214 @@
 // money is in MINOR units (sen), consistent with orders. See
 // docs/manual-subscription.md.
 //
-// The `Country` import is type-only, so this stays a pure module with no
-// runtime dependency on `country.ts` (which does import `convex/values`).
+// `DEFAULT_COUNTRY` is a runtime import from `country.ts`, which pulls in
+// `convex/values` — a package, not a Convex function module, so the client-
+// imports gate (`src/lib/convex-client-imports.test.ts`) allows it and the
+// browser bundle already carries it through `convex/react`. The module still
+// has no Convex FUNCTION dependency.
 
-import type { Country } from "./country";
+import { type Country, DEFAULT_COUNTRY } from "./country";
 
-export type Plan = "starter" | "pro" | "scale";
+/**
+ * The three tiers (Credits T6, ClickUp z8r3fdkp8h — Arif, 30 Sep 2026):
+ * Starter and Pro at a list price, and ENTERPRISE — contact us, no public
+ * price, quoted per deal. Scale (RM399 for 500 credits) was retired before it
+ * ever went public: it was Pro plus packs under a new name, and its only real
+ * effect was anchoring an enterprise buyer on SME pricing. Nobody was ever on
+ * it, so it went as a rename, not a migration.
+ */
+export type Plan = "starter" | "pro" | "enterprise";
 export type BillingCycle = "monthly" | "annual";
 
-export const PLANS: Plan[] = ["starter", "pro", "scale"];
+/** The tiers with a LIST price — what the price tables, the credit grants and
+ * every self-serve door are keyed by. Enterprise is priced by its contract
+ * (`subscriptions.enterprise`), never by a table, so a `Record<ListedPlan, …>`
+ * makes "the Enterprise price" a compile error rather than a silent zero. */
+export type ListedPlan = Exclude<Plan, "enterprise">;
 
-/** Plan currently selectable at signup. Scale is disabled ("Coming soon") for v1
- * — schema keeps it so future activation needs no migration. */
-export function isPlanSelectable(plan: Plan): boolean {
-	return plan === "starter" || plan === "pro";
+/** Rank order, low to high. */
+export const PLANS: Plan[] = ["starter", "pro", "enterprise"];
+export const LISTED_PLANS: ListedPlan[] = ["starter", "pro"];
+
+export function isListedPlan(plan: Plan): plan is ListedPlan {
+	return plan !== "enterprise";
 }
 
-/** Only Pro grants a Founding Member rank at v1 (Arif's 2026-05-28 decision —
- * Scale is disabled and grants no badge). */
+/**
+ * Whether a seller can buy this tier — self-serve (`subscribeSelf`,
+ * `changePlan`, `switchPendingPlan`) and on the public pages (`/pricing`'s
+ * plan-aware CTA, the landing teaser). Starter and Pro are; ENTERPRISE never
+ * is: a store is on Enterprise only when a Kedaipal admin attaches a contract
+ * (`enterprise.setContract`), and the public surfaces offer "Talk to Arif"
+ * instead of a Subscribe button.
+ *
+ * Kept as the one gate rather than inlined `true` so a tier that is not for
+ * sale closes every door — both public surfaces and all three mutations — by
+ * answering `false` here, not by hunting down call sites. A `Record` rather
+ * than a list so a new member of `Plan` is a compile error until someone
+ * decides whether it is for sale.
+ */
+const SELECTABLE: Record<Plan, boolean> = {
+	starter: true,
+	pro: true,
+	enterprise: false,
+};
+
+export function isPlanSelectable(plan: Plan): boolean {
+	return SELECTABLE[plan];
+}
+
+/** Only Pro grants a Founding Member rank (Arif's 2026-05-28 decision). The
+ * cohort is closed, and a founding store stays on Founding Pro
+ * (`foundingPlanLocked`) — it can never be put on an Enterprise contract. */
 export function planQualifiesForFounding(plan: Plan): boolean {
 	return plan === "pro";
 }
 
+/**
+ * Kedaipal Credits (86eye2ccu): the orders each plan includes a month.
+ * 1 credit = 1 order, used when the order is created on any channel and given
+ * back only for an order that never got going (see `convex/lib/credits.ts`).
+ * Locked 17 Sep 2026 (decision register z8r3fdf8j1): Starter 100 / Pro 200.
+ * ENTERPRISE has no entry: its included credits are negotiated per deal and
+ * live on the contract, written through to `creditAccounts.grantOverride` —
+ * the one included-credits field (T6).
+ *
+ * THE per-plan order allowance — "one number, one source". `PLAN_CAPS.orderCap`
+ * below is DERIVED from this table, never a second literal, so the soft-cap
+ * meter and the credit ledger can't disagree. Subscription rows carry
+ * `orderCap` denormalized, so changing a number here needs
+ * `migrations.resyncSubscriptionCaps` on prod. Public copy (`/pricing`,
+ * landing) reads these numbers too.
+ */
+export const PLAN_CREDIT_GRANT: Record<ListedPlan, number> = {
+	starter: 100,
+	pro: 200,
+};
+
+/** Where an Enterprise tier starts (Arif, 30 Sep 2026): "built for 1,500+
+ * orders a month" on `/pricing` and the plan picker, and the volume at which
+ * `/cost` points a visitor at Enterprise instead of Pro plus packs. A number,
+ * never a price — Enterprise has no public price. */
+export const ENTERPRISE_FROM_ORDERS = 1500;
+
+/** The monthly grant for a store on FOUNDING pricing whose plan is Pro — 300
+ * for life, MY (RM104) and SG (S$41) seats alike (Arif, 15 Sep 2026). Never
+ * shown on a public page — the cohort is closed. */
+export const FOUNDING_PRO_CREDIT_GRANT = 300;
+
+/**
+ * The free trial's order allowance (Zaki, 30 Sep 2026). Counted from the
+ * store's FIRST order: the trial lasts 14 days (the first invoice's due date)
+ * or this many orders, whichever runs out first. ONE-OFF for the whole trial:
+ * a trial that crosses a month boundary is NOT re-granted, or "200 orders to
+ * try it" would quietly become 400. It is Pro's allowance because the trial
+ * is a Pro trial.
+ */
+export const TRIAL_CREDIT_GRANT = PLAN_CREDIT_GRANT.pro;
+
+/** How long bought (and referral / admin-granted) credits last, in calendar
+ * months from the moment they land (register item 6). Plan credits never
+ * carry over at all — they reset every usage period. */
+export const PURCHASED_CREDIT_LIFETIME_MONTHS = 12;
+
+/**
+ * How many SELLER cancellations a month give their credit back (Zaki,
+ * 30 Sep 2026). Only an order the seller never accepted qualifies — a new
+ * order or an unanswered booking request, cancelled or declined. Without the
+ * cap, "cancel a finished order to win its credit back" would turn the seller
+ * lock into a no-op, since cancelling stays open while a store is locked.
+ */
+export const SELLER_CANCEL_REFUNDS_PER_PERIOD = 10;
+
+/** A top-up pack id — stable, stamped on every purchase row, never recomputed. */
+export type CreditPackId = "p50" | "p200" | "p50sg" | "p200sg";
+
+export type CreditPack = {
+	id: CreditPackId;
+	credits: number;
+	/** Minor units (sen / cents), in `currency`. */
+	priceMinor: number;
+	currency: BillingCurrency;
+};
+
+/**
+ * Top-up packs, locked 17 Sep 2026 (z8r3fdf8j1 items 2 + 3; the older
+ * RM50 / RM170 / S$25 / S$85 figures are dead). Keyed by the seller's BILLING
+ * currency — a seller only ever sees one currency's packs, never RM beside S$.
+ *
+ * Guard rule, pinned by `credits.test.ts`: in each currency the cheapest
+ * credit in any pack costs at least as much as the most expensive implied
+ * per-order price of any tier, so upgrading always beats topping up at volume.
+ */
+export const CREDIT_PACKS: Record<BillingCurrency, readonly CreditPack[]> = {
+	MYR: [
+		{ id: "p50", credits: 50, priceMinor: 4500, currency: "MYR" },
+		{ id: "p200", credits: 200, priceMinor: 16000, currency: "MYR" },
+	],
+	SGD: [
+		{ id: "p50sg", credits: 50, priceMinor: 2200, currency: "SGD" },
+		{ id: "p200sg", credits: 200, priceMinor: 7500, currency: "SGD" },
+	],
+};
+
+/** Every pack, both currencies — for lookups by id. */
+export function creditPackById(id: string): CreditPack | undefined {
+	for (const currency of BILLING_CURRENCIES) {
+		const pack = CREDIT_PACKS[currency].find((p) => p.id === id);
+		if (pack) return pack;
+	}
+	return undefined;
+}
+
 export type PlanCaps = {
-	/** Monthly order cap. SOFT in v1 — drives a dashboard nudge, never blocks the
-	 * public storefront. All tiers are finite (Arif's 2026-06-28 decision dropped
-	 * Scale's "unlimited"). NOTE: the pricing page advertises the *decided*
-	 * allowances 100/200/400 (caps ticket 86eye2ccu) ahead of enforcement. These
-	 * constants still read Pro 500 / Scale 2,000 until 86eye2ccu ships the lower
-	 * caps — and this is the value the shipped billing-tab order meter renders as
-	 * its denominator — so the advertised copy and this constant deliberately
-	 * diverge for BOTH Pro and Scale in the meantime. */
+	/** Monthly order allowance — DERIVED from `PLAN_CREDIT_GRANT` (Credits,
+	 * 86eye2ccu), never a literal of its own. SOFT: it drives the dashboard
+	 * meter and never blocks the public storefront. Rows carry the cap
+	 * denormalized, so a change needs `migrations.resyncSubscriptionCaps` on
+	 * prod.
+	 *
+	 * While a subscription is ON HOLD the EFFECTIVE cap is 0 (ordering off) —
+	 * resolved by `resolveAccess`, never stored, so resuming needs no rewrite. */
 	orderCap: number;
-	/** Hard cap on dashboard users. */
+	/** Hard cap on dashboard users — TOTAL people incl. the owner, so member
+	 * seats = `userCap - 1` (see convex/lib/seats.ts). Starter 1 / Pro 3 =
+	 * "You + 0/2 teammates" (Zaki, 24 Sep 2026, 86exr91r4); Enterprise is
+	 * unlimited (T6). Denormalized onto subscription rows like orderCap —
+	 * changing these numbers needs `migrations.resyncSubscriptionCaps` on
+	 * prod. */
 	userCap: number;
 	/** Monthly broadcast quota (hard, seller-side). */
 	broadcastQuota: number;
 };
 
-// Per CLAUDE.md pricing table.
+/** Sentinel for "unlimited" denormalized caps (Convex stores finite numbers;
+ * `Infinity` isn't valid JSON). Any cap ≥ this is treated as unlimited.
+ * Declared before `PLAN_CAPS`, which reads it at module load. */
+export const UNLIMITED = 1_000_000_000;
+
+export function isUnlimited(cap: number): boolean {
+	return cap >= UNLIMITED;
+}
+
+// Per CLAUDE.md pricing table. `orderCap` is the credit grant — see above.
 export const PLAN_CAPS: Record<Plan, PlanCaps> = {
-	starter: { orderCap: 100, userCap: 1, broadcastQuota: 0 },
-	pro: { orderCap: 500, userCap: 2, broadcastQuota: 100 },
-	scale: { orderCap: 2000, userCap: 5, broadcastQuota: 500 },
+	starter: {
+		orderCap: PLAN_CREDIT_GRANT.starter,
+		userCap: 1,
+		broadcastQuota: 0,
+	},
+	pro: { orderCap: PLAN_CREDIT_GRANT.pro, userCap: 3, broadcastQuota: 100 },
+	// Enterprise (T6): Pro plus unlimited seats. Its order volume is the
+	// contract's included credits, metered by the credit ledger — the cap is
+	// never the gate, so it isn't a second copy of a per-deal number.
+	// Broadcasts are unbuilt; when they ship, the contract decides their
+	// quota — until then, Pro's.
+	enterprise: {
+		orderCap: UNLIMITED,
+		userCap: UNLIMITED,
+		broadcastQuota: 100,
+	},
 };
 
 /** Boolean feature entitlements per plan — the pricing table's ✓/– rows for
@@ -95,12 +260,35 @@ export type PlanFeatures = {
 	 * un-gated (downgrade never traps), and a connected store's buyer-facing
 	 * Pay-now keeps working on every tier (buyer flow never varies by plan). */
 	onlinePayments: boolean;
-	/** Seller WhatsApp order alerts (86eyhw9zy): a WA template to the seller's
-	 * own number on new order + payment claim. Pro because each alert is a
-	 * billable Meta send (absorbed into the plan — decided 7 Aug 2026, no
-	 * add-on SKU). Gates only ENABLING the toggle — disabling and clearing the
-	 * number stay un-gated so a downgraded seller is never trapped. */
-	waOrderAlerts: boolean;
+	/** Event RSVP (`z8r3fdff9u`): publishing a product with a FIXED event date,
+	 * so guests RSVP to one moment instead of each picking their own fulfilment
+	 * date, with a seat cap and a per-option headcount. Pro because it's a
+	 * made-to-order/catering capability (Arif's 14 Sep 2026 call). Gates only
+	 * SETTING the event config — an event that already exists keeps taking
+	 * RSVPs, the headcount keeps totalling and the buyer flow never varies by
+	 * seller plan, so a downgrade never strands guests mid-RSVP. */
+	events: boolean;
+	/** Promo price + flash sale (z8r3fdcw72): SETTING a promo config on a
+	 * product. Gates only the seller configuring — an active promo on a
+	 * downgraded store stops APPLYING (effective price = list, badge reads
+	 * "Promo paused (Pro)") but the config is paused, never deleted, so an
+	 * upgrade revives it untouched. */
+	promo: boolean;
+	/** Vouchers (`z8r3fdr617`): issuing single-use discount codes. Pro because
+	 * it is a demand-generation lever, not part of taking an order — and it is
+	 * the one feature that gives money away, so it belongs with the paid tier's
+	 * marketing tools. Gates only ISSUING: voiding a voucher, and REDEEMING an
+	 * outstanding one, stay all-tier, so a store that downgrades neither traps
+	 * its seller nor strands a buyer holding a code it already sent. Already
+	 * -issued history stays readable on every plan (decided 8 Oct 2026). */
+	vouchers: boolean;
+	/** Cross-border delivery MY ↔ SG (`z8r3fdr5yy`): taking orders delivered to
+	 * the other country, at the seller's own price for it. Gated at the
+	 * ADDRESS, not the courier, so a flat-fee or free store can't take a
+	 * foreign address on Starter either. A downgrade PAUSES the lane at read
+	 * time (stored lanes are kept and revive on upgrade) and never touches an
+	 * order already placed — it ships at the price it was sold at. */
+	crossBorder: boolean;
 };
 
 export type PlanFeature = keyof PlanFeatures;
@@ -115,7 +303,10 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		radiusDelivery: false,
 		delivery: false,
 		onlinePayments: false,
-		waOrderAlerts: false,
+		events: false,
+		promo: false,
+		vouchers: false,
+		crossBorder: false,
 	},
 	pro: {
 		crm: true,
@@ -126,9 +317,16 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		radiusDelivery: true,
 		delivery: true,
 		onlinePayments: true,
-		waOrderAlerts: true,
+		events: true,
+		promo: true,
+		vouchers: true,
+		crossBorder: true,
 	},
-	scale: {
+	// Enterprise gets everything Pro has. Its extras are seats (above) and
+	// terms (the contract); multi-outlet and priority support are sold as
+	// "coming" in copy and get a flag here only when they ship — this table
+	// holds LIVE features only.
+	enterprise: {
 		crm: true,
 		orderInbox: true,
 		chargeablePickup: true,
@@ -137,7 +335,10 @@ export const PLAN_FEATURES: Record<Plan, PlanFeatures> = {
 		radiusDelivery: true,
 		delivery: true,
 		onlinePayments: true,
-		waOrderAlerts: true,
+		events: true,
+		promo: true,
+		vouchers: true,
+		crossBorder: true,
 	},
 };
 
@@ -173,49 +374,53 @@ export const BILLING_CURRENCY_FOR_COUNTRY: Record<Country, BillingCurrency> = {
 };
 
 // Standard monthly price per billing currency (minor units — sen / cents).
-// SGD numbers come from the Aug 2026 SG pricing deck (S$29 / S$59 / S$119).
+// Starter/Pro: locked May 2026 (MYR) + the Aug 2026 SG pricing deck (SGD).
+// Enterprise has no list price — it bills from its contract (`enterprisePrice`).
 export const PLAN_MONTHLY_PRICES: Record<
 	BillingCurrency,
-	Record<Plan, number>
+	Record<ListedPlan, number>
 > = {
-	MYR: { starter: 7900, pro: 14900, scale: 29900 },
-	SGD: { starter: 2900, pro: 5900, scale: 11900 },
+	MYR: { starter: 7900, pro: 14900 },
+	SGD: { starter: 2900, pro: 5900 },
 };
 
 // MYR shorthand for the table above.
-export const PLAN_MONTHLY_PRICE: Record<Plan, number> = PLAN_MONTHLY_PRICES.MYR;
+export const PLAN_MONTHLY_PRICE: Record<ListedPlan, number> =
+	PLAN_MONTHLY_PRICES.MYR;
 
 // Founding Member monthly price — 30% lifetime discount (manual v1), per
 // billing currency, rounded DOWN to a whole unit the same way in each (MYR
-// RM104.30 → RM104; SGD S$41.30 → S$41, S$83.30 → S$83). Only the Pro number
-// is reachable at launch; Scale kept for when it activates.
+// RM104.30 → RM104; SGD S$41.30 → S$41). Founding pricing was RETIRED for new
+// signups in the 30 Aug 2026 reset — no public surface advertises it — but
+// every claimed member keeps their rate, so the table stays in billing. Pro
+// only: a founding store stays on Founding Pro (`foundingPlanLocked`).
 export const FOUNDING_MONTHLY_PRICES: Record<
 	BillingCurrency,
-	Record<"pro" | "scale", number>
+	Record<"pro", number>
 > = {
-	MYR: { pro: 10400, scale: 20900 },
-	SGD: { pro: 4100, scale: 8300 },
+	MYR: { pro: 10400 },
+	SGD: { pro: 4100 },
 };
 
 // MYR shorthand for the founding table above.
-export const FOUNDING_MONTHLY_PRICE: Record<"pro" | "scale", number> =
+export const FOUNDING_MONTHLY_PRICE: Record<"pro", number> =
 	FOUNDING_MONTHLY_PRICES.MYR;
 
 /**
- * Price of each outlet beyond the three Scale includes (minor units).
+ * Off-Season Hold — the monthly price of a PAUSED subscription (minor units).
+ * RM19 / S$9 per the 30 Aug 2026 pricing reset (z8r3fday24).
  *
- * Display copy only — Scale is still "Coming soon" and the billing lever ships
- * with that build (docs/pricing.md). It lives here rather than inside the
- * message catalogs because the catalogs used to spell "RM49" into the sentence,
- * which quoted ringgit at a Singaporean reading S$ tier prices two lines above.
- *
- * SGD follows the tier ratio (SGD ≈ 0.4 × MYR across all three plans) and keeps
- * the same just-under-a-round-number shape. UNCONFIRMED — swap in a decided
- * number when Scale is priced for sale.
+ * A hold is a subscription STATUS (`on_hold`), not a `Plan`: the seller keeps
+ * their tier (`subscriptions.plan` is what they resume to), ordering switches
+ * off, and the storefront / catalog / buyer list / order history stay live.
+ * Not on `PLAN_MONTHLY_PRICES` on purpose — widening the `Plan` union would
+ * drag a non-tier through every feature matrix and picker. Every surface that
+ * quotes the hold price reads it from here (the `pricing-copy.test.ts`
+ * currency-literal guard forbids spelling it into copy).
  */
-export const OUTLET_ADDON_MONTHLY_PRICES: Record<BillingCurrency, number> = {
-	MYR: 4900,
-	SGD: 1900,
+export const HOLD_MONTHLY_PRICES: Record<BillingCurrency, number> = {
+	MYR: 1900,
+	SGD: 900,
 };
 
 /**
@@ -261,18 +466,66 @@ export const ANNUAL_MONTHS_RECEIVED = 12;
  * claim can never contradict what `planPrice` actually charges. */
 export const ANNUAL_MONTHS_FREE = ANNUAL_MONTHS_RECEIVED - ANNUAL_MONTHS_CHARGED;
 
-/** Plan price for a billing cycle (minor units). Annual = monthly × 10. */
+/** A LISTED tier's price for a billing cycle (minor units). Annual = monthly
+ * × 10. Enterprise is priced by its contract — see `enterprisePrice`, and
+ * `subscriptionPrice` for code that bills any tier. */
 export function planPrice(
-	plan: Plan,
+	plan: ListedPlan,
 	cycle: BillingCycle,
 	founding = false,
 	currency: BillingCurrency = "MYR",
 ): number {
 	const monthly =
-		founding && (plan === "pro" || plan === "scale")
-			? FOUNDING_MONTHLY_PRICES[currency][plan]
+		founding && plan === "pro"
+			? FOUNDING_MONTHLY_PRICES[currency].pro
 			: PLAN_MONTHLY_PRICES[currency][plan];
 	return cycle === "annual" ? monthly * ANNUAL_MONTHS_CHARGED : monthly;
+}
+
+/** What an Enterprise contract prices by: its monthly fee, in the currency it
+ * was agreed in (a Singapore deal is SGD minor units — never converted). */
+export type EnterpriseTerms = {
+	baseFeeMinor: number;
+	currency: BillingCurrency;
+};
+
+/**
+ * An Enterprise bill for a cycle (T6): the contract's monthly fee, × 10 for a
+ * year — the same "2 months free" every tier gets (HSL: RM888 a month, RM8,880
+ * a year, fee and rate locked for the term). Founding never applies.
+ */
+export function enterprisePrice(
+	terms: EnterpriseTerms,
+	cycle: BillingCycle,
+): number {
+	return cycle === "annual"
+		? terms.baseFeeMinor * ANNUAL_MONTHS_CHARGED
+		: terms.baseFeeMinor;
+}
+
+/**
+ * Any tier's price for a cycle — the list tables, or the contract for an
+ * Enterprise store. A money path must never guess: an Enterprise subscription
+ * without its contract THROWS (the contract mutation makes that unreachable —
+ * a store only becomes Enterprise by getting one, and can't drop it while it
+ * is).
+ */
+export function subscriptionPrice(
+	plan: Plan,
+	cycle: BillingCycle,
+	opts: {
+		founding: boolean;
+		currency: BillingCurrency;
+		enterprise: EnterpriseTerms | undefined;
+	},
+): number {
+	if (plan !== "enterprise")
+		return planPrice(plan, cycle, opts.founding, opts.currency);
+	if (!opts.enterprise)
+		throw new Error(
+			"An Enterprise subscription is priced by its contract, and this one has none.",
+		);
+	return enterprisePrice(opts.enterprise, cycle);
 }
 
 /**
@@ -304,7 +557,7 @@ export type AnnualQuote = {
 };
 
 export function annualQuote(
-	plan: Plan,
+	plan: ListedPlan,
 	founding = false,
 	currency: BillingCurrency = "MYR",
 ): AnnualQuote {
@@ -319,11 +572,489 @@ export function annualQuote(
 	};
 }
 
+/** Days in a billing cycle — the flat slabs `nextPeriodEnd` grants. */
+export function cycleDays(cycle: BillingCycle): number {
+	return cycle === "annual" ? 365 : 30;
+}
+
+/**
+ * Extra days granted on the new plan for value the seller had already paid for
+ * — the "credit as days" model for a mid-cycle change.
+ *
+ * The seller pays the ordinary full price for the new plan, so the invoice
+ * stays a bog-standard service bill: the gateway amount check, the saved-method
+ * consent guard, the PDF totals and the MRR figure all keep working untouched.
+ * What they had left over comes back as TIME rather than as a discount.
+ *
+ *   valueLeft   = fromPrice × daysLeft / fromCycleDays
+ *   carryover   = valueLeft ÷ (toPrice / toCycleDays)
+ *
+ * Day-rates rather than a naive price ratio, so crossing cycles is right too:
+ * RM26 left on a monthly Starter buys 5 days of monthly Pro but only hours of
+ * an annual Pro, because an annual plan's daily rate is far lower per ringgit
+ * paid. Both prices are read at the seller's OWN founding rate and currency.
+ *
+ * Deliberately called at SETTLE, never at issue: on the manual rail a seller
+ * can pay up to 14 days after the invoice is cut, and `daysLeft` must be the
+ * days genuinely still unused when the money lands. Priced at issue, a
+ * late-paid upgrade would buy days that had already elapsed — the flaw that
+ * sank the charge-the-difference design.
+ *
+ * Applies to ANY invoice settled while a paid period is still running, not
+ * just upgrades: the rule is simply that a seller never loses time they have
+ * already bought. That also fixes early renewals, which used to forfeit the
+ * remainder silently.
+ *
+ * Rounds to the nearest whole day (flooring quietly shaves up to a day of paid
+ * value); returns 0 once the period has lapsed, so it can never resurrect a
+ * period that had already run out.
+ */
+export type PlanChangeCarryover = {
+	/** Whole days still unused on the plan being left. */
+	daysLeft: number;
+	/** What those days are worth, in minor units, at the OLD plan's rate. */
+	valueLeftSen: number;
+	/** What that value buys at the NEW plan's daily rate. */
+	days: number;
+};
+
+export type PlanChangeCarryoverArgs = {
+	fromPlan: Plan;
+	fromCycle: BillingCycle;
+	toPlan: Plan;
+	toCycle: BillingCycle;
+	founding: boolean;
+	currency: BillingCurrency;
+	/** The store's Enterprise contract, when either side is Enterprise — its
+	 * days are valued at the contract fee. Absent on an Enterprise side, no
+	 * days carry (never a guess on a money path). */
+	enterprise?: EnterpriseTerms;
+	/** The period the seller already paid for. */
+	periodEnd: number | undefined;
+	now: number;
+};
+
+/**
+ * The same conversion as `planChangeCarryoverDays`, with its WORKING shown.
+ *
+ * The seller-facing copy needs all three numbers, not just the answer: told
+ * only "16 days carry over" while their billing page says the plan runs
+ * another 30, the natural reading is that 14 days were confiscated. What
+ * actually carries is the MONEY — every sen of it — and the day count shrinks
+ * only because the tier they are moving to costs more per day. Quoting the
+ * days left and their value is what makes that land (Zaki, 13 Sep 2026).
+ */
+export function planChangeCarryover(
+	args: PlanChangeCarryoverArgs,
+): PlanChangeCarryover {
+	const none: PlanChangeCarryover = { daysLeft: 0, valueLeftSen: 0, days: 0 };
+	if (args.periodEnd === undefined) return none;
+	const msLeft = args.periodEnd - args.now;
+	if (msLeft <= 0) return none;
+	const priceOf = (plan: Plan, cycle: BillingCycle): number =>
+		plan === "enterprise"
+			? args.enterprise
+				? enterprisePrice(args.enterprise, cycle)
+				: 0
+			: planPrice(plan, cycle, args.founding, args.currency);
+	const fromPrice = priceOf(args.fromPlan, args.fromCycle);
+	const toPrice = priceOf(args.toPlan, args.toCycle);
+	if (fromPrice <= 0 || toPrice <= 0) return none;
+	const daysLeftExact = msLeft / DAY_MS;
+	const valueLeft = (fromPrice * daysLeftExact) / cycleDays(args.fromCycle);
+	const newDailyRate = toPrice / cycleDays(args.toCycle);
+	return {
+		// Both rounded from the SAME fractional remainder, so "N days, worth RM X"
+		// always reconciles against the old plan's price.
+		daysLeft: Math.round(daysLeftExact),
+		valueLeftSen: Math.round(valueLeft),
+		days: Math.round(valueLeft / newDailyRate),
+	};
+}
+
+export function planChangeCarryoverDays(args: PlanChangeCarryoverArgs): number {
+	return planChangeCarryover(args).days;
+}
+
+/** Tier order, low to high. Plan changes are classified by RANK, never by
+ * price: a founding Pro (RM104) undercuts a list Starter… no it doesn't, but a
+ * promo or a price reset could, and a seller on an ANNUAL Starter (RM790)
+ * moving to a MONTHLY Pro (RM149) would read as a "downgrade" on price while
+ * being an unmistakable tier upgrade. Rank is total and survives any repricing. */
+export function planRank(plan: Plan): number {
+	return PLANS.indexOf(plan);
+}
+
+/** True when `to` is a higher tier than `from` (the immediate, pay-now
+ * direction); false for same-tier or lower (the scheduled direction). */
+export function isPlanUpgrade(from: Plan, to: Plan): boolean {
+	return planRank(to) > planRank(from);
+}
+
+/**
+ * The free period's BACKSTOP, in days (start-when-you-sell, z8r3fday24). A new
+ * store is free until its FIRST LIVE ORDER — any channel — or until this many
+ * days pass, whichever comes first; that moment issues the first invoice
+ * (`invoices.internalIssueFirstInvoice`). So this is no longer "the trial
+ * length": most stores end their free period earlier, by selling. Copy calls it
+ * "day 15" (the invoice lands the day after 14 full free days).
+ */
 export const TRIAL_DAYS = 14;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Days a seller has to pay an invoice once it's issued, when the admin form
+ * doesn't set its own due date (`insertPendingInvoice`).
+ *
+ * The FIRST invoice's grace is also the public trial (Zaki, 30 Sep 2026): it
+ * is issued with the store's first order, and until it's paid the store keeps
+ * everything in Pro, capped at `TRIAL_CREDIT_GRANT` orders. So "14 days or 200
+ * orders from your first order, whichever comes first" is THIS number and that
+ * one — `/pricing`, the landing teaser and the emails read both from here,
+ * never a literal, so moving the grace moves the promise with it.
+ */
+export const INVOICE_DUE_GRACE_DAYS = 14;
+
 /** Founding cohort size — first 10 paying Pro retailers. */
 export const FOUNDING_MEMBER_LIMIT = 10;
+
+/**
+ * Founding-benefit retention window (Zaki, 3 Sep 2026; unchanged z8r3fdfyw5):
+ * founding benefits survive a subscription lapse of up to 3 months. Sit unpaid
+ * longer and the daily pass REVOKES them for good
+ * (`foundingMembers.internalRevokeLapsedBenefits`) — the rank and badge stay,
+ * permanently, exactly as the agreement and the billing ribbon promise.
+ * Surfaced on the billing tab's founding ribbon, its T-14 warning banner and
+ * the plan picker — never enforced silently.
+ *
+ * CONFIRMED by Arif, 19 Sep 2026 (z8r3fdfyw5) — 90 days is the number. It had
+ * existed only here and in docs/hitpay-recurring.md, from a verbal call, which
+ * is why it was flagged: the signed agreement (86exq9kz9) still reads "RM104/mo
+ * for life" with no lapse clause, so the code was the only record of the rule
+ * it enforces. Change it here and the cron gate, the T-14 warning, the emails
+ * and every surfaced date move together.
+ */
+export const FOUNDING_PRICE_LAPSE_MS = 90 * DAY_MS;
+
+/** How long before benefits end the seller is warned (z8r3fdfyw5): one email +
+ * one billing-tab banner, so nothing is taken without notice. */
+export const FOUNDING_BENEFIT_WARNING_MS = 14 * DAY_MS;
+
+export type FoundingEligibilityArgs = {
+	isFoundingMember: boolean;
+	foundingIntent: boolean;
+	paidThrough: number | undefined;
+	/** `retailers.foundingBenefitsRevokedAt` — set = benefits ended for good.
+	 * REQUIRED, not optional: every caller must answer it, so a new pricing path
+	 * cannot forget to and quietly re-grant a revoked discount. */
+	benefitsRevokedAt: number | undefined;
+	/** `retailers.foundingBenefitsRestoredAt` — an admin re-grant, and the floor
+	 * the window measures from. Also required, for the same reason: a pricing
+	 * path that ignored it would quote list price to a member Arif just
+	 * restored. */
+	benefitsRestoredAt: number | undefined;
+	now: number;
+};
+
+/**
+ * The instant a founding member's benefits end if they never pay: their
+ * paid-through plus the window. The ONE author of that date — the cron's
+ * revoke gate, the T-14 warning gate, the warning email and the billing-tab
+ * banner all read it, so "ends 28 Oct" on the page cannot disagree with the
+ * day the cron actually takes it. Undefined when there is no paid period to
+ * measure from (a founding trial that never paid — nothing to lapse).
+ */
+export function foundingBenefitsEndAt(
+	paidThrough: number | undefined,
+	benefitsRestoredAt?: number,
+): number | undefined {
+	const from = foundingClockFrom(paidThrough, benefitsRestoredAt);
+	return from === undefined ? undefined : from + FOUNDING_PRICE_LAPSE_MS;
+}
+
+/**
+ * The moment the founding lapse clock runs FROM: normally the store's
+ * paid-through, but never earlier than an admin's re-grant (z8r3fdfyw5).
+ *
+ * A re-grant has to move the clock or it does nothing. Clearing the revocation
+ * stamp alone left `foundingPriceEligible`'s window measured from a
+ * paid-through that had already expired, so Arif's "Restore benefits" was a
+ * no-op for the exact population it exists for — the lapsed members — and the
+ * next daily pass revoked them again and sent a second "ended" email. Restored
+ * members now get a fresh full window, warned again at T-14 before it lapses a
+ * second time, on identical terms.
+ *
+ * A store that never paid is left alone: `paidThrough === undefined` keeps its
+ * "nothing has lapsed, fail toward the promise" meaning rather than starting a
+ * clock a re-grant would otherwise invent.
+ */
+export function foundingClockFrom(
+	paidThrough: number | undefined,
+	benefitsRestoredAt: number | undefined,
+): number | undefined {
+	if (paidThrough === undefined) return undefined;
+	return benefitsRestoredAt === undefined
+		? paidThrough
+		: Math.max(paidThrough, benefitsRestoredAt);
+}
+
+/**
+ * Whether this STORE is on founding pricing right now — for any tier that has
+ * a founding price. Tier-agnostic on purpose: `planPrice` already confines the
+ * discount to Pro, so the store-level answer is the one to hand to
+ * anything that prices MORE than one tier (the billing page's plan cards, a
+ * Starter → Pro carryover). Asking `foundingPricingApplies` with the store's
+ * CURRENT plan instead answers "no" for a founding member sitting on Starter,
+ * which then prices their move back up to Pro at list (z8r3fdfty4).
+ *
+ * Order matters: a CLAIMED member is judged on the lapse window even though
+ * their `foundingIntent` flag is never cleared after the claim — intent alone
+ * only covers the unclaimed first conversion, which has no lapse to measure.
+ * `paidThrough` is the subscription's `currentPeriodEnd` (undefined = never
+ * had a paid period → fail toward the promise).
+ */
+export function foundingPriceEligible(args: FoundingEligibilityArgs): boolean {
+	// REVOKED OUTRANKS EVERYTHING, and is checked before the `foundingIntent`
+	// fallback on purpose (z8r3fdfyw5). That fallback is the trap: a claimed
+	// member's `foundingIntent` is never cleared, and it carries NO lapse check —
+	// so any revocation that merely cleared `isFoundingMember` would drop through
+	// to `return args.foundingIntent` and hand the store founding pricing
+	// *forever*, the exact opposite of revoking it. Short-circuiting here makes
+	// that unreachable by construction instead of by remembering to clear a
+	// second flag. Mutation-tested: delete this line and plans.test.ts goes red.
+	if (args.benefitsRevokedAt !== undefined) return false;
+	if (args.isFoundingMember) {
+		// Measured from the re-grant when there is one, or the whole lever is a
+		// no-op: a restored member's paid-through is, by definition, already past
+		// the window.
+		const from = foundingClockFrom(args.paidThrough, args.benefitsRestoredAt);
+		if (from === undefined) return true;
+		return args.now - from <= FOUNDING_PRICE_LAPSE_MS;
+	}
+	return args.foundingIntent;
+}
+
+/**
+ * Whether a NEW invoice for `plan` (renewal or self-serve) bills at the
+ * founding price. One rule for every automated issuer — the admin issue form
+ * keeps its explicit founding checkbox (Arif's judgment can override either
+ * way). Store eligibility (`foundingPriceEligible`) narrowed to the tiers that
+ * carry a founding price.
+ */
+export function foundingPricingApplies(
+	args: FoundingEligibilityArgs & { plan: Plan },
+): boolean {
+	if (args.plan !== "pro") return false;
+	return foundingPriceEligible(args);
+}
+
+/** Everything the daily pass needs to judge one founding member's benefits. */
+export type FoundingLapseGateArgs = {
+	status: "trialing" | "active" | "past_due" | "cancelled" | "on_hold";
+	/** A comped store isn't billed at all — there is no lapse to measure. */
+	comped: boolean;
+	/** The subscription's `currentPeriodEnd`. */
+	paidThrough: number | undefined;
+	benefitsRevokedAt: number | undefined;
+	/** An admin re-grant — the floor the clock measures from. */
+	benefitsRestoredAt: number | undefined;
+	now: number;
+};
+
+/**
+ * Is this member's clock RUNNING — i.e. are their benefits on the path to being
+ * taken at all? The one author of that question (z8r3fdfyw5): the revoke gate,
+ * the warning gate and the date the seller is SHOWN all ask it, so the billing
+ * page can never count down to a deadline the cron will not enforce.
+ *
+ * That split was a real bug, found by testing against an aged store: the ribbon
+ * derived its countdown from `currentPeriodEnd` alone and showed a red "your
+ * founding price ends on 29 Sept" alert to a store the pass skips — most
+ * plausibly a COMPED founding member, who would be threatened with losing a
+ * discount that can never actually be taken.
+ *
+ * Four never-touch cases, all of them a store that is square with us:
+ *  - already revoked — revocation is once, and re-granting is Arif's to do;
+ *  - `on_hold` — AN OFF-SEASON HOLD IS A PAYING STORE. Its monthly hold invoice
+ *    advances `currentPeriodEnd` at settle, so paid-through protects it too;
+ *    both guards are deliberate, and both are pinned by a test;
+ *  - `active` — either mid-period, or a renewal invoice still inside its grace;
+ *  - `comped`, or no paid period at all (`paidThrough` undefined — a founding
+ *    trial that never paid: nothing has lapsed, so we fail toward the promise,
+ *    exactly as `foundingPriceEligible` does).
+ */
+export function foundingBenefitsAtRisk(args: FoundingLapseGateArgs): boolean {
+	if (args.benefitsRevokedAt !== undefined) return false;
+	if (args.comped) return false;
+	if (args.status === "active" || args.status === "on_hold") return false;
+	return foundingBenefitsEndAt(args.paidThrough, args.benefitsRestoredAt) !== undefined;
+}
+
+/**
+ * Should the daily pass revoke this member's founding benefits? The EXACT
+ * complement of `foundingPriceEligible` for a claimed member whose clock is
+ * running: eligibility survives while `now <= paidThrough + window`, so
+ * revocation needs `now > paidThrough + window`. A day-90 boundary where both
+ * said "yes" would revoke a member the billing page was still quoting the
+ * discount to, which is the one inconsistency this pairing exists to make
+ * impossible (invariant-tested in plans.test.ts).
+ */
+export function foundingBenefitsRevocable(args: FoundingLapseGateArgs): boolean {
+	if (!foundingBenefitsAtRisk(args)) return false;
+	const endAt = foundingBenefitsEndAt(args.paidThrough, args.benefitsRestoredAt);
+	if (endAt === undefined) return false;
+	return args.now > endAt;
+}
+
+/**
+ * Should the T-14 "your founding price ends on {date}" notice go out? Same
+ * never-touch cases as revocation, narrowed to the warning window and deduped
+ * per PAID PERIOD rather than per member: `sentForPeriodEnd` holds the
+ * `currentPeriodEnd` the last warning was about, so paying (which advances the
+ * period) lets a future lapse warn again — no clearing logic to forget. The
+ * window closes at `endAt`, which the daily cadence always reaches first: 14
+ * daily runs sit between T-14 and T-0.
+ */
+export function foundingBenefitsWarningDue(
+	args: FoundingLapseGateArgs & { sentForPeriodEnd: number | undefined },
+): boolean {
+	if (!foundingBenefitsAtRisk(args)) return false;
+	const endAt = foundingBenefitsEndAt(args.paidThrough, args.benefitsRestoredAt);
+	if (endAt === undefined) return false;
+	if (args.sentForPeriodEnd === args.paidThrough) return false;
+	return args.now >= endAt - FOUNDING_BENEFIT_WARNING_MS && args.now <= endAt;
+}
+
+/**
+ * The one tier a store on founding pricing is billed for (Zaki, 17 Sep 2026).
+ * Founding Members stay on Founding Pro: no plan change, no Starter. What they
+ * CAN do is stop renewing (turn auto-renewal off). A subscription that then
+ * lapses past `FOUNDING_PRICE_LAPSE_MS` has its benefits REVOKED (z8r3fdfyw5),
+ * and from there the store is an ordinary seller again, free to pick any plan —
+ * permanently, since the revocation outranks the read-time window. The lock
+ * needs no code for that: it keys off `foundingPriceEligible`, so it opens the
+ * moment revocation lands (pinned by a test). A founding member who wants
+ * more volume tops up (their 300 credits a month already beat Pro's 200); a
+ * founding store can never be put on an Enterprise contract.
+ */
+export const FOUNDING_PLAN = "pro" satisfies Plan;
+
+/** True when a store on founding pricing asks to be billed for any tier but
+ * Founding Pro — every self-serve plan path refuses it server-side, and the
+ * billing page never offers it. */
+export function foundingPlanLocked(plan: Plan, foundingEligible: boolean): boolean {
+	return foundingEligible && plan !== FOUNDING_PLAN;
+}
+
+/**
+ * The ONE currency Kedaipal bills a store in: its country's — every invoice,
+ * renewal, plan change, top-up pack and Pay-now link (86eyp7hn7, Zaki 28 Oct
+ * 2026). Billing in another country's currency means the store's country
+ * changes first, through its owner's country switch; there is no per-invoice
+ * override. It used to follow the last PAID invoice, which let one bill issued
+ * in the wrong currency (the admin form defaulted to MYR) stick to a
+ * Singapore store for every renewal after it. An Enterprise contract is the
+ * one exception: its currency is agreed and frozen with the deal.
+ */
+export function storeBillingCurrency(
+	country: Country | undefined,
+): BillingCurrency {
+	return BILLING_CURRENCY_FOR_COUNTRY[country ?? DEFAULT_COUNTRY];
+}
+
+/** Everything the NEXT renewal bill will say — see `renewalQuote`. */
+export type RenewalQuote = {
+	/** A paused store renews the Off-Season Hold, not its tier. */
+	kind: "plan" | "hold";
+	/** The tier billed. A scheduled downgrade lands with the renewal, so this is
+	 * the scheduled plan when there is one — except on a hold bill, where it is
+	 * the tier the seller resumes to (the downgrade waits for the first tier
+	 * bill after they resume), and for a store on founding pricing, whose
+	 * scheduled downgrade is cancelled by the founding lock. */
+	plan: Plan;
+	/** A hold always bills one month. */
+	billingCycle: BillingCycle;
+	/** Never on a hold bill — the hold price is flat. */
+	founding: boolean;
+	currency: BillingCurrency;
+	/** Minor units — exactly the `total` the renewal invoice is written with. */
+	amount: number;
+};
+
+/**
+ * What a store's next renewal bills: the ONE author of that answer. The cron's
+ * renewal invoice, the pre-charge heads-up email, HitPay's authorisation page
+ * and the seller's billing page all read it, so "RM104 on the page, RM149 on
+ * the bill" cannot happen by construction (z8r3fdfty4).
+ */
+export function renewalQuote(args: {
+	status: "trialing" | "active" | "past_due" | "cancelled" | "on_hold";
+	plan: Plan;
+	billingCycle: BillingCycle;
+	pendingPlanChange: Plan | undefined;
+	isFoundingMember: boolean;
+	foundingIntent: boolean;
+	paidThrough: number | undefined;
+	/** `retailers.foundingBenefitsRevokedAt` — a revoked member's renewal is an
+	 * ordinary Pro bill, and the scheduled-downgrade lock opens with it. */
+	benefitsRevokedAt: number | undefined;
+	/** `retailers.foundingBenefitsRestoredAt` — an admin re-grant re-prices the
+	 * next renewal at the founding rate, which is the promise the dialog makes. */
+	benefitsRestoredAt: number | undefined;
+	country: Country | undefined;
+	/** The store's Enterprise contract, if it has one. Required as a KEY so
+	 * every caller answers it: an Enterprise renewal bills the contract, in
+	 * the contract's currency, and never a list price. */
+	enterprise: EnterpriseTerms | undefined;
+	now: number;
+}): RenewalQuote {
+	const currency = storeBillingCurrency(args.country);
+	if (args.status === "on_hold") {
+		return {
+			kind: "hold",
+			plan: args.plan,
+			billingCycle: "monthly",
+			founding: false,
+			currency,
+			amount: HOLD_MONTHLY_PRICES[currency],
+		};
+	}
+	// Founding Members stay on Founding Pro (Zaki, 17 Sep 2026): a downgrade
+	// scheduled before the lock existed is CANCELLED here — never billed — and
+	// the renewal issuer consumes the flag as it writes the Founding Pro bill.
+	const scheduled =
+		args.pendingPlanChange !== undefined &&
+		!foundingPlanLocked(args.pendingPlanChange, foundingPriceEligible(args))
+			? args.pendingPlanChange
+			: undefined;
+	const plan = scheduled ?? args.plan;
+	if (plan === "enterprise") {
+		// The contract prices it, in the currency it was agreed in; founding
+		// never applies. `subscriptionPrice` throws on a missing contract —
+		// a renewal must never be issued at a guessed amount.
+		return {
+			kind: "plan",
+			plan,
+			billingCycle: args.billingCycle,
+			founding: false,
+			currency: args.enterprise?.currency ?? currency,
+			amount: subscriptionPrice(plan, args.billingCycle, {
+				founding: false,
+				currency,
+				enterprise: args.enterprise,
+			}),
+		};
+	}
+	const founding = foundingPricingApplies({ ...args, plan });
+	return {
+		kind: "plan",
+		plan,
+		billingCycle: args.billingCycle,
+		founding,
+		currency,
+		amount: planPrice(plan, args.billingCycle, founding, currency),
+	};
+}
 
 /** Caps to denormalize onto a subscription for a plan. Resolves `Infinity` to a
  * large sentinel so it survives Convex's number storage + JSON. */
@@ -338,10 +1069,51 @@ export function capsForPlan(plan: Plan): PlanCaps {
 	};
 }
 
-/** Sentinel for "unlimited" denormalized caps (Convex stores finite numbers;
- * `Infinity` isn't valid JSON). Any cap ≥ this is treated as unlimited. */
-export const UNLIMITED = 1_000_000_000;
+/** The tier whose FEATURES "full access" resolves to. Full access is what a
+ * Kedaipal admin gets on their own store and what a comped store gets
+ * (z8r3fdeub2) — one definition, so the two can never drift. The top tier. */
+export const FULL_ACCESS_PLAN: Plan = "enterprise";
 
-export function isUnlimited(cap: number): boolean {
-	return cap >= UNLIMITED;
+/**
+ * Does this store get FULL ACCESS — every feature and no limits of any kind?
+ *
+ * THE one author of that question, so the entitlement caps
+ * (`fullAccessCaps` below), the credit gate (`storeIsMetered`,
+ * convex/lib/credits.ts) and the product cap (convex/lib/productCap.ts) can
+ * never disagree about which stores are uncapped. They disagreed once and it
+ * shipped: z8r3fdp4er took admin stores out of the credit system but left
+ * comped ones metered, so a sponsored seller read "200 of 200" over a bar
+ * while this module's own caps said unlimited (z8r3fdrph7).
+ *
+ * Two stores qualify, by Zaki's decision of 17 Sep 2026 — "a comp gets the
+ * same limit as admin":
+ *  - an admin's OWN store (dogfooding, never billed);
+ *  - a SPONSORED store (`subscriptions.comped`).
+ *
+ * The missing-subscription-row FAIL-SAFE also resolves to full access, but it
+ * does so in `resolveAccess`'s own `!sub` branch rather than here: it is a
+ * data fault, not a granted sponsorship, and the credit gate deliberately
+ * keeps it METERED (never locked) so its volume still leaves a record. Pass a
+ * store that has a row; one without is answered upstream.
+ */
+export function storeHasFullAccess(args: {
+	ownerIsAdmin: boolean;
+	comped: boolean;
+}): boolean {
+	return args.ownerIsAdmin || args.comped;
+}
+
+/** Entitlement caps for full access: no limits on anything — orders, seats or
+ * broadcasts (Zaki, 17 Sep: a comp gets "the same limit as admin"). Resolved
+ * at read time by `resolveAccess`, never stored, so turning full access off
+ * needs no cap rewrite. The product cap follows the same answer via
+ * `storeHasFullAccess` (it is not a `PlanCaps` entry, because catalogue size
+ * is still not a tier lever — see convex/lib/productCap.ts). When broadcasts
+ * ship, this is where their cost for admin + comped stores gets decided. */
+export function fullAccessCaps(): PlanCaps {
+	return {
+		orderCap: UNLIMITED,
+		userCap: UNLIMITED,
+		broadcastQuota: UNLIMITED,
+	};
 }

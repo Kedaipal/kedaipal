@@ -14,10 +14,27 @@
  */
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { internalMutation } from "./_generated/server";
+import { ensureCreditAccount } from "./credits";
+import { storeOwnerIsAdmin } from "./lib/auth";
 import { generateTrackingToken } from "./lib/order";
+import { capsForPlan } from "./lib/plans";
+import { legacyClaimFromOrder } from "./lib/paymentClaims";
 import { isOrderPaymentMethod } from "./lib/paymentMethod";
-import { createCategoryNameMemo, resolveCategoryNames } from "./orders";
+import {
+	ensurePromoRunCounter,
+	loadPromoRunUnits,
+	tallyPromoUnits,
+} from "./lib/promoTally";
+import {
+	synthesizeDefaultStages,
+	type StatusLabels,
+} from "./lib/orderStatus";
+import {
+	createCategoryNameMemo,
+	resolveCategoryNames,
+} from "./lib/orderCategoryNames";
 
 const BATCH_SIZE = 50;
 
@@ -342,5 +359,492 @@ export const migrateLalamoveModeToLive = internalMutation({
 			);
 		}
 		return { migrated, isDone: page.isDone };
+	},
+});
+
+/**
+ * Re-sync the denormalized entitlement caps on every subscription row to the
+ * current `PLAN_CAPS` (30 Aug 2026 pricing reset, z8r3fday24: Pro 500 → 200;
+ * Credits T6 retired Scale for Enterprise, whose seats are unlimited). The
+ * caps are copied onto the row at signup and at every settle, so a constant
+ * change alone leaves every EXISTING seller on the old denominator — "N of
+ * 500" in Settings → Billing under a page that says 200.
+ *
+ * Idempotent: rows already at the canonical caps are skipped. The patch
+ * deliberately leaves `updatedAt` alone — for a past_due row that field is the
+ * lock-flip moment the founder report reads (docs/shipped-log.md).
+ *
+ * The table is one row per store (≈ hundreds), so a single collect is fine.
+ * Run: `npx convex run migrations:resyncSubscriptionCaps`
+ */
+/**
+ * Flag every unresolved `gatewayIssue` stamped before `gatewayIssueOpen`
+ * existed, so the admin "Payments to review" queue (which reads the
+ * `by_gateway_issue_open` index) sees them. Invoices are one-per-cycle rows,
+ * so a full collect is fine at this table's size — this is a one-off, not a
+ * hot path.
+ *
+ * Idempotent: already-flagged and already-resolved rows are skipped.
+ *
+ * Run on dev:  `npx convex run migrations:backfillGatewayIssueOpen`
+ * Run on PROD: `npx convex run migrations:backfillGatewayIssueOpen --prod`
+ * (write `--prod` yourself — the bare command runs against DEV and reports
+ * success, which reads exactly like a prod run that worked).
+ */
+export const backfillGatewayIssueOpen = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ scanned: number; flagged: number }> => {
+		const invoices = await ctx.db.query("invoices").collect();
+		let flagged = 0;
+		for (const inv of invoices) {
+			if (!inv.gatewayIssue) continue;
+			if (inv.gatewayIssue.resolvedAt !== undefined) continue;
+			if (inv.gatewayIssueOpen === true) continue;
+			await ctx.db.patch(inv._id, { gatewayIssueOpen: true });
+			flagged++;
+		}
+		return { scanned: invoices.length, flagged };
+	},
+});
+
+export const resyncSubscriptionCaps = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ scanned: number; patched: number }> => {
+		const subs = await ctx.db.query("subscriptions").collect();
+		let patched = 0;
+		for (const sub of subs) {
+			const caps = capsForPlan(sub.plan);
+			if (
+				sub.orderCap === caps.orderCap &&
+				sub.userCap === caps.userCap &&
+				sub.broadcastQuota === caps.broadcastQuota
+			)
+				continue;
+			await ctx.db.patch(sub._id, {
+				orderCap: caps.orderCap,
+				userCap: caps.userCap,
+				broadcastQuota: caps.broadcastQuota,
+			});
+			patched++;
+		}
+		return { scanned: subs.length, patched };
+	},
+});
+
+/**
+ * Move each retailer's global status vocabulary onto the per-kind `orderFlows`
+ * field (`z8r3fdh3w1`) — the *migrate* stage of widen→migrate→narrow.
+ *
+ * What changes on the seller's screen: **nothing**. The resolver already reads
+ * the legacy `orderStages` / `statusLabels` pair as a fallback for
+ * `delivery` + `self_collect`, so an un-migrated store behaves identically.
+ * This exists so the *narrow* (dropping both legacy fields and the
+ * `statusLabels` arg on `retailers.update`) has nothing left to break.
+ *
+ * The mapping is the only one the data supports: the flat list and the rename
+ * map could only ever have meant the two product kinds, because those were the
+ * only kinds a seller could see when they wrote them. Bookings and event RSVPs
+ * get nothing — which is the bug fix, and is already live via the resolver.
+ *
+ * Both product kinds receive the SAME list, because that is what they resolve
+ * to today; the seller can then diverge them per card. A store with no legacy
+ * config at all is skipped entirely rather than being pinned to four empty
+ * arrays — absent already means "on defaults" once the legacy fields are gone.
+ *
+ * Idempotent: a retailer that already carries an `orderFlows` key for a kind is
+ * never overwritten, so a re-run after a crash resumes cleanly and a seller who
+ * customised a kind between batches keeps their edit.
+ *
+ * Run on dev:  `npx convex run migrations:backfillOrderFlows`
+ * Run on PROD: `npx convex run migrations:backfillOrderFlows --prod`
+ *
+ * **Write `--prod` yourself.** The bare command runs against DEV and reports
+ * success, which reads exactly like a prod run that worked
+ * (docs/release-checklist.md calls this out as the standing trap).
+ *
+ * Not release-blocking: the resolver falls back to the legacy pair for
+ * delivery/self_collect, so stores behave correctly un-migrated. This is the
+ * prerequisite for the NARROW (`z8r3fdhq1x`), which drops those fields.
+ */
+export const backfillOrderFlows = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const page = await ctx.db
+			.query("retailers")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+
+		let patched = 0;
+		for (const retailer of page.page) {
+			const legacyStages = retailer.orderStages;
+			const legacyLabels = retailer.statusLabels;
+			const hasLegacy =
+				(legacyStages?.length ?? 0) > 0 ||
+				(legacyLabels !== undefined &&
+					Object.values(legacyLabels).some(
+						(perLocale) =>
+							perLocale && Object.values(perLocale).some((l) => l?.trim()),
+					));
+			if (!hasLegacy) continue;
+
+			// The list the two product kinds resolve to TODAY. When the seller
+			// configured stages that's their list; when they only renamed, it's
+			// the synthesized defaults with the renames folded in — which is
+			// exactly a rename expressed as stages (the two were always the same
+			// thing, see docs/order-status-customization.md).
+			const existing = retailer.orderFlows ?? {};
+			const next = { ...existing };
+			let changed = false;
+			for (const kind of ["delivery", "self_collect"] as const) {
+				if (next[kind] !== undefined) continue; // seller already answered
+				next[kind] =
+					legacyStages && legacyStages.length > 0
+						? legacyStages
+						: synthesizeDefaultStages({
+								labels: legacyLabels as StatusLabels | undefined,
+								deliveryMethod: kind,
+							});
+				changed = true;
+			}
+			if (!changed) continue;
+
+			// The legacy fields are deliberately LEFT IN PLACE. They stop being
+			// read the moment every kind has an answer, and the narrow deletes
+			// them — keeping them here means this migration is reversible by
+			// clearing `orderFlows`, with nothing lost in between.
+			await ctx.db.patch(retailer._id, { orderFlows: next });
+			patched++;
+		}
+
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.migrations.backfillOrderFlows, {
+				cursor: page.continueCursor,
+			});
+		}
+		return { patched, isDone: page.isDone };
+	},
+});
+
+/**
+ * Kedaipal Credits (86eye2ccu): open a credit account for every existing
+ * store — the AFTER-DEPLOY step of the credits release (listed in the release
+ * PR's operator checklist). Each store opens with the grant its status earns
+ * today, for the current usage period: the one-off trial allowance (200), its
+ * plan's monthly grant (Founding Pro 300, an Enterprise contract's included
+ * credits), or nothing while past_due / on hold — that grant lands the moment
+ * they pay or resume. An UNMETERED store (admin-owned or comped) is skipped
+ * entirely: `ensureCreditAccount` answers null for it (z8r3fdp4er +
+ * z8r3fdrph7), so it opens no account at all. The
+ * FULL grant, never "grant minus this month's orders": nobody starts the
+ * credits era in debt or locked. No welcome credits (dropped 17 Sep 2026).
+ *
+ * Idempotent (a store that already has an account — opened at signup, or by
+ * its first order since the deploy — is only rolled, never re-granted) and
+ * batched: each run handles one page and schedules the next, so it is run
+ * ONCE per deployment. Returns this page's counts; every page logs its own.
+ */
+export const backfillCreditAccounts = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (
+		ctx,
+		{ cursor },
+	): Promise<{ scanned: number; created: number; isDone: boolean }> => {
+		const now = Date.now();
+		const page = await ctx.db
+			.query("retailers")
+			.paginate({ numItems: 100, cursor: cursor ?? null });
+		let created = 0;
+		for (const retailer of page.page) {
+			const ensured = await ensureCreditAccount(ctx, retailer._id, now);
+			if (ensured?.created) created++;
+		}
+		console.log("[credits] backfill page", {
+			scanned: page.page.length,
+			created,
+			isDone: page.isDone,
+		});
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillCreditAccounts,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { scanned: page.page.length, created, isDone: page.isDone };
+	},
+});
+
+/**
+ * Give every order claimed before `paymentClaims` existed (z8r3fdn2uj) its one
+ * history row, rebuilt from the order's own fields by `legacyClaimFromOrder` —
+ * the same rebuild the seller's order page shows meanwhile, so running this
+ * changes nothing a seller sees; it only makes the history real rows.
+ *
+ * Idempotent: an order that already has a row (claimed after deploy, or
+ * already backfilled) is skipped, and an order nobody claimed has nothing to
+ * rebuild. `updatedAt` is NOT bumped — recording history isn't a change to the
+ * sale. Batched + self-scheduling.
+ *
+ * Run: `npx convex run migrations:backfillPaymentClaims`
+ */
+export const backfillPaymentClaims = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const page = await ctx.db
+			.query("orders")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+
+		let inserted = 0;
+		for (const order of page.page) {
+			const legacy = legacyClaimFromOrder(order);
+			if (!legacy) continue;
+			const existing = await ctx.db
+				.query("paymentClaims")
+				.withIndex("by_order_createdAt", (q) => q.eq("orderId", order._id))
+				.first();
+			if (existing) continue;
+			await ctx.db.insert("paymentClaims", { orderId: order._id, ...legacy });
+			inserted++;
+		}
+
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillPaymentClaims,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { inserted, isDone: page.isDone };
+	},
+});
+
+/**
+ * Mint the flash-sale units counter (`promoRunUnits`, 86eyjv002) for every
+ * capped run that went live BEFORE the table existed — the MIGRATE step.
+ * Until a run has a row the catalogue falls back to tallying orders, which is
+ * correct but is the scan this ticket removed; the NARROW (deleting that
+ * fallback from `promoUnitsTaken`) waits on this having run on prod.
+ *
+ * Also a drift check, so it is safe to re-run at any time: a run that already
+ * has a row is recounted from the orders, and a row that disagrees is SET to
+ * the tally (the doors' authority) and reported. A clean run reports
+ * `drifted: 0` in every product's log line — anything else means a seam was
+ * missed and is a bug.
+ *
+ * ONE PRODUCT PER TRANSACTION. Each capped product costs one collect of the
+ * store's orders in its sale window — measured at ~2.5 KB an order, so ten of
+ * them in one page blew the 16 MiB read limit on a 2,000-order store (Phase 1,
+ * 2 Nov). The page mutation only finds capped products and schedules
+ * `backfillPromoRunUnitsOne` for each, so no transaction reads more than the
+ * order door already reads for that product on every sale.
+ *
+ * Run: `npx convex run migrations:backfillPromoRunUnits`
+ */
+export const backfillPromoRunUnits = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (
+		ctx,
+		{ cursor },
+	): Promise<{ scanned: number; scheduled: number; isDone: boolean }> => {
+		const page = await ctx.db
+			.query("products")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+		let scheduled = 0;
+		for (const product of page.page) {
+			if (product.promo?.unitCap === undefined) continue;
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillPromoRunUnitsOne,
+				{ productId: product._id },
+			);
+			scheduled++;
+		}
+		console.log("[promoRunUnits] backfill page", {
+			scanned: page.page.length,
+			scheduled,
+			isDone: page.isDone,
+		});
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillPromoRunUnits,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { scanned: page.page.length, scheduled, isDone: page.isDone };
+	},
+});
+
+/** One capped product's mint-or-recount — see `backfillPromoRunUnits`. Also
+ * scheduled by the promotion apply queue for a KEPT run with no counter yet,
+ * so a batch of members never tallies more than one product per transaction. */
+export const backfillPromoRunUnitsOne = internalMutation({
+	args: { productId: v.id("products") },
+	handler: async (
+		ctx,
+		{ productId },
+	): Promise<{ minted: boolean; drifted: boolean }> => {
+		const now = Date.now();
+		const product = await ctx.db.get(productId);
+		const promo = product?.promo;
+		if (!product || promo?.unitCap === undefined)
+			return { minted: false, drifted: false };
+		if (await ensurePromoRunCounter(ctx, product, now, "unknown")) {
+			console.log("[promoRunUnits] minted", { productId, runId: promo.runId });
+			return { minted: true, drifted: false };
+		}
+		const row = await loadPromoRunUnits(ctx, productId, promo.runId);
+		if (row === null) return { minted: false, drifted: false };
+		const tally = await tallyPromoUnits(ctx, {
+			retailerId: product.retailerId,
+			productId,
+			runId: promo.runId,
+			startsAt: promo.startsAt ?? 0,
+			endsAt: promo.endsAt,
+		});
+		if (row.units === tally) return { minted: false, drifted: false };
+		console.warn("[promoRunUnits] counter drifted from the tally — reset", {
+			productId,
+			runId: promo.runId,
+			counter: row.units,
+			tally,
+		});
+		await ctx.db.patch(row._id, { units: tally, updatedAt: now });
+		return { minted: false, drifted: true };
+	},
+});
+
+/**
+ * Purge the credit data of ADMIN-OWNED stores (z8r3fdp4er).
+ *
+ * A Kedaipal admin's own store is outside the credit system: `regimeFor`
+ * answers `null` for it, so nothing reads or writes its account any more. The
+ * rows it grew while it WAS metered are inert — but they sit below the current
+ * usage period forever, so `credits:internalRollPeriods` re-selects them on
+ * every sweep and can never advance them. This removes them.
+ *
+ * DELIBERATELY NARROWER THAN `storeIsMetered` (z8r3fdrph7). A SPONSORED
+ * (comped) store is unmetered too, and its rows are inert for the same
+ * reason — but it can hold BOUGHT credits, 12-month `creditLots` a seller
+ * paid real money for before the comp was switched on. A comp is a toggle an
+ * admin can turn off, and when it goes off the store is metered again and
+ * those lots must still be there. Purging them would destroy credits we sold.
+ * So this is keyed on admin ownership alone, not on the gate beside it, and
+ * an admin's own store can never be in that position (it is never sold a
+ * pack — `topUpRefusal` refuses it). Sponsored stores keep their rows inert
+ * instead, and `internalExpireLots` still retires their lots on schedule
+ * (it reads the account directly, not the regime), so nothing freezes and
+ * nothing is resurrected when a comp ends.
+ *
+ * DRY RUN BY DEFAULT. With no args it reports what it would delete and touches
+ * nothing.
+ *
+ * DELETING NAMES ITS TARGETS. `apply: true` also requires `retailerIds`, and
+ * every id must be in the unmetered set this run found — so the operator has
+ * to have READ the dry run's store names before anything is deleted. The
+ * unmetered check alone is not a safety net against the dangerous direction
+ * of a mis-set `ADMIN_USER_IDS` (PR #343 review): an admin id MISSING is
+ * harmless here, but a paying seller's id wrongly ADDED makes their store
+ * unmetered, and a purge keyed only on "is it unmetered?" would select it by
+ * the very same mistake. Naming the ids puts a human between the env var and
+ * the delete.
+ *
+ * Capped per run so a long ledger can't hit the transaction limit: `done`
+ * comes back false when a table filled its cap — run it again until true.
+ *
+ * Run:
+ *   npx convex run migrations:purgeUnmeteredCreditData
+ *   npx convex run migrations:purgeUnmeteredCreditData '{"apply":true,"retailerIds":["<id from the dry run>"]}'
+ */
+const PURGE_CAP = 1000;
+export const purgeUnmeteredCreditData = internalMutation({
+	args: {
+		apply: v.optional(v.boolean()),
+		/** Required with `apply` — the stores to purge, as the dry run named
+		 * them. An id the run did not find unmetered is refused. */
+		retailerIds: v.optional(v.array(v.id("retailers"))),
+	},
+	handler: async (
+		ctx,
+		{ apply, retailerIds },
+	): Promise<{
+		applied: boolean;
+		/** False when a table filled `PURGE_CAP` — run it again. */
+		done: boolean;
+		stores: Array<{
+			retailerId: Id<"retailers">;
+			storeName: string;
+			accounts: number;
+			lots: number;
+			ledger: number;
+		}>;
+	}> => {
+		const stores: Array<{
+			retailerId: Id<"retailers">;
+			storeName: string;
+			accounts: number;
+			lots: number;
+			ledger: number;
+		}> = [];
+		let done = true;
+		const named = new Set<string>(retailerIds ?? []);
+		if (apply === true && named.size === 0)
+			throw new Error(
+				"Deleting needs the stores named: run it with no args first, then pass the retailerIds it reports as { apply: true, retailerIds: [...] }.",
+			);
+		const purged = new Set<string>();
+		for await (const retailer of ctx.db.query("retailers")) {
+			// Admin ownership, NOT `storeIsMetered` — see the note above on why
+			// a sponsored store's rows are deliberately left alone.
+			if (!storeOwnerIsAdmin(retailer)) continue;
+			const accounts = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.take(PURGE_CAP);
+			const lots = await ctx.db
+				.query("creditLots")
+				.withIndex("by_retailer_open_expiry", (q) =>
+					q.eq("retailerId", retailer._id),
+				)
+				.take(PURGE_CAP);
+			const ledger = await ctx.db
+				.query("creditLedger")
+				.withIndex("by_retailer_created", (q) =>
+					q.eq("retailerId", retailer._id),
+				)
+				.take(PURGE_CAP);
+			if (
+				accounts.length === PURGE_CAP ||
+				lots.length === PURGE_CAP ||
+				ledger.length === PURGE_CAP
+			)
+				done = false;
+			if (accounts.length + lots.length + ledger.length === 0) continue;
+			stores.push({
+				retailerId: retailer._id,
+				storeName: retailer.storeName,
+				accounts: accounts.length,
+				lots: lots.length,
+				ledger: ledger.length,
+			});
+			if (apply !== true || !named.has(retailer._id)) continue;
+			purged.add(retailer._id);
+			for (const row of [...ledger, ...lots, ...accounts])
+				await ctx.db.delete(row._id);
+		}
+		// An id that named nothing is a typo, or a store this run does not
+		// consider unmetered. Throwing here ROLLS THE WHOLE MUTATION BACK —
+		// including the deletes above — so a run is all-or-nothing and a
+		// fat-fingered id can never half-purge the book.
+		const unmatched = [...named].filter((id) => !purged.has(id));
+		if (apply === true && unmatched.length > 0)
+			throw new Error(
+				`These ids are not unmetered stores with credit data in this run, so nothing was deleted: ${unmatched.join(", ")}`,
+			);
+		console.log("[credits] unmetered purge", {
+			applied: apply === true,
+			done,
+			stores,
+		});
+		return { applied: apply === true, done, stores };
 	},
 });

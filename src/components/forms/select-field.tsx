@@ -1,5 +1,5 @@
-import { cn } from "../../lib/utils";
 import { Field, FieldDescription, FieldError, FieldLabel } from "../ui/field";
+import { Select } from "../ui/select";
 import { useFieldContext } from "./form";
 
 interface SelectFieldOption {
@@ -31,28 +31,25 @@ export function SelectField({
 				{label}
 				{required ? <span className="ml-0.5 text-destructive">*</span> : null}
 			</FieldLabel>
-			<select
+			{/* Chrome lives in the `Select` primitive, not here — a form-bound
+			    picker and a plain-state one must not look like two controls. */}
+			<Select
+				variant="field"
+				className="w-full"
 				id={field.name}
 				name={field.name}
 				disabled={disabled}
 				value={field.state.value ?? ""}
 				onChange={(e) => field.handleChange(e.target.value)}
 				onBlur={() => field.handleBlur()}
-				aria-invalid={isInvalid}
-				className={cn(
-					"min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none transition-colors",
-					"focus:border-ring focus:ring-2 focus:ring-ring/50",
-					"disabled:cursor-not-allowed disabled:opacity-60",
-					isInvalid &&
-						"border-destructive focus:border-destructive focus:ring-destructive/30",
-				)}
+				isError={isInvalid}
 			>
 				{options.map((opt) => (
 					<option key={opt.value} value={opt.value}>
 						{opt.label}
 					</option>
 				))}
-			</select>
+			</Select>
 			{description ? <FieldDescription>{description}</FieldDescription> : null}
 			{isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
 		</Field>

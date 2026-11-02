@@ -18,11 +18,36 @@ that a feature nobody is told about is a missing piece of UI, not a shipped one.
 
 | surface | when | why |
 | --- | --- | --- |
-| **Permanent panel** — "What's new" in the More menu (mobile) and sidebar footer (desktop) | always openable; carries a dot when something is unseen | a dismissed announcement must never become unreadable |
+| **Permanent panel** — "What's new" in the More menu (mobile) and sidebar footer (desktop) | always openable; carries a dot when something is unseen; shows the newest **five** releases, the rest behind "Show N older releases" | a dismissed announcement must never become unreadable |
 | **Modal** | opens unprompted **only** for a release marked `notable: true` | a modal on every release trains sellers to dismiss reflexively — and then the one that matters is dismissed too |
 
 Both read the same entries and the same seen-state, so the dot and the modal
 cannot disagree.
+
+### How many releases the panel shows
+
+`PANEL_RELEASE_LIMIT = 5` (`src/lib/releases.ts`). The array keeps every
+release forever — there is no separate changelog page, and the rule above says
+nothing may become unreadable — but the panel renders the newest five and folds
+the rest behind a **"Show N older releases"** button inside the scroll area.
+Every open starts folded; it is history the seller asked for once, not a
+preference.
+
+**Unseen releases are never folded.** `splitPanelReleases` stretches the cut
+to the number of unseen releases, so a seller back from a long gap (or a
+store act-as stamped with an old version) sees everything they missed without
+knowing to tap. Unseen releases are always the newest, so the unseen set is a
+prefix and the split is one slice.
+
+The whole array still ships in the dashboard bundle (~6 KB of prose per
+release). That is deliberate for now: the dashboard is Clerk-gated and not
+first-paint critical. If the file passes ~30 releases, move the older ones out
+of the bundle before adding a public changelog page — the two are separate
+decisions. A public page is **parked by decision**, not forgotten:
+[z8r3fddrya](https://app.clickup.com/t/z8r3fddrya) records why (the fold made it
+unnecessary as a readability fix; it earns its keep as a marketing surface) and
+the one trap it must handle — entries carry `/app` deep links that dead-end for
+a signed-out visitor.
 
 ## Where things live
 
@@ -103,6 +128,16 @@ worse than no entry at all. Keep them apart.
    | Delyva connect | `spotlightHref("delyva")` | `/app/settings?tab=integrations` |
    | Annual billing | `spotlightHref("annual_billing")` | `/app/settings?tab=billing` |
 
+   **A section on Home — same ring, no tab.** A registry row with
+   `page: "home"` renders `/app?spot=<key>`; Home validates the key against
+   its own and scrolls to the section once it has mounted (the Refer card
+   renders only after its query answers). Added for Refer a kedai, the last
+   section on Home — the one place a note landing at the top would miss.
+
+   | feature | ✅ | ❌ |
+   | --- | --- | --- |
+   | Refer a kedai | `spotlightHref("refer")` | `/app` |
+
    **A card on a product's form — two hops, same ring.** Some features live
    on ONE product's edit form rather than a settings tab (the weekend rate on
    a stay listing). A note can't know which product, so a registry row with
@@ -121,6 +156,20 @@ worse than no entry at all. Keep them apart.
    | feature | ✅ | ❌ |
    | --- | --- | --- |
    | Weekend rate | `spotlightHref("weekend_rate")` | `/app/products` |
+
+   **A card in the new-product wizard — `?card=`, not `?spot=`.** A feature
+   whose door is step 0 of `/app/products/new` (the Event card) is reached
+   with `/app/products/new?card=<card>`, which opens the wizard with that
+   card already **selected** (`z8r3fdhkr7`). A spotlight ring would be the
+   wrong tool there: step 0 pre-selects the store's own type with the same
+   mint border, so a ring on Event would sit beside a lit Food card and the
+   seller couldn't tell which one the note meant. Selecting it answers the
+   question instead of pointing at it, and a locked plan gets the tap's
+   refusal on arrival rather than a dead-end flow.
+
+   | feature | ✅ | ❌ |
+   | --- | --- | --- |
+   | Events | `/app/products/new?card=event` | `/app/products/new` |
 
    Adding a key: give the card an `id={SPOTLIGHT_ANCHOR.<key>.anchor}` and
    thread `highlight` to it (every settings tab takes a `target: CardTarget`

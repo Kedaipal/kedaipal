@@ -13,6 +13,9 @@ import {
 } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -366,7 +369,7 @@ describe("invoices.issueInvoice", () => {
 		expect((await getRetailer(t, retailerId))?.isFoundingMember).toBe(true);
 	});
 
-	test("defaults to MYR when no currency is passed (legacy call shape)", async () => {
+	test("a Malaysian store is billed in MYR — the admin never picks the currency", async () => {
 		const t = setup();
 		const { retailerId } = await seedPublic(t, "u_myr", "myr-store");
 		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
@@ -384,12 +387,13 @@ describe("invoices.issueInvoice", () => {
 	test("an SGD invoice bills from the SGD price table", async () => {
 		const t = setup();
 		const { retailerId } = await seedPublic(t, "u_sgd", "sgd-store");
+		// An SGD bill is an SG store's — the currency follows the country.
+		await t.run((ctx) => ctx.db.patch(retailerId, { country: "SG" }));
 		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
 			retailerId,
 			plan: "pro",
 			billingCycle: "monthly",
 			founding: false,
-			currency: "SGD",
 			dueDate: due(),
 		});
 		const inv = await getInvoice(t, invoiceId);
@@ -402,12 +406,13 @@ describe("invoices.issueInvoice", () => {
 	test("an SGD ANNUAL invoice charges 10 months, like MYR", async () => {
 		const t = setup();
 		const { retailerId } = await seedPublic(t, "u_sgd_a", "sgd-annual-store");
+		// An SGD bill is an SG store's — the currency follows the country.
+		await t.run((ctx) => ctx.db.patch(retailerId, { country: "SG" }));
 		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
 			retailerId,
 			plan: "starter",
 			billingCycle: "annual",
 			founding: false,
-			currency: "SGD",
 			dueDate: due(),
 		});
 		const inv = await getInvoice(t, invoiceId);
@@ -418,12 +423,13 @@ describe("invoices.issueInvoice", () => {
 	test("an SGD FOUNDING invoice bills S$41 and claims the rank when paid", async () => {
 		const t = setup();
 		const { retailerId } = await seedPublic(t, "u_sgd_f", "sgd-founding-store");
+		// An SGD bill is an SG store's — the currency follows the country.
+		await t.run((ctx) => ctx.db.patch(retailerId, { country: "SG" }));
 		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
 			retailerId,
 			plan: "pro",
 			billingCycle: "monthly",
 			founding: true,
-			currency: "SGD",
 			dueDate: due(),
 		});
 		const inv = await getInvoice(t, invoiceId);
@@ -435,18 +441,62 @@ describe("invoices.issueInvoice", () => {
 		expect((await getRetailer(t, retailerId))?.isFoundingMember).toBe(true);
 	});
 
-	test("rejects Scale + founding-non-Pro + duplicate pending + non-admin", async () => {
+	/**
+	 * Enterprise (Credits T6) has no list price: its invoice bills the store's
+	 * CONTRACT — the fee, the currency it was agreed in and its term — whatever
+	 * cycle the form sends, and founding never applies. No contract, no invoice.
+	 */
+	test("an Enterprise invoice bills the contract — never the form's cycle, never founding", async () => {
 		const t = setup();
-		const { retailerId } = await seedPublic(t, "u3", "store-3");
+		const { retailerId } = await seedPublic(t, "u_ent", "store-ent");
 		await expect(
 			asAdmin(t).mutation(api.invoices.issueInvoice, {
 				retailerId,
-				plan: "scale",
+				plan: "enterprise",
 				billingCycle: "monthly",
 				founding: false,
 				dueDate: due(),
 			}),
-		).rejects.toThrow(/scale is unavailable/i);
+		).rejects.toThrow(/contract first/);
+		await asAdmin(t).mutation(api.enterprise.setContract, {
+			retailerId,
+			baseFeeMinor: 88800,
+			includedCredits: 1500,
+			overageRateMinor: 60,
+			blockSize: 5000,
+			billingCycle: "annual",
+			contactName: "HSL Food GM",
+		});
+		const { invoiceId } = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+			dueDate: due(),
+		});
+		const inv = await getInvoice(t, invoiceId);
+		expect(inv).toMatchObject({
+			plan: "enterprise",
+			billingCycle: "annual",
+			total: 888000, // RM888 × 10 — the prepaid year
+			amount: 888000,
+			currency: "MYR",
+		});
+		expect(inv?.foundingDiscount).toBeUndefined();
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "enterprise",
+				billingCycle: "annual",
+				founding: true,
+				dueDate: due(),
+			}),
+		).rejects.toThrow(/only pro/i);
+	});
+
+	test("rejects founding-non-Pro + duplicate pending + non-admin", async () => {
+		const t = setup();
+		const { retailerId } = await seedPublic(t, "u3", "store-3");
 		await expect(
 			asAdmin(t).mutation(api.invoices.issueInvoice, {
 				retailerId,
@@ -613,7 +663,7 @@ describe("backfill", () => {
 });
 
 describe("daily billing cron", () => {
-	test("flips lapsed trial → past_due and overdue active → past_due, leaves comped", async () => {
+	test("lapsed trial → free period ends + first invoice scheduled (no lock); overdue active → past_due", async () => {
 		const t = setup();
 		// A trialing retailer whose trial has lapsed.
 		await t
@@ -653,8 +703,24 @@ describe("daily billing cron", () => {
 			internal.subscriptions.internalDailyBillingStatus,
 			{},
 		);
-		expect(res.trialExpired).toBe(1);
+		// Start-when-you-sell (z8r3fday24): the backstop ENDS the free period and
+		// writes the first bill — it no longer locks. Only that invoice going
+		// overdue locks (covered in startWhenYouSell.test.ts).
+		expect(res.trialExpired).toBe(0);
+		expect(res.firstInvoicesIssued).toBe(1);
 		expect(res.overdue).toBe(1);
+		const trialSub = await t.run(async (ctx) => {
+			const tr = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "trial-store"))
+				.first();
+			return ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", tr!._id))
+				.first();
+		});
+		expect(trialSub?.status).toBe("trialing");
+		expect(trialSub?.freePeriodEndReason).toBe("backstop");
 
 		expect((await getSubFor(t, foundingId))?.status).toBe("past_due");
 	});
@@ -741,7 +807,7 @@ describe("daily billing cron", () => {
 		expect(second.trialReminders).toBe(0);
 	});
 
-	test("locks an active vendor whose period lapsed with NO pending invoice", async () => {
+	test("period lapsed with NO pending invoice → auto-issues the renewal, never locks (86eyb6z4r)", async () => {
 		const t = setup();
 		const { retailerId, invoiceId } = await seedFounding(t, "u_laps", "laps-store");
 		// Settle the invoice (no pending left), then expire the paid period.
@@ -758,15 +824,56 @@ describe("daily billing cron", () => {
 			internal.subscriptions.internalDailyBillingStatus,
 			{},
 		);
-		expect(res.lapsed).toBe(1);
-		expect((await getSubFor(t, retailerId))?.status).toBe("past_due");
+		// The old behavior locked here (`lapsed`); the machine now writes the
+		// renewal bill instead and the seller keeps access through its grace.
+		expect(res.renewalsIssued).toBe(1);
+		expect((await getSubFor(t, retailerId))?.status).toBe("active");
+
+		// Run the issuance the cron scheduled (invoked directly — fake timers
+		// hold scheduled functions, and the mutation is the thing under test)
+		// and check the bill it wrote: renewal origin, founding discount
+		// preserved (lifetime), same plan/cycle.
+		const subscriptionId = (await getSubFor(t, retailerId))?._id;
+		if (!subscriptionId) throw new Error("no subscription");
+		const issued = await t.mutation(
+			internal.invoices.internalIssueRenewalInvoice,
+			{ subscriptionId },
+		);
+		expect(issued.issued).toBe(true);
+		expect(issued.autoCharge).toBe(false); // no saved method on this store
+		const renewal = await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return rows.find((inv) => inv.status === "pending");
+		});
+		expect(renewal).toBeDefined();
+		expect(renewal?.origin).toBe("auto_renewal");
+		expect(renewal?.plan).toBe("pro");
+		// seedFounding claims the rank at markPaid → the renewal keeps the 30%.
+		expect(renewal?.foundingDiscount).toBeGreaterThan(0);
+		expect(renewal?.currency).toBe("MYR"); // follows the last PAID invoice
+
+		// Idempotent both ways: a second direct call no-ops on the pending
+		// invoice, and a second cron run schedules nothing new.
+		const reissued = await t.mutation(
+			internal.invoices.internalIssueRenewalInvoice,
+			{ subscriptionId },
+		);
+		expect(reissued.issued).toBe(false);
+		const again = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(again.renewalsIssued).toBe(0);
 	});
 
-	test("does NOT lapse-lock while a pending invoice still gives grace", async () => {
+	test("does NOT re-issue while a pending invoice still gives grace", async () => {
 		const t = setup();
 		const { retailerId } = await seedFounding(t, "u_grace", "grace-store");
 		// A converted (active) vendor: period ended, but the invoice is still pending +
-		// due in the future, so grace holds.
+		// due in the future, so grace holds and no new bill is written.
 		await t.run(async (ctx) => {
 			const sub = await ctx.db
 				.query("subscriptions")
@@ -782,8 +889,187 @@ describe("daily billing cron", () => {
 			internal.subscriptions.internalDailyBillingStatus,
 			{},
 		);
-		expect(res.lapsed).toBe(0);
+		expect(res.renewalsIssued).toBe(0);
 		expect((await getSubFor(t, retailerId))?.status).toBe("active");
+	});
+
+	test("picks up a due auto-charge retry while a renewal invoice pends (86eyb6z4r)", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "u_rty", "rty-store");
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			const now = Date.now();
+			await ctx.db.patch(sub!._id, {
+				autoRenewSessionId: "rb_rty",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: now,
+					failedAttempts: 1,
+					nextRetryAt: now - 60_000, // retry window arrived
+				},
+			});
+			await ctx.db.insert("invoices", {
+				retailerId,
+				subscriptionId: sub!._id,
+				invoiceNumber: "INV-RTY-2",
+				plan: "pro" as const,
+				billingCycle: "monthly" as const,
+				amount: 10400,
+				total: 10400,
+				currency: "MYR",
+				periodStart: now,
+				periodEnd: now + 30 * 86400000,
+				dueDate: now + 10 * 86400000,
+				status: "pending" as const,
+				origin: "auto_renewal" as const,
+				createdAt: now,
+			});
+		});
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.autoChargeRetries).toBe(1);
+	});
+
+	test("auto-renew sellers get ONE pre-charge notice per cycle; updatedAt untouched", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "u_ntc", "ntc-store");
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		const before = await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			const now = Date.now();
+			await ctx.db.patch(sub!._id, {
+				currentPeriodEnd: now + 2 * 24 * 60 * 60 * 1000, // inside the window
+				autoRenewSessionId: "rb_ntc",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "touch_n_go",
+					attachedAt: now,
+				},
+			});
+			return (await ctx.db.get(sub!._id))?.updatedAt;
+		});
+
+		const first = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(first.renewalNotices).toBe(1);
+		const sub = await getSubFor(t, retailerId);
+		expect(sub?.renewalNoticeSentForPeriodEnd).toBe(sub?.currentPeriodEnd);
+		// The stamp must NOT touch updatedAt — for past_due rows that field is
+		// the lock-flip moment the founder report reads (docs/shipped-log.md).
+		expect(sub?.updatedAt).toBe(before);
+
+		const second = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(second.renewalNotices).toBe(0);
+	});
+
+	test("no reminder while the machine is mid-flight on the same money — and it still goes out once resolved", async () => {
+		// "Pay this invoice" is a double-payment nudge while a sent charge's
+		// outcome is unknown, or while a stranded charge waits on a human.
+		const t = setup();
+		const DAY = 24 * 60 * 60 * 1000;
+		const { retailerId, invoiceId } = await seedFounding(t, "u_norem", "norem-store");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				status: "active",
+				currentPeriodEnd: Date.now() + 20 * DAY,
+				autoRenewSessionId: "rb_rem",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+					// Outcome unknown, young enough that the retry sweep stays
+					// quiet — this test is about the reminder alone.
+					lastChargeAttemptAt: Date.now() - 60_000,
+					pendingChargeInvoiceId: invoiceId,
+				},
+			});
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() + 2 * DAY });
+		});
+
+		const held = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(held.remindersSent).toBe(0);
+		// NOT stamped — the skip must not eat the reminder for good.
+		expect((await t.run((ctx) => ctx.db.get(invoiceId)))?.reminderSentAt)
+			.toBeUndefined();
+
+		// The question resolves (decline recorded), the bill is still unpaid
+		// and still inside the window: NOW the reminder goes out.
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				autoRenew: {
+					...sub!.autoRenew!,
+					lastChargeAttemptAt: undefined,
+					pendingChargeInvoiceId: undefined,
+				},
+			});
+		});
+		const resolved = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(resolved.remindersSent).toBe(1);
+	});
+
+	test("a stranded charge holds the reminder the same way", async () => {
+		const t = setup();
+		const DAY = 24 * 60 * 60 * 1000;
+		const { retailerId, invoiceId } = await seedFounding(t, "u_norem2", "norem2-store");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				status: "active",
+				currentPeriodEnd: Date.now() + 20 * DAY,
+				autoRenewSessionId: "rb_rem2",
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+					strandedCharge: {
+						invoiceId,
+						invoiceNumber: "INV-OLD",
+						amountSen: 14900,
+						currency: "MYR",
+						paymentId: "reconciled:rb_rem2:1",
+						at: Date.now() - DAY,
+					},
+				},
+			});
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() + 2 * DAY });
+		});
+		const run = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(run.remindersSent).toBe(0);
 	});
 
 	test("reminders fire again next cycle — dedup is per-invoice, not per-vendor", async () => {
@@ -1013,5 +1299,1275 @@ describe("invoices.markPaid — subscribe_paid key event (z8r3fdd1v1)", () => {
 		const renewal = jobs[1] as { params?: Record<string, unknown> };
 		expect(renewal.params?.first_time).toBe(false);
 		expect(renewal.params?.value).toBe(149);
+	});
+});
+
+/**
+ * Mid-cycle tier changes (86eyb6z4r) — the four scenarios a seller can walk,
+ * end to end through the real mutations. The pure arithmetic is pinned in
+ * plans.test.ts; this block pins what the MONEY and the ACCESS do: an upgrade
+ * bills full price and hands back the unused days, a downgrade charges nothing
+ * and takes nothing away until the period already paid for runs out, and the
+ * guards refuse the states where either would be wrong.
+ */
+describe("invoices.changePlan — mid-cycle tier moves", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
+	/** An ACTIVE, paying seller mid-period — the only state a plan CHANGE applies
+	 * to (everyone else is choosing a plan, which is the picker's job). */
+	async function seedActive(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+		opts: { plan: "starter" | "pro"; daysLeft: number; country?: "MY" | "SG" },
+	) {
+		const asUser = t.withIdentity({ subject: userId });
+		await asUser.mutation(api.retailers.createRetailer, {
+			storeName: `Store ${slug}`,
+			slug,
+		});
+		const retailerId = await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			if (!r) throw new Error("no retailer");
+			if (opts.country) await ctx.db.patch(r._id, { country: opts.country });
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r._id))
+				.first();
+			if (!sub) throw new Error("no sub");
+			const now = Date.now();
+			await ctx.db.patch(sub._id, {
+				plan: opts.plan,
+				billingCycle: "monthly",
+				status: "active",
+				currentPeriodStart: now - (30 - opts.daysLeft) * DAY,
+				currentPeriodEnd: now + opts.daysLeft * DAY,
+			});
+			return r._id;
+		});
+		return { asUser, retailerId };
+	}
+
+	const pendingFor = (
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+	) =>
+		t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.collect();
+			return rows.filter((inv) => inv.status === "pending");
+		});
+
+	test("A — upgrade bills FULL price now and the unused days come back as days", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_up", "up-store", {
+			plan: "starter",
+			daysLeft: 10,
+		});
+		const at = Date.now();
+
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		expect(res.kind).toBe("invoiced");
+		// No saved method on this store → the seller pays the invoice by hand.
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+		expect(res.chargingSavedMethod).toBe(false);
+
+		const invoice = await getInvoice(t, res.invoiceId);
+		// Full Pro, never a prorated difference — a part-price invoice is what
+		// the design review killed (a small unpaid top-up inherits the service
+		// bill's lifecycle and soft-locks a fully paid store).
+		expect(invoice?.total).toBe(14900);
+		expect(invoice?.plan).toBe("pro");
+		expect(invoice?.billingCycle).toBe("monthly");
+		expect(invoice?.origin).toBe("self_serve");
+
+		// Nothing moves until the money lands — still Starter, still their caps.
+		const before = await getSubFor(t, retailerId);
+		expect(before?.plan).toBe("starter");
+
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId: res.invoiceId });
+		const after = await getSubFor(t, retailerId);
+		expect(after?.plan).toBe("pro");
+		// Pro's allowance since the 30 Aug pricing reset (z8r3fday24).
+		expect(after?.orderCap).toBe(200);
+		// 10 unused Starter days (RM79/30 a day) buy 5 Pro days (RM149/30 a day),
+		// added on top of the fresh 30 — so 35, not 30 and not 40.
+		expect(after?.currentPeriodEnd).toBe(at + 30 * DAY + 5 * DAY);
+	});
+
+	test("A3 — a founding member's Starter → Founding Pro upgrade carries days at THEIR rate (z8r3fdfty4)", async () => {
+		// Admin-marked founding (rank flag, `foundingIntent` unset) — the v1 path
+		// most of the cohort took. The billing page quotes the carryover at the
+		// founding Pro rate; settle used to ask "does STARTER have a founding
+		// price?" (no) and price it at list, granting 5 days where 8 were shown.
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_fup", "fup-store", {
+			plan: "starter",
+			daysLeft: 10,
+		});
+		await t.run(async (ctx) =>
+			ctx.db.patch(retailerId, { isFoundingMember: true, foundingMemberRank: 5 }),
+		);
+		const at = Date.now();
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+		expect((await getInvoice(t, res.invoiceId))?.total).toBe(10400);
+
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId: res.invoiceId });
+		// 10 Starter days (RM79/30 a day) buy 8 Founding Pro days (RM104/30 a
+		// day) — at list Pro (RM149/30) the same value buys only 5.
+		expect((await getSubFor(t, retailerId))?.currentPeriodEnd).toBe(
+			at + 30 * DAY + 8 * DAY,
+		);
+	});
+
+	test("A4 — the settled invoice states the period the money actually bought", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_rcpt", "rcpt-store", {
+			plan: "starter",
+			daysLeft: 10,
+		});
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+
+		// Issued now, paid 6 days later — so the period runs from the PAYMENT,
+		// not the issue date, and carries the 4 Starter days still unused.
+		const issued = await getInvoice(t, res.invoiceId);
+		vi.setSystemTime(Date.now() + 6 * DAY);
+		const paidAt = Date.now();
+		await asAdmin(t).mutation(api.invoices.markPaid, {
+			invoiceId: res.invoiceId,
+		});
+
+		const settled = await getInvoice(t, res.invoiceId);
+		const sub = await getSubFor(t, retailerId);
+		// The receipt (PDF prints exactly these two) matches the service the
+		// seller actually holds — a mismatch is a document understating what was
+		// bought, which is the one thing a receipt must not do.
+		expect(settled?.periodStart).toBe(paidAt);
+		expect(settled?.periodEnd).toBe(sub?.currentPeriodEnd);
+		// And it is genuinely corrected, not coincidentally equal to the estimate.
+		expect(settled?.periodStart).not.toBe(issued?.periodStart);
+		expect(settled?.periodEnd).not.toBe(issued?.periodEnd);
+		// 4 Starter days left ≈ 2 Pro days, on top of the fresh 30.
+		expect(settled?.periodEnd).toBe(paidAt + 32 * DAY);
+	});
+
+	test("A5 — a plain renewal's receipt still covers exactly its own cycle", async () => {
+		// The no-carryover case: nothing should move but the dates, and the span
+		// must stay a whole cycle so the founder report's legacy span fallback
+		// (monthsInInvoicePeriod) can never read a part-month.
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_span", "span-store", {
+			plan: "starter",
+			daysLeft: 0,
+		});
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+		const paidAt = Date.now();
+		await asAdmin(t).mutation(api.invoices.markPaid, {
+			invoiceId: res.invoiceId,
+		});
+		const settled = await getInvoice(t, res.invoiceId);
+		expect(settled?.periodEnd).toBe(paidAt + 30 * DAY);
+		expect(
+			((settled?.periodEnd ?? 0) - (settled?.periodStart ?? 0)) / DAY,
+		).toBe(30);
+		expect((await getSubFor(t, retailerId))?.plan).toBe("pro");
+	});
+
+	test("A2 — an upgrade paid LATE credits only the days still unused", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_late", "late-store", {
+			plan: "starter",
+			daysLeft: 10,
+		});
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+
+		// The manual rail is 14 days wide. Settle 8 days after the invoice was
+		// written: only 2 Starter days are left to credit, and the arithmetic
+		// must be done at SETTLE, not at issue.
+		vi.setSystemTime(Date.now() + 8 * DAY);
+		const at = Date.now();
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId: res.invoiceId });
+		const after = await getSubFor(t, retailerId);
+		expect(after?.plan).toBe("pro");
+		// 2 Starter days ≈ 1 Pro day.
+		expect(after?.currentPeriodEnd).toBe(at + 30 * DAY + 1 * DAY);
+	});
+
+	test("A3 — an upgrade settled AFTER the period lapsed credits nothing", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_lapse", "lapse-store", {
+			plan: "starter",
+			daysLeft: 3,
+		});
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+		vi.setSystemTime(Date.now() + 5 * DAY);
+		const at = Date.now();
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId: res.invoiceId });
+		// Nothing was left to carry — a plain 30-day period, no negative credit.
+		expect((await getSubFor(t, retailerId))?.currentPeriodEnd).toBe(at + 30 * DAY);
+	});
+
+	test("B — downgrade is SCHEDULED: no invoice, no loss of access today", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_dn", "dn-store", {
+			plan: "pro",
+			daysLeft: 12,
+		});
+		const periodEnd = (await getSubFor(t, retailerId))?.currentPeriodEnd;
+
+		const res = await asUser.mutation(api.invoices.changePlan, {
+			plan: "starter",
+		});
+		expect(res.kind).toBe("scheduled");
+		if (res.kind !== "scheduled") throw new Error("expected a schedule");
+		// It lands exactly when the period they paid for runs out — the date the
+		// dialog and the banner both quote.
+		expect(res.effectiveAt).toBe(periodEnd);
+
+		// Charges nothing, and takes nothing away yet.
+		expect(await pendingFor(t, retailerId)).toHaveLength(0);
+		const sub = await getSubFor(t, retailerId);
+		expect(sub?.plan).toBe("pro");
+		expect(sub?.orderCap).toBe(200);
+		expect(sub?.pendingPlanChange?.plan).toBe("starter");
+
+		// And it's reversible right up to the moment it lands.
+		await asUser.mutation(api.invoices.cancelPlanChange, {});
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	test("B2 — a scheduled downgrade never moves updatedAt (the past_due lock stamp)", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_stamp", "stamp-store", {
+			plan: "pro",
+			daysLeft: 12,
+		});
+		const before = (await getSubFor(t, retailerId))?.updatedAt;
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+		expect((await getSubFor(t, retailerId))?.updatedAt).toBe(before);
+	});
+
+	test("C — the scheduled plan is what the renewal invoice bills, once", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_land", "land-store", {
+			plan: "pro",
+			daysLeft: 1,
+		});
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+
+		// The period runs out — the cron notices and writes the renewal bill.
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { currentPeriodEnd: Date.now() - 1000 });
+		});
+		const cron = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(cron.renewalsIssued).toBe(1);
+
+		const subscriptionId = (await getSubFor(t, retailerId))?._id;
+		if (!subscriptionId) throw new Error("no subscription");
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [renewal] = await pendingFor(t, retailerId);
+		// Billed at STARTER, not the Pro they were on — the whole point.
+		expect(renewal?.plan).toBe("starter");
+		expect(renewal?.total).toBe(7900);
+		expect(renewal?.origin).toBe("auto_renewal");
+		// The intent is consumed by the bill that honoured it, so a second cycle
+		// can't re-downgrade a seller who has since moved back up.
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
+
+		// Access only actually drops when that bill is paid.
+		if (!renewal) throw new Error("no renewal invoice");
+		expect((await getSubFor(t, retailerId))?.plan).toBe("pro");
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId: renewal._id });
+		const after = await getSubFor(t, retailerId);
+		expect(after?.plan).toBe("starter");
+		expect(after?.orderCap).toBe(100);
+	});
+
+	test("C3 — voiding the renewal that carried a downgrade keeps the downgrade scheduled", async () => {
+		// The renewal consumed the seller's scheduled move to Starter when it
+		// was issued. An admin voiding that bill (a wrong due date, a retry)
+		// must not quietly turn their choice into a Pro renewal — auto-charged
+		// if they have a saved method. Calling it off is the seller's own act.
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_rearm", "rearm-store", {
+			plan: "pro",
+			daysLeft: 1,
+		});
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+		const subscriptionId = (await getSubFor(t, retailerId))?._id;
+		if (!subscriptionId) throw new Error("no subscription");
+		await t.run((ctx) =>
+			ctx.db.patch(subscriptionId, { currentPeriodEnd: Date.now() - 1000 }),
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [renewal] = await pendingFor(t, retailerId);
+		expect(renewal?.plan).toBe("starter");
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
+		if (!renewal) throw new Error("no renewal invoice");
+
+		await asAdmin(t).mutation(api.invoices.voidInvoice, {
+			invoiceId: renewal._id,
+		});
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange?.plan).toBe(
+			"starter",
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [again] = await pendingFor(t, retailerId);
+		expect(again).toMatchObject({ plan: "starter", total: 7900 });
+	});
+
+	test("C4 — voiding an ordinary renewal schedules nothing", async () => {
+		const t = setup();
+		const { retailerId } = await seedActive(t, "u_plainvoid", "plain-void-store", {
+			plan: "pro",
+			daysLeft: 1,
+		});
+		const subscriptionId = (await getSubFor(t, retailerId))?._id;
+		if (!subscriptionId) throw new Error("no subscription");
+		await t.run((ctx) =>
+			ctx.db.patch(subscriptionId, { currentPeriodEnd: Date.now() - 1000 }),
+		);
+		await t.mutation(internal.invoices.internalIssueRenewalInvoice, {
+			subscriptionId,
+		});
+		const [renewal] = await pendingFor(t, retailerId);
+		if (!renewal) throw new Error("no renewal invoice");
+		await asAdmin(t).mutation(api.invoices.voidInvoice, {
+			invoiceId: renewal._id,
+		});
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	test("C2 — moving back up supersedes a scheduled downgrade", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_undo", "undo-store", {
+			plan: "pro",
+			daysLeft: 9,
+		});
+		await asUser.mutation(api.invoices.changePlan, { plan: "starter" });
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeDefined();
+
+		// They're on Pro, so "up" means dropping to Starter first isn't needed —
+		// cancelling is the seller-facing route, but a *later* upgrade invoice
+		// must clear the intent too or the renewal would undo what they paid for.
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { plan: "starter" });
+		});
+		await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		expect((await getSubFor(t, retailerId))?.pendingPlanChange).toBeUndefined();
+	});
+
+	test("D — the guards: open invoice, wrong status, same plan, on the house", async () => {
+		const t = setup();
+
+		// An unpaid bill already on the table — a second one is how a seller ends
+		// up past_due on a plan they never got.
+		const open = await seedActive(t, "u_g1", "g1-store", {
+			plan: "starter",
+			daysLeft: 10,
+		});
+		await open.asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		await expect(
+			open.asUser.mutation(api.invoices.changePlan, { plan: "pro" }),
+		).rejects.toThrow(/Settle your open invoice/);
+
+		// Not active → the plan PICKER is the right door (it starts a period).
+		const locked = await seedActive(t, "u_g2", "g2-store", {
+			plan: "starter",
+			daysLeft: 2,
+		});
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", locked.retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { status: "past_due" });
+		});
+		await expect(
+			locked.asUser.mutation(api.invoices.changePlan, { plan: "pro" }),
+		).rejects.toThrow(/active subscription/);
+
+		// Already there.
+		const same = await seedActive(t, "u_g3", "g3-store", {
+			plan: "pro",
+			daysLeft: 5,
+		});
+		await expect(
+			same.asUser.mutation(api.invoices.changePlan, { plan: "pro" }),
+		).rejects.toThrow(/already on pro/);
+
+		// Comped pilots never pay, so there is no tier to move between.
+		const comped = await seedActive(t, "u_g4", "g4-store", {
+			plan: "pro",
+			daysLeft: 5,
+		});
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", comped.retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { comped: true });
+		});
+		await expect(
+			comped.asUser.mutation(api.invoices.changePlan, { plan: "starter" }),
+		).rejects.toThrow(/on the house/);
+	});
+
+	test("D2 — an SG seller's upgrade is invoiced in SGD", async () => {
+		const t = setup();
+		const { asUser } = await seedActive(t, "u_sg", "sg-store", {
+			plan: "starter",
+			daysLeft: 10,
+			country: "SG",
+		});
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+		const invoice = await getInvoice(t, res.invoiceId);
+		expect(invoice?.currency).toBe("SGD");
+		expect(invoice?.total).toBe(5900);
+	});
+
+	test("D3 — a founding member upgrading is billed THEIR price, not list", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedActive(t, "u_fnd2", "fnd2-store", {
+			plan: "starter",
+			daysLeft: 10,
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailerId, { isFoundingMember: true });
+		});
+		const res = await asUser.mutation(api.invoices.changePlan, { plan: "pro" });
+		if (res.kind !== "invoiced") throw new Error("expected an invoice");
+		const invoice = await getInvoice(t, res.invoiceId);
+		expect(invoice?.total).toBe(10400);
+		expect(invoice?.foundingDiscount).toBe(4500);
+	});
+});
+
+/**
+ * Post-lock recovery chain (z8r3fdg3mh). Before this, `invoiceOverdue` on the
+ * lock transition was the LAST thing a lapsing seller ever heard from us —
+ * `cancelled` is never reached, so they sat at `past_due` in silence forever.
+ */
+describe("post-lock recovery chain (z8r3fdg3mh)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
+	/** A store locked over an invoice that went overdue `daysAgo` days ago. */
+	async function seedLocked(
+		t: ReturnType<typeof setup>,
+		userId: string,
+		slug: string,
+		daysAgo: number,
+	) {
+		const { retailerId, invoiceId } = await seedFounding(t, userId, slug);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { status: "past_due" });
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - daysAgo * DAY });
+		});
+		return { retailerId, invoiceId };
+	}
+
+	test("+3d past due → stage 1, stamped and not re-sent on the next run", async () => {
+		const t = setup();
+		const { invoiceId } = await seedLocked(t, "u_rec1", "rec-1", 3);
+
+		const first = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(first.recoveryNudges).toBe(1);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(1);
+
+		const second = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(second.recoveryNudges).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(1);
+	});
+
+	test("the ladder walks 1 → 2 as the days pass, and stops there", async () => {
+		const t = setup();
+		const { invoiceId } = await seedLocked(t, "u_rec2", "rec-2", 3);
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(1);
+
+		// Age the invoice past the final threshold.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 7 * DAY });
+		});
+		const second = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(second.recoveryNudges).toBe(1);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(2);
+
+		// Day 30: nothing further. The final nudge says it is the last contact,
+		// and the code has to mean it.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 30 * DAY });
+		});
+		const third = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(third.recoveryNudges).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(2);
+	});
+
+	test("an invoice found at day 9 with no stage gets ONLY the final notice", async () => {
+		// A cron outage must not produce a +3d today and a +7d tomorrow — that
+		// reads as a system flailing at someone who is already unhappy.
+		const t = setup();
+		const { invoiceId } = await seedLocked(t, "u_rec3", "rec-3", 9);
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.recoveryNudges).toBe(1);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(2);
+	});
+
+	test("day 1 and 2 past due are still silent — the lock email just went out", async () => {
+		const t = setup();
+		const { invoiceId } = await seedLocked(t, "u_rec4", "rec-4", 2);
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.recoveryNudges).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBeUndefined();
+	});
+
+	test("paying stops the chain with no teardown", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedLocked(t, "u_rec5", "rec-5", 3);
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(1);
+
+		await asAdmin(t).mutation(api.invoices.markPaid, { invoiceId });
+		await t.run(async (ctx) => {
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 7 * DAY });
+		});
+		const after = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		// The invoice left `pending`, so the by_status scan never sees it again.
+		expect(after.recoveryNudges).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(1);
+		expect((await getSubFor(t, retailerId))?.status).toBe("active");
+	});
+
+	test("a COMPED store overdue on a stale invoice is never told it is locked", async () => {
+		// The lock loops skip comped subs entirely, so a store comped after its
+		// invoice was issued sits overdue with full access — chasing it would be
+		// flatly untrue. `past_due` + not-comped IS the soft-lock predicate.
+		const t = setup();
+		const { retailerId, invoiceId } = await seedLocked(t, "u_rec6", "rec-6", 10);
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { comped: true });
+		});
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.recoveryNudges).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBeUndefined();
+	});
+
+	test("an ADMIN's own store is never chased — it is never actually locked", async () => {
+		// The second way `frozen` can be false at `past_due` (comped is the
+		// first): resolveAccess forces active/unfrozen for a store whose OWNER
+		// is allow-listed, and the billing tab tells them admins have no
+		// invoices to settle. Chasing them contradicts the product to its own
+		// operators. Found in the Chrome round — the chain emailed the admin
+		// store "your dashboard is locked, pay RM149" twice.
+		const t = setup();
+		const { retailerId, invoiceId } = await seedLocked(t, ADMIN, "rec-admin", 5);
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.recoveryNudges).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBeUndefined();
+		expect(retailerId).toBeDefined();
+	});
+
+	test("a non-admin store with the same shape IS chased — the guard is not a blanket skip", async () => {
+		const t = setup();
+		const { invoiceId } = await seedLocked(t, "u_notadmin", "rec-notadmin", 5);
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.recoveryNudges).toBe(1);
+		expect((await getInvoice(t, invoiceId))?.recoveryStage).toBe(1);
+	});
+
+	test("an overdue invoice on a still-ACTIVE sub locks first, and is not chased in the same run", async () => {
+		// Ordering guard: the lock transition owns day 0 (it sends invoiceOverdue
+		// + the WhatsApp). The ladder must not also fire on that same pass.
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "u_rec7", "rec-7");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { status: "active" });
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 5 * DAY });
+		});
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.overdue).toBe(1);
+		expect((await getSubFor(t, retailerId))?.status).toBe("past_due");
+		// The sub was `active` when the ladder's guard read it, so no nudge yet —
+		// it starts from the next daily run, a clear day after the lock notice.
+		expect(res.recoveryNudges).toBe(0);
+	});
+
+	test("the pre-due reminder and the recovery ladder never both fire for one invoice", async () => {
+		const t = setup();
+		const { invoiceId } = await seedLocked(t, "u_rec8", "rec-8", 3);
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.recoveryNudges).toBe(1);
+		expect(res.remindersSent).toBe(0);
+		expect((await getInvoice(t, invoiceId))?.reminderSentAt).toBeUndefined();
+	});
+});
+
+/**
+ * The ONE WhatsApp in the billing chain (z8r3fdg3mh) — scheduled at the lock
+ * moment beside the overdue email. `_scheduled_functions` is the honest read:
+ * a spy on the action would never fire from a mutation.
+ */
+describe("billing past-due WhatsApp (z8r3fdg3mh)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+
+	async function waJobs(t: ReturnType<typeof setup>): Promise<string[]> {
+		const jobs = await t.run((ctx) =>
+			ctx.db.system.query("_scheduled_functions").collect(),
+		);
+		return jobs
+			.filter((j) => j.name.includes("notifyBillingPastDue"))
+			.map((j) => String((j.args[0] as { invoiceId: string }).invoiceId));
+	}
+
+	test("a real lock schedules the WhatsApp alongside the overdue email", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "u_wa1", "wa-1");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { status: "active" });
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 1000 });
+		});
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+		expect(await waJobs(t)).toContain(invoiceId);
+	});
+
+	test("a COMPED trialing row past its backstop is skipped whole — no flip, no WhatsApp", async () => {
+		// z8r3fdeub2 retired the legacy comped→past_due flip: a comped row is
+		// never billed and never flipped, so nothing locks and nothing may send.
+		const t = setup();
+		await t
+			.withIdentity({ subject: "u_wa2" })
+			.mutation(api.retailers.createRetailer, {
+				storeName: "Comped Co",
+				slug: "wa-comped",
+			});
+		await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", "wa-comped"))
+				.first();
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r!._id))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				comped: true,
+				trialEndsAt: Date.now() - 1000,
+			});
+		});
+		const res = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(res.trialExpired).toBe(0);
+		expect(await waJobs(t)).toHaveLength(0);
+	});
+
+	test("the recovery nudges stay email-only — exactly one WhatsApp per lapse", async () => {
+		const t = setup();
+		const { retailerId, invoiceId } = await seedFounding(t, "u_wa3", "wa-3");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, { status: "past_due" });
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 3 * DAY });
+		});
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(invoiceId, { dueDate: Date.now() - 7 * DAY });
+		});
+		await t.mutation(internal.subscriptions.internalDailyBillingStatus, {});
+		// Both ladder stages ran (see the recovery-chain suite) and neither
+		// spent a template. WhatsApp is the lock moment only.
+		expect(await waJobs(t)).toHaveLength(0);
+	});
+});
+
+describe("issueInvoice — replacing a mis-tiered bill (z8r3fdpm2p)", () => {
+	async function seedStore(t: ReturnType<typeof setup>, slug: string) {
+		await t
+			.withIdentity({ subject: `u_${slug}` })
+			.mutation(api.retailers.createRetailer, {
+				storeName: `Store ${slug}`,
+				slug,
+			});
+		return t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r!._id))
+				.first();
+			return { retailerId: r!._id, subId: sub!._id };
+		});
+	}
+
+	const openBill = (t: ReturnType<typeof setup>, retailerId: Id<"retailers">) =>
+		t.run((ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.filter((q) => q.eq(q.field("status"), "pending"))
+				.first(),
+		);
+
+	test("still refuses a second bill when no replacement is named", async () => {
+		// Two live Pay-now links on one store is a double payment waiting to
+		// happen — the guard only yields to an explicit replacement.
+		const t = setup();
+		const { retailerId } = await seedStore(t, "rep-dup");
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "starter",
+				billingCycle: "monthly",
+				founding: false,
+			}),
+		).rejects.toThrow(/already has a pending invoice/);
+	});
+
+	test("voids the named bill and issues the corrected one in one go", async () => {
+		const t = setup();
+		const { retailerId } = await seedStore(t, "rep-swap");
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const wrong = await openBill(t, retailerId);
+
+		const res = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "starter",
+			billingCycle: "monthly",
+			founding: false,
+			replacePendingId: wrong!._id,
+		});
+
+		expect(res.replaced?.invoiceNumber).toBe(wrong!.invoiceNumber);
+		const voided = await t.run((ctx) => ctx.db.get(wrong!._id));
+		expect(voided?.status).toBe("void");
+		// Exactly one bill open afterwards, and it's the corrected tier.
+		const open = await openBill(t, retailerId);
+		expect(open?._id).toBe(res.invoiceId);
+		expect(open?.plan).toBe("starter");
+	});
+
+	test("refuses a STALE id rather than voiding whatever is open now", async () => {
+		// The page was looking at a bill that has since been settled, voided or
+		// replaced. Falling through would void someone else's bill.
+		const t = setup();
+		const { retailerId } = await seedStore(t, "rep-stale");
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const first = await openBill(t, retailerId);
+		await asAdmin(t).mutation(api.invoices.voidInvoice, {
+			invoiceId: first!._id,
+		});
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const current = await openBill(t, retailerId);
+
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "starter",
+				billingCycle: "monthly",
+				founding: false,
+				replacePendingId: first!._id,
+			}),
+		).rejects.toThrow(/no longer the open one/);
+		// …and the real open bill is untouched.
+		const after = await t.run((ctx) => ctx.db.get(current!._id));
+		expect(after?.status).toBe("pending");
+	});
+
+	/** A renewal bill with a saved card armed — the only shape that ever had
+	 * an auto-charge scheduled against it. */
+	async function seedArmedRenewal(
+		t: ReturnType<typeof setup>,
+		slug: string,
+	) {
+		const { retailerId, subId } = await seedStore(t, slug);
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const bill = await openBill(t, retailerId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(bill!._id, { origin: "auto_renewal" });
+			await ctx.db.patch(subId, {
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+				},
+			});
+		});
+		return { retailerId, billId: bill!._id };
+	}
+
+	test("a CHEAPER correction inherits the renewal's card charge", async () => {
+		// The seller already mandated the larger amount, so charging the smaller
+		// one stays inside it — and spares them a bill nothing would pay.
+		const t = setup();
+		const { retailerId, billId } = await seedArmedRenewal(t, "rep-cheaper");
+		const res = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "starter",
+			billingCycle: "monthly",
+			founding: false,
+			replacePendingId: billId,
+		});
+		expect(res.replaced?.keptAutoCharge).toBe(true);
+	});
+
+	test("a DEARER correction never charges the card on an admin's say-so", async () => {
+		// However the change was agreed, Kedaipal does not charge itself up
+		// (Zaki, 7 Oct 2026). The bill still carries its Pay-now link.
+		const t = setup();
+		const { retailerId, billId } = await seedArmedRenewal(t, "rep-dearer");
+		await t.run(async (ctx) => {
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.first();
+			await ctx.db.patch(sub!._id, {
+				enterprise: {
+					baseFeeMinor: 88_800,
+					currency: "MYR" as const,
+					includedCredits: 1500,
+					overageRateMinor: 60,
+					blockSize: 5000,
+					contactName: "Someone",
+					setBy: ADMIN,
+					setAt: Date.now(),
+				},
+			});
+		});
+		const res = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+			replacePendingId: billId,
+		});
+		expect(res.replaced?.keptAutoCharge).toBe(false);
+	});
+
+	test("refuses while a card charge hasn't reported back", async () => {
+		const t = setup();
+		const { retailerId, subId } = await seedStore(t, "rep-inflight");
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const bill = await openBill(t, retailerId);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(subId, {
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: Date.now(),
+					lastChargeAttemptAt: Date.now(),
+				},
+			});
+		});
+
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "starter",
+				billingCycle: "monthly",
+				founding: false,
+				replacePendingId: bill!._id,
+			}),
+		).rejects.toThrow(/hasn't reported back yet/);
+		// The bill it would have voided is still standing.
+		const after = await t.run((ctx) => ctx.db.get(bill!._id));
+		expect(after?.status).toBe("pending");
+	});
+});
+
+describe("replace + the dunning ladder (review finding, 7 Oct)", () => {
+	/** An active store, a DECLINED renewal: the attempt stamp is cleared (so
+	 * the replace is allowed) and a retry is standing. This is the commonest
+	 * state in which an admin reaches for a correction. */
+	async function seedDeclinedRenewal(
+		t: ReturnType<typeof setup>,
+		slug: string,
+	) {
+		await t
+			.withIdentity({ subject: `u_${slug}` })
+			.mutation(api.retailers.createRetailer, {
+				storeName: `Store ${slug}`,
+				slug,
+			});
+		const { retailerId, subId } = await t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			const sub = await ctx.db
+				.query("subscriptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", r!._id))
+				.first();
+			return { retailerId: r!._id, subId: sub!._id };
+		});
+		await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "pro",
+			billingCycle: "monthly",
+			founding: false,
+		});
+		const bill = await t.run((ctx) =>
+			ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.filter((q) => q.eq(q.field("status"), "pending"))
+				.first(),
+		);
+		const now = Date.now();
+		await t.run(async (ctx) => {
+			await ctx.db.patch(bill!._id, { origin: "auto_renewal" });
+			await ctx.db.patch(subId, {
+				status: "active",
+				currentPeriodStart: now - 20 * 24 * 60 * 60 * 1000,
+				currentPeriodEnd: now + 10 * 24 * 60 * 60 * 1000,
+				autoRenew: {
+					provider: "hitpay" as const,
+					method: "card",
+					attachedAt: now,
+					// What `recordChargeFailure` leaves behind on a decline: the
+					// attempt stamp CLEARED, a retry standing.
+					failedAttempts: 1,
+					nextRetryAt: now - 1000,
+					lastChargeError: "declined",
+				},
+				// An Enterprise contract, so the dearer replacement is reachable.
+				enterprise: {
+					baseFeeMinor: 88_800,
+					currency: "MYR" as const,
+					includedCredits: 1500,
+					overageRateMinor: 60,
+					blockSize: 5000,
+					contactName: "Someone",
+					setBy: ADMIN,
+					setAt: now,
+				},
+			});
+		});
+		return { retailerId, subId, billId: bill!._id };
+	}
+
+	test("a DEARER replacement leaves no retry for the sweep to charge", async () => {
+		// The bug: `recordChargeFailure` clears the stamp but leaves
+		// `nextRetryAt`, so `autoChargeIdle` passes and the replace is allowed —
+		// then two days later the sweep finds `retryDue` plus a pending bill
+		// (it checks no origin, and nor does `chargeDueRenewal`) and charges the
+		// card the INCREASED amount the form promised it never would.
+		const t = setup();
+		const { retailerId, billId } = await seedDeclinedRenewal(t, "dun-dearer");
+
+		const res = await asAdmin(t).mutation(api.invoices.issueInvoice, {
+			retailerId,
+			plan: "enterprise",
+			billingCycle: "monthly",
+			founding: false,
+			replacePendingId: billId,
+		});
+		expect(res.replaced?.keptAutoCharge).toBe(false);
+
+		const sweep = await t.mutation(
+			internal.subscriptions.internalDailyBillingStatus,
+			{},
+		);
+		expect(sweep.autoChargeRetries).toBe(0);
+	});
+
+	test("voiding a renewal takes its dunning ladder with it", async () => {
+		// Same rule by the other door: the ladder counts failures against ONE
+		// bill, so carrying it over starts the next renewal mid-ladder.
+		const t = setup();
+		const { subId, billId } = await seedDeclinedRenewal(t, "dun-void");
+		await asAdmin(t).mutation(api.invoices.voidInvoice, { invoiceId: billId });
+		const sub = await t.run((ctx) => ctx.db.get(subId));
+		expect(sub?.autoRenew?.nextRetryAt).toBeUndefined();
+		expect(sub?.autoRenew?.failedAttempts).toBeUndefined();
+		// The mandate itself survives — only the ladder was about the bill.
+		expect(sub?.autoRenew?.method).toBe("card");
+	});
+});
+
+describe("the billing picker and the sellers directory list the same book (z8r3fdpm2p)", () => {
+	test("both surfaces take the SAME cap — no second hardcoded number", async () => {
+		// They disagreed: 500 in the directory against a bare 200 here. The
+		// picker is newest-first, so past 200 the OLDEST stores vanished from
+		// it while the seller sheet still reached them — and the Enterprise
+		// contract is reachable from both, so one door could not see a store
+		// the other could.
+		const t = setup();
+		const made: string[] = [];
+		for (let i = 0; i < 3; i++) {
+			const slug = `cap-store-${i}`;
+			await t
+				.withIdentity({ subject: `u_cap_${i}` })
+				.mutation(api.retailers.createRetailer, {
+					storeName: `Cap Store ${i}`,
+					slug,
+				});
+			made.push(slug);
+		}
+		const picker = await asAdmin(t).query(
+			api.invoices.listRetailersForAdmin,
+			{},
+		);
+		const directory = await asAdmin(t).query(
+			api.admin.listSellersForAdmin,
+			{},
+		);
+		// Every store the directory can reach, the picker can reach.
+		const pickerSlugs = new Set(picker.stores.map((r) => r.slug));
+		for (const s of made) expect(pickerSlugs.has(s)).toBe(true);
+		expect(picker.stores.length).toBe(directory.sellers.length);
+		// Neither surface claims truncation at this size.
+		expect(directory.capped).toBe(false);
+		// Well under the cap, so the picker must not claim to be truncated.
+		expect(picker.capped).toBe(false);
+	});
+
+	test("neither store list may hardcode its own cap", () => {
+		// The behavioural test above CANNOT reach this: at three seeded stores
+		// both queries return everything whatever their cap, so reverting the
+		// picker to `.take(200)` leaves it green (checked). The drift is a
+		// source-level fact, so it is guarded at source level — the house
+		// precedent is `src/lib/convex-read-pattern.test.ts`.
+		const root = join(__dirname);
+		for (const file of ["invoices.ts", "admin.ts"]) {
+			const src = readFileSync(join(root, file), "utf8");
+			for (const [i, line] of src.split("\n").entries()) {
+				// A `.take(<number>)` on the retailers table is the shape that
+				// drifted. Derived caps (`ADMIN_STORE_LIST_LIMIT + 1`) and takes
+				// on other tables are untouched.
+				const take = line.match(/\.take\(\s*(\d+)/);
+				if (!take) continue;
+				const window = src.split("\n").slice(Math.max(0, i - 6), i + 1).join("\n");
+				if (!/query\("retailers"\)/.test(window)) continue;
+				throw new Error(
+					`${file}:${i + 1} caps the store list with the literal ${take[1]} — use ADMIN_STORE_LIST_LIMIT so the billing picker and the sellers directory cannot disagree about which stores exist.`,
+				);
+			}
+		}
+		expect(ADMIN_STORE_LIST_LIMIT).toBeGreaterThan(0);
+	});
+});
+
+describe("a store is billed in its country's currency — always (86eyp7hn7)", () => {
+	/** A store in `country`, optionally with one invoice of `invoice`'s
+	 * status and currency already on its books. */
+	async function seedStore(
+		t: ReturnType<typeof setup>,
+		slug: string,
+		country: "MY" | "SG",
+		invoice?: { status: "paid" | "pending" | "void"; currency: "MYR" | "SGD" },
+	) {
+		await t
+			.withIdentity({ subject: `u_${slug}` })
+			.mutation(api.retailers.createRetailer, {
+				storeName: `Store ${slug}`,
+				slug,
+			});
+		return t.run(async (ctx) => {
+			const r = await ctx.db
+				.query("retailers")
+				.withIndex("by_slug", (q) => q.eq("slug", slug))
+				.first();
+			if (!r) throw new Error("no retailer");
+			await ctx.db.patch(r._id, { country });
+			if (invoice) {
+				const sub = await ctx.db
+					.query("subscriptions")
+					.withIndex("by_retailer", (q) => q.eq("retailerId", r._id))
+					.first();
+				if (!sub) throw new Error("no sub");
+				const now = Date.now();
+				await ctx.db.insert("invoices", {
+					retailerId: r._id,
+					subscriptionId: sub._id,
+					invoiceNumber: `INV-${slug}`,
+					amount: 14900,
+					total: 14900,
+					currency: invoice.currency,
+					periodStart: now,
+					periodEnd: now + 30 * 24 * 60 * 60 * 1000,
+					dueDate: now,
+					status: invoice.status,
+					createdAt: now,
+					...(invoice.status === "paid" ? { markedPaidAt: now } : {}),
+				});
+			}
+			return r._id;
+		});
+	}
+
+	async function rowOf(t: ReturnType<typeof setup>, slug: string) {
+		const { stores } = await asAdmin(t).query(
+			api.invoices.listRetailersForAdmin,
+			{},
+		);
+		return stores.find((s) => s.slug === slug);
+	}
+
+	test("the picker shows each store's country and the currency it sets", async () => {
+		const t = setup();
+		await seedStore(t, "sg-new", "SG");
+		await seedStore(t, "my-new", "MY");
+		expect(await rowOf(t, "sg-new")).toMatchObject({
+			billingCurrency: "SGD",
+			country: "SG",
+		});
+		expect(await rowOf(t, "my-new")).toMatchObject({
+			billingCurrency: "MYR",
+			country: "MY",
+		});
+	});
+
+	test("a ringgit bill an SG store once paid never makes it a ringgit store", async () => {
+		// The bug that made this a rule: the form defaulted to MYR, an SG store
+		// paid one RM bill, and "last paid currency wins" then billed it in RM
+		// for every renewal after. The country is the only answer now.
+		const t = setup();
+		const retailerId = await seedStore(t, "sg-paid-rm", "SG", {
+			status: "paid",
+			currency: "MYR",
+		});
+		expect(await rowOf(t, "sg-paid-rm")).toMatchObject({
+			billingCurrency: "SGD",
+		});
+		const { invoiceId } = await asAdmin(t).mutation(
+			api.invoices.issueInvoice,
+			{ retailerId, plan: "pro", billingCycle: "monthly", founding: false },
+		);
+		expect(await getInvoice(t, invoiceId)).toMatchObject({
+			currency: "SGD",
+			total: 5900,
+		});
+	});
+
+	test("issueInvoice takes no currency — a caller can't send one", async () => {
+		const t = setup();
+		const retailerId = await seedStore(t, "sg-sent-rm", "SG");
+		await expect(
+			asAdmin(t).mutation(api.invoices.issueInvoice, {
+				retailerId,
+				plan: "pro",
+				billingCycle: "monthly",
+				founding: false,
+				// A stale tab from before the gate still sends this.
+				...({ currency: "MYR" } as object),
+			}),
+		).rejects.toThrow(/currency/);
 	});
 });

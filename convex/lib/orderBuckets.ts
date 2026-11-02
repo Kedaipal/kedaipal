@@ -4,6 +4,8 @@
 // status is deliberately NOT a bucket (it's an orthogonal filter + badge). See
 // docs/order-inbox.md.
 
+import { isRevenueOrder } from "./insights";
+
 export type OrderStatus =
 	| "pending"
 	// Booking kind only (86eyj70z1): a date-range request awaiting the
@@ -73,6 +75,20 @@ export const BUCKET_LEAVES: Record<OrderBucket, InboxStatusLeaf[]> = {
 	cancelled: ["cancelled"],
 };
 
+/**
+ * Every leaf that still HOLDS its place — a seat at an event, a booking's
+ * capacity: the whole row minus the cancelled bucket. It is the status scope
+ * behind every "registered" count (`holdsSeats` / `holdsCapacity` are the
+ * same rule, `status !== "cancelled"`), so a link that opens the orders behind
+ * such a count carries it as `?st=`: the Schedule row said "Open 2 orders"
+ * and the inbox showed three, the third cancelled, because the link narrowed
+ * to the listing and the day but not to the statuses the count was made of.
+ * Derived, never listed by hand, so a new leaf joins it on its own.
+ */
+export const HOLDING_LEAVES: InboxStatusLeaf[] = INBOX_LEAF_KEYS.filter(
+	(leaf) => !BUCKET_LEAVES.cancelled.includes(leaf),
+);
+
 /** Seller-facing name for a leaf that has no `OrderStatus` behind it. Not
  * renameable (see `INBOX_LEAF_KEYS`), so it needs no label resolver. */
 export const UNSEEN_LEAF_LABEL = "Not yet opened";
@@ -85,6 +101,33 @@ export function leafBucket(leaf: InboxStatusLeaf): OrderBucket {
 	if (leaf === "cancelled") return "cancelled";
 	return "in_progress"; // confirmed (seen) / packed / shipped
 }
+
+/** The `OrderStatus` behind a leaf — identity except for the unseen split,
+ * which is a `confirmed` order the seller has not opened yet. */
+export function leafStatus(leaf: InboxStatusLeaf): OrderStatus {
+	return leaf === "confirmed_unseen" ? "confirmed" : leaf;
+}
+
+/**
+ * The leaves whose orders Insights counts as revenue — the status scope every
+ * drill-in from `/app/insights` carries, so the inbox it opens holds exactly
+ * the orders the figure was computed from.
+ *
+ * Without it a drill-in passed only a date range, so the inbox answered a
+ * different question than the chart asked: "2 orders" on a trend bar opened a
+ * list of 3, the extra one CANCELLED. Insights excludes `pending`,
+ * `booking_requested` and `cancelled` from every figure; the inbox, told only
+ * "8 Sep", showed them.
+ *
+ * DERIVED from `isRevenueOrder`, never typed out, because the two lists
+ * drifting is the whole failure. Note `confirmed_unseen` is in here: it is a
+ * `confirmed` order nobody has opened, which Insights counts while the inbox
+ * files it under New. A hand-written list would have missed it and the
+ * drill-in would have been short by every unopened order.
+ */
+export const REVENUE_LEAVES: InboxStatusLeaf[] = INBOX_LEAF_KEYS.filter(
+	(leaf) => isRevenueOrder(leafStatus(leaf)),
+);
 
 /**
  * Seller-facing label for a leaf. Takes the caller's status resolver rather than
@@ -254,4 +297,46 @@ export function statusAgeSeverity(
 	if (hrs >= 24) return "urgent";
 	if (hrs >= 4) return "warn";
 	return "normal";
+}
+
+/**
+ * How old an unpaid order has to be before Home calls it out as chasing work
+ * (z8r3fdrgzj). Three days is the point a seller stops remembering the order
+ * without being reminded — short enough to still be collectable, long enough
+ * that an order placed on a Friday evening is not nagged about on Saturday.
+ */
+export const STALE_UNPAID_DAYS = 3;
+
+/** What the collection predicates need on top of bucketing: whether the money
+ * arrived, and when the order was placed. `BucketableOrder` stays the minimal
+ * status shape it has always been. */
+export type CollectableOrder = BucketableOrder & {
+	paymentStatus?: string;
+	createdAt: number;
+};
+
+/**
+ * Is this an OPEN order whose money has not arrived? The definition behind both
+ * the inbox's "To collect" figure and Home's strip — one author, so the two can
+ * never disagree about what "unpaid" means.
+ *
+ * "Not received" rather than "unpaid", deliberately: an order the buyer has
+ * CLAIMED to have paid is still money the seller does not have, and it is the
+ * one most worth chasing, because somebody is waiting on a human to look.
+ */
+export function isOpenUnpaid(order: CollectableOrder): boolean {
+	const b = orderBucket(order);
+	if (b !== "new" && b !== "in_progress") return false;
+	return (order.paymentStatus ?? "unpaid") !== "received";
+}
+
+/**
+ * Open, unpaid, and older than `STALE_UNPAID_DAYS` — a STRICT SUBSET of
+ * `isOpenUnpaid`, which is what lets Home say "3 of your 9 unpaid orders are
+ * over 3 days old" without the two numbers being computed from different ideas.
+ * Age is measured from `createdAt`, the same anchor revenue uses.
+ */
+export function isStaleUnpaid(order: CollectableOrder, now: number): boolean {
+	if (!isOpenUnpaid(order)) return false;
+	return order.createdAt < now - STALE_UNPAID_DAYS * 24 * 60 * 60 * 1000;
 }

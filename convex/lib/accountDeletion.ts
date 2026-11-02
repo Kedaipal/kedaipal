@@ -19,19 +19,49 @@
  *    data only (no buyer PII) and must survive the tenant for bookkeeping/tax.
  *    Their `retailerId`/`subscriptionId` refs dangle after deletion — expected
  *    for a retained record of a deleted tenant.
+ *  - `creditLedger` rows (Credits, 86eye2ccu) — the financial record of what
+ *    the seller bought and spent (purchased credits are deferred revenue until
+ *    spent or expired). Like invoices: seller billing data, no buyer PII, kept
+ *    for bookkeeping. Their `retailerId`/`orderId` refs dangle — expected.
+ *  - `creditPurchases` rows + their `receiptPdfStorageId` blobs (Credits T2,
+ *    z8r3fdf8ht) — what the seller paid Kedaipal for top-up packs, the same
+ *    kind of record as an invoice. Their `creditPurchases` PHASE doesn't
+ *    delete them: it closes every still-pending checkout (below).
+ *  - `referrals` rows naming the tenant as REFERRER (z8r3fdetf5) — each is
+ *    the referee's record (and their reward stands), not the tenant's data.
+ *    Their `referrerId` dangles; surfaces read a missing referrer as "a
+ *    Kedaipal seller". The tenant's own row (as referee) IS deleted.
  *  - `adminAuditLog` rows — an audit trail must outlive the tenant it audited
  *    (`targetId`s are doc ids / last-4 only, never buyer PII).
+ *  - `messageLogRollups` rows — the PERMANENT WhatsApp cost ledger (retailer ×
+ *    MYT month × category × status). `purgeExpiredOutboundLog` folds every
+ *    expiring `outboundMessageLog` row into its bucket precisely so aggregate
+ *    cost accounting survives the 90-day purge "forever" (lib/retention.ts),
+ *    and Meta bills us per send from Oct 2026 — so this is a record of what
+ *    Kedaipal was CHARGED for a seller's traffic, the same class as an
+ *    invoice. The rollup deliberately drops `toWaPhone`/`templateName`, so it
+ *    carries counts and no buyer PII. The raw per-send rows (which do carry
+ *    the buyer's number) ARE deleted, by the `outboundMessageLog` phase.
+ *    `retailerId` is left dangling rather than cleared: it is the ledger's
+ *    grouping key, and blanking it would merge a deleted tenant's months into
+ *    the tenant-less bucket and corrupt both.
  *  - `optOuts` rows are the buyer's standing suppression instruction, GLOBAL
  *    across every retailer on the shared WABA — deleting one would re-enable
  *    messages the buyer said stop to. The phase only clears
  *    `triggeredByRetailerId` on rows pointing at the deleted tenant, so no
  *    dangling ref remains while the suppression itself stands.
+ *  - `marketplaceShowcases` rows are Kedaipal's own curation of /stores
+ *    (z8r3fdr6mv), not the tenant's data — a showcase outlives any one store
+ *    in it. The phase only drops the deleted store from each showcase's
+ *    `members`, so no dangling ref remains and the admin's member count stays
+ *    honest. A showcase holds no PII (retailer ids + booth labels).
  *
  * Every phase is idempotent (take-a-batch-and-delete, or a cursor scan whose
  * matches are patched exactly once), so re-entry after a crash just resumes.
  */
 
 import { v } from "convex/values";
+import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { deleteOrderOwnedBlobs } from "./orderBlobs";
@@ -43,18 +73,33 @@ export const DELETION_PHASES = [
 	"products",
 	"productCategories",
 	"categories",
+	"bookingBlocks",
 	"deliveryJobs",
 	"deliveryQuotes",
+	"courierWallets",
+	"easyparcelConnections",
+	"courierOAuthStates",
 	"customers",
 	"pickupLocations",
 	"counterCheckoutSessions",
+	"orderClaims",
+	"voucherRedemptions",
+	"vouchers",
+	"promotions",
+	"storeAvailability",
 	"subscriptions",
 	"subscriptionUsage",
+	"creditPurchases",
+	"creditAccounts",
+	"creditLots",
 	"foundingMembers",
+	"retailerMembers",
 	"retailerSendingLimits",
+	"referrals",
 	"outboundMessageLog",
 	"slugHistory",
 	"optOuts",
+	"marketplaceShowcases",
 	"retailer",
 ] as const;
 
@@ -73,6 +118,7 @@ export type DeletionPhase = (typeof DELETION_PHASES)[number];
 export const PAGINATED_PHASES: ReadonlySet<DeletionPhase> = new Set([
 	"slugHistory",
 	"optOuts",
+	"marketplaceShowcases",
 ]);
 
 /** Arg validator for the driver's continuation state. Built from
@@ -84,9 +130,9 @@ export const deletionPhaseValidator = v.union(
 export type DeletionPhaseResult = {
 	/**
 	 * Documents processed this call — deleted rows for the indexed phases,
-	 * SCANNED rows for the two full-table-scan phases (`slugHistory`,
-	 * `optOuts`), because scanning is what consumes the transaction budget
-	 * there even when nothing matches.
+	 * SCANNED rows for the full-table-scan phases (`slugHistory`, `optOuts`,
+	 * `marketplaceShowcases`), because scanning is what consumes the
+	 * transaction budget there even when nothing matches.
 	 */
 	processed: number;
 	/** True when this phase has nothing left for the tenant. */
@@ -176,6 +222,22 @@ export async function runDeletionPhase(
 			}
 			return { processed: rows.length, done: rows.length < limit };
 		}
+		case "bookingBlocks": {
+			// Availability windows the seller closed off ("Maintenance — river
+			// deck repair"). Tenant-owned calendar config: no buyer PII and no
+			// money, so nothing argues for keeping it once the store is gone.
+			// Grouped with the catalogue phases above rather than appended,
+			// because a block is a product's availability — the `productId` it
+			// may carry points at rows the `products` phase has already deleted.
+			// Index prefix: by_retailer_start with only the retailerId bound
+			// covers every window.
+			const rows = await ctx.db
+				.query("bookingBlocks")
+				.withIndex("by_retailer_start", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const block of rows) await ctx.db.delete(block._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
 		case "deliveryJobs": {
 			const rows = await ctx.db
 				.query("deliveryJobs")
@@ -195,6 +257,36 @@ export async function runDeletionPhase(
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const quote of rows) await ctx.db.delete(quote._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "easyparcelConnections": {
+			// Encrypted OAuth tokens — deleting the row is the whole revocation
+			// on our side (EasyParcel exposes no revoke endpoint).
+			const rows = await ctx.db
+				.query("easyparcelConnections")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const row of rows) await ctx.db.delete(row._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "courierOAuthStates": {
+			const rows = await ctx.db
+				.query("courierOAuthStates")
+				.withIndex("by_retailer_provider", (q) =>
+					q.eq("retailerId", retailerId),
+				)
+				.take(limit);
+			for (const row of rows) await ctx.db.delete(row._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "courierWallets": {
+			const rows = await ctx.db
+				.query("courierWallets")
+				.withIndex("by_retailer_provider", (q) =>
+					q.eq("retailerId", retailerId),
+				)
+				.take(limit);
+			for (const wallet of rows) await ctx.db.delete(wallet._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "customers": {
@@ -225,12 +317,137 @@ export async function runDeletionPhase(
 			for (const session of rows) await ctx.db.delete(session._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
+		case "orderClaims": {
+			// DELETED, not retained (claim links, 86eyq0epn). A claim is an OFFER
+			// the seller sent a buyer — required `waPhone`, optional `buyerName`,
+			// plus the frozen line snapshot — and never a record of what Kedaipal
+			// CHARGED the seller, which is the one thing the header's retention
+			// block keeps. Nothing survives the tenant to justify holding a
+			// buyer's number, so the rows go.
+			//
+			// This phase is the doer the claim cron defers to: `purgeStaleClaims`
+			// sweeps `expired`/`cancelled` rows past CLAIM_RETENTION_MS and
+			// deliberately exempts `completed` ones, on the grounds that "order
+			// retention is the PDPA pack's job" (convex/lib/orderClaims.ts). That
+			// job had no doer here, so a completed claim kept its buyer's phone
+			// and name indefinitely after the store was erased.
+			//
+			// Index prefix: by_retailer_status with only the retailerId bound
+			// covers every status (same shape as counterCheckoutSessions above).
+			// No blobs to free — a claim holds no storage ids. Position is not
+			// load-bearing: rows are found by retailer, never through the
+			// `sessionId` the phase above has already deleted.
+			const rows = await ctx.db
+				.query("orderClaims")
+				.withIndex("by_retailer_status", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const claim of rows) await ctx.db.delete(claim._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "voucherRedemptions": {
+			// A shared code's per-order uses (`z8r3fducfm`). Pure bookkeeping —
+			// the money is on the ORDER — and they go before their voucher rows
+			// so no row is ever left pointing at a deleted code.
+			const rows = await ctx.db
+				.query("voucherRedemptions")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const row of rows) await ctx.db.delete(row._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "vouchers": {
+			// Seller-issued discount codes (`z8r3fdr617`). Deleted outright, not
+			// retained: unlike an invoice or a credit-ledger row, a voucher is
+			// not a record of money that changed hands — what the seller actually
+			// gave away is already in the ORDER's `voucherSnapshot` and
+			// `voucherDiscount`, and those orders go with the tenant. The
+			// `redeemedOrderId` refs dangle the moment the `orders` phase above
+			// has run, which is exactly why this phase follows it.
+			const rows = await ctx.db
+				.query("vouchers")
+				.withIndex("by_retailer_created", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const voucher of rows) await ctx.db.delete(voucher._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "promotions": {
+			// Bulk promotions (`z8r3fducfd`). Pure catalogue grouping — the
+			// prices they wrote lived on the products, already gone with the
+			// `products` phase, and an order keeps its own frozen line price.
+			// Members first (a product's own rows also go with its cascade;
+			// this sweeps the rest), then the promotions they pointed at.
+			const members = await ctx.db
+				.query("promotionMembers")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const member of members) await ctx.db.delete(member._id);
+			if (members.length === limit) return { processed: members.length, done: false };
+			const rows = await ctx.db
+				.query("promotions")
+				.withIndex("by_retailer_created", (q) => q.eq("retailerId", retailerId))
+				.take(limit - members.length);
+			for (const promotion of rows) await ctx.db.delete(promotion._id);
+			return {
+				processed: members.length + rows.length,
+				done: rows.length < limit - members.length,
+			};
+		}
+		case "storeAvailability": {
+			// The seller's pause / Kedaipal's switch (`z8r3fdudf7`) — one row
+			// per store at most; it describes a storefront that is going.
+			const rows = await ctx.db
+				.query("storeAvailability")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const row of rows) await ctx.db.delete(row._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
 		case "subscriptions": {
+			// A deleted tenant must not leave MONEY rails live (86eyb6z4r):
+			//  - the saved-method session at HitPay is cancelled remotely
+			//    (best-effort — with the local row gone nothing can ever charge,
+			//    the DELETE is hygiene so the token doesn't outlive the account);
+			//  - pending invoices are VOIDED (they're retained by decision, so
+			//    they must not stay forever-payable) and their Pay-now links
+			//    killed — a payment into a deleted store is only ever a refund.
+			// Idempotent: voided invoices drop out of the pending filter, and a
+			// re-entered batch finds no subscription rows left to act on.
+			// Bounded like every sibling phase (the driver re-enters until a
+			// batch comes back short). Voided rows drop out of this filter, so
+			// re-entry never redoes work.
+			const pending = await ctx.db
+				.query("invoices")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.filter((q) => q.eq(q.field("status"), "pending"))
+				.take(limit);
+			for (const invoice of pending) {
+				await ctx.db.patch(invoice._id, {
+					status: "void",
+					voidedAt: Date.now(),
+					voidReason: "Account deleted",
+				});
+				if (invoice.gatewayRequestId) {
+					await ctx.scheduler.runAfter(
+						0,
+						internal.subscriptionPayments.expireInvoiceRequest,
+						{ requestId: invoice.gatewayRequestId },
+					);
+				}
+			}
 			const rows = await ctx.db
 				.query("subscriptions")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
-			for (const subscription of rows) await ctx.db.delete(subscription._id);
+			for (const subscription of rows) {
+				if (subscription.autoRenewSessionId) {
+					await ctx.scheduler.runAfter(
+						0,
+						internal.subscriptionPayments.deleteRecurringSession,
+						{ sessionId: subscription.autoRenewSessionId },
+					);
+				}
+				await ctx.db.delete(subscription._id);
+			}
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "subscriptionUsage": {
@@ -242,6 +459,57 @@ export async function runDeletionPhase(
 			for (const usage of rows) await ctx.db.delete(usage._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
+		case "creditPurchases": {
+			// Retained by decision (see the header) — but, like a pending
+			// invoice, a live top-up checkout must not outlive the store: a
+			// payment into a deleted store is only ever a refund. Expire every
+			// pending purchase and kill its HitPay link; a payment that still
+			// slips through is stamped `late_payment` and never credited.
+			// Expired rows drop out of the index range, so re-entry never
+			// redoes work.
+			const pending = await ctx.db
+				.query("creditPurchases")
+				.withIndex("by_retailer_status_created", (q) =>
+					q.eq("retailerId", retailerId).eq("status", "pending"),
+				)
+				.take(limit);
+			for (const purchase of pending) {
+				await ctx.db.patch(purchase._id, {
+					status: "expired",
+					expiredAt: Date.now(),
+				});
+				if (purchase.gatewayRequestId) {
+					await ctx.scheduler.runAfter(
+						0,
+						internal.creditPurchases.deletePurchaseRequest,
+						{ requestId: purchase.gatewayRequestId },
+					);
+				}
+			}
+			return { processed: pending.length, done: pending.length < limit };
+		}
+		case "creditAccounts": {
+			// The cached balance row (Credits, 86eye2ccu) — derived state, gone with
+			// the tenant. The LEDGER is retained (see the header).
+			const rows = await ctx.db
+				.query("creditAccounts")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const account of rows) await ctx.db.delete(account._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "creditLots": {
+			// Index prefix: by_retailer_open_expiry with only the retailerId bound
+			// — open and spent lots alike.
+			const rows = await ctx.db
+				.query("creditLots")
+				.withIndex("by_retailer_open_expiry", (q) =>
+					q.eq("retailerId", retailerId),
+				)
+				.take(limit);
+			for (const lot of rows) await ctx.db.delete(lot._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
 		case "foundingMembers": {
 			const rows = await ctx.db
 				.query("foundingMembers")
@@ -250,12 +518,49 @@ export async function runDeletionPhase(
 			for (const member of rows) await ctx.db.delete(member._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
+		case "retailerMembers": {
+			// Team seats (86exr91r4). Rows are DELETED, not marked — erasing the
+			// tenant erases its people-records (member email + name are PII), and
+			// a removed-marker would dangle once the retailer row goes. Each
+			// still-active member gets the "store closed" email with the store
+			// name SNAPSHOTTED into the args, because by send time there is no
+			// retailer row left to read.
+			const rows = await ctx.db
+				.query("retailerMembers")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+				.take(limit);
+			for (const member of rows) {
+				if (member.status === "active") {
+					await ctx.scheduler.runAfter(0, internal.team.sendTeamEmail, {
+						kind: "teamAccessRevoked",
+						to: member.email,
+						revokeReason: "store_deleted",
+						storeNameOverride: retailer.storeName,
+						localeOverride: retailer.locale,
+					});
+				}
+				await ctx.db.delete(member._id);
+			}
+			return { processed: rows.length, done: rows.length < limit };
+		}
 		case "retailerSendingLimits": {
 			const rows = await ctx.db
 				.query("retailerSendingLimits")
 				.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
 				.take(limit);
 			for (const limits of rows) await ctx.db.delete(limits._id);
+			return { processed: rows.length, done: rows.length < limit };
+		}
+		case "referrals": {
+			// The tenant's OWN referral (z8r3fdetf5) — the row saying who referred
+			// it. Rows where it was the REFERRER are not its data to erase: they
+			// are each referee's record, and their reward stands, so they stay
+			// with `referrerId` dangling (see RETAINED above).
+			const rows = await ctx.db
+				.query("referrals")
+				.withIndex("by_referee", (q) => q.eq("refereeId", retailerId))
+				.take(limit);
+			for (const row of rows) await ctx.db.delete(row._id);
 			return { processed: rows.length, done: rows.length < limit };
 		}
 		case "outboundMessageLog": {
@@ -297,6 +602,31 @@ export async function runDeletionPhase(
 			for (const row of page.page) {
 				if (row.triggeredByRetailerId === retailerId) {
 					await ctx.db.patch(row._id, { triggeredByRetailerId: undefined });
+				}
+			}
+			return {
+				processed: page.page.length,
+				done: page.isDone,
+				cursor: page.continueCursor,
+			};
+		}
+		case "marketplaceShowcases": {
+			// NEVER deleted — a showcase is Kedaipal's curation of /stores and
+			// outlives any one store in it (z8r3fdr6mv). The deleted store is
+			// dropped from each showcase's member list so no ref dangles. Members
+			// are an array on the row, so no index can find "showcases holding
+			// this store" — paginated full-table scan over a table that holds a
+			// handful of rows by construction; patched rows keep their index
+			// position so the cursor walk is exact.
+			const page = await ctx.db
+				.query("marketplaceShowcases")
+				.paginate({ numItems: limit, cursor });
+			for (const row of page.page) {
+				if (row.members.some((m) => m.retailerId === retailerId)) {
+					await ctx.db.patch(row._id, {
+						members: row.members.filter((m) => m.retailerId !== retailerId),
+						updatedAt: Date.now(),
+					});
 				}
 			}
 			return {

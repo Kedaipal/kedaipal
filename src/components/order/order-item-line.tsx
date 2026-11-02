@@ -18,6 +18,7 @@
 // "2 weekend nights × RM 120.00" and the title row needn't repeat the label.
 
 import { partitionNights } from "../../../convex/lib/bookingAvailability";
+import { answerLabelPrefix } from "../../../convex/lib/buyerQuestions";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
@@ -30,6 +31,7 @@ import {
 	describeBookingSpan,
 	describeNights,
 	formatNight,
+	skippedDayRows,
 } from "../../lib/booking-dates";
 import { formatPrice } from "../../lib/format";
 import { AppImage } from "../ui/app-image";
@@ -44,6 +46,13 @@ export type OrderBookingSpan = {
 	 * split line name ITS OWN nights instead of repeating the whole stay.
 	 * Absent on a single-rate booking and on every pre-S13 one. */
 	weekendDays?: readonly number[];
+	/** Frozen shut days an open-days package stepped over (z8r3fdhpm7,
+	 * `orders.bookingSkippedDays`) — named after the window, so the buyer and
+	 * the seller both see why it ends when it does. */
+	skippedDays?: readonly number[];
+	/** The days the customer skipped (z8r3fdh3ay, `bookingCustomerSkips`) —
+	 * a subset of `skippedDays`, named as skips rather than closures. */
+	customerSkips?: readonly number[];
 };
 
 export function OrderItemLine({
@@ -55,6 +64,8 @@ export function OrderItemLine({
 	currency,
 	imageUrl,
 	booking,
+	answers = [],
+	locale = "en",
 }: {
 	name: string;
 	variantLabel?: string;
@@ -68,13 +79,22 @@ export function OrderItemLine({
 	imageUrl?: string;
 	/** Set on a booking order's line — replaces the "N × price" sub-line. */
 	booking?: OrderBookingSpan;
+	/** The buyer's answers to the product's questions (z8r3fdkjek), frozen
+	 * with the label they were asked under. Plain text — React escapes it. */
+	answers?: ReadonlyArray<{ label: string; answer: string }>;
+	/** The store's language for the skipped-day labels (the buyer's `/track`
+	 * passes it; the seller page is English). */
+	locale?: "en" | "ms";
 }) {
 	// A weekend/weekday line carries its kind in the frozen label; the
 	// sub-line says it, so the title row doesn't repeat it.
 	const nightKind = booking ? bookingNightKind(variantLabel) : undefined;
 	const titleLabel = nightKind === undefined ? variantLabel : undefined;
+	const hasAnswers = answers.length > 0;
 	return (
-		<li className="flex items-center justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
+		<li
+			className={`flex ${hasAnswers ? "items-start" : "items-center"} justify-between gap-3 py-2.5 first:pt-0 last:pb-0`}
+		>
 			<AppImage
 				src={imageUrl}
 				alt={name}
@@ -101,6 +121,32 @@ export function OrderItemLine({
 							)
 						: `${quantity} × ${formatPrice(unitPrice, currency)}`}
 				</p>
+				{booking?.packaged ? (
+					<SkippedDayRows
+						skipped={booking.skippedDays}
+						customerSkips={booking.customerSkips}
+						locale={locale}
+						className="mt-1"
+					/>
+				) : null}
+				{hasAnswers ? (
+					// Each pair flows as ONE run of text, wrapping like a sentence.
+					// It was a flex row with a `shrink-0` label, so a long question
+					// took the whole width and squeezed the answer to a one-letter
+					// column. Inline flow can't do that, whatever the lengths.
+					<dl className="mt-1 flex flex-col gap-0.5 text-xs">
+						{answers.map((a) => (
+							<div key={`${a.label}:${a.answer}`} className="wrap-break-word">
+								<dt className="inline text-muted-foreground">
+									{answerLabelPrefix(a.label)}
+								</dt>{" "}
+								<dd className="inline font-medium text-foreground">
+									{a.answer}
+								</dd>
+							</div>
+						))}
+					</dl>
+				) : null}
 			</div>
 			<p className="shrink-0 text-sm font-semibold tabular-nums">
 				{formatPrice(lineTotal, currency)}
@@ -130,9 +176,11 @@ function bookingLineDetail(
 		// of one, so "3 × RM 450.00" is exactly the arithmetic — no need to store
 		// the package length on the order to say something true. A single package
 		// says only its window: "1 ×" is noise.
+		// The skipped days render as their own rows below (`SkippedDayRows`).
+		const window = span;
 		return quantity > 1
-			? `${quantity} × ${formatPrice(unitPrice, currency)} · ${span}`
-			: span;
+			? `${quantity} × ${formatPrice(unitPrice, currency)} · ${window}`
+			: window;
 	}
 	// `quantity` is the night count, but derive from the dates as the fallback
 	// so a line whose quantity was ever touched still reads truthfully. (On a
@@ -173,4 +221,40 @@ function ownNights(
 	// span (only reachable if a row were edited by hand) — fall back rather
 	// than print a line with no nights at all.
 	return own.length > 0 ? own : null;
+}
+
+/**
+ * A package's skipped days as labelled rows (z8r3fdh3ay) — "Store closed" and
+ * "Skipped on request" each on its own line, rather than one sentence of
+ * dates. Shared by this line (both pages) and the seller's Fulfilment card.
+ */
+export function SkippedDayRows({
+	skipped,
+	customerSkips,
+	locale = "en",
+	className = "",
+}: {
+	skipped?: readonly number[];
+	customerSkips?: readonly number[];
+	locale?: "en" | "ms";
+	className?: string;
+}) {
+	const rows = skippedDayRows(skipped, customerSkips, locale);
+	if (rows.length === 0) return null;
+	return (
+		<ul className={`flex flex-col gap-0.5 text-xs ${className}`}>
+			{rows.map((row) => (
+				<li key={row.kind} className="flex gap-1.5">
+					<span
+						aria-hidden
+						className={`mt-1.5 size-1.5 shrink-0 rounded-full ${row.kind === "requested" ? "bg-accent" : "bg-muted-foreground/50"}`}
+					/>
+					<span>
+						<span className="text-muted-foreground">{row.label}:</span>{" "}
+						<span className="font-medium text-foreground">{row.days}</span>
+					</span>
+				</li>
+			))}
+		</ul>
+	);
 }

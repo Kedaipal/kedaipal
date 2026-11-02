@@ -33,6 +33,27 @@ crons.daily(
 	{},
 );
 
+// EasyParcel (z8r3fdcje2): status arrives by webhook (unsigned — each one
+// only schedules a re-read); this hourly sweep re-reads every active
+// shipment as the backstop for a webhook EasyParcel never delivered. The
+// dispatch card's "Refresh status" covers the impatient path between runs.
+// See docs/delivery-easyparcel.md.
+crons.interval(
+	"sync easyparcel shipments",
+	{ hours: 1 },
+	internal.easyparcel.syncActiveJobs,
+	{},
+);
+
+// Connect attempts (`courierOAuthStates`) only matter for minutes — the
+// settings card reads the latest one. Drop anything older than a week.
+crons.daily(
+	"purge courier oauth states",
+	{ hourUTC: 3, minuteUTC: 55 },
+	internal.easyparcel.purgeOAuthStates,
+	{},
+);
+
 // Counter Checkout housekeeping: flip unscanned sessions past their ~10min TTL
 // to `expired`. Reads already compute effective expiry, so this just keeps stale
 // rows out of active-session listings. See docs/counter-checkout.md.
@@ -125,11 +146,51 @@ crons.daily(
 	{},
 );
 
+// wabaTemplateEvents older than 90 days — the newest row PER TEMPLATE is
+// always kept (it is the admin console's live view of that template's
+// status + billing category; Meta only posts on change).
+crons.daily(
+	"purge expired waba template events",
+	{ hourUTC: 4, minuteUTC: 20 },
+	internal.wabaProtection.purgeExpiredWabaTemplateEvents,
+	{},
+);
+
 // adminAuditLog rows older than 24 months (the stated compliance window).
 crons.daily(
 	"purge expired admin audit log",
 	{ hourUTC: 4, minuteUTC: 25 },
 	internal.admin.purgeExpiredAdminAudit,
+	{},
+);
+
+// Kedaipal Credits (86eye2ccu, docs/credits.md): roll every credit account a
+// month boundary has passed — the plan grant lands and a positive leftover is
+// forfeited. 16:05 UTC = 00:05 MYT/SGT, so the new month's credits arrive at the
+// seller's own midnight on the 1st, not UTC's. Daily, so a missed run heals the
+// next day; every debit also rolls its own account lazily.
+crons.daily(
+	"roll credit periods",
+	{ hourUTC: 16, minuteUTC: 5 },
+	internal.credits.internalRollPeriods,
+	{},
+);
+
+// Credits: retire whatever is left of each purchased lot 12 months after it
+// landed (00:10 MYT), one `expire` ledger row per lot.
+crons.daily(
+	"expire purchased credits",
+	{ hourUTC: 16, minuteUTC: 10 },
+	internal.credits.internalExpireLots,
+	{},
+);
+
+// Credits T3: email each store 14 days before any of its bought credits expire
+// (00:15 MYT), once per lot, one email per store.
+crons.daily(
+	"credit expiry notices",
+	{ hourUTC: 16, minuteUTC: 15 },
+	internal.creditNotices.internalExpiryNotices,
 	{},
 );
 

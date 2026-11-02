@@ -96,7 +96,11 @@ covers general order-on-behalf: phone orders, DM quotes, repeat customers.
   second its own countdown hits zero, and a 5-min cron
   (`expireStaleClaims`) keeps the status buckets true. Dead claims
   (expired/cancelled) hold buyer PII and are purged after ~30 days
-  (`purgeStaleClaims`); completed claims are kept (they link to an order).
+  (`purgeStaleClaims`); completed claims are kept (they link to an order) and
+  are erased with the seller's account by the `orderClaims` phase of the
+  deletion cascade ([`docs/account-deletion.md`](./account-deletion.md)) —
+  nothing else deletes one, so that phase is what keeps "kept" from meaning
+  "forever".
 
 ## How the timer works, mechanically (dev)
 
@@ -433,8 +437,66 @@ outcome.
 - Token capability = `generateTrackingToken()` (the `/track` posture:
   unguessable, noindex, never echoed into meta). Clerk-free buyer surface
   (`BUYER_ROUTE_IDS`), SSR via `ssrRead` soft-degrade.
-- **Open:** the variant-A sticky timer bar ("Price locked for 14:32", mint
-  clock + progress line, `ClaimTimerBar`) over a slimmed storefront checkout:
+- **Open:** the sticky countdown ("Price locked for 14:32", `ClaimTimerBar`)
+  over a slimmed storefront checkout. **Restyled to the house scissors strip
+  in z8r3fdr60v** — it shipped as a 3px progress hairline under a navy bar,
+  which read as a border, not a timer. `ClaimTimerBar` is now a thin sticky
+  wrapper around `CountdownStrip` (`src/components/ui/countdown-strip.tsx`):
+  a receipt being cut along its dotted line, right to left, scissors riding
+  the cut, the countdown printed down the middle — crisp on the sealed half
+  and a misregistered, smudged ghost of itself in the wake. Dashes and digits
+  stage mint → amber (≤25% left) → red (≤10%) via `countdownStage`
+  (`src/lib/countdown.ts`), thresholds capped in absolute time (10 min /
+  60 s) so a 24h window never sits amber all afternoon. **Colour is urgency,
+  geometry is progress** — the two answer different questions, so a long
+  window can be nearly cut while the digits are still mint.
+  **The paper is a FIXED dark surface** (`--countdown-paper` / `-ink` /
+  `-ok` / `-low` / `-critical` in `styles.css`, the `bg-cta-mesh`
+  precedent) — it keeps the navy-and-mint language the bar shipped with,
+  but NOT by spelling it `bg-primary` + `text-accent`: both of those
+  resolve to mint in `.dark`, which would put the figures mint-on-mint. A
+  fixed surface means a fixed ramp, so the stage colours are the on-dark
+  variants, and a test fails if anyone simplifies it back. The wake's
+  ghosts sit at high opacity for the same reason: half-opacity was tuned
+  when the paper was white and the ink dark, where fading reads as a
+  smudge; on dark it reads as erased, and the final minute's red clock
+  vanished. Misregistering print doesn't thin ink — the dirt is offset,
+  shear and blur.
+  **The opening is a GENTLE LIFT off the paper** (`--countdown-cut`, ~11
+  points of lightness) and the SHAPE carries the tear, not the brightness.
+  That ratio is the whole trick and it took three wrong turns to find: what
+  made the bright strip work was never a strong paper-vs-opening contrast,
+  it was that the ink contrasted hard with BOTH grounds, so the tear read
+  as a tonal shift while the words stayed solid across it. Crank the two
+  grounds apart instead — a darker opening, a mid one, then a properly
+  light one were all tried — and the ink is forced either to fail on one
+  side or to change colour halfway through a word. One light ink, one ramp,
+  everywhere. The wedge opens WIDER THAN THE PRINT IS TALL and springs open
+  fast behind the blades rather than tapering evenly, because the figures
+  sit mid-band: a narrow or slowly-widening opening strands the tops and
+  tails of the glyphs on the paper either side and the word reads as a
+  smear half-scrubbed out.
+  **Contract for any consumer:** `onExpired` fires **exactly once per
+  deadline** (guarded on the deadline, not a bare flag, so a strip handed a
+  new already-past deadline still fires), the clock **stops** at zero rather
+  than re-rendering a finished strip every second, and the fully-cut state
+  carries an `sr-only` "… — ended" because every visible layer at that point
+  is `aria-hidden`. Today's consumers all unmount at the deadline and the
+  claim page's handler is idempotent, so none of the three is load-bearing
+  yet — they are the contract the next consumer inherits (raised as FYIs on
+  the PR #348 review). **40px tall**, not 56: as a page-top band under a 65px
+  store header it has to read as a strip of tape across a header, not as a
+  second one. Figures use `formatTimeLeft`, which rolls to "10h 36m" above
+  the hour — a promotion can run for a day, and the raw `m:ss` primitive
+  printed that as "638:31".
+  **A live countdown is ALWAYS the page's top band** (`CountdownBand`,
+  full-bleed and sticky under the store header) — never an inline panel
+  element, so the clock stays on screen through a long checkout and every
+  page that has one puts it in the same place. The storefront checkout and
+  product page mount the same band (z8r3fdcw72), so a claim's clock and a
+  flash sale's can never drift apart; the product CARD is the deliberate
+  exception (at ~180px the blades and ghost turn to mush, so it keeps a
+  compact image overlay, which also keeps card heights uniform). Then:
   read-only Order Ticket (frozen lines, "price set by the store"), numbered
   sections — 1 details (name editable, phone locked to the number the link
   was sent to), 2 method/address (shared `AddressFieldset`, pickup picker,
@@ -449,6 +511,7 @@ outcome.
   confirmation push an order create does). Runs the **storefront validation
   set** (address shape by store country, delivery-on-offer, pickup
   resolution, notice floor = store ∨ strictest claim line, opening hours,
+  the **prep floor** and a kept **self-collect time** — `z8r3fdff97` — and
   live stock) but **deliberately skips the min-order rules and the mockup
   gate** — the seller keyed the lines and agreed the price (the counter
   posture; both pinned by test). Delivery fee resolves exactly like
@@ -459,7 +522,31 @@ outcome.
   `stampProductsOrdered`, customer link, retailer email + WA seller alert,
   buyer confirmation push). **Idempotent**: a second commit returns the
   existing order; a reopened completed link shows "already confirmed" +
-  the track page.
+  the track page. Each line freezes its product's **pickup note** from the
+  LIVE product at commit (`z8r3fdff97`) — what the claim page showed, so a
+  seller's correction between send and commit reaches the buyer; the claim
+  lines themselves stay the price-lock snapshot and carry no note.
+- **Prep time + pickup notes on the page** (`z8r3fdff97`): `getByToken`
+  decorates each frozen line with its product's live `prepMinutes` and
+  `pickupNote` (read in the same de-duplicated product pass as the notice
+  floor). The page runs the storefront's rules from
+  `src/lib/checkout-fulfilment.ts` — a pickup time when the store keeps hours
+  or a line needs prep, the prep hint, the pickup point's schedule hint, and
+  the "Before you collect" block — see [`fulfilment-date.md`](./fulfilment-date.md).
+- **Overseas-number delivery note** (`z8r3fdh274`): the claim's number comes
+  from the counter session — a scan, or a manual bind that takes any country —
+  so it can be foreign, and a courier only takes a contact number from the
+  store's own country. When the store books couriers and the buyer picks
+  delivery, the delivery section says the courier will contact the store instead
+  of them, that the store can still reach them on WhatsApp, and that their
+  order page shows every update — never a promise of a stream of WhatsApp
+  updates (one message per order); collection wording and BM included. The number is already known here, so the test is the
+  courier's own (`toDomesticContactPhone`), not a picker. `getByToken` carries
+  **`store.booksCouriers`** beside `collectsFromCustomer` — one bit
+  (`storeBooksCouriers`: Lalamove or Delyva booking armed); the courier config
+  never leaves the owner reads. Shared helper with the storefront checkout:
+  `src/lib/overseas-courier-note.ts`; rules in
+  [`phone-numbers.md`](./phone-numbers.md#telling-the-buyer-at-checkout--bookscouriers).
 - **After commit** the buyer lands on `/track/<token>`, where the SAME
   deadline keeps counting (`PaymentDueCountdown`, above the payment card)
   until real money — see the timer section for the pause/extension rules.
@@ -467,6 +554,54 @@ outcome.
   never a bare "Cancelled".
 - **Expired / cancelled:** calm dead-end — nothing charged, wa.me into the
   seller's chat with a prefilled ask, "Browse the store instead".
+
+## A lapsed store's claim carries no payment deadline (z8r3fdr6gg)
+
+While the store's buyer payments are paused (past due), the buyer can still commit a claim, but there is nothing they can pay with, so a deadline would be a trap: `commit` stamps no `paymentDueAt`, and `cancelUnpaidDueOrders` **lifts** a deadline that falls due during the pause instead of cancelling the order (the stock stays held; the seller can cancel by hand once they're back). The claim page and the order page say payments are paused. One edge accepted on purpose: an order whose deadline is still running when the store comes back keeps whatever is left of it. See [`manual-subscription.md`](./manual-subscription.md#buyer-payments-pause-while-a-store-is-lapsed-z8r3fdr6gg).
+
+## Off-Season Hold closes every claim door (z8r3fday24)
+
+A claim is the only order invitation that can already be sitting in a buyer's
+chat when the seller pauses ordering, so the hold has to reach all three of its
+doors, not just the send:
+
+| Door | While `retailers.orderingPausedAt` is set |
+| --- | --- |
+| `sendClaim` | refused — a paused store issues no new links |
+| `resendClaim` | refused — re-sending pushes a fresh link, i.e. a new invitation |
+| `commit` | refused — the stale-tab guard, so a link sent minutes before the pause can't land an order (stock untouched, claim stays `open` until its own TTL expires it) |
+| `getByToken` | carries `store.orderingPaused`, so the page renders the seasonal-break dead end **on load** — the buyer never fills a form the commit would reject |
+
+The one exception is deliberate: a buyer who **already completed** their claim
+still gets their order back on a re-open, because the idempotent branch runs
+before the guard. Their order exists; hiding it behind a break notice would be
+a lie about their own purchase.
+
+Ranking on the page: the pause outranks `expired` (it's the truer, more
+actionable reason) but never `completed`. It reads as the shop resting, not as
+the seller withdrawing this particular order — that's what `cancelled` says.
+
+## Sending needs a credit in hand; finishing never does (z8r3fdwbbb)
+
+`sendClaim` and `resendClaim` refuse while the store can't pay for the sale's
+credit (`assertCounterSaleFunded` — the counter's rule, since a claim is a
+counter sale finished on the buyer's phone). "Send link" and "Retry" are
+disabled with the reason on the Counter page. The credit is still spent at
+`commit`, and `commit` is **never** refused over the seller's balance: a link
+already out when the balance hits zero completes for the buyer, and that order
+waits on credits like any other below-zero order. See
+[`credits.md`](./credits.md#the-counter-needs-a-credit-in-hand-z8r3fdwbbb).
+
+That is the **one remaining way a counter-originated sale can wait**, so both
+seller surfaces say so instead of reading as a finished sale:
+
+- **The claims panel row:** `listClaims` carries `orderCreditsToUnlock` (set
+  only on a gated order, from the same `forSeller` redaction the row already
+  ran) — "Buyer finished · Waiting on 1 credit · ORD-X", with a lock in place of the
+  success tick.
+- **The session's done screen:** reading the order's `creditGated`, it shows
+  "Waiting on N credits" and the way back, and leaves out the receipt and the
+  one-tap close — the server refuses both for a gated order.
 
 ## WhatsApp send
 

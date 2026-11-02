@@ -1,0 +1,981 @@
+// @vitest-environment jsdom
+// The admin seller directory (z8r3fdh37c): status chips that filter and
+// count, a sort menu, search across contact facts, the desktop table vs the
+// phone cards, the read-only detail sheet with its copy controls, the CSV
+// export, and the one-door Manage menu (owner decision, 20 Sep 2026).
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
+import { type FunctionReference, getFunctionName } from "convex/server";
+import { useState } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { api } from "../../convex/_generated/api";
+import type { AdminSellerRow } from "../../convex/admin";
+
+const { navigateSpy, setActAsSpy, downloadCsvSpy, desktop } = vi.hoisted(
+	() => ({
+		navigateSpy: vi.fn(),
+		setActAsSpy: vi.fn(),
+		downloadCsvSpy: vi.fn(),
+		desktop: { value: true },
+	}),
+);
+vi.mock("@tanstack/react-router", () => ({
+	createFileRoute: () => (opts: unknown) => opts,
+	useNavigate: () => navigateSpy,
+	Link: ({
+		to,
+		hash,
+		children,
+		...rest
+	}: {
+		to: string;
+		hash?: string;
+		children: React.ReactNode;
+	}) => (
+		<a href={hash ? `${to}#${hash}` : to} {...rest}>
+			{children}
+		</a>
+	),
+}));
+vi.mock("@convex-dev/react-query", () => ({
+	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
+}));
+const queryData = new Map<string, unknown>();
+vi.mock("@tanstack/react-query", () => ({
+	useQuery: (q: { __fn: FunctionReference<"query"> }) => ({
+		data: queryData.get(getFunctionName(q.__fn)),
+	}),
+}));
+vi.mock("../hooks/useActAs", () => ({
+	useActAs: () => ({ setActAs: setActAsSpy }),
+}));
+vi.mock("../hooks/useIsDesktop", () => ({
+	useIsDesktop: () => desktop.value,
+}));
+vi.mock("../lib/download", () => ({ downloadCsv: downloadCsvSpy }));
+
+// Radix positions menus with floating-ui, which watches the trigger with a
+// ResizeObserver jsdom doesn't ship.
+vi.stubGlobal(
+	"ResizeObserver",
+	class {
+		observe() {}
+		unobserve() {}
+		disconnect() {}
+	},
+);
+
+const mutationSpies = new Map<string, ReturnType<typeof vi.fn>>();
+vi.mock("convex/react", () => ({
+	useMutation: (ref: FunctionReference<"mutation">) => {
+		const name = getFunctionName(ref);
+		if (!mutationSpies.has(name)) {
+			mutationSpies.set(name, vi.fn().mockResolvedValue({ ok: true }));
+		}
+		return mutationSpies.get(name);
+	},
+	// The credit ledger drawer's paginated read (Credits T5).
+	usePaginatedQuery: () => ({
+		results: [],
+		status: "Exhausted",
+		loadMore: () => {},
+	}),
+}));
+
+import { SellerCard } from "../components/admin/seller-card";
+import { formatShortDate } from "../lib/format";
+import {
+	AdminSellersContent,
+	Route,
+	type SellersSearch,
+} from "./app.admin.sellers";
+
+const startActAsSpy = () =>
+	mutationSpies.get(getFunctionName(api.admin.startActAsSession));
+
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = new Date(2026, 8, 22, 12).getTime();
+const at = (days: number) => NOW + days * DAY;
+
+function seller(overrides: Partial<AdminSellerRow> = {}): AdminSellerRow {
+	return {
+		_id: "r_comp" as AdminSellerRow["_id"],
+		availability: { state: "open" },
+		storeName: "Mak Kuih",
+		slug: "mak-kuih",
+		ownerUserId: "u_owner",
+		ownerIsAdmin: false,
+		seats: { active: 1, cap: 3, capUnlimited: false, invited: 0 },
+		isFoundingMember: false,
+		foundingIntent: false,
+		subscriptionStatus: "trialing",
+		plan: "pro",
+		comped: false,
+		createdAt: at(-20),
+		unclaimed: false,
+		referralEditable: true,
+		hasPaidInvoice: false,
+		acquisition: { suggested: null },
+		purging: false,
+		marketplace: { internal: false },
+		country: "MY",
+		currency: "MYR",
+		billingCurrency: "MYR",
+		...overrides,
+	};
+}
+
+const ROWS: AdminSellerRow[] = [
+	seller({
+		_id: "r_bear" as AdminSellerRow["_id"],
+		storeName: "Bearcamp Malaysia",
+		slug: "bearcamp-malaysia",
+		foundingMemberRank: 1,
+		subscriptionStatus: "active",
+		billingCycle: "monthly",
+		currentPeriodEnd: at(22),
+		ownerEmail: "hello@bearcamp.example",
+		waPhone: "60123456789",
+		autoRenew: {
+			method: "card",
+			methodLabel: "Visa ·· 4242",
+			attachedAt: at(-60),
+		},
+		lastActAsAt: at(-4),
+		credits: {
+			plan: 80,
+			purchased: 50,
+			periodKey: "2026-09",
+			periodGrant: 200,
+		},
+	}),
+	seller({
+		_id: "r_lekor" as AdminSellerRow["_id"],
+		storeName: "Lekor Mr.Ganu",
+		slug: "lekor-mr-ganu",
+		foundingMemberRank: 2,
+		subscriptionStatus: "past_due",
+		billingCycle: "monthly",
+		ownerEmail: "lekor@example.com",
+		waPhone: "60134567890",
+		pendingInvoice: {
+			invoiceNumber: "KP-0142",
+			dueDate: at(-19),
+			total: 9900,
+			currency: "MYR",
+			hasPayNowLink: true,
+			plan: "pro",
+			billingCycle: "monthly",
+			kind: "plan",
+		},
+		credits: {
+			plan: -15,
+			purchased: 0,
+			periodKey: "2026-09",
+			periodGrant: 100,
+			exhaustedAt: at(-3),
+			customGrant: 150,
+		},
+	}),
+	seller({
+		_id: "r_fish" as AdminSellerRow["_id"],
+		storeName: "Waa Daa Fish",
+		slug: "waadaafish",
+		subscriptionStatus: "trialing",
+		trialEndsAt: at(6),
+		waPhone: "60198765432",
+	}),
+	seller({
+		_id: "r_admin" as AdminSellerRow["_id"],
+		storeName: "Kedaipal Demo",
+		slug: "kp-demo",
+		ownerIsAdmin: true,
+	}),
+];
+
+/** The route test's stand-in for the router: URL state in React state. */
+function Harness({ initial = {} }: { initial?: SellersSearch }) {
+	const [search, setSearch] = useState<SellersSearch>(initial);
+	return <AdminSellersContent search={search} onSearchChange={setSearch} />;
+}
+
+function renderDirectory(initial?: SellersSearch) {
+	queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
+		sellers: ROWS,
+		capped: false,
+	});
+	queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), true);
+	return render(<Harness initial={initial} />);
+}
+
+/** Radix opens the menu on pointerdown alone — firing Enter as well would
+ * TOGGLE it straight back shut. */
+function openMenu(name: RegExp | string) {
+	const trigger = screen.getByRole("button", { name });
+	fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerId: 1 });
+	return trigger;
+}
+
+beforeEach(() => {
+	mutationSpies.clear();
+	navigateSpy.mockClear();
+	setActAsSpy.mockClear();
+	downloadCsvSpy.mockClear();
+	queryData.clear();
+	desktop.value = true;
+	vi.spyOn(Date, "now").mockReturnValue(NOW);
+});
+afterEach(() => {
+	cleanup();
+	vi.restoreAllMocks();
+});
+
+describe("directory — desktop table", () => {
+	it("shows every contact and billing fact on the row, each contact with its own copy control", () => {
+		renderDirectory();
+		const row = screen.getByRole("row", { name: /Bearcamp Malaysia/ });
+		expect(within(row).getByText("hello@bearcamp.example")).toBeTruthy();
+		expect(within(row).getByText("+60 12-345 6789")).toBeTruthy();
+		expect(
+			within(row).getByRole("button", {
+				name: "Copy email hello@bearcamp.example",
+			}),
+		).toBeTruthy();
+		expect(
+			within(row).getByRole("button", {
+				name: "Copy WhatsApp +60 12-345 6789",
+			}),
+		).toBeTruthy();
+		expect(
+			within(row)
+				.getByRole("link", { name: /Chat on WhatsApp/ })
+				.getAttribute("href"),
+		).toBe("https://wa.me/60123456789");
+		expect(within(row).getByText("Active")).toBeTruthy();
+		expect(within(row).getByText("Pro")).toBeTruthy();
+		expect(
+			within(row).getByText("Monthly · auto-renew Visa ·· 4242"),
+		).toBeTruthy();
+		expect(within(row).getByText(/^Renews /)).toBeTruthy();
+		expect(within(row).getByText("in 22 days")).toBeTruthy();
+	});
+
+	it("a missing contact says so in words and grows no buttons; a past-due row says why and how late", () => {
+		renderDirectory();
+		const fish = screen.getByRole("row", { name: /Waa Daa Fish/ });
+		expect(within(fish).getByText("No email on file")).toBeTruthy();
+		expect(
+			within(fish).queryByRole("button", { name: /Copy email/ }),
+		).toBeNull();
+		expect(within(fish).getByText("in 6 days")).toBeTruthy();
+
+		const lekor = screen.getByRole("row", { name: /Lekor/ });
+		expect(within(lekor).getByText("Past due")).toBeTruthy();
+		expect(within(lekor).getByText("KP-0142 unpaid")).toBeTruthy();
+		expect(within(lekor).getByText("19 days overdue")).toBeTruthy();
+		expect(within(lekor).getByText("Monthly · Pay-now link")).toBeTruthy();
+	});
+
+	it("founding rank first by default; an admin store reads Admin with no expiry", () => {
+		renderDirectory();
+		const names = screen
+			.getAllByRole("row")
+			.slice(1)
+			.map((r) => r.getAttribute("data-seller"));
+		expect(names).toEqual([
+			"bearcamp-malaysia",
+			"lekor-mr-ganu",
+			"waadaafish",
+			"kp-demo",
+		]);
+		const admin = screen.getByRole("row", { name: /Kedaipal Demo/ });
+		expect(within(admin).getByText("Admin")).toBeTruthy();
+		expect(within(admin).getByText("Never billed")).toBeTruthy();
+	});
+});
+
+describe("directory — chips, sort, search", () => {
+	it("chips carry counts, Past due sits first after All, and picking one filters the rows", () => {
+		renderDirectory();
+		const chips = Array.from(
+			document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]"),
+		);
+		const labels = chips.map((b) => b.textContent);
+		expect(labels[0]).toBe("All4");
+		expect(labels[1]).toBe("Past due1");
+		expect(chips[0].getAttribute("aria-pressed")).toBe("true");
+		expect(
+			screen.queryByRole("button", { name: /No subscription/ }),
+		).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: /^Past due/ }));
+		expect(
+			screen
+				.getByRole("button", { name: /^Past due/ })
+				.getAttribute("aria-pressed"),
+		).toBe("true");
+		expect(screen.getAllByRole("row")).toHaveLength(2); // header + Lekor
+		expect(screen.getByText("Showing 1 of 4")).toBeTruthy();
+	});
+
+	// z8r3fdzn6r: the chips are an OR, so an admin can see a whole collection
+	// of states at once ("Past due or Trialing") instead of one bucket at a time.
+	it("chips combine: two picked shows stores in either, the line names them, Clear all (N) undoes it", () => {
+		renderDirectory();
+		expect(screen.getByText(/Tap chips to combine them/)).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /^Clear all/ })).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: /^Past due/ }));
+		fireEvent.click(screen.getByRole("button", { name: /^Trialing/ }));
+		for (const name of [/^Past due/, /^Trialing/]) {
+			expect(
+				screen.getByRole("button", { name }).getAttribute("aria-pressed"),
+			).toBe("true");
+		}
+		expect(
+			screen.getByRole("button", { name: /^All/ }).getAttribute("aria-pressed"),
+		).toBe("false");
+		// header + Lekor (past due) + Waa Daa (trialing)
+		expect(screen.getAllByRole("row")).toHaveLength(3);
+		expect(screen.getByText("Past due or Trialing")).toBeTruthy();
+		expect(screen.getByText("Showing 2 of 4")).toBeTruthy();
+
+		// Tapping a lit chip takes it back out of the union.
+		fireEvent.click(screen.getByRole("button", { name: /^Past due/ }));
+		expect(screen.getAllByRole("row")).toHaveLength(2);
+
+		fireEvent.click(screen.getByRole("button", { name: /^Past due/ }));
+		fireEvent.click(screen.getByRole("button", { name: "Clear all (2)" }));
+		expect(screen.getAllByRole("row")).toHaveLength(5);
+		expect(
+			screen.getByRole("button", { name: /^All/ }).getAttribute("aria-pressed"),
+		).toBe("true");
+	});
+
+	it("All is the empty selection: tapping it clears every chip", () => {
+		renderDirectory({ status: ["past_due", "active"] });
+		expect(screen.getAllByRole("row")).toHaveLength(3);
+		fireEvent.click(screen.getByRole("button", { name: /^All/ }));
+		expect(screen.getAllByRole("row")).toHaveLength(5);
+		expect(screen.queryByRole("button", { name: /^Clear all/ })).toBeNull();
+	});
+
+	it("an empty union names every chip in it", () => {
+		renderDirectory({ status: ["on_hold", "cancelled"] });
+		expect(screen.getByText("Nothing in On hold or Cancelled")).toBeTruthy();
+	});
+
+	it("?status= reads a list, an older single value, and drops junk", () => {
+		const validate = (
+			Route as unknown as {
+				validateSearch: (s: Record<string, unknown>) => SellersSearch;
+			}
+		).validateSearch;
+		// Row order, de-duplicated, whatever order the link was clicked in.
+		expect(
+			validate({ status: ["cancelled", "past_due", "cancelled"] }).status,
+		).toEqual(["past_due", "cancelled"]);
+		// Links written before the chips combined (Acquisition, bookmarks).
+		expect(validate({ status: "untagged_payers" }).status).toEqual([
+			"untagged_payers",
+		]);
+		expect(validate({ status: ["all", "bogus", 3] }).status).toBeUndefined();
+	});
+
+	it("sort by expiry puts the soonest deadline first and dateless rows last", () => {
+		renderDirectory();
+		openMenu(/^Sort: Founding rank/);
+		fireEvent.click(screen.getByRole("menuitemradio", { name: /Expiry/ }));
+		const names = screen
+			.getAllByRole("row")
+			.slice(1)
+			.map((r) => r.getAttribute("data-seller"));
+		// Lekor's bill was due 19 days ago, Fish's trial ends in 6, Bearcamp
+		// renews in 22, the admin store has no date.
+		expect(names).toEqual([
+			"lekor-mr-ganu",
+			"waadaafish",
+			"bearcamp-malaysia",
+			"kp-demo",
+		]);
+		expect(screen.getByRole("button", { name: /^Sort: Expiry/ })).toBeTruthy();
+	});
+
+	it("search reaches the email and the phone, not just the name", () => {
+		renderDirectory();
+		const box = screen.getByLabelText("Search sellers");
+		fireEvent.change(box, { target: { value: "hello@bearcamp" } });
+		expect(screen.getAllByRole("row")).toHaveLength(2);
+		expect(screen.getByRole("row", { name: /Bearcamp/ })).toBeTruthy();
+		fireEvent.change(box, { target: { value: "+60 19-876" } });
+		expect(screen.getByRole("row", { name: /Waa Daa Fish/ })).toBeTruthy();
+		expect(screen.getAllByRole("row")).toHaveLength(2);
+	});
+
+	// z8r3fdtk87: a hand-typed or shared `?q=9981` reaches validateSearch as
+	// the NUMBER 9981 (TanStack JSON-parses the URL), and a key the validator
+	// left out leaked that number to `q.trim()` — "Something went wrong". The
+	// router-merge half is pinned in src/lib/search-params.test.tsx and swept
+	// for every route in search-params-sweep.test.ts.
+	it("a numeric ?q= from a pasted link is read as text, and junk closes every key", () => {
+		const validate = (
+			Route as unknown as {
+				validateSearch: (s: Record<string, unknown>) => SellersSearch;
+			}
+		).validateSearch;
+		expect(validate({ q: 9981 })).toEqual({ q: "9981" });
+		const junk = validate({ q: [1], status: 7, sort: true });
+		expect(junk).toEqual({});
+		for (const key of ["q", "status", "sort"]) {
+			expect(Object.hasOwn(junk, key)).toBe(true);
+		}
+	});
+
+	it("an all-digit query finds the slug, the name and the phone that carry it", () => {
+		const yuzu = seller({
+			_id: "r_yuzu" as AdminSellerRow["_id"],
+			storeName: "Yuzu Bakes",
+			slug: "9981yuzu",
+		});
+		const named = seller({
+			_id: "r_named" as AdminSellerRow["_id"],
+			storeName: "Kedai 9981",
+			slug: "kedai-lama",
+		});
+		const phoned = seller({
+			_id: "r_phoned" as AdminSellerRow["_id"],
+			storeName: "Pak Ali Satay",
+			slug: "pak-ali",
+			notifyWaPhone: "60129981234",
+		});
+		queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
+			sellers: [...ROWS, yuzu, named, phoned],
+			capped: false,
+		});
+		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), true);
+		render(<Harness initial={{ q: "9981" }} />);
+		// Header row + the three matches; nothing else carries 9981.
+		expect(screen.getAllByRole("row")).toHaveLength(4);
+		for (const name of [/Yuzu Bakes/, /Kedai 9981/, /Pak Ali Satay/]) {
+			expect(screen.getByRole("row", { name })).toBeTruthy();
+		}
+	});
+
+	it("no matches names the filter that is hiding the rest and clears it in one tap", () => {
+		renderDirectory({ status: ["past_due"], q: "kuih" });
+		expect(screen.getByText("No past due sellers match “kuih”")).toBeTruthy();
+		// One chip + the search box: the count says what the tap undoes.
+		fireEvent.click(screen.getByRole("button", { name: "Clear all (2)" }));
+		expect(screen.getAllByRole("row")).toHaveLength(5);
+		expect(
+			(screen.getByLabelText("Search sellers") as HTMLInputElement).value,
+		).toBe("");
+		expect(
+			screen.getByRole("button", { name: /^All/ }).getAttribute("aria-pressed"),
+		).toBe("true");
+	});
+
+	it("Export CSV writes the visible rows and is disabled-with-reason when nothing matches", () => {
+		renderDirectory({ status: ["active"] });
+		fireEvent.click(screen.getByRole("button", { name: /Export CSV/ }));
+		expect(downloadCsvSpy).toHaveBeenCalledTimes(1);
+		const [filename, csv] = downloadCsvSpy.mock.calls[0] as [string, string];
+		expect(filename).toBe("kedaipal-sellers-2026-09-22.csv");
+		expect(csv.split("\r\n")).toHaveLength(2);
+		expect(csv).toContain("hello@bearcamp.example");
+		expect(csv).not.toContain("lekor@example.com");
+
+		cleanup();
+		renderDirectory({ status: ["cancelled"] });
+		const button = screen.getByRole("button", { name: /Export CSV/ });
+		expect(button.hasAttribute("disabled")).toBe(true);
+		expect(button.getAttribute("title")).toMatch(/no rows match/);
+	});
+});
+
+describe("directory — detail sheet", () => {
+	it("the store name opens a read-only sheet with every fact copyable and a Copy summary", async () => {
+		renderDirectory();
+		fireEvent.click(screen.getByRole("button", { name: "Bearcamp Malaysia" }));
+		const sheet = await screen.findByRole("dialog");
+		expect(
+			within(sheet).getByRole("heading", { name: "Bearcamp Malaysia" }),
+		).toBeTruthy();
+		// No alerts number on this row: the line says so rather than vanishing.
+		expect(within(sheet).getByText("Order alerts to")).toBeTruthy();
+		expect(within(sheet).getByText("No WhatsApp on file")).toBeTruthy();
+		expect(
+			within(sheet).getByText(
+				"kedaipal.com/bearcamp-malaysia".replace(
+					"kedaipal.com",
+					window.location.host,
+				),
+			),
+		).toBeTruthy();
+		expect(
+			within(sheet).getByRole("button", { name: "Copy storefront link" }),
+		).toBeTruthy();
+		expect(
+			within(sheet).getByRole("button", { name: /Copy a summary of Bearcamp/ }),
+		).toBeTruthy();
+		expect(within(sheet).getByText("Visa ·· 4242")).toBeTruthy();
+		expect(within(sheet).getByText("Never paid")).toBeTruthy();
+		expect(within(sheet).getByText(/4 days ago/)).toBeTruthy(); // last act-as
+		// Opening the sheet entered nothing.
+		expect(setActAsSpy).not.toHaveBeenCalled();
+
+		// Its primary button IS the act-as door.
+		fireEvent.click(within(sheet).getByRole("button", { name: "Open store" }));
+		expect(setActAsSpy).toHaveBeenCalledWith("r_bear");
+		expect(startActAsSpy()).toHaveBeenCalledWith({ retailerId: "r_bear" });
+		expect(navigateSpy).toHaveBeenCalledWith({ to: "/app" });
+	});
+
+	it("a contract's allowances read on the sheet, not only inside the edit form", async () => {
+		// A negotiated term the summary hides is a term the next admin
+		// discovers by hitting it (z8r3fdkp8h seats/broadcasts).
+		queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
+			capped: false,
+			sellers: [
+				seller({
+					_id: "r_hsl" as AdminSellerRow["_id"],
+					storeName: "Mama's Delights",
+					slug: "mamas-delights",
+					subscriptionStatus: "active",
+					plan: "enterprise",
+					billingCycle: "monthly",
+					enterprise: {
+						baseFeeMinor: 88_800,
+						currency: "MYR",
+						includedCredits: 1500,
+						overageRateMinor: 60,
+						blockSize: 5000,
+						teammates: 12,
+						broadcastQuota: 500,
+						contactName: "HSL Food GM",
+						setAt: at(-1),
+					},
+				}),
+				seller({
+					_id: "r_unl" as AdminSellerRow["_id"],
+					storeName: "Unlimited Deal",
+					slug: "unlimited-deal",
+					subscriptionStatus: "active",
+					plan: "enterprise",
+					billingCycle: "monthly",
+					enterprise: {
+						baseFeeMinor: 120_000,
+						currency: "MYR",
+						includedCredits: 2000,
+						overageRateMinor: 50,
+						blockSize: 5000,
+						contactName: "Someone",
+						setAt: at(-1),
+					},
+				}),
+			],
+		});
+		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), false);
+		render(<Harness />);
+
+		fireEvent.click(screen.getByRole("button", { name: "Mama's Delights" }));
+		let sheet = await screen.findByRole("dialog");
+		expect(within(sheet).getByText(/12 teammates \+ the owner/)).toBeTruthy();
+		expect(within(sheet).getByText(/500 broadcasts\/mo/)).toBeTruthy();
+		fireEvent.keyDown(document.body, { key: "Escape" });
+
+		// A deal that names no allowances reads the tier's unlimited, and says
+		// nothing about broadcasts it never negotiated.
+		fireEvent.click(screen.getByRole("button", { name: "Unlimited Deal" }));
+		sheet = await screen.findByRole("dialog");
+		expect(within(sheet).getByText("Unlimited teammates")).toBeTruthy();
+		expect(within(sheet).queryByText(/broadcasts\/mo/)).toBeNull();
+	});
+
+	it("an open Enterprise ask reads on the sheet and dismisses in place; the chip filters to it", async () => {
+		// The lead exists so an ask can't be forgotten (z8r3fdkp8h follow-up):
+		// a chip in the owes-action front group, and the answer (contract or
+		// dismiss) right where the admin already works.
+		queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
+			capped: false,
+			sellers: [
+				ROWS[0],
+				seller({
+					_id: "r_lead" as AdminSellerRow["_id"],
+					storeName: "Mama's Delights",
+					slug: "mamas-delights",
+					subscriptionStatus: "trialing",
+					enterpriseInterestAt: at(-3),
+				}),
+			],
+		});
+		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), false);
+		render(<Harness initial={{ status: ["wants_enterprise"] }} />);
+
+		// The chip carries its count and the filter shows only the ask.
+		expect(
+			screen.getByRole("button", { name: /Wants Enterprise/ }).textContent,
+		).toContain("1");
+		expect(screen.getByText("Mama's Delights")).toBeTruthy();
+		expect(screen.queryByText("Bearcamp Malaysia")).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: "Mama's Delights" }));
+		const sheet = await screen.findByRole("dialog");
+		expect(within(sheet).getByText("Wants Enterprise")).toBeTruthy();
+		expect(within(sheet).getByText(/3 days ago/)).toBeTruthy();
+		fireEvent.click(within(sheet).getByRole("button", { name: "Dismiss" }));
+		expect(
+			mutationSpies.get(getFunctionName(api.enterprise.dismissInterest)),
+		).toHaveBeenCalledWith({ retailerId: "r_lead" });
+	});
+});
+
+describe("directory — phone", () => {
+	it("renders cards instead of a table, with 44px copy targets", () => {
+		desktop.value = false;
+		renderDirectory();
+		expect(screen.queryByRole("table")).toBeNull();
+		expect(screen.getAllByRole("listitem")).toHaveLength(4);
+		const copy = screen.getByRole("button", {
+			name: "Copy email hello@bearcamp.example",
+		});
+		expect(copy.className).toMatch(/h-11/);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// SellerCard — one Manage menu per row (owner decision, 20 Sep 2026)
+// ---------------------------------------------------------------------------
+
+function renderCard(row: AdminSellerRow, purgeEnabled = false) {
+	const onViewDetails = vi.fn();
+	render(
+		<ul>
+			<SellerCard
+				seller={row}
+				purgeEnabled={purgeEnabled}
+				onViewDetails={onViewDetails}
+				now={NOW}
+			/>
+		</ul>,
+	);
+	return { onViewDetails };
+}
+
+describe("SellerCard — Store highlights at a glance (z8r3fdkmyp)", () => {
+	it("a live paid window shows a Highlight pill naming its last day", () => {
+		const until = NOW + 7 * 24 * 60 * 60 * 1000;
+		renderCard(
+			seller({ marketplace: { sponsoredUntil: until, internal: false } }),
+		);
+		const pill = screen.getByText(/^Highlight · to /);
+		// Full date (with year) in the tooltip; day + month on the pill.
+		expect(pill.getAttribute("title")).toBe(
+			`On Store highlights through ${formatShortDate(until - 1)}`,
+		);
+	});
+
+	it("a comped Sponsor store shows 'Highlight · comped' with no window set", () => {
+		renderCard(
+			seller({
+				comped: true,
+				comp: { kind: "sponsor", label: "Sponsored by Kedaipal", grantedAt: 0 },
+			}),
+		);
+		expect(screen.getByText("Highlight · comped")).toBeTruthy();
+	});
+
+	it("nothing for an expired window, a kept-off comp, or an internal store", () => {
+		renderCard(
+			seller({ marketplace: { sponsoredUntil: NOW - 1, internal: false } }),
+		);
+		expect(screen.queryByText(/^Highlight/)).toBeNull();
+		cleanup();
+		renderCard(
+			seller({
+				comped: true,
+				comp: { kind: "partner", grantedAt: 0 },
+				marketplace: { compHighlightOffAt: NOW - 1, internal: false },
+			}),
+		);
+		expect(screen.queryByText(/^Highlight/)).toBeNull();
+		cleanup();
+		renderCard(
+			seller({
+				comped: true,
+				comp: { kind: "internal", grantedAt: 0 },
+				marketplace: { internal: true },
+			}),
+		);
+		expect(screen.queryByText(/^Highlight/)).toBeNull();
+	});
+
+	it("hidden by an admin: 'Hidden from /stores' — and it outranks a live highlight", () => {
+		renderCard(
+			seller({
+				marketplace: {
+					hidden: { at: at(-2) },
+					sponsoredUntil: at(7),
+					internal: false,
+				},
+			}),
+		);
+		expect(screen.getByText("Hidden from /stores").getAttribute("title")).toBe(
+			`Hidden from /stores by an admin since ${formatShortDate(at(-2))}`,
+		);
+		expect(screen.queryByText(/^Highlight/)).toBeNull();
+	});
+});
+
+describe("SellerCard — hide from /stores (z8r3fdkmyp)", () => {
+	const hideSpy = () =>
+		mutationSpies.get(getFunctionName(api.admin.hideFromMarketplace));
+	const showSpy = () =>
+		mutationSpies.get(getFunctionName(api.admin.showOnMarketplace));
+
+	it("hiding goes through a confirm that names the consequence, with the optional note", async () => {
+		renderCard(seller());
+		openMenu(/Manage Mak Kuih/);
+		expect(screen.getByText(/storefront and orders unaffected/)).toBeTruthy();
+		fireEvent.click(screen.getByText("Hide from /stores"));
+		expect(await screen.findByText("Hide Mak Kuih from /stores?")).toBeTruthy();
+		expect(
+			screen.getByText(/whatever the seller's own switch says/),
+		).toBeTruthy();
+		expect(hideSpy()).not.toHaveBeenCalled();
+		fireEvent.change(screen.getByLabelText(/Note to the seller/), {
+			target: { value: "  Add real photos.  " },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Hide from /stores" }));
+		await waitFor(() =>
+			expect(hideSpy()).toHaveBeenCalledWith({
+				retailerId: "r_comp",
+				note: "Add real photos.",
+			}),
+		);
+	});
+
+	it("a hidden store's item says since when, pauses its highlight, and shows it again in one click", () => {
+		renderCard(
+			seller({
+				comped: true,
+				comp: { kind: "sponsor", grantedAt: 0 },
+				marketplace: { hidden: { at: at(-3) }, internal: false },
+			}),
+		);
+		openMenu(/Manage Mak Kuih/);
+		expect(
+			screen.getByText(`Hidden since ${formatShortDate(at(-3))}`),
+		).toBeTruthy();
+		// The highlight keeps its setting but must not read as featured.
+		expect(screen.getByText("Paused while hidden from /stores")).toBeTruthy();
+		expect(screen.queryByText(/While comped/)).toBeNull();
+		fireEvent.click(screen.getByText("Show on /stores again"));
+		expect(showSpy()).toHaveBeenCalledWith({ retailerId: "r_comp" });
+	});
+
+	it("an internal store: disabled, with the reason in place", () => {
+		renderCard(seller({ marketplace: { internal: true } }));
+		openMenu(/Manage Mak Kuih/);
+		const item = screen
+			.getByText("Hide from /stores")
+			.closest('[role="menuitem"]');
+		expect(item?.getAttribute("aria-disabled")).toBe("true");
+		expect(
+			screen.getByText("Internal store — never listed anyway"),
+		).toBeTruthy();
+	});
+});
+
+describe("SellerCard — the Manage menu", () => {
+	it("one door: nothing on the row enters act-as; the name opens details, the rest are copy controls", () => {
+		const { onViewDetails } = renderCard(
+			seller({ ownerEmail: "mak@example.com", waPhone: "60111111111" }),
+			true,
+		);
+		const names = screen
+			.getAllByRole("button")
+			.map((b) => b.getAttribute("aria-label") ?? b.textContent);
+		for (const n of names) {
+			expect(n).toMatch(/^(Mak Kuih|Manage Mak Kuih|Copy )/);
+		}
+		fireEvent.click(screen.getByRole("button", { name: "Mak Kuih" }));
+		expect(onViewDetails).toHaveBeenCalledTimes(1);
+		expect(setActAsSpy).not.toHaveBeenCalled();
+
+		openMenu(/Manage Mak Kuih/);
+		expect(screen.getByText("Open store")).toBeTruthy();
+		expect(screen.getByText(/Act-as mode/)).toBeTruthy();
+		expect(screen.getByText("View details")).toBeTruthy();
+		expect(screen.getByText("Turn on comp upgrade")).toBeTruthy();
+		expect(screen.getByText(/never billed/)).toBeTruthy();
+		expect(screen.getByText("Delete store")).toBeTruthy();
+		expect(screen.getByText(/Dev only/)).toBeTruthy();
+	});
+
+	it("Open store enters act-as: session started, audit fired, dashboard opened", () => {
+		renderCard(seller());
+		openMenu(/Manage Mak Kuih/);
+		fireEvent.click(screen.getByText("Open store"));
+		expect(setActAsSpy).toHaveBeenCalledWith("r_comp");
+		expect(startActAsSpy()).toHaveBeenCalledWith({ retailerId: "r_comp" });
+		expect(navigateSpy).toHaveBeenCalledWith({ to: "/app" });
+	});
+
+	it("the comp item opens the comp dialog, worded for the toggle's position", async () => {
+		renderCard(seller());
+		openMenu(/Manage Mak Kuih/);
+		fireEvent.click(screen.getByText("Turn on comp upgrade"));
+		expect(await screen.findByText("Comp upgrade — Mak Kuih")).toBeTruthy();
+		// A comped row's item reads as the edit door instead.
+		cleanup();
+		renderCard(
+			seller({
+				comped: true,
+				subscriptionStatus: "active",
+				comp: {
+					kind: "sponsor",
+					label: "Sponsored by Bearcamp",
+					grantedAt: new Date(2026, 8, 14).getTime(),
+				},
+			}),
+		);
+		openMenu(/Manage Mak Kuih/);
+		expect(screen.getByText("Comp upgrade — on")).toBeTruthy();
+		expect(screen.getByText(/turn it off/)).toBeTruthy();
+	});
+
+	it("an admin-owned store: comp disabled with the reason readable in place, not behind a hover", () => {
+		renderCard(seller({ ownerIsAdmin: true }));
+		openMenu(/Manage Mak Kuih/);
+		const item = screen
+			.getByText("Turn on comp upgrade")
+			.closest('[role="menuitem"]');
+		expect(item?.getAttribute("aria-disabled")).toBe("true");
+		expect(screen.getByText("Admin store — always free already")).toBeTruthy();
+	});
+
+	it("Delete store exists only where the dev purge is enabled, and goes through the slug confirm", async () => {
+		renderCard(seller(), false);
+		openMenu(/Manage Mak Kuih/);
+		expect(screen.queryByText("Delete store")).toBeNull();
+		cleanup();
+
+		renderCard(seller(), true);
+		openMenu(/Manage Mak Kuih/);
+		fireEvent.click(screen.getByText("Delete store"));
+		expect(await screen.findByText("Delete Mak Kuih?")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Delete store" })).toBeTruthy();
+	});
+
+	it("a purging row shows Deleting… and no Manage door", () => {
+		renderCard(seller({ purging: true }), true);
+		expect(screen.getByText("Deleting…")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /Manage/ })).toBeNull();
+	});
+});
+
+/**
+ * Kedaipal Credits T5: the directory reads each store's credits, sorts the
+ * owing ones to the top, and the sheet opens the full ledger drawer.
+ */
+describe("directory — credits", () => {
+	it("the row reads each store's credits: left, owed with since-when, or no account yet", () => {
+		renderDirectory();
+		const row = (slug: string) =>
+			screen
+				.getAllByRole("row")
+				.find((r) => r.getAttribute("data-seller") === slug) as HTMLElement;
+		expect(within(row("bearcamp-malaysia")).getByText("130 left")).toBeTruthy();
+		expect(within(row("lekor-mr-ganu")).getByText("15 owed")).toBeTruthy();
+		expect(within(row("lekor-mr-ganu")).getByText(/Out since/)).toBeTruthy();
+		expect(
+			within(row("waadaafish")).getByText("No credit account yet"),
+		).toBeTruthy();
+	});
+
+	it("sort by credits puts the store owing orders first and account-less rows last", () => {
+		renderDirectory();
+		openMenu(/^Sort: Founding rank/);
+		fireEvent.click(screen.getByRole("menuitemradio", { name: /Credits/ }));
+		const names = screen
+			.getAllByRole("row")
+			.slice(1)
+			.map((r) => r.getAttribute("data-seller"));
+		expect(names).toEqual([
+			"lekor-mr-ganu",
+			"bearcamp-malaysia",
+			// No credit account: by name after everything with a number.
+			"kp-demo",
+			"waadaafish",
+		]);
+	});
+
+	it("the sheet's Credits section names the custom grant and opens the ledger as a page of the same drawer", async () => {
+		renderDirectory();
+		fireEvent.click(screen.getByRole("button", { name: "Lekor Mr.Ganu" }));
+		const sheet = await screen.findByRole("dialog");
+		expect(within(sheet).getByText("150 a month")).toBeTruthy();
+		expect(within(sheet).getByText(/Sep 2026/)).toBeTruthy();
+		fireEvent.click(
+			within(sheet).getByRole("button", { name: "Open credit ledger" }),
+		);
+		expect(
+			await screen.findByRole("heading", { name: "Credit ledger" }),
+		).toBeTruthy();
+		// One drawer — never a second one stacked on the seller's.
+		expect(screen.getAllByRole("dialog")).toHaveLength(1);
+		// The way back names the seller and returns focus to what opened it.
+		fireEvent.click(
+			within(screen.getByRole("dialog")).getByRole("button", {
+				name: "Lekor Mr.Ganu",
+			}),
+		);
+		const reopen = await screen.findByRole("button", {
+			name: "Open credit ledger",
+		});
+		expect(document.activeElement).toBe(reopen);
+	});
+
+	it("the CSV carries the credit columns", () => {
+		renderDirectory();
+		fireEvent.click(screen.getByRole("button", { name: /Export CSV/ }));
+		const csv = downloadCsvSpy.mock.calls[0][1] as string;
+		const [header] = csv.split("\r\n");
+		for (const column of [
+			"Credits left",
+			"Plan credits",
+			"Extra credits",
+			"Out of credits since",
+			"Custom grant",
+		])
+			expect(header).toContain(column);
+	});
+});
+
+describe("the directory's count never claims the whole book (z8r3fdpm2p)", () => {
+	it("says 'of the newest N' when the book runs past the cap", () => {
+		// `Showing 500 of 500` read as the whole book while the oldest stores
+		// were simply not in the list. Same silent truncation the billing
+		// picker had, one surface over.
+		queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
+			sellers: ROWS,
+			capped: true,
+		});
+		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), false);
+		render(<Harness />);
+		expect(screen.getByText(/of the newest \d+/)).toBeTruthy();
+	});
+
+	it("counts plainly when the whole book fits", () => {
+		renderDirectory();
+		expect(screen.queryByText(/of the newest/)).toBeNull();
+		expect(screen.getByText(/Showing \d+ of \d+/)).toBeTruthy();
+	});
+});

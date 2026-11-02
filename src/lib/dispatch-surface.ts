@@ -53,6 +53,9 @@ export function shipsAsParcel(method: DeliveryMethod | undefined): boolean {
 
 type LalamoveDispatch = FunctionReturnType<typeof api.lalamove.getDeliveryJob>;
 type DelyvaDispatch = FunctionReturnType<typeof api.delyva.getDispatchState>;
+type EasyparcelDispatch = FunctionReturnType<
+	typeof api.easyparcel.getDispatchState
+>;
 
 /** Orders a courier or rider can still be booked on. Both providers agree on
  * this window; the servers enforce it (`bad_status`). */
@@ -67,11 +70,16 @@ export function lalamoveSurface(
 	if (!shipsAsParcel(order.deliveryMethod) || !dispatch) return "none";
 	const { job, blockReason } = dispatch;
 	const activeJob = job && isActiveJobStatus(job.status);
-	// No rider works in Singapore and none is out — a completed or failed
-	// Malaysian trip belongs on the timeline, not under a live dispatch card
+	// Rider booking isn't open in this store's country and none is out — a
+	// completed or failed trip from before (e.g. a store that switched country) belongs on the timeline, not under a live dispatch card
 	// that would re-offer a booking (86eyqgujv). Never while one is still out:
 	// cancel lives on that card.
-	if (blockReason === "country_unsupported" && !activeJob) return "none";
+	if (
+		(blockReason === "country_unsupported" ||
+			blockReason === "destination_unsupported") &&
+		!activeJob
+	)
+		return "none";
 	if (!job && !bookableStatus(order)) return "none";
 	if (!job && blockReason === "booking_disabled") return "hint";
 	return "card";
@@ -83,12 +91,45 @@ export function delyvaSurface(
 ): DispatchSurface {
 	if (!shipsAsParcel(order.deliveryMethod) || !dispatch) return "none";
 	const { job, blockReason } = dispatch;
-	if (blockReason === "country_unsupported" && !job) return "none";
+	// Same for an order going where this provider doesn't carry
+	// (z8r3fdr5yy) — the hub's overseas note says how it ships instead.
+	if (
+		(blockReason === "country_unsupported" ||
+			blockReason === "destination_unsupported") &&
+		!job
+	)
+		return "none";
 	if ((blockReason === "not_delivery" || blockReason === "no_address") && !job)
 		return "none";
 	// A set-up nudge belongs on orders the seller could still act on. On a
 	// delivered or cancelled order it is noise — the Lalamove posture, applied
 	// here so the two cards behave alike.
+	if (!dispatch.bookingEnabled && !job)
+		return bookableStatus(order) ? "hint" : "none";
+	return "card";
+}
+
+/** The Delyva rules, plus `not_configured` (EasyParcel's app credentials are
+ * deployment config) — the two parcel cards must behave alike (one idea, one
+ * control). A dead grant (`reconnect_needed`) is a CARD, not a hint: the
+ * seller has this integration and must be shown how to restore it. */
+export function easyparcelSurface(
+	order: Doc<"orders">,
+	dispatch: EasyparcelDispatch | undefined,
+): DispatchSurface {
+	if (!shipsAsParcel(order.deliveryMethod) || !dispatch) return "none";
+	const { job, blockReason } = dispatch;
+	// An unconfigured deployment is the country case's twin: nothing the
+	// seller can fix, so no card — unless a booking from before is still out.
+	if (
+		(blockReason === "country_unsupported" ||
+			blockReason === "destination_unsupported" ||
+			blockReason === "not_configured") &&
+		!job
+	)
+		return "none";
+	if ((blockReason === "not_delivery" || blockReason === "no_address") && !job)
+		return "none";
 	if (!dispatch.bookingEnabled && !job)
 		return bookableStatus(order) ? "hint" : "none";
 	return "card";

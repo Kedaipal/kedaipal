@@ -1,6 +1,7 @@
 import { type ErrorComponentProps, useRouter } from "@tanstack/react-router";
 import { RefreshCw, WifiOff } from "lucide-react";
 import { Button } from "./ui/button";
+import { FullPageError } from "./ui/full-page-error";
 
 /**
  * The router's default error boundary (86eyheqzv). Before this existed, any
@@ -18,33 +19,28 @@ import { Button } from "./ui/button";
 export function RouteErrorCard({ error, reset }: ErrorComponentProps) {
 	const router = useRouter();
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<div className="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
-				<WifiOff className="size-6" aria-hidden />
-			</div>
-			<h1 className="text-2xl font-bold">Something went wrong</h1>
-			<p className="text-sm text-muted-foreground">
-				This is usually temporary — your order and cart are safe. Give it
-				another try, and if it keeps happening, wait a minute and reload.
-			</p>
-			<Button
-				type="button"
-				className="mt-2 h-11 rounded-xl px-6"
-				onClick={() => {
-					// Order matters: clear the boundary first, then re-run the failed
-					// loaders — invalidate alone would re-render into the stale error.
-					reset();
-					void router.invalidate();
-				}}
-			>
-				<RefreshCw className="size-4" aria-hidden />
-				Try again
-			</Button>
-			{import.meta.env.DEV ? (
-				<pre className="mt-4 max-w-full overflow-auto rounded-xl border border-destructive/40 bg-destructive/5 p-3 text-left text-xs text-destructive">
-					{error.message}
-				</pre>
-			) : null}
-		</main>
+		<FullPageError
+			icon={WifiOff}
+			title="Something went wrong"
+			actions={
+				<Button
+					type="button"
+					className="h-11 rounded-xl px-6"
+					onClick={() => {
+						// Order matters: clear the boundary first, then re-run the failed
+						// loaders — invalidate alone would re-render into the stale error.
+						reset();
+						void router.invalidate();
+					}}
+				>
+					<RefreshCw className="size-4" aria-hidden />
+					Try again
+				</Button>
+			}
+			detail={error.message}
+		>
+			This is usually temporary — your order and cart are safe. Give it another
+			try, and if it keeps happening, wait a minute and reload.
+		</FullPageError>
 	);
 }

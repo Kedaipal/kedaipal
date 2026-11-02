@@ -3,18 +3,17 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Hoisted so the vi.mock factories below can reference them safely.
-const { initMock, captureMock, registerMock, envState, routerState } = vi.hoisted(
-	() => ({
+const { initMock, captureMock, registerMock, envState, routerState } =
+	vi.hoisted(() => ({
 		initMock: vi.fn(),
 		captureMock: vi.fn(),
 		registerMock: vi.fn(),
-	envState: {
-		key: undefined as string | undefined,
-		host: undefined as string | undefined,
-	},
+		envState: {
+			key: undefined as string | undefined,
+			host: undefined as string | undefined,
+		},
 		routerState: { pathname: "/" },
-	}),
-);
+	}));
 
 vi.mock("posthog-js", () => ({
 	default: { init: initMock, capture: captureMock, register: registerMock },

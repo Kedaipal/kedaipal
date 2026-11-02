@@ -4,15 +4,16 @@
 
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { CalendarRange } from "lucide-react";
 import { api } from "../../convex/_generated/api";
 import { PageHeader } from "../components/dashboard/page-header";
 import { OrdersViewToggle } from "../components/order/orders-view-toggle";
 import { SellerBookingCalendar } from "../components/order/seller-booking-calendar";
-import { Button } from "../components/ui/button";
+import { NewBookingLinks } from "../components/products/new-booking-links";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { hasFeature } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/orders/calendar")({
 	component: OrdersCalendarPage,
@@ -24,6 +25,18 @@ function OrdersCalendarPage() {
 		convexQuery(
 			api.bookingBlocks.hasBookingListings,
 			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
+
+	// The calendar is all-tier; Schedule is a Pro inbox lens, so a Starter
+	// store's switch here stays Calendar-only, as it is on the inbox.
+	const inboxEnabled =
+		retailer?.actingAsAdmin === true ||
+		hasFeature(retailer?.subscription, "orderInbox");
+	const hasDatedListings = useQuery(
+		convexQuery(
+			api.schedule.hasDatedListings,
+			retailer && inboxEnabled ? { retailerId: retailer._id } : "skip",
 		),
 	).data;
 
@@ -41,7 +54,13 @@ function OrdersCalendarPage() {
 			<PageHeader
 				title="Orders"
 				subtitle="Booking calendar"
-				actions={<OrdersViewToggle active="calendar" showCalendar />}
+				actions={
+					<OrdersViewToggle
+						active="calendar"
+						showCalendar
+						showSchedule={hasDatedListings === true}
+					/>
+				}
 			/>
 			<div className="flex items-center justify-between gap-3 lg:hidden">
 				<div className="min-w-0">
@@ -50,7 +69,11 @@ function OrdersCalendarPage() {
 					</h2>
 					<p className="text-[13px] text-muted-foreground">Booking calendar</p>
 				</div>
-				<OrdersViewToggle active="calendar" showCalendar />
+				<OrdersViewToggle
+					active="calendar"
+					showCalendar
+					showSchedule={hasDatedListings === true}
+				/>
 			</div>
 
 			{hasBookings ? (
@@ -65,13 +88,12 @@ function OrdersCalendarPage() {
 							No booking listings yet
 						</p>
 						<p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
-							The calendar shows booked nights for listings sold by date. Create
-							a product and pick the Booking kind to start taking requests.
+							The calendar shows bookings for plans and stays sold by date. Add
+							one to start taking requests — it opens with that type already
+							picked.
 						</p>
 					</div>
-					<Button asChild variant="outline" className="tap-target">
-						<Link to="/app/products/new">Create a booking listing</Link>
-					</Button>
+					<NewBookingLinks />
 				</div>
 			)}
 		</div>

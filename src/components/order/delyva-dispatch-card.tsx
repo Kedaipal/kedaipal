@@ -17,6 +17,7 @@
 
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useAction } from "convex/react";
 import {
 	CircleAlert,
@@ -27,23 +28,28 @@ import {
 	Truck,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import { walletVerdict } from "../../../convex/lib/courierWallet";
 import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
 import type { DelyvaItemType, DelyvaService } from "../../../convex/lib/delyva";
-import { delyvaSurface } from "../../lib/dispatch-surface";
+import { courierMargin } from "../../lib/courier-margin";
 import {
+	courierContactFallbackCopy,
 	delyvaBlockCopy,
 	delyvaStatusLabel,
 } from "../../lib/delyva-dispatch-block";
+import { delyvaSurface } from "../../lib/dispatch-surface";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
+import { parcelDeliveredCopy } from "../../lib/parcel-courier-copy";
 import { ProBadge } from "../app/pro-gate";
+import { DispatchWalletLine } from "../deliveries/dispatch-wallet-line";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { CopyButton } from "../ui/copy-button";
 import { Input } from "../ui/input";
+import { pricedWithoutWeight, weightGapLine } from "./weight-gap-note";
 
 const ITEM_TYPES: ReadonlyArray<{ value: DelyvaItemType; label: string }> = [
 	{ value: "PARCEL", label: "Parcel" },
@@ -55,13 +61,21 @@ const ITEM_TYPES: ReadonlyArray<{ value: DelyvaItemType; label: string }> = [
 export function DelyvaDispatchCard({
 	order,
 	embedded = false,
+	lockedReason,
 }: {
 	order: Doc<"orders">;
 	/** Rendered inside the dispatch hub's shell — see BookDeliveryCard. */
 	embedded?: boolean;
+	/** Set while the store can't book right now (out of credits, or
+	 * view-only) — see BookDeliveryCard. Cancelling stays open. */
+	lockedReason?: string;
 }) {
 	const dispatch = useQuery(
 		convexQuery(api.delyva.getDispatchState, { shortId: order.shortId }),
+	).data;
+	// The same wallet read the line beside Book shows (the cache shares it).
+	const wallets = useQuery(
+		convexQuery(api.courierWallets.list, { retailerId: order.retailerId }),
 	).data;
 
 	const prepareBooking = useAction(api.delyva.prepareBooking);
@@ -75,6 +89,11 @@ export function DelyvaDispatchCard({
 	 * on at all, so no address would quote. Distinguishes "you have nothing
 	 * connected" from "nobody covers this route". */
 	const [noCouriersOnAccount, setNoCouriersOnAccount] = useState(false);
+	// How many couriers the seller's Delyva account has switched on — couriers
+	// are opt-in there, so the list's footer says the count (z8r3fdx34j).
+	const [activeCourierCount, setActiveCourierCount] = useState<number | null>(
+		null,
+	);
 	/** Set with an empty list on a chilled/frozen quote: the same route quotes
 	 * fine as an ordinary parcel, so the gap is cold chain on the account. */
 	const [coldChainGap, setColdChainGap] = useState(false);
@@ -105,7 +124,10 @@ export function DelyvaDispatchCard({
 	const job = dispatch.job;
 	const activeJob = job && isActiveJobStatus(job.status) ? job : null;
 	const failedJob =
-		job && (job.status === "canceled" || job.status === "expired" || job.status === "rejected")
+		job &&
+		(job.status === "canceled" ||
+			job.status === "expired" ||
+			job.status === "rejected")
 			? job
 			: null;
 	const completedJob = job?.status === "completed" ? job : null;
@@ -125,11 +147,11 @@ export function DelyvaDispatchCard({
 					Delyva booking is paused — turn <b>Delyva couriers</b> back on under
 					Courier booking in{" "}
 					<Link
-						to="/app/settings"
-						search={{ tab: "fulfilment" }}
+						to="/app/settings/delivery-pricing"
+						hash="courier-booking"
 						className="font-medium text-accent hover:underline"
 					>
-						Settings → Fulfilment
+						Settings → Delivery pricing
 					</Link>
 					.
 				</p>
@@ -180,6 +202,7 @@ export function DelyvaDispatchCard({
 			}
 			setServices(result.services);
 			setNoCouriersOnAccount(result.accountHasNoCouriers === true);
+			setActiveCourierCount(result.activeCourierCount ?? null);
 			setColdChainGap(result.coldChainUnavailable === true);
 			// Cheapest pre-selected — the list arrives price-sorted from the server.
 			setSelectedCode(result.services[0]?.code ?? null);
@@ -220,6 +243,16 @@ export function DelyvaDispatchCard({
 	}
 
 	const selected = services?.find((s) => s.code === selectedCode) ?? null;
+	// Since 31 Oct the quote reads Delyva's balance too, so a wallet that
+	// can't pay is known before the tap: Book disables with the wallet line as
+	// its reason, exactly like EasyParcel. A stale or refusal-seen number only
+	// warns (walletVerdict) — Delyva stays the final judge.
+	const walletView = wallets?.find((w) => w.provider === "delyva");
+	const selectedUnaffordable =
+		selected !== null &&
+		walletView !== undefined &&
+		walletVerdict(walletView, selected.price, Date.now(), selected.currency) ===
+			"block";
 
 	return (
 		<section
@@ -253,7 +286,9 @@ export function DelyvaDispatchCard({
 				<p className="flex items-start gap-2 rounded-xl bg-amber-100 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
 					<FlaskConical className="mt-0.5 size-4 shrink-0" />
 					<span>
-						<span className="font-medium">Test mode — no courier will come.</span>{" "}
+						<span className="font-medium">
+							Test mode — no courier will come.
+						</span>{" "}
 						Your Delyva key is a demo-account key, so any booking here is
 						simulated and nothing is really charged. Connect your live key in{" "}
 						<Link
@@ -274,8 +309,8 @@ export function DelyvaDispatchCard({
 					<CircleAlert className="mt-0.5 size-4 shrink-0" />
 					<span>
 						<span className="font-medium">Booking didn&apos;t go through</span>
-						{failedJob.failureReason ? ` — ${failedJob.failureReason}` : ""}. Your
-						buyer was not notified; the order is unchanged.
+						{failedJob.failureReason ? ` — ${failedJob.failureReason}` : ""}.
+						Your buyer was not notified; the order is unchanged.
 					</span>
 				</p>
 			) : null}
@@ -308,14 +343,14 @@ export function DelyvaDispatchCard({
 					) : (
 						<p className="text-muted-foreground">
 							Booked — waiting for {job.serviceName ?? "the courier"} to issue a
-							tracking number. It appears here and on your buyer&apos;s order page
-							by itself.
+							tracking number. It appears here and on your buyer&apos;s order
+							page by itself.
 						</p>
 					)}
 
 					<p className="text-muted-foreground">
 						{completedJob
-							? "Delivered. Your buyer was notified automatically."
+							? parcelDeliveredCopy(!!order.carrierTrackingUrl)
 							: "Your buyer already has this — the tracking number is on their order page. The order marks itself Shipped at collection and Delivered on arrival."}
 					</p>
 
@@ -346,7 +381,7 @@ export function DelyvaDispatchCard({
 						</Button>
 					) : null}
 				</div>
-			) : bookable ? (
+			) : bookable && !lockedReason ? (
 				<>
 					{/* Where the courier collects — surfaced BEFORE the first quote so a
 					    stale pickup address (imported from Delyva's profile at connect)
@@ -368,10 +403,29 @@ export function DelyvaDispatchCard({
 						</p>
 					) : null}
 
+					{/* Who the courier will phone at the buyer's end — said before the
+					    first quote, so a seller isn't surprised when the courier calls
+					    the store about an overseas buyer (z8r3fdh274). */}
+					{dispatch.buyerContactFallback ? (
+						<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+							{courierContactFallbackCopy(dispatch.country)}
+						</p>
+					) : null}
+
 					{/* What is being shipped, in the seller's terms. The weight is the
 					    one number that changes the price, so it is editable here rather
 					    than hidden behind a re-quote. */}
 					<div className="flex flex-col gap-1.5">
+						{/* The buyer was priced without part of the weight (the
+						    one-kilo floor, or lines with no weight in a heavier cart):
+						    the seller must know it BEFORE they pick a service, where
+						    "buyer paid" sits beside every price — the one place the
+						    under-collection shows. */}
+						{pricedWithoutWeight(order.deliverySnapshot) ? (
+							<p className="rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
+								{weightGapLine(order.deliverySnapshot)}
+							</p>
+						) : null}
 						<div className="flex items-center justify-between gap-2">
 							<span className="text-xs font-medium text-muted-foreground">
 								Parcel weight
@@ -403,9 +457,22 @@ export function DelyvaDispatchCard({
 						</div>
 						{needsTypedWeight ? (
 							<p className="text-xs text-muted-foreground">
-								{dispatch.weightIssue === "custom_item"
-									? "This order has a custom line, so we can't work its weight out — weigh the packed parcel and type it here."
-									: "Some items here have no parcel weight set, so we can't add it up — weigh the packed parcel and type it here (or set weights in Products)."}
+								{dispatch.weightIssue === "custom_item" ? (
+									"This order has a custom line, so we can't work its weight out — weigh the packed parcel and type it here."
+								) : (
+									<>
+										Some items here have no parcel weight set, so we can&apos;t
+										add it up — weigh the packed parcel and type it here. Set
+										the weights once in{" "}
+										<Link
+											to="/app/products"
+											className="font-medium text-accent-emphasis underline-offset-2 hover:underline"
+										>
+											Products
+										</Link>{" "}
+										and the next booking fills itself in.
+									</>
+								)}
 							</p>
 						) : null}
 					</div>
@@ -524,10 +591,9 @@ export function DelyvaDispatchCard({
 								isn&apos;t the address or the weight.
 							</p>
 							<p className="text-sm text-muted-foreground">
-								Ask Delyva to enable a cold-chain service on your account —
-								then re-quote here. If these goods aren&apos;t
-								temperature-sensitive after all, switch the parcel type to{" "}
-								<b>Parcel</b> above.
+								Ask Delyva to enable a cold-chain service on your account — then
+								re-quote here. If these goods aren&apos;t temperature-sensitive
+								after all, switch the parcel type to <b>Parcel</b> above.
 							</p>
 							<button
 								type="button"
@@ -579,9 +645,11 @@ export function DelyvaDispatchCard({
 									    Singapore store), and "buyer paid S$6.00" next to
 									    "RM 0.10" invites a margin call out of thin air. */}
 									{services.some((s) => s.currency !== order.currency) ? (
-										<>Quoted in {services[0]?.currency} — buyer paid{" "}
-										{formatPrice(order.deliveryFee ?? 0, order.currency)}, so
-										these prices aren&apos;t directly comparable</>
+										<>
+											Quoted in {services[0]?.currency} — buyer paid{" "}
+											{formatPrice(order.deliveryFee ?? 0, order.currency)}, so
+											these prices aren&apos;t directly comparable
+										</>
 									) : (
 										<>
 											Buyer paid{" "}
@@ -620,6 +688,15 @@ export function DelyvaDispatchCard({
 											<span className="text-sm font-bold">
 												{formatPrice(service.price, service.currency)}
 											</span>
+											{/* Against what the buyer paid — the buyer never chose
+											    this courier, so its price is the seller's margin. */}
+											{service.currency === order.currency ? (
+												<MarginTag
+													priceMinor={service.price}
+													buyerPaidMinor={order.deliveryFee ?? 0}
+													currency={order.currency}
+												/>
+											) : null}
 											{index === 0 && services.length > 1 ? (
 												<span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent-emphasis">
 													Cheapest
@@ -650,11 +727,26 @@ export function DelyvaDispatchCard({
 									</span>
 								</p>
 							) : null}
+							{/* Read with the quote: short on a fresh read disables Book
+							    below; a last-seen (refusal) balance only warns. */}
+							<DispatchWalletLine
+								id={`delyva-wallet-${order.shortId}`}
+								provider="delyva"
+								priceMinor={selected ? selected.price : null}
+								priceCurrency={selected?.currency ?? order.currency}
+								retailerId={order.retailerId}
+								country={dispatch.country}
+							/>
 							<Button
 								type="button"
 								className="h-11 w-full"
 								isLoading={booking}
-								disabled={booking || !selected}
+								disabled={booking || !selected || selectedUnaffordable}
+								aria-describedby={
+									selectedUnaffordable
+										? `delyva-wallet-${order.shortId}`
+										: undefined
+								}
 								onClick={() => void handleBook()}
 							>
 								{booking ? (
@@ -670,8 +762,25 @@ export function DelyvaDispatchCard({
 								)}
 							</Button>
 							<p className="text-xs text-muted-foreground">
-								Charged to your Delyva credit when you book. The tracking number
-								lands here and on your buyer&apos;s order page.
+								Charged to your Delyva wallet when you book. Prices here are
+								Delyva&apos;s estimate — the final one is set when the booking
+								goes through. The tracking number lands here and on your
+								buyer&apos;s order page.
+							</p>
+							<p className="text-xs text-muted-foreground">
+								Only couriers switched on in your Delyva account show here
+								{activeCourierCount !== null
+									? ` (${activeCourierCount} on)`
+									: ""}
+								.{" "}
+								<a
+									href="https://my.delyva.app"
+									target="_blank"
+									rel="noopener noreferrer"
+									className="font-medium text-accent-emphasis underline-offset-2 hover:underline"
+								>
+									Add couriers in Delyva
+								</a>
 							</p>
 							<button
 								type="button"
@@ -689,9 +798,15 @@ export function DelyvaDispatchCard({
 					<Button type="button" className="h-11 w-full" disabled>
 						<Truck className="size-4" /> Book a courier
 					</Button>
+					{/* The store-wide lock outranks this order's own block: it stops
+					    every booking, and it is the one the seller can clear today. */}
 					<p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-						{blockReason === "plan_gated" ? <ProBadge /> : null}
-						{delyvaBlockCopy(blockReason ?? "")}
+						{lockedReason ?? (
+							<>
+								{blockReason === "plan_gated" ? <ProBadge /> : null}
+								{delyvaBlockCopy(blockReason ?? "")}
+							</>
+						)}
 					</p>
 				</div>
 			)}
@@ -733,10 +848,32 @@ function serviceMeta(service: DelyvaService): string {
 				: service.serviceType === "NDD"
 					? "Next-day"
 					: null;
-	const cold = service.itemTypes?.some(
-		(t) => t === "CHILLED" || t === "FROZEN",
-	)
+	const cold = service.itemTypes?.some((t) => t === "CHILLED" || t === "FROZEN")
 		? "Cold chain"
 		: null;
 	return [cold, speed, service.companyName].filter(Boolean).join(" · ");
+}
+
+/** "+RM 0.80 kept" / "RM 3.40 from your margin" beside one courier's price. */
+function MarginTag({
+	priceMinor,
+	buyerPaidMinor,
+	currency,
+}: {
+	priceMinor: number;
+	buyerPaidMinor: number;
+	currency: string;
+}) {
+	const margin = courierMargin(priceMinor, buyerPaidMinor, currency);
+	return (
+		<span
+			className={
+				margin.tone === "loss"
+					? "text-[11px] font-medium text-amber-700 dark:text-amber-300"
+					: "text-[11px] text-muted-foreground"
+			}
+		>
+			{margin.label}
+		</span>
+	);
 }

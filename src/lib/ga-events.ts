@@ -3,7 +3,10 @@ import { extractGaClientId } from "../../convex/lib/ga4";
 import { isCapabilityTokenPath } from "./analytics-privacy";
 import { trackClarityEvent } from "./clarity-events";
 import { clientEnv } from "./env";
-import { readMarketingSource } from "./marketing-attribution";
+import {
+	readMarketingReferrerStore,
+	readMarketingSource,
+} from "./marketing-attribution";
 
 /**
  * Custom events for the acquisition funnel (z8r3fdd1v0):
@@ -34,7 +37,43 @@ export type FunnelEvent =
 	| "calc_used"
 	| "cta_signup_click"
 	| "onboarding_start"
-	| "store_created";
+	| "store_created"
+	// Credits T2 (z8r3fdf8ht): a seller submitted the pack picker. Its paid
+	// counterpart, `credits_topup_paid`, is server-side (convex/ga4Events.ts) —
+	// the payment lands after the browser has gone to HitPay.
+	| "credits_topup_started"
+	// Credits T6 (z8r3fdkp8h): someone opened the "Talk to Arif" chat from an
+	// Enterprise card — the only door into Enterprise, so the one lead signal.
+	// `surface` says which card (pricing / teaser / billing).
+	| "enterprise_talk_clicked"
+	// Demo-first landing (z8r3fdtpub T1): a WhatsApp "Book a demo" link was
+	// tapped; `placement` names the surface. The counterpart of
+	// `cta_signup_click` now that the demo is the page's primary ask —
+	// without it the flip can't be read in GA4.
+	| "demo_cta"
+	// Referral push (28 Oct 2026, docs/referrals.md): a seller shared their
+	// referral link — `channel` = `whatsapp` | `copy_link` | `copy_message` |
+	// `image`, `surface` = `home` | `page`. The card shipped with NO event, so
+	// nobody could tell whether anyone had ever tapped Share; this is the
+	// first half of "did the push work", the second being `store_created`
+	// with a `referral-<slug>` src.
+	| "referral_share";
+
+/** Where a referral share was tapped from, and through what. */
+export type ReferralShareChannel =
+	| "whatsapp"
+	| "copy_link"
+	| "copy_message"
+	| "image"
+	| "image_share";
+export type ReferralShareSurface = "home" | "page";
+
+export function trackReferralShare(
+	channel: ReferralShareChannel,
+	surface: ReferralShareSurface,
+): void {
+	trackEvent("referral_share", { channel, surface });
+}
 
 let gaInitialized = false;
 
@@ -61,9 +100,11 @@ export function ensureGaInitialized(pathname: string): boolean {
  * Fire a funnel event to every provider. Clarity gets the bare name (its own
  * gate + `src` tag live in `trackClarityEvent`); GA4 gets the name plus
  * params, with the captured marketing `src` (if any) attached to EVERY event
- * so the funnel stays segmentable by source end to end — an explicit `src` in
- * `params` out-ranks the stored one. GA no-ops without a measurement ID and on
- * capability-token paths; never throws — analytics must never break the page.
+ * so the funnel stays segmentable by source end to end — and, when the
+ * session came through another seller's powered-by badge, `ref_store` (that
+ * store's slug, z8r3fdcwd0) beside it. An explicit `src` in `params` out-ranks
+ * the stored one. GA no-ops without a measurement ID and on capability-token
+ * paths; never throws — analytics must never break the page.
  */
 export function trackEvent(
 	name: FunnelEvent,
@@ -74,7 +115,12 @@ export function trackEvent(
 		trackClarityEvent(name);
 		if (!ensureGaInitialized(window.location.pathname)) return;
 		const src = readMarketingSource();
-		ReactGA.event(name, { ...(src ? { src } : {}), ...params });
+		const refStore = readMarketingReferrerStore();
+		ReactGA.event(name, {
+			...(src ? { src } : {}),
+			...(refStore ? { ref_store: refStore } : {}),
+			...params,
+		});
 	} catch {
 		// Swallow — see doc comment.
 	}
@@ -104,4 +150,20 @@ export function readGaClientId(): string | undefined {
  */
 export function trackSignupCta(placement: string): void {
 	trackEvent("cta_signup_click", { placement });
+}
+
+/** Where a demo link sits — the surfaces that carry one. */
+export type DemoPlacement =
+	| "hero"
+	| "nav"
+	| "nav-mobile"
+	| "final"
+	| "pricing"
+	| "pricing-bottom"
+	| "fit"
+	| "dock";
+
+/** A WhatsApp demo link was tapped, on `placement`. */
+export function trackDemoCta(placement: DemoPlacement): void {
+	trackEvent("demo_cta", { placement });
 }

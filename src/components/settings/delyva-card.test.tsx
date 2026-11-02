@@ -3,7 +3,13 @@
 // single-key connect, the demo-account warning, the Pro gate (which never
 // traps a downgraded seller), and the country-aware pickup-address rules.
 // The on/off toggle lives in Fulfilment → Courier booking, not here.
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
@@ -28,11 +34,31 @@ vi.mock("convex/react", async () => {
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
-vi.mock("@tanstack/react-query", () => ({
-	useQuery: () => ({ data: state.settings }),
+vi.mock("@tanstack/react-query", async () => {
+	const { getFunctionName } = await import("convex/server");
+	return {
+		// The courier-wallet line (z8r3fdx34j) reads its own query; everything
+		// else answers with this card's own state.
+		useQuery: (q: { fn: unknown }) => ({
+			data:
+				getFunctionName(q.fn as never) === "courierWallets:list"
+					? walletState.wallets
+					: state.settings,
+		}),
+	};
+});
+const walletState = vi.hoisted(() => ({
+	wallets: [] as unknown[],
 }));
 vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
+}));
+// The shared wallet row asks whether this reader can refresh / edit it.
+vi.mock("../../hooks/useStoreLock", () => ({
+	useAreaLock: () => ({ readOnly: false, reason: "", cause: null }),
+}));
+vi.mock("../../hooks/usePermission", () => ({
+	usePermission: () => ({ canRead: true, canWrite: true, role: "owner" }),
 }));
 vi.mock("../../hooks/useActAs", () => ({
 	useActAsRetailerId: () => undefined,
@@ -89,6 +115,8 @@ const RETAILER = "r1" as Id<"retailers">;
 function card(props: { canUse?: boolean; country?: "MY" | "SG" } = {}) {
 	return (
 		<DelyvaCard
+			shellId="settings-delyva"
+			highlight={undefined}
 			retailerId={RETAILER}
 			canUse={props.canUse ?? true}
 			country={props.country ?? "MY"}
@@ -145,7 +173,10 @@ describe("account card", () => {
 	it("offers the connect form straight away when nothing is connected", () => {
 		render(card());
 		expect(screen.getByLabelText(/delyva api key/i)).toBeTruthy();
-		expect(screen.getByRole("button", { name: /connect delyva/i })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /connect delyva/i }),
+		).toBeTruthy();
+		expect(screen.getByText(/tracking scan, not a photo/)).toBeTruthy();
 	});
 
 	it("shows the account settings once connected, plus the cross-tab pointer", () => {
@@ -334,7 +365,7 @@ describe("plan gate", () => {
 		state.settings = settings();
 		render(card({ canUse: false }));
 		expect(screen.getByRole("button", { name: /disconnect/i })).toBeTruthy();
-		expect(screen.getByRole("button", { name: /replace key/i })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /^replace$/i })).toBeTruthy();
 	});
 });
 
@@ -343,7 +374,9 @@ describe("Singapore (z8r3fdbqmc)", () => {
 	it("is offered to a Singapore store like any other", () => {
 		state.settings = disconnected();
 		render(card({ country: "SG" }));
-		expect(screen.getByRole("button", { name: /connect delyva/i })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /connect delyva/i }),
+		).toBeTruthy();
 		expect(
 			screen.queryByText(/isn't available in your store's country/i),
 		).toBeNull();
@@ -373,7 +406,9 @@ describe("Singapore (z8r3fdbqmc)", () => {
 		fireEvent.change(screen.getByLabelText(/postal code/i), {
 			target: { value: "018956" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /save pickup address/i }),
+		);
 		await waitFor(() => expect(state.mutation).toHaveBeenCalled());
 		expect(state.mutation).toHaveBeenCalledWith({
 			retailerId: undefined,
@@ -396,7 +431,9 @@ describe("Singapore (z8r3fdbqmc)", () => {
 		fireEvent.change(screen.getByLabelText(/postal code/i), {
 			target: { value: "01895" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /save pickup address/i }),
+		);
 		expect(screen.getByText(/6-digit postal code/i)).toBeTruthy();
 		expect(state.mutation).not.toHaveBeenCalled();
 	});
@@ -451,14 +488,47 @@ describe("connected settings", () => {
 		const { container } = render(card());
 
 		expect(container.textContent).toContain("won't move to Shipped");
-		fireEvent.click(screen.getByRole("button", { name: /retry now/i }));
+		fireEvent.click(screen.getByRole("button", { name: /register again/i }));
 		await waitFor(() => expect(resubscribe).toHaveBeenCalled());
 	});
 
 	it("flags a missing pickup address before the first booking fails", () => {
 		state.settings = settings({ pickupAddress: undefined });
 		render(card());
-		expect(screen.getByText(/Add this before your first booking/i)).toBeTruthy();
+		// The checklist's pickup step needs action, and the header counts it.
+		expect(screen.getByText("Setup 2 of 3")).toBeTruthy();
+		expect(screen.getAllByText("(action needed)")).toHaveLength(1);
+	});
+
+	it("a fully set-up account reads as ticked steps and one chip (86eye9xd4)", () => {
+		state.settings = settings({ isDemo: false });
+		render(card());
+		expect(screen.getByText("Connected")).toBeTruthy();
+		expect(screen.queryByText("(action needed)")).toBeNull();
+		expect(screen.getAllByText("(done)")).toHaveLength(3);
+	});
+});
+
+describe("pickup address — a set address is one quiet row (86eye9xd4)", () => {
+	it("folds to the address with change it, opens the editor, and Cancel folds it back", () => {
+		state.settings = settings();
+		render(card());
+		expect(
+			screen.getByText(/12 Jalan Ampang, 50450 Kuala Lumpur/),
+		).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "address search" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "change it" }));
+		expect(screen.getByRole("button", { name: "address search" })).toBeTruthy();
+		// Opened but untouched: nothing to save, and Cancel is the way out.
+		expect(
+			(
+				screen.getByRole("button", {
+					name: "Save pickup address",
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(screen.queryByRole("button", { name: "address search" })).toBeNull();
 	});
 });
 
@@ -470,9 +540,9 @@ describe("pickup address", () => {
 	it("fills every structured field from an address search", () => {
 		render(card());
 		fireEvent.click(screen.getByLabelText(/address search/i));
-		expect((screen.getByLabelText(/street address/i) as HTMLInputElement).value).toBe(
-			"12 Jalan Ampang",
-		);
+		expect(
+			(screen.getByLabelText(/street address/i) as HTMLInputElement).value,
+		).toBe("12 Jalan Ampang");
 		expect((screen.getByLabelText(/city/i) as HTMLInputElement).value).toBe(
 			"Kuala Lumpur",
 		);
@@ -490,7 +560,9 @@ describe("pickup address", () => {
 		fireEvent.change(screen.getByLabelText(/postcode/i), {
 			target: { value: "50480" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /save pickup address/i }),
+		);
 		await waitFor(() => expect(state.mutation).toHaveBeenCalled());
 		expect(state.mutation?.mock.calls[0][0].pickupAddress.postcode).toBe(
 			"50480",
@@ -503,7 +575,9 @@ describe("pickup address", () => {
 		fireEvent.change(screen.getByLabelText(/postcode/i), {
 			target: { value: "504" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /save pickup address/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /save pickup address/i }),
+		);
 		expect(screen.getByText(/5-digit postcode/i)).toBeTruthy();
 		expect(state.mutation).not.toHaveBeenCalled();
 	});
@@ -514,5 +588,45 @@ describe("pickup address", () => {
 		const postcode = screen.getByLabelText(/postcode/i) as HTMLInputElement;
 		fireEvent.change(postcode, { target: { value: "50-450x" } });
 		expect(postcode.value).toBe("50450");
+	});
+});
+
+describe("booking held for parcel weights (23 Oct 2026)", () => {
+	it("says booking is off until the products are weighed, and links the fix", () => {
+		state.settings = settings({ enabled: false, bookingHeldForWeights: 2 });
+		const { container } = render(card());
+		expect(container.textContent).toContain(
+			"Booking is off until 2 products have a parcel weight — couriers price by weight.",
+		);
+		// The router stub renders `to` as-is — assert the destination, not the role.
+		expect(screen.getByText(/set parcel weights/i).getAttribute("to")).toBe(
+			"/app/products/weights",
+		);
+		// The pointer to the switch still stands — it is where they go next.
+		expect(container.textContent).toContain("Courier booking");
+	});
+
+	it("a connect that held booking warns straight away", async () => {
+		const { toast } = await import("sonner");
+		state.actions.set(
+			NAME.connect,
+			vi.fn().mockResolvedValue({
+				ok: true,
+				accountName: "Mandos",
+				webhooksSubscribed: true,
+				isDemo: false,
+				bookingHeldForWeights: 4,
+			}),
+		);
+		render(card());
+		fireEvent.change(screen.getByLabelText(/delyva api key/i), {
+			target: { value: "dx-abc" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /connect delyva/i }));
+		await waitFor(() =>
+			expect(toast.warning).toHaveBeenCalledWith(
+				"Booking stays off until 4 products have a parcel weight — see the note on this card.",
+			),
+		);
 	});
 });

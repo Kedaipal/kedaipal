@@ -6,6 +6,7 @@ import {
 	internalAction,
 	internalQuery,
 } from "./_generated/server";
+import { courierProviderValidator } from "./lib/courierProviders";
 import { sendEmail } from "./lib/email";
 import {
 	type DeliveryMethod,
@@ -15,6 +16,7 @@ import {
 } from "./lib/emailCopy";
 import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
 import { sellerWaAlertWillAttempt } from "./lib/sellerAlerts";
+import { waAlertsCoveredBySubscription } from "./subscriptions";
 import {
 	sellerNewOrderTemplateName,
 	sellerPaymentClaimTemplateName,
@@ -62,6 +64,7 @@ export const getOrderForRetailerEmail = internalQuery({
 		// applies sellerWaAlertWillAttempt with its own env check.
 		orderWaAlerts: boolean | undefined;
 		notifyWaPhone: string | undefined;
+		subscriptionCovers: boolean;
 		isCounterOrder: boolean;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
@@ -93,6 +96,7 @@ export const getOrderForRetailerEmail = internalQuery({
 			deliveryFeePending: order.deliveryFeePending === true,
 			orderWaAlerts: retailer.orderWaAlerts,
 			notifyWaPhone: retailer.notifyWaPhone,
+			subscriptionCovers: await waAlertsCoveredBySubscription(ctx, retailer),
 			isCounterOrder: order.source === "counter",
 		};
 	},
@@ -164,7 +168,7 @@ export const notifyDeliveryJobFailed = internalAction({
 		reason: v.optional(v.string()),
 		// Which booking provider failed (86eyjpv6z). Absent = "lalamove", so
 		// pre-Delyva scheduled sends keep rendering unchanged.
-		provider: v.optional(v.union(v.literal("lalamove"), v.literal("delyva"))),
+		provider: v.optional(courierProviderValidator),
 	},
 	handler: async (ctx, { orderId, reason, provider }): Promise<void> => {
 		let meta: {
@@ -272,6 +276,7 @@ export const notifyRetailerOrderAlert = internalAction({
 			// Seller-alert reach — drives the WhatsApp-first suppression below.
 			orderWaAlerts: boolean | undefined;
 			notifyWaPhone: string | undefined;
+			subscriptionCovers: boolean;
 			isCounterOrder: boolean;
 		} | null = null;
 		try {
@@ -307,8 +312,13 @@ export const notifyRetailerOrderAlert = internalAction({
 			return;
 		}
 
+		// A request awaiting the seller's approval (a booking, or an RSVP on an
+		// event that approves each guest — `z8r3fdkjek`) is NEW work for them,
+		// never "confirmed".
 		const alertKey: RetailerEmailKey =
-			meta.status === "pending" ? "newOrder" : "orderConfirmed";
+			meta.status === "pending" || meta.status === "booking_requested"
+				? "newOrder"
+				: "orderConfirmed";
 		const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 		const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
 
@@ -390,6 +400,7 @@ export const notifyPaymentClaimed = internalAction({
 			// Seller-alert reach — drives the WhatsApp-first suppression below.
 			orderWaAlerts: boolean | undefined;
 			notifyWaPhone: string | undefined;
+			subscriptionCovers: boolean;
 			isCounterOrder: boolean;
 		} | null = null;
 		try {
@@ -499,6 +510,7 @@ export const notifyPaymentReceived = internalAction({
 			paymentReference: string | undefined;
 			orderWaAlerts: boolean | undefined;
 			notifyWaPhone: string | undefined;
+			subscriptionCovers: boolean;
 		} | null = null;
 		try {
 			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {

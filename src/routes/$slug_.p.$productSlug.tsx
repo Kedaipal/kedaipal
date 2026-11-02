@@ -7,14 +7,39 @@ import {
 	redirect,
 } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
-import { ProductPageView } from "../components/storefront/product-page";
+import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
+import {
+	GALLERY_PRELOAD_SIZES,
+	ProductPageView,
+} from "../components/storefront/product-page";
+import { OrderingPausedProvider } from "../components/storefront/seasonal-break";
+import { HomeOnlyLabelProvider } from "../components/storefront/ships-abroad";
+import {
+	StoreUnavailable,
+	type StoreUnavailableLoaderData,
+	storeUnavailableHead,
+} from "../components/storefront/store-unavailable";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
+import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
+import { breadcrumbListJsonLd, productCrumbs } from "../lib/breadcrumbs";
 import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
-import { absoluteProxiedImageUrl } from "../lib/image-proxy";
-import { ssrRead } from "../lib/ssr-read";
+import {
+	absoluteProxiedImageUrl,
+	imageSrcSet,
+	proxiedImageUrl,
+} from "../lib/image-proxy";
+import { jsonLdScript } from "../lib/json-ld";
+import { pageHead } from "../lib/not-found";
+import { seoDescription } from "../lib/seo-text";
+import {
+	ssrDeadline,
+	ssrHeadRead,
+	ssrProductPage,
+	ssrRetailerBySlug,
+} from "../lib/storefront-ssr";
 import { hasStartingPrice } from "../lib/variant";
 
 interface ProductLoaderData {
@@ -22,8 +47,17 @@ interface ProductLoaderData {
 	slug: string;
 	productName: string;
 	productSlug: string;
+	/** First visible category, for the breadcrumb; null → Store › Product. */
+	primaryCategory: { name: string; slug: string } | null;
 	description: string;
 	canonicalUrl: string;
+	indexable: boolean;
+	locale: Locale;
+	sku: string | undefined;
+	variantCount: number;
+	imageUrls: string[];
+	promoPriceFrom: number | undefined;
+	promoEndsAt: number | undefined;
 	ogImageUrl: string | undefined;
 	// Offer facts for the Product JSON-LD, frozen at load time. Prices in minor
 	// units; 0/0 + quote-only means "no offers block" (price is negotiated).
@@ -35,6 +69,10 @@ interface ProductLoaderData {
 	/** The price is only a floor (custom line the seller quotes on top of) — the
 	 * offers block must not advertise it as the settled price. See 86eyhn4mr. */
 	startingPrice: boolean;
+	/** The gallery's first photo — this page's LCP element now that the app
+	 * bar replaced the cover hero (z8r3fdegb5), so head() preloads it. Raw
+	 * storage URL; head() mirrors the gallery's proxied srcset. */
+	firstImageUrl: string | undefined;
 }
 
 /**
@@ -45,10 +83,16 @@ interface ProductLoaderData {
  * routing trick as the category + checkout pages ($slug.tsx is a leaf).
  */
 export const Route = createFileRoute("/$slug_/p/$productSlug")({
-	loader: async ({ params }): Promise<ProductLoaderData | null> => {
-		const client = getConvexHttpClient();
-		const retailerRead = await ssrRead(() =>
-			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
+	loader: async ({
+		params,
+		context,
+	}): Promise<ProductLoaderData | StoreUnavailableLoaderData | null> => {
+		// Seeds the cache the page renders from (z8r3fdue6f — see $slug.tsx).
+		const deadline = ssrDeadline();
+		const retailerRead = await ssrRetailerBySlug(
+			context.queryClient,
+			params.slug,
+			deadline,
 		);
 		// Transient upstream failure: render the shell (client query paints the
 		// product) instead of an error page (86eyheqzv). Definitive notFounds
@@ -67,14 +111,20 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 		if (result.status === "notFound") {
 			throw notFound();
 		}
+		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
+		// the component renders the neutral unavailable page, and head()
+		// takes it out of search in the SSR HTML.
+		if (result.status === "unavailable")
+			return { unavailable: true, storeName: result.storeName };
 		const retailer = result.retailer;
 
 		// Unknown, archived, hidden or category-suppressed → 404, never a leak.
-		const productRead = await ssrRead(() =>
-			client.query(api.products.getPublicBySlug, {
-				retailerId: retailer._id,
-				slug: params.productSlug,
-			}),
+		// The same read seeds the page's buy box.
+		const productRead = await ssrProductPage(
+			context.queryClient,
+			retailer._id,
+			params.productSlug,
+			deadline,
 		);
 		if (!productRead.ok) return null;
 		const product = productRead.value;
@@ -82,18 +132,50 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			throw notFound();
 		}
 
-		const productDescription = product.description?.replace(/\s+/g, " ").trim();
+		// The breadcrumb's middle crumb (z8r3fdh2z3). A transient failure here
+		// shortens the trail to Store › Product; it never fails the page.
+		// head()-only, so it isn't seeded — but it shares the loader's deadline.
+		const categoryRead = await ssrHeadRead(
+			() =>
+				getConvexHttpClient().query(api.categories.primaryPublicForProduct, {
+					retailerId: retailer._id,
+					productId: product._id,
+				}),
+			deadline,
+		);
+		const primaryCategory = categoryRead.ok ? categoryRead.value : null;
+
+		const productDescription = seoDescription(product.description);
 		const description =
 			productDescription ||
 			`Order ${product.name} from ${retailer.storeName} on WhatsApp via Kedaipal.`;
 
+		// The STORED slug, not the URL parameter: the query lower-cases its
+		// input, so `/p/Choc-Cake` answers 200 and must canonicalise to the
+		// real URL rather than mint a duplicate.
+		const productSlug = product.slug;
+		const promoLive = product.promoState?.phase === "live";
 		return {
 			storeName: retailer.storeName,
 			slug: retailer.slug,
 			productName: product.name,
-			productSlug: params.productSlug,
+			productSlug,
+			primaryCategory,
 			description,
-			canonicalUrl: `${SITE_URL}/${retailer.slug}/p/${params.productSlug}`,
+			canonicalUrl: `${SITE_URL}/${retailer.slug}/p/${productSlug}`,
+			indexable: retailer.indexable ?? true,
+			locale: retailer.locale ?? "en",
+			sku: product.sku,
+			variantCount: product.variantCount,
+			// Every photo for the Product's `image` (Google shows up to several
+			// in rich results); the OG card still takes the first.
+			imageUrls: product.imageUrls
+				.slice(0, 5)
+				.map((url) => absoluteProxiedImageUrl(url, SITE_URL)),
+			// A live promo paints the sale price on the page, so the schema must
+			// say the same price (Google flags a mismatch) and when it ends.
+			promoPriceFrom: promoLive ? product.promoPriceFrom : undefined,
+			promoEndsAt: promoLive ? product.promoState?.endsAt : undefined,
 			// Social cards + JSON-LD go through the image proxy too: link unfurlers
 			// are known to skip oversized images outright, and a 4 MB cover is
 			// exactly the kind of thing they drop — so this is a correctness fix for
@@ -114,96 +196,169 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 			inStock: product.inStock,
 			quoteOnly: product.hasQuotePricing && product.priceTo === 0,
 			startingPrice: hasStartingPrice(product.variants),
+			firstImageUrl: product.imageUrls[0],
 		};
 	},
-	head: ({ loaderData }) => {
-		if (!loaderData) return {};
-		const {
-			storeName,
-			productName,
-			description,
-			canonicalUrl,
-			ogImageUrl,
-			priceFrom,
-			priceTo,
-			currency,
-			inStock,
-			quoteOnly,
-			startingPrice,
-		} = loaderData;
-		const title = `${productName} — ${storeName} | Kedaipal`;
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData }) => {
+			if (!loaderData) return {};
+			if ("unavailable" in loaderData)
+				return storeUnavailableHead(loaderData.storeName);
+			const {
+				storeName,
+				slug,
+				productName,
+				primaryCategory,
+				description,
+				canonicalUrl,
+				indexable,
+				locale,
+				sku,
+				variantCount,
+				imageUrls,
+				promoPriceFrom,
+				promoEndsAt,
+				ogImageUrl,
+				priceFrom,
+				priceTo,
+				currency,
+				inStock,
+				quoteOnly,
+				startingPrice,
+				firstImageUrl,
+			} = loaderData;
+			const title = `${productName} — ${storeName} | Kedaipal`;
+			const storeUrl = `${SITE_URL}/${slug}`;
 
-		const meta = [
-			{ title },
-			{ name: "description", content: description },
-			{ name: "robots", content: "index, follow" },
-			{ property: "og:type", content: "website" },
-			{ property: "og:site_name", content: "Kedaipal" },
-			{ property: "og:title", content: title },
-			{ property: "og:description", content: description },
-			{ property: "og:url", content: canonicalUrl },
-			{
-				name: "twitter:card",
-				content: ogImageUrl ? "summary_large_image" : "summary",
-			},
-			{ name: "twitter:title", content: title },
-			{ name: "twitter:description", content: description },
-		];
-		if (ogImageUrl) {
-			meta.push(
-				{ property: "og:image", content: ogImageUrl },
-				{ name: "twitter:image", content: ogImageUrl },
-			);
-		}
+			const meta = [
+				{ title },
+				{ name: "description", content: description },
+				{
+					name: "robots",
+					content: indexable ? "index, follow" : "noindex, follow",
+				},
+				{ property: "og:type", content: "product" },
+				{ property: "og:site_name", content: "Kedaipal" },
+				{ property: "og:locale", content: OG_LOCALE[locale] },
+				{ property: "og:title", content: title },
+				{ property: "og:description", content: description },
+				{ property: "og:url", content: canonicalUrl },
+				{
+					name: "twitter:card",
+					content: ogImageUrl ? "summary_large_image" : "summary",
+				},
+				{ name: "twitter:title", content: title },
+				{ name: "twitter:description", content: description },
+			];
+			if (ogImageUrl) {
+				meta.push(
+					{ property: "og:image", content: ogImageUrl },
+					{ property: "og:image:alt", content: productName },
+					{ name: "twitter:image", content: ogImageUrl },
+				);
+			}
 
-		// Product JSON-LD. Prices convert minor → major units; quote-only
-		// products (price negotiated on the mockup) carry no offers block
-		// rather than advertising a misleading RM 0. A single price that's only
-		// a STARTING price is an AggregateOffer with a lowPrice and no ceiling —
-		// a flat `Offer.price` would promise a total the mockup can exceed.
-		const toMajor = (sen: number) => (sen / 100).toFixed(2);
-		const availability = inStock
-			? "https://schema.org/InStock"
-			: "https://schema.org/OutOfStock";
-		const jsonLd = {
-			"@context": "https://schema.org",
-			"@type": "Product",
-			name: productName,
-			description,
-			url: canonicalUrl,
-			...(ogImageUrl ? { image: ogImageUrl } : {}),
-			...(quoteOnly
-				? {}
-				: priceFrom === priceTo && !startingPrice
+			// Product JSON-LD. Prices convert minor → major units; quote-only
+			// products (price negotiated on the mockup) carry no offers block
+			// rather than advertising a misleading RM 0. A single price that's only
+			// a STARTING price is an AggregateOffer with a lowPrice and no ceiling —
+			// a flat `Offer.price` would promise a total the mockup can exceed.
+			const toMajor = (sen: number) => (sen / 100).toFixed(2);
+			const availability = inStock
+				? "https://schema.org/InStock"
+				: "https://schema.org/OutOfStock";
+			// Shared by both offer shapes: who sells it, in what condition, and —
+			// during a live promo — until when the price holds.
+			const offerCommon = {
+				priceCurrency: currency,
+				availability,
+				url: canonicalUrl,
+				itemCondition: "https://schema.org/NewCondition",
+				seller: { "@type": "Store", name: storeName, url: storeUrl },
+				...(promoEndsAt
 					? {
-							offers: {
-								"@type": "Offer",
-								price: toMajor(priceFrom),
-								priceCurrency: currency,
-								availability,
-								url: canonicalUrl,
-							},
+							priceValidUntil: new Date(promoEndsAt).toISOString().slice(0, 10),
 						}
+					: {}),
+			};
+			// A live promo is what the page paints, so it is what the schema says:
+			// a single-price product on sale is one Offer at the sale price (the
+			// literal reading of the page), not a range up to the old price.
+			const lowPrice = promoPriceFrom ?? priceFrom;
+			const offers =
+				priceFrom === priceTo && !startingPrice
+					? { "@type": "Offer", price: toMajor(lowPrice), ...offerCommon }
 					: {
-							offers: {
-								"@type": "AggregateOffer",
-								lowPrice: toMajor(priceFrom),
-								...(priceTo > priceFrom ? { highPrice: toMajor(priceTo) } : {}),
-								priceCurrency: currency,
-								availability,
-								url: canonicalUrl,
-							},
-						}),
-		};
+							"@type": "AggregateOffer",
+							lowPrice: toMajor(lowPrice),
+							...(priceTo > lowPrice ? { highPrice: toMajor(priceTo) } : {}),
+							// A live product whose variants are all inactive still has a
+							// price; Google warns on a non-positive count.
+							offerCount: Math.max(1, variantCount),
+							...offerCommon,
+						};
+			// Quote-only: Google requires offers, review or aggregateRating on a
+			// Product, and a negotiated price has none — so no Product block at
+			// all, rather than one Search Console reports as an error. The
+			// breadcrumb still carries the page.
+			const productJsonLd = quoteOnly
+				? null
+				: {
+						"@context": "https://schema.org",
+						"@type": "Product",
+						name: productName,
+						description,
+						url: canonicalUrl,
+						...(imageUrls.length > 0 ? { image: imageUrls } : {}),
+						...(sku ? { sku } : {}),
+						brand: { "@type": "Brand", name: storeName },
+						offers,
+					};
 
-		return {
-			meta,
-			links: [{ rel: "canonical", href: canonicalUrl }],
-			scripts: [
-				{ type: "application/ld+json", children: JSON.stringify(jsonLd) },
-			],
-		};
-	},
+			return {
+				meta,
+				links: [
+					{ rel: "canonical", href: canonicalUrl },
+					// LCP preload (z8r3fdegb5): with the cover hero gone from subpages,
+					// the gallery's first photo is this page's LCP element. The hint
+					// must name the same candidate the gallery will actually request —
+					// it renders through AppImage (proxied + srcset), so
+					// imagesrcset/imagesizes mirror the component's own sizes.
+					//
+					// `imagesizes` comes from the gallery itself (GALLERY_PRELOAD_SIZES)
+					// so the hint can never drift from the branch that paints — it
+					// covers the mobile carousel tile below lg AND the desktop hero
+					// above it. See that constant for what the drift cost.
+					...(firstImageUrl
+						? [
+								{
+									rel: "preload",
+									as: "image",
+									href: proxiedImageUrl(firstImageUrl),
+									imagesrcset: imageSrcSet(firstImageUrl) ?? undefined,
+									imagesizes: GALLERY_PRELOAD_SIZES,
+								},
+							]
+						: []),
+				],
+				scripts: [
+					...(productJsonLd ? [jsonLdScript(productJsonLd)] : []),
+					// Store › Category › Product (z8r3fdh2z3).
+					jsonLdScript(
+						breadcrumbListJsonLd(
+							productCrumbs({
+								siteUrl: SITE_URL,
+								storeName,
+								storeSlug: slug,
+								category: primaryCategory,
+								productName,
+								productUrl: canonicalUrl,
+							}),
+						),
+					),
+				],
+			};
+		}),
 	notFoundComponent: ProductNotFound,
 	component: ProductRoute,
 });
@@ -211,20 +366,23 @@ export const Route = createFileRoute("/$slug_/p/$productSlug")({
 function ProductNotFound() {
 	const { slug } = Route.useParams();
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-3xl font-bold">Product not found</h1>
-			<p className="text-sm text-muted-foreground">
-				It may have sold out for good or been renamed — the store&apos;s full
-				catalog is still open.
-			</p>
-			<Link
-				to="/$slug"
-				params={{ slug }}
-				activeOptions={{ exact: true }}
-				className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
-			>
-				Browse the store
-			</Link>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="text-3xl font-bold">Product not found</h1>
+				<p className="text-sm text-muted-foreground">
+					It may have sold out for good or been renamed — the store&apos;s full
+					catalog is still open.
+				</p>
+				<Link
+					to="/$slug"
+					params={{ slug }}
+					activeOptions={{ exact: true }}
+					className="mt-1 inline-flex h-11 items-center rounded-xl bg-foreground px-4 text-sm font-medium text-background"
+				>
+					Browse the store
+				</Link>
+			</div>
+			<StorefrontFooter slug={slug} />
 		</main>
 	);
 }
@@ -232,15 +390,12 @@ function ProductNotFound() {
 function ProductSkeleton() {
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
-			{/* Mirrors the shared StorefrontHeader shape so the swap-in is seamless. */}
-			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8">
-				<Skeleton className="h-5 w-24" />
-				<div className="flex items-center gap-4">
-					<Skeleton className="h-16 w-16 shrink-0 rounded-2xl" />
-					<div className="flex flex-col gap-2">
-						<Skeleton className="h-7 w-40" />
-						<Skeleton className="h-4 w-48" />
-					</div>
+			{/* Mirrors the compact StorefrontAppBar so the swap-in is seamless. */}
+			<header className="border-b border-border">
+				<div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 lg:h-16">
+					<Skeleton className="size-6 rounded-full" />
+					<Skeleton className="size-8 rounded-[10px]" />
+					<Skeleton className="h-4 w-32" />
 				</div>
 			</header>
 			<div className="mt-4 px-5 lg:flex lg:gap-10 lg:px-8">
@@ -259,6 +414,9 @@ function ProductRoute() {
 	const { slug, productSlug } = Route.useParams();
 	// Product links are the ones pasted in bios/lives — capture the ?src= tag.
 	useCaptureAttribution(slug);
+	// A `?voucher=` link lands on an EMPTY cart, so the code has to survive the
+	// browsing that follows (`z8r3fdr617`) — same reason as the line above.
+	useCaptureVoucherParam(slug);
 	// Live queries keep the page reactive after the SSR'd loader response —
 	// stock, prices and visibility update in place.
 	const result = useQuery(
@@ -282,6 +440,9 @@ function ProductRoute() {
 	// The store/category pages deliberately DON'T gate on this: their CartBar
 	// degrades additively ("Empty" → filled), and holding the catalog on
 	// localStorage would be a worse trade.
+	if (result?.status === "unavailable") {
+		return <StoreUnavailable storeName={result.storeName} />;
+	}
 	if (!retailer || product === undefined || !cart.hydrated) {
 		return <ProductSkeleton />;
 	}
@@ -298,18 +459,31 @@ function ProductRoute() {
 		// bar publishes its measured height as --storefront-bar-h, so the
 		// reservation is exact rather than a guess with dead space under the
 		// badge. The fallback only applies for the frame before first measure.
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
-			<ProductPageView
-				product={product}
-				retailerId={retailer._id}
-				retailer={retailer}
-				storeSlug={retailer.slug}
-				cart={cart}
-				canonicalUrl={`${SITE_URL}/${retailer.slug}/p/${productSlug}`}
-			/>
-			{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
+		<OrderingPausedProvider
+			paused={retailer.orderingPaused === true}
+			pausedBy={retailer.orderingPausedBy}
+		>
+			<HomeOnlyLabelProvider
+				storeCountry={retailer.country}
+				shipsAbroadTo={retailer.shipsAbroadTo}
+			>
+				<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-[var(--storefront-bar-h,12rem)] lg:pb-10">
+					<ProductPageView
+						product={product}
+						retailerId={retailer._id}
+						retailer={retailer}
+						storeSlug={retailer.slug}
+						cart={cart}
+						canonicalUrl={`${SITE_URL}/${retailer.slug}/p/${productSlug}`}
+					/>
+					{/* Direct flex child so its `mt-auto` anchors it to the bottom of the
 			    page — same placement as the store home and category pages. */}
-			<StorefrontFooter />
-		</div>
+					<StorefrontFooter
+						slug={slug}
+						discover={retailer.marketplaceUnlisted !== true}
+					/>
+				</div>
+			</HomeOnlyLabelProvider>
+		</OrderingPausedProvider>
 	);
 }

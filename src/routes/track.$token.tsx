@@ -24,41 +24,55 @@ import {
 	Truck,
 	XCircle,
 } from "lucide-react";
-import {
-	type FormEvent,
-	type ReactNode,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
+import {
+	PAYMENTS_PAUSED_HEADING,
+	paymentsPausedOrderLine,
+} from "../../convex/lib/buyerPayments";
 import { isSafeTrackingUrl } from "../../convex/lib/couriers";
+import { overseasFeeLabel } from "../../convex/lib/crossBorder";
 import {
 	DAY_MS,
 	formatFulfilmentDate,
 	formatFulfilmentDateTime,
 } from "../../convex/lib/fulfilmentDate";
 import { describeGatewayMethods } from "../../convex/lib/hitpay";
-import { isMockupGateClosed } from "../../convex/lib/order";
+import { isFreeOrder, isMockupGateClosed } from "../../convex/lib/order";
 import { paymentDeadlineApplies } from "../../convex/lib/orderClaims";
 import { isOrderDocPaid } from "../../convex/lib/orderDocument";
 import { paymentMethodLabel } from "../../convex/lib/paymentMethod";
+import { orderPickupNotes } from "../../convex/lib/pickupNote";
+import { formatEventMoment } from "../../convex/lib/productEvent";
 import {
 	type OrderBookingSpan,
 	OrderItemLine,
 } from "../components/order/order-item-line";
+import {
+	ContinueShoppingLink,
+	OrderStoreEyebrow,
+	requestCardLinksBack,
+	storeLinkSlug,
+} from "../components/order/order-store-links";
 import { PaymentDueCountdown } from "../components/order/payment-due-countdown";
+import { PickupNotes } from "../components/order/pickup-notes";
+import { PlanSkipsNote } from "../components/order/plan-skips-note";
 import { ReceiptDownloadButton } from "../components/order/receipt-download-button";
+import { RescheduledNote } from "../components/order/rescheduled-note";
 import { AddressEditDialog } from "../components/storefront/address-edit-dialog";
+import { BuyerPhoneRepairForm } from "../components/storefront/buyer-phone-repair-form";
 import { DeliveryAddressDisplay } from "../components/storefront/delivery-address-display";
 import { ManualPaymentDialog } from "../components/storefront/manual-payment-dialog";
+import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { CopyButton } from "../components/ui/copy-button";
-import { MyPhoneInput } from "../components/ui/my-phone-input";
+import { LinkifiedText } from "../components/ui/linkified-text";
 import { Skeleton } from "../components/ui/skeleton";
+import { ThemeToggle } from "../components/ui/theme-toggle";
 import { ZoomableImage } from "../components/ui/zoomable-image";
+import { bookingLengthLabel } from "../lib/booking-dates";
 import { getConvexHttpClient } from "../lib/convex-server";
 import { shipsAsParcel } from "../lib/dispatch-surface";
 import { convexErrorMessage, formatMobile, formatPrice } from "../lib/format";
@@ -67,10 +81,13 @@ import {
 	googleMapsNavUrl,
 	wazeNavUrl,
 } from "../lib/google-address";
+import { pageHead } from "../lib/not-found";
 import { withLineKeys } from "../lib/order-card-items";
 import {
 	anchorOrdinal,
 	type Locale,
+	type OrderFlowKind,
+	type OrderFlows,
 	type OrderStatus,
 	resolveCurrentStage,
 	resolveStages,
@@ -80,6 +97,9 @@ import {
 	stageLabel,
 } from "../lib/orderStatus";
 import { ssrRead } from "../lib/ssr-read";
+import { TONE_PANEL, type Tone } from "../lib/tone";
+import { confirmationSentBody } from "../lib/track-confirmation-copy";
+import { trackFirstBeatLabel } from "../lib/track-first-beat";
 import { createWaAutoOpen, isWhatsAppWebview } from "../lib/wa-auto-open";
 import { buildOrderWaMessage, waOrderUrl } from "../lib/wa-order-message";
 
@@ -88,7 +108,14 @@ type PaymentStatus = "unpaid" | "claimed" | "received";
 type PaymentCfg = {
 	label: string;
 	icon: ReactNode;
-	tone: string;
+	/**
+	 * A key into the shared registry, not classes. The panel's own colours used
+	 * to live here as a fourth hand-copy of `border-X-200 bg-X-50 text-X-700`,
+	 * which is how this card ended up a light plate on a dark page while the
+	 * seller's identical chip was fine. The meaning→tone call stays local; both
+	 * themes' values come from `lib/tone.ts`.
+	 */
+	tone: Tone;
 };
 
 function getPaymentConfig(status: PaymentStatus): PaymentCfg {
@@ -97,19 +124,19 @@ function getPaymentConfig(status: PaymentStatus): PaymentCfg {
 			return {
 				label: "Payment Confirmed",
 				icon: <BadgeCheck className="size-5" />,
-				tone: "border-emerald-200 bg-emerald-50 text-emerald-700",
+				tone: "success",
 			};
 		case "claimed":
 			return {
 				label: "Payment Submitted",
 				icon: <Hourglass className="size-5" />,
-				tone: "border-blue-200 bg-blue-50 text-blue-700",
+				tone: "info",
 			};
 		default:
 			return {
 				label: "Payment Unpaid",
 				icon: <HandCoins className="size-5" />,
-				tone: "border-amber-200 bg-amber-50 text-amber-800",
+				tone: "warn",
 			};
 	}
 }
@@ -169,7 +196,11 @@ function gatewayIssueCopy(
  * shows, so a buyer reads one number whether the payment landed or stalled. */
 function GatewayIssueReference({ paymentId }: { paymentId: string }) {
 	return (
-		<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5">
+		// The plate is a LIFT off whatever tinted card it sits on, not a white
+		// surface — so in dark it lifts the other way (white/10 over the dark
+		// panel). Left as `bg-white/60` it would be a bright slab carrying the
+		// panel's light text.
+		<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5 dark:border-white/10 dark:bg-white/10">
 			<div className="flex items-center justify-between gap-2">
 				<p className="text-[10px] font-medium uppercase tracking-wider opacity-70">
 					Payment ref
@@ -216,36 +247,55 @@ export const Route = createFileRoute("/track/$token")({
 		// secret token into a title/canonical that could leak via referrer/history.
 		return { shortId: read.value.shortId };
 	},
-	head: ({ loaderData }) => ({
-		meta: [
-			{
-				title: loaderData?.shortId
-					? `Order ${loaderData.shortId} — Kedaipal`
-					: "Your order — Kedaipal",
-			},
-			// noindex + no canonical: the URL carries a capability token, so it must
-			// never be indexed or advertised.
-			{ name: "robots", content: "noindex" },
-		],
-	}),
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData }) => ({
+			meta: [
+				{
+					title: loaderData?.shortId
+						? `Order ${loaderData.shortId} — Kedaipal`
+						: "Your order — Kedaipal",
+				},
+				// noindex + no canonical: the URL carries a capability token, so it must
+				// never be indexed or advertised.
+				{ name: "robots", content: "noindex" },
+			],
+		})),
 	notFoundComponent: OrderNotFound,
 	component: TrackingRoute,
 });
 
-type DeliveryMethod = "delivery" | "self_collect" | "booking";
+// The flow kinds this page renders. Canonical union (convex/lib/orderStatus)
+// rather than a local copy — the local one still read
+// "delivery | self_collect | booking" after the event kind shipped, so an
+// RSVP's own vocabulary couldn't be passed here at all.
+type DeliveryMethod = OrderFlowKind;
 
 type StatusCfg = { label: string; icon: ReactNode; color: string };
 
 // Icons + colors are fixed per canonical status; only the text is retailer-
 // customizable. Labels resolve at render time (override → method preset → base
 // default) so a relabel is retroactive across all in-flight orders.
+//
+// The marks stay at the 500 step in BOTH themes rather than moving to a
+// `TONE_ACCENT` pair: a mid-tone glyph reads on a white card and on a dark one,
+// which is why `dark-mode-coverage.test.ts` exempts 500-level marks outright.
+// Darkening them to 700 would repaint the buyer's most prominent glyph to fix
+// nothing.
 function getStatusConfig(
 	method: DeliveryMethod,
 	labels: StatusLabels | undefined,
 	locale: Locale,
+	bookingPackaged?: boolean,
+	orderFlows?: OrderFlows,
 ): Record<string, StatusCfg> {
 	const label = (status: OrderStatus) =>
-		resolveStatusLabel(status, { labels, deliveryMethod: method, locale });
+		resolveStatusLabel(status, {
+			labels,
+			orderFlows,
+			deliveryMethod: method,
+			locale,
+			bookingPackaged,
+		});
 	return {
 		pending: {
 			label: label("pending"),
@@ -304,19 +354,23 @@ function OrderNotFound() {
 	// Intentionally does NOT echo the URL token — it's a capability, and the link
 	// may simply be stale. Keep the message generic.
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-2xl font-bold">Order not found</h1>
-			<p className="text-sm text-muted-foreground">
-				This tracking link is invalid or has expired. Please use the link from
-				your WhatsApp order confirmation, or message the store for a new one.
-			</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 text-center">
+			<div className="flex flex-1 flex-col items-center justify-center gap-3">
+				<h1 className="text-2xl font-bold">Order not found</h1>
+				<p className="text-sm text-muted-foreground">
+					This tracking link is invalid or has expired. Please use the link from
+					your WhatsApp order confirmation, or message the store for a new one.
+				</p>
+			</div>
+			{/* Unknown token = unknown store, so the badge carries no `store=`. */}
+			<StorefrontFooter surface="track" />
 		</main>
 	);
 }
 
 function TrackingSkeleton() {
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-12 pt-10">
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-4 pt-10">
 			<Skeleton className="h-3 w-16" />
 			<Skeleton className="mt-3 h-8 w-32" />
 			<Skeleton className="mt-1 h-4 w-44" />
@@ -364,6 +418,9 @@ function TrackingSkeleton() {
 				))}
 				<Skeleton className="h-10 w-full rounded-xl" />
 			</section>
+			{/* Rendered on the skeleton too, so the badge is in place before the
+			    order resolves instead of popping in under the content. */}
+			<StorefrontFooter surface="track" />
 		</main>
 	);
 }
@@ -395,7 +452,12 @@ function TrackingRoute() {
 		order.status !== "cancelled" &&
 		(order.paymentStatus ?? "unpaid") !== "received" &&
 		!isMockupGateClosed(order) &&
-		order.deliveryFeePending !== true;
+		order.deliveryFeePending !== true &&
+		// A genuinely free order (`z8r3fdff9u` — the RM0 RSVP) has nothing to
+		// pay: without this, the page told a guest to bank-transfer RM 0.00 and
+		// attach the receipt. isFreeOrder, never a bare total check — an
+		// unquoted mockup order also sits at 0 and must keep its (held) ask.
+		!isFreeOrder(order);
 	const paymentInfo = useQuery(
 		convexQuery(
 			api.orders.getPaymentMethods,
@@ -412,6 +474,9 @@ function TrackingRoute() {
 	const gatewayMethodsLabel = describeGatewayMethods(
 		paymentInfo?.gatewayMethods,
 	);
+	// The store is lapsed (z8r3fdr6gg): the server sent no methods and no
+	// gateway, and the card says why in place of the Pay-now door.
+	const paymentsPaused = paymentInfo?.paymentsPaused === true;
 	const [editingAddress, setEditingAddress] = useState(false);
 	// The manual-payment sheet (methods + I've-paid proof in one door) — opened
 	// by the payment card's primary button on manual stores, the bank-transfer
@@ -475,20 +540,41 @@ function TrackingRoute() {
 					checkOut: order.bookingCheckOut,
 					packaged: isBookingPackage,
 					weekendDays: order.bookingWeekendDays,
+					skippedDays: order.bookingSkippedDays,
+					customerSkips: order.bookingCustomerSkips,
 				}
 			: undefined;
 	const ms = order.retailerLocale === "ms";
+	// Where "back to the store" goes (z8r3fducgw); undefined = nowhere to go.
+	const storeSlug = storeLinkSlug(order);
+	// The foot row, unless a declined/expired request card already links back.
+	const showContinueShopping =
+		storeSlug !== undefined &&
+		order.storeName !== "" &&
+		!requestCardLinksBack(order);
 	// Collection service (86eyg0n8e, frozen at order create): the rider picks
 	// up FROM this buyer's address — every "Deliver…" label flips to collection
 	// wording so the page never claims something is being sent to them.
 	const isCollection = order.deliveryDirection === "collection";
+	// The order's FLOW KIND, not its raw delivery method — an RSVP is stored
+	// self_collect, so passing the method would hand a guest pickup wording.
+	// Only `pending`/`booking_requested`/`cancelled` read their label from here
+	// (every other status resolves through the stage list below), but those are
+	// exactly the ones no stage can correct, so they get the right kind too.
 	const statusConfig = getStatusConfig(
-		deliveryMethod,
+		order.eventLocked ? "event" : deliveryMethod,
 		order.statusLabels,
 		order.retailerLocale,
+		order.bookingPackaged,
+		order.orderFlows,
 	);
 	const config = statusConfig[order.status];
 	const isCancelled = order.status === "cancelled";
+	// "Before you collect" is only useful before collecting: gone once the
+	// order is collected (delivered) or cancelled. The gate on method + source
+	// is shared with WhatsApp — see orderPickupNotes.
+	const buyerPickupNotes =
+		isCancelled || order.status === "delivered" ? [] : orderPickupNotes(order);
 	// Pending-only, deliberately — and that now excludes fee-pending orders,
 	// since the confirmation push commits them as `confirmed` at create
 	// (86eyfq0w5). Locked call (Zaki, 31 Jul): a `deliveryFeePending` order is
@@ -553,9 +639,13 @@ function TrackingRoute() {
 	// in at the production boundary (before the first packed-or-later stage).
 	const stageLocale = order.retailerLocale;
 	const stages = resolveStages({
+		orderFlows: order.orderFlows,
 		orderStages: order.orderStages,
 		labels: order.statusLabels,
-		deliveryMethod,
+		// An RSVP's timeline is Order Received → Confirmed → Checked In — no
+		// Packed, no Ready for Pickup. Same registry the seller's stepper uses,
+		// so the two sides can never tell different stories.
+		deliveryMethod: order.eventLocked ? "event" : deliveryMethod,
 		bookingPackaged: order.bookingPackaged,
 	});
 	const currentStage = resolveCurrentStage(
@@ -585,11 +675,17 @@ function TrackingRoute() {
 	}> = [
 		{
 			key: "pending",
-			// A booking's first beat is the request, not "Order Received" — reuse
-			// the swept status label so a seller's locale flows through.
-			label: isBooking
-				? statusConfig.booking_requested.label
-				: statusConfig.pending.label,
+			// Request → "Awaiting Approval"; a booking past it → "Booking
+			// Received" (an instant booking never waited); else "Order
+			// Received". The rules and their reasons: `trackFirstBeatLabel`.
+			label: trackFirstBeatLabel({
+				isBooking,
+				status: order.status,
+				bookingResolution: order.bookingResolution,
+				locale: stageLocale,
+				requestedLabel: statusConfig.booking_requested.label,
+				pendingLabel: statusConfig.pending.label,
+			}),
 			icon: statusConfig.pending.icon,
 			isDone: true, // any order on this page has at least been received
 			isCurrent: currentPos === 0,
@@ -632,11 +728,28 @@ function TrackingRoute() {
 	}
 
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-12 pt-10">
-			{/* Header */}
-			<p className="text-xs font-semibold uppercase tracking-widest text-accent">
-				Kedaipal
-			</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-4 pt-10">
+			{/* Header — the STORE's name is the eyebrow. This is the seller's order
+			    page as far as the buyer is concerned (same as the storefront, where
+			    the store brand leads); Kedaipal's own mark is the powered-by badge
+			    at the foot of the page, so the platform isn't named twice. It links
+			    back into the store (z8r3fducgw): one tap to keep shopping. The
+			    theme flip shares its row, at the right edge like every buyer
+			    header (z8r3fdwc19); `-my-3.5` centres the 44px disc on the 16px
+			    eyebrow line without pushing the heading down, and `-mr-3` puts
+			    the glyph on the column's right edge. */}
+			<div className="flex items-center justify-between gap-2">
+				{/* `min-w-0`: a long store name truncates instead of pushing the
+				    toggle off the right edge. */}
+				<div className="flex min-w-0">
+					<OrderStoreEyebrow
+						storeName={order.storeName}
+						slug={storeSlug}
+						ms={ms}
+					/>
+				</div>
+				<ThemeToggle variant="ghost" className="-my-3.5 -mr-3" />
+			</div>
 			<h1 className="mt-3 font-mono text-2xl font-bold tracking-tight">
 				#{order.shortId}
 			</h1>
@@ -688,6 +801,8 @@ function TrackingRoute() {
 					<ConfirmationSentCard
 						ms={order.retailerLocale === "ms"}
 						checkoutPhone={order.checkoutPhone}
+						free={isFreeOrder(order)}
+						paymentsPaused={paymentsPaused}
 					/>
 				) : null
 			) : null}
@@ -696,6 +811,63 @@ function TrackingRoute() {
 			    lifecycle, stated where the buyer lands. While awaiting, the payment
 			    card below is suppressed — nothing is payable until the seller
 			    approves, and an armed Pay button on a request would be a lie. */}
+			{/* An RSVP awaiting the host's approval (`z8r3fdkjek`) — the same
+			    request lifecycle, in the guest's words: a SEAT is held, not dates. */}
+			{!isBooking && order.status === "booking_requested" ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-amber-300 bg-card p-4 dark:border-amber-800">
+					<span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+						<Clock className="size-3.5" aria-hidden />
+						{ms ? "Menunggu kelulusan" : "Awaiting approval"}
+					</span>
+					<p className="font-heading text-lg font-extrabold leading-tight">
+						{ms ? "Permintaan RSVP dihantar" : "RSVP request sent"}
+					</p>
+					<p className="text-sm leading-relaxed text-muted-foreground">
+						{ms
+							? `${order.storeName} meluluskan setiap RSVP. Tempat anda disimpan sementara itu dan belum ada bayaran — sebaik sahaja diluluskan, cara membayar akan muncul di halaman ini. Permintaan yang tidak dijawab dalam 24 jam akan tamat tempoh.`
+							: `${order.storeName} approves each RSVP. Your seat is held meanwhile and nothing has been paid — once they approve, how to pay appears on this page. A request not answered within 24 hours expires.`}
+					</p>
+				</section>
+			) : null}
+			{!isBooking && order.bookingResolution !== undefined ? (
+				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-border bg-card p-4">
+					<span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">
+						{order.bookingResolution === "declined"
+							? ms
+								? "RSVP tidak diluluskan"
+								: "RSVP not approved"
+							: ms
+								? "Permintaan tamat tempoh"
+								: "Request expired"}
+					</span>
+					{order.bookingResolution === "declined" && order.cancellationNote ? (
+						<blockquote className="border-l-2 border-border pl-3 text-sm italic text-muted-foreground">
+							“{order.cancellationNote}”
+						</blockquote>
+					) : order.bookingResolution === "expired" ? (
+						<p className="text-sm leading-relaxed text-muted-foreground">
+							{ms
+								? "Penganjur tidak menjawab dalam masa 24 jam, jadi tempat anda dilepaskan."
+								: "The host didn't respond within 24 hours, so your seat was released."}
+						</p>
+					) : null}
+					<p className="text-sm font-medium">
+						{ms ? "Tiada bayaran dibuat." : "Nothing was charged."}
+					</p>
+					{storeSlug ? (
+						<Link
+							to="/$slug"
+							params={{ slug: storeSlug }}
+							className="mt-1 inline-flex h-11 w-fit items-center rounded-lg border border-border bg-background px-4 text-sm font-semibold transition-colors hover:bg-muted"
+						>
+							{ms
+								? `Kembali ke ${order.storeName}`
+								: `Back to ${order.storeName}`}
+						</Link>
+					) : null}
+				</section>
+			) : null}
+
 			{isBooking && order.status === "booking_requested" ? (
 				<section className="mt-6 flex flex-col gap-2 rounded-2xl border border-amber-300 bg-card p-4 dark:border-amber-800">
 					<span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
@@ -737,10 +909,10 @@ function TrackingRoute() {
 					<p className="text-sm font-medium">
 						{ms ? "Tiada bayaran dibuat." : "Nothing was charged."}
 					</p>
-					{order.retailerSlug ? (
+					{storeSlug ? (
 						<Link
 							to="/$slug"
-							params={{ slug: order.retailerSlug }}
+							params={{ slug: storeSlug }}
 							className="mt-1 inline-flex h-11 w-fit items-center rounded-lg border border-border bg-background px-4 text-sm font-semibold transition-colors hover:bg-muted"
 						>
 							{ms ? "Cuba tarikh lain" : "Try different dates"}
@@ -795,16 +967,25 @@ function TrackingRoute() {
 			order.paymentDueAt !== undefined &&
 			paymentStatus === "unpaid" &&
 			!deliveryFeeHeld &&
-			!gatewayIssueUnresolved ? (
+			!gatewayIssueUnresolved &&
+			// No deadline runs while the buyer can't pay (the sweep lifts it) —
+			// and none is shown until the payment query has said which it is,
+			// or a lapsed store's countdown flashes before the paused card.
+			!paymentsPaused &&
+			!(showPaymentSection && paymentInfo === undefined) ? (
 				<PaymentDueCountdown dueAt={order.paymentDueAt} />
 			) : null}
 
 			{/* Payment card — independent of fulfilment status. Hidden once cancelled,
 			    and held back on a booking REQUEST: nothing is payable until the seller
-			    approves (the awaiting card above says so). */}
-			{!isCancelled && order.status !== "booking_requested" ? (
+			    approves (the awaiting card above says so). A FREE order drops the
+			    whole card: "Payment Unpaid" over an RM 0.00 total is a claim about a
+			    debt that doesn't exist, and every control inside is a dead end. */}
+			{!isCancelled &&
+			order.status !== "booking_requested" &&
+			!isFreeOrder(order) ? (
 				<section
-					className={`mt-4 flex flex-col gap-3 rounded-2xl border p-4 ${paymentConfig.tone}`}
+					className={`mt-4 flex flex-col gap-3 rounded-2xl border p-4 ${TONE_PANEL[paymentConfig.tone]}`}
 				>
 					<div className="flex items-center gap-3">
 						{paymentConfig.icon}
@@ -844,7 +1025,8 @@ function TrackingRoute() {
 								</p>
 							) : null}
 							{order.gatewayPaymentId ? (
-								<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5">
+								// Same lift-not-white plate as `GatewayIssueReference`.
+								<div className="rounded-lg border border-black/5 bg-white/60 px-2.5 py-1.5 dark:border-white/10 dark:bg-white/10">
 									{/* Copy sits beside the LABEL, not the value, so the id gets
 									    the chip's full width — a 36-char HitPay reference then
 									    renders complete at 375px instead of truncating, and a
@@ -929,6 +1111,28 @@ function TrackingRoute() {
 									Checking with HitPay — this usually takes a few seconds.
 								</p>
 							</>
+						) : showPaymentSection && paymentInfo === undefined ? (
+							// Still asking the server how this order can be paid. Never
+							// fall through to a Pay-now that might not exist: on a
+							// lapsed store it flashed a live "Pay now" before the
+							// paused state arrived (z8r3fdr6gg test). `null` = nothing
+							// configured, which the manual branch below still handles.
+							<Button disabled isLoading className="h-12 w-full text-base">
+								Checking payment options…
+							</Button>
+						) : paymentsPaused ? (
+							// After the holds above (they're more specific, and the
+							// payment query is skipped while they stand) and after a
+							// HitPay return being verified — money that may already
+							// have moved is confirmed whatever the store's state.
+							<>
+								<Button disabled className="h-12 w-full text-base">
+									{PAYMENTS_PAUSED_HEADING}
+								</Button>
+								<p className="text-xs opacity-80">
+									{paymentsPausedOrderLine(order.storeName)}
+								</p>
+							</>
 						) : gatewayAvailable ? (
 							<>
 								<Button
@@ -947,13 +1151,18 @@ function TrackingRoute() {
 									{order.storeName || "the store"}'s secure HitPay page — your
 									order confirms automatically.
 								</p>
-								<button
-									type="button"
-									onClick={() => setClaimingPayment(true)}
-									className="self-start text-sm font-medium underline-offset-2 hover:underline"
-								>
-									Paid by bank transfer instead? Tell the store
-								</button>
+								{/* Only while the store still offers its manual details for
+								    this order — a HitPay store withholds them (86eye9xd4),
+								    and a door to an empty sheet is a dead end. */}
+								{paymentMethods.length > 0 ? (
+									<button
+										type="button"
+										onClick={() => setClaimingPayment(true)}
+										className="self-start text-sm font-medium underline-offset-2 hover:underline"
+									>
+										Paid by bank transfer instead? Tell the store
+									</button>
+								) : null}
 							</>
 						) : (
 							<>
@@ -963,9 +1172,13 @@ function TrackingRoute() {
 								>
 									Pay now · {formatPrice(order.total, order.currency)}
 								</Button>
+								{/* Says the screenshot is REQUIRED before the sheet opens
+								    (z8r3fdnpxf): a buyer who learns about a mandatory field
+								    only once they're inside the form has been ambushed by it. */}
 								<p className="text-xs opacity-80">
-									Bank transfer or QR — pay in your banking app, then attach the
-									receipt so {order.storeName || "the store"} can confirm it.
+									Bank transfer or QR — pay in your banking app, then attach
+									your receipt. {order.storeName || "The store"} needs the
+									screenshot to confirm your payment.
 								</p>
 							</>
 						)
@@ -1012,11 +1225,15 @@ function TrackingRoute() {
 							order.currency,
 						);
 						return (
-							<section className="mt-4 flex flex-col gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
+							// Deliberately NOT `TONE_PANEL.warn`: this card carries a heavier
+							// border than the payment card's warn state because it interrupts
+							// rather than informs, so it keeps its own amber and only gains
+							// the dark pairs.
+							<section className="mt-4 flex flex-col gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
 								<div className="flex items-center gap-3">
-									<HandCoins className="size-5 shrink-0 text-amber-600" />
+									<HandCoins className="size-5 shrink-0 text-amber-600 dark:text-amber-400" />
 									<div className="min-w-0 flex-1">
-										<p className="text-xs font-semibold uppercase tracking-widest text-amber-700">
+										<p className="text-xs font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
 											Payment
 										</p>
 										<p className="font-semibold">{copy.heading}</p>
@@ -1231,7 +1448,9 @@ function TrackingRoute() {
 			) : null}
 
 			{/* The stay itself — a booking's equivalent of the address/pickup blocks.
-			    Frozen at request (bookingCheckIn/Out never change after create). */}
+			    Frozen at request, except that a seller's "Skip a day" on an
+			    open-days plan moves the last day out (z8r3fdh3ay) — this page is
+			    live, so it shows the new one. */}
 			{isBooking &&
 			order.bookingCheckIn !== undefined &&
 			order.bookingCheckOut !== undefined ? (
@@ -1284,25 +1503,21 @@ function TrackingRoute() {
 							</span>
 						</div>
 						<p className="text-xs text-muted-foreground">
-							{(() => {
-								// "2 night(s)" was the only place the app hedged its
-								// plural instead of counting — every other surface says
-								// "2 nights" / "1 night". Malay doesn't inflect, so only
-								// the EN branch takes the count.
-								const n = Math.round(
-									(order.bookingCheckOut - order.bookingCheckIn) / DAY_MS,
-								);
-								const unit = isBookingPackage
-									? ms
-										? "hari"
-										: `day${n === 1 ? "" : "s"}`
-									: ms
-										? "malam"
-										: `night${n === 1 ? "" : "s"}`;
-								return `${n} ${unit}`;
-							})()} ·{" "}
+							{/* Counted the way it was sold — "4 open days" for an
+							    open-days package, never the calendar span (it said
+							    "7 days" under a receipt that said 4, z8r3fdhpm7). */}
+							{bookingLengthLabel(order, ms ? "ms" : "en")} ·{" "}
 							{order.items[0]?.name ?? (ms ? "penyenaraian" : "listing")}
 						</p>
+						{isBookingPackage ? (
+							<PlanSkipsNote
+								order={order}
+								maxSkips={order.bookingMaxSkips}
+								skippable={order.bookingSkippable === true}
+								storeName={order.storeName}
+								ms={ms}
+							/>
+						) : null}
 					</div>
 				</section>
 			) : null}
@@ -1426,10 +1641,39 @@ function TrackingRoute() {
 					</div>
 					<PickupNavButtons snapshot={order.pickupSnapshot} />
 					{order.pickupSnapshot.notes ? (
-						<p className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-foreground whitespace-pre-line">
-							{order.pickupSnapshot.notes}
-						</p>
+						// The point's own note, labelled: it sits directly above the
+						// products' "Before you collect" block (z8r3fdff97), and two
+						// instruction boxes in one card must each say whose they are.
+						<div className="rounded-lg bg-muted/40 px-3 py-2">
+							<p className="text-xs font-semibold text-foreground">
+								About this spot
+							</p>
+							<p className="mt-0.5 text-xs text-foreground whitespace-pre-line wrap-break-word">
+								<LinkifiedText text={order.pickupSnapshot.notes} />
+							</p>
+						</div>
 					) : null}
+					{/* The PRODUCTS' collection instructions (z8r3fdff97), beside the
+					    point's own notes above: those describe the place, these
+					    describe what to bring or do for what was bought. */}
+					<PickupNotes
+						audience="buyer"
+						locale={order.retailerLocale}
+						notes={buyerPickupNotes}
+					/>
+				</section>
+			) : null}
+
+			{/* A self-collect order with notes but no snapshot (placed before
+			    pickup points were frozen onto orders) still gets its notes, in
+			    the card's position — the instruction matters more than the card. */}
+			{isSelfCollect && !order.pickupSnapshot && buyerPickupNotes.length > 0 ? (
+				<section className="mt-6 rounded-2xl border border-border bg-card p-4">
+					<PickupNotes
+						audience="buyer"
+						locale={order.retailerLocale}
+						notes={buyerPickupNotes}
+					/>
 				</section>
 			) : null}
 
@@ -1452,7 +1696,10 @@ function TrackingRoute() {
 							</button>
 						) : null}
 					</div>
-					<DeliveryAddressDisplay address={order.deliveryAddress} />
+					<DeliveryAddressDisplay
+						address={order.deliveryAddress}
+						storeCountry={order.retailerCountry}
+					/>
 					{(() => {
 						const mapsUrl = deriveMapsUrl(order.deliveryAddress);
 						return mapsUrl ? (
@@ -1503,24 +1750,58 @@ function TrackingRoute() {
 			    A booking's fulfilmentDate IS its check-in, already printed above
 			    under its own word, so this would duplicate it as "Delivery on". */}
 			{!isBooking && order.fulfilmentDate !== undefined ? (
-				<div className="mt-2 flex items-center gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
-					<CalendarDays className="size-4 text-accent" />
-					{isSelfCollect
-						? order.pickupSnapshot?.locationType === "drop_off"
-							? "Meet on "
-							: "Collect on "
-						: isCollection
-							? order.collectedAt !== undefined
-								? "Collected on "
-								: "We collect on "
-							: "Delivery on "}
-					<span className="font-semibold">
-						{formatFulfilmentDateTime(
-							order.fulfilmentDate,
-							order.fulfilmentTimeMinutes,
-						)}
+				<div className="mt-2 flex items-start gap-2 rounded-xl bg-accent/5 px-3 py-2 text-sm font-medium text-foreground">
+					<CalendarDays className="mt-0.5 size-4 shrink-0 text-accent" />
+					<span>
+						{/* An RSVP's moment is the EVENT's (`z8r3fdff9u`), not a slot
+						    the guest picked — "Collect on" would misdescribe it, and
+						    "Event" is the word they'll be looking for on this page. */}
+						{order.eventLocked
+							? "Event: "
+							: isSelfCollect
+								? order.pickupSnapshot?.locationType === "drop_off"
+									? "Meet on "
+									: "Collect on "
+								: isCollection
+									? order.collectedAt !== undefined
+										? "Collected on "
+										: "We collect on "
+									: "Delivery on "}
+						<span className="font-semibold">
+							{order.eventLocked
+								? formatEventMoment({
+										date: order.fulfilmentDate,
+										timeMinutes: order.fulfilmentTimeMinutes,
+										endDate: order.eventEndDate,
+									})
+								: formatFulfilmentDateTime(
+										order.fulfilmentDate,
+										order.fulfilmentTimeMinutes,
+									)}
+						</span>
+						{order.eventLocked ? (
+							<span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+								Set by the store for this event — same for every guest. Where to
+								go is in the pickup card above.
+							</span>
+						) : null}
 					</span>
 				</div>
+			) : null}
+
+			{/* …and, when the seller MOVED that moment, say so (z8r3fdff97 test
+			    round). No message goes out on a reschedule, so without this the
+			    new time is indistinguishable from the one the buyer chose.
+			    Hidden once the order is done: history, not news. */}
+			{!isBooking && !isCancelled && order.status !== "delivered" ? (
+				<RescheduledNote
+					className="mt-2"
+					audience="buyer"
+					rescheduledAt={order.rescheduledAt}
+					fromDate={order.rescheduledFromDate}
+					fromTimeMinutes={order.rescheduledFromTimeMinutes}
+					storeName={order.storeName || "The store"}
+				/>
 			) : null}
 
 			<AddressEditDialog
@@ -1529,7 +1810,9 @@ function TrackingRoute() {
 				token={token}
 				currentAddress={order.deliveryAddress}
 				retailerId={order.retailerId}
-				country={order.retailerCountry}
+				// An overseas order is edited within ITS country (z8r3fdr5yy) — the
+				// address form follows the address, not the store.
+				country={order.deliveryAddress?.country ?? order.retailerCountry}
 				subtotal={order.subtotal}
 				orderItems={order.items}
 				currency={order.currency}
@@ -1543,9 +1826,17 @@ function TrackingRoute() {
 				onClose={() => setClaimingPayment(false)}
 				token={token}
 				shortId={order.shortId}
-				storeName={order.storeName || "the store"}
+				storeName={order.storeName || (ms ? "kedai" : "the store")}
 				methods={paymentMethods}
 				hasExistingClaim={paymentStatus === "claimed"}
+				// Proof is mandatory on the FIRST claim only (z8r3fdnpxf) — once the
+				// seller has a screenshot, a reference-only fix doesn't demand it
+				// again. Same ORDER-level rule `claimPayment` enforces.
+				hasExistingProof={order.hasPaymentProof}
+				locale={order.retailerLocale}
+				// The way out of the mandatory attachment: the vendor's own chat,
+				// where they can mark the payment received by hand.
+				storeWaPhone={order.retailerWaPhone}
 			/>
 
 			{/* Items */}
@@ -1575,6 +1866,8 @@ function TrackingRoute() {
 								currency={order.currency}
 								imageUrl={itemImageUrls?.[i] ?? undefined}
 								booking={itemBookingSpan}
+								answers={item.answers}
+								locale={ms ? "ms" : "en"}
 							/>
 						);
 					})}
@@ -1605,7 +1898,14 @@ function TrackingRoute() {
 				{/* Frozen delivery charge — same reconciliation rule as the pickup fee. */}
 				{order.deliveryFee && order.deliveryFee > 0 ? (
 					<div className="flex items-center justify-between px-3 text-sm text-muted-foreground">
-						<span>{isCollection ? "Collection fee" : "Delivery fee"}</span>
+						<span>
+							{isCollection
+								? "Collection fee"
+								: (overseasFeeLabel(
+										order.deliveryAddress?.country,
+										order.retailerCountry,
+									) ?? "Delivery fee")}
+						</span>
 						<span className="tabular-nums">
 							{formatPrice(order.deliveryFee, order.currency)}
 						</span>
@@ -1631,6 +1931,23 @@ function TrackingRoute() {
 						</span>
 					</div>
 				) : null}
+				{/* The voucher (`z8r3fdr617`) — the one SUBTRACTIVE line, so it is
+				    signed and accented rather than reading as another charge. Last
+				    of the adjustments, immediately above the total it reduces, and
+				    named by its code so the buyer can see which voucher did it. */}
+				{order.voucherDiscount && order.voucherDiscount > 0 ? (
+					<div className="flex items-center justify-between gap-3 px-3 text-sm text-accent-emphasis">
+						<span className="min-w-0 truncate">
+							{ms ? "Voucher" : "Voucher"}
+							{order.voucherSnapshot?.code
+								? ` · ${order.voucherSnapshot.code}`
+								: ""}
+						</span>
+						<span className="shrink-0 font-medium tabular-nums">
+							−{formatPrice(order.voucherDiscount, order.currency)}
+						</span>
+					</div>
+				) : null}
 				<div className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2.5 text-sm font-bold">
 					<span>Total</span>
 					<span className="tabular-nums">
@@ -1651,14 +1968,19 @@ function TrackingRoute() {
 					</p>
 				) : null}
 				{/* Buyer self-serves a PDF receipt — generated on demand from this
-				    order, no delivery/email needed. */}
-				<ReceiptDownloadButton
-					token={token}
-					paid={isOrderDocPaid(order.paymentStatus)}
-					pdfHint
-					variant="outline"
-					className="w-full"
-				/>
+				    order, no delivery/email needed. Not for a request the seller
+				    hasn't accepted (awaiting, declined or expired — `z8r3fdkjek`):
+				    an invoice for an unaccepted booking/RSVP reads as a bill. */}
+				{order.status === "booking_requested" ||
+				order.bookingResolution !== undefined ? null : (
+					<ReceiptDownloadButton
+						token={token}
+						paid={isOrderDocPaid(order.paymentStatus)}
+						pdfHint
+						variant="outline"
+						className="w-full"
+					/>
+				)}
 			</section>
 
 			{/* Echo the shopper's note so they can confirm it was received. Plain
@@ -1677,25 +1999,41 @@ function TrackingRoute() {
 				</section>
 			) : null}
 
-			{/* Contact the store directly. Buyers otherwise only ever hear from the
-			    shared Kedaipal WABA — this opens a chat to the vendor's own number
-			    with the order ref pre-filled. Hidden when the store has no number. */}
-			{order.retailerWaPhone ? (
-				<a
-					href={`https://wa.me/${order.retailerWaPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
-						order.retailerLocale === "ms"
-							? `Hai ${order.storeName}, saya ada pertanyaan tentang pesanan ${order.shortId}.`
-							: `Hi ${order.storeName}, I have a question about my order ${order.shortId}.`,
-					)}`}
-					target="_blank"
-					rel="noopener noreferrer"
-					className="mt-6 flex items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
-				>
-					<MessageCircle className="size-4" />
-					{order.retailerLocale === "ms"
-						? `Hubungi ${order.storeName || "kedai"}`
-						: `Message ${order.storeName || "the store"}`}
-				</a>
+			{/* The foot of the order: order help first, then the way back into
+			    the store. Exits sit together at the bottom, below every payment
+			    and status card, so neither competes with a Pay CTA. Other stores
+			    come after, in the footer (z8r3fducgw). */}
+			{order.retailerWaPhone || showContinueShopping ? (
+				<div className="mt-6 flex flex-col gap-3">
+					{/* Contact the store directly. Buyers otherwise only ever hear
+					    from the shared Kedaipal WABA — this opens a chat to the
+					    vendor's own number with the order ref pre-filled. Hidden
+					    when the store has no number. */}
+					{order.retailerWaPhone ? (
+						<a
+							href={`https://wa.me/${order.retailerWaPhone.replace(/\D/g, "")}?text=${encodeURIComponent(
+								order.retailerLocale === "ms"
+									? `Hai ${order.storeName}, saya ada pertanyaan tentang pesanan ${order.shortId}.`
+									: `Hi ${order.storeName}, I have a question about my order ${order.shortId}.`,
+							)}`}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-accent/40 bg-accent/5 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/10"
+						>
+							<MessageCircle className="size-4" />
+							{order.retailerLocale === "ms"
+								? `Hubungi ${order.storeName || "kedai"}`
+								: `Message ${order.storeName || "the store"}`}
+						</a>
+					) : null}
+					{showContinueShopping && storeSlug ? (
+						<ContinueShoppingLink
+							storeName={order.storeName}
+							slug={storeSlug}
+							ms={ms}
+						/>
+					) : null}
+				</div>
 			) : null}
 
 			{/* PDPA notice companion (86ey5m3hx item 1): this page is the buyer's
@@ -1712,6 +2050,19 @@ function TrackingRoute() {
 					{order.retailerLocale === "ms" ? "Dasar Privasi" : "Privacy Policy"}
 				</a>
 			</p>
+
+			{/* "Powered by Kedaipal" (z8r3fdcwd0) — the order page is the one buyer
+			    surface EVERY order reaches (the confirmation message's only link),
+			    so it is the badge's highest-volume home. Direct flex child of the
+			    min-h-dvh column so `mt-auto` sinks it to the bottom. */}
+			<StorefrontFooter
+				slug={order.retailerSlug}
+				surface="track"
+				locale={order.retailerLocale}
+				discover={
+					order.retailerSlug !== undefined && order.marketplaceUnlisted !== true
+				}
+			/>
 		</main>
 	);
 }
@@ -1813,9 +2164,16 @@ type TrackedOrder = NonNullable<FunctionReturnType<typeof api.orders.get>>;
 function ConfirmationSentCard({
 	ms,
 	checkoutPhone,
+	free,
+	paymentsPaused,
 }: {
 	ms: boolean;
 	checkoutPhone: string;
+	/** `isFreeOrder` — a free RSVP has no "how to pay" for this card to point at. */
+	free: boolean;
+	/** The store is lapsed (z8r3fdr6gg): the card below says payments are
+	 * paused, so this one mustn't promise "how to pay" is here right now. */
+	paymentsPaused: boolean;
 }) {
 	return (
 		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-accent/40 bg-accent/5 p-4">
@@ -1833,9 +2191,7 @@ function ConfirmationSentCard({
 				</div>
 			</div>
 			<p className="text-sm text-muted-foreground">
-				{ms
-					? "Tak perlu hantar apa-apa. Itulah satu-satunya mesej yang kami hantar — selebihnya ada di sini: cara membayar, status terkini dan resit anda. Simpan pautan ini."
-					: "Nothing to send. That's the only message we'll send you — everything else is here: how to pay, your latest status, and your receipt. Keep this link."}
+				{confirmationSentBody({ ms, free, paymentsPaused })}
 			</p>
 			<Button asChild variant="outline" className="h-11 w-full">
 				<a
@@ -1887,7 +2243,8 @@ function PushSendingCard({
  * The confirmation push gave up (86eyf1rck). Two very different truths behind
  * one status, so two very different asks:
  *
- *  - `unreachable` — the number can't receive WhatsApp (typo'd, no account).
+ *  - `unreachable` — the number can't receive WhatsApp (typo'd, no account,
+ *    or a country Meta won't let us message — error 130497).
  *    Only the buyer can fix that, so the primary action is **editing the
  *    number**, which re-sends immediately. The wa.me send stays as a quiet
  *    secondary route (it also repairs the number, via the inbound path).
@@ -1913,36 +2270,7 @@ function PushFailedCard({
 	const pretty = order.customer.waPhone
 		? formatMobile(order.customer.waPhone)
 		: "";
-	const updatePhone = useMutation(api.orders.updateBuyerPhone);
 	const [editing, setEditing] = useState(false);
-	const [value, setValue] = useState("");
-	const [busy, setBusy] = useState(false);
-	// Focus on open rather than autoFocus: the field only mounts when the buyer
-	// taps "Update my number", so this is a response to their action, not a
-	// page-load surprise. One-shot — a callback ref would re-fire every keystroke.
-	const phoneInputRef = useRef<HTMLInputElement>(null);
-	useEffect(() => {
-		if (editing) phoneInputRef.current?.focus();
-	}, [editing]);
-
-	async function handleSave(e: FormEvent) {
-		e.preventDefault();
-		setBusy(true);
-		try {
-			await updatePhone({ token, waPhone: value.trim() });
-			toast.success(
-				ms
-					? "Nombor dikemas kini — pengesahan sedang dihantar"
-					: "Number updated — sending your confirmation now",
-			);
-			setEditing(false);
-			setValue("");
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setBusy(false);
-		}
-	}
 
 	return (
 		<section className="mt-6 flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-800 dark:bg-amber-950/50">
@@ -1966,8 +2294,8 @@ function PushFailedCard({
 			<p className="text-sm text-amber-950/90 dark:text-amber-100/90">
 				{unreachable
 					? ms
-						? `Kami tak dapat hantar ke ${pretty} — nombor itu mungkin tersilap taip atau tiada WhatsApp. Pesanan anda tetap disahkan dan butiran di bawah adalah muktamad. Simpan pautan ini — ini halaman pesanan anda.`
-						: `We couldn't deliver it to ${pretty} — that number may have a typo, or no WhatsApp account. Your order is still confirmed and everything below is final. Keep this link — this page is your order.`
+						? `Kami tak dapat hantar ke ${pretty} — nombor itu mungkin tersilap taip, tiada WhatsApp, atau dari negara yang belum boleh kami hantar mesej WhatsApp. Pesanan anda tetap disahkan dan butiran di bawah adalah muktamad. Simpan pautan ini — ini halaman pesanan anda.`
+						: `We couldn't deliver it to ${pretty} — that number may have a typo, no WhatsApp account, or be in a country we can't message on WhatsApp yet. Your order is still confirmed and everything below is final. Keep this link — this page is your order.`
 					: ms
 						? `Masalah di pihak kami, bukan nombor anda. Pesanan anda telah disahkan dan ${storeName} sudah menerimanya — anda masih boleh membayar di bawah. Simpan pautan ini — ini halaman pesanan anda.`
 						: `That's a problem on our side, not with your number. Your order is confirmed and ${storeName} already has it — you can still pay below. Keep this link — this page is your order.`}
@@ -1975,55 +2303,21 @@ function PushFailedCard({
 
 			{unreachable ? (
 				editing ? (
-					<form onSubmit={handleSave} className="flex flex-col gap-2">
-						<label
-							htmlFor="repair-wa-phone"
-							className="text-xs font-medium text-amber-950 dark:text-amber-100"
-						>
-							{ms ? "Nombor WhatsApp anda" : "Your WhatsApp number"}
-						</label>
-						{/* Same plated control as the storefront checkout field this is
-						    repairing — the buyer has already met it once, and it's the
-						    only shape `assertValidMobileForCountry` behind it accepts
-						    (judged by the store's country, which rides the order
-						    payload). Its own neutral chrome inside the amber card, so
-						    the control reads as a control and not as part of the
-						    warning. */}
-						<MyPhoneInput
-							id="repair-wa-phone"
-							ref={phoneInputRef}
-							value={value}
-							onChange={setValue}
-							country={order.retailerCountry}
-							className="bg-white dark:bg-amber-950"
-						/>
-						<div className="flex gap-2">
-							<Button
-								type="submit"
-								isLoading={busy}
-								disabled={busy || value.trim().length === 0}
-								className="h-11 flex-1"
-							>
-								{ms ? "Simpan & hantar" : "Save & resend"}
-							</Button>
-							<Button
-								type="button"
-								variant="outline"
-								onClick={() => setEditing(false)}
-								disabled={busy}
-								className="h-11"
-							>
-								{ms ? "Batal" : "Cancel"}
-							</Button>
-						</div>
-					</form>
+					// Mounted per edit, so each attempt starts clean. It judges the
+					// number with the same buyer picker + parser as checkout, and
+					// never spends a server try on a number that can't parse.
+					<BuyerPhoneRepairForm
+						token={token}
+						failedWaPhone={order.customer.waPhone}
+						storeCountry={order.retailerCountry}
+						locale={order.retailerLocale}
+						onSaved={() => setEditing(false)}
+						onCancel={() => setEditing(false)}
+					/>
 				) : (
 					<Button
 						type="button"
-						onClick={() => {
-							setValue("");
-							setEditing(true);
-						}}
+						onClick={() => setEditing(true)}
 						className="h-12 w-full text-base"
 					>
 						{ms ? "Kemas kini nombor" : "Update my number"}
@@ -2082,6 +2376,7 @@ function SendOrderCard({
 	const message = buildOrderWaMessage({
 		shortId: order.shortId,
 		storeName: order.storeName,
+		storeCountry: order.retailerCountry,
 		items: order.items,
 		currency: order.currency,
 		total: order.total,
@@ -2312,6 +2607,9 @@ function MockupReview({
 						src={mockupUrls[0]}
 						alt="Your mockup"
 						caption="Your mockup"
+						// dark-ok: the mat stays white in BOTH themes. A mockup is a
+						// user-supplied image — routinely dark ink on transparent — so a
+						// dark mat would swallow the artwork or frame it in a seam.
 						wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
 						className="block max-h-72 w-full object-contain"
 						// Order-owned blob (orderBlobs.ts) — erased on hard delete.
@@ -2327,6 +2625,7 @@ function MockupReview({
 								caption={`Your mockup ${i + 1}`}
 								// Order-owned blob — erased on hard delete.
 								sensitive
+								// dark-ok: same theme-invariant mat as the single-mockup case.
 								wrapperClassName="block w-full overflow-hidden rounded-xl border border-border bg-white"
 								className="block aspect-square w-full object-cover"
 							/>
@@ -2366,7 +2665,7 @@ function MockupReview({
 				</p>
 			) : null}
 			{status === "approved" ? (
-				<p className="text-sm text-emerald-700">
+				<p className="text-sm text-emerald-700 dark:text-emerald-300">
 					Approved — the seller will start making your order.
 				</p>
 			) : null}

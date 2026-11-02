@@ -18,7 +18,7 @@ The five things to internalize:
 - **The pain we solve.** F&B sellers (a) miss orders buried in WhatsApp chat history and (b) waste hours chasing payment confirmation. Everything maps back to those two.
 - **The moat.** Kedaipal owns **one** Meta-verified WABA that sends for every retailer. Retailers need no WABA, no business verification, no SSM. "Live in 5 minutes" is structural, not marketing — it's the wedge vs. WATI / SleekFlow / EasyStore / Orderla.
 - **Positioning vs. Orderla.** Orderla is a *form*; Kedaipal is a *full storefront*. Public line: *"Where Orderla users graduate to when their order form falls apart."*
-- **Pricing (locked).** Starter RM79 / Pro RM149 ★ / Scale RM299, 14-day trial, no card. No free tier until 50 paying customers.
+- **Pricing (locked, reset 30 Aug 2026; credits 30 Sep 2026; Enterprise 1 Oct 2026).** Starter RM79 / Pro RM149 ★, each with monthly **Kedaipal Credits** (1 credit = 1 order: 100 / 200; top-ups for a busy month; no pay-as-you-go), and **Enterprise — Custom, "Talk to Arif"**, a per-store contract for 1,500+ orders a month ([`pricing.md`](./pricing.md#enterprise--a-contract-not-a-price)). Scale was retired before it went public. Free until the first live order, then 14 days or 200 orders of everything in Pro, whichever comes first (a day-15 backstop invoice if no order); no card. Off-Season Hold RM19/mo exists in-product for paid sellers between seasons but is never on a public page. No free tier until 50 paying customers. See [`credits.md`](./credits.md).
 - **Money boundary.** Subscription billing flows to Kedaipal (Stripe + HitPay/Billplz). **Customer payment money is retailer-owned** (HitPay Connect / Billplz / Stripe Connect) — Kedaipal is never merchant of record for shopper transactions.
 
 ---
@@ -90,7 +90,7 @@ Then follow the canonical setup in [`.env.local.example`](../.env.local.example)
 4. **Wire Clerk → Convex** — in the Convex dashboard → Settings → Authentication, add a provider with the Clerk Issuer URL + applicationID ([docs](https://docs.convex.dev/auth/clerk)).
 5. **Optional integrations** (only when working on those features):
    - WhatsApp Cloud API: `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_VERIFY_TOKEN`, plus `WHATSAPP_APP_SECRET` + `APP_URL` set on the Convex deployment (`npx convex env set KEY value`).
-   - Email: `RESEND_API_KEY`, `EMAIL_FROM` (verify the sender domain first).
+   - Email: `RESEND_API_KEY`, `EMAIL_FROM` (verify the sender domain first; anything new that sends as `@kedaipal.com` must be authorised before its first send, see [sender authentication](./email-notifications.md#sender-authentication--spf-dkim-dmarc-z8r3fdxrx5)).
    - Analytics: `VITE_GA_MEASUREMENT_ID`.
 
 > **Env var split:** `VITE_*` vars are frontend (`.env.local`); backend secrets live on the Convex deployment via `npx convex env set` (`--prod` for production). Validated at load in [`src/lib/env.ts`](../src/lib/env.ts).
@@ -168,7 +168,7 @@ The [`docs/README.md`](./README.md) index groups everything (including roadmap d
 ## Part 6 — Conventions
 
 - **MANDATORY before writing Convex code:** read [`convex/_generated/ai/guidelines.md`](../convex/_generated/ai/guidelines.md). It overrides general Convex knowledge (function registration, validators, pagination, auth, scheduling, file storage).
-- **Lint/format:** Biome (`pnpm lint`, `pnpm format`, `pnpm check`) — not Prettier/ESLint.
+- **Lint/format:** Biome (`pnpm check` is what CI gates — lint *and* formatting/import order; `pnpm lint` is a lint-only subset) — not Prettier/ESLint. `npx biome check --write <paths>` fixes drift; pass explicit paths, never a directory.
 - **Types:** `pnpm typecheck` (`tsc --noEmit`). Avoid `any`; validate external input with Zod ([`src/lib/schemas.ts`](../src/lib/schemas.ts)).
 - **Testing:** Vitest + `convex-test` on the edge runtime (`pnpm test`). Pure helpers in `convex/lib/*` are kept Convex-import-free precisely so they unit-test in isolation. Backend tests sit beside code as `convex/*.test.ts`; frontend lib tests as `src/lib/*.test.ts`.
 - **Immutability:** prefer new objects over in-place mutation (see repo coding rules).
@@ -191,6 +191,6 @@ Common commands:
 | `pnpm dev:all` | Convex + frontend |
 | `pnpm test` | Vitest (single run) |
 | `pnpm typecheck` | `tsc --noEmit` |
-| `pnpm check` | Biome lint + format |
+| `pnpm check` | Biome lint + format + import order (the CI gate) |
 | `pnpm seed` | Seed dev data |
 | `npx convex run <file>:<fn> '<json>'` | Invoke a Convex function directly (e.g. backfills, diagnostics) |

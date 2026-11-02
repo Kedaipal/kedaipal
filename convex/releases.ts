@@ -26,6 +26,9 @@ import { compareCalendarVersions, isCalendarVersion } from "./lib/appVersion";
 async function retailerForCaller(ctx: QueryCtx): Promise<Doc<"retailers"> | null> {
 	const identity = await ctx.auth.getUserIdentity();
 	if (!identity) return null;
+	// OWNER-ONLY BY CONSTRUCTION (by_user) — deliberate (86exr91r4): the
+	// What's-new seen-stamp lives on the retailer row, so a member reading the
+	// modal would mark the OWNER as caught up. Members skip the modal in v1.
 	return await ctx.db
 		.query("retailers")
 		.withIndex("by_user", (q) => q.eq("userId", identity.subject))

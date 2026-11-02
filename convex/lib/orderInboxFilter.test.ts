@@ -15,7 +15,7 @@ function order(overrides: Partial<FilterableOrder> = {}): FilterableOrder {
 		createdAt: 1_000,
 		shortId: "ORD-0001",
 		customer: { name: "Aisha", waPhone: "+60123456789" },
-		items: [{ name: "Vanilla Cake", variantLabel: "1kg", quantity: 1 }],
+		items: [{ name: "Vanilla Cake", variantLabel: "1kg", quantity: 1, price: 1000 }],
 		subtotal: 12500,
 		total: 12500,
 		currency: "MYR",
@@ -194,18 +194,18 @@ describe("buildInboxPredicate — statuses (86eyrtz74)", () => {
 
 describe("buildInboxPredicate — categories (86eyrtz74)", () => {
 	const cake = order({
-		items: [{ name: "Kek Lapis", quantity: 1, categoryNames: ["Cakes"] }],
+		items: [{ name: "Kek Lapis", quantity: 1, categoryNames: ["Cakes"], price: 1000 }],
 	});
 	const mixed = order({
 		items: [
-			{ name: "Kek Lapis", quantity: 1, categoryNames: ["Cakes"] },
-			{ name: "Teh Ais", quantity: 1, categoryNames: ["Drinks"] },
+			{ name: "Kek Lapis", quantity: 1, categoryNames: ["Cakes"], price: 1000 },
+			{ name: "Teh Ais", quantity: 1, categoryNames: ["Drinks"], price: 1000 },
 		],
 	});
 	const uncategorised = order({
-		items: [{ name: "Custom", quantity: 1, categoryNames: [] }],
+		items: [{ name: "Custom", quantity: 1, categoryNames: [], price: 1000 }],
 	});
-	const legacy = order({ items: [{ name: "Old order", quantity: 1 }] });
+	const legacy = order({ items: [{ name: "Old order", quantity: 1, price: 1000 }] });
 
 	test("undefined / empty means no category filtering", () => {
 		for (const args of [
@@ -308,6 +308,151 @@ describe("buildInboxPredicate — source", () => {
 	test("an empty list means no filtering, not 'match nothing'", () => {
 		const p = buildInboxPredicate({ sources: [] });
 		expect(p(order({ source: "counter" }))).toBe(true);
+	});
+});
+
+describe("buildInboxPredicate — fulfilments (z8r3fdfau9)", () => {
+	const delivery = order({ deliveryMethod: "delivery" });
+	const legacy = order({ deliveryMethod: undefined });
+	const pickup = order({
+		deliveryMethod: "self_collect",
+		pickupSnapshot: { label: "Shop", address: "Jalan 1" },
+	});
+	const dropOff = order({
+		deliveryMethod: "self_collect",
+		pickupSnapshot: {
+			label: "Pasar Chow Kit",
+			address: "Jalan Raja Alang",
+			locationType: "drop_off",
+		},
+	});
+	const weCollect = order({
+		deliveryMethod: "delivery",
+		deliveryDirection: "collection",
+	});
+	const booking = order({ deliveryMethod: "booking" });
+	// Stored self_collect — the marker is the only thing that says "event".
+	const rsvp = order({ deliveryMethod: "self_collect", eventRsvp: true });
+
+	test("no fulfilment filter matches every kind", () => {
+		const p = buildInboxPredicate({});
+		for (const o of [
+			delivery,
+			legacy,
+			pickup,
+			dropOff,
+			weCollect,
+			booking,
+			rsvp,
+		]) {
+			expect(p(o)).toBe(true);
+		}
+	});
+
+	test("an empty list means no filtering, not 'match nothing'", () => {
+		const p = buildInboxPredicate({ fulfilments: [] });
+		expect(p(pickup)).toBe(true);
+	});
+
+	test("delivery matches delivery AND legacy, but never a collection run", () => {
+		const p = buildInboxPredicate({ fulfilments: ["delivery"] });
+		expect(p(delivery)).toBe(true);
+		// Every order created before `deliveryMethod` existed — its row already
+		// reads "Delivery", so the filter has to keep it or the table and the
+		// filter disagree about the same order.
+		expect(p(legacy)).toBe(true);
+		// A collection order IS deliveryMethod "delivery" in the schema. The trip
+		// goes the other way, so "show me my deliveries" must not return it.
+		expect(p(weCollect)).toBe(false);
+		expect(p(pickup)).toBe(false);
+		expect(p(booking)).toBe(false);
+	});
+
+	test("an approval-gated RSVP is still an event, whatever status it waits in (z8r3fdkjek)", () => {
+		// An event with `requiresApproval` lands its RSVPs in `booking_requested`
+		// — the status bookings already use — while staying an RSVP. Status and
+		// fulfilment are different axes, so the one must not bend the other: the
+		// order is an Event that happens to be awaiting approval, not a Booking.
+		const awaiting = order({
+			deliveryMethod: "self_collect",
+			eventRsvp: true,
+			status: "booking_requested",
+		});
+		expect(buildInboxPredicate({ fulfilments: ["event"] })(awaiting)).toBe(
+			true,
+		);
+		expect(buildInboxPredicate({ fulfilments: ["booking"] })(awaiting)).toBe(
+			false,
+		);
+		expect(
+			buildInboxPredicate({ fulfilments: ["self_collect"] })(awaiting),
+		).toBe(false);
+		// And it ANDs with the status axis the way any other order does.
+		expect(
+			buildInboxPredicate({
+				fulfilments: ["event"],
+				statuses: ["booking_requested"],
+			})(awaiting),
+		).toBe(true);
+	});
+
+	test("an RSVP filters as an event, never as the self-collect it is stored as", () => {
+		const events = buildInboxPredicate({ fulfilments: ["event"] });
+		expect(events(rsvp)).toBe(true);
+		expect(events(pickup)).toBe(false);
+		// And the converse, which is the half that actually bit: asking for
+		// self-collect must not drag every RSVP in with it.
+		const own = buildInboxPredicate({ fulfilments: ["self_collect"] });
+		expect(own(pickup)).toBe(true);
+		expect(own(rsvp)).toBe(false);
+	});
+
+	test("self-collect and drop-off are separate answers", () => {
+		const own = buildInboxPredicate({ fulfilments: ["self_collect"] });
+		expect(own(pickup)).toBe(true);
+		// The whole point: three pasar meetups are a different day out from a
+		// counter full of shop collections.
+		expect(own(dropOff)).toBe(false);
+
+		const meetup = buildInboxPredicate({ fulfilments: ["drop_off"] });
+		expect(meetup(dropOff)).toBe(true);
+		expect(meetup(pickup)).toBe(false);
+	});
+
+	test("we-collect and booking each match only themselves", () => {
+		expect(buildInboxPredicate({ fulfilments: ["collection"] })(weCollect)).toBe(
+			true,
+		);
+		expect(buildInboxPredicate({ fulfilments: ["collection"] })(delivery)).toBe(
+			false,
+		);
+		expect(buildInboxPredicate({ fulfilments: ["booking"] })(booking)).toBe(
+			true,
+		);
+		expect(buildInboxPredicate({ fulfilments: ["booking"] })(delivery)).toBe(
+			false,
+		);
+	});
+
+	test("several kinds OR together — 'everything I have to travel for'", () => {
+		const p = buildInboxPredicate({
+			fulfilments: ["delivery", "collection"],
+		});
+		expect(p(delivery)).toBe(true);
+		expect(p(weCollect)).toBe(true);
+		expect(p(pickup)).toBe(false);
+		expect(p(dropOff)).toBe(false);
+	});
+
+	test("ANDs with the other dimensions rather than ORing into them", () => {
+		// "Today's unpaid pickups" is one question, not two lists joined.
+		const p = buildInboxPredicate({
+			fulfilments: ["self_collect"],
+			paymentStatuses: ["unpaid"],
+		});
+		expect(p({ ...pickup, paymentStatus: "unpaid" })).toBe(true);
+		expect(p({ ...pickup, paymentStatus: "received" })).toBe(false);
+		expect(p({ ...delivery, paymentStatus: "unpaid" })).toBe(false);
 	});
 });
 
@@ -598,7 +743,7 @@ describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => 
 	const rich = order({
 		shortId: "ORD-7788",
 		customer: { name: "Nurul Ain", waPhone: "+60123456789" },
-		items: [{ name: "Kek Lapis", variantLabel: "1kg", quantity: 2 }],
+		items: [{ name: "Kek Lapis", variantLabel: "1kg", quantity: 2, price: 1000 }],
 		deliveryAddress: {
 			line1: "12 Jalan Kenari 5",
 			city: "Puchong",
@@ -643,6 +788,20 @@ describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => 
 		expect(hits("changed mind")).toBe(true);
 	});
 
+	test("finds a self-collect order by its pickup note — not a delivery order carrying the same frozen note (z8r3fdff97)", () => {
+		const lines = [
+			{
+				name: "Ice cream puff",
+				quantity: 6,
+				pickupNote: "Bring an ice bag.", price: 1000 },
+		];
+		const collect = order({ deliveryMethod: "self_collect", items: lines });
+		const delivered = order({ deliveryMethod: "delivery", items: lines });
+		const search = buildInboxPredicate({ searchText: "ice bag" });
+		expect(search(collect)).toBe(true);
+		expect(search(delivered)).toBe(false);
+	});
+
 	test("is case-insensitive and still rejects a genuine miss", () => {
 		expect(hits("PUCHONG")).toBe(true);
 		expect(hits("kuala lumpur")).toBe(false);
@@ -652,6 +811,19 @@ describe("buildInboxPredicate — search spans every column (86eyrtz74)", () => 
 		// "123456789" has to find "+60123456789" however the seller typed it.
 		expect(hits("123456789")).toBe(true);
 		expect(hits("60123456789")).toBe(true);
+	});
+
+	test("a foreign number typed the local way, trunk 0 and all, finds the stored international form (z8r3fdh274)", () => {
+		const uk = order({ customer: { name: "Tom", waPhone: "447911123456" } });
+		const search = (term: string) =>
+			buildInboxPredicate({ searchText: term })(uk);
+		expect(search("07911 123456")).toBe(true);
+		expect(search("+44 7911 123456")).toBe(true);
+		expect(search("7911 123456")).toBe(true);
+		// Dropping the trunk never turns a genuine miss into a hit.
+		expect(search("07911 999999")).toBe(false);
+		// Nor widens a short term into a 3-digit tail match.
+		expect(search("0456")).toBe(false);
 	});
 
 	test("an order with none of those fields is unaffected", () => {
@@ -757,5 +929,89 @@ describe("narrowsTheInbox — the Pro gate", () => {
 		expect(narrowsTheInbox({ bookingPeriods: ["active"] })).toBe(false);
 		expect(narrowsTheInbox({ paymentStatuses: ["unpaid"] })).toBe(true);
 		expect(narrowsTheInbox({})).toBe(false);
+	});
+	test("fulfilment gates like every other narrowing filter (z8r3fdfau9)", () => {
+		// It is a filter, not a place: it narrows the list, so it belongs behind
+		// the same gate as payment and category. The record this reads is
+		// compiler-enforced complete — the reason a filter added without touching
+		// it can no longer fail the gate open silently.
+		expect(narrowsTheInbox({ fulfilments: ["delivery"] })).toBe(true);
+		// An empty array narrows nothing, so it must not paywall either.
+		expect(narrowsTheInbox({ fulfilments: [] })).toBe(false);
+	});
+});
+
+describe("compareInboxOrder — same-day ties break by TIME (z8r3fdff97)", () => {
+	const DAY = 1_000;
+	test("two orders due the same day run in time order, not placement order", () => {
+		expect(
+			compareInboxOrder(
+				{ fulfilmentDate: DAY, fulfilmentTimeMinutes: 17 * 60 },
+				{ fulfilmentDate: DAY, fulfilmentTimeMinutes: 11 * 60 },
+			),
+		).toBeGreaterThan(0);
+	});
+
+	test("a timed order comes before an untimed one on the same day", () => {
+		const timed = { fulfilmentDate: DAY, fulfilmentTimeMinutes: 15 * 60 };
+		const untimed = { fulfilmentDate: DAY };
+		expect(compareInboxOrder(timed, untimed)).toBe(-1);
+		expect(compareInboxOrder(untimed, timed)).toBe(1);
+	});
+
+	test("two untimed orders on the same day keep the incoming (createdAt) order", () => {
+		expect(compareInboxOrder({ fulfilmentDate: DAY }, { fulfilmentDate: DAY })).toBe(0);
+	});
+
+	test("the DATE still decides first — a late time tomorrow never beats an early one today", () => {
+		expect(
+			compareInboxOrder(
+				{ fulfilmentDate: DAY + 1, fulfilmentTimeMinutes: 1 },
+				{ fulfilmentDate: DAY, fulfilmentTimeMinutes: 23 * 60 },
+			),
+		).toBeGreaterThan(0);
+	});
+
+	test("sortInboxOrders applies it end to end under `due`", () => {
+		const orders = [
+			{ id: "evening", fulfilmentDate: DAY, fulfilmentTimeMinutes: 18 * 60 },
+			{ id: "anytime", fulfilmentDate: DAY },
+			{ id: "morning", fulfilmentDate: DAY, fulfilmentTimeMinutes: 9 * 60 },
+		];
+		expect(sortInboxOrders(orders, "due").map((o) => o.id)).toEqual([
+			"morning",
+			"evening",
+			"anytime",
+		]);
+	});
+});
+
+describe("buildInboxPredicate — listing (the Schedule's drill-down, z8r3fdjv0d)", () => {
+	const line = (productId: string) => ({
+		productId,
+		name: "Line",
+		quantity: 1,
+		price: 1000,
+	});
+
+	test("matches an order with a line of that listing, among others", () => {
+		const p = buildInboxPredicate({ listing: "p_lunch" });
+		expect(p(order({ items: [line("p_cake"), line("p_lunch")] }))).toBe(true);
+		expect(p(order({ items: [line("p_cake")] }))).toBe(false);
+	});
+
+	test("matches a booking of that listing by its denormalised id", () => {
+		const p = buildInboxPredicate({ listing: "p_studio" });
+		expect(p(order({ items: [], bookingProductId: "p_studio" }))).toBe(true);
+		expect(p(order({ items: [], bookingProductId: "p_other" }))).toBe(false);
+	});
+
+	test("a gated order (lines stripped) does not match", () => {
+		const p = buildInboxPredicate({ listing: "p_lunch" });
+		expect(p(order({ items: [], creditGated: true }))).toBe(false);
+	});
+
+	test("is a narrowing (Pro) filter", () => {
+		expect(narrowsTheInbox({ listing: "p_lunch" })).toBe(true);
 	});
 });

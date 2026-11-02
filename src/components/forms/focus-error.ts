@@ -1,4 +1,5 @@
 import type { FormEvent } from "react";
+import { openEnclosingDisclosure } from "./reveal-setting";
 
 /**
  * Shared "take me to the error" behaviour for every form built on the
@@ -18,7 +19,10 @@ import type { FormEvent } from "react";
  * specific, actionable target.
  */
 export function focusFirstInvalidField(
-	formEl: HTMLFormElement | null | undefined,
+	// Any container, not just a <form>: the product wizard is a stepper whose
+	// Continue is a plain button, and it needs the same "take me to the error"
+	// behaviour. Nothing here is form-specific — it is a querySelector.
+	formEl: HTMLElement | null | undefined,
 ): boolean {
 	if (!formEl) return false;
 	// First invalid control in DOM order — visually the topmost error.
@@ -26,9 +30,22 @@ export function focusFirstInvalidField(
 	const target =
 		control ?? formEl.querySelector<HTMLElement>("[data-form-error]");
 	if (!target) return false;
-	target.scrollIntoView({ behavior: "smooth", block: "center" });
-	// Focus only a real control — the smooth scroll already centred it, so skip
-	// focus's own instant jump (which would fight the animation).
+	// The error sits inside a COLLAPSED question row (z8r3fdv1z2): a hidden
+	// element can be neither scrolled to nor focused, so ask the row to open
+	// and report "not yet" — the caller's retry lands on it once it renders.
+	// The same opener "Find a setting" uses (z8r3fdwwy3).
+	if (openEnclosingDisclosure(target)) return false;
+	// INSTANT, not smooth. Measured in Chrome on the product form: a smooth
+	// scrollIntoView over a long distance moved the page 0px, while the same
+	// call without `behavior` jumped correctly — so every form's "take me to
+	// the error" was focusing an input 2000px off-screen and looking, to the
+	// seller, like the button did nothing (z8r3fdcw72 visual pass; the bug is
+	// older than that ticket and affects every `submitThenFocusError` caller).
+	// Optional-called because jsdom doesn't implement it and this also runs
+	// from the wizard's rAF, where a throw is an unhandled error.
+	target.scrollIntoView?.({ block: "center" });
+	// Focus only a real control — scrollIntoView has already centred it, so
+	// skip focus's own second jump.
 	if (control?.matches("input, textarea, select, [contenteditable='true']")) {
 		control.focus({ preventScroll: true });
 	}
@@ -36,16 +53,37 @@ export function focusFirstInvalidField(
 }
 
 // React 18 commits state updates from async callbacks via a scheduler macrotask,
-// which can land AFTER the first animation frame — so a single-frame check can
-// race the render and find nothing. Retry across a few frames (~5 is far beyond
-// any real commit latency) until the invalid state is in the DOM.
-const FOCUS_RETRY_FRAMES = 5;
+// which can land after the first check — so a single look can race the render
+// and find nothing. Retry a few times (~6 ticks is far beyond any real commit
+// latency) until the invalid state is in the DOM.
+//
+// The retry rides a TIMER, never `requestAnimationFrame`. A document whose
+// `visibilityState` is "hidden" does not run rAF callbacks at all, and "hidden"
+// is not an exotic state: a Chrome window fully covered by another app is
+// hidden, which is precisely how this behaviour gets hand-tested. So the whole
+// chain ran — submit, settle, `.finally()` — and then stopped dead at the rAF
+// that never fired, making "take me to the error" look permanently broken in
+// the only environment anyone ever checks it in, while a seller's visible page
+// was the one place it worked (z8r3fdrkq2). A timer fires in both states.
+const FOCUS_RETRY_ATTEMPTS = 5;
+// ~One frame. The budget (6 looks over ~96ms) is unchanged from the rAF version.
+const FOCUS_RETRY_MS = 16;
 
-function focusWhenRendered(formEl: HTMLFormElement, attemptsLeft: number) {
-	requestAnimationFrame(() => {
+function focusWhenRendered(formEl: HTMLElement, attemptsLeft: number) {
+	setTimeout(() => {
 		if (focusFirstInvalidField(formEl)) return;
 		if (attemptsLeft > 0) focusWhenRendered(formEl, attemptsLeft - 1);
-	});
+	}, FOCUS_RETRY_MS);
+}
+
+/**
+ * Same "take me to the error" behaviour for a container that ISN'T a form —
+ * the product wizard's Continue is a plain button. Call it right after the
+ * state update that marks the fields invalid; the frame retry below handles
+ * the commit latency.
+ */
+export function focusAfterRender(el: HTMLElement | null | undefined): void {
+	if (el) focusWhenRendered(el, FOCUS_RETRY_ATTEMPTS);
 }
 
 /**
@@ -61,7 +99,20 @@ export function submitThenFocusError(
 	e.stopPropagation();
 	// Capture synchronously — currentTarget is cleared once the handler returns.
 	const formEl = e.currentTarget as HTMLFormElement;
-	void form.handleSubmit().finally(() => {
-		focusWhenRendered(formEl, FOCUS_RETRY_FRAMES);
-	});
+	void form
+		.handleSubmit()
+		// `finally`, never `then`: a submit that THREW is still a refused save,
+		// and that is exactly when the seller needs taking to the problem.
+		.finally(() => {
+			focusWhenRendered(formEl, FOCUS_RETRY_ATTEMPTS);
+		})
+		// TanStack re-throws whatever the form's own `onSubmit` threw (FormApi
+		// `catch { … throw err }`). Left alone, that lands as an unhandled
+		// rejection — a seam-level wart that buries whatever else is in the
+		// console. The form itself owns telling the seller (its `onSubmit`
+		// catches and writes the server-error line), so here it is logged and
+		// stops. Same posture as `src/lib/ssr-read.ts`.
+		.catch((err: unknown) => {
+			console.error("Form submit failed", err);
+		});
 }

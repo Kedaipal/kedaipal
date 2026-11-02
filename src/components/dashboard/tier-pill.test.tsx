@@ -69,6 +69,16 @@ describe("TierPill", () => {
 		expect(screen.getByText("Pro")).toBeTruthy();
 	});
 
+	it("a sponsored store reads 'Sponsored' → billing, with no tier chip even for a founding member", () => {
+		render(<TierPill subscription={sub({ comped: true })} foundingRank={4} />);
+		expect(screen.getByText("Founding #4 · Sponsored")).toBeTruthy();
+		// A comp resolves to every tier — naming "Pro" beside it would mislead.
+		expect(screen.queryByText("Pro")).toBeNull();
+		expect(screen.getByTestId("tier-link").getAttribute("href")).toBe(
+			"/app/settings?tab=billing",
+		);
+	});
+
 	it("shows only the Admin pill (→ console) for an admin's own store", () => {
 		render(<TierPill subscription={sub()} admin foundingRank={2} />);
 		expect(screen.getByText("Admin")).toBeTruthy();
@@ -77,5 +87,41 @@ describe("TierPill", () => {
 		expect(screen.getByTestId("tier-link").getAttribute("href")).toBe(
 			"/app/admin/sellers",
 		);
+	});
+	it("a pre-built store reads Unclaimed, never 'Sponsored'", () => {
+		// A pre-built store runs on an `internal` comp while an admin builds it,
+		// so the comped branch labelled it "Sponsored" — a word that is false, on
+		// the seller-facing chip an admin shows the vendor during the handover
+		// demo. Found by driving it (2 Oct). Drop the `unclaimed` branch in
+		// `tierPill` and this reads "Sponsored" again.
+		render(<TierPill subscription={sub({ comped: true })} unclaimed />);
+		expect(screen.getByText("Unclaimed")).toBeTruthy();
+		expect(screen.queryByText("Sponsored")).toBeNull();
+	});
+
+	it("the Unclaimed pill goes to the console, not to billing", () => {
+		// There is no subscriber yet, so "manage your billing" is a page about
+		// nobody; the directory is where the handover email is set.
+		render(<TierPill subscription={sub({ comped: true })} unclaimed />);
+		expect(screen.getByTestId("tier-link").getAttribute("href")).toBe(
+			"/app/admin/sellers",
+		);
+	});
+
+	it("unclaimed outranks a founding rank too", () => {
+		render(
+			<TierPill
+				subscription={sub({ comped: true })}
+				foundingRank={4}
+				unclaimed
+			/>,
+		);
+		expect(screen.getByText("Unclaimed")).toBeTruthy();
+		expect(screen.queryByText(/Founding/)).toBeNull();
+	});
+
+	it("an ordinary comped store still reads Sponsored", () => {
+		render(<TierPill subscription={sub({ comped: true })} />);
+		expect(screen.getByText("Sponsored")).toBeTruthy();
 	});
 });

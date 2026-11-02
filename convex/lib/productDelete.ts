@@ -63,5 +63,32 @@ export async function deleteProductCascade(
 		.collect();
 	for (const junction of junctions) await ctx.db.delete(junction._id);
 
+	// Flash-sale units counters (86eyjv002) — one per run the product ever
+	// sold under capped; a cache of its orders, meaningless without it.
+	const unitCounters = await ctx.db
+		.query("promoRunUnits")
+		.withIndex("by_product_run", (q) => q.eq("productId", product._id))
+		.collect();
+	for (const counter of unitCounters) await ctx.db.delete(counter._id);
+
+	// Bulk-promotion memberships (z8r3fducfd). The promotion row itself
+	// outlives the product (it may hold others, and is history either way);
+	// only this product's place in it goes.
+	const memberships = await ctx.db
+		.query("promotionMembers")
+		.withIndex("by_product", (q) => q.eq("productId", product._id))
+		.collect();
+	for (const member of memberships) {
+		// Still counted on its promotion's row: the count drops with it.
+		if (member.state === "pending" || member.state === "applied") {
+			const promotion = await ctx.db.get(member.promotionId);
+			if (promotion)
+				await ctx.db.patch(promotion._id, {
+					productCount: Math.max(0, promotion.productCount - 1),
+				});
+		}
+		await ctx.db.delete(member._id);
+	}
+
 	await ctx.db.delete(product._id);
 }

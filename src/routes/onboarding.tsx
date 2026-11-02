@@ -1,8 +1,4 @@
-import {
-	RedirectToSignIn,
-	RedirectToSignUp,
-	Show,
-} from "@clerk/tanstack-react-start";
+import { RedirectToSignIn, Show } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -12,7 +8,7 @@ import {
 	useNavigate,
 } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Sparkles } from "lucide-react";
+import { Gift, Sparkles } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
@@ -22,27 +18,40 @@ import {
 	COUNTRY_LABELS,
 	type Country,
 } from "../../convex/lib/country";
+import type { AcquisitionChannel } from "../../convex/lib/metrics";
+import { parseReferralInput } from "../../convex/lib/referral";
 import {
 	MOBILE_EXAMPLE,
 	MOBILE_KIND,
 	MOBILE_MESSAGE,
 	otherCountryMobile,
 } from "../../convex/lib/slug";
+import type { ClaimRefusal } from "../../convex/lib/unclaimedStore";
+import type { ReferralInvite } from "../../convex/referrals";
+import { FoundUsQuestion } from "../components/onboarding/found-us-question";
+import { OnboardingTopBar } from "../components/onboarding/onboarding-top-bar";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { InputPrefixFrame } from "../components/ui/input-prefix-frame";
 import { MyPhoneInput } from "../components/ui/my-phone-input";
+import { Skeleton } from "../components/ui/skeleton";
+import { clearStoredActAs } from "../hooks/useActAs";
 import { useLandingRegion } from "../hooks/useLandingRegion";
 import { useOnboardingStart } from "../hooks/useOnboardingStart";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { convexErrorMessage } from "../lib/format";
 import { readGaClientId, trackEvent } from "../lib/ga-events";
-import { readMarketingSource } from "../lib/marketing-attribution";
+import {
+	readMarketingReferrerStore,
+	readMarketingSource,
+} from "../lib/marketing-attribution";
 import {
 	decodeOnboardingPrefill,
 	type OnboardingPrefill,
 } from "../lib/onboarding-link";
+import { clearReferralCookie, readReferralSlug } from "../lib/referral-cookie";
 import { waPhoneCheckoutSchema } from "../lib/schemas";
-import { slugify } from "../lib/slug";
+import { slugify, validateStoreName } from "../lib/slug";
 
 /**
  * Optional prefill, carried as a single URL-safe token (`?p=…`). Set when Kedaipal
@@ -68,17 +77,17 @@ function OnboardingRoute() {
 	// Preserve the prefill token across the auth round-trip — otherwise Clerk would
 	// bounce the client back to a bare /onboarding and drop the prefill.
 	const location = useLocation();
-	const search = Route.useSearch();
-	// An admin-invited client (has a prefill token) is brand-new — send them to
-	// SIGN-UP, not sign-in (sign-in would dead-end with "couldn't find account").
-	// Everyone else reaching /onboarding signed-out already has an account → sign-in.
-	const fallback = search.prefill ? (
-		<RedirectToSignUp
+	// One door for everyone signed out, the admin's prefilled invite included:
+	// sign-in, which falls through to sign-up for an unknown address
+	// (z8r3fdwdvq). The invite used to go straight to SIGN-UP because sign-in
+	// dead-ended on a new address — but that only swapped the dead end: a
+	// prefilled address that already had a login got "email already taken".
+	// Both legs come back to this exact URL, prefill token and all.
+	const fallback = (
+		<RedirectToSignIn
+			signInForceRedirectUrl={location.href}
 			signUpForceRedirectUrl={location.href}
-			signUpFallbackRedirectUrl={location.href}
 		/>
-	) : (
-		<RedirectToSignIn signInForceRedirectUrl={location.href} />
 	);
 	return (
 		<Show when="signed-in" fallback={fallback}>
@@ -98,8 +107,14 @@ function OnboardingForm() {
 	const navigate = useNavigate();
 	const search = Route.useSearch();
 	const retailer = useQuery(convexQuery(api.retailers.getMyRetailer, {})).data;
+	// Pre-built store handover (docs/prebuilt-stores.md): is a finished store
+	// waiting for this login? Read here, beside the "do I already have a store?"
+	// question, because the answer decides WHICH SCREEN this is — not a banner on
+	// top of a wizard the vendor must not use.
+	const claimable = useQuery(
+		convexQuery(api.retailers.myClaimableStore, {}),
+	).data;
 	const createRetailer = useMutation(api.retailers.createRetailer);
-
 	// Assisted = an admin-generated prefill link. Seed the fields, surface the WA
 	// number for review, and tell the client what's going on.
 	const prefill = search.prefill;
@@ -109,6 +124,43 @@ function OnboardingForm() {
 	// "no store yet" — an already-onboarded seller landing here gets redirected
 	// below and must not count as a funnel entry.
 	useOnboardingStart(retailer);
+	// Who referred them (z8r3fdetf5): a typeable field, seeded from the 30-day
+	// referral cookie. The field — not the cookie — is what signup sends, so a
+	// referee who tapped the link on their phone and signs up on a laptop can
+	// still name the store, and one who was seeded can clear it. The live
+	// query answers "will this store be credited?" as they type; the note at
+	// the top of the form restates the offer for whatever it resolves to.
+	const [referralInput, setReferralInput] = useState("");
+	// A link-seeded referral is CONFIRMED, not typed (the 28 Oct 2026 push):
+	// the field becomes a "Kuih Lab referred you ✓" chip with "Not them?" to
+	// edit, so the referee who arrived through a link can't fumble the slug
+	// — and still can change it, because the cookie keeps the LAST link
+	// opened and two partners can share a prospect. A disabled input would
+	// have been that dead end.
+	const [referralSeeded, setReferralSeeded] = useState(false);
+	// "How did you find Kedaipal?" (86eye3eyp) — optional, nothing picked by
+	// default. A referral cookie IS the answer, so it pre-picks referral.
+	const [foundUs, setFoundUs] = useState<AcquisitionChannel | null>(null);
+	useEffect(() => {
+		const seeded = readReferralSlug(document.cookie);
+		if (seeded) {
+			setReferralInput(seeded);
+			setReferralSeeded(true);
+			setFoundUs("referral");
+		}
+	}, []);
+	const referralSlug = parseReferralInput(referralInput);
+	const invite = useQuery(
+		convexQuery(
+			api.referrals.invite,
+			referralSlug ? { slug: referralSlug } : "skip",
+		),
+	).data;
+	// `undefined` only while a typed slug is still resolving; an empty field
+	// is simply "no referral", never a placeholder.
+	const referralNote: ReferralInvite | null | undefined = referralSlug
+		? invite
+		: null;
 
 	const [storeName, setStoreName] = useState(prefill?.store ?? "");
 	const [slug, setSlug] = useState(prefill?.slug ?? "");
@@ -147,7 +199,7 @@ function OnboardingForm() {
 	const [submitting, setSubmitting] = useState(false);
 	const [agreed, setAgreed] = useState(false);
 
-	const availability = useSlugAvailability(slug);
+	const availability = useSlugAvailability(slug, "create");
 
 	// Already onboarded → straight to dashboard.
 	useEffect(() => {
@@ -159,14 +211,38 @@ function OnboardingForm() {
 		if (!slugEdited) setSlug(slugify(storeName));
 	}, [storeName, slugEdited]);
 
-	if (retailer === undefined) {
+	// `claimable.state === "anonymous"` means Convex answered before the Clerk
+	// token attached — a timing state, not a verdict (see myClaimableStore).
+	// Rendering the wizard on it flashed "Name your store" at a vendor whose
+	// store was already built and waiting. Always transient here: this component
+	// only mounts inside `<Show when="signed-in">`.
+	if (
+		retailer === undefined ||
+		claimable === undefined ||
+		claimable.state === "anonymous"
+	) {
 		return <LoadingScreen />;
 	}
 
+	// A store that is already theirs REPLACES the wizard — it never sits as a
+	// banner above it. Their store exists, fully built; offering "Name your
+	// store" beside it invites a second store this login cannot have, and
+	// `createRetailer` would only refuse after they had filled the whole form.
+	// A dead end dressed as a choice is worse than no choice (CLAUDE.md).
+	if (claimable.state === "claimable") {
+		return (
+			<ClaimStoreScreen storeName={claimable.storeName} slug={claimable.slug} />
+		);
+	}
+
+	// Same rule as the server (`assertValidStoreName`), read inline before the
+	// seller ever submits — the brand check is the one they would not guess.
+	const nameCheck = validateStoreName(storeName);
+
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
-		if (storeName.trim().length < 2) {
-			toast.error("Store name must be at least 2 characters");
+		if (!nameCheck.ok) {
+			toast.error(nameCheck.message);
 			return;
 		}
 		if (availability.status !== "available") return;
@@ -195,11 +271,17 @@ function OnboardingForm() {
 		setSubmitting(true);
 		try {
 			// The tag the session arrived with (marketing routes / powered-by
-			// badge) — the server re-sanitizes, this is only a hint.
+			// badge) — the server re-sanitizes, this is only a hint. Beside it,
+			// the store whose badge it was (z8r3fdcwd0) — the server resolves the
+			// slug to a store and drops one that names nobody.
 			const signupSource = readMarketingSource();
+			const signupReferrerSlug = readMarketingReferrerStore();
 			// GA client id, so server-side key events (first_order/subscribe_paid)
 			// stitch to this browser's funnel — validated server-side, hint only.
 			const gaClientId = readGaClientId();
+			// The referral (z8r3fdetf5) — whatever the field says, cookie-seeded
+			// or typed. The server records it only when the store behind it can
+			// refer right now.
 			await createRetailer({
 				storeName: storeName.trim(),
 				slug,
@@ -209,8 +291,14 @@ function OnboardingForm() {
 				// plan begins once Arif marks their founding invoice paid.
 				...(prefill?.founding ? { intent: "founding" as const } : {}),
 				...(signupSource !== undefined ? { signupSource } : {}),
+				...(signupReferrerSlug !== undefined ? { signupReferrerSlug } : {}),
 				...(gaClientId !== undefined ? { gaClientId } : {}),
+				...(referralSlug !== undefined ? { referralSlug } : {}),
+				...(foundUs !== null ? { acquisitionSource: foundUs } : {}),
 			});
+			// Recorded — the cookie has nothing left to do, and must not decide
+			// anything this browser does next.
+			clearReferralCookie();
 			// The funnel's terminal key event — after the mutation succeeds, so a
 			// slug collision or validation error can't inflate conversions.
 			trackEvent("store_created");
@@ -222,13 +310,24 @@ function OnboardingForm() {
 	}
 
 	const canSubmit =
-		storeName.trim().length >= 2 &&
+		nameCheck.ok &&
 		availability.status === "available" &&
 		agreed &&
 		!submitting;
 
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-6 px-5 pb-32 pt-12">
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-6 px-5 pb-32 pt-6">
+			{/* Brand + account bar — same container width as the form, so the page
+			    says whose app this is and which account the store will belong to
+			    (with the way out) before asking for anything. */}
+			<OnboardingTopBar />
+			{/* Team states (86exr91r4), ABOVE the wizard: a pending invitation is
+			    almost always why an invited helper is standing here (they signed up
+			    directly instead of tapping the email link), and a freshly-removed
+			    member deserves the explanation before a bare "create your store". */}
+			<PendingInvitesBanner />
+			<RemovedFromTeamBanner />
+			<HandoverBlockedBanner claimable={claimable} />
 			<header className="flex flex-col gap-2">
 				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
 					Step 1 of 1
@@ -243,6 +342,8 @@ function OnboardingForm() {
 					</span>
 				</p>
 			</header>
+
+			<ReferralInviteNote invite={referralNote} />
 
 			{assisted ? (
 				<div className="flex items-start gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
@@ -283,6 +384,9 @@ function OnboardingForm() {
 						placeholder="e.g. Your store name"
 						variant="field"
 					/>
+					{storeName.trim().length > 0 && !nameCheck.ok ? (
+						<p className="text-sm text-destructive">✗ {nameCheck.message}</p>
+					) : null}
 				</Field>
 
 				<Field label="URL slug">
@@ -356,6 +460,72 @@ function OnboardingForm() {
 					</Field>
 				) : null}
 
+				<FoundUsQuestion
+					value={foundUs}
+					onChange={setFoundUs}
+					referralOpen={referralInput.trim() !== ""}
+					referralField={
+						referralSeeded && referralSlug !== undefined && invite ? (
+							<ReferredByChip
+								invite={invite}
+								onChange={() => setReferralSeeded(false)}
+							/>
+						) : (
+							<Field label="Which store sent you? (optional)">
+								<InputPrefixFrame
+									prefix={
+										<span className="text-sm">kedaipal.com/referral/</span>
+									}
+									invalid={referralSlug !== undefined && invite === null}
+								>
+									<Input
+										type="text"
+										value={referralInput}
+										onChange={(e) => {
+											const raw = e.target.value;
+											// A pasted LINK collapses to its slug at once, so the field
+											// never reads "kedaipal.com/referral/ https://kedaipal…" —
+											// the plate already says the rest. Bare typing is left alone.
+											const slug = raw.includes("/")
+												? parseReferralInput(raw)
+												: undefined;
+											setReferralInput(slug ?? raw);
+										}}
+										placeholder="their-store"
+										variant="bare"
+										autoCapitalize="none"
+										autoCorrect="off"
+										spellCheck={false}
+										aria-invalid={referralSlug !== undefined && invite === null}
+										className="min-h-11 flex-1 px-3 font-mono text-base"
+									/>
+								</InputPrefixFrame>
+								{referralSlug === undefined ? (
+									<span className="text-xs text-muted-foreground">
+										{referralInput.trim() === ""
+											? "Paste their referral link, or the store name from it. Filled in for you when you arrived through one."
+											: "That doesn't look like a store link."}
+									</span>
+								) : invite === undefined ? (
+									<span className="text-xs text-muted-foreground">
+										Checking…
+									</span>
+								) : invite === null ? (
+									<span className="text-xs font-medium text-destructive">
+										✗ No store on an active plan at that link — check it with
+										them, or leave this blank.
+									</span>
+								) : (
+									<span className="text-xs text-accent-emphasis">
+										✓ {invite.storeName} referred you — free orders for you both
+										when you pay your first invoice.
+									</span>
+								)}
+							</Field>
+						)
+					}
+				/>
+
 				<label className="flex items-start gap-3 text-sm text-muted-foreground">
 					<input
 						type="checkbox"
@@ -409,6 +579,100 @@ function OnboardingForm() {
 	);
 }
 
+/**
+ * The referral, restated where the store is born (z8r3fdetf5): who invited
+ * them, and the bonus they get when they pay their first invoice — the one
+ * moment it lands, so "when you start your plan" is never a surprise later.
+ * While the invite resolves (the cookie says one is coming) the same shell
+ * holds the place with skeleton bars, so the form below doesn't jump; nothing
+ * renders when there's no live invite. Same shape as the assisted-setup note
+ * beneath it, so the two read as one family of callouts.
+ */
+const INVITE_NOTE_CLASS =
+	"flex min-h-[6.25rem] items-start gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-sm sm:min-h-[5rem]";
+
+export function ReferralInviteNote({
+	invite,
+}: {
+	invite: ReferralInvite | null | undefined;
+}) {
+	if (invite === null) return null;
+	if (invite === undefined)
+		return (
+			<div aria-hidden className={INVITE_NOTE_CLASS}>
+				<Gift className="mt-0.5 size-4 shrink-0 text-accent" />
+				<div className="flex min-w-0 flex-1 flex-col gap-2 pt-0.5">
+					<Skeleton className="h-4 w-44" />
+					<Skeleton className="h-3 w-full" />
+					<Skeleton className="h-3 w-3/4 sm:hidden" />
+				</div>
+			</div>
+		);
+	return (
+		<div className={INVITE_NOTE_CLASS}>
+			<Gift className="mt-0.5 size-4 shrink-0 text-accent" />
+			<div className="flex min-w-0 flex-col gap-0.5">
+				<p className="font-medium text-foreground">
+					{invite.storeName} invited you
+				</p>
+				<p className="text-xs leading-snug text-muted-foreground">
+					Pay your first invoice and {invite.offer.pro} free orders land on Pro,
+					or {invite.offer.starter} on Starter. They last 12 months.
+				</p>
+			</div>
+		</div>
+	);
+}
+
+/**
+ * The "Referred by" field once a link has already answered it: the store's
+ * name, confirmed, and one way to change it. Same height as the input it
+ * replaces, so the form doesn't jump when "Not them?" swaps it back.
+ */
+export function ReferredByChip({
+	invite,
+	onChange,
+}: {
+	invite: ReferralInvite;
+	onChange: () => void;
+}) {
+	return (
+		<div className="flex flex-col gap-2">
+			{/* The same label as the field it stands in for — tapping "Not them?"
+			    must not rename the slot under the seller's finger. */}
+			<span className="text-sm font-medium">
+				Which store sent you? (optional)
+			</span>
+			<div
+				className="flex min-h-11 items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent/5 py-0 pl-3 pr-1"
+				data-testid="referred-by-chip"
+			>
+				<span className="flex min-w-0 items-center gap-2 text-sm">
+					<Gift className="size-4 shrink-0 text-accent" aria-hidden="true" />
+					<span className="truncate">
+						<span className="font-semibold">{invite.storeName}</span> referred
+						you
+					</span>
+					<span className="shrink-0 text-accent-emphasis" aria-hidden="true">
+						✓
+					</span>
+				</span>
+				<button
+					type="button"
+					onClick={onChange}
+					className="inline-flex min-h-11 shrink-0 items-center px-2 text-xs font-semibold text-muted-foreground underline-offset-4 hover:underline"
+				>
+					Not them?
+				</button>
+			</div>
+			<span className="text-xs text-muted-foreground">
+				Filled in from the link you opened. Free orders for you both when you
+				pay your first invoice.
+			</span>
+		</div>
+	);
+}
+
 function Field({
 	label,
 	children,
@@ -446,8 +710,309 @@ function AvailabilityHint({
 
 function LoadingScreen() {
 	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md items-center justify-center px-5">
-			<p className="text-sm text-muted-foreground">Loading…</p>
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-6">
+			{/* Same bar as the form screen, so the brand doesn't blink in late. */}
+			<OnboardingTopBar />
+			<p className="m-auto text-sm text-muted-foreground">Loading…</p>
 		</main>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Pre-built store handover (docs/prebuilt-stores.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * "Your store is ready" — the whole of a white-glove vendor's onboarding.
+ *
+ * Exported for the visual harness + onboarding-claim.test.tsx (same reason
+ * comp-dialog exports its dialog): this screen is behind Clerk and a specific
+ * data state, so the only way to LOOK at its states is to render it directly.
+ *
+ * REPLACES the wizard rather than banners it, because this login cannot create
+ * a store (one store per login) and must not be shown a form that would refuse
+ * at the end. The screen's job is to make a store the vendor has never seen
+ * feel like theirs before they tap: it names the store, shows the real
+ * storefront link they can open in a tab, and says what is inside.
+ *
+ * CONSENT IS TAKEN HERE. `createUnclaimedStore` deliberately stamps none — an
+ * admin cannot agree to the Terms on the vendor's behalf — so this is the first
+ * and only moment the person actually bound by the agreement accepts it, and
+ * `claimStore` requires it. Same checkbox, same links, same "not pre-ticked"
+ * rule as the wizard.
+ */
+export function ClaimStoreScreen({
+	storeName,
+	slug,
+}: {
+	storeName: string;
+	slug: string;
+}) {
+	const navigate = useNavigate();
+	const claimStore = useMutation(api.retailers.claimStore);
+	const [agreed, setAgreed] = useState(false);
+	const [claiming, setClaiming] = useState(false);
+	const storefront = `kedaipal.com/${slug}`;
+
+	async function handleClaim() {
+		setClaiming(true);
+		try {
+			const result = await claimStore({ acceptedLegal: agreed });
+			if (result.ok) {
+				// The store just changed hands, so ANY act-as session pointing at
+				// it is stale by definition — and the usual way to reach this
+				// screen is the admin's own tab, where they built the store and
+				// then signed out for the vendor to claim it. Without this the
+				// vendor lands on their new dashboard wearing the admin's
+				// "BUILDING" banner over a cached unclaimed payload (Zaki, 2 Oct).
+				// Cleared through the provider-FREE helper: `ActAsProvider` wraps
+				// the `/app` subtree only, so `useActAs()` throws on this route —
+				// which is exactly how this screen crashed the first time a
+				// vendor opened it. PR #325 makes act-as session-keyed in
+				// general; this is the one moment that belongs to the handover.
+				clearStoredActAs();
+				toast.success(`${storeName} is yours — welcome to Kedaipal!`);
+				navigate({ to: "/app" });
+				return;
+			}
+			// The refusals are all "something changed since this page loaded" —
+			// another tab claimed it, or this login joined a team meanwhile. Say
+			// which, and leave them on a page that re-reads on refresh.
+			toast.error(
+				result.reason === "own_store"
+					? `This login already runs ${result.storeName}, and an account can only hold one store.`
+					: result.reason === "other_membership"
+						? `You're on the team at ${result.storeName ?? "another store"}. Leave that team from Settings → Team first.`
+						: result.reason === "unverified_email"
+							? "Your email address isn't verified yet — verify it, then reload this page."
+							: "This store is no longer waiting to be claimed — ask us to check it.",
+			);
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setClaiming(false);
+		}
+	}
+
+	return (
+		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-6 px-5 pb-32 pt-6">
+			<OnboardingTopBar />
+			<header className="flex flex-col gap-2">
+				<p className="text-xs font-semibold uppercase tracking-widest text-accent">
+					Ready for you
+				</p>
+				<h1 className="text-3xl font-bold leading-tight">
+					{storeName} is set up
+				</h1>
+				<p className="text-sm text-muted-foreground">
+					We built this store for you. Take it over and it's yours — products,
+					settings and all.
+				</p>
+			</header>
+
+			<div className="flex items-start gap-3 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
+				<Sparkles className="mt-0.5 size-4 shrink-0 text-accent" />
+				<div className="flex min-w-0 flex-col gap-1">
+					<p className="font-medium text-foreground">Your store link</p>
+					<a
+						href={`https://${storefront}`}
+						target="_blank"
+						rel="noreferrer"
+						className="truncate font-mono text-[13px] text-accent-emphasis underline"
+					>
+						{storefront}
+					</a>
+					<p className="text-xs text-muted-foreground">
+						Open it in a tab to see what buyers will see. It isn't listed
+						publicly until you take it over.
+					</p>
+				</div>
+			</div>
+
+			<label className="flex items-start gap-3 text-sm text-muted-foreground">
+				<input
+					type="checkbox"
+					checked={agreed}
+					onChange={(e) => setAgreed(e.target.checked)}
+					className="mt-0.5 size-5 shrink-0 rounded border-input accent-accent"
+				/>
+				<span>
+					I agree to the{" "}
+					<Link
+						to="/terms"
+						target="_blank"
+						className="font-medium text-foreground underline"
+					>
+						Terms
+					</Link>
+					,{" "}
+					<Link
+						to="/privacy"
+						target="_blank"
+						className="font-medium text-foreground underline"
+					>
+						Privacy Policy
+					</Link>
+					, and{" "}
+					<Link
+						to="/acceptable-use"
+						target="_blank"
+						className="font-medium text-foreground underline"
+					>
+						Acceptable Use Policy
+					</Link>
+					.
+				</span>
+			</label>
+
+			<div className="fixed inset-x-0 bottom-0 border-t border-border bg-background px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+				<div className="mx-auto w-full max-w-md">
+					<Button
+						className="h-12 w-full text-base"
+						disabled={!agreed || claiming}
+						onClick={() => void handleClaim()}
+					>
+						{claiming ? "Taking over…" : `Take over ${storeName}`}
+					</Button>
+					{/* Disabled-with-reason: the button above goes quiet until the box
+					    is ticked, and a quiet button with no reason is the oldest
+					    dead end there is. */}
+					<p className="mt-2 text-center text-xs text-muted-foreground">
+						{agreed
+							? "Your 14-day free trial starts when you take it over — not before."
+							: "Tick the box above to continue."}
+					</p>
+				</div>
+			</div>
+		</main>
+	);
+}
+
+/**
+ * A store IS waiting for this address, but this login can't hold it — it
+ * already runs a store, or sits on another store's team.
+ *
+ * Without this the vendor sees nothing at all: `myClaimableStore` would answer
+ * "none", the wizard would render, and the store we built for them would be
+ * invisible with no hint that it exists or why they can't reach it. Same shape
+ * as `RemovedFromTeamBanner` — one explanation, one way out.
+ */
+export function HandoverBlockedBanner({
+	claimable,
+}: {
+	claimable:
+		| { state: "anonymous" }
+		| { state: "none" }
+		| { state: "blocked"; storeName: string; refusal: ClaimRefusal };
+}) {
+	if (claimable.state !== "blocked") return null;
+	const { storeName, refusal } = claimable;
+	const why =
+		refusal.reason === "own_store"
+			? `This login already runs ${refusal.storeName}, and an account can only hold one store. Close that store first, or sign up with a different email and tell us which one to use.`
+			: refusal.reason === "other_membership"
+				? `You're on the team at ${refusal.storeName ?? "another store"}, and an account can only be in one store. Leave that team from Settings → Team, then reload this page.`
+				: "Your email address isn't verified yet. Verify it, then reload this page.";
+	return (
+		<div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/40">
+			<p className="text-sm font-semibold">
+				{storeName} is waiting for you — but not on this login
+			</p>
+			<p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+				{why}
+			</p>
+		</div>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Team banners (86exr91r4)
+// ---------------------------------------------------------------------------
+
+/** "You've been invited to {Store}" — the direct-signup path: the helper made
+ * an account without tapping the email link, so the invite must find THEM.
+ * Accepting here is safe without the token because the list only ever holds
+ * invites addressed to this login's verified email. */
+function PendingInvitesBanner() {
+	const navigate = useNavigate();
+	const invites = useQuery(convexQuery(api.team.myPendingInvites, {})).data;
+	const accept = useMutation(api.team.acceptPendingInvite);
+	const [joining, setJoining] = useState<string | null>(null);
+	if (!invites || invites.length === 0) return null;
+	return (
+		<div className="flex flex-col gap-3 rounded-2xl border border-accent/30 bg-accent/5 p-4">
+			{invites.map((invite) => (
+				<div
+					key={invite.memberId}
+					className="flex flex-wrap items-center gap-3"
+				>
+					<div className="min-w-0 flex-1 basis-48">
+						<p className="text-sm font-semibold">
+							You've been invited to {invite.storeName}
+						</p>
+						<p className="text-xs text-muted-foreground">
+							Join their team instead of creating a store — you'll work from
+							this login with the access they set.
+						</p>
+					</div>
+					<Button
+						className="h-10"
+						disabled={joining !== null}
+						onClick={async () => {
+							setJoining(invite.memberId);
+							try {
+								const result = await accept({ memberId: invite.memberId });
+								if (result.ok) {
+									toast.success(`Welcome to ${result.storeName}!`);
+									navigate({ to: "/app" });
+									return;
+								}
+								toast.error(
+									result.reason === "no_seat"
+										? `${invite.storeName} has no free seat any more — ask the owner to resend once one opens.`
+										: result.reason === "expired"
+											? "That invitation expired — ask the owner to resend it."
+											: "That invitation is no longer valid — ask the owner to resend it.",
+								);
+							} catch (err) {
+								toast.error(convexErrorMessage(err));
+							} finally {
+								setJoining(null);
+							}
+						}}
+					>
+						{joining === invite.memberId ? "Joining…" : "Join"}
+					</Button>
+				</div>
+			))}
+		</div>
+	);
+}
+
+/** The removed state: without this, a helper the owner removed lands on a bare
+ * "create your store" wizard with no idea why — the one screen the spec says
+ * must explain itself. */
+function RemovedFromTeamBanner() {
+	const membership = useQuery(convexQuery(api.team.myMembershipState, {})).data;
+	const removed = membership?.removed;
+	if (!removed) return null;
+	const why =
+		removed.reason === "plan_change"
+			? `${removed.storeName} moved to a plan with fewer team seats, so your seat was released.`
+			: removed.reason === "store_deleted"
+				? `${removed.storeName} closed their Kedaipal store.`
+				: `The owner of ${removed.storeName} removed your team access.`;
+	return (
+		<div className="rounded-2xl border border-border bg-muted/50 p-4">
+			<p className="text-sm font-semibold">
+				You no longer have access to {removed.storeName}
+			</p>
+			<p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+				{why}{" "}
+				{removed.reason === "removed_by_owner"
+					? "If that's a surprise, ask them directly — or start a store of your own below."
+					: "You can start a store of your own below, or ask the owner to re-invite you."}
+			</p>
+		</div>
 	);
 }

@@ -16,6 +16,7 @@
  */
 
 import { ConvexError, v } from "convex/values";
+import { assertTakesBuyerOrders } from "./storeAvailability";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import {
@@ -31,6 +32,8 @@ import {
 	assertValidBookingRange,
 	BOOKING_HORIZON_DAYS,
 	BOOKING_REQUEST_TTL_MS,
+	type ClosureRule,
+	closureRule,
 	findFullNights,
 	MAX_AVAILABILITY_WINDOW_DAYS,
 	MAX_BOOKING_NIGHTS,
@@ -40,6 +43,8 @@ import {
 	nightsBetween,
 	splitNightsByRate,
 } from "./lib/bookingAvailability";
+import { type ClosedDateRange, upcomingClosures } from "./lib/closedDates";
+import { closedWeekdays, storeClosedOn } from "./lib/openingHours";
 import { requireCustomerName } from "./lib/customer";
 import {
 	DAY_MS,
@@ -52,6 +57,7 @@ import {
 	generateShortId,
 	generateTrackingToken,
 } from "./lib/order";
+import { withCategoryNames } from "./lib/orderCategoryNames";
 import { logAdminAction } from "./lib/auth";
 import {
 	effectiveKind,
@@ -62,14 +68,29 @@ import {
 import { stampProductsOrdered } from "./lib/productOrdered";
 import { rateLimiter } from "./lib/rateLimiter";
 import { DEFAULT_COUNTRY } from "./lib/country";
-import { assertValidMobileForCountry } from "./lib/slug";
+import {
+	assertValidBuyerWaPhone,
+	resolveBuyerDialCountry,
+} from "./lib/buyerPhone";
 import { orderConfirmTemplateName } from "./lib/whatsapp";
 import {
 	applyStatusTransition,
 	MAX_CUSTOMER_NOTE,
 	requireOrderAccess,
 } from "./orders";
-import { assertSubscriptionActive } from "./subscriptions";
+import {
+	assertOrderCreditAvailable,
+	orderGatedForSeller,
+} from "./creditLock";
+import {
+	applyCustomerSkip,
+	isSkippablePlan,
+	latestCustomerSkip,
+	planSkipBlocker,
+	undoLatestSkip,
+} from "./lib/bookingSkips";
+import { effectivePrice } from "./lib/promo";
+import { assertSubscriptionActive, getAccess } from "./subscriptions";
 import { recordOrderCreated } from "./subscriptionUsage";
 
 /** Decline reasons are quoted verbatim in the guest's page (and, once the
@@ -88,12 +109,19 @@ function buildStayLines(
 	variant: Doc<"productVariants">,
 	checkIn: number,
 	checkOut: number,
+	// The promo-resolved nightly rate (z8r3fdcw72) — callers price through
+	// convex/lib/promo so this function stays pure. The weekend surcharge
+	// keeps its own rate: promoPrice is per VARIANT, and the weekend price
+	// lives on the listing, so a promo discounts the base nights only.
+	nightlyPrice: number = variant.price,
 ): Doc<"orders">["items"] {
 	const base = {
 		productId: product._id,
 		variantId: variant._id,
 		name: product.name,
 	};
+	const nightlyListPrice =
+		nightlyPrice < variant.price ? variant.price : undefined;
 	const weekendPrice = product.booking?.weekendPrice;
 	const weekendDays = product.booking?.weekendDays;
 	if (weekendPrice === undefined || weekendDays === undefined) {
@@ -101,7 +129,8 @@ function buildStayLines(
 			{
 				...base,
 				variantLabel: undefined,
-				price: variant.price,
+				price: nightlyPrice,
+				listPrice: nightlyListPrice,
 				quantity: nightsBetween(checkIn, checkOut),
 			},
 		];
@@ -116,7 +145,8 @@ function buildStayLines(
 		lines.push({
 			...base,
 			variantLabel: WEEKDAY_NIGHTS_LABEL,
-			price: variant.price,
+			price: nightlyPrice,
+			listPrice: nightlyListPrice,
 			quantity: weekdayNights,
 		});
 	}
@@ -191,6 +221,24 @@ export const availability = query({
 		 * rate for every night. */
 		weekendPrice?: number;
 		weekendDays?: number[];
+		/** The store's upcoming closed dates (z8r3fdhpm7) — public (the label
+		 * is written for buyers). The calendar marks them, and a package that
+		 * absorbs them names the ones inside the buyer's term. */
+		closures: ClosedDateRange[];
+		/** What a closure does to THIS listing (`closureRule`): unavailable
+		 * nights for a stay, absorbed by an access package, skipped by an
+		 * open-days package. */
+		closureRule: ClosureRule;
+		/** Package listings only: the store's weekly days off. With `closures`
+		 * it is everything the calendar needs to answer "is the store shut?"
+		 * exactly as `requestBooking` will (`storeClosedOn`) — no package starts
+		 * on a shut day, and an open-days one steps over them. Empty for a stay,
+		 * which the weekly day off never touches. */
+		closedWeekdays: number[];
+		/** Open-days packages only (z8r3fdh3ay): the listing's "up to N skips
+		 * per package", stated beside the rule before the buyer pays. Unset =
+		 * no limit. */
+		maxSkips?: number;
 	} | null> => {
 		if (!isMytMidnight(args.from) || !isMytMidnight(args.to)) {
 			throw new ConvexError("Availability window must be calendar days");
@@ -228,6 +276,16 @@ export const availability = query({
 			maxPackageQuantity: maxPackageQuantity(product.booking),
 			weekendPrice: product.booking?.weekendPrice,
 			weekendDays: product.booking?.weekendDays,
+			closures: upcomingClosures(retailer.closedDates),
+			closureRule: closureRule(product.booking),
+			closedWeekdays:
+				closureRule(product.booking) === "unavailable"
+					? []
+					: closedWeekdays(retailer.openingHours),
+			maxSkips:
+				closureRule(product.booking) === "skipped"
+					? product.booking?.maxSkips
+					: undefined,
 		};
 	},
 });
@@ -254,6 +312,10 @@ export const requestBooking = mutation({
 			// payment ask, declined-with-reason, expiry) reaches the guest on
 			// WhatsApp — a phone-less request would dead-end at approval.
 			waPhone: v.optional(v.string()),
+			// The country picked on the phone field's plate (z8r3fdh274), same
+			// contract as orders.create: absent = the store's country, never
+			// stored.
+			waDialCountry: v.optional(v.string()),
 		}),
 		customerNote: v.optional(v.string()),
 	},
@@ -269,25 +331,31 @@ export const requestBooking = mutation({
 
 		const retailer = await ctx.db.get(args.retailerId);
 		if (!retailer) throw new ConvexError("Store not found");
+		// Off-Season Hold (z8r3fday24): a paused store takes no booking requests.
+		await assertTakesBuyerOrders(ctx, retailer);
 		const product = await loadBookableListing(ctx, args.productId);
 		if (!product || product.retailerId !== args.retailerId) {
 			throw new ConvexError("This listing isn't taking bookings right now");
 		}
 
 		// Guest identity — name required (same rule as every checkout) and a
-		// reachable MY WhatsApp mobile required (see the args comment).
+		// reachable WhatsApp mobile required (see the args comment), from any
+		// country: a guest's number is theirs, not the store's (z8r3fdh274).
 		const name = requireCustomerName(args.customer.name);
 		if (!args.customer.waPhone) {
 			throw new ConvexError("A WhatsApp number is required to request a booking");
 		}
 		let waPhone: string;
 		try {
-			// Judged by the STORE's country (SG-lite) — the same bridge
-			// orders.create uses, so a booking checkout can't reject a number
-			// the ordinary checkout would accept.
-			waPhone = assertValidMobileForCountry(
+			// Judged by the country the guest picked (absent = the store's) —
+			// the same authority orders.create uses, so a booking checkout can't
+			// reject a number the ordinary checkout would accept.
+			waPhone = assertValidBuyerWaPhone(
 				args.customer.waPhone,
-				retailer.country ?? DEFAULT_COUNTRY,
+				resolveBuyerDialCountry(
+					args.customer.waDialCountry,
+					retailer.country ?? DEFAULT_COUNTRY,
+				),
 			);
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
@@ -323,12 +391,21 @@ export const requestBooking = mutation({
 			: 1;
 		let checkIn: number;
 		let checkOut: number;
+		// The shut days an OPEN-DAYS package steps over (z8r3fdhpm7) — empty for
+		// every other shape. Built from the same two facts the buyer calendar
+		// is sent, so the term the buyer was shown is the term charged. The same
+		// schedule refuses ANY package starting on a shut day.
+		let skipped: number[];
 		try {
-			({ checkIn, checkOut } = resolveBookingRange(
+			({ checkIn, checkOut, skipped } = resolveBookingRange(
 				product.booking,
 				args.checkIn,
 				args.checkOut,
 				packageQuantity,
+				storeClosedOn(
+					closedWeekdays(retailer.openingHours),
+					retailer.closedDates,
+				),
 			));
 		} catch (err) {
 			throw new ConvexError((err as Error).message);
@@ -358,7 +435,12 @@ export const requestBooking = mutation({
 		// (Convex serializes, so two buyers racing for the last spot can't both
 		// pass; a block/booking landing mid-checkout surfaces here as the
 		// friendly retry, never a silent failure).
-		const fullNights = await findFullNights(ctx, product, checkIn, checkOut);
+		// An open-days package is judged on the days it COUNTS: a block or a
+		// full night on a day it skips is a day the buyer never uses.
+		const skippedSet = new Set(skipped);
+		const fullNights = (
+			await findFullNights(ctx, product, checkIn, checkOut)
+		).filter((night) => !skippedSet.has(night));
 		if (fullNights.length > 0) {
 			throw new ConvexError(
 				`${formatFulfilmentDate(fullNights[0])} is no longer available — pick different dates`,
@@ -381,6 +463,18 @@ export const requestBooking = mutation({
 		// deposit): a later price edit never re-describes a placed booking. A
 		// stay that is all one kind writes one line; a listing without the rate
 		// writes today's unlabelled line.
+		// Promo price (z8r3fdcw72): the nightly/package rate goes through the
+		// same pricing module as every other order door. Flash mechanics (cap,
+		// payment hold) never apply to bookings in v1 — capacity already
+		// governs — so no runId is stamped and no tally runs; `listPrice`
+		// still prints the saving.
+		const storePlan = (await getAccess(ctx, args.retailerId)).plan;
+		const effectiveRate = effectivePrice(
+			variant,
+			product,
+			storePlan,
+			Date.now(),
+		);
 		const items = isPackageListing
 			? [
 					{
@@ -388,11 +482,13 @@ export const requestBooking = mutation({
 						variantId: variant._id,
 						name: product.name,
 						variantLabel: undefined,
-						price: variant.price,
+						price: effectiveRate,
+						listPrice:
+							effectiveRate < variant.price ? variant.price : undefined,
 						quantity: packageQuantity,
 					},
 				]
-			: buildStayLines(product, variant, checkIn, checkOut);
+			: buildStayLines(product, variant, checkIn, checkOut, effectiveRate);
 		// The refundable security deposit rides the one payment (86eyn4kee):
 		// frozen from the listing NOW (snapshot posture — a later policy edit
 		// never changes a placed booking) and folded into `total` through the
@@ -430,7 +526,21 @@ export const requestBooking = mutation({
 			retailerId: args.retailerId,
 			shortId,
 			trackingToken,
-			items,
+			// Stamped `false` rather than left absent (86eypn8ye). A booking holds
+			// its dates through `bookingsOverlapping` and never touches `onHand` —
+			// this path does no decrement at all — so `false` is the true answer,
+			// not a default. Left unstamped it would fall to `lineReservedStock`'s
+			// legacy re-resolve, which happens to return false today ONLY because
+			// every booking listing stores `blockWhenOutOfStock: false`; but
+			// `variantInputValidator` accepts `true` on a booking create, so that
+			// is an invariant of the form rather than of the mutation. Stamping
+			// here makes the answer independent of it, and makes the doc's
+			// "every create path stamps it" literally true of all four.
+			// Categories frozen at booking, like every order door (86eyrtz74).
+			items: await withCategoryNames(
+				ctx,
+				items.map((line) => ({ ...line, stockReserved: false })),
+			),
 			subtotal,
 			total,
 			currency: product.currency,
@@ -453,6 +563,17 @@ export const requestBooking = mutation({
 				!isPackageListing && product.booking?.weekendPrice !== undefined
 					? product.booking.weekendDays
 					: undefined,
+			// Frozen beside the span it explains (z8r3fdhpm7): which days inside
+			// an open-days term weren't counted. A later hours edit never
+			// re-describes a paid package.
+			bookingSkippedDays: skipped.length > 0 ? skipped : undefined,
+			// Frozen (z8r3fdh3ay): sold as days of service, so the seller can
+			// "Skip a day" of it for life — whatever the listing says later.
+			// Stamped `false` too on every other package, so a later flip of the
+			// listing can't make an every-day pass skippable either.
+			bookingOpenDays: isPackageListing
+				? closureRule(product.booking) === "skipped"
+				: undefined,
 			securityDeposit,
 			// The check-in day IS the order's due date — the inbox sort, due-today
 			// strip and urgency badges all read fulfilmentDate, so a request for
@@ -479,9 +600,16 @@ export const requestBooking = mutation({
 		// every other confirm site makes.
 		if (instantBook) await stampRetailerActivation(ctx, args.retailerId, now);
 
-		// Same bookkeeping as any created order: usage meter (soft cap), the
-		// sold-once stamp (protects the listing from permanent delete), CRM link.
-		await recordOrderCreated(ctx, args.retailerId, now);
+		// Same bookkeeping as any created order: usage meter (soft cap) + its
+		// credit, the sold-once stamp (protects the listing from permanent
+		// delete), CRM link. A request-to-book uses its credit now and gets it
+		// back if the request is declined or expires unanswered.
+		await recordOrderCreated(ctx, {
+			retailerId: args.retailerId,
+			orderId,
+			orderShortId: shortId,
+			createdAt: now,
+		});
 		await stampProductsOrdered(ctx, items, now);
 		await linkOrderToCustomer(ctx, {
 			retailerId: args.retailerId,
@@ -521,24 +649,41 @@ export const requestBooking = mutation({
 	},
 });
 
+/**
+ * `booking_requested` is the generic "awaiting the seller's approval" status:
+ * a booking request, or an RSVP on an event that approves each guest
+ * (`z8r3fdkjek`). The mechanics are identical; only the nouns differ.
+ */
+function requestNouns(order: { eventRsvp?: boolean }): {
+	thing: "booking" | "RSVP";
+	held: string;
+	again: string;
+} {
+	return order.eventRsvp === true
+		? { thing: "RSVP", held: "the seat was released", again: "RSVP again" }
+		: { thing: "booking", held: "the dates were released", again: "book again" };
+}
+
 /** Cause-true refusals for acting on a request that is no longer one. */
 function assertStillRequested(order: {
 	status: string;
 	bookingResolution?: "declined" | "expired";
+	eventRsvp?: boolean;
 }): void {
 	if (order.status === "booking_requested") return;
+	const n = requestNouns(order);
 	if (order.bookingResolution === "expired") {
 		throw new ConvexError(
-			"This request expired after 24 hours and the dates were released — ask the guest to book again",
+			`This request expired after 24 hours and ${n.held} — ask the guest to ${n.again}`,
 		);
 	}
 	if (order.bookingResolution === "declined") {
 		throw new ConvexError("This request was already declined");
 	}
 	if (order.status === "cancelled") {
-		throw new ConvexError("This booking was cancelled");
+		throw new ConvexError(`This ${n.thing} was cancelled`);
 	}
-	throw new ConvexError("This booking was already approved");
+	throw new ConvexError(`This ${n.thing} was already approved`);
 }
 
 /**
@@ -550,15 +695,24 @@ function assertStillRequested(order: {
 export const approveBookingRequest = mutation({
 	args: { orderId: v.id("orders") },
 	handler: async (ctx, { orderId }): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		// Booking approvals/settlement are order-pipeline work (the FS Fitness
+		// front-desk case), so they ride the orders grant — the `bookings` area
+		// covers the catalog side (listings, blocks, calendar), not order handling.
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		assertStillRequested(order);
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, order.retailerId);
+		}
+		await assertOrderCreditAvailable(ctx, order);
 
 		// The one transition path: timeline event, activation stamp, stage reset.
 		// notifyStatusChange skips `confirmed`, so nothing generic goes out.
 		await applyStatusTransition(ctx, order, "confirmed", {
-			note: "Booking approved",
+			note: order.eventRsvp === true ? "RSVP approved" : "Booking approved",
+			actorUserId: access.role === "admin" ? undefined : access.userId,
 		});
 
 		// The confirm+pay message rides the EXACT storefront-push machinery
@@ -588,7 +742,13 @@ export const approveBookingRequest = mutation({
 export const declineBookingRequest = mutation({
 	args: { orderId: v.id("orders"), reason: v.string() },
 	handler: async (ctx, { orderId, reason }): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		// Booking approvals/settlement are order-pipeline work (the FS Fitness
+		// front-desk case), so they ride the orders grant — the `bookings` area
+		// covers the catalog side (listings, blocks, calendar), not order handling.
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		assertStillRequested(order);
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, order.retailerId);
@@ -618,7 +778,13 @@ export const declineBookingRequest = mutation({
 			ctx,
 			{ ...order, bookingResolution: "declined" },
 			"cancelled",
-			{ note: `Booking declined: ${trimmed}` },
+			{
+				note: `${order.eventRsvp === true ? "RSVP" : "Booking"} declined: ${trimmed}`,
+				actorUserId: access.role === "admin" ? undefined : access.userId,
+				// Declining a request the seller never accepted — the strictest refund
+				// rule applies (never accepted, within the monthly allowance).
+				cancelCause: "seller",
+			},
 		);
 		await logAdminAction(ctx, access, "bookings.decline", orderId);
 	},
@@ -642,7 +808,13 @@ export const settleSecurityDeposit = mutation({
 		reason: v.optional(v.string()),
 	},
 	handler: async (ctx, { orderId, keptAmount, reason }): Promise<void> => {
-		const { order, access } = await requireOrderAccess(ctx, orderId);
+		// Booking approvals/settlement are order-pipeline work (the FS Fitness
+		// front-desk case), so they ride the orders grant — the `bookings` area
+		// covers the catalog side (listings, blocks, calendar), not order handling.
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "write",
+		});
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, order.retailerId);
 
@@ -706,8 +878,217 @@ export const expireStaleRequests = internalMutation({
 			// expired", never a bare "cancelled").
 			await ctx.db.patch(order._id, { bookingResolution: "expired" });
 			await applyStatusTransition(ctx, order, "cancelled", {
-				note: "Booking request expired — not answered within 24 hours",
+				note: `${order.eventRsvp === true ? "RSVP" : "Booking"} request expired — not answered within 24 hours`,
+				cancelCause: "system",
 			});
 		}
+	},
+});
+
+/**
+ * What the seller's "Skip a day" control needs for one order (z8r3fdh3ay), or
+ * null when the order isn't a skippable plan at all — a stay, an every-day
+ * pass, a month, or a credit-gated order (invisible, T3.1) — so the control
+ * doesn't render rather than render disabled. Everything ELSE (which days can
+ * be picked, the preview of the new last day, why it's blocked) is computed on
+ * the client from the order through `convex/lib/bookingSkips`, the same module
+ * the mutation runs — this only adds the two facts the order row doesn't
+ * carry: the listing's cap and the store's schedule.
+ */
+export const skipPlan = query({
+	args: { orderId: v.id("orders") },
+	handler: async (
+		ctx,
+		{ orderId },
+	): Promise<{
+		/** The listing's "up to N skips per package" — unset = no limit. */
+		maxSkips?: number;
+		/** The store's weekly days off + closed dates — with these the dialog
+		 * resolves the extension exactly as `skipPackageDay` will
+		 * (`storeClosedOn`). */
+		closedWeekdays: number[];
+		closedDates: ClosedDateRange[];
+	} | null> => {
+		const { order, access } = await requireOrderAccess(ctx, orderId, {
+			area: "orders",
+			level: "read",
+		});
+		if (order.deliveryMethod !== "booking") return null;
+		if (await orderGatedForSeller(ctx, order)) return null;
+		const listing = order.bookingProductId
+			? await ctx.db.get(order.bookingProductId)
+			: null;
+		if (
+			!isSkippablePlan(order, closureRule(listing?.booking) === "skipped")
+		) {
+			return null;
+		}
+		return {
+			maxSkips: listing?.booking?.maxSkips,
+			closedWeekdays: closedWeekdays(access.retailer.openingHours),
+			closedDates: access.retailer.closedDates ?? [],
+		};
+	},
+});
+
+/** Load + vet an order for a skip write — the shared front half of both
+ * mutations. Throws seller copy. The subscription and credit guards stay in
+ * each handler — the lock-coverage tests read them there. */
+async function loadSkippablePlan(
+	ctx: MutationCtx,
+	orderId: Doc<"orders">["_id"],
+) {
+	// Order-pipeline work rides the orders grant, like approve/decline.
+	const { order, access } = await requireOrderAccess(ctx, orderId, {
+		area: "orders",
+		level: "write",
+	});
+	const listing = order.bookingProductId
+		? await ctx.db.get(order.bookingProductId)
+		: null;
+	if (
+		order.deliveryMethod !== "booking" ||
+		!isSkippablePlan(order, closureRule(listing?.booking) === "skipped")
+	) {
+		throw new ConvexError(
+			"Only a package counted in open days can skip a day",
+		);
+	}
+	return { order, access, listing };
+}
+
+/**
+ * "Skip a day" (z8r3fdh3ay): the customer missed — or will miss — `day` of
+ * their open-days plan, so it stops counting and the plan's last day moves
+ * out by one open day. ONLY `bookingCheckOut` (plus the two day lists) moves:
+ * check-in, price, quantity and payment never do — a skip is not a refund.
+ *
+ * Seller-only by design: the buyer asks in WhatsApp, as today. And no
+ * WhatsApp goes out (owner call, 23 Sep) — the buyer's tracking page is the
+ * record, and the seller has just been talking to them anyway.
+ *
+ * Idempotent on the day: a second skip of the same day (two teammates, a
+ * double tap) is a no-op that says so, not an error.
+ */
+export const skipPackageDay = mutation({
+	args: { orderId: v.id("orders"), day: v.number() },
+	handler: async (
+		ctx,
+		{ orderId, day },
+	): Promise<{ alreadySkipped: boolean; lastDay: number }> => {
+		const { order, access, listing } = await loadSkippablePlan(ctx, orderId);
+		if (!access.actingAsAdmin) {
+			await assertSubscriptionActive(ctx, order.retailerId);
+		}
+		await assertOrderCreditAvailable(ctx, order);
+		const checkOut = order.bookingCheckOut as number;
+		if ((order.bookingCustomerSkips ?? []).includes(day)) {
+			return { alreadySkipped: true, lastDay: checkOut - DAY_MS };
+		}
+		if (!isMytMidnight(day)) throw new ConvexError("Pick a calendar day");
+		const blocker = planSkipBlocker(order, {
+			maxSkips: listing?.booking?.maxSkips,
+		});
+		if (blocker !== null) throw new ConvexError(blocker);
+
+		const retailer = access.retailer;
+		let result: ReturnType<typeof applyCustomerSkip>;
+		try {
+			result = applyCustomerSkip(
+				order,
+				day,
+				storeClosedOn(
+					closedWeekdays(retailer.openingHours),
+					retailer.closedDates,
+				),
+			);
+		} catch (err) {
+			throw new ConvexError((err as Error).message);
+		}
+		// The day the plan grows onto must be bookable — the one availability
+		// authority, so a capped listing can't be overbooked through a skip.
+		// The old check-out onward is the only new ground; a shut day stepped
+		// over on the way is never used, so only the new last day is asked.
+		if (listing) {
+			const full = await findFullNights(
+				ctx,
+				listing,
+				result.lastDay,
+				result.checkOut,
+			);
+			if (full.length > 0) {
+				throw new ConvexError(
+					`The plan would move onto ${formatFulfilmentDate(result.lastDay)}, which is blocked or fully booked — unblock it first`,
+				);
+			}
+		}
+
+		const now = Date.now();
+		await ctx.db.patch(order._id, {
+			bookingCheckOut: result.checkOut,
+			bookingSkippedDays: result.skippedDays,
+			bookingCustomerSkips: result.customerSkips,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			action: "booking_day_skipped",
+			note: `Skipped ${formatFulfilmentDate(day)} — last day now ${formatFulfilmentDate(result.lastDay)}`,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
+			createdAt: now,
+		});
+		await logAdminAction(ctx, access, "bookings.skipPackageDay", orderId);
+		return { alreadySkipped: false, lastDay: result.lastDay };
+	},
+});
+
+/**
+ * Undo the LATEST skip (z8r3fdh3ay) — the day counts again and the plan gives
+ * back the day it added. `day` is the skip the seller saw as latest: if
+ * another skip landed since (a teammate, another tab), this refuses rather
+ * than undoing one they never looked at. Older skips are final, so the
+ * history can't be rewritten out of order.
+ */
+export const unskipPackageDay = mutation({
+	args: { orderId: v.id("orders"), day: v.number() },
+	handler: async (ctx, { orderId, day }): Promise<{ lastDay: number }> => {
+		const { order, access } = await loadSkippablePlan(ctx, orderId);
+		if (!access.actingAsAdmin) {
+			await assertSubscriptionActive(ctx, order.retailerId);
+		}
+		await assertOrderCreditAvailable(ctx, order);
+		const latest = latestCustomerSkip(order);
+		if (latest === undefined) throw new ConvexError("There's no skip to undo");
+		if (latest !== day) {
+			throw new ConvexError(
+				"Only the latest skip can be undone — this one is final",
+			);
+		}
+		// Same state gates as a skip, minus the cap (undoing frees one).
+		const blocker = planSkipBlocker(order, {});
+		if (blocker !== null) throw new ConvexError(blocker);
+
+		const result = undoLatestSkip(order);
+		const now = Date.now();
+		await ctx.db.patch(order._id, {
+			bookingCheckOut: result.checkOut,
+			// Convex reads `undefined` as "remove" — the one spelling for none.
+			bookingSkippedDays:
+				result.skippedDays.length > 0 ? result.skippedDays : undefined,
+			bookingCustomerSkips:
+				result.customerSkips.length > 0 ? result.customerSkips : undefined,
+			updatedAt: now,
+		});
+		await ctx.db.insert("orderEvents", {
+			orderId: order._id,
+			status: order.status,
+			action: "booking_day_skip_undone",
+			note: `Undid the skip on ${formatFulfilmentDate(day)} — last day back to ${formatFulfilmentDate(result.lastDay)}`,
+			actorUserId: access.role === "admin" ? undefined : access.userId,
+			createdAt: now,
+		});
+		await logAdminAction(ctx, access, "bookings.unskipPackageDay", orderId);
+		return { lastDay: result.lastDay };
 	},
 });

@@ -7,6 +7,7 @@ import {
 	Ban,
 	CircleCheck,
 	Copy,
+	FileText,
 	type LucideIcon,
 	Pause,
 	Play,
@@ -20,7 +21,17 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import type { AdminOptOutRow } from "../../convex/wabaProtection";
+import { dialCodeLabel, dialCountryName } from "../../convex/lib/buyerPhone";
+import {
+	OPT_OUT_FOREIGN_EXAMPLE,
+	OPT_OUT_PHONE_MESSAGE,
+	readOptOutPhone,
+} from "../../convex/lib/optOutPhone";
+import { MOBILE_EXAMPLE } from "../../convex/lib/slug";
+import type {
+	AdminOptOutRow,
+	AdminTemplateRow,
+} from "../../convex/wabaProtection";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import {
@@ -35,6 +46,13 @@ import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
 import { MASK_PII } from "../lib/analytics-privacy";
 import { convexErrorMessage } from "../lib/format";
+import {
+	categoryChip,
+	qualityTone,
+	statusTone,
+	TONE_CLASS,
+	type Tone,
+} from "../lib/waba-template-chips";
 
 export const Route = createFileRoute("/app/admin/waba")({
 	component: AdminWabaRoute,
@@ -224,6 +242,11 @@ function AdminWabaContent() {
 
 			<GlobalOptOutPanel />
 
+			{/* Last on purpose: this is reference state an operator consults, not
+			    something they act on. The vendor list and the opt-out register
+			    are the two things they came here to DO. */}
+			<TemplatesPanel />
+
 			{target ? (
 				<ConfirmDialog vendor={target} onClose={() => setTarget(null)} />
 			) : null}
@@ -251,11 +274,20 @@ function GlobalOptOutPanel() {
 	const registerOptOut = useMutation(api.wabaProtection.adminRegisterOptOut);
 	const reactivate = useMutation(api.wabaProtection.adminReactivateOptIn);
 	const [submitting, setSubmitting] = useState(false);
-	// The server is the judge of what counts as a valid mobile (PR #191 review —
-	// the key must canonicalize to the international form the send gate checks,
-	// in whichever supported country's shape the number fits).
+	// The server is the judge of what counts as a valid number (PR #191 review —
+	// the key must canonicalize to the international form the send gate checks).
+	// It also finds a register row by its exact digits when no parse can reach
+	// it, which the client can't see — so validity is read from `status`.
 	const invalid =
 		status !== undefined && !status.optedOut && status.invalid === true;
+	// The country the number READS as — the same shared parse the server keys
+	// on. Named in the status line because any country is accepted now, so a
+	// mistyped number can read as a real foreign one (`61…` is Australian); an
+	// admin sees that before registering anything. Country only, never digits.
+	const read = valid ? readOptOutPhone(phone) : null;
+	const subject = read
+		? `This ${dialCountryName(read.iso)} (${dialCodeLabel(read.iso)}) number`
+		: "This number";
 
 	async function act() {
 		if (!status) return;
@@ -284,7 +316,8 @@ function GlobalOptOutPanel() {
 					number the cashier typed. Suppresses marketing/broadcast sends from
 					every store on the shared number; the confirmation for an order they
 					placed still delivers. The buyer can reply START (or be re-activated
-					here) to undo it.
+					here) to undo it. Malaysian and Singapore numbers can be typed the
+					local way; any other country's number needs its country code.
 				</p>
 			</div>
 			<div className="flex flex-col gap-2 sm:flex-row">
@@ -293,7 +326,8 @@ function GlobalOptOutPanel() {
 					inputMode="tel"
 					value={phone}
 					onChange={(e) => setPhone(e.target.value)}
-					placeholder="Buyer's WhatsApp number, e.g. 012-345 6789"
+					aria-label="Buyer's WhatsApp number"
+					placeholder={`e.g. ${MOBILE_EXAMPLE.MY} or ${OPT_OUT_FOREIGN_EXAMPLE}`}
 					className="sm:max-w-xs"
 				/>
 				<Button
@@ -315,12 +349,12 @@ function GlobalOptOutPanel() {
 			{valid && status ? (
 				<p className="text-xs text-muted-foreground">
 					{status.optedOut
-						? `Currently opted out (${SOURCE_LABEL[status.source]}, since ${new Date(
+						? `${subject} is opted out (${SOURCE_LABEL[status.source]}, since ${new Date(
 								status.since,
 							).toLocaleDateString("en-MY")}).`
 						: invalid
-							? "Enter a Malaysian (e.g. 012-345 6789) or Singapore (e.g. 9123 4567) mobile number."
-							: "This number is not currently opted out."}
+							? `${OPT_OUT_PHONE_MESSAGE}.`
+							: `${subject} is not currently opted out.`}
 				</p>
 			) : null}
 			<OptOutRegister />
@@ -450,6 +484,193 @@ function OptOutRegister() {
 				</p>
 			) : null}
 		</div>
+	);
+}
+
+/**
+ * Per-template state (z8r3fddtkh). Meta can pause, disable or re-categorise
+ * an approved template AFTER approval; a category flip out of UTILITY is a
+ * ~6× per-send price jump from 1 Oct 2026 with an appeal window. Before this
+ * panel the first sign was the Meta invoice. Every template this deployment
+ * is configured to send is listed — including ones whose env var is unset,
+ * so a silent send path is visible as "not configured" rather than absent.
+ */
+type LanguageState = AdminTemplateRow["languages"][number];
+
+/** "status · category · quality" chips for one language of one template. */
+function LanguageChips({
+	lang,
+	configured,
+}: {
+	lang: LanguageState;
+	configured: boolean;
+}) {
+	const category = categoryChip(lang.category, configured);
+	const chips: Array<{
+		label: string;
+		value: string;
+		tone: Tone;
+		hint?: string;
+	}> = [
+		{
+			label: "status",
+			value: lang.status ?? "no update yet",
+			tone: statusTone(lang.status),
+		},
+		{
+			label: "billed as",
+			value: category.value,
+			tone: category.tone,
+			hint: category.hint,
+		},
+		{
+			label: "quality",
+			value: lang.quality ?? "unknown",
+			tone: qualityTone(lang.quality),
+		},
+	];
+	return (
+		// Two columns, not a flex row: on a phone the third chip wraps, and it
+		// must wrap UNDER its language, not into the language column. The label
+		// column grows past its 1.5rem floor rather than clipping — "en"/"ms"
+		// stay aligned, and a longer code Meta reports (e.g. en_US) still fits.
+		<div className="grid grid-cols-[minmax(1.5rem,auto)_1fr] items-start gap-x-1.5">
+			<span className="pt-0.5 font-mono text-xs uppercase text-muted-foreground">
+				{lang.language}
+			</span>
+			<div className="flex flex-wrap items-center gap-1.5">
+				{chips.map((c) => (
+					<span
+						key={c.label}
+						title={c.hint ?? `${c.label}: ${c.value}`}
+						className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs ${TONE_CLASS[c.tone]}`}
+					>
+						<span className="opacity-70">{c.label}</span>
+						<span className="font-medium">{c.value}</span>
+					</span>
+				))}
+			</div>
+		</div>
+	);
+}
+
+function TemplatesPanel() {
+	const data = useQuery(
+		convexQuery(api.wabaProtection.adminListTemplates, {}),
+	).data;
+	return (
+		<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
+			<div className="flex items-start gap-3">
+				<FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+				<div>
+					<h3 className="font-semibold">Message templates</h3>
+					<p className="text-sm text-muted-foreground">
+						Meta can pause, disable or re-categorise an approved template at any
+						time. A template billed outside <b>UTILITY</b> costs ~6× per send
+						from 1 Oct 2026 and can be appealed for a short window — ops is
+						emailed the moment Meta tells us. This is the live state per
+						template and language. Meta reports a category only when it
+						<b> changes</b> one, so a template we registered as utility reads
+						“assumed” until it says otherwise.
+					</p>
+				</div>
+			</div>
+
+			{data === undefined ? (
+				<Skeleton className="h-24 w-full" />
+			) : (
+				<>
+					{data.neverReceived ? (
+						<p className="rounded-xl border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+							<span className="font-medium text-foreground">
+								No template updates received yet.
+							</span>{" "}
+							Subscribe <code>message_template_status_update</code>,{" "}
+							<code>template_category_update</code> and{" "}
+							<code>message_template_quality_update</code> under the app's
+							WhatsApp webhook fields in the Meta App dashboard. Until then the
+							states below stay “no update yet”.
+						</p>
+					) : null}
+					<ul className="flex flex-col divide-y divide-border">
+						{data.rows.map((row) => (
+							<li
+								key={row.envVar ?? row.templateName}
+								className="flex flex-col gap-1.5 py-2.5"
+							>
+								<div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+									{row.templateName ? (
+										<span className="font-mono text-sm">
+											{row.templateName}
+										</span>
+									) : (
+										<span className="text-sm text-muted-foreground">
+											Not configured on this deployment
+										</span>
+									)}
+									{row.purpose ? (
+										<span className="text-xs text-muted-foreground">
+											{row.purpose}
+										</span>
+									) : (
+										<span className="text-xs text-muted-foreground">
+											Reported by Meta — not in this deployment's config
+										</span>
+									)}
+									{row.envVar ? (
+										<code className="text-[11px] text-muted-foreground">
+											{row.envVar}
+										</code>
+									) : null}
+								</div>
+								{row.languages.map((lang) => (
+									<LanguageChips
+										key={lang.language}
+										lang={lang}
+										configured={row.configured}
+									/>
+								))}
+							</li>
+						))}
+					</ul>
+					{data.recent.length > 0 ? (
+						<details className="text-xs">
+							<summary className="cursor-pointer text-muted-foreground">
+								Recent updates from Meta ({data.recent.length})
+							</summary>
+							<ul className="mt-2 flex flex-col gap-1">
+								{data.recent.map((ev) => (
+									<li
+										key={ev._id}
+										className="flex flex-wrap items-baseline gap-x-2"
+									>
+										<span className="tabular-nums text-muted-foreground">
+											{new Date(ev.observedAt).toLocaleString("en-MY")}
+										</span>
+										<span className="font-mono">{ev.templateName}</span>
+										<span className="uppercase text-muted-foreground">
+											{ev.language}
+										</span>
+										<span
+											className={
+												ev.alerted ? "text-red-700 dark:text-red-300" : ""
+											}
+										>
+											{ev.summary}
+										</span>
+										{ev.alerted ? (
+											<span className="text-muted-foreground">
+												· ops emailed
+											</span>
+										) : null}
+									</li>
+								))}
+							</ul>
+						</details>
+					) : null}
+				</>
+			)}
+		</section>
 	);
 }
 

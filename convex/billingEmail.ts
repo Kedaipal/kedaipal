@@ -3,24 +3,41 @@
 // the originating mutation/cron never fails on an outbound issue — mirrors the
 // order-alert emails in convex/email.ts. Pure copy lives in lib/billingEmailCopy.ts.
 
+import { billingPageUrl } from "./lib/billingUrl";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { type ActionCtx, internalAction, internalQuery } from "./_generated/server";
 import {
+	type AutoRenewEmailKey,
 	type BillingEmailKey,
 	type PaymentEmailKey,
+	renderAutoRenewEmail,
 	renderBillingEmail,
+	renderCreditPurchaseEmail,
+	renderHoldEmail,
 	renderPaymentEmail,
 	renderTrialEmail,
 	type TrialEmailKey,
 } from "./lib/billingEmailCopy";
+import { loadCreditAccount } from "./credits";
+import { monthlyCreditGrant } from "./lib/credits";
 import { sendEmail } from "./lib/email";
+import { gatewayPaymentMethodLabel } from "./lib/hitpayBilling";
+import { formatDocDate } from "./lib/pdf/document";
+import { referralHref, referralRewardCredits } from "./lib/referral";
+import { referralReceiptFooter } from "./lib/referralEmailCopy";
+import { HOLD_LABEL } from "./lib/seasonalHold";
 import type { Locale } from "./lib/emailCopy";
+import {
+	type BillingCurrency,
+	FOUNDING_PRO_CREDIT_GRANT,
+	HOLD_MONTHLY_PRICES,
+	PLAN_CREDIT_GRANT,
+	renewalQuote,
+	storeBillingCurrency,
+} from "./lib/plans";
 
-function billingPageUrl(): string {
-	return `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/settings?tab=billing`;
-}
 
 const MONTHS = [
 	"Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -37,8 +54,17 @@ function formatDueDate(ms: number): string {
 	return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
-function planLabel(plan: string, cycle: string): string {
+/** "Pro · Monthly" — what an invoice email calls the thing it bills. An
+ * Enterprise bill names its CONTRACT, never a plan (T6): the invoice PDF's
+ * "Kedaipal Enterprise Contract" line, said the same way here. */
+export function invoicePlanLabel(
+	plan: string,
+	cycle: string,
+	kind: "plan" | "hold" = "plan",
+): string {
 	const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+	if (kind === "hold") return `${HOLD_LABEL} · ${cap(cycle)}`;
+	if (plan === "enterprise") return `Enterprise contract · ${cap(cycle)}`;
 	return `${cap(plan)} · ${cap(cycle)}`;
 }
 
@@ -52,6 +78,7 @@ type InvoiceEmailMeta = {
 	status: string;
 	plan: string;
 	billingCycle: string;
+	kind: "plan" | "hold";
 	notifyEmail: string | undefined;
 	storeName: string;
 	locale: Locale;
@@ -63,6 +90,13 @@ type InvoiceEmailMeta = {
 	// above are deliberately withheld and the email shows a "we'll confirm
 	// payment details on WhatsApp" line instead.
 	crossBorder: boolean;
+	// HitPay Pay-now link (86eyb6z4r), when the mint landed for this invoice.
+	payNowUrl: string | undefined;
+	// Kedaipal Credits (T5): what the billed plan gives THIS store a month —
+	// undefined for a hold invoice, which grants nothing.
+	includedCredits: number | undefined;
+	// The store's slug — the receipt's referral footer builds the link from it.
+	slug: string;
 };
 
 /** Loads everything the billing-email action needs in one roundtrip: invoice +
@@ -83,6 +117,33 @@ export const getInvoiceForEmail = internalQuery({
 		const config = crossBorder
 			? null
 			: await ctx.db.query("billingConfig").first();
+		const kind = invoice.kind ?? "plan";
+		const plan = invoice.plan ?? sub?.plan ?? "pro";
+		// The store's own grant for the BILLED plan, through the one author of
+		// grant precedence (`monthlyCreditGrant`): an admin's custom grant beats
+		// the tier, and a founding-priced Pro invoice is Founding Pro's 300 —
+		// fine in the member's own email, never on a public page. The annual
+		// lock is left out on purpose: this bill starts the NEXT term, and
+		// paying it re-stamps the lock at today's grant.
+		const account =
+			kind === "plan" ? await loadCreditAccount(ctx, invoice.retailerId) : null;
+		// A contract store's override IS its contract's included credits
+		// (T6), and it ends with the contract: the bill that moves the store
+		// OFF the contract (a Pro renewal after a scheduled move) buys Pro's
+		// allowance, so it must not promise the contract's 1,500.
+		const leavesContract =
+			sub?.enterprise !== undefined && plan !== "enterprise";
+		const includedCredits =
+			kind === "plan"
+				? monthlyCreditGrant({
+						status: "active",
+						plan,
+						foundingEligible: (invoice.foundingDiscount ?? 0) > 0,
+						override: leavesContract ? undefined : account?.grantOverride,
+						annualGrant: undefined,
+						now: Date.now(),
+					})
+				: undefined;
 		return {
 			invoiceNumber: invoice.invoiceNumber,
 			amount: invoice.amount,
@@ -98,8 +159,9 @@ export const getInvoiceForEmail = internalQuery({
 			// the first annual invoice email "Pro · Monthly" beside a ten-times
 			// amount while its own attached PDF said "Annual Subscription". Same bug
 			// mislabelled a Starter invoice issued to a store still trialing on Pro.
-			plan: invoice.plan ?? sub?.plan ?? "pro",
+			plan,
 			billingCycle: invoice.billingCycle ?? sub?.billingCycle ?? "monthly",
+			kind,
 			notifyEmail: retailer.notifyEmail,
 			storeName: retailer.storeName,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
@@ -108,6 +170,9 @@ export const getInvoiceForEmail = internalQuery({
 			bankAccountNumber: config?.bankAccountNumber,
 			duitnowId: config?.duitnowId,
 			crossBorder,
+			payNowUrl: invoice.gatewayPayment?.url,
+			includedCredits,
+			slug: retailer.slug,
 		};
 	},
 });
@@ -116,6 +181,9 @@ async function sendInvoiceEmail(
 	ctx: ActionCtx,
 	invoiceId: Id<"invoices">,
 	key: BillingEmailKey,
+	/** Post-lock recovery chain only (z8r3fdg3mh) — how long this invoice has
+	 * been overdue, so the copy can state it as a fact. */
+	daysPastDue?: number,
 ): Promise<void> {
 	let meta: InvoiceEmailMeta | null = null;
 	try {
@@ -145,7 +213,7 @@ async function sendInvoiceEmail(
 	const { subject, html, text } = renderBillingEmail(meta.locale, key, {
 		storeName: meta.storeName,
 		invoiceNumber: meta.invoiceNumber,
-		planLabel: planLabel(meta.plan, meta.billingCycle),
+		planLabel: invoicePlanLabel(meta.plan, meta.billingCycle, meta.kind),
 		totalFormatted: formatMoney(meta.total, meta.currency),
 		baseFormatted: hasDiscount
 			? formatMoney(meta.amount, meta.currency)
@@ -159,7 +227,20 @@ async function sendInvoiceEmail(
 		bankAccountNumber: meta.bankAccountNumber,
 		duitnowId: meta.duitnowId,
 		crossBorder: meta.crossBorder,
+		payNowUrl: meta.payNowUrl,
 		billingUrl: billingPageUrl(),
+		includedCredits: meta.includedCredits,
+		daysPastDue,
+		// The Off-Season Hold is only an alternative for a seller who ISN'T
+		// already on it — a hold invoice means they took that door already, and
+		// offering it again would point them at a button that refuses them.
+		holdPriceFormatted:
+			key === "recoveryFinal" && meta.kind === "plan"
+				? formatMoney(
+						HOLD_MONTHLY_PRICES[meta.currency as BillingCurrency],
+						meta.currency,
+					)
+				: undefined,
 	});
 
 	try {
@@ -173,11 +254,24 @@ async function sendInvoiceEmail(
 	}
 }
 
-/** Scheduled by invoices.issueInvoice — "here's your new invoice + how to pay". */
+/** Scheduled by every issuance path — "here's your new invoice + how to pay".
+ * A store's FIRST invoice (z8r3fday24) gets its own framing: "your first
+ * order is in" or "your free period has ended", by what ended the period. */
 export const notifyInvoiceIssued = internalAction({
-	args: { invoiceId: v.id("invoices") },
-	handler: async (ctx, { invoiceId }): Promise<void> => {
-		await sendInvoiceEmail(ctx, invoiceId, "invoiceIssued");
+	args: {
+		invoiceId: v.id("invoices"),
+		firstInvoice: v.optional(
+			v.union(v.literal("first_order"), v.literal("backstop")),
+		),
+	},
+	handler: async (ctx, { invoiceId, firstInvoice }): Promise<void> => {
+		const key: BillingEmailKey =
+			firstInvoice === "first_order"
+				? "firstInvoiceOrder"
+				: firstInvoice === "backstop"
+					? "firstInvoiceBackstop"
+					: "invoiceIssued";
+		await sendInvoiceEmail(ctx, invoiceId, key);
 	},
 });
 
@@ -195,6 +289,32 @@ export const notifyInvoiceOverdue = internalAction({
 	args: { invoiceId: v.id("invoices") },
 	handler: async (ctx, { invoiceId }): Promise<void> => {
 		await sendInvoiceEmail(ctx, invoiceId, "invoiceOverdue");
+	},
+});
+
+/**
+ * Post-lock recovery chain (z8r3fdg3mh) — the two nudges AFTER the lock, at
+ * +3d and +7d past the due date. `invoiceOverdue` above fires on the
+ * transition itself; before this existed that was the last thing a lapsing
+ * seller ever heard from us.
+ *
+ * `sendInvoiceEmail` re-guards `status === "pending"`, so a seller who paid
+ * between the cron stamping the stage and this action running gets nothing —
+ * the chain's stop condition is enforced at both ends.
+ */
+export const notifyInvoiceRecovery = internalAction({
+	args: {
+		invoiceId: v.id("invoices"),
+		stage: v.union(v.literal(1), v.literal(2)),
+		daysPastDue: v.number(),
+	},
+	handler: async (ctx, { invoiceId, stage, daysPastDue }): Promise<void> => {
+		await sendInvoiceEmail(
+			ctx,
+			invoiceId,
+			stage === 1 ? "recoveryNudge" : "recoveryFinal",
+			daysPastDue,
+		);
 	},
 });
 
@@ -234,21 +354,39 @@ export const sendSampleBillingEmail = internalAction({
 			v.literal("invoiceIssued"),
 			v.literal("invoiceReminder"),
 			v.literal("invoiceOverdue"),
+			v.literal("firstInvoiceOrder"),
+			v.literal("firstInvoiceBackstop"),
 			v.literal("trialEndingSoon"),
-			v.literal("trialEnded"),
+			v.literal("compEnded"),
+			v.literal("holdStarted"),
+			v.literal("holdResumed"),
 			v.literal("welcome"),
 			v.literal("thanks"),
+			v.literal("autoRenewEnabled"),
+			v.literal("autoRenewUpcoming"),
+			v.literal("autoRenewFailed"),
+			// Credits T2: the top-up receipt — "member":true previews the store
+			// copy of a teammate's purchase.
+			v.literal("creditPurchaseReceipt"),
 		),
-		locale: v.optional(v.union(v.literal("en"), v.literal("ms"))),
+		locale: v.optional(
+			v.union(v.literal("en"), v.literal("ms"), v.literal("zh")),
+		),
 		founding: v.optional(v.boolean()),
 		currency: v.optional(v.union(v.literal("MYR"), v.literal("SGD"))),
+		// Adds the sample Pay-now button to the invoice emails ("payNow": true).
+		payNow: v.optional(v.boolean()),
+		member: v.optional(v.boolean()),
 	},
 	handler: async (
 		_ctx,
-		{ to, key, locale, founding, currency },
+		{ to, key, locale, founding, currency, payNow, member },
 	): Promise<{ sent: string; key: string }> => {
 		const loc: Locale = locale ?? "en";
 		const url = billingPageUrl();
+		const samplePayNow = payNow
+			? "https://securecheckout.sandbox.hit-pay.com/payment-request/sample"
+			: undefined;
 		const crossBorder = currency === "SGD";
 		const withDiscount = founding === true;
 		const sampleBase = crossBorder ? "SGD 59.00" : "MYR 149.00";
@@ -259,46 +397,91 @@ export const sendSampleBillingEmail = internalAction({
 				: "MYR 104.00"
 			: sampleBase;
 		const rendered =
-			key === "welcome" || key === "thanks"
+			key === "creditPurchaseReceipt"
+				? renderCreditPurchaseEmail(loc, {
+						storeName: "Sample Store",
+						credits: 50,
+						amountFormatted: crossBorder ? "SGD 22.00" : "MYR 45.00",
+						methodLabel: "Touch 'n Go",
+						paidOnFormatted: "30 Sep 2026",
+						expiresOnFormatted: "30 Sep 2027",
+						purchaseNumber: "CRD-202609-SMPL",
+						boughtBy: member ? "Aisyah" : undefined,
+						recipient: "store",
+						ctaUrl: url,
+					})
+				: key === "welcome" || key === "thanks"
 				? renderPaymentEmail(loc, key, {
 						storeName: "Sample Store",
 						planLabel: "Pro · Monthly",
 						totalFormatted: sampleTotal,
 						dashboardUrl: url,
 					})
-				: key === "trialEndingSoon" || key === "trialEnded"
+				: key === "trialEndingSoon" || key === "compEnded"
 					? renderTrialEmail(loc, key, {
 							storeName: "Sample Store",
 							billingUrl: url,
 							daysLeft: 3,
+							sponsorLabel:
+								key === "compEnded" ? "Sponsored by Maybank SME" : undefined,
 						})
-					: renderBillingEmail(loc, key, {
-						storeName: "Sample Store",
-						invoiceNumber: "INV-202607-SAMPLE",
-						planLabel: "Pro · Monthly",
-						totalFormatted: sampleTotal,
-						baseFormatted: withDiscount ? sampleBase : undefined,
-						discountFormatted: withDiscount ? sampleDiscount : undefined,
-						dueDateFormatted: "5 Jul 2026",
-						bankName: crossBorder ? undefined : "Maybank",
-						bankAccountName: crossBorder ? undefined : "Kedaipal Sdn Bhd",
-						bankAccountNumber: crossBorder ? undefined : "5123 4567 8901",
-						duitnowId: crossBorder ? undefined : "kedaipal",
-						crossBorder,
-						billingUrl: url,
-					});
+					: key === "holdStarted" || key === "holdResumed"
+						? renderHoldEmail(loc, key, {
+								storeName: "Sample Store",
+								billingUrl: url,
+								planLabel: "Pro",
+								holdPriceFormatted: crossBorder ? "SGD 9.00" : "MYR 19.00",
+								billsNow: true,
+							})
+					: key === "autoRenewEnabled" ||
+							key === "autoRenewUpcoming" ||
+							key === "autoRenewFailed"
+						? renderAutoRenewEmail(loc, key, {
+								storeName: "Sample Store",
+								methodLabel: "Visa ·· 4242",
+								billingUrl: url,
+								planLabel: "Pro · Monthly",
+								amountFormatted: sampleTotal,
+								chargeDateFormatted: "5 Jul 2026",
+								payNowUrl: samplePayNow,
+								final: false,
+							})
+						: renderBillingEmail(loc, key, {
+								storeName: "Sample Store",
+								invoiceNumber: "INV-202607-SAMPLE",
+								planLabel: "Pro · Monthly",
+								totalFormatted: sampleTotal,
+								baseFormatted: withDiscount ? sampleBase : undefined,
+								discountFormatted: withDiscount ? sampleDiscount : undefined,
+								dueDateFormatted: "5 Jul 2026",
+								bankName: crossBorder ? undefined : "Maybank",
+								bankAccountName: crossBorder ? undefined : "Kedaipal Sdn Bhd",
+								bankAccountNumber: crossBorder ? undefined : "5123 4567 8901",
+								duitnowId: crossBorder ? undefined : "kedaipal",
+								crossBorder,
+								payNowUrl: samplePayNow,
+								billingUrl: url,
+								includedCredits: withDiscount
+									? FOUNDING_PRO_CREDIT_GRANT
+									: PLAN_CREDIT_GRANT.pro,
+							});
 		await sendEmail(to, rendered.subject, rendered.html, rendered.text);
 		return { sent: to, key };
 	},
 });
 
-/** Send a retailer-only (no invoice) notice — trial nudges or the lapsed notice.
- * Shared by the named actions below. Fire-and-forget. */
+/** Send a retailer-only (no invoice) notice — the free-period nudge, the
+ * lapsed notice or the comp-ended notice. Shared by the named actions below.
+ * Fire-and-forget. */
 async function sendRetailerNotice(
 	ctx: ActionCtx,
 	retailerId: Id<"retailers">,
 	key: TrialEmailKey,
-	daysLeft?: number,
+	extra: {
+		daysLeft?: number;
+		sponsorLabel?: string;
+		endsOnFormatted?: string;
+	} = {},
 ): Promise<void> {
 	let meta: {
 		notifyEmail: string | undefined;
@@ -317,7 +500,9 @@ async function sendRetailerNotice(
 	const { subject, html, text } = renderTrialEmail(meta.locale, key, {
 		storeName: meta.storeName,
 		billingUrl: billingPageUrl(),
-		daysLeft,
+		daysLeft: extra.daysLeft,
+		sponsorLabel: extra.sponsorLabel,
+		endsOnFormatted: extra.endsOnFormatted,
 	});
 	try {
 		await sendEmail(meta.notifyEmail, subject, html, text);
@@ -330,16 +515,136 @@ async function sendRetailerNotice(
 	}
 }
 
-/** Trial nudges (no invoice). `trialEndingSoon` (~3 days left) and `trialEnded`
- * (locked) — scheduled by the daily cron. */
+/** Retailer notices with no invoice attached, scheduled by the daily cron and
+ * the comp toggle:
+ *  - `trialEndingSoon` — ~3 days before the free period's backstop.
+ *  - `compEnded` — an admin turned the store's comp upgrade off (z8r3fdeub2):
+ *    it's an expired seller now (storefront + ordering live, editing locked
+ *    until they pick a plan).
+ * The old `trialEnded` lock notice is gone with start-when-you-sell: the free
+ * period ending now ISSUES a first invoice (`firstInvoice*` keys above), and
+ * only that invoice going overdue locks — which sends the ordinary
+ * `invoiceOverdue`. */
 export const notifyTrialEmail = internalAction({
 	args: {
 		retailerId: v.id("retailers"),
-		key: v.union(v.literal("trialEndingSoon"), v.literal("trialEnded")),
+		key: v.union(v.literal("trialEndingSoon"), v.literal("compEnded")),
 		daysLeft: v.optional(v.number()),
+		/** compEnded: the comp's seller-facing label, named in the email. */
+		sponsorLabel: v.optional(v.string()),
 	},
-	handler: async (ctx, { retailerId, key, daysLeft }): Promise<void> => {
-		await sendRetailerNotice(ctx, retailerId, key, daysLeft);
+	handler: async (
+		ctx,
+		{ retailerId, key, daysLeft, sponsorLabel },
+	): Promise<void> => {
+		await sendRetailerNotice(ctx, retailerId, key, { daysLeft, sponsorLabel });
+	},
+});
+
+/**
+ * Founding-benefit lifecycle notices (z8r3fdfyw5), both scheduled by the daily
+ * pass (`foundingMembers.internalRevokeLapsedBenefits`):
+ * `foundingBenefitsEndingSoon` at T-14 and `foundingBenefitsEnded` once it is
+ * taken. `endsOnAt` is the date from `foundingBenefitsEndAt` — the SAME author
+ * the cron's gate and the billing-tab banner read, so the email can't promise a
+ * date the cron doesn't honour. Fire-and-forget like every other billing email:
+ * the revoke itself has already committed, so a bounced email must never undo
+ * it (and never blocks it — Zaki, 18 Sep 2026).
+ */
+export const notifyFoundingBenefitsEmail = internalAction({
+	args: {
+		retailerId: v.id("retailers"),
+		key: v.union(
+			v.literal("foundingBenefitsEndingSoon"),
+			v.literal("foundingBenefitsEnded"),
+		),
+		endsOnAt: v.number(),
+	},
+	handler: async (ctx, { retailerId, key, endsOnAt }): Promise<void> => {
+		await sendRetailerNotice(ctx, retailerId, key, {
+			endsOnFormatted: formatDueDate(endsOnAt),
+		});
+	},
+});
+
+/** Off-Season Hold notices (z8r3fday24): `holdStarted` (what's paused, what
+ * stays live, the hold price, when it bills, how to resume) and `holdResumed`
+ * (the tier is back; whether its invoice is on its way now or at period end).
+ * Scheduled by subscriptions.setSeasonalHold. Fire-and-forget. */
+export const notifyHoldEmail = internalAction({
+	args: {
+		retailerId: v.id("retailers"),
+		key: v.union(v.literal("holdStarted"), v.literal("holdResumed")),
+		billsNow: v.boolean(),
+		billsFromAt: v.optional(v.number()),
+	},
+	handler: async (ctx, { retailerId, key, billsNow, billsFromAt }): Promise<void> => {
+		let meta: {
+			notifyEmail: string | undefined;
+			storeName: string;
+			locale: Locale;
+			plan: string;
+			currency: BillingCurrency;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.billingEmail.getHoldEmailContext, {
+				retailerId,
+			});
+		} catch (err) {
+			console.error(`Hold notice ${key} lookup failed`, err);
+			return;
+		}
+		if (!meta || !meta.notifyEmail) return;
+		const { subject, html, text } = renderHoldEmail(meta.locale, key, {
+			storeName: meta.storeName,
+			billingUrl: billingPageUrl(),
+			planLabel: meta.plan.charAt(0).toUpperCase() + meta.plan.slice(1),
+			holdPriceFormatted: formatMoney(
+				HOLD_MONTHLY_PRICES[meta.currency],
+				meta.currency,
+			),
+			billsNow,
+			billsFromFormatted:
+				billsFromAt !== undefined ? formatDueDate(billsFromAt) : undefined,
+		});
+		try {
+			await sendEmail(meta.notifyEmail, subject, html, text);
+		} catch (err) {
+			console.error(
+				`Hold notice ${key} failed (${retailerId}, to=${meta.notifyEmail}): ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+		}
+	},
+});
+
+/** Contact + tier + billing currency for the hold notices. */
+export const getHoldEmailContext = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		notifyEmail: string | undefined;
+		storeName: string;
+		locale: Locale;
+		plan: string;
+		currency: BillingCurrency;
+	} | null> => {
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) return null;
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.first();
+		return {
+			notifyEmail: retailer.notifyEmail,
+			storeName: retailer.storeName,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			plan: sub?.plan ?? "pro",
+			currency: storeBillingCurrency(retailer.country),
+		};
 	},
 });
 
@@ -361,9 +666,21 @@ export const notifyPaymentReceived = internalAction({
 		const key: PaymentEmailKey = firstTime ? "welcome" : "thanks";
 		const { subject, html, text } = renderPaymentEmail(meta.locale, key, {
 			storeName: meta.storeName,
-			planLabel: planLabel(meta.plan, meta.billingCycle),
+			planLabel: invoicePlanLabel(meta.plan, meta.billingCycle, meta.kind),
 			totalFormatted: formatMoney(meta.total, meta.currency),
 			dashboardUrl: billingPageUrl(),
+			// A paid PLAN invoice makes the store active, so its referral link
+			// counts from this moment — the one email every paying store gets
+			// every month carries the invitation (docs/referrals.md, the push).
+			// A hold receipt doesn't: a paused store's link is paused too.
+			...(meta.kind === "plan"
+				? {
+						referralFooter: referralReceiptFooter(meta.locale, {
+							link: referralHref(meta.slug),
+							proCredits: referralRewardCredits("pro"),
+						}),
+					}
+				: {}),
 		});
 		try {
 			await sendEmail(meta.notifyEmail, subject, html, text);
@@ -377,11 +694,260 @@ export const notifyPaymentReceived = internalAction({
 	},
 });
 
-/** Scheduled when the daily cron locks a paid vendor whose period lapsed with no
- * pending invoice (Arif hasn't issued a renewal). */
-export const notifySubscriptionLapsed = internalAction({
+// --- Auto-renewal notices (86eyb6z4r) ---------------------------------------
+
+/** Everything the auto-renew notices need: contact + the seller's CURRENT
+ * renewal price (plan/cycle/founding/currency-aware — the number the upcoming
+ * charge will actually be) + the pending invoice's Pay-now link for the
+ * failure notice. */
+export const getAutoRenewEmailContext = internalQuery({
 	args: { retailerId: v.id("retailers") },
-	handler: async (ctx, { retailerId }): Promise<void> => {
-		await sendRetailerNotice(ctx, retailerId, "subscriptionLapsed");
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		notifyEmail: string | undefined;
+		storeName: string;
+		locale: Locale;
+		planLabel: string;
+		amountFormatted: string;
+		payNowUrl: string | undefined;
+	} | null> => {
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) return null;
+		const sub = await ctx.db
+			.query("subscriptions")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.first();
+		if (!sub) return null;
+		const invoices = await ctx.db
+			.query("invoices")
+			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+			.order("desc")
+			.collect();
+		const pending = invoices.find((inv) => inv.status === "pending");
+		// The heads-up must quote exactly what the renewal will charge, so it
+		// reads the same author as the cron's invoice (z8r3fdfty4): a scheduled
+		// downgrade lands WITH the renewal (quote the plan they're moving to,
+		// not the one they're leaving), and a PAUSED subscription renews the
+		// hold, not the tier — the hold price outranks a scheduled plan change,
+		// which only lands when they resume (z8r3fday24 × 86eyb6z4r).
+		const quote = renewalQuote({
+			status: sub.status,
+			plan: sub.plan,
+			billingCycle: sub.billingCycle,
+			pendingPlanChange: sub.pendingPlanChange?.plan,
+			isFoundingMember: retailer.isFoundingMember === true,
+			foundingIntent: sub.foundingIntent === true,
+			benefitsRevokedAt: retailer.foundingBenefitsRevokedAt,
+			benefitsRestoredAt: retailer.foundingBenefitsRestoredAt,
+			paidThrough: sub.currentPeriodEnd,
+			country: retailer.country,
+			enterprise: sub.enterprise,
+			now: Date.now(),
+		});
+		return {
+			notifyEmail: retailer.notifyEmail,
+			storeName: retailer.storeName,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			planLabel: invoicePlanLabel(quote.plan, quote.billingCycle, quote.kind),
+			amountFormatted: formatMoney(quote.amount, quote.currency),
+			payNowUrl: pending?.gatewayPayment?.url,
+		};
+	},
+});
+
+/** The three auto-renewal notices: setup confirmation, the pre-charge
+ * "renewing soon" heads-up (once per cycle — no surprise merchant-initiated
+ * debits), and the charge-failure dunning notice. Fire-and-forget like every
+ * other billing email. */
+export const notifyAutoRenewEmail = internalAction({
+	args: {
+		retailerId: v.id("retailers"),
+		key: v.union(
+			v.literal("autoRenewEnabled"),
+			v.literal("autoRenewUpcoming"),
+			v.literal("autoRenewFailed"),
+		),
+		methodLabel: v.string(),
+		chargeAt: v.optional(v.number()),
+		invoiceId: v.optional(v.id("invoices")),
+		final: v.optional(v.boolean()),
+	},
+	handler: async (
+		ctx,
+		{ retailerId, key, methodLabel, chargeAt, final },
+	): Promise<void> => {
+		let meta: {
+			notifyEmail: string | undefined;
+			storeName: string;
+			locale: Locale;
+			planLabel: string;
+			amountFormatted: string;
+			payNowUrl: string | undefined;
+		} | null = null;
+		try {
+			meta = await ctx.runQuery(internal.billingEmail.getAutoRenewEmailContext, {
+				retailerId,
+			});
+		} catch (err) {
+			console.error(`Auto-renew email ${key} lookup failed`, err);
+			return;
+		}
+		if (!meta || !meta.notifyEmail) return;
+		const { subject, html, text } = renderAutoRenewEmail(
+			meta.locale,
+			key as AutoRenewEmailKey,
+			{
+				storeName: meta.storeName,
+				methodLabel,
+				billingUrl: billingPageUrl(),
+				planLabel: meta.planLabel,
+				amountFormatted: meta.amountFormatted,
+				chargeDateFormatted:
+					chargeAt !== undefined ? formatDueDate(chargeAt) : undefined,
+				payNowUrl: meta.payNowUrl,
+				final,
+			},
+		);
+		try {
+			await sendEmail(meta.notifyEmail, subject, html, text);
+		} catch (err) {
+			console.error(
+				`Auto-renew email ${key} failed (${retailerId}): ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+		}
+	},
+});
+
+// --- Credit-pack receipts (Credits T2, z8r3fdf8ht) --------------------------
+
+type CreditPurchaseEmailMeta = {
+	status: string;
+	notifyEmail: string | undefined;
+	storeName: string;
+	locale: Locale;
+	credits: number;
+	amountMinor: number;
+	currency: string;
+	paymentMethod: string | undefined;
+	paidAt: number | undefined;
+	purchaseNumber: string;
+	expiresAt: number | undefined;
+	/** The teammate who bought it — null when the owner did. */
+	buyer: { name: string; email: string } | null;
+};
+
+/** Everything the top-up receipt needs in one read: the purchase, its lot's
+ * expiry, the store's billing inbox + locale, and the teammate who paid. */
+export const getCreditPurchaseForEmail = internalQuery({
+	args: { purchaseId: v.id("creditPurchases") },
+	handler: async (
+		ctx,
+		{ purchaseId },
+	): Promise<CreditPurchaseEmailMeta | null> => {
+		const purchase = await ctx.db.get(purchaseId);
+		if (!purchase) return null;
+		const retailer = await ctx.db.get(purchase.retailerId);
+		if (!retailer) return null;
+		const lot = purchase.lotId ? await ctx.db.get(purchase.lotId) : null;
+		let buyer: CreditPurchaseEmailMeta["buyer"] = null;
+		if (purchase.createdBy !== retailer.userId) {
+			const rows = await ctx.db
+				.query("retailerMembers")
+				.withIndex("by_user", (q) => q.eq("userId", purchase.createdBy))
+				.collect();
+			const member = rows.find((m) => m.retailerId === retailer._id);
+			if (member)
+				buyer = { name: member.displayName ?? member.email, email: member.email };
+		}
+		return {
+			status: purchase.status,
+			notifyEmail: retailer.notifyEmail,
+			storeName: retailer.storeName,
+			locale: (retailer.locale as Locale | undefined) ?? "en",
+			credits: purchase.credits,
+			amountMinor: purchase.amountMinor,
+			currency: purchase.currency,
+			paymentMethod: purchase.paymentMethod,
+			paidAt: purchase.paidAt,
+			purchaseNumber: purchase.purchaseNumber,
+			expiresAt: lot?.expiresAt,
+			buyer,
+		};
+	},
+});
+
+/**
+ * The top-up receipt, scheduled by `creditPurchases.finalizePaidPurchase` once
+ * the rail is named and the PDF frozen. It goes to the store's billing inbox
+ * for EVERY top-up — naming the teammate when one bought it, so the owner
+ * hears of every member purchase (Zaki, 30 Sep 2026) — and a copy goes to that
+ * teammate, who paid with their own card or wallet and needs the proof.
+ * Dates on the MYT wall clock (`formatDocDate`), matching the receipt PDF and
+ * the lot's own expiry. Fire-and-forget like every billing email.
+ */
+export const notifyCreditPurchaseReceipt = internalAction({
+	args: { purchaseId: v.id("creditPurchases") },
+	handler: async (ctx, { purchaseId }): Promise<void> => {
+		let meta: CreditPurchaseEmailMeta | null = null;
+		try {
+			meta = await ctx.runQuery(internal.billingEmail.getCreditPurchaseForEmail, {
+				purchaseId,
+			});
+		} catch (err) {
+			console.error("Credit receipt lookup failed", err);
+			return;
+		}
+		// Only a PAID purchase gets a receipt — a stray schedule never mails
+		// one for money that didn't land.
+		if (!meta || meta.status !== "paid" || meta.paidAt === undefined) return;
+		const base = {
+			storeName: meta.storeName,
+			credits: meta.credits,
+			amountFormatted: formatMoney(meta.amountMinor, meta.currency),
+			methodLabel: meta.paymentMethod
+				? gatewayPaymentMethodLabel(meta.paymentMethod)
+				: "Online payment",
+			paidOnFormatted: formatDocDate(meta.paidAt),
+			expiresOnFormatted:
+				meta.expiresAt !== undefined
+					? formatDocDate(meta.expiresAt)
+					: "12 months from today",
+			purchaseNumber: meta.purchaseNumber,
+		};
+		const sends: Array<{ to: string; recipient: "store" | "buyer" }> = [];
+		if (meta.notifyEmail) sends.push({ to: meta.notifyEmail, recipient: "store" });
+		else
+			console.warn(
+				`Credit receipt: store copy skipped, notifyEmail empty (${meta.purchaseNumber})`,
+			);
+		if (
+			meta.buyer &&
+			meta.buyer.email.toLowerCase() !== meta.notifyEmail?.toLowerCase()
+		)
+			sends.push({ to: meta.buyer.email, recipient: "buyer" });
+		for (const { to, recipient } of sends) {
+			const { subject, html, text } = renderCreditPurchaseEmail(meta.locale, {
+				...base,
+				boughtBy: meta.buyer?.name,
+				recipient,
+				ctaUrl:
+					recipient === "store"
+						? billingPageUrl()
+						: `${process.env.SITE_URL ?? "https://kedaipal.com"}/app`,
+			});
+			try {
+				await sendEmail(to, subject, html, text);
+			} catch (err) {
+				console.error(
+					`Credit receipt (${recipient}) failed (${meta.purchaseNumber}): ${
+						err instanceof Error ? err.message : String(err)
+					}`,
+				);
+			}
+		}
 	},
 });

@@ -144,6 +144,7 @@ describe("buildPaymentRequestParams", () => {
 		webhookUrl: "https://example.convex.site/webhook/hitpay",
 		buyerName: "Aina",
 		buyerPhone: "60123456789",
+		storeCountry: "MY" as const,
 	};
 
 	test("maps order facts to HitPay's form fields", () => {
@@ -174,6 +175,48 @@ describe("buildPaymentRequestParams", () => {
 		});
 		expect(p.get("name")).toBeNull();
 		expect(p.get("phone")).toBeNull();
+	});
+
+	// z8r3fdh274: buyers can hold any country's number now. HitPay's phone
+	// validation for anything but the account's own market is unverified, and a
+	// 422 there kills Pay-now — while the phone does nothing for us.
+	test("sends the phone for a mobile of the store's own country", () => {
+		expect(buildPaymentRequestParams(inputs).get("phone")).toBe("60123456789");
+		expect(
+			buildPaymentRequestParams({
+				...inputs,
+				currency: "sgd",
+				buyerPhone: "6591234567",
+				storeCountry: "SG",
+			}).get("phone"),
+		).toBe("6591234567");
+	});
+
+	test("leaves a foreign buyer's phone off the request", () => {
+		const p = buildPaymentRequestParams({
+			...inputs,
+			buyerPhone: "447911123456",
+		});
+		expect(p.get("phone")).toBeNull();
+		// Everything else still goes — the request itself is unaffected.
+		expect(p.get("name")).toBe("Aina");
+		expect(p.get("amount")).toBe("45.50");
+	});
+
+	test("leaves the other supported country's mobile off too (MY buyer, SG store)", () => {
+		expect(
+			buildPaymentRequestParams({
+				...inputs,
+				currency: "sgd",
+				storeCountry: "SG",
+			}).get("phone"),
+		).toBeNull();
+		expect(
+			buildPaymentRequestParams({
+				...inputs,
+				buyerPhone: "6591234567",
+			}).get("phone"),
+		).toBeNull();
 	});
 });
 

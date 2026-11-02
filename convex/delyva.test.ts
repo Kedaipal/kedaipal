@@ -5,9 +5,10 @@
 // mechanics are covered in convex/lib/delyva.test.ts.
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { COUNTRY_COURIER_BOOKING } from "./lib/courierProviders";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -497,6 +498,57 @@ describe("getDispatchState", () => {
 		expect(state?.blockReason).toBe("job_active");
 	});
 
+	test("a timed self-collect order never reaches dispatch (z8r3fdff97)", async () => {
+		// A pickup carries a time since z8r3fdff97. It must not look bookable:
+		// the method gate refuses before anything reads the moment.
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			deliveryMethod: "self_collect",
+			deliveryAddress: undefined,
+			fulfilmentDate: Date.now() - (Date.now() % 86_400_000),
+			fulfilmentTimeMinutes: 930,
+		});
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+			?.shortId as string;
+		const asUser = t.withIdentity({ subject: USER });
+		const state = await asUser.query(api.delyva.getDispatchState, { shortId });
+		expect(state?.blockReason).toBe("not_delivery");
+		const context = await asUser.query(internal.delyva.getDispatchContext, {
+			shortId,
+		});
+		expect(context).toMatchObject({ ok: false, reason: "not_delivery" });
+	});
+
+	test("bookingEnabled reads false when paused, and when the connect never finished", async () => {
+		// Pins the shared armed predicate (delyvaBookingArmed) the card's bit
+		// now comes from — the two ways a stored key is not a working setup.
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+			?.shortId as string;
+		const asUser = t.withIdentity({ subject: USER });
+		const patchDelyva = (patch: Partial<Doc<"retailers">["delyva"]>) =>
+			t.run(async (ctx) => {
+				const row = await ctx.db.get(retailer._id);
+				if (!row?.delyva) throw new Error("seed missing delyva");
+				await ctx.db.patch(retailer._id, { delyva: { ...row.delyva, ...patch } });
+			});
+
+		await patchDelyva({ enabled: false });
+		expect(
+			(await asUser.query(api.delyva.getDispatchState, { shortId }))
+				?.bookingEnabled,
+		).toBe(false);
+
+		await patchDelyva({ enabled: true, customerId: undefined });
+		expect(
+			(await asUser.query(api.delyva.getDispatchState, { shortId }))
+				?.bookingEnabled,
+		).toBe(false);
+	});
+
 	test("empty cart weight surfaces as missing_weights for the dialog", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);
@@ -510,10 +562,15 @@ describe("getDispatchState", () => {
 	});
 });
 
-describe("Singapore stores (z8r3fdbqmc)", () => {
-	// SG has no Lalamove at all, so Delyva is that market's only courier
-	// automation — the country gate and the address rules have to hold here,
-	// not just in Malaysia.
+describe("Singapore stores (z8r3fdbqmc; SG retired with EasyParcel, z8r3fdcje2)", () => {
+	// Delyva SG closed in the registry when EasyParcel became the SG parcel
+	// lane (the SG tenant ships an empty service catalogue). The address rules
+	// and the country-stamp MECHANISM still hold — they are what a future
+	// re-open relies on — so the mechanism tests below re-open the registry
+	// row for their own duration and the afterEach restores the real decision.
+	afterEach(() => {
+		COUNTRY_COURIER_BOOKING.delyva.SG = false;
+	});
 	async function seedSgRetailer(t: ReturnType<typeof setup>) {
 		const retailer = await seedRetailer(t);
 		await t.run(async (ctx) => {
@@ -540,14 +597,17 @@ describe("Singapore stores (z8r3fdbqmc)", () => {
 		return retailer;
 	}
 
-	test("booking is allowed in SG — the gate is per provider, not inherited", async () => {
+	test("SG reads country-closed — but a connected account keeps its unwind path", async () => {
 		const t = setup();
 		const retailer = await seedSgRetailer(t);
 		const asUser = t.withIdentity({ subject: USER });
 		const view = await asUser.query(api.delyva.getSettings, {
 			retailerId: retailer._id,
 		});
-		expect(view.countryAllowed).toBe(true);
+		// The retirement (z8r3fdcje2): no NEW SG bookings through Delyva…
+		expect(view.countryAllowed).toBe(false);
+		// …while the connection stays visible, so a connected store can still
+		// see and disconnect it (the settings card's country-blocked note).
 		expect(view.connected).toBe(true);
 	});
 
@@ -605,6 +665,8 @@ describe("Singapore stores (z8r3fdbqmc)", () => {
 	});
 
 	test("stamps SG on both waypoints — an MY literal would quote nothing", async () => {
+		// Mechanism test: runs with the registry row re-opened (see describe).
+		COUNTRY_COURIER_BOOKING.delyva.SG = true;
 		const t = setup();
 		const retailer = await seedSgRetailer(t);
 		const orderId = await seedOrder(t, retailer._id, {
@@ -780,5 +842,151 @@ describe("pickup address import (profile → settings)", () => {
 		const asUser = t.withIdentity({ subject: USER });
 		const state = await asUser.query(api.delyva.getDispatchState, { shortId });
 		expect(state?.pickupSummary).toBe("12 Jalan Ampang, 50450 Kuala Lumpur");
+	});
+});
+
+describe("overseas buyer numbers (z8r3fdh274) — the courier calls the store", () => {
+	// Buyers may type a WhatsApp number from any country, but a Delyva booking
+	// lives inside the store's country. A foreign buyer number hands the
+	// courier the STORE's number instead, with the buyer's real one leading
+	// the booking note — Lalamove's rule, applied to parcels.
+	const UK_BUYER = "447700900123";
+	const SELLER = "60198765432";
+
+	/** The shared seed plus the store's own WhatsApp number (the shared seed
+	 * has none); `undefined` = a store that never saved one. */
+	async function seedStoreWithPhone(
+		t: ReturnType<typeof setup>,
+		waPhone: string | undefined,
+	) {
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, { waPhone });
+		});
+		return retailer;
+	}
+
+	async function contextFor(
+		t: ReturnType<typeof setup>,
+		retailerId: Id<"retailers">,
+		overrides: Partial<Doc<"orders">>,
+	) {
+		const orderId = await seedOrder(t, retailerId, overrides);
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+			?.shortId as string;
+		const asUser = t.withIdentity({ subject: USER });
+		const context = await asUser.query(internal.delyva.getDispatchContext, {
+			shortId,
+		});
+		if (!context.ok) throw new Error(`expected ok, got ${context.reason}`);
+		const state = await asUser.query(api.delyva.getDispatchState, { shortId });
+		return { context, state };
+	}
+
+	test("a UK buyer: the courier gets the store's number, the buyer's leads the note", async () => {
+		const t = setup();
+		const retailer = await seedStoreWithPhone(t, SELLER);
+		const { context, state } = await contextFor(t, retailer._id, {
+			customer: { name: "Aisha", waPhone: UK_BUYER },
+			customerNote: "Leave with the guard",
+			deliveryAddress: {
+				line1: "7 Jalan Bukit Bintang",
+				city: "Kuala Lumpur",
+				state: "Kuala Lumpur",
+				postcode: "55100",
+				notes: "Blue gate",
+			},
+		});
+		// Bare digits — Delyva takes MSISDNs without the '+'.
+		expect(context.destination.phone).toBe(SELLER);
+		expect(context.origin.phone).toBe(SELLER);
+		expect(context.note?.split(" · ")).toEqual([
+			`Buyer WhatsApp: +${UK_BUYER}`,
+			"Blue gate",
+			"Leave with the guard",
+		]);
+		expect(context.buyerContactFallback).toBe(true);
+		// …and the card hears about it before any quote.
+		expect(state?.buyerContactFallback).toBe(true);
+		expect(state?.country).toBe("MY");
+	});
+
+	test("the cross-border +65 buyer on a Malaysian store falls back too", async () => {
+		const t = setup();
+		const retailer = await seedStoreWithPhone(t, SELLER);
+		const { context } = await contextFor(t, retailer._id, {
+			customer: { name: "Aisha", waPhone: "6581815321" },
+		});
+		expect(context.destination.phone).toBe(SELLER);
+		expect(context.note).toBe("Buyer WhatsApp: +6581815321");
+		expect(context.buyerContactFallback).toBe(true);
+	});
+
+	test("a local buyer keeps their own number — no fallback, nothing added to the note", async () => {
+		const t = setup();
+		const retailer = await seedStoreWithPhone(t, SELLER);
+		const { context, state } = await contextFor(t, retailer._id, {
+			customer: { name: "Aisha", waPhone: "60123456789" },
+		});
+		expect(context.destination.phone).toBe("60123456789");
+		expect(context.note).toBeUndefined();
+		expect(context.buyerContactFallback).toBe(false);
+		expect(state?.buyerContactFallback).toBe(false);
+	});
+
+	test("a store with no number of its own keeps the buyer's — never an empty contact", async () => {
+		const t = setup();
+		const retailer = await seedStoreWithPhone(t, undefined);
+		const { context, state } = await contextFor(t, retailer._id, {
+			customer: { name: "Aisha", waPhone: UK_BUYER },
+		});
+		expect(context.destination.phone).toBe(UK_BUYER);
+		expect(context.note).toBeUndefined();
+		expect(context.buyerContactFallback).toBe(false);
+		// Nothing was swapped, so the card has nothing to warn about.
+		expect(state?.buyerContactFallback).toBe(false);
+	});
+
+	test("an order with no buyer number is not an 'overseas' one — no empty 'Buyer WhatsApp: +' note", async () => {
+		// The pre-existing rule for a number-less order (the courier reaches
+		// the store) stands; it just isn't a fallback worth warning about.
+		const t = setup();
+		const retailer = await seedStoreWithPhone(t, SELLER);
+		const { context, state } = await contextFor(t, retailer._id, {
+			customer: { name: "Aisha" },
+		});
+		expect(context.destination.phone).toBe(SELLER);
+		expect(context.note).toBeUndefined();
+		expect(context.buyerContactFallback).toBe(false);
+		expect(state?.buyerContactFallback).toBe(false);
+	});
+
+	test("a Singapore store judges by ITS country: a +60 buyer is the foreign one", async () => {
+		// Mechanism test — the registry closed Delyva SG (z8r3fdcje2), so the
+		// row re-opens for this test's duration and restores after.
+		COUNTRY_COURIER_BOOKING.delyva.SG = true;
+		try {
+			const t = setup();
+			const retailer = await seedStoreWithPhone(t, "6581815321");
+			await t.run(async (ctx) => {
+				await ctx.db.patch(retailer._id, { country: "SG" });
+			});
+		const { context, state } = await contextFor(t, retailer._id, {
+				currency: "SGD",
+				customer: { name: "Aisha", waPhone: "60123456789" },
+				deliveryAddress: {
+					line1: "1 Raffles Place",
+					city: "Singapore",
+					state: "Singapore",
+					postcode: "048616",
+				},
+			});
+			expect(context.destination.phone).toBe("6581815321");
+			expect(context.note).toBe("Buyer WhatsApp: +60123456789");
+			expect(state?.buyerContactFallback).toBe(true);
+			expect(state?.country).toBe("SG");
+		} finally {
+			COUNTRY_COURIER_BOOKING.delyva.SG = false;
+		}
 	});
 });

@@ -1,0 +1,548 @@
+// @vitest-environment jsdom
+// Admin → Billing → "Issue an invoice": what the form actually bills, and the
+// Enterprise door it now carries (ClickUp z8r3fdpm2p).
+//
+// Enterprise bills a negotiated contract, so a store without one used to find
+// the tier button dead and a line telling it to go to another tab. The tier is
+// now always pickable and the contract is written from here — and a Founding
+// Member on a contract can finally be billed that contract instead of a Pro
+// bill that would end it.
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { type FunctionReference, getFunctionName } from "convex/server";
+import type { ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const state = vi.hoisted(() => ({
+	retailers: [] as Array<Record<string, unknown>>,
+	spots: 5 as number | undefined,
+	issue: vi.fn(),
+	sheetOpen: false,
+	capped: false,
+}));
+
+vi.mock("@tanstack/react-router", () => ({
+	createFileRoute: () => (opts: Record<string, unknown>) => opts,
+	Link: ({ children }: { children: ReactNode }) => <a href="/">{children}</a>,
+}));
+vi.mock("@convex-dev/react-query", () => ({
+	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
+}));
+vi.mock("@tanstack/react-query", () => ({
+	useQuery: (opts: { __fn: FunctionReference<"query"> }) => ({
+		data: getFunctionName(opts.__fn).startsWith("foundingMembers:")
+			? state.spots
+			: { stores: state.retailers, capped: state.capped },
+	}),
+}));
+vi.mock("convex/react", () => ({ useMutation: () => state.issue }));
+// The sheet is the shared contract form in its own chrome, covered by its own
+// tests; here only "did the form open it" matters.
+vi.mock("../components/ui/confirm-dialog", () => ({
+	// The real one is Radix; here only "what did it say, and did confirming
+	// run the issue" matters.
+	ConfirmDialog: ({
+		open,
+		title,
+		description,
+		onConfirm,
+	}: {
+		open: boolean;
+		title: React.ReactNode;
+		description?: React.ReactNode;
+		onConfirm: () => void;
+	}) =>
+		open ? (
+			<div data-testid="confirm">
+				<p>{title}</p>
+				<p>{description}</p>
+				<button type="button" onClick={onConfirm}>
+					Replace it
+				</button>
+			</div>
+		) : null,
+}));
+vi.mock("../components/admin/enterprise-contract-sheet", () => ({
+	EnterpriseContractSheet: ({ open }: { open: boolean }) => {
+		state.sheetOpen = open;
+		return open ? <div data-testid="contract-sheet" /> : null;
+	},
+}));
+
+const { CollapsibleAdminCard, IssueInvoiceForm } = await import(
+	"./app.admin.billing"
+);
+
+afterEach(() => {
+	cleanup();
+	state.retailers = [];
+	state.spots = 5;
+	state.issue = vi.fn();
+	state.sheetOpen = false;
+	state.capped = false;
+});
+
+const CONTRACT = {
+	baseFeeMinor: 88800,
+	currency: "MYR" as const,
+	billingCycle: "monthly" as const,
+	includedCredits: 1500,
+	overageRateMinor: 60,
+	blockSize: 5000,
+	contactName: "Pat Lim",
+	setAt: 1_760_000_000_000,
+};
+
+const store = (overrides: Record<string, unknown> = {}) => ({
+	_id: "r1",
+	storeName: "Hermoolah",
+	slug: "hermoolah",
+	status: "active",
+	plan: "pro",
+	isFoundingMember: false,
+	foundingIntent: false,
+	foundingBenefitsRevoked: false,
+	autoChargeIdle: false,
+	comped: false,
+	unclaimed: false,
+	billingCurrency: "MYR",
+	country: "MY",
+	...overrides,
+});
+
+/** Pick the one store in the picker — every test bills somebody. */
+function pickStore() {
+	fireEvent.change(screen.getByRole("combobox"), { target: { value: "r1" } });
+}
+
+const planButton = (name: "starter" | "pro" | "enterprise") =>
+	screen.getByRole("button", { name: new RegExp(`^${name}$`, "i") });
+
+describe("Issue an invoice — the Enterprise door", () => {
+	it("lets a store with no contract be picked for Enterprise, and says what's missing", () => {
+		state.retailers = [store()];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+
+		// The whole complaint: this used to be disabled, which told the admin
+		// the TIER was unavailable when only the contract was.
+		expect((planButton("enterprise") as HTMLButtonElement).disabled).toBe(
+			false,
+		);
+		fireEvent.click(planButton("enterprise"));
+
+		expect(screen.getByText("No contract yet")).toBeTruthy();
+		expect(
+			(
+				screen.getByRole("button", {
+					name: /issue invoice/i,
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+	});
+
+	it("opens the contract form from the billing card — no second tab", () => {
+		state.retailers = [store()];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+		fireEvent.click(planButton("enterprise"));
+
+		expect(screen.queryByTestId("contract-sheet")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: /set up contract/i }));
+		expect(screen.getByTestId("contract-sheet")).toBeTruthy();
+	});
+
+	it("offers the live contract for editing instead of a dead end", () => {
+		state.retailers = [store({ plan: "enterprise", enterprise: CONTRACT })];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+
+		// A contract store ARMS its contract — Enterprise is already the plan.
+		expect(screen.getByText("Billing their contract")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /edit contract/i }));
+		expect(screen.getByTestId("contract-sheet")).toBeTruthy();
+	});
+
+	it("bills a Founding Member's CONTRACT, not a Pro bill that would end it", async () => {
+		// The pre-fix bug: founding forced Pro for every tier, so a founding
+		// store on a contract drafted a founding Pro invoice — and paying a
+		// non-Enterprise bill is exactly what takes a store OFF its contract.
+		state.retailers = [
+			store({
+				plan: "enterprise",
+				isFoundingMember: true,
+				enterprise: CONTRACT,
+			}),
+		];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+
+		fireEvent.click(screen.getByRole("button", { name: /issue invoice/i }));
+		await vi.waitFor(() => expect(state.issue).toHaveBeenCalled());
+		expect(state.issue).toHaveBeenCalledWith(
+			expect.objectContaining({ plan: "enterprise", founding: false }),
+		);
+	});
+
+	it("still prices a founding store's PRO bill at the founding rate", async () => {
+		state.retailers = [store({ isFoundingMember: true })];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+
+		fireEvent.click(screen.getByRole("button", { name: /issue invoice/i }));
+		await vi.waitFor(() => expect(state.issue).toHaveBeenCalled());
+		expect(state.issue).toHaveBeenCalledWith(
+			expect.objectContaining({ plan: "pro", founding: true }),
+		);
+	});
+
+	it("keeps the Enterprise explainer out of an ordinary Pro bill", () => {
+		state.retailers = [store()];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+
+		// Pro is the default for a store with no contract, and an admin billing
+		// Pro must not be lectured about a tier they didn't pick — the old hint
+		// fired for EVERY selected store without a contract. The contract strip
+		// speaks only while Enterprise is the chosen plan.
+		expect(screen.queryByText("No contract yet")).toBeNull();
+		fireEvent.click(planButton("enterprise"));
+		expect(screen.getByText("No contract yet")).toBeTruthy();
+	});
+});
+
+describe("Issue an invoice — correcting an open bill (z8r3fdpm2p)", () => {
+	const RENEWAL = {
+		_id: "inv1",
+		invoiceNumber: "INV-202610-AAAA",
+		total: 14_900,
+		currency: "MYR",
+		plan: "pro" as const,
+		kind: "plan" as const,
+		origin: "auto_renewal" as const,
+	};
+
+	it("offers to replace the open bill instead of dead-ending", () => {
+		// The old copy sent the admin to another card to void it by hand.
+		state.retailers = [store({ pending: RENEWAL, autoChargeIdle: true })];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+
+		const btn = screen.getByRole("button", { name: /replace open bill/i });
+		expect((btn as HTMLButtonElement).disabled).toBe(false);
+		expect(screen.queryByText(/settle it first/i)).toBeNull();
+		expect(screen.getByText(/INV-202610-AAAA is open for/)).toBeTruthy();
+	});
+
+	it("promises the card charge only on a correction that costs no more", () => {
+		state.retailers = [store({ pending: RENEWAL, autoChargeIdle: true })];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+
+		// Default Pro (RM149) replacing a RM149 renewal — inside the mandate.
+		expect(screen.getByText(/will be charged/)).toBeTruthy();
+
+		// Starter is cheaper still — also inside it.
+		fireEvent.click(planButton("starter"));
+		expect(screen.getByText(/will be charged/)).toBeTruthy();
+	});
+
+	it("refuses to replace while a card charge is unresolved", () => {
+		// `chargeInFlight` is its own fact now: `autoChargeIdle === false` is
+		// ALSO true for a detached method and a stranded charge, and refusing
+		// those said "hasn't reported back yet" about a replace the server
+		// would have allowed (review, 7 Oct).
+		state.retailers = [
+			store({ pending: RENEWAL, autoChargeIdle: false, chargeInFlight: true }),
+		];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+
+		expect(
+			(
+				screen.getByRole("button", {
+					name: /replace open bill/i,
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(true);
+		expect(screen.getByText(/hasn't reported back yet/)).toBeTruthy();
+	});
+
+	it("allows the replace when the card is merely detached or stranded", () => {
+		// `autoChargeIdle` is false for THREE different reasons; only one of
+		// them is "a charge is in flight". A stranded charge or a detached
+		// method used to produce a disabled button reading "hasn't reported
+		// back yet" about a replace the server would have allowed.
+		state.retailers = [
+			store({ pending: RENEWAL, autoChargeIdle: false, chargeInFlight: false }),
+		];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+
+		expect(
+			(
+				screen.getByRole("button", {
+					name: /replace open bill/i,
+				}) as HTMLButtonElement
+			).disabled,
+		).toBe(false);
+		expect(screen.queryByText(/hasn't reported back yet/)).toBeNull();
+		// …and it is honest that no card will follow this one.
+		expect(screen.getByText(/won't charge this automatically/)).toBeTruthy();
+	});
+
+	it("names the bill it will void before replacing it", async () => {
+		state.retailers = [store({ pending: RENEWAL, autoChargeIdle: true })];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+
+		fireEvent.click(screen.getByRole("button", { name: /replace open bill/i }));
+		expect(screen.getByTestId("confirm")).toBeTruthy();
+		expect(screen.getByText(/Replace INV-202610-AAAA\?/)).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: "Replace it" }));
+		await vi.waitFor(() => expect(state.issue).toHaveBeenCalled());
+		expect(state.issue).toHaveBeenCalledWith(
+			expect.objectContaining({ replacePendingId: "inv1" }),
+		);
+	});
+});
+
+describe("Issue an invoice — what paying does to the tier (z8r3fdpm2p)", () => {
+	it("warns that an admin DOWNGRADE lands immediately, unlike a seller's own", () => {
+		// The surprising half: `settleInvoicePaid` flips the plan at once, while
+		// a seller's own downgrade is scheduled to the period end.
+		state.retailers = [store({ plan: "pro" })];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+		fireEvent.click(planButton("starter"));
+
+		expect(screen.getByText(/down to Starter straight away/)).toBeTruthy();
+		expect(screen.getByText(/unlike a seller's own downgrade/)).toBeTruthy();
+	});
+
+	it("says an upgrade lands on payment, never before", () => {
+		state.retailers = [store({ plan: "starter" })];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+		fireEvent.click(planButton("pro"));
+
+		expect(screen.getByText(/from Starter to Pro — not before/)).toBeTruthy();
+	});
+
+	it("says nothing when the bill isn't a tier change at all", () => {
+		state.retailers = [store({ plan: "pro" })];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+		expect(screen.queryByText(/straight away|not before/)).toBeNull();
+	});
+});
+
+describe("Issue an invoice — the picker's cap (z8r3fdpm2p)", () => {
+	it("says so when the book runs past the list, and names the way out", () => {
+		// The picker is newest-first, so a truncated list is missing the OLDEST
+		// stores — and silently, which is the constraint-enforced-silently
+		// CLAUDE.md forbids. It bites sooner than the number suggests: batch
+		// pre-building (PR #346) adds placeholder stores at the NEWEST end, so
+		// a batch pushes exactly that many real customers off.
+		state.retailers = [store()];
+		state.capped = true;
+		render(<IssueInvoiceForm defaultOpen />);
+
+		expect(screen.getByText(/Showing the newest 500 stores/)).toBeTruthy();
+		// The way out, not just the bad news.
+		expect(screen.getByText(/Admin · Sellers/)).toBeTruthy();
+	});
+
+	it("stays quiet when the whole book fits", () => {
+		state.retailers = [store()];
+		state.capped = false;
+		render(<IssueInvoiceForm defaultOpen />);
+		expect(screen.queryByText(/Showing the newest/)).toBeNull();
+	});
+});
+
+describe("Issue an invoice — the currency is the store's country's, never a pick (86eyp7hn7)", () => {
+	const issueButton = () =>
+		screen.getByRole("button", { name: /issue invoice/i });
+	const sgStore = (overrides: Record<string, unknown> = {}) =>
+		store({ billingCurrency: "SGD", country: "SG", ...overrides });
+
+	it("an SG founding store bills S$41, and the form says its country set that", () => {
+		state.retailers = [sgStore({ isFoundingMember: true })];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+
+		expect(screen.getByText("S$ (SGD)")).toBeTruthy();
+		expect(screen.getByText(/S\$\s?41\.00/)).toBeTruthy();
+		expect(
+			screen.getByText(
+				"Set by its country (Singapore). To bill another currency, change the store's country first (act as it → Settings) — that also turns off its auto-renewal.",
+			),
+		).toBeTruthy();
+		fireEvent.click(issueButton());
+		// The server sets the currency itself — the form never sends one.
+		expect(state.issue).toHaveBeenCalledWith(
+			expect.objectContaining({ founding: true, plan: "pro" }),
+		);
+		expect(state.issue.mock.calls[0][0]).not.toHaveProperty("currency");
+	});
+
+	it("offers no currency to pick — there is no way to bill an SG store in RM here", () => {
+		// The picker that defaulted to MYR is what billed a Singapore store in
+		// ringgit; the rule is structural now, not a default.
+		state.retailers = [sgStore()];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+		expect(screen.queryByRole("button", { name: /RM \(MYR\)/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /S\$ \(SGD\)/ })).toBeNull();
+	});
+
+	it("each store shows its own country's currency as you switch between them", () => {
+		state.retailers = [
+			store(),
+			sgStore({ _id: "r2", storeName: "Lion City Bakes", slug: "lcb" }),
+		];
+		render(<IssueInvoiceForm defaultOpen />);
+		expect(screen.getByText("Follows the store's country.")).toBeTruthy();
+		pickStore();
+		expect(screen.getByText("RM (MYR)")).toBeTruthy();
+		expect(screen.getByText(/Set by its country \(Malaysia\)/)).toBeTruthy();
+		fireEvent.change(screen.getByRole("combobox"), { target: { value: "r2" } });
+		expect(screen.getByText("S$ (SGD)")).toBeTruthy();
+		expect(screen.getByText(/Set by its country \(Singapore\)/)).toBeTruthy();
+	});
+});
+
+// z8r3fdzn6r: the billing tab folds each section to one line that carries its
+// state, so the tab reads as a list of jobs instead of a wall of forms.
+describe("Issue an invoice — folded to one line", () => {
+	const header = () =>
+		screen.getByRole("button", { name: /^Issue an invoice/ });
+
+	it("starts closed with a summary of what it does, and opens from its header", () => {
+		state.retailers = [store()];
+		render(<IssueInvoiceForm />);
+		expect(header().getAttribute("aria-expanded")).toBe("false");
+		expect(header().textContent).toMatch(/Bill an existing store/);
+		// Closed means closed: the picker is not reachable.
+		expect(screen.queryByRole("combobox")).toBeNull();
+
+		fireEvent.click(header());
+		expect(header().getAttribute("aria-expanded")).toBe("true");
+		expect(screen.getByRole("combobox")).toBeTruthy();
+	});
+
+	it("a fold keeps the draft, and the folded line says there is one", () => {
+		state.retailers = [store()];
+		render(<IssueInvoiceForm defaultOpen />);
+		pickStore();
+		fireEvent.click(header());
+
+		expect(header().textContent).toMatch(/Draft in progress · Hermoolah/);
+		fireEvent.click(header());
+		expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe(
+			"r1",
+		);
+	});
+});
+
+// Hands-on test, 2 Nov: a deep-linked card scrolled into view once, then the
+// sections above it loaded and pushed it out of sight. It now follows every
+// layout shift until the page settles — and stops the moment the admin moves.
+// Only a DEEP-LINKED card does this: a card that merely starts open (Pending
+// invoices, every visit) must leave the page where it is.
+describe("a deep-linked card stays in view while the page settles", () => {
+	const deepLinkedCard = () => (
+		<CollapsibleAdminCard
+			icon={null}
+			title="Onboard a client"
+			description="How to use it"
+			summary="Nothing in progress"
+			deepLinked
+		>
+			<p>panel</p>
+		</CollapsibleAdminCard>
+	);
+
+	it("re-scrolls on each layout shift and stops once the admin scrolls", () => {
+		vi.useFakeTimers();
+		const scroll = vi.fn();
+		Element.prototype.scrollIntoView = scroll;
+		let shift: () => void = () => {};
+		vi.stubGlobal(
+			"ResizeObserver",
+			class {
+				constructor(cb: () => void) {
+					shift = cb;
+				}
+				observe() {}
+				disconnect() {
+					shift = () => {};
+				}
+			},
+		);
+		render(deepLinkedCard());
+		expect(scroll).toHaveBeenCalledTimes(1);
+
+		// The list above it loads: the card is brought back.
+		shift();
+		expect(scroll).toHaveBeenCalledTimes(2);
+
+		// The admin's own move wins — no more pulling the page around.
+		window.dispatchEvent(new Event("wheel"));
+		shift();
+		expect(scroll).toHaveBeenCalledTimes(2);
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	it("lets go once the page has held still", () => {
+		vi.useFakeTimers();
+		const scroll = vi.fn();
+		Element.prototype.scrollIntoView = scroll;
+		let shift: () => void = () => {};
+		vi.stubGlobal(
+			"ResizeObserver",
+			class {
+				constructor(cb: () => void) {
+					shift = cb;
+				}
+				observe() {}
+				disconnect() {
+					shift = () => {};
+				}
+			},
+		);
+		render(deepLinkedCard());
+		vi.advanceTimersByTime(1000);
+		shift();
+		expect(scroll).toHaveBeenCalledTimes(1);
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	it("a card opened by hand never scrolls the page", () => {
+		const scroll = vi.fn();
+		Element.prototype.scrollIntoView = scroll;
+		state.retailers = [store()];
+		render(<IssueInvoiceForm />);
+		fireEvent.click(screen.getByRole("button", { name: /^Issue an invoice/ }));
+		expect(scroll).not.toHaveBeenCalled();
+	});
+
+	// Review, 2 Nov: the scroll was keyed on `defaultOpen`, so Pending invoices
+	// — open by default on EVERY visit — pulled the page past the stat tiles
+	// and the tab fork on a plain load. Starting open is not a deep link.
+	it("a card that merely starts open leaves the page where it is", () => {
+		const scroll = vi.fn();
+		Element.prototype.scrollIntoView = scroll;
+		state.retailers = [store()];
+		render(<IssueInvoiceForm defaultOpen />);
+		expect(
+			screen
+				.getByRole("button", { name: /^Issue an invoice/ })
+				.getAttribute("aria-expanded"),
+		).toBe("true");
+		expect(scroll).not.toHaveBeenCalled();
+	});
+});

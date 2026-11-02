@@ -91,7 +91,7 @@ export function CategoryPicker({
 				>
 					{locked
 						? "Adding products to categories is part of the Pro plan. You can still remove this product from its current categories."
-						: "Pick where this product appears when buyers browse by category. It always stays in the “All products” view."}
+						: "Pick where this product appears when buyers browse by category. It always stays in the “All products” view. Your orders can be filtered by category too: adding one also files this product's earlier uncategorized orders."}
 				</p>
 			</div>
 
@@ -136,8 +136,11 @@ export function CategoryPicker({
 								>
 									<span
 										className={`flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors ${
+											// --accent goes LIGHTER in dark, where a hardcoded white
+											// tick fails contrast on it. --accent-foreground is pure
+											// white in light, so only the dark rendering moves.
 											isSelected
-												? "border-accent bg-accent text-white"
+												? "border-accent bg-accent text-accent-foreground"
 												: "border-input bg-background"
 										}`}
 									>

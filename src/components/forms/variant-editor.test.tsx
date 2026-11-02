@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+	act,
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+} from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // default vitest environment is edge-runtime.)
 vi.mock("convex/react", () => ({ useMutation: () => vi.fn() }));
 
+import { DISCLOSURE_PANEL_ATTR, REVEAL_EVENT } from "../ui/question-row";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
 import {
 	isMadeToOrderOnly,
@@ -19,9 +26,22 @@ import {
 afterEach(cleanup);
 
 /** Controlled wrapper so toggles reflect back into state during the test. */
-function Harness({ initial }: { initial: VariantEditorState }) {
+function Harness({
+	initial,
+	collapseChoices,
+}: {
+	initial: VariantEditorState;
+	collapseChoices?: boolean;
+}) {
 	const [state, setState] = useState(initial);
-	return <VariantEditor value={state} onChange={setState} currency="RM" />;
+	return (
+		<VariantEditor
+			value={state}
+			onChange={setState}
+			currency="MYR"
+			collapseChoices={collapseChoices}
+		/>
+	);
 }
 
 const singleVariant: VariantEditorState = {
@@ -59,9 +79,9 @@ const withOptions: VariantEditorState = {
 };
 
 describe("VariantEditor — the promoted questions", () => {
-	it("asks 'What kind of product is it?' with Just one item selected for a single product", () => {
+	it("asks 'Does the buyer choose anything?' with Just one item selected for a single product", () => {
 		render(<Harness initial={singleVariant} />);
-		expect(screen.getByText(/what kind of product is it/i)).toBeTruthy();
+		expect(screen.getByText(/does the buyer choose anything/i)).toBeTruthy();
 		expect(
 			screen
 				.getByRole("button", { name: /just one item/i })
@@ -296,6 +316,63 @@ describe("VariantEditor — vary per choice", () => {
 	});
 });
 
+describe("VariantEditor — the variant cap (z8r3fdjgvd)", () => {
+	/** A state whose two axes multiply to `a × b` combinations. */
+	function grid(a: number, b: number): VariantEditorState {
+		const av = Array.from({ length: a }, (_, i) => `a${i}`);
+		const bv = Array.from({ length: b }, (_, i) => `b${i}`);
+		return {
+			options: [
+				{ name: "Adult 1 size", values: av },
+				{ name: "Adult 2 size", values: bv },
+			],
+			rows: av.flatMap((x) =>
+				bv.map((y) => ({
+					optionValues: [x, y],
+					sku: "",
+					price: "10",
+					stock: "1",
+					active: true,
+					blockWhenOutOfStock: true,
+					requiresProof: false,
+					parcelWeightG: "",
+					imageStorageIds: [],
+				})),
+			),
+			customLine: null,
+		};
+	}
+
+	it("accepts the 56-combination two-size grid the cap was raised for", () => {
+		render(<Harness initial={grid(7, 8)} />);
+		expect(screen.getByText("56 choices")).toBeTruthy();
+		expect(screen.queryByText(/over the limit/)).toBeNull();
+	});
+
+	it("refuses past 100 and says how many to remove", () => {
+		render(<Harness initial={grid(11, 10)} />);
+		expect(
+			screen.getAllByText(/110 choices — 10 over the limit of 100/).length,
+		).toBeGreaterThan(0);
+		// The consequence, not just the fact.
+		expect(
+			screen.getAllByText(/Remove option values to get under it/).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("reports the breach on the axis editor, not only after the price grid", () => {
+		// The cap is broken by adding a VALUE, so the message has to live with the
+		// control that adds one — at the cap the grid below is ~13,000px long, and
+		// a message under it is off-screen for the whole edit.
+		render(<Harness initial={grid(11, 10)} />);
+		const notice = screen.getAllByText(/over the limit of 100/)[0];
+		const axisName = screen.getByDisplayValue("Adult 1 size");
+		// Same axis card: the notice is inside the container that holds the name
+		// field and its value chips.
+		expect(axisName.closest("div")?.parentElement?.contains(notice)).toBe(true);
+	});
+});
+
 describe("VariantEditor — Advanced disclosure", () => {
 	it("keeps SKU, approval and the custom option collapsed by default", () => {
 		render(<Harness initial={singleVariant} />);
@@ -349,7 +426,7 @@ describe("VariantEditor — Advanced disclosure", () => {
 					},
 				}}
 				onChange={() => {}}
-				currency="RM"
+				currency="MYR"
 				issues={[
 					{
 						where: "custom",
@@ -425,7 +502,7 @@ describe("VariantEditor — inline submit issues", () => {
 					rows: [{ ...singleVariant.rows[0], price: "", stock: "" }],
 				}}
 				onChange={() => {}}
-				currency="RM"
+				currency="MYR"
 				issues={[
 					{
 						where: "row",
@@ -458,7 +535,7 @@ describe("VariantEditor — inline submit issues", () => {
 			<VariantEditor
 				value={withOptions}
 				onChange={() => {}}
-				currency="RM"
+				currency="MYR"
 				issues={[
 					{
 						where: "row",
@@ -485,7 +562,7 @@ describe("VariantEditor — inline submit issues", () => {
 					rows: [],
 				}}
 				onChange={() => {}}
-				currency="RM"
+				currency="MYR"
 				issues={[
 					{
 						where: "option",
@@ -510,5 +587,334 @@ describe("VariantEditor — inline submit issues", () => {
 		).toBeTruthy();
 		const nameInput = screen.getByPlaceholderText("Option name (e.g. Size)");
 		expect(nameInput.getAttribute("aria-invalid")).toBe("true");
+	});
+});
+
+describe("stock left the product save (86eypn8ye)", () => {
+	const live = [
+		{
+			variantId: "v1" as never,
+			optionValues: [],
+			onHand: 20,
+		},
+	];
+
+	it("a SAVED variant shows its live count read-only, with Adjust", () => {
+		// The bug this closes: a stock input rendered here holds a number that
+		// goes stale while the form is open, and Save wrote it back.
+		render(
+			<VariantEditor
+				value={singleVariant}
+				onChange={() => {}}
+				currency="MYR"
+				liveStock={live}
+				productName="Keropok Lekor"
+			/>,
+		);
+		expect(screen.getByText("In stock")).toBeTruthy();
+		expect(screen.getByText("20")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Adjust" })).toBeTruthy();
+		// The editable stepper is gone — the seller cannot change stock as a side
+		// effect of saving something else.
+		expect(screen.queryByLabelText("Stock on hand")).toBe(null);
+		expect(screen.queryByText("In stock now")).toBe(null);
+	});
+
+	it("price and stock are the same height — both on the 44px field size", () => {
+		// They sit side by side in one row, so a mismatch reads as a broken
+		// input rather than a deliberate one. PriceInput was the last control in
+		// this card still on the compact `default` variant (h-8) while the stock
+		// control beside it, and the name/description fields above it, were all
+		// h-11. Also the mobile-first tap-target floor.
+		render(
+			<VariantEditor
+				value={singleVariant}
+				onChange={() => {}}
+				currency="MYR"
+			/>,
+		);
+		const price = screen.getByPlaceholderText("0.00");
+		expect(price.className).toContain("min-h-11");
+		expect(price.className).not.toContain("h-8");
+
+		// Its partner control, for the pairing this test exists to protect.
+		const stock = screen.getByLabelText("Stock on hand");
+		expect(stock.closest("div")?.className).toContain("h-11");
+	});
+
+	it("a NEW row keeps its stock input", () => {
+		// No liveStock entry means the grid is INSERTING this combination: it has
+		// no stock of its own to protect, so the typed number is the only truth.
+		render(
+			<VariantEditor
+				value={singleVariant}
+				onChange={() => {}}
+				currency="MYR"
+			/>,
+		);
+		expect(screen.getByText("In stock now")).toBeTruthy();
+		expect(screen.getByLabelText("Stock on hand")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Adjust" })).toBe(null);
+	});
+
+	it("the live count is matched to a row the way the SERVER matches it", () => {
+		// `(isCustom, optionValues)`, positionally — the same rule
+		// `saveVariantGrid` uses. If the two ever disagree, a row would show a
+		// read-only cell for a variant the server is about to insert instead.
+		render(
+			<VariantEditor
+				value={withOptions}
+				onChange={() => {}}
+				currency="MYR"
+				liveStock={[
+					{ variantId: "vS" as never, optionValues: ["S"], onHand: 7 },
+				]}
+				productName="Tee"
+			/>,
+		);
+		// The S row resolved; the others did not and keep their inputs.
+		expect(screen.getByText("7")).toBeTruthy();
+		expect(screen.getAllByRole("button", { name: "Adjust" })).toHaveLength(1);
+		expect(screen.getAllByLabelText("Stock on hand").length).toBeGreaterThan(0);
+	});
+});
+
+describe("VariantEditor — the choice list collapses on edit (z8r3fdwnyk)", () => {
+	const header = () =>
+		screen.getByRole("button", { name: /the choices & prices/i });
+	const panel = () =>
+		document.querySelector<HTMLElement>(`[${DISCLOSURE_PANEL_ATTR}]`);
+	const priceInputs = () =>
+		Array.from(document.querySelectorAll<HTMLInputElement>("input")).filter(
+			(i) => i.placeholder === "0.00",
+		);
+
+	it("is closed by default, with the list's state on the header line", () => {
+		render(<Harness initial={withOptions} collapseChoices />);
+		expect(header().getAttribute("aria-expanded")).toBe("false");
+		expect(panel()?.hidden).toBe(true);
+		// The rows stay mounted (a half-typed price survives a collapse).
+		expect(priceInputs()).toHaveLength(2);
+		expect(document.querySelector("[data-choices-answer]")?.textContent).toBe(
+			"2 choices · RM\u00a010",
+		);
+	});
+
+	it("the header toggles the list both ways", () => {
+		render(<Harness initial={withOptions} collapseChoices />);
+		fireEvent.click(header());
+		expect(header().getAttribute("aria-expanded")).toBe("true");
+		expect(panel()?.hidden).toBe(false);
+		fireEvent.click(header());
+		expect(panel()?.hidden).toBe(true);
+	});
+
+	it("a long open list can be closed from its foot, not only from its header", () => {
+		const many: VariantEditorState = {
+			...withOptions,
+			options: [{ name: "Size", values: ["S", "M", "L", "XL"] }],
+			rows: ["S", "M", "L", "XL"].map((v) => ({
+				...withOptions.rows[0],
+				optionValues: [v],
+			})),
+		};
+		render(<Harness initial={many} collapseChoices />);
+		fireEvent.click(header());
+		fireEvent.click(screen.getByRole("button", { name: "Hide the 4 choices" }));
+		expect(panel()?.hidden).toBe(true);
+		expect(header().getAttribute("aria-expanded")).toBe("false");
+	});
+
+	it("stays a plain, always-open list on create (no collapseChoices)", () => {
+		render(<Harness initial={withOptions} />);
+		expect(
+			screen.queryByRole("button", { name: /the choices & prices/i }),
+		).toBeNull();
+		expect(panel()).toBeNull();
+		expect(screen.getByText("The choices & prices")).toBeTruthy();
+	});
+
+	it("opens itself when the seller adds a choice — its new row has no price yet", () => {
+		render(<Harness initial={withOptions} collapseChoices />);
+		const add = screen.getByPlaceholderText("Add value");
+		fireEvent.change(add, { target: { value: "L" } });
+		fireEvent.click(screen.getByRole("button", { name: "Add value" }));
+		expect(panel()?.hidden).toBe(false);
+		expect(priceInputs()).toHaveLength(3);
+	});
+
+	it("opens itself when a refused save points at a choice's price", () => {
+		render(
+			<VariantEditor
+				value={withOptions}
+				onChange={() => {}}
+				currency="MYR"
+				collapseChoices
+				issues={[
+					{
+						where: "row",
+						index: 1,
+						field: "price",
+						message: "Enter a price (e.g. 120 or 120.50).",
+					},
+				]}
+			/>,
+		);
+		expect(panel()?.hidden).toBe(false);
+	});
+
+	it("answers focus-error's reveal event, like a question row", () => {
+		render(<Harness initial={withOptions} collapseChoices />);
+		const el = panel();
+		expect(el?.hidden).toBe(true);
+		act(() => {
+			el?.dispatchEvent(new CustomEvent(REVEAL_EVENT));
+		});
+		expect(panel()?.hidden).toBe(false);
+	});
+
+	describe("Advanced on edit (z8r3fdwnyk test-code F1)", () => {
+		const loaded: VariantEditorState = {
+			options: [
+				{ name: "Size", values: ["S", "M"] },
+				{ name: "Colour", values: ["Red", "Blue"] },
+			],
+			rows: ["S", "M"].flatMap((sz) =>
+				["Red", "Blue"].map((c, ci) => ({
+					...withOptions.rows[0],
+					optionValues: [sz, c],
+					sku: sz === "S" && ci === 0 ? "TEE-S-R" : "",
+					parcelWeightG: "500",
+				})),
+			),
+			customLine: null,
+		};
+		const advHeader = () => screen.getByRole("button", { name: /^advanced/i });
+		const panels = () =>
+			Array.from(
+				document.querySelectorAll<HTMLElement>(`[${DISCLOSURE_PANEL_ATTR}]`),
+			);
+
+		it("starts closed even when it holds config, and says what it holds", () => {
+			render(<Harness initial={loaded} collapseChoices />);
+			expect(advHeader().getAttribute("aria-expanded")).toBe("false");
+			expect(
+				document.querySelector("[data-advanced-answer]")?.textContent,
+			).toBe("Second choice: Colour · 1 SKU · 4 parcel weights");
+		});
+
+		it("without collapseChoices it still forces itself open (wizard / create)", () => {
+			render(<Harness initial={loaded} />);
+			expect(advHeader().getAttribute("aria-expanded")).toBe("true");
+		});
+
+		it("opened, its per-choice details are folded too, behind their own line", () => {
+			render(<Harness initial={loaded} collapseChoices />);
+			fireEvent.click(advHeader());
+			const details = screen.getByRole("button", {
+				name: /per-choice details/i,
+			});
+			expect(details.getAttribute("aria-expanded")).toBe("false");
+			expect(details.textContent).toContain(
+				"4 choices · 1 SKU · 4 parcel weights",
+			);
+			// Second panel = the details list; its SKU inputs stay mounted.
+			expect(panels()[1]?.hidden).toBe(true);
+			expect(screen.getByLabelText("SKU for S / Red")).toBeTruthy();
+			fireEvent.click(details);
+			expect(panels()[1]?.hidden).toBe(false);
+		});
+
+		it("a refused parcel weight opens Advanced AND its details", () => {
+			render(
+				<VariantEditor
+					value={loaded}
+					onChange={() => {}}
+					currency="MYR"
+					collapseChoices
+					issues={[
+						{
+							where: "row",
+							index: 2,
+							field: "weight",
+							message: "Whole grams only (e.g. 500 for half a kilo).",
+						},
+					]}
+				/>,
+			);
+			expect(advHeader().getAttribute("aria-expanded")).toBe("true");
+			expect(
+				screen
+					.getByRole("button", { name: /per-choice details/i })
+					.getAttribute("aria-expanded"),
+			).toBe("true");
+		});
+	});
+});
+
+describe("VariantEditor — parcel weight where pricing depends on it (23 Oct 2026)", () => {
+	it("a courier store promotes the weight, marks it required, and says the floor — never 'can't be priced'", () => {
+		const { container } = render(
+			<VariantEditor
+				value={singleVariant}
+				onChange={() => {}}
+				currency="MYR"
+				weightPricing="courier"
+			/>,
+		);
+		expect(container.textContent).toContain("Parcel weight");
+		expect(container.textContent).toContain("(required)");
+		expect(container.textContent).toContain("Your couriers price by weight");
+		expect(container.textContent).toContain("1 kg parcel");
+		expect(container.textContent).not.toContain("can't be priced");
+		const input = screen.getByLabelText(/parcel weight in grams/i);
+		expect(input.getAttribute("aria-required")).toBe("true");
+	});
+
+	it("a rate-card store says the order can't be priced, and never mentions a floor", () => {
+		const { container } = render(
+			<VariantEditor
+				value={singleVariant}
+				onChange={() => {}}
+				currency="MYR"
+				weightPricing="rate_card"
+			/>,
+		);
+		expect(container.textContent).toContain(
+			"Your rate card prices delivery by weight",
+		);
+		expect(container.textContent).toContain("can't be priced");
+		expect(container.textContent).not.toContain("1 kg");
+	});
+
+	it("an off-sale row is not required — it can't be ordered", () => {
+		render(
+			<VariantEditor
+				value={{
+					...singleVariant,
+					rows: [{ ...singleVariant.rows[0], active: false }],
+				}}
+				onChange={() => {}}
+				currency="MYR"
+				weightPricing="courier"
+			/>,
+		);
+		expect(
+			screen
+				.getByLabelText(/parcel weight in grams/i)
+				.getAttribute("aria-required"),
+		).toBeNull();
+	});
+
+	it("a store that doesn't price by weight keeps the weight optional, inside Advanced", () => {
+		const { container } = render(
+			<VariantEditor
+				value={singleVariant}
+				onChange={() => {}}
+				currency="MYR"
+			/>,
+		);
+		expect(container.textContent).not.toContain("(required)");
+		expect(container.textContent).not.toContain("price by weight");
 	});
 });

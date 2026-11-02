@@ -9,25 +9,24 @@ import {
 	ChevronRight,
 	ClipboardList,
 	CreditCard,
-	Info,
 	Landmark,
 	MapPinned,
 	MessageCircle,
+	Moon,
 	Plug,
 	Plus,
 	QrCode,
 	ReceiptText,
-	ShieldCheck,
 	Store,
 	Trash2,
-	UtensilsCrossed,
-	Wrench,
+	UsersRound,
 } from "lucide-react";
 import {
 	type FormEvent,
 	type ReactNode,
 	useCallback,
 	useEffect,
+	useId,
 	useState,
 } from "react";
 import { toast } from "sonner";
@@ -46,15 +45,11 @@ import {
 	type DeliveryConfig,
 	deliveryModeAllowed,
 } from "../../convex/lib/delivery";
-import { STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
+import { storeBillingCurrency } from "../../convex/lib/plans";
+import { STORE_NAME_MAX, STORED_MOBILE_PATTERN } from "../../convex/lib/slug";
 import { STORE_DESCRIPTION_MAX } from "../../convex/lib/storeProfile";
-import {
-	defaultTemplate,
-	type Locale,
-	type MessageTemplates,
-	TEMPLATE_KEYS,
-	type TemplateKey,
-} from "../../convex/lib/whatsappCopy";
+import type { Locale } from "../../convex/lib/whatsappCopy";
+import { AreaGate } from "../components/app/area-gate";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -62,13 +57,42 @@ import {
 import { TierPill } from "../components/dashboard/tier-pill";
 import { submitThenFocusError } from "../components/forms/focus-error";
 import { useAppForm } from "../components/forms/form";
+import { AppearanceTab } from "../components/settings/appearance-tab";
 import { BillingTab } from "../components/settings/billing-tab";
 import { BookingsTab } from "../components/settings/bookings-tab";
 import { CountrySetupPanel } from "../components/settings/country-setup-panel";
+import { CreditTopUpDialog } from "../components/settings/credit-top-up-dialog";
 import { FulfilmentTab } from "../components/settings/fulfilment-tab";
+import {
+	HitpayAccountCard,
+	HowBuyersPayCard,
+} from "../components/settings/how-buyers-pay-card";
 import { IntegrationsTab } from "../components/settings/integrations-tab";
-import { NotificationsCard } from "../components/settings/notifications-card";
-import { WaOrderAlertsCard } from "../components/settings/wa-order-alerts-card";
+import { MarketplaceCard } from "../components/settings/marketplace-card";
+import { MessageTemplatesForm } from "../components/settings/message-templates-form";
+import { OrderAlertsCard } from "../components/settings/order-alerts-card";
+import { OrderFlowsSection } from "../components/settings/order-flows-card";
+import {
+	SettingsIndex,
+	SettingsRail,
+	storeGlance,
+	type TabGlance,
+} from "../components/settings/settings-nav";
+import {
+	Card,
+	ExpandableRow,
+	Glance,
+	HelperBullets,
+	InfoDisclosure,
+	SAVE_BTN_CLASS,
+	SectionHeading,
+	SectionLabel,
+	SettingsColumns,
+	SettingsSection,
+} from "../components/settings/settings-primitives";
+import { StoreStatusCard } from "../components/settings/store-status-card";
+import { StorefrontChatCard } from "../components/settings/storefront-chat-card";
+import { TeamTab } from "../components/settings/team-tab";
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -76,47 +100,47 @@ import {
 	MOBILE_PLACEHOLDER,
 	MyPhonePrefix,
 } from "../components/ui/my-phone-input";
+import { Select } from "../components/ui/select";
 import { Skeleton } from "../components/ui/skeleton";
 import { SortableList } from "../components/ui/sortable-list";
 import {
 	useActAsRetailerId,
 	useDashboardRetailer,
 } from "../hooks/useDashboardRetailer";
+import { usePermission } from "../hooks/usePermission";
 import { useRevealOnAdd } from "../hooks/useRevealOnAdd";
 import { useSlugAvailability } from "../hooks/useSlugAvailability";
 import { useUpdateSettings } from "../hooks/useUpdateSettings";
 import {
+	autoRenewMethodPhrase,
 	type CardTarget,
 	type FixHighlight,
 	highlightFor,
-	highlightRingClass,
+	revealAnchorWhenMounted,
 	SETTINGS_ANCHOR,
-	scrollToAnchor,
 } from "../lib/country-setup-copy";
-import { convexErrorMessage } from "../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../lib/image-upload";
+import { parseTopUpParam, type TopUpParam } from "../lib/credit-top-up";
+import { PRICING_MODE_UI, pricingModeOf } from "../lib/delivery-modes";
 import {
-	ANCHOR_UI_LABELS,
-	collectStageConfigErrors,
-	MAX_ORDER_STAGES,
-	type OrderStage,
-	resolveStages,
-	STAGE_ANCHORS,
-	STAGE_DESCRIPTION_MAX_LENGTH,
-	STAGE_LABEL_MAX_LENGTH,
-	type StageAnchor,
-} from "../lib/orderStatus";
+	convexErrorMessage,
+	currencySymbol,
+	formatMobile,
+} from "../lib/format";
+import { IMAGE_ACCEPT } from "../lib/image-upload";
+import { integrationsGlance } from "../lib/integrations-glance";
+import { NOTE_LINK_HINT } from "../lib/linkify";
+import { LOCALE_LABELS } from "../lib/message-templates";
+import type { StatusLabels } from "../lib/orderStatus";
 import { normalizeMobileDigits, toNationalPhoneInput } from "../lib/phone";
 import { reorderByIds } from "../lib/reorder";
-import {
-	settingsNotifyEmailFormSchema,
-	settingsWaPhoneFormSchema,
-} from "../lib/schemas";
+import { settingsWaPhoneFormSchema } from "../lib/schemas";
+import { validateStoreName } from "../lib/slug";
 import {
 	isSettingsSpotlightKey,
-	SPOTLIGHT_ANCHOR,
 	type SettingsSpotlightKey,
+	SPOTLIGHT_ANCHOR,
 } from "../lib/spotlight";
+import { uploadImage } from "../lib/storage-upload";
 import { hasFeature, tierPill } from "../lib/subscription";
 import { cn } from "../lib/utils";
 
@@ -136,23 +160,17 @@ const LOCALE_OPTIONS = [
 	{ value: "zh", label: "中文" },
 ] as const;
 
-// Shared display label for a locale, used by the language card, the WhatsApp
-// template tabs, and the locale-picker `<select>`s below.
-const LOCALE_LABELS: Record<Locale, string> = {
-	en: "English",
-	ms: "Bahasa Malaysia",
-	zh: "中文",
-};
-
 type SettingsTab =
 	| "store"
+	| "team"
 	| "billing"
 	| "whatsapp"
 	| "payments"
 	| "fulfilment"
 	| "integrations"
 	| "bookings"
-	| "order-status";
+	| "order-status"
+	| "appearance";
 
 // Legacy deep-link support: the fulfilment tab used to be "pickup" (self-collect
 // only). Old bookmarks / checklist links carry `?tab=pickup` — normalise them so
@@ -172,6 +190,14 @@ const SETTINGS_TABS: ReadonlyArray<{
 		label: "Store",
 		description: "Name, logo, URL and currency",
 		icon: <Store className="size-4" />,
+	},
+	// Team sits between the store's identity and its money (Store group): who
+	// operates the store is an account-level fact, not a "how you sell" one.
+	{
+		id: "team",
+		label: "Team",
+		description: "Invite helpers & control what they can access",
+		icon: <UsersRound className="size-4" />,
 	},
 	{
 		id: "billing",
@@ -199,13 +225,13 @@ const SETTINGS_TABS: ReadonlyArray<{
 		description: "Delivery & self-collect options",
 		icon: <MapPinned className="size-4" />,
 	},
-	// Third-party ACCOUNTS (Lalamove, Delyva, HitPay): keys, connection
+	// Third-party ACCOUNTS (couriers + HitPay): keys, connection
 	// health, per-service details. The behaviour those accounts power stays
 	// under Fulfilment / Payments, which link here when nothing is connected.
 	{
 		id: "integrations",
 		label: "Integrations",
-		description: "Lalamove, Delyva & HitPay accounts",
+		description: "Courier & payment accounts",
 		icon: <Plug className="size-4" />,
 	},
 	// Booking stores only (filtered out of both navs otherwise) — the Google
@@ -222,31 +248,44 @@ const SETTINGS_TABS: ReadonlyArray<{
 		description: "Buyer-facing order stages",
 		icon: <ClipboardList className="size-4" />,
 	},
+	// Not a store setting: every tab above configures what BUYERS see, this one
+	// configures the app on THIS DEVICE. Hence its own group below rather than a
+	// seventh row under Selling.
+	{
+		id: "appearance",
+		label: "Appearance",
+		description: "Light, dark or match device",
+		icon: <Moon className="size-4" />,
+	},
 ];
 
 const SETTINGS_TAB_IDS: ReadonlyArray<SettingsTab> = SETTINGS_TABS.map(
 	(t) => t.id,
 );
 
-// The mobile index groups sections by meaning: your store's identity/account
-// vs how you sell. Desktop keeps the flat tab grid (all destinations visible).
+// One structure for both navs (86eye9xd4, 14A): the mobile index and the
+// desktop rail show these groups, in this order. Split by rhythm, not by
+// topic — Store is who you are and what you pay us; Selling is the daily
+// levers; Connections is the accounts you paste in once. A ten-item "Selling"
+// pile mixed the two rhythms, and tab ten would have landed in it by default.
 const SETTINGS_GROUPS: ReadonlyArray<{
 	label: string;
 	tabs: SettingsTab[];
 }> = [
-	{ label: "Store", tabs: ["store", "billing"] },
+	{ label: "Store", tabs: ["store", "team", "billing"] },
 	{
 		label: "Selling",
-		tabs: [
-			"whatsapp",
-			"payments",
-			"fulfilment",
-			"integrations",
-			"bookings",
-			"order-status",
-		],
+		tabs: ["payments", "fulfilment", "order-status", "whatsapp"],
 	},
+	{ label: "Connections", tabs: ["integrations", "bookings"] },
+	// Last by urgency, not by laziness: you set your store up before you tune how
+	// it looks, and this is the only group that changes nothing a buyer sees.
+	{ label: "App", tabs: ["appearance"] },
 ];
+
+const SETTINGS_TAB_LABELS = Object.fromEntries(
+	SETTINGS_TABS.map((t) => [t.id, t.label]),
+) as Record<SettingsTab, string>;
 
 /**
  * `id` is the deep-link anchor: the post-switch checklist links to the exact
@@ -255,64 +294,6 @@ const SETTINGS_GROUPS: ReadonlyArray<{
  *
  * `scroll-mt-24` keeps the sticky header off the card once scrolled to.
  */
-function Card({
-	children,
-	id,
-	highlight,
-}: {
-	children: ReactNode;
-	id?: string;
-	highlight?: FixHighlight;
-}) {
-	return (
-		<section
-			id={id}
-			data-fix-highlight={highlight ?? undefined}
-			className={`flex flex-col gap-4 rounded-2xl border bg-background p-5 scroll-mt-24 lg:p-6 ${highlightRingClass(highlight)}`}
-		>
-			{children}
-		</section>
-	);
-}
-
-function SectionHeading({
-	title,
-	description,
-}: {
-	title: string;
-	description?: string;
-}) {
-	return (
-		<div className="flex flex-col gap-1">
-			<h3 className="text-sm font-semibold text-foreground">{title}</h3>
-			{description ? (
-				<p className="text-xs text-muted-foreground leading-relaxed">
-					{description}
-				</p>
-			) : null}
-		</div>
-	);
-}
-
-const SAVE_BTN_CLASS = "h-11 lg:h-10 lg:w-auto lg:self-end lg:min-w-[160px]";
-
-function InfoBanner({
-	title,
-	children,
-}: {
-	title: string;
-	children: ReactNode;
-}) {
-	return (
-		<div className="flex gap-3 rounded-xl border border-accent/20 bg-accent/5 px-4 py-3.5">
-			<Info className="size-4 shrink-0 text-accent mt-0.5" aria-hidden="true" />
-			<div className="flex flex-col gap-1.5 text-sm text-muted-foreground leading-relaxed">
-				<p className="font-medium text-foreground">{title}</p>
-				{children}
-			</div>
-		</div>
-	);
-}
 
 export const Route = createFileRoute("/app/settings")({
 	// `tab` stays optional: no tab = the grouped index on mobile (desktop falls
@@ -323,6 +304,9 @@ export const Route = createFileRoute("/app/settings")({
 		tab?: SettingsTab;
 		fix?: CountrySetupItemKey;
 		spot?: SettingsSpotlightKey;
+		autorenew?: "return";
+		paid?: "return";
+		topup?: TopUpParam;
 	} => {
 		const raw =
 			typeof search.tab === "string"
@@ -341,58 +325,199 @@ export const Route = createFileRoute("/app/settings")({
 		// registry, never a raw element id — and only a key whose card is on
 		// THIS page: a product-form key pasted here would scroll nowhere.
 		const spot = isSettingsSpotlightKey(search.spot) ? search.spot : undefined;
+		// Credits T2 (z8r3fdf8ht): `topup=1` opens the credit-pack picker
+		// (every "Top up" button links there), `topup=return` is HitPay sending
+		// the buyer back. See src/lib/credit-top-up.ts.
+		const topup = parseTopUpParam(search.topup);
 		return {
 			tab: SETTINGS_TAB_IDS.includes(raw as SettingsTab)
 				? (raw as SettingsTab)
 				: undefined,
-			...(fix ? { fix } : {}),
-			...(spot ? { spot } : {}),
+			// Every key is returned, `undefined` when absent — an omitted key
+			// leaks its raw value through TanStack's merge (z8r3fdtk87,
+			// src/lib/search-params.ts).
+			fix,
+			spot,
+			// HitPay redirect returns (86eyb6z4r): back from the auto-renewal
+			// authorisation page / from an invoice's hosted checkout. The billing
+			// tab reconciles once and then clears the flag from the URL.
+			autorenew: search.autorenew === "return" ? "return" : undefined,
+			paid: search.paid === "return" ? "return" : undefined,
+			topup,
 		};
 	},
 	component: SettingsRoute,
 });
 
 function SettingsSkeleton() {
+	// The shape of the page that loads into it: the grouped index on a phone,
+	// the section rail beside a column of cards from lg. Rows per group mirror
+	// SETTINGS_GROUPS itself, so nothing jumps when the real nav lands.
 	return (
-		<div className="flex flex-col gap-6 lg:max-w-2xl">
+		<div className="flex max-w-6xl flex-col gap-6">
 			<PageHeaderSkeleton hasSubtitle />
-			<section className="flex flex-col gap-2 lg:hidden">
-				<Skeleton className="h-7 w-24" />
-				<Skeleton className="h-4 w-48" />
-			</section>
 
-			{/* Tab bar */}
-			<div className="flex gap-1 border-b border-input">
-				{[64, 88, 80, 96].map((w) => (
-					<Skeleton
-						key={w}
-						className="h-11 rounded-none"
-						style={{ width: w }}
-					/>
+			{/* Mobile: the grouped index. */}
+			<div className="flex flex-col gap-4 lg:hidden">
+				<Skeleton className="h-16 w-full rounded-2xl" />
+				{SETTINGS_GROUPS.map((group) => (
+					<div key={group.label} className="flex flex-col gap-1.5">
+						<Skeleton className="h-3 w-16" />
+						<div className="flex flex-col divide-y divide-border rounded-2xl border border-border bg-card px-3.5">
+							{group.tabs.map((tab) => (
+								<div key={tab} className="flex min-h-[52px] items-center gap-3">
+									<Skeleton className="h-4 w-24" />
+									<Skeleton className="ml-auto h-4 w-16" />
+								</div>
+							))}
+						</div>
+					</div>
 				))}
 			</div>
 
-			{/* Form cards */}
-			<div className="flex flex-col gap-6 pt-2">
-				{[0, 1, 2].map((n) => (
-					<section
-						key={n}
-						className="flex flex-col gap-4 rounded-2xl border border-input bg-background p-4"
-					>
-						<div className="flex flex-col gap-1.5">
-							<Skeleton className="h-4 w-32" />
-							<Skeleton className="h-3 w-2/3" />
+			{/* Desktop: rail + content. */}
+			<div className="hidden lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start lg:gap-8">
+				<div className="flex flex-col gap-5">
+					{SETTINGS_GROUPS.map((group) => (
+						<div key={group.label} className="flex flex-col gap-1">
+							<Skeleton className="mx-2 mb-1 h-3 w-14" />
+							{group.tabs.map((tab) => (
+								<Skeleton key={tab} className="h-10 w-full rounded-xl" />
+							))}
 						</div>
-						<div className="flex flex-col gap-2">
-							<Skeleton className="h-3 w-20" />
+					))}
+				</div>
+				<div className="flex flex-col gap-6">
+					<Skeleton className="h-7 w-32" />
+					{["first", "second"].map((n) => (
+						<section
+							key={n}
+							className="flex flex-col gap-4 rounded-2xl border bg-background p-6"
+						>
+							<div className="flex flex-col gap-1.5">
+								<Skeleton className="h-4 w-32" />
+								<Skeleton className="h-3 w-2/3" />
+							</div>
 							<Skeleton className="h-11 w-full rounded-xl" />
-						</div>
-						<Skeleton className="h-12 w-full rounded-md" />
-					</section>
-				))}
+							<Skeleton className="h-11 w-full rounded-xl" />
+						</section>
+					))}
+				</div>
 			</div>
 		</div>
 	);
+}
+
+/**
+ * Each tab's live state in a few words — the seam both navs read (the
+ * desktop rail's sublabel, the mobile index's right-hand value), so a tab
+ * never says one thing in one and another in the other. `warn` is reserved
+ * for "this needs you" (no contact number, nothing for buyers to pay with).
+ */
+function useSettingsGlances(
+	retailer: ReturnType<typeof useDashboardRetailer>,
+	{
+		adminOwnStore,
+		hasBookingListings,
+	}: { adminOwnStore: boolean; hasBookingListings: boolean },
+): Partial<Record<SettingsTab, TabGlance>> {
+	const actAsRetailerId = useActAsRetailerId();
+	const bookingsPerm = usePermission("bookings");
+	const team = useQuery(
+		convexQuery(
+			api.team.list,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
+	// Same args as the Fulfilment / Integrations callers, so it's one cache entry.
+	const delyva = useQuery(
+		convexQuery(api.delyva.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	const easyparcel = useQuery(
+		convexQuery(api.easyparcel.getSettings, { retailerId: actAsRetailerId }),
+	).data;
+	// Same args as StoreStatusCard, so the card and the glance share one entry.
+	const storeStatus = useQuery(
+		convexQuery(
+			api.storeAvailability.forSeller,
+			retailer ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
+	const feed = useQuery(
+		convexQuery(
+			api.calendarFeed.getCalendarFeed,
+			retailer && hasBookingListings && bookingsPerm.canRead
+				? { retailerId: retailer._id }
+				: "skip",
+		),
+	).data;
+	if (!retailer) return {};
+
+	const seats = team?.seats.activeCount;
+	const methods = retailer.paymentMethods?.length ?? 0;
+	const hitpayOn =
+		retailer.hitpay?.enabled === true && retailer.hitpay.hasCredentials;
+	const deliveryOn = retailer.offerDelivery !== false;
+	const pickupOn = retailer.offerSelfCollect === true;
+	// "Connected" counts accounts with keys stored, over the cards this store
+	// can actually see — the same rule the cards use to show themselves.
+	const integrations = integrationsGlance({
+		lalamoveConnected: Boolean(retailer.deliveryBooking?.apiKeyHint),
+		hitpayConnected: Boolean(retailer.hitpay?.hasCredentials),
+		delyva,
+		easyparcel,
+	});
+	const customisedFlows =
+		Object.values(retailer.orderFlows ?? {}).some(
+			(stages) => (stages?.length ?? 0) > 0,
+		) || (retailer.orderStages?.length ?? 0) > 0;
+
+	return {
+		store: storeGlance(retailer.storeName, storeStatus?.availability),
+		team:
+			seats === undefined
+				? undefined
+				: {
+						text:
+							seats === 0
+								? "Just you"
+								: `${seats} seat${seats === 1 ? "" : "s"}`,
+					},
+		billing: retailer.subscription
+			? {
+					text: tierPill(
+						retailer.subscription,
+						Date.now(),
+						undefined,
+						adminOwnStore,
+					).label,
+				}
+			: undefined,
+		whatsapp: retailer.waPhone?.trim()
+			? { text: "Connected" }
+			: { text: "Add number", tone: "warn" },
+		payments: hitpayOn
+			? { text: "HitPay" }
+			: methods > 0
+				? { text: `${methods} method${methods === 1 ? "" : "s"}` }
+				: { text: "Not set up", tone: "warn" },
+		fulfilment: deliveryOn
+			? { text: PRICING_MODE_UI[pricingModeOf(retailer.deliveryConfig)].short }
+			: pickupOn
+				? { text: "Pickup only" }
+				: { text: "Off", tone: "warn" },
+		"order-status": { text: customisedFlows ? "Customised" : "Default" },
+		// No count until both courier reads land — a "0 of 2" that becomes
+		// "0 of 3" a beat later is a number that lied (test-code F17).
+		integrations:
+			delyva === undefined || easyparcel === undefined
+				? undefined
+				: { text: `${integrations.connected} of ${integrations.total}` },
+		bookings:
+			feed === undefined
+				? undefined
+				: { text: feed.token ? "Feed on" : "Not set up" },
+	};
 }
 
 function SettingsRoute() {
@@ -416,12 +541,19 @@ function SettingsRoute() {
 		[renameSlugMutation, actAsRetailerId],
 	);
 	const updateSettings = useUpdateSettings();
+	// The store page's "Ask on WhatsApp" switch (z8r3fdvwcy) — its own
+	// verb-shaped mutation, owner-only on the server; the card disables with
+	// the reason for a teammate or an acting admin.
+	const setStorefrontChat = useMutation(api.retailers.setStorefrontChat);
+	// A teammate can't change the account-level alert channels (owner-only on
+	// the server) — the alerts card disables those rows with the reason.
+	const storePerm = usePermission("store_settings");
 
 	// URL is the source of truth for the active tab, so deep links (e.g. the
 	// "View billing" banner → ?tab=billing) actually switch the tab even when the
 	// settings page is already mounted. No tab at all = the grouped index on
 	// mobile; desktop always shows a section (defaulting to Store).
-	const { tab, fix, spot } = Route.useSearch();
+	const { tab, fix, spot, autorenew, paid, topup } = Route.useSearch();
 	const activeTab: SettingsTab = tab ?? "store";
 	// The Bookings tab exists only for stores selling the booking kind — a
 	// non-booking store never sees a calendar-feed section it has nothing to
@@ -434,20 +566,44 @@ function SettingsRoute() {
 				retailer ? { retailerId: retailer._id } : "skip",
 			),
 		).data === true;
-	const visibleTabs = SETTINGS_TABS.filter(
-		(t) => t.id !== "bookings" || hasBookingListings,
-	);
+	// Same reason as bookings: the "events keep their own pipeline" note only
+	// renders for sellers who actually run events.
+	const hasEventListings =
+		useQuery(
+			convexQuery(
+				api.products.hasEventListings,
+				retailer ? { retailerId: retailer._id } : "skip",
+			),
+		).data === true;
+	// Marketplace card truth (z8r3fdkmyp): ON without a visible product isn't
+	// listed, so the card must know. `undefined` = loading, never "no".
+	const listingReadiness = useQuery(
+		convexQuery(
+			api.marketplace.myListingReadiness,
+			retailer && activeTab === "store" ? { retailerId: retailer._id } : "skip",
+		),
+	).data;
 	const visibleGroups = SETTINGS_GROUPS.map((g) => ({
 		...g,
 		tabs: g.tabs.filter((id) => id !== "bookings" || hasBookingListings),
 	}));
+	const glances = useSettingsGlances(retailer, {
+		adminOwnStore,
+		hasBookingListings,
+	});
 	const navigate = Route.useNavigate();
+	// A top-up request (`?topup=`) is consumed once by the dialog, then dropped
+	// from the URL without a history entry — a refresh never replays it.
+	const stripTopUpParam = useCallback(
+		() => navigate({ search: { tab: "billing" }, replace: true }),
+		[navigate],
+	);
 	const setActiveTab = (t: SettingsTab) => navigate({ search: { tab: t } });
 	const backToIndex = () => navigate({ search: { tab: undefined } });
 	const [newSlug, setNewSlug] = useState("");
 	const [saving, setSaving] = useState(false);
 
-	const availability = useSlugAvailability(newSlug);
+	const availability = useSlugAvailability(newSlug, "rename");
 
 	// Deep link to one card: scroll to it and ring it, instead of dropping the
 	// seller at the top of a long tab to hunt for it. Two senders, one shape —
@@ -465,10 +621,9 @@ function SettingsRoute() {
 		cardTarget?.anchor === anchor ? cardTarget.highlight : undefined;
 	useEffect(() => {
 		if (!targetAnchor) return;
-		// The tab body mounts in this same commit, so the target doesn't exist
-		// until after paint — wait a frame rather than racing it.
-		const frame = requestAnimationFrame(() => scrollToAnchor(targetAnchor));
-		return () => cancelAnimationFrame(frame);
+		// The tab body renders behind a skeleton until the store loads, so the
+		// card can mount well after this effect — wait for IT, not a frame.
+		return revealAnchorWhenMounted(targetAnchor);
 	}, [targetAnchor]);
 
 	if (!retailer) return <SettingsSkeleton />;
@@ -496,7 +651,8 @@ function SettingsRoute() {
 		<Card>
 			<SectionHeading
 				title="Storefront URL"
-				description="Rename your public storefront slug. Old links keep redirecting for 90 days."
+				description="Your public link — old links keep redirecting for 90 days after a rename."
+				glance={<Glance tone="grey">/{retailer.slug}</Glance>}
 			/>
 			<form onSubmit={onSubmit} className="flex flex-col gap-3">
 				<div className="flex items-center rounded-xl border border-input bg-background pl-4 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50">
@@ -525,7 +681,7 @@ function SettingsRoute() {
 	);
 
 	return (
-		<div className="flex flex-col gap-6 lg:max-w-2xl">
+		<div className="flex max-w-6xl flex-col gap-6">
 			<PageHeader
 				title="Settings"
 				subtitle={
@@ -544,8 +700,12 @@ function SettingsRoute() {
 						Settings
 					</h2>
 
-					{/* Store identity card — doubles as the deep link + tier badge. */}
-					<div className="flex items-center gap-3 rounded-2xl bg-foreground p-3.5 text-background">
+					{/* Store identity card — doubles as the deep link + tier badge.
+					    In dark it becomes a mint-tinted panel rather than flipping to a
+					    white plate: `bg-foreground` inverts to near-white on a dark page,
+					    which reads as a hole punched in the screen. Same recipe as the
+					    other emphasis panels (Home's due-today banner and hero stat). */}
+					<div className="flex items-center gap-3 rounded-2xl bg-foreground p-3.5 text-background dark:border dark:border-accent/30 dark:bg-accent/12 dark:text-foreground">
 						<span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-accent font-heading text-base font-extrabold text-accent-foreground">
 							<AppImage
 								src={retailer.logoUrl}
@@ -575,70 +735,12 @@ function SettingsRoute() {
 						/>
 					</div>
 
-					{visibleGroups.map((group) => (
-						<div key={group.label} className="flex flex-col gap-1.5">
-							<span className="pl-1 text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground/80">
-								{group.label}
-							</span>
-							<div className="overflow-hidden rounded-2xl border border-border bg-card">
-								{group.tabs.map((id, i) => {
-									const t = SETTINGS_TABS.find((x) => x.id === id);
-									if (!t) return null;
-									// Status at a glance where we have live state — no tap
-									// needed to check health.
-									const subtitle =
-										t.id === "billing" && retailer.subscription
-											? tierPill(
-													retailer.subscription,
-													Date.now(),
-													// Keep the plain tier label here (founding rank stays
-													// on the header pill only); just fold in the admin case.
-													undefined,
-													adminOwnStore,
-												).label
-											: t.description;
-									const waConnected =
-										t.id === "whatsapp" && Boolean(retailer.waPhone?.trim());
-									return (
-										<button
-											key={t.id}
-											type="button"
-											onClick={() => setActiveTab(t.id)}
-											className={`flex min-h-[60px] w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-muted/50 ${
-												i > 0 ? "border-t border-border/60" : ""
-											}`}
-										>
-											<span
-												className={`flex size-9 shrink-0 items-center justify-center rounded-[10px] ${
-													waConnected
-														? "bg-accent/15 text-accent-emphasis"
-														: "bg-muted text-foreground"
-												}`}
-											>
-												{t.icon}
-											</span>
-											<span className="flex min-w-0 flex-1 flex-col">
-												<span className="text-sm font-semibold">{t.label}</span>
-												<span className="truncate text-xs text-muted-foreground">
-													{subtitle}
-												</span>
-											</span>
-											{waConnected ? (
-												<span className="shrink-0 rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-bold text-accent-emphasis">
-													Connected
-												</span>
-											) : (
-												<ChevronRight
-													className="size-4 shrink-0 text-muted-foreground/50"
-													aria-hidden="true"
-												/>
-											)}
-										</button>
-									);
-								})}
-							</div>
-						</div>
-					))}
+					<SettingsIndex
+						groups={visibleGroups}
+						labels={SETTINGS_TAB_LABELS}
+						glances={glances}
+						onSelect={setActiveTab}
+					/>
 
 					{/* Kedaipal admins: the console entry lives here on mobile (desktop
 					    has the sidebar Admin group). Once inside /app/admin/*, the
@@ -646,26 +748,21 @@ function SettingsRoute() {
 					    tab back to this store. See docs/admin-console.md. */}
 					{isAdmin ? (
 						<div className="flex flex-col gap-1.5">
-							<span className="pl-1 text-[11px] font-bold uppercase tracking-[0.08em] text-muted-foreground/80">
-								Admin
-							</span>
-							<div className="overflow-hidden rounded-2xl border border-border bg-card">
+							<SectionLabel>Admin</SectionLabel>
+							<div className="overflow-hidden rounded-2xl border border-border bg-card px-3.5">
 								<Link
 									to="/app/admin/sellers"
-									className="flex min-h-[60px] w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-muted/50"
+									className="flex min-h-[52px] w-full items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50"
 								>
-									<span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-										<ShieldCheck className="size-4.5" aria-hidden="true" />
+									<span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+										Admin console
 									</span>
-									<span className="flex min-w-0 flex-1 flex-col">
-										<span className="text-sm font-semibold">Admin console</span>
-										<span className="truncate text-xs text-muted-foreground">
-											All sellers, billing &amp; WABA safety
-										</span>
+									<span className="max-w-[55%] truncate text-right text-sm font-semibold text-foreground">
+										Sellers &amp; billing
 									</span>
 									<ChevronRight
-										className="size-4 shrink-0 text-muted-foreground/50"
-										aria-hidden="true"
+										aria-hidden
+										className="size-4 shrink-0 text-muted-foreground/60"
 									/>
 								</Link>
 							</div>
@@ -679,7 +776,7 @@ function SettingsRoute() {
 						type="button"
 						onClick={backToIndex}
 						aria-label="Back to settings"
-						className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
+						className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground transition-colors hover:bg-muted"
 					>
 						<ArrowLeft className="size-5" />
 					</button>
@@ -689,356 +786,423 @@ function SettingsRoute() {
 				</div>
 			)}
 
-			{/* ---- Desktop: flat tab grid (all destinations visible at once). */}
-			<div className="hidden gap-2 lg:grid lg:grid-cols-3">
-				{visibleTabs.map((t) => (
-					<button
-						key={t.id}
-						type="button"
-						onClick={() => setActiveTab(t.id)}
-						className={`flex items-center gap-3 rounded-2xl border p-3 text-left transition-all ${
-							activeTab === t.id
-								? "border-accent bg-accent/10 text-foreground shadow-sm"
-								: "border-border bg-card text-muted-foreground hover:border-foreground/20 hover:text-foreground"
-						}`}
-					>
-						<span
-							className={`flex size-8 shrink-0 items-center justify-center rounded-xl ${
-								activeTab === t.id
-									? "bg-accent text-accent-foreground"
-									: "bg-muted text-muted-foreground"
-							}`}
-						>
-							{t.icon}
-						</span>
-						<span className="min-w-0">
-							<span className="block text-sm font-semibold leading-tight">
-								{t.label}
-							</span>
-							<span className="mt-0.5 hidden text-xs leading-snug text-muted-foreground sm:block">
-								{t.description}
-							</span>
-						</span>
-					</button>
-				))}
-			</div>
+			{/* ---- Desktop: the section rail beside the content (2A). Mobile keeps
+			     its grouped index above; the rail is the same groups and glances. */}
+			<div className="lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start lg:gap-8">
+				<div className="hidden lg:block">
+					<SettingsRail
+						groups={visibleGroups}
+						labels={SETTINGS_TAB_LABELS}
+						glances={glances}
+						active={activeTab}
+						onSelect={setActiveTab}
+					/>
+				</div>
 
-			{/* Section content — hidden on mobile while the index is showing
-			    (desktop always renders the active section, defaulting to Store). */}
-			<div
-				className={
-					tab === undefined ? "hidden lg:flex lg:flex-col lg:gap-6" : "contents"
-				}
-			>
-				{activeTab === "store" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<Card>
-							<StoreNameForm
-								current={retailer.storeName}
-								onSave={(storeName) => updateSettings({ storeName })}
-							/>
-						</Card>
-						<Card
-							id={SPOTLIGHT_ANCHOR.business_details.anchor}
-							highlight={ringFor(SPOTLIGHT_ANCHOR.business_details.anchor)}
-						>
-							<BusinessIdentityForm
-								current={retailer.businessIdentity}
-								country={retailer.country}
-								onSave={(businessIdentity) =>
-									updateSettings({ businessIdentity })
-								}
-							/>
-						</Card>
-						<Card>
-							<NotificationsCard />
-						</Card>
-						{/* Notification surfaces live together: browser (above), WhatsApp,
-						    email (below). The WA card only mounts when the deployment has
-						    an approved seller template configured (86eyhw9zy). */}
-						{retailer.waOrderAlertsAvailable ? (
-							<Card
-								id={SETTINGS_ANCHOR.notify_wa_phone}
-								highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
-							>
-								<WaOrderAlertsCard
-									enabled={retailer.orderWaAlerts === true}
-									currentPhone={retailer.notifyWaPhone ?? ""}
-									fallbackPhone={retailer.waPhone ?? ""}
-									optedOut={retailer.notifyWaPhoneOptedOut === true}
-									canUse={hasFeature(retailer.subscription, "waOrderAlerts")}
-									country={retailer.country}
-									onSave={(patch) => updateSettings(patch)}
+				{/* Section content — hidden on mobile while the index is showing
+				    (desktop always renders the active section, defaulting to Store).
+				    Store and Fulfilment lay their cards out in two columns from xl;
+				    every other tab stays one readable column. */}
+				<div
+					className={cn(
+						"min-w-0 flex-col gap-6",
+						tab === undefined ? "hidden lg:flex" : "flex",
+						activeTab !== "store" &&
+							activeTab !== "fulfilment" &&
+							"lg:max-w-2xl",
+					)}
+				>
+					<h2 className="hidden font-heading text-xl font-extrabold leading-tight lg:block">
+						{SETTINGS_TAB_LABELS[activeTab]}
+					</h2>
+					{activeTab === "store" ? (
+						<AreaGate area="store_settings">
+							<div className="flex flex-col gap-6">
+								{/* FIRST on the tab, full width above the columns
+								    (z8r3fdudf7): whether the store takes orders at all
+								    is the most consequential setting here. */}
+								<Card
+									id={SPOTLIGHT_ANCHOR.store_status.anchor}
+									highlight={ringFor(SPOTLIGHT_ANCHOR.store_status.anchor)}
+								>
+									<StoreStatusCard
+										retailerId={retailer._id}
+										storeName={retailer.storeName}
+									/>
+								</Card>
+								{/* 10A: four sections ordered by how often they're touched.
+								    Identity + Brand on the left, the set-once account
+								    sections on the right (xl and up; one column below). */}
+								<SettingsColumns
+									left={
+										<>
+											<SettingsSection label="Identity">
+												<Card>
+													<StoreNameForm
+														current={retailer.storeName}
+														onSave={(storeName) =>
+															updateSettings({ storeName })
+														}
+													/>
+												</Card>
+												{slugRenameForm}
+												{/* One field, so the form owns the card heading — the
+												    Business name card's posture. The "What does your store
+												    sell?" picker shared this card until z8r3fdxt99; its one
+												    job was pre-selecting the wizard's kind card, retired
+												    because the kind is fixed once published and a store
+												    sells more than one (single meals AND meal plans).
+												    `retailers.storeType` is unread until the field is
+												    dropped. */}
+												<Card>
+													<StoreDescriptionForm
+														current={retailer.storeDescription ?? ""}
+														onSave={(storeDescription) =>
+															updateSettings({ storeDescription })
+														}
+													/>
+												</Card>
+												{/* The directory card is built from the name, description
+										    and area above — it belongs with them. */}
+												<Card
+													id={SPOTLIGHT_ANCHOR.store_listing.anchor}
+													highlight={ringFor(
+														SPOTLIGHT_ANCHOR.store_listing.anchor,
+													)}
+												>
+													<MarketplaceCard
+														storeName={retailer.storeName}
+														unlisted={retailer.marketplaceUnlisted === true}
+														area={retailer.storeArea ?? ""}
+														readiness={listingReadiness}
+														onSave={(patch) => updateSettings(patch)}
+													/>
+												</Card>
+												{/* Beside the listing: both are "what the public sees
+										    of my store" switches, and the island card on the
+										    store home is where this one shows (z8r3fdvwcy). */}
+												<Card id="settings-storefront-chat">
+													<StorefrontChatCard
+														enabled={retailer.storefrontChatEnabled !== false}
+														hasWaPhone={!!retailer.waPhone}
+														onChange={(enabled) =>
+															setStorefrontChat({
+																retailerId: retailer._id,
+																enabled,
+															})
+														}
+													/>
+												</Card>
+											</SettingsSection>
+											<SettingsSection label="Brand">
+												<Card>
+													<SectionHeading
+														title="Logo & cover image"
+														description="How your storefront header looks — and the preview when you share your link."
+														glance={
+															retailer.logoUrl && retailer.coverImageUrl ? (
+																<Glance>Both set</Glance>
+															) : retailer.logoUrl || retailer.coverImageUrl ? (
+																<Glance tone="grey">
+																	{retailer.logoUrl
+																		? "Logo only"
+																		: "Cover only"}
+																</Glance>
+															) : (
+																<Glance tone="grey">Not set</Glance>
+															)
+														}
+													/>
+													<LogoForm
+														currentLogoUrl={retailer.logoUrl}
+														onSave={(logoStorageId) =>
+															updateSettings({ logoStorageId })
+														}
+													/>
+													<div className="border-t border-border/60 pt-4">
+														<CoverImageForm
+															currentCoverUrl={retailer.coverImageUrl}
+															onSave={(coverImageStorageId) =>
+																updateSettings({ coverImageStorageId })
+															}
+														/>
+													</div>
+												</Card>
+											</SettingsSection>
+										</>
+									}
+									right={
+										<>
+											{/* Every field here is owner-only on the server, so a
+									    teammate reads it with the reason instead of
+									    meeting a refused save. */}
+											<SettingsSection label="Business & country">
+												<AreaGate area="store_settings" ownerOnly>
+													<div className="flex flex-col gap-4">
+														<Card
+															id={SPOTLIGHT_ANCHOR.business_details.anchor}
+															highlight={ringFor(
+																SPOTLIGHT_ANCHOR.business_details.anchor,
+															)}
+														>
+															<BusinessIdentityForm
+																current={retailer.businessIdentity}
+																country={retailer.country}
+																onSave={(businessIdentity) =>
+																	updateSettings({ businessIdentity })
+																}
+															/>
+														</Card>
+														<Card
+															id={SPOTLIGHT_ANCHOR.store_country.anchor}
+															highlight={ringFor(
+																SPOTLIGHT_ANCHOR.store_country.anchor,
+															)}
+														>
+															<SectionHeading
+																title="Country & currency"
+																description="Where your store operates and the currency it prices in."
+																glance={
+																	<Glance tone="grey">
+																		{retailer.country} ·{" "}
+																		{currencySymbol(retailer.currency)}
+																	</Glance>
+																}
+															/>
+															<CountryForm
+																current={retailer.country}
+																currency={retailer.currency}
+																deliveryConfig={retailer.deliveryConfig}
+																deliveryBooking={retailer.deliveryBooking}
+																waPhone={retailer.waPhone}
+																notifyWaPhone={retailer.notifyWaPhone}
+																autoRenewOn={
+																	retailer.subscription?.autoRenew !== undefined
+																}
+																onSave={(patch) => updateSettings(patch)}
+															/>
+															{/* Directly under the picker, so "what did that just
+													    do?" is answered where the question was asked.
+													    Renders nothing for a store that never switched. */}
+															<CountrySetupPanel
+																onGoToFix={(tab, key) =>
+																	navigate({ search: { tab, fix: key } })
+																}
+															/>
+															<div className="border-t border-border/60 pt-4">
+																<CurrencyForm
+																	current={retailer.currency}
+																	onSave={(currency) =>
+																		updateSettings({ currency })
+																	}
+																/>
+															</div>
+														</Card>
+													</div>
+												</AreaGate>
+											</SettingsSection>
+											<SettingsSection label="Alerts & defaults">
+												<Card
+													id={SETTINGS_ANCHOR.notify_wa_phone}
+													highlight={ringFor(SETTINGS_ANCHOR.notify_wa_phone)}
+												>
+													<OrderAlertsCard
+														whatsapp={
+															retailer.waOrderAlertsAvailable
+																? {
+																		// Absent = on (z8r3fdv55f).
+																		switchedOn:
+																			retailer.orderWaAlerts !== false,
+																		currentPhone: retailer.notifyWaPhone ?? "",
+																		fallbackPhone: retailer.waPhone ?? "",
+																		optedOut:
+																			retailer.notifyWaPhoneOptedOut === true,
+																		covered: retailer.waAlertsCovered === true,
+																	}
+																: undefined
+														}
+														notifyEmail={retailer.notifyEmail ?? ""}
+														country={retailer.country}
+														canEditAccount={storePerm.role !== "member"}
+														onSave={(patch) => updateSettings(patch)}
+													/>
+												</Card>
+											</SettingsSection>
+										</>
+									}
 								/>
-							</Card>
-						) : null}
-						<Card>
-							<NotifyEmailForm
-								current={retailer.notifyEmail ?? ""}
-								onSave={(notifyEmail) => updateSettings({ notifyEmail })}
+							</div>
+						</AreaGate>
+					) : null}
+
+					{activeTab === "team" ? (
+						<TeamTab retailerId={retailer._id} storeName={retailer.storeName} />
+					) : null}
+
+					{activeTab === "billing" ? (
+						<>
+							<AreaGate area="billing">
+								<BillingTab
+									retailer={retailer}
+									target={cardTarget}
+									billingReturn={
+										autorenew === "return"
+											? "autorenew"
+											: paid === "return"
+												? "paid"
+												: undefined
+									}
+									onBillingReturnHandled={() =>
+										navigate({ search: { tab: "billing" }, replace: true })
+									}
+								/>
+							</AreaGate>
+							{/* Beside the gate, not inside it: buying credits is the
+						    CREDITS grant, and a teammate can hold credits write
+						    without billing read — inside, the gate would hide the
+						    only place they can buy. The dialog checks its own
+						    access (credits read to see, write to buy). */}
+							<CreditTopUpDialog
+								retailer={retailer}
+								request={topup}
+								onRequestHandled={stripTopUpParam}
 							/>
-						</Card>
-						<Card>
-							<StoreDescriptionForm
-								current={retailer.storeDescription ?? ""}
-								onSave={(storeDescription) =>
-									updateSettings({ storeDescription })
+						</>
+					) : null}
+
+					{activeTab === "whatsapp" ? (
+						<AreaGate area="store_settings" ownerOnly>
+							<div className="flex flex-col gap-6 pt-2">
+								<InfoDisclosure summary="How WhatsApp works on Kedaipal">
+									<HelperBullets
+										items={[
+											"Each order sends the buyer one WhatsApp — the confirmation — from Kedaipal's shared number, on your behalf. No Meta account needed.",
+											"It links to the buyer's own order page, which updates itself as you pack, ship and get paid — those steps don't send a WhatsApp.",
+											"Your contact number below shows there as a tap-to-chat link.",
+										]}
+									/>
+								</InfoDisclosure>
+
+								<Card
+									id={SETTINGS_ANCHOR.wa_phone}
+									highlight={ringFor(SETTINGS_ANCHOR.wa_phone)}
+								>
+									<WaPhoneForm
+										current={retailer.waPhone ?? ""}
+										country={retailer.country}
+										onSave={(waPhone) => updateSettings({ waPhone })}
+									/>
+								</Card>
+								<Card>
+									<LocaleForm
+										current={retailer.locale}
+										onSave={(locale) => updateSettings({ locale })}
+									/>
+								</Card>
+								<Card
+									id={SETTINGS_ANCHOR.message_copy}
+									highlight={ringFor(SETTINGS_ANCHOR.message_copy)}
+								>
+									<MessageTemplatesForm
+										current={retailer.messageTemplates}
+										onSave={(messageTemplates) =>
+											updateSettings({ messageTemplates })
+										}
+									/>
+								</Card>
+							</div>
+						</AreaGate>
+					) : null}
+
+					{activeTab === "payments" ? (
+						<AreaGate area="payments_settings">
+							<PaymentsTabBody
+								retailer={retailer}
+								highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
+								buyersPayHighlight={ringFor(
+									SPOTLIGHT_ANCHOR.how_buyers_pay.anchor,
+								)}
+								onSave={updateSettings}
+								onOpenIntegrations={() =>
+									navigate({ search: { tab: "integrations" } })
 								}
 							/>
-						</Card>
-						<Card>
-							<StoreTypeForm
-								current={retailer.storeType}
-								onSave={(storeType) => updateSettings({ storeType })}
-							/>
-						</Card>
-						{slugRenameForm}
-						<Card>
-							<LogoForm
-								currentLogoUrl={retailer.logoUrl}
-								onSave={(logoStorageId) => updateSettings({ logoStorageId })}
-							/>
-						</Card>
-						<Card>
-							<CoverImageForm
-								currentCoverUrl={retailer.coverImageUrl}
-								onSave={(coverImageStorageId) =>
-									updateSettings({ coverImageStorageId })
-								}
-							/>
-						</Card>
-						<Card
-							id={SPOTLIGHT_ANCHOR.store_country.anchor}
-							highlight={ringFor(SPOTLIGHT_ANCHOR.store_country.anchor)}
-						>
-							<CountryForm
-								current={retailer.country}
+						</AreaGate>
+					) : null}
+
+					{activeTab === "fulfilment" ? (
+						<AreaGate area="fulfilment">
+							<FulfilmentTab
+								target={cardTarget}
 								currency={retailer.currency}
+								retailerId={retailer._id}
+								country={retailer.country}
+								offerSelfCollect={retailer.offerSelfCollect ?? false}
+								offerDelivery={retailer.offerDelivery ?? true}
 								deliveryConfig={retailer.deliveryConfig}
+								businessAddress={retailer.businessAddress}
+								minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
+								openingHours={retailer.openingHours}
+								closedDates={retailer.closedDates}
+								hasBookingListings={hasBookingListings}
+								minOrderValue={retailer.minOrderValue}
+								awbConfig={retailer.awbConfig}
+								subscription={retailer.subscription}
 								deliveryBooking={retailer.deliveryBooking}
-								waPhone={retailer.waPhone}
-								notifyWaPhone={retailer.notifyWaPhone}
-								onSave={(patch) => updateSettings(patch)}
+								crossBorderLanes={retailer.crossBorderLanes}
 							/>
-							{/* Directly under the picker, so "what did that just do?"
-							    is answered where the question was asked. Renders
-							    nothing for a store that has never switched. */}
-							<CountrySetupPanel
-								onGoToFix={(tab, key) =>
-									navigate({ search: { tab, fix: key } })
-								}
-							/>
-						</Card>
-						<Card>
-							<CurrencyForm
-								current={retailer.currency}
-								onSave={(currency) => updateSettings({ currency })}
-							/>
-						</Card>
-					</div>
-				) : null}
+						</AreaGate>
+					) : null}
 
-				{activeTab === "billing" ? (
-					<BillingTab retailer={retailer} target={cardTarget} />
-				) : null}
-
-				{activeTab === "whatsapp" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<InfoBanner title="How WhatsApp works on Kedaipal">
-							<p>
-								Every order sends the buyer{" "}
-								<span className="font-medium text-foreground">
-									one WhatsApp message
-								</span>{" "}
-								— the confirmation — from{" "}
-								<span className="font-medium text-foreground">
-									Kedaipal's shared WhatsApp Business number
-								</span>{" "}
-								on your behalf, no Meta account needed.
-							</p>
-							<p>
-								That message links to the buyer's own order page, which updates
-								itself. Packing, shipping, payment and cancellation no longer
-								send a WhatsApp — the buyer sees them on that page.
-							</p>
-							<p>
-								Add your personal WhatsApp number below so buyers can reach you
-								directly. It appears as a tappable contact link on their order
-								page.
-							</p>
-						</InfoBanner>
-
-						<Card
-							id={SETTINGS_ANCHOR.wa_phone}
-							highlight={ringFor(SETTINGS_ANCHOR.wa_phone)}
-						>
-							<WaPhoneForm
-								current={retailer.waPhone ?? ""}
+					{activeTab === "integrations" ? (
+						<AreaGate area="integrations">
+							<IntegrationsTab
+								target={cardTarget}
+								retailerId={retailer._id}
 								country={retailer.country}
-								onSave={(waPhone) => updateSettings({ waPhone })}
+								deliveryBooking={retailer.deliveryBooking}
+								businessAddress={retailer.businessAddress}
+								hitpay={retailer.hitpay}
+								subscription={retailer.subscription}
+								onSave={updateSettings}
+								onOpenPayments={() => navigate({ search: { tab: "payments" } })}
 							/>
-						</Card>
-						<Card>
-							<LocaleForm
-								current={retailer.locale}
-								onSave={(locale) => updateSettings({ locale })}
-							/>
-						</Card>
-						<Card
-							id={SETTINGS_ANCHOR.message_copy}
-							highlight={ringFor(SETTINGS_ANCHOR.message_copy)}
-						>
-							<MessageTemplatesForm
-								current={retailer.messageTemplates}
-								onSave={(messageTemplates) =>
-									updateSettings({ messageTemplates })
-								}
-							/>
-						</Card>
-					</div>
-				) : null}
+						</AreaGate>
+					) : null}
 
-				{activeTab === "payments" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<Card
-							id={SETTINGS_ANCHOR.payment_methods}
-							highlight={ringFor(SETTINGS_ANCHOR.payment_methods)}
-						>
-							<PaymentMethodsForm
-								current={retailer.paymentMethods ?? []}
-								country={retailer.country}
-								onSave={(paymentMethods) => updateSettings({ paymentMethods })}
-							/>
-						</Card>
-						{/* HitPay moved to Settings → Integrations (2 Sep IA rework) —
-						    one home for every third-party account. The pointer keeps the
-						    old home from reading as "online payments are gone". */}
-						<p className="px-1 text-xs text-muted-foreground">
-							Online payments (HitPay) moved to{" "}
-							<button
-								type="button"
-								onClick={() => navigate({ search: { tab: "integrations" } })}
-								className="font-medium text-accent hover:underline"
-							>
-								Settings → Integrations
-							</button>
-							— connect your account there; buyers keep seeing Pay now on their
-							orders as before.
-						</p>
-						{/* Says plainly that nothing chases the buyer automatically, and
-						    names the one manual tool that exists — so the behaviour is
-						    discoverable without a seller assuming a nudge went out that
-						    didn't (docs/payment-reminder.md). */}
-						<p className="px-1 text-xs text-muted-foreground">
-							Kedaipal doesn't chase unpaid orders automatically. Each order
-							gets one WhatsApp — the confirmation — and it links the buyer to
-							their order page, where these payment details and the “I've paid”
-							button live. If an order is still unpaid on day 11, a “Send
-							payment reminder” button appears on its order page (once per day,
-							until day 14) — sending it is always your call.
-						</p>
-					</div>
-				) : null}
+					{activeTab === "bookings" ? (
+						<AreaGate area="bookings">
+							<div className="flex flex-col gap-6 pt-2">
+								<BookingsTab retailerId={retailer._id} />
+							</div>
+						</AreaGate>
+					) : null}
 
-				{activeTab === "fulfilment" ? (
-					<FulfilmentTab
-						target={cardTarget}
-						currency={retailer.currency}
-						retailerId={retailer._id}
-						country={retailer.country}
-						offerSelfCollect={retailer.offerSelfCollect ?? false}
-						offerDelivery={retailer.offerDelivery ?? true}
-						deliveryConfig={retailer.deliveryConfig}
-						businessAddress={retailer.businessAddress}
-						deliveryBooking={retailer.deliveryBooking}
-						minFulfilmentNoticeDays={retailer.minFulfilmentNoticeDays}
-						openingHours={retailer.openingHours}
-						minOrderValue={retailer.minOrderValue}
-						awbConfig={retailer.awbConfig}
-						subscription={retailer.subscription}
-					/>
-				) : null}
-
-				{activeTab === "integrations" ? (
-					<IntegrationsTab
-						target={cardTarget}
-						retailerId={retailer._id}
-						country={retailer.country}
-						deliveryBooking={retailer.deliveryBooking}
-						hitpay={retailer.hitpay}
-						subscription={retailer.subscription}
-						onSave={updateSettings}
-					/>
-				) : null}
-
-				{activeTab === "bookings" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<BookingsTab retailerId={retailer._id} />
-					</div>
-				) : null}
-
-				{activeTab === "order-status" ? (
-					<div className="flex flex-col gap-6 pt-2">
-						<InfoBanner title="How order stages work">
-							<p>
-								Build the steps your orders move through — name them however you
-								work. Buyers see them as a live timeline; you advance orders
-								step-by-step from the dashboard.
-							</p>
-							<p>
-								Every step maps to one of four built-in milestones via{" "}
-								<span className="font-medium text-foreground">“Counts as”</span>
-								, so payments, packing and tracking keep working:{" "}
-								<span className="font-medium text-foreground">Accepted</span> →{" "}
-								<span className="font-medium text-foreground">
-									In production
-								</span>{" "}
-								→ <span className="font-medium text-foreground">Ready</span> →{" "}
-								<span className="font-medium text-foreground">Done</span>.
-							</p>
-							<p>
-								<span className="font-medium text-foreground">
-									Your first step should count as “Accepted”, your last as
-									“Done”
-								</span>{" "}
-								— map the steps in between to whichever milestone fits. E.g. a
-								cake shop: “Order received” (Accepted) → “Baking” (In
-								production) → “Ready for pickup” (Ready) → “Collected” (Done).
-							</p>
-						</InfoBanner>
-
-						{/* The booking carve-out, stated where the seller configures the
-						    thing it carves out of. Custom steps describe how an order is
-						    PREPARED; a stay or a membership isn't prepared, so bookings
-						    keep their own three milestones. Without this line the rule
-						    would be invisible until a seller wondered why their campsite
-						    order ignored the flow they'd just built. */}
-						{hasBookingListings ? (
-							<p className="rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
-								<span className="font-semibold text-foreground">
-									Bookings don&apos;t use these steps.
-								</span>{" "}
-								A stay always runs Confirmed → Checked in → Checked out, and a
-								fixed-length package Confirmed → Active → Ended. What you set
-								here applies to your product orders.
-							</p>
-						) : null}
-
-						<Card>
-							<StageEditor
-								seed={resolveStages({
+					{activeTab === "order-status" ? (
+						<AreaGate area="store_settings">
+							<OrderFlowsSection
+								input={{
+									orderFlows: retailer.orderFlows,
 									orderStages: retailer.orderStages,
-									labels: retailer.statusLabels,
-									deliveryMethod: retailer.offerSelfCollect
-										? "self_collect"
-										: "delivery",
-								})}
-								isCustomized={Boolean(retailer.orderStages?.length)}
-								onSave={(orderStages) => updateSettings({ orderStages })}
+									statusLabels: retailer.statusLabels as
+										| StatusLabels
+										| undefined,
+									// Undefined reads as TRUE for delivery (legacy stores always had
+									// it) and as FALSE for pickup — same rule as the storefront.
+									offerDelivery: retailer.offerDelivery !== false,
+									offerSelfCollect: retailer.offerSelfCollect === true,
+									hasBookingListings,
+									hasEventListings,
+								}}
+								onSave={(orderFlows) => updateSettings({ orderFlows })}
 							/>
-						</Card>
-					</div>
-				) : null}
+						</AreaGate>
+					) : null}
+
+					{/* No AreaGate: this is a device preference, not store data — a
+					    teammate with no settings grant still picks their own theme. */}
+					{activeTab === "appearance" ? <AppearanceTab /> : null}
+				</div>
 			</div>
 		</div>
 	);
@@ -1071,10 +1235,14 @@ function StoreNameForm({
 	const [value, setValue] = useState(current);
 	const [saving, setSaving] = useState(false);
 	const dirty = value.trim() !== current.trim() && value.trim().length > 0;
+	// Same rule as the server save — surfaced under the field so "Save name"
+	// is disabled WITH its reason rather than failing on click.
+	const nameCheck = validateStoreName(value);
+	const issue = dirty && !nameCheck.ok ? nameCheck.message : null;
 
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
-		if (!dirty) return;
+		if (!dirty || issue) return;
 		setSaving(true);
 		try {
 			await onSave(value.trim());
@@ -1091,6 +1259,9 @@ function StoreNameForm({
 			<SectionHeading
 				title="Business name"
 				description="Shown on your storefront header and WhatsApp messages."
+				glance={
+					current.trim() ? <Glance tone="grey">{current}</Glance> : undefined
+				}
 			/>
 			<div className="flex flex-col gap-1.5">
 				<Input
@@ -1098,16 +1269,17 @@ function StoreNameForm({
 					value={value}
 					onChange={(e) => setValue(e.target.value)}
 					placeholder="Your Store Name"
-					maxLength={80}
+					maxLength={STORE_NAME_MAX}
 					variant="field"
 				/>
+				{issue ? <p className="text-sm text-destructive">✗ {issue}</p> : null}
 				<span className="self-end text-xs text-muted-foreground tabular-nums">
-					{value.trim().length}/80
+					{value.trim().length}/{STORE_NAME_MAX}
 				</span>
 			</div>
 			<Button
 				type="submit"
-				disabled={!dirty || saving}
+				disabled={!dirty || saving || issue !== null}
 				className={SAVE_BTN_CLASS}
 			>
 				{saving ? "Saving…" : "Save name"}
@@ -1204,9 +1376,25 @@ function BusinessIdentityForm({
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<SectionHeading
-				title="Business details"
-				description="Printed in the “From” section of the invoices and receipts your customers download — what a company's finance team needs to accept your invoice. Only the fields you fill in appear; leave everything blank to show just your store name."
+				title="Legal identity"
+				description="Printed in the “From” section of the invoices and receipts your customers download."
+				glance={
+					<Glance tone="grey">
+						{fields.some(([, saved]) => (saved ?? "").trim())
+							? "On invoices"
+							: "Store name only"}
+					</Glance>
+				}
 			/>
+			<InfoDisclosure summary="What to fill in">
+				<HelperBullets
+					items={[
+						"What a company's finance team needs before it accepts your invoice",
+						"Only the fields you fill in appear on the document",
+						"Leave everything blank to show just your store name",
+					]}
+				/>
+			</InfoDisclosure>
 			<div className="flex flex-col gap-3">
 				<label className="flex flex-col gap-1.5">
 					<span className={fieldLabel}>Registered business name</span>
@@ -1318,7 +1506,12 @@ function StoreDescriptionForm({
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
 			<SectionHeading
 				title="Store description"
-				description="A short line shown on your storefront under your store name — say what you sell, your lead time, or area. Leave blank to hide it."
+				description="Shown under your store name — what you sell, your lead time or area. Leave blank to hide it."
+				glance={
+					<Glance tone="grey">
+						{current.trim() ? "Set" : "No description"}
+					</Glance>
+				}
 			/>
 			<div className="flex flex-col gap-1.5">
 				<textarea
@@ -1344,101 +1537,6 @@ function StoreDescriptionForm({
 	);
 }
 
-/**
- * "What does your store sell?" (86eyj70z1 decision 5) — sets the DEFAULT kind
- * pre-selected for NEW products in the wizard, nothing else: existing products
- * never re-type, and every kind stays pickable per product. Four cards mirror
- * the wizard's step 0 exactly (Food stores as `physical` — it's a vocabulary
- * router, never a stored value). Tap to save; tap the selected card again to
- * clear.
- */
-function StoreTypeForm({
-	current,
-	onSave,
-}: {
-	current: "physical" | "service" | "booking" | undefined;
-	onSave: (
-		storeType: "physical" | "service" | "booking" | null,
-	) => Promise<unknown>;
-}) {
-	const [saving, setSaving] = useState(false);
-	// Three cards, not the wizard's four: Food is a wizard-session router that
-	// stores as `physical`, so here (where only the stored default matters) the
-	// two share one card — two lit cards for one saved value would read broken.
-	const cards = [
-		{
-			value: "physical" as const,
-			icon: <UtensilsCrossed className="size-4" aria-hidden />,
-			label: "Food & physical goods",
-			hint: "Cakes, kuih, frozen, gear, packaged items",
-		},
-		{
-			value: "service" as const,
-			icon: <Wrench className="size-4" aria-hidden />,
-			label: "Service",
-			hint: "Cleaning, wash, repair",
-		},
-		{
-			value: "booking" as const,
-			icon: <CalendarRange className="size-4" aria-hidden />,
-			label: "Booking",
-			hint: "Campsite, venue, homestay, rental",
-		},
-	];
-	async function pick(value: "physical" | "service" | "booking") {
-		setSaving(true);
-		try {
-			// Tapping the selected type again clears it (back to no default).
-			await onSave(current === value ? null : value);
-			toast.success(
-				current === value ? "Store type cleared." : "Store type saved.",
-			);
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSaving(false);
-		}
-	}
-	return (
-		<div className="flex flex-col gap-4">
-			<SectionHeading
-				title="What does your store sell?"
-				description="Pre-selects the matching type when you add a new product — you can still pick a different type per product, and existing products never change. Tap again to clear."
-			/>
-			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-				{cards.map((card) => {
-					const selected = current === card.value;
-					return (
-						<button
-							key={card.label}
-							type="button"
-							disabled={saving}
-							aria-pressed={selected}
-							onClick={() => pick(card.value)}
-							className={cn(
-								"flex min-h-11 items-center gap-3 rounded-xl border p-3 text-left transition-colors disabled:opacity-60",
-								selected
-									? "border-accent bg-accent/10"
-									: "border-border hover:border-accent/60",
-							)}
-						>
-							<span className="text-accent-emphasis">{card.icon}</span>
-							<span className="min-w-0">
-								<span className="block text-sm font-semibold">
-									{card.label}
-								</span>
-								<span className="block truncate text-xs text-muted-foreground">
-									{card.hint}
-								</span>
-							</span>
-						</button>
-					);
-				})}
-			</div>
-		</div>
-	);
-}
-
 function LogoForm({
 	currentLogoUrl,
 	onSave,
@@ -1458,20 +1556,13 @@ function LogoForm({
 		if (!file) return;
 		setUploading(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () => generateLogoUploadUrl());
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const url = await generateLogoUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
-			setLocalPreview(URL.createObjectURL(prepared.blob));
+			const { storageId } = upload;
+			setLocalPreview(URL.createObjectURL(upload.blob));
 			await onSave(storageId);
 			toast.success("Logo saved.");
 		} catch (err) {
@@ -1494,8 +1585,9 @@ function LogoForm({
 	return (
 		<div className="flex flex-col gap-4">
 			<SectionHeading
-				title="Store logo"
-				description="Square images work best. Shown on your storefront header and dashboard. Max ~2MB."
+				level="sub"
+				title="Logo"
+				description="Square works best — shown on your storefront header and dashboard. Max ~2MB."
 			/>
 
 			{previewUrl ? (
@@ -1564,20 +1656,15 @@ function CoverImageForm({
 		if (!file) return;
 		setUploading(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () =>
+				generateCoverImageUploadUrl(),
+			);
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const url = await generateCoverImageUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
-			setLocalPreview(URL.createObjectURL(prepared.blob));
+			const { storageId } = upload;
+			setLocalPreview(URL.createObjectURL(upload.blob));
 			await onSave(storageId);
 			toast.success("Cover image saved.");
 		} catch (err) {
@@ -1600,8 +1687,9 @@ function CoverImageForm({
 	return (
 		<div className="flex flex-col gap-4">
 			<SectionHeading
+				level="sub"
 				title="Cover image"
-				description="Best size 1200 × 400 px (wide 3:1). Fills your storefront header and shows as the preview when you share your link. Max ~2MB."
+				description="1200 × 400 px (3:1) works best — it fills your header and previews when you share your link. Max ~2MB."
 			/>
 
 			{previewUrl ? (
@@ -1678,6 +1766,126 @@ function newDraft(type: "bank" | "qr"): MethodDraft {
 // Placeholder examples per store country (z8r3fdbmc9) — "Maybank / DuitNow /
 // Sdn Bhd" on a Singapore store reads as someone else's app. Examples only;
 // the fields stay free text.
+/**
+ * Settings → Payments (86eye9xd4, 8A + 1B). The decision first — how buyers
+ * pay — then the details that decision uses. While HitPay is the way buyers
+ * pay, the manual methods stay saved in a quieter dashed card: hidden from
+ * buyers on every order HitPay can take, still shown on one it can't (under
+ * its minimum), and one tap from coming back.
+ */
+function PaymentsTabBody({
+	retailer,
+	highlight,
+	buyersPayHighlight,
+	onSave,
+	onOpenIntegrations,
+}: {
+	retailer: NonNullable<ReturnType<typeof useDashboardRetailer>>;
+	highlight: FixHighlight | undefined;
+	/** A What's-new link to "How buyers pay" rings that card. */
+	buyersPayHighlight: FixHighlight | undefined;
+	onSave: ReturnType<typeof useUpdateSettings>;
+	onOpenIntegrations: () => void;
+}) {
+	const methods = retailer.paymentMethods ?? [];
+	const online =
+		retailer.hitpay?.hasCredentials === true && retailer.hitpay.enabled;
+	const methodNames = methods.map((m) => m.label);
+	const form = (
+		<PaymentMethodsForm
+			current={methods}
+			country={retailer.country}
+			onSave={(paymentMethods) => onSave({ paymentMethods })}
+		/>
+	);
+	return (
+		<div className="flex flex-col gap-6">
+			<HowBuyersPayCard
+				highlight={buyersPayHighlight}
+				hitpay={retailer.hitpay}
+				canUse={hasFeature(retailer.subscription, "onlinePayments")}
+				manualCount={methods.length}
+				onSave={onSave}
+				onOpenIntegrations={onOpenIntegrations}
+			/>
+			{online ? (
+				// A deep link to the methods lands on the editor row and opens it.
+				<Card dashed>
+					<SectionHeading
+						title="Manual methods"
+						description={
+							methods.length > 0
+								? `${listPhrase(methodNames)}. Kept for the day you switch back — and still shown on an order too small for HitPay.`
+								: "None saved. Add a bank or QR here before you switch back to manual transfer."
+						}
+						glance={<Glance tone="grey">Saved, hidden</Glance>}
+					/>
+					<ExpandableRow
+						id={SETTINGS_ANCHOR.payment_methods}
+						label="Edit methods"
+						value={
+							<span className="font-normal text-muted-foreground">
+								{methods.length} saved
+							</span>
+						}
+						highlight={highlight}
+					>
+						{form}
+					</ExpandableRow>
+				</Card>
+			) : (
+				<Card id={SETTINGS_ANCHOR.payment_methods} highlight={highlight}>
+					<SectionHeading
+						title="Payment methods"
+						description="What buyers use to pay you — shown on their private order page."
+						glance={
+							methods.length > 0 ? (
+								<Glance>
+									{methods.length} {methods.length === 1 ? "method" : "methods"}
+								</Glance>
+							) : (
+								<Glance tone="warn">None yet</Glance>
+							)
+						}
+					/>
+					<InfoDisclosure summary="How buyers see this">
+						<HelperBullets
+							items={[
+								"Never pasted into the WhatsApp chat — each buyer gets a private order-page link",
+								"Account numbers copy in one tap",
+								"Never shown on your public storefront",
+								"Drag the handle to reorder",
+							]}
+						/>
+					</InfoDisclosure>
+					{form}
+					{/* Says plainly that nothing chases the buyer automatically, and
+					    names the one manual tool that exists (docs/payment-reminder.md). */}
+					<InfoDisclosure summary="If a buyer hasn't paid">
+						<HelperBullets
+							items={[
+								"Kedaipal doesn't chase unpaid orders automatically — each order gets one WhatsApp, the confirmation, linking to the order page",
+								"From day 11 unpaid, a “Send payment reminder” button appears on the order page — once a day, until day 14",
+								"Sending it is always your call",
+							]}
+						/>
+					</InfoDisclosure>
+				</Card>
+			)}
+			<HitpayAccountCard
+				hitpay={retailer.hitpay}
+				onOpenIntegrations={onOpenIntegrations}
+			/>
+		</div>
+	);
+}
+
+/** "A", "A and B", "A, B and C" — the manual card's one-line inventory. */
+function listPhrase(items: string[]): string {
+	if (items.length <= 1) return items[0] ?? "";
+	return `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
+
 const BANK_PLACEHOLDER: Record<Country, string> = {
 	MY: "Maybank",
 	SG: "DBS",
@@ -1793,22 +2001,15 @@ function PaymentMethodsForm({
 		if (!file) return;
 		setUploadingKey(key);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const upload = await uploadImage(file, () => generateQrUploadUrl());
+			if (!upload.ok) {
+				toast.error(upload.message);
 				return;
 			}
-			const url = await generateQrUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const { storageId } = (await res.json()) as { storageId: string };
+			const { storageId } = upload;
 			update(key, {
 				qrImageStorageId: storageId,
-				qrPreviewUrl: URL.createObjectURL(prepared.blob),
+				qrPreviewUrl: URL.createObjectURL(upload.blob),
 			});
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
@@ -2040,6 +2241,9 @@ function PaymentMethodsForm({
 						maxLength={500}
 						className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
 					/>
+					<span className="text-xs text-muted-foreground">
+						{NOTE_LINK_HINT}
+					</span>
 				</label>
 
 				<button
@@ -2058,11 +2262,6 @@ function PaymentMethodsForm({
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-6">
-			<SectionHeading
-				title="Payment methods"
-				description="Add your banks and QR codes. For your buyers' security, these are no longer pasted into the WhatsApp chat — instead the order confirmation links each buyer to their own order page, where all of them show with one-tap copy. Never shown on your public storefront. Drag the handle to reorder within each group."
-			/>
-
 			{/* Bank accounts — shown on the buyer's order page (linked from WhatsApp). */}
 			<div className="flex flex-col gap-3">
 				<div className="flex items-center justify-between gap-2">
@@ -2073,7 +2272,7 @@ function PaymentMethodsForm({
 					<Button
 						type="button"
 						variant="outline"
-						className="h-9"
+						className="h-11 lg:h-9"
 						onClick={() => addMethod("bank")}
 						disabled={atCap}
 					>
@@ -2106,7 +2305,7 @@ function PaymentMethodsForm({
 					<Button
 						type="button"
 						variant="outline"
-						className="h-9"
+						className="h-11 lg:h-9"
 						onClick={() => addMethod("qr")}
 						disabled={atCap}
 					>
@@ -2144,546 +2343,6 @@ function PaymentMethodsForm({
 	);
 }
 
-// Only the keys still in TEMPLATE_KEYS are editable — the status/fallback copy
-// no longer has a sender, so it has no label here either. Partial + fallback so
-// a key added back to TEMPLATE_KEYS renders instead of crashing.
-const TEMPLATE_LABELS: Partial<Record<TemplateKey, string>> = {
-	confirm: "Your reply",
-};
-
-// The card earns its place on one narrow job: a buyer who types their order
-// number into the shared number gets this reply. The order's own confirmation is
-// a fixed Meta template and is NOT editable here — if TEMPLATE_KEYS ever empties
-// out, delete this card rather than shipping an editor that changes nothing.
-function MessageTemplatesForm({
-	current,
-	onSave,
-}: {
-	current: MessageTemplates | undefined;
-	onSave: (templates: MessageTemplates) => Promise<unknown>;
-}) {
-	const [activeLocale, setActiveLocale] = useState<Locale>("en");
-	const [draft, setDraft] = useState<MessageTemplates>(() => current ?? {});
-
-	function setField(locale: Locale, key: TemplateKey, value: string) {
-		setDraft((prev) => ({
-			...prev,
-			[locale]: { ...(prev[locale] ?? {}), [key]: value },
-		}));
-	}
-
-	function resetField(locale: Locale, key: TemplateKey) {
-		setDraft((prev) => {
-			const next = { ...(prev[locale] ?? {}) };
-			delete next[key];
-			return { ...prev, [locale]: next };
-		});
-	}
-
-	async function handleSubmit(e: FormEvent) {
-		e.preventDefault();
-		try {
-			await onSave(draft);
-			toast.success("Templates saved.");
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		}
-	}
-
-	const locales: Locale[] = ["en", "ms", "zh"];
-
-	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<div className="flex flex-col gap-1">
-				<h3 className="text-sm font-semibold text-foreground">
-					Reply when a buyer messages their order number
-				</h3>
-				<p className="text-xs text-muted-foreground leading-relaxed">
-					The confirmation your buyers receive is a fixed Meta-approved template
-					— WhatsApp's rule for messaging someone who hasn't replied yet — so it
-					can't be customised. This copy is the reply sent when a buyer writes
-					their order number (e.g. <code className="font-mono">ORD-1234</code>)
-					to our shared number. Use{" "}
-					<code className="font-mono">{"{shortId}"}</code> and{" "}
-					<code className="font-mono">{"{storeName}"}</code> as variables. Leave
-					blank to use the default.
-				</p>
-			</div>
-
-			<div className="flex gap-2 border-b border-input">
-				{locales.map((loc) => (
-					<button
-						key={loc}
-						type="button"
-						onClick={() => setActiveLocale(loc)}
-						className={`min-h-11 px-4 text-sm font-medium ${
-							activeLocale === loc
-								? "border-b-2 border-primary text-primary"
-								: "text-muted-foreground"
-						}`}
-					>
-						{LOCALE_LABELS[loc]}
-					</button>
-				))}
-			</div>
-
-			<div className="flex flex-col gap-4">
-				{TEMPLATE_KEYS.map((key) => {
-					const value = draft[activeLocale]?.[key] ?? "";
-					const placeholder = defaultTemplate(activeLocale, key);
-					return (
-						<label key={key} className="flex flex-col gap-1">
-							<div className="flex items-center justify-between">
-								<span className="text-sm font-medium">
-									{TEMPLATE_LABELS[key] ?? key}
-								</span>
-								{value ? (
-									<button
-										type="button"
-										onClick={() => resetField(activeLocale, key)}
-										className="text-xs text-muted-foreground underline"
-									>
-										Reset to default
-									</button>
-								) : null}
-							</div>
-							<textarea
-								value={value}
-								onChange={(e) => setField(activeLocale, key, e.target.value)}
-								placeholder={placeholder}
-								rows={3}
-								maxLength={1000}
-								className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-							/>
-						</label>
-					);
-				})}
-			</div>
-
-			<Button type="submit" className={SAVE_BTN_CLASS}>
-				Save templates
-			</Button>
-		</form>
-	);
-}
-
-// One editable stage in the StageEditor. `_key` is a stable React key so drag
-// reordering doesn't remount inputs; `id` is the server id ("" = new stage).
-type StageDraft = {
-	_key: string;
-	id: string;
-	anchor: StageAnchor;
-	labelEn: string;
-	labelMs: string;
-	labelZh: string;
-	descEn: string;
-	descMs: string;
-	descZh: string;
-};
-
-function seedToDraft(s: OrderStage): StageDraft {
-	return {
-		_key: crypto.randomUUID(),
-		// Synthesized defaults ("default:<anchor>") aren't real ids — saving turns
-		// them into configured stages with fresh ids.
-		id: s.id.startsWith("default:") ? "" : s.id,
-		anchor: s.anchor,
-		labelEn: s.label.en,
-		labelMs: s.label.ms ?? "",
-		labelZh: s.label.zh ?? "",
-		descEn: s.description?.en ?? "",
-		descMs: s.description?.ms ?? "",
-		descZh: s.description?.zh ?? "",
-	};
-}
-
-// Map drafts to the wire/validation shape (stable id for dup-checking).
-function draftsToStages(drafts: StageDraft[]): OrderStage[] {
-	return drafts.map((d, i) => ({
-		id: d.id || d._key,
-		anchor: d.anchor,
-		label: {
-			en: d.labelEn.trim(),
-			...(d.labelMs.trim() ? { ms: d.labelMs.trim() } : {}),
-			...(d.labelZh.trim() ? { zh: d.labelZh.trim() } : {}),
-		},
-		...(d.descEn.trim() || d.descMs.trim() || d.descZh.trim()
-			? {
-					description: {
-						...(d.descEn.trim() ? { en: d.descEn.trim() } : {}),
-						...(d.descMs.trim() ? { ms: d.descMs.trim() } : {}),
-						...(d.descZh.trim() ? { zh: d.descZh.trim() } : {}),
-					},
-				}
-			: {}),
-		sortOrder: i,
-	}));
-}
-
-function StageEditor({
-	seed,
-	isCustomized,
-	onSave,
-}: {
-	seed: OrderStage[];
-	isCustomized: boolean;
-	onSave: (stages: OrderStage[]) => Promise<unknown>;
-}) {
-	const [drafts, setDrafts] = useState<StageDraft[]>(() =>
-		seed.map(seedToDraft),
-	);
-	const [saving, setSaving] = useState(false);
-	// Cards collapse to a one-line summary by default (a full stage card is tall on
-	// mobile, so the page reads better at a glance). Click a card to expand it.
-	// During a drag the row always renders compact (state.isSorting), and the
-	// expanded set is preserved so cards re-open exactly as they were afterwards.
-	const [expanded, setExpanded] = useState<Set<string>>(new Set());
-	const { markAdded, revealRef } = useRevealOnAdd();
-	function toggleExpand(key: string) {
-		setExpanded((prev) => {
-			const next = new Set(prev);
-			if (next.has(key)) next.delete(key);
-			else next.add(key);
-			return next;
-		});
-	}
-
-	function update(key: string, patch: Partial<StageDraft>) {
-		setDrafts((prev) =>
-			prev.map((d) => (d._key === key ? { ...d, ...patch } : d)),
-		);
-	}
-	function remove(key: string) {
-		setDrafts((prev) => prev.filter((d) => d._key !== key));
-	}
-	function addStage() {
-		if (drafts.length >= MAX_ORDER_STAGES) {
-			toast.error(`You can have at most ${MAX_ORDER_STAGES} stages.`);
-			return;
-		}
-		const key = crypto.randomUUID();
-		// Open the new (empty) stage so the seller can fill it in immediately, and
-		// reveal it (scroll + focus) — it appends below the fold on a phone.
-		setExpanded((prev) => new Set(prev).add(key));
-		markAdded(key);
-		setDrafts((prev) => [
-			...prev,
-			{
-				_key: key,
-				id: "",
-				// Default to the last stage's anchor so the monotonic rule holds and
-				// the seller usually doesn't need to touch the dropdown.
-				anchor: prev[prev.length - 1]?.anchor ?? "confirmed",
-				labelEn: "",
-				labelMs: "",
-				labelZh: "",
-				descEn: "",
-				descMs: "",
-				descZh: "",
-			},
-		]);
-	}
-
-	const errors = collectStageConfigErrors(draftsToStages(drafts));
-	const canSave = drafts.length > 0 && errors.length === 0 && !saving;
-
-	async function handleSave() {
-		setSaving(true);
-		try {
-			await onSave(draftsToStages(drafts));
-			toast.success("Order stages saved.");
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSaving(false);
-		}
-	}
-
-	async function handleReset() {
-		setSaving(true);
-		try {
-			await onSave([]); // empty → server clears → synthesized defaults
-			toast.success("Reset to the default stages.");
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setSaving(false);
-		}
-	}
-
-	function stageCard(
-		d: StageDraft,
-		index: number,
-		handle: ReactNode,
-		state: { isSorting: boolean; isOverlay: boolean },
-	) {
-		const displayLabel = d.labelEn.trim() || `Stage ${index + 1}`;
-		if (state.isSorting) {
-			return (
-				<div
-					className={`flex items-center gap-2 rounded-xl border bg-card p-3 ${
-						state.isOverlay ? "border-accent shadow-lg" : "border-border"
-					}`}
-				>
-					{handle}
-					<span className="truncate text-sm font-medium">{displayLabel}</span>
-					<span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-						{ANCHOR_UI_LABELS[d.anchor]}
-					</span>
-				</div>
-			);
-		}
-
-		const isExpanded = expanded.has(d._key);
-		if (!isExpanded) {
-			// Collapsed-by-default summary — same info as the drag row; click to open.
-			return (
-				<div className="flex items-center gap-2 rounded-xl border border-border bg-card p-3">
-					{handle}
-					<button
-						type="button"
-						onClick={() => toggleExpand(d._key)}
-						aria-expanded={false}
-						className="flex min-w-0 flex-1 items-center gap-2 text-left"
-					>
-						<span className="truncate text-sm font-medium">{displayLabel}</span>
-						<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-							{ANCHOR_UI_LABELS[d.anchor]}
-						</span>
-						<ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground" />
-					</button>
-				</div>
-			);
-		}
-
-		return (
-			<div
-				ref={revealRef(d._key)}
-				className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
-			>
-				{/* Header mirrors the collapsed row exactly (handle + label + chevron
-				    far-right) so the toggle target doesn't jump when expanding. */}
-				<div className="flex items-center gap-2">
-					{handle}
-					<button
-						type="button"
-						onClick={() => toggleExpand(d._key)}
-						aria-expanded={true}
-						className="flex min-w-0 flex-1 items-center gap-2 text-left"
-					>
-						<span className="truncate text-sm font-medium">{displayLabel}</span>
-						<ChevronDown className="ml-auto size-4 shrink-0 rotate-180 text-muted-foreground" />
-					</button>
-				</div>
-
-				{/* Stack on mobile (full-width, never misaligned); three columns at sm+
-				    where each label fits one line so the inputs line up. */}
-				<div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-medium text-muted-foreground">
-							Label (English)
-						</span>
-						<Input
-							type="text"
-							variant="field"
-							maxLength={STAGE_LABEL_MAX_LENGTH}
-							value={d.labelEn}
-							onChange={(e) => update(d._key, { labelEn: e.target.value })}
-							placeholder="e.g. Sewing"
-						/>
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-medium text-muted-foreground">
-							Label (Bahasa Malaysia)
-						</span>
-						<Input
-							type="text"
-							variant="field"
-							maxLength={STAGE_LABEL_MAX_LENGTH}
-							value={d.labelMs}
-							onChange={(e) => update(d._key, { labelMs: e.target.value })}
-							placeholder="Optional"
-						/>
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-medium text-muted-foreground">
-							Label (中文)
-						</span>
-						<Input
-							type="text"
-							variant="field"
-							maxLength={STAGE_LABEL_MAX_LENGTH}
-							value={d.labelZh}
-							onChange={(e) => update(d._key, { labelZh: e.target.value })}
-							placeholder="Optional"
-						/>
-					</label>
-				</div>
-
-				<label className="flex flex-col gap-1">
-					<span className="text-xs font-medium text-muted-foreground">
-						Counts as{" "}
-						<span className="font-normal">
-							— which milestone this step represents
-						</span>
-					</span>
-					<select
-						value={d.anchor}
-						onChange={(e) =>
-							update(d._key, { anchor: e.target.value as StageAnchor })
-						}
-						className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-					>
-						{STAGE_ANCHORS.map((a) => (
-							<option key={a} value={a}>
-								{ANCHOR_UI_LABELS[a]}
-							</option>
-						))}
-					</select>
-					<span className="text-xs text-muted-foreground">
-						{d.anchor === "confirmed"
-							? "The order has been accepted. Use this for your first step."
-							: d.anchor === "delivered"
-								? "The order is complete. Use this for your last step."
-								: "A step while you're fulfilling the order."}
-					</span>
-				</label>
-
-				<div className="grid grid-cols-1 gap-2">
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-medium text-muted-foreground">
-							Buyer note (optional) — English
-						</span>
-						<textarea
-							value={d.descEn}
-							onChange={(e) => update(d._key, { descEn: e.target.value })}
-							placeholder="e.g. Drying — usually 1–2 days depending on weather"
-							rows={2}
-							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
-							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-						/>
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-medium text-muted-foreground">
-							Buyer note (optional) — Bahasa Malaysia
-						</span>
-						<textarea
-							value={d.descMs}
-							onChange={(e) => update(d._key, { descMs: e.target.value })}
-							placeholder="Pilihan"
-							rows={2}
-							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
-							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-						/>
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-medium text-muted-foreground">
-							Buyer note (optional) — 中文
-						</span>
-						<textarea
-							value={d.descZh}
-							onChange={(e) => update(d._key, { descZh: e.target.value })}
-							placeholder="可选"
-							rows={2}
-							maxLength={STAGE_DESCRIPTION_MAX_LENGTH}
-							className="rounded-xl border border-input bg-background px-4 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-						/>
-					</label>
-				</div>
-
-				{/* Destructive action lives at the bottom (out of the toggle header) so
-				    it can't be hit while quick-expanding/collapsing. */}
-				<button
-					type="button"
-					onClick={() => remove(d._key)}
-					className="flex h-9 items-center gap-1.5 self-start rounded-lg px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
-				>
-					<Trash2 className="size-3.5" />
-					Remove stage
-				</button>
-			</div>
-		);
-	}
-
-	return (
-		<div className="flex flex-col gap-4">
-			<div className="flex items-center justify-between gap-2">
-				<SectionHeading
-					title="Stages"
-					description="Drag to reorder. Each stage must “count as” the same milestone as the one before it, or a later one."
-				/>
-				<Button
-					type="button"
-					variant="outline"
-					className="h-9 shrink-0"
-					onClick={addStage}
-					disabled={drafts.length >= MAX_ORDER_STAGES}
-				>
-					<Plus className="size-4" />
-					Add stage
-				</Button>
-			</div>
-
-			{/* Stages used to be able to fire a WhatsApp each. They can't any more, so
-			    say what they still do — otherwise a seller who relied on stage pings
-			    just sees the toggle gone. */}
-			<p className="text-xs text-muted-foreground leading-relaxed">
-				Stages are your own words for the steps an order goes through. They name
-				the steps on the buyer's order page too — advancing a stage updates that
-				page instantly, but doesn't send the buyer a WhatsApp.
-			</p>
-
-			{drafts.length === 0 ? (
-				<p className="rounded-xl border border-dashed border-input bg-muted/20 px-4 py-4 text-center text-sm text-muted-foreground">
-					No stages — add at least one, or reset to the defaults.
-				</p>
-			) : (
-				<SortableList
-					items={drafts}
-					getId={(d) => d._key}
-					onReorder={(ids) =>
-						setDrafts((prev) => reorderByIds(prev, ids, (d) => d._key))
-					}
-					renderItem={(d, handle, state) =>
-						stageCard(d, drafts.indexOf(d), handle, state)
-					}
-					className="flex flex-col gap-3"
-				/>
-			)}
-
-			{errors.length > 0 ? (
-				<ul className="flex flex-col gap-1 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-xs text-destructive">
-					{errors.map((e) => (
-						<li key={e}>• {e}</li>
-					))}
-				</ul>
-			) : null}
-
-			<div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-end">
-				{isCustomized ? (
-					<Button
-						type="button"
-						variant="ghost"
-						onClick={handleReset}
-						disabled={saving}
-						className="h-11 lg:h-10 lg:w-auto"
-					>
-						Reset to defaults
-					</Button>
-				) : null}
-				<Button
-					type="button"
-					onClick={handleSave}
-					disabled={!canSave}
-					className={SAVE_BTN_CLASS}
-				>
-					{saving ? "Saving…" : "Save stages"}
-				</Button>
-			</div>
-		</div>
-	);
-}
-
 function LocaleForm({
 	current,
 	onSave,
@@ -2691,50 +2350,58 @@ function LocaleForm({
 	current: Locale;
 	onSave: (locale: Locale) => Promise<unknown>;
 }) {
+	const localeSelectId = useId();
 	const [value, setValue] = useState<Locale>(current);
+	const [saving, setSaving] = useState(false);
 	const dirty = value !== current;
 
 	async function handleSubmit(e: FormEvent) {
 		e.preventDefault();
+		setSaving(true);
 		try {
 			await onSave(value);
 			toast.success("Language saved.");
 		} catch (err) {
 			toast.error(convexErrorMessage(err));
+		} finally {
+			setSaving(false);
 		}
 	}
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<label className="flex flex-col gap-2">
-				<span className="text-sm font-medium">Message language</span>
-				<select
-					value={value}
-					onChange={(e) => setValue(e.target.value as Locale)}
-					className="min-h-11 rounded-xl border border-input bg-background px-4 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
-				>
-					{LOCALE_OPTIONS.map((opt) => (
-						<option key={opt.value} value={opt.value}>
-							{opt.label}
-						</option>
-					))}
-				</select>
-				{/* The field reaches further than its old "sent to shoppers" copy
-				    admitted: retailer email alerts have always rendered in it, and
-				    the WhatsApp order alerts (86eyhw9zy) now do too. */}
-				<span className="text-xs text-muted-foreground">
-					Used for the order confirmation buyers receive and their order page —
-					and for the order alerts we send you on WhatsApp.
-				</span>
-			</label>
-
-			<Button type="submit" disabled={!dirty} className={SAVE_BTN_CLASS}>
-				Save language
+			{/* The language reaches further than "sent to shoppers": retailer
+			    email alerts have always rendered in it, and the WhatsApp order
+			    alerts (86eyhw9zy) do too. */}
+			<SectionHeading
+				title="Message language"
+				description="Used for the confirmation buyers receive, their order page, and the alerts we send you."
+				glance={<Glance tone="grey">{LOCALE_LABELS[current]}</Glance>}
+			/>
+			<Select
+				id={localeSelectId}
+				aria-label="Message language"
+				variant="field"
+				className="w-full"
+				value={value}
+				onChange={(e) => setValue(e.target.value as Locale)}
+			>
+				{LOCALE_OPTIONS.map((opt) => (
+					<option key={opt.value} value={opt.value}>
+						{opt.label}
+					</option>
+				))}
+			</Select>
+			<Button
+				type="submit"
+				disabled={!dirty || saving}
+				className={SAVE_BTN_CLASS}
+			>
+				{saving ? "Saving…" : "Save language"}
 			</Button>
 		</form>
 	);
 }
-
 function CountryForm({
 	current,
 	currency,
@@ -2742,10 +2409,15 @@ function CountryForm({
 	deliveryBooking,
 	waPhone,
 	notifyWaPhone,
+	autoRenewOn,
 	onSave,
 }: {
 	current: Country;
 	currency: string;
+	/** A saved auto-renew method is attached. A real country change detaches
+	 * it (86eyp7hn7: the card was authorised in the old billing currency), so
+	 * the card says so BEFORE the save and the toast confirms it after. */
+	autoRenewOn: boolean;
 	/** Read only to warn BEFORE the save about what will need updating after
 	 * it. None of these block the switch any more, and none are cleared by it
 	 * (86eyqgujv) — the checklist below the card tracks them until fixed. */
@@ -2756,17 +2428,21 @@ function CountryForm({
 	deliveryBooking?: { enabled: boolean; vehicleType: "MOTORCYCLE" | "CAR" };
 	waPhone?: string;
 	notifyWaPhone?: string;
-	onSave: (patch: { country: Country }) => Promise<unknown>;
+	onSave: (patch: {
+		country: Country;
+	}) => Promise<{ autoRenewDetached: boolean }>;
 }) {
 	const form = useAppForm({
 		defaultValues: { country: current as string },
 		onSubmit: async ({ value }) => {
 			try {
-				await onSave({ country: value.country as Country });
+				const result = await onSave({ country: value.country as Country });
 				toast.success(
 					value.country === current
 						? "Country saved."
-						: `Country saved — check the list below for anything that still needs updating.`,
+						: result.autoRenewDetached
+							? `Country saved — auto-renewal is now off. Set it up again on Billing with ${autoRenewMethodPhrase(storeBillingCurrency(value.country as Country))}, and check the list below.`
+							: `Country saved — check the list below for anything that still needs updating.`,
 				);
 			} catch (err) {
 				toast.error(convexErrorMessage(err));
@@ -2792,7 +2468,7 @@ function CountryForm({
 						label="Store country"
 						options={COUNTRY_OPTIONS}
 						required
-						description="Where your store operates. Checkout accepts this country's phone numbers and addresses, and buyers see forms that match it."
+						description="Checkout accepts this country's phone numbers and addresses."
 					/>
 				)}
 			</form.AppField>
@@ -2813,6 +2489,15 @@ function CountryForm({
 					// turns "why is my delivery not quoting?" a week later into a
 					// decision made now, with the same list waiting underneath the
 					// card afterwards.
+					// The store's own money is NOT a carried-over thing that "only
+					// works in" the old country — it is the one thing the switch
+					// changes (86eyp7hn7), so it gets its own sentence above the
+					// carried list rather than a bullet under that list's frame.
+					const billingLine = `Your Kedaipal subscription bills in ${storeBillingCurrency(picked)} from your next invoice.${
+						autoRenewOn
+							? ` Auto-renewal turns off — your saved method was authorised in ${storeBillingCurrency(current)} — so set it up again on Billing with ${autoRenewMethodPhrase(storeBillingCurrency(picked))} afterwards.`
+							: ""
+					}`;
 					const carried = [
 						...(deliveryConfig &&
 						!deliveryModeAllowed(picked, deliveryConfig.mode)
@@ -2837,6 +2522,7 @@ function CountryForm({
 							{expectedCurrency !== currency ? (
 								<p className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
 									Stores in {COUNTRY_LABELS[picked]} usually price in{" "}
+									{/* currency-literal-ok: compares currency SETTINGS, not amounts */}
 									{expectedCurrency} — yours is set to {currency}. Change it in
 									the Currency card below if that's not intentional.
 								</p>
@@ -2847,6 +2533,7 @@ function CountryForm({
 										Switching to {COUNTRY_LABELS[picked]} keeps everything you
 										have set up.
 									</p>
+									<p className="text-muted-foreground">{billingLine}</p>
 									{carried.length > 0 ? (
 										<>
 											<p className="text-muted-foreground">
@@ -2898,7 +2585,8 @@ function CurrencyForm({
 				const synced = result?.productsCurrencySynced ?? 0;
 				toast.success(
 					synced > 0
-						? `Currency saved — ${synced} product${synced === 1 ? "" : "s"} switched to ${value.currency}. Prices kept their numbers, so re-check them.`
+						? // currency-literal-ok: names the currency SETTING the seller just saved.
+							`Currency saved — ${synced} product${synced === 1 ? "" : "s"} switched to ${value.currency}. Prices kept their numbers, so re-check them.`
 						: "Currency saved.",
 				);
 			} catch (err) {
@@ -2919,10 +2607,20 @@ function CurrencyForm({
 						label="Storefront currency"
 						options={CURRENCY_OPTIONS}
 						required
-						description="Used for product prices and order totals. Changing it switches every product to the new currency — amounts keep their numbers (RM 12 becomes S$ 12), so re-check your prices after switching. Orders already placed keep the currency they were placed in, but Insights and customer lifetime totals add those older amounts up as plain numbers, so totals that span the change won't convert."
+						description="Used for product prices and order totals."
 					/>
 				)}
 			</form.AppField>
+			<InfoDisclosure summary="Before you change currency">
+				<HelperBullets
+					items={[
+						// currency-literal-ok: the switch explainer names both currencies on purpose.
+						"Every product switches — amounts keep their numbers (RM 12 becomes S$ 12), so re-check your prices",
+						"Orders already placed keep the currency they were placed in",
+						"Insights and customer lifetime totals add older amounts up as plain numbers, so totals that span the change won't convert",
+					]}
+				/>
+			</InfoDisclosure>
 
 			<form.Subscribe
 				selector={(s) => ({
@@ -2948,77 +2646,12 @@ function CurrencyForm({
 	);
 }
 
-function NotifyEmailForm({
-	current,
-	onSave,
-}: {
-	current: string;
-	onSave: (notifyEmail: string) => Promise<unknown>;
-}) {
-	const form = useAppForm({
-		defaultValues: { notifyEmail: current },
-		validators: { onChange: settingsNotifyEmailFormSchema },
-		onSubmit: async ({ value }) => {
-			try {
-				await onSave(value.notifyEmail.trim());
-				toast.success("Notification email saved.");
-			} catch (err) {
-				toast.error(convexErrorMessage(err));
-			}
-		},
-	});
-
-	function handleSubmit(e: FormEvent) {
-		submitThenFocusError(form, e);
-	}
-
-	return (
-		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
-			<form.AppField name="notifyEmail">
-				{(field) => (
-					<field.TextField
-						label="Notification email"
-						placeholder="orders@yourstore.com"
-						type="email"
-						inputMode="email"
-						description="We'll email you here whenever a new order arrives or a buyer says they've paid. If WhatsApp order alerts are on, these arrive on WhatsApp instead — and this email is the backup if one can't be delivered. Leave blank to turn off email notifications."
-					/>
-				)}
-			</form.AppField>
-
-			<form.Subscribe
-				selector={(s) => ({
-					canSubmit: s.canSubmit,
-					isSubmitting: s.isSubmitting,
-					values: s.values,
-				})}
-			>
-				{({ canSubmit, isSubmitting, values }) => {
-					const dirty = values.notifyEmail.trim() !== current.trim();
-					return (
-						<Button
-							type="submit"
-							disabled={!dirty || !canSubmit || isSubmitting}
-							className={SAVE_BTN_CLASS}
-						>
-							{isSubmitting ? "Saving…" : "Save email"}
-						</Button>
-					);
-				}}
-			</form.Subscribe>
-		</form>
-	);
-}
-
-// The seller-contact description names the store's own mobile kind. The MY
-// line also names the Lalamove sender-contact role — Lalamove is MY-market, so
-// that sentence would be a false promise on an SG store.
-// An order sends the buyer exactly one WhatsApp (the confirmation), so this
-// number's real home is the buyer's order page — that's where they reach the
-// seller for the rest of the order's life. Don't promise "updates" here.
+// The field hint under the seller's contact number. Its card already says
+// where buyers see it; this names the number kind and the rider role (the
+// store's own number is the Lalamove sender contact in both markets).
 const WA_PHONE_DESCRIPTION: Record<Country, string> = {
-	MY: "Shown to buyers on their order page (and in the order confirmation) so they can message you directly. Malaysian mobile — it's also the sender contact when a rider collects from you.",
-	SG: "Shown to buyers on their order page (and in the order confirmation) so they can message you directly. Singapore mobile with WhatsApp.",
+	MY: "Malaysian mobile with WhatsApp — riders also call it when they collect from you.",
+	SG: "Singapore mobile with WhatsApp — riders also call it when they collect from you.",
 };
 
 function WaPhoneForm({
@@ -3053,10 +2686,21 @@ function WaPhoneForm({
 
 	return (
 		<form onSubmit={handleSubmit} className="flex flex-col gap-4">
+			<SectionHeading
+				title="Contact number"
+				description="Buyers tap it on their order page to message you directly."
+				glance={
+					current.trim() ? (
+						<Glance tone="grey">{formatMobile(current)}</Glance>
+					) : (
+						<Glance tone="warn">Not set</Glance>
+					)
+				}
+			/>
 			<form.AppField name="waPhone">
 				{(field) => (
 					<field.TextField
-						label="Your contact WhatsApp number"
+						label="Your WhatsApp number"
 						type="tel"
 						inputMode="tel"
 						autoComplete="tel"

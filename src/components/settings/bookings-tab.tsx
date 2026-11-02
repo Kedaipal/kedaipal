@@ -6,7 +6,6 @@
 
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import { CalendarRange, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -15,6 +14,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { clientEnv } from "../../lib/env";
 import { convexErrorMessage } from "../../lib/format";
+import { NewBookingLinks } from "../products/new-booking-links";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
 import {
@@ -69,13 +69,11 @@ export function BookingsTab({ retailerId }: { retailerId: Id<"retailers"> }) {
 						No booking listings yet
 					</p>
 					<p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
-						This section holds the Google Calendar feed for listings sold by
-						date. Create a product and pick the Booking kind first.
+						This section holds the Google Calendar feed for plans and stays sold
+						by date. Add one first — it opens with that type already picked.
 					</p>
 				</div>
-				<Button asChild variant="outline" className="tap-target">
-					<Link to="/app/products/new">Create a booking listing</Link>
-				</Button>
+				<NewBookingLinks />
 			</section>
 		);
 	}

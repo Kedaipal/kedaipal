@@ -6,7 +6,13 @@ import { compareCalendarVersions } from "../../convex/lib/appVersion";
 import type { Release } from "../content/releases";
 import { RELEASE_KIND_LABELS, RELEASES } from "../content/releases";
 import { isCalendarVersion } from "./app-version";
-import { localized, resolveWhatsNew } from "./releases";
+import { isKindCard } from "./kind-card";
+import {
+	localized,
+	PANEL_RELEASE_LIMIT,
+	resolveWhatsNew,
+	splitPanelReleases,
+} from "./releases";
 import {
 	isSpotlightKey,
 	SPOTLIGHT_ANCHOR,
@@ -113,6 +119,47 @@ describe("resolveWhatsNew", () => {
 		});
 		expect(s.all.map((r) => r.version)).toEqual(["2026.08.2", "2026.08.1"]);
 		expect(s.unseenVersions.has("2026.09.1")).toBe(false);
+	});
+});
+
+describe("splitPanelReleases", () => {
+	const seven = [
+		release("2026.09.7"),
+		release("2026.09.6"),
+		release("2026.09.5"),
+		release("2026.09.4"),
+		release("2026.09.3"),
+		release("2026.09.2"),
+		release("2026.09.1"),
+	];
+
+	test("shows the newest five and folds the rest", () => {
+		const { shown, older } = splitPanelReleases(seven, new Set());
+		expect(shown.map((r) => r.version)).toEqual([
+			"2026.09.7",
+			"2026.09.6",
+			"2026.09.5",
+			"2026.09.4",
+			"2026.09.3",
+		]);
+		expect(older.map((r) => r.version)).toEqual(["2026.09.2", "2026.09.1"]);
+		expect(PANEL_RELEASE_LIMIT).toBe(5);
+	});
+
+	test("never folds an unseen release — the limit stretches to fit them", () => {
+		// A seller back from a long gap has six unseen releases; hiding the
+		// sixth behind "Show older" would make the panel lie about what they
+		// missed.
+		const unseen = new Set(seven.slice(0, 6).map((r) => r.version));
+		const { shown, older } = splitPanelReleases(seven, unseen);
+		expect(shown).toHaveLength(6);
+		expect(older.map((r) => r.version)).toEqual(["2026.09.1"]);
+	});
+
+	test("folds nothing when there is nothing past the limit", () => {
+		const { shown, older } = splitPanelReleases(seven.slice(0, 3), new Set());
+		expect(shown).toHaveLength(3);
+		expect(older).toHaveLength(0);
 	});
 });
 
@@ -333,6 +380,13 @@ describe("the shipped RELEASES content", () => {
 					`${e.href}: "${spot}" is not a spotlight key`,
 				).toBe(true);
 				const target = SPOTLIGHT_ANCHOR[spot as SpotlightKey];
+				if (target.page === "home") {
+					expect(path, `${e.href}: a Home spotlight lands on Home`).toBe(
+						"/app",
+					);
+					expect(params.get("tab")).toBeNull();
+					continue;
+				}
 				if (target.page === "product") {
 					// The products LIST is the first hop — never a guessed id.
 					expect(path, `${e.href}: a product spotlight lands on the list`).toBe(
@@ -348,6 +402,29 @@ describe("the shipped RELEASES content", () => {
 					params.get("tab"),
 					`${e.href}: spot "${spot}" lives on the ${target.tab} tab`,
 				).toBe(target.tab);
+			}
+		}
+	});
+
+	test("every `?card=` deep link names a real step-0 card, on the new-product route", () => {
+		// `/app/products/new` DROPS a card it doesn't know (a hand-typed value
+		// must never select something step 0 doesn't render) — so a typo like
+		// `?card=events` wouldn't fail anywhere: the note would just open the
+		// wizard on the store's own type, the exact miss `?card=` exists to
+		// prevent (z8r3fdhkr7). This is where the typo fails instead.
+		for (const r of RELEASES) {
+			for (const e of r.entries) {
+				const [path, query] = (e.href ?? "").split("?");
+				const card = new URLSearchParams(query ?? "").get("card");
+				if (card === null) continue;
+				expect(
+					path,
+					`${e.href}: \`?card=\` only means something on the new-product wizard`,
+				).toBe("/app/products/new");
+				expect(
+					isKindCard(card),
+					`${e.href}: "${card}" is not a step-0 card`,
+				).toBe(true);
 			}
 		}
 	});

@@ -267,6 +267,72 @@ describe("WhatsNew — caught-up state", () => {
 	});
 });
 
+describe("WhatsNew — folding older releases", () => {
+	function quiet(version: string): Release {
+		return { ...QUIET, version, date: "2026-08-01" };
+	}
+	const seven = [
+		{ ...NOTABLE, version: "2026.09.1" },
+		quiet("2026.08.9"),
+		quiet("2026.08.8"),
+		quiet("2026.08.7"),
+		quiet("2026.08.6"),
+		quiet("2026.08.5"),
+		quiet("2026.08.4"),
+	];
+
+	async function openPanel() {
+		screen.getByRole("button", { name: "What's new" }).click();
+		await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+	}
+	const dividers = () => screen.getAllByText(/^2026\.\d\d\.\d+$/);
+
+	it("shows five, then the rest on one tap — nothing becomes unreadable", async () => {
+		releasesUnderTest = seven;
+		mockSeen({ seenVersion: "2026.09.1" });
+		renderShell();
+		await openPanel();
+		expect(dividers()).toHaveLength(5);
+		const more = screen.getByRole("button", { name: /show 2 older releases/i });
+		more.click();
+		await waitFor(() => expect(dividers()).toHaveLength(7));
+		expect(screen.queryByRole("button", { name: /older release/i })).toBeNull();
+	});
+
+	it("never folds an unseen release, even past the limit", async () => {
+		releasesUnderTest = seven;
+		// Seen only the oldest → six unseen; all six must be on screen. The
+		// notable one auto-opens the modal, so there is nothing to click.
+		mockSeen({ seenVersion: "2026.08.4" });
+		renderShell();
+		await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+		expect(dividers()).toHaveLength(6);
+		expect(
+			screen.getByRole("button", { name: /show 1 older release$/i }),
+		).toBeTruthy();
+	});
+
+	it("starts folded again on the next open", async () => {
+		releasesUnderTest = seven;
+		mockSeen({ seenVersion: "2026.09.1" });
+		renderShell();
+		await openPanel();
+		screen.getByRole("button", { name: /older releases/i }).click();
+		await waitFor(() => expect(dividers()).toHaveLength(7));
+		screen.getByRole("button", { name: "Done" }).click();
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		await openPanel();
+		expect(dividers()).toHaveLength(5);
+	});
+
+	it("shows no fold button when the history fits", async () => {
+		mockSeen({ seenVersion: "2026.09.1" });
+		renderShell();
+		await openPanel();
+		expect(screen.queryByRole("button", { name: /older release/i })).toBeNull();
+	});
+});
+
 describe("WhatsNew — host menu handoff", () => {
 	it("tells its host to close when the panel opens", async () => {
 		// PR #218 review. The More sheet passes its `close` here. Without it,

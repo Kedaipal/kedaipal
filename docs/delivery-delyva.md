@@ -67,6 +67,14 @@ impossible to express, which is why each provider owns its own table.
 this they had *no* courier automation at all — every parcel arranged by hand
 with the tracking number typed in. Delyva is that market's whole answer.
 
+> **Superseded on both halves (Sep 2026)** — kept as the reasoning of the time.
+> Lalamove opened Singapore
+> ([`z8r3fdch3r`](https://app.clickup.com/t/z8r3fdch3r),
+> `COUNTRY_RIDER_BOOKING.SG = true`), and Delyva's SG tenant turned out to ship
+> an **empty** service catalogue in practice (no SG sandbox, bring-your-own
+> courier) — so an SG store can connect Delyva and quote nothing. The current
+> truth is the comment on `COUNTRY_DELYVA_BOOKING` in `convex/lib/delivery.ts`.
+
 What is country-shaped, and where it comes from:
 
 - **Postal codes.** MY is 5 digits and called a *postcode*; SG is 6 and called
@@ -153,13 +161,76 @@ and there is no quotation id — order create re-prices. So:
 summariser the weight-zone pricing uses. When the cart is unweighable (a
 custom line, or missing product weights) the dialog asks the seller to type
 the packed weight (`weightKgOverride`); the seller can always override, since
-they know the real packed weight best.
+they know the real packed weight best. The *checkout* quote for such a cart
+was priced at the one-kilo floor (23 Oct 2026, see
+[`delivery-live-pricing.md`](./delivery-live-pricing.md)), so this is also
+where a heavier-than-a-kilo parcel's under-collection becomes visible — the
+card shows "buyer paid X" beside every service price, and when the order's
+snapshot carries the floor stamp (`weightFloored`) the card says so above the
+weight box: "Priced at the 1 kg floor — N items had no weight.", or, for a
+cart over a kilo, "N items had no weight at checkout and were priced without
+it."
+
+**Arming is gated on the catalogue** (23 Oct 2026): on a live-pricing store,
+`updateSettings({ enabled: true })` refuses while any buyable choice has no
+parcel weight (`assertCatalogueWeighed`, `convex/lib/parcelWeights.ts`), and
+`getSettings` reports the count as `bookingHeldForWeights` so the
+Courier-booking toggle greys out with the reason and a link to Products →
+Parcel weights. `storeConnection` (the connect action's save) likewise
+stores the key but keeps `enabled: false` on such a store, returning
+`bookingHeldForWeights` so the Integrations card and the connect toast say
+why booking stayed off. Replacing the key on a store whose booking is
+already ON keeps it on (`alreadyArmed`) — a rotation is maintenance, and
+holding it would stop Delyva quoting at checkout with no switch touched
+(PR #416 review). Disabling is never gated, and a store that is
+already armed keeps editing its address and parcel type — only the OFF→ON
+flip is the gate. See
+[`delivery-live-pricing.md`](./delivery-live-pricing.md#parcel-weight-is-required-where-pricing-depends-on-it-23-oct-2026).
 
 **Wire shapes were probed live** against a demo account (27 Aug 2026), not
 assumed: the waypoint address rides *inside* `contact` (a top-level
 `address1` is rejected), `inventory` is required on **both** waypoints, and
 `POST /order/{id}/cancel` is the working cancel path (the ms2781 variant also
 exists; both return `statusCode: 900`).
+
+### Contact phones
+
+Buyers can give a WhatsApp number from any country
+([`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274) —
+[`phone-numbers.md`](./phone-numbers.md)), but a Delyva booking lives inside the
+store's country (one tenant per country), and a domestic courier handed an
+overseas number may not be able to call it. So Delyva follows the rule Lalamove
+dispatch already did, from the same provider-neutral helper
+(`toDomesticContactPhone`, `convex/lib/courierContact.ts`):
+
+- **Destination phone** (`buyerContactPhone` in `convex/delyva.ts`, bare digits —
+  Delyva takes MSISDNs without the `+`): the buyer's number when it belongs to
+  the store's country; the **store's** number when it doesn't.
+- **The buyer's real number leads the note.** On a fallback,
+  `Buyer WhatsApp: +<digits>` goes **first** in the booking note, ahead of the
+  address notes and the customer note — `buildCreateOrderBody` cuts the note at
+  400 characters, and a long address note must never push out the one way to
+  reach the buyer.
+- **A store with no number keeps the buyer's**: a foreign contact beats an
+  empty one. An order with **no** buyer number isn't treated as overseas — the
+  destination takes the store's number as it always did (`buyer || seller`).
+- **The card says so before the first quote.** `getDispatchState` returns the
+  store's `country` and `buyerContactFallback`; while the order is bookable the
+  dispatch card shows *"This buyer's WhatsApp number isn't a Malaysian number,
+  so the courier gets your store's number instead, with the buyer's real number
+  in the booking note."* (`courierContactFallbackCopy`,
+  `src/lib/delyva-dispatch-block.ts` — "a Singapore number" on an SG store; no
+  collection wording, because Delyva has no collection direction). It shows no
+  phone number, so it needs no `MASK_PII`.
+- **This also covers orders that already existed.** Inbound-WhatsApp orders
+  could always carry a +65 or other foreign number, and Delyva used to hand it
+  to the courier as-is. Whether Delyva or its downstream couriers ever refused
+  a foreign number is unverified; the fallback applies either way.
+
+`bookingEnabled` on the dispatch state now reads the shared
+`delyvaBookingArmed` (`convex/lib/courierBooking.ts`) — identical semantics
+(credentials, enabled, `delyvaBookingAllowed`) — which also feeds the public
+`booksCouriers` bit behind the checkout's overseas-number note.
 
 ## Webhook (`POST /webhook/delyva`)
 
@@ -226,7 +297,9 @@ courier price at the moment of choice. So the rule is now:
 
 - **Charge mode** (Fulfilment → Delivery charge) answers "what does the buyer
   pay". Lalamove live-quote remains one of those modes; Delyva never is.
-- **Courier booking** (Fulfilment → Courier booking) is **independent
+- **Courier booking** (Fulfilment → Delivery → *Courier booking* row, which
+  opens the card on the Delivery pricing page at `#courier-booking` and
+  glances what's armed — 86eye9xd4) is **independent
   toggles**, not a radio — a seller may arm Lalamove riders AND Delyva
   couriers and pick per order (rider across town today, parcel across the
   country tomorrow). Arranging your own courier is the ever-present baseline,
@@ -305,6 +378,16 @@ There is no SG demo/sandbox tenant under any obvious name (`demosg`,
 `sgdemo`, `demo-sg` all answer "Company not found."), and the two real test
 tenants (`demo`, `trydx`) are both Malaysian. If a sandbox is wanted for SG
 it has to come from Delyva support.
+
+### Proof of delivery — a scan, not a photo (z8r3fdytmq)
+
+Parcel couriers confirm delivery with a **tracking scan**; there is no
+drop-off photo like a Lalamove rider's. Delyva sends none, and Kedaipal stores none for it — only `convex/lalamove.ts` writes `deliveryJobs.podImageStorageIds`. The seller is told in two
+places, one author (`src/lib/parcel-courier-copy.ts`): under the card's ✓ list
+before connecting (`PARCEL_NO_PHOTO_NOTE`), and on the order's delivered state
+(`parcelDeliveredCopy`, which points at **Track parcel** when the order has a
+tracking link). Without it, a seller using Lalamove too reads the missing photo
+as a bug.
 
 ## Seller UI
 
@@ -461,6 +544,38 @@ feature the seller has never heard of), and
 account → credit → cold-chain activation → API key → paste → one real test —
 linked from the settings card, the `hitpay-setup.html` / `lalamove-setup.html`
 precedent.
+
+### Wallet, margin and the couriers-on footer (z8r3fdx34j)
+
+Delyva's **customer profile carries the wallet balance** (found 31 Oct
+2026): `GET /customer/{customerId}` with the seller's own key returns
+`walletBalance` (`parseDelyvaWalletBalance`). It's read on connect, from the
+Refresh icon (`delyva.refreshBalance`), alongside every dispatch quote, and by
+the top-up sheet's re-check, and recorded as a PULL observation. An
+insufficient-credit refusal (`"Bal: 0, Price: 5.00"`, `parseDelyvaRefusal`)
+still records its number too. Top up goes to `my.delyva.app/customer/topup`.
+See [`courier-wallets.md`](./courier-wallets.md).
+
+On the dispatch card:
+
+- **The wallet line** above Book. A balance read with the quote that can't
+  pay **disables Book** with the line as its reason (like EasyParcel); a
+  last-seen (refusal) balance only warns — Delyva has the final say.
+- **Margin per courier**: beside every price, what it leaves of the delivery
+  fee the buyer paid ("+RM 0.80 kept" / "RM 3.40 from your margin",
+  `courierMargin`). The buyer never chose this courier, so its price is the
+  seller's margin. Hidden when the account quotes in another currency.
+- **"Only couriers switched on in your Delyva account show here (N on)"**,
+  with a link to Delyva. A fresh DelyvaNow account has none on, and the
+  count rides alongside every quote (`GET /service` in parallel, never able
+  to fail the quote).
+- **Indicative price**: "the final one is set when the booking goes through".
+- **Weights**: the typed-weight helper links to Products, so setting the
+  weights once fills every later booking in.
+
+**Not built:** grouping instant riders (Grab Express, pandago) apart from
+parcel couriers. It needs a service-code mapping verified on a real account
+with those couriers on; until then it is one list, cheapest first.
 
 ## Testing
 

@@ -62,16 +62,39 @@ describe("OrderContextBadge — fulfilment date gating", () => {
 		expect(screen.getByText(/\d/).className).not.toMatch(/red|orange|amber/);
 	});
 
-	it("counter order shows NO fulfilment-date badge at all", () => {
+	it("counter order with the DEFAULTED date (today-of-creation) hides the badge", () => {
 		const { container } = render(
 			<OrderContextBadge
-				order={base({ source: "counter", fulfilmentDate: OVERDUE })}
+				order={base({
+					source: "counter",
+					fulfilmentDate: todayMytMidnight(NOW),
+				})}
 				now={NOW}
 			/>,
 		);
 		expect(screen.queryByText(/Overdue/)).toBeNull();
 		// The confirmed counter order isn't escalated → the whole badge is empty.
 		expect(container.textContent).toBe("");
+	});
+
+	it("counter order with no fulfilment date at all hides the badge", () => {
+		const { container } = render(
+			<OrderContextBadge order={base({ source: "counter" })} now={NOW} />,
+		);
+		expect(container.textContent).toBe("");
+	});
+
+	it("counter order with a REAL date (an event's, or seller-picked) SHOWS it", () => {
+		// isDefaultedCounterDate: only the defaulted "today" is noise — a date
+		// that differs from the creation day is a promise (a walk-in RSVP's
+		// event date, a preorder) and hiding it hid the one fact that matters.
+		render(
+			<OrderContextBadge
+				order={base({ source: "counter", fulfilmentDate: OVERDUE })}
+				now={NOW}
+			/>,
+		);
+		expect(screen.getByText(/Overdue/)).toBeTruthy();
 	});
 });
 

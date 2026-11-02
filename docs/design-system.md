@@ -8,7 +8,9 @@ Source of truth for tokens: [`src/styles.css`](../src/styles.css). Primitives: [
 - **Tailwind v4** (CSS-first `@theme`, no `tailwind.config.js`) + **shadcn** base layer + **radix-ui** for behaviour.
 - **Fonts:** `Geist Variable` (body, `--font-sans`), `Red Hat Display Variable` (headings, `--font-heading`). Use the `font-heading` utility on display text; headings `h1–h6` already get it via base CSS.
 - **Icons:** `lucide-react` only. Default icon size in buttons is `size-4` (auto-applied) — don't hardcode unless deviating.
-- **Animation:** `framer-motion` is available; always gate motion behind `prefers-reduced-motion` (see the marquee example in `styles.css`).
+- **Animation:** `framer-motion` is available; always gate motion behind `prefers-reduced-motion` (see the marquee example in `styles.css`). For chrome state changes (collapse/expand, reveal), prefer CSS transitions over framer-motion — the reference is the dashboard sidebar's collapse ([`sidebar.tsx`](../src/components/dashboard/sidebar.tsx)): one shared `transition-[…] duration-200 motion-reduce:transition-none` spec so width, labels and chevron move as one gesture; labels stay mounted and fade/clip (`aria-hidden` while collapsed) instead of unmounting mid-animation — but a hidden cluster that holds a **link or button** gets `inert`, not `aria-hidden`, or it stays an invisible Tab stop (the tier pill; the bottom row cross-fades its two What's-new forms with the hidden one `inert`); and transitions arm one frame AFTER mount, so a state restored from `localStorage` paints instantly on page load rather than replaying as a slide.
+- **The dashboard sidebar is 216px expanded (`w-54`), 68px collapsed, and not resizable** (z8r3fdwc19). Width is set by the longest row it must hold whole, not by the nav labels (all one short word): the foot's What's-new + version line needs 178px for a two-digit release, so 208px clipped by a pixel. Resize was considered and declined — it earns its keep on variable-length, nested trees (ClickUp, Notion); a ten-link nav has two useful widths and collapse already gives the second, while a persisted drag width would land after hydration and jump the layout on every load.
+- **A fixed-height column (`h-dvh` rail, sheet, dialog) names the ONE part that gives.** Every flex child can shrink by default, and a child with `overflow-hidden` (any clip-to-animate wrapper) can shrink to **nothing** — its min-height drops to 0. Mark the chrome rows `shrink-0` and give the scrolling region `min-h-0 overflow-y-auto`, plus `*:shrink-0` when its own children clip. The dashboard sidebar learned this the hard way: on a laptop-height window an admin's links squashed the tier pill to a sliver and the links to 2px while the footer fell off-screen. A scroller that hides its scrollbar (or sits where macOS overlays an invisible one) gets `scroll-shadow-y` (`styles.css`): a soft shade at whichever edge has more, gone at the end — pure CSS, painted on `--card`.
 - Class merging: **always** `cn()` from [`#/lib/utils`](../src/lib/utils.ts). Polymorphism: radix `Slot` via the `asChild` prop (Button supports it).
 
 ## Color tokens (semantic, never raw hex)
@@ -19,6 +21,7 @@ Defined as HSL CSS vars in `:root` + `.dark` and exposed as Tailwind colors (`bg
 | `background` / `foreground` | page base |
 | `card` / `popover` | raised surfaces |
 | `primary` | navy — primary emphasis, dark surfaces |
+| `segment` | the selected half of a pill toggle (MY/SG, Monthly/Annual) — the house navy one step lighter than `primary`, because at 11% a 40px pill reads black (Arif, 19 Oct 2026); lifts further in dark, never mint (a current value is a state, not an action) |
 | `accent` | **mint — the brand action color** (primary buttons default to this) |
 | `secondary` | soft slate — low-emphasis fills |
 | `muted` / `muted-foreground` | subtle bg / secondary text |
@@ -26,7 +29,21 @@ Defined as HSL CSS vars in `:root` + `.dark` and exposed as Tailwind colors (`bg
 | `border` / `input` / `ring` | hairlines, field borders, focus ring (ring = mint) |
 | `sidebar-*` | dashboard chrome |
 
-Dark mode: `.dark` class on an ancestor; **mint becomes `primary`**. Every new surface must read correctly in both — use tokens and it's automatic.
+Dark mode: `.dark` class on an ancestor; **mint becomes `primary`**. It reaches every page this repo renders (the blog is a separate repo). Every new surface must read correctly in both — use tokens and it's automatic. Full behaviour, scope and the toggle: [`dark-mode.md`](./dark-mode.md).
+
+### Writing UI that survives dark mode
+
+1. **Semantic token → nothing to do.** `bg-card`, `text-foreground`, `border-border` flip on their own. This is the whole reason the token layer exists; reach for it first.
+2. **Raw palette colour → it needs a `dark:` twin on the same element.** `bg-amber-50 dark:bg-amber-950`, `text-amber-800 dark:text-amber-200`. **This is machine-enforced** by `src/lib/dark-mode-coverage.test.ts` in the gate, so you get told at `pnpm test`, not in review — and only on surfaces that can actually render dark (the marketing site is exempt because it never does).
+3. **A coloured status pill or notice card → use [`src/lib/tone.ts`](../src/lib/tone.ts).** `TONE_CHIP`, `TONE_PANEL`, `TONE_ACCENT` keyed by a `Tone`. The same map used to be hand-copied into four files and three of the copies had no dark pairs at all, so a buyer's order-status pill was dark-on-dark while the seller's identical pill was fine. **Only adopt it when the registry's LIGHT values match what the surface already renders** — otherwise you are repainting light mode, which outranks tidiness. A couple of maps stay hand-rolled for exactly that reason, and say so at the call site.
+4. **Deliberately theme-invariant?** Write `dark-ok` in a comment on (or just above) the line, **with the reason**. Legitimate cases: a QR plate (a QR on a dark ground does not scan), a white mat under a user's transparent-background logo, an external brand hex, a print surface, a swatch that must show the theme you are *not* in.
+5. **Never flip a surface to a light plate in dark.** `bg-foreground text-background` is a navy panel in light and inverts to near-white in dark, which reads as a hole punched in the screen. Three replacements, by intent:
+   - **Primary action button, selected chip, rank badge** → `bg-primary text-background dark:text-primary-foreground`. In light the fill is byte-identical (`--primary` *is* navy) and the label stays `text-background` — `#fff`, not `text-primary-foreground`'s `hsl(210 40% 98%)`; adopting the recipe must never repaint the theme every current user is in. In dark: solid mint, navy label, the same as every other primary control. The full table, with the panel and avatar recipes and the one sanctioned exception, is in [`dark-mode.md`](./dark-mode.md#inverted-surfaces--the-softened-recipe).
+   - **Emphasis panel** (the due-today banner, the Home hero stat, the settings identity card) → keep the light classes and add `dark:bg-accent/12 dark:border dark:border-accent/30 dark:text-foreground`. Check nested children too — a `text-background/75` label inside becomes invisible.
+   - **Avatar / identity chip** → add `dark:bg-accent/15 dark:text-accent-emphasis`.
+6. **Black is not a Kedaipal colour — the dark ink is navy.** `--primary` at 11% lightness reads *black* at badge and pill size (Arif, 19 Oct 2026; Zaki, 20 Oct). For a dark chip, badge, pill toggle or band use **`bg-segment text-segment-foreground`** — the same navy a step lighter, 22% in light and 34% in dark, so it is navy in both. Buttons stay `bg-primary`. Never `bg-black` / `bg-slate-900` and friends as a surface: **machine-enforced** by the same coverage test, which fails on any solid black-family surface. A phone bezel in a product mockup is the one black object, and those files are exempt with the reason.
+
+   The one sanctioned exception is `order-bulk-bar.tsx`: a transient floating toolbar that is *supposed* to invert against whatever is behind it, and it says so in a comment.
 
 ## Radius & spacing
 - Radius scales off `--radius: 0.75rem`: `rounded-sm/md/lg/xl/2xl…`. Cards/dialogs use `rounded-xl`; buttons `rounded-lg`; pills `rounded-full`.
@@ -47,7 +64,16 @@ understood. All three cost a round trip:
    ignores the minimum entirely; shrinking the box means shrinking the CONTENT
    (font sizes, avatar sizes, gaps, padding). Measure the real element and
    subtract the parts rather than assuming the minimum won.
-3. **A CSS grid row stretches every cell to its tallest sibling.** One cell with
+3. **A flex item needs `min-w-0` to shrink at all.** Its default
+   `min-width: auto` refuses to go below the content's min-content width, so a
+   wide child — a data table, a long unbroken string — pushes the *whole* row
+   past the viewport instead of scrolling inside its own box. The dashboard
+   shell's main column lacked it, so switching on two orders-table columns at
+   1281px made the page scroll sideways and pushed the toolbar's right-hand
+   controls off screen (z8r3fdff97 test round; `src/routes/app.tsx`, pinned by
+   `src/routes/app-shell-layout.test.ts`). Put `min-w-0` on every flex item
+   whose content can outgrow it, and let an inner `overflow-x-auto` scroll.
+4. **A CSS grid row stretches every cell to its tallest sibling.** One cell with
    an extra line makes the whole row taller, so a rare state can cost height on
    every screen. Prefer a FIXED number of content lines (drop one item to make
    room for the "+N more") over a variable one — the height becomes
@@ -64,7 +90,7 @@ broken this way for weeks because a flat fill sat beside it and hid the loss.
 1. **≥44px tap targets** for anything interactive. ⚠️ **`Button`'s own sizes top out at `h-9` = 36px** — even `size="lg"` and `size="icon"` do **not** clear 44px. For any primary *touch* target, add the **`tap-target`** utility (or `min-h-11`) to the button, or use the Input `field` variant for fields. (Mouse-only desktop controls may stay compact — 44px is a touch rule.) Icon-only buttons should use `size="icon"` + `tap-target`, not a text size like `lg`.
 2. **Single-column by default**, widen at `sm:`/`lg:`. Never design desktop-first and shrink.
 3. **Safe areas:** bottom-anchored bars use `pb-[max(0.75rem,env(safe-area-inset-bottom))]` (or the `safe-bottom` utility). See [`bottom-nav.tsx`](../src/components/dashboard/bottom-nav.tsx).
-4. **Bottom-anchored primary action** on long flows (border + `bg-background`), not a button lost at the bottom of a scroll. **`fixed inset-x-0 bottom-0`** — every action bar in the app does this ([`cart-bar.tsx`](../src/components/storefront/cart-bar.tsx), the product page's purchase bar, [`checkout-form.tsx`](../src/components/storefront/checkout-form.tsx), the cost calculator, the orders bulk bar). Out of flow means the page's own footer renders as ordinary content **above** the floating bar, so every page stacks the same way — a `sticky` bar sits IN flow and shoves the footer below it, which reads as welded and inconsistent with its sibling pages.
+4. **Bottom-anchored primary action** on long flows (border + `bg-background`), not a button lost at the bottom of a scroll. **`fixed inset-x-0 bottom-0`** — every action bar in the app does this (the product page's purchase bar, [`checkout-form.tsx`](../src/components/storefront/checkout-form.tsx), the cost calculator, the orders bulk bar). Out of flow means the page's own footer renders as ordinary content **above** the floating bar, so every page stacks the same way — a `sticky` bar sits IN flow and shoves the footer below it, which reads as welded and inconsistent with its sibling pages. The browse pages' [`cart-bar.tsx`](../src/components/storefront/cart-bar.tsx) is the same rule in **capsule form** (z8r3fdegb5): a `fixed` floating pill inset from the edges, gone while the cart is empty, with the page reserving `pb-28` instead of a measured bar height (the pill is a constant `h-14`, so a constant reservation is honest).
    - A fixed bar is out of flow, so **the page must reserve its height**: measure it with [`usePublishedHeight`](../src/hooks/usePublishedHeight.ts) and pad with `pb-[var(--storefront-bar-h,…)]` rather than hardcoding a guess that rots as the bar's content wraps. A `display:none` bar measures `0px` and `var(…, fallback)` only fires when the property is *unset*, so pair it with a breakpoint override (`lg:pb-10`).
    - `sticky bottom-0` is for a bar that's the **last element in its own scroll container with nothing after it** — the dashboard [`bottom-nav.tsx`](../src/components/dashboard/bottom-nav.tsx), which has no footer to stack against.
 5. Bottom nav / desktop sidebar swap at `lg` (`lg:hidden` / `hidden lg:flex`).
@@ -76,12 +102,14 @@ Don't hand-roll what exists. From [`src/components/ui/`](../src/components/ui/):
 | --- | --- | --- |
 | Button | `Button` | variants: `default`(mint)/`outline`/`secondary`/`ghost`/`destructive`/`link`; sizes incl. `icon*`. `isLoading` shows a spinner; `asChild` to wrap a `Link`. |
 | Text input | `Input` | `variant="field"` = **mobile form field (≥44px)**; `default` = compact toolbar; `bare` = child of a composite. `isError` sets `aria-invalid`. |
+| Picker | `Select` | native `<select>` with the UA caret suppressed and **our own chevron** — see below. Same `variant="field"`/`default` + `isError` API as `Input`, so the two line up side by side. Form-bound rows use `SelectField` (`src/components/forms/`), which wraps it. |
 | Form row | `Field` + `FieldLabel` / `FieldContent` / `FieldDescription` / `FieldError` | **always** compose forms with these — don't hand-write label+input+error. `FieldError` takes an `errors` array (TanStack Form shape). |
 | Textarea | `Textarea` | |
-| Phone | `MyPhoneInput` (plain state) / `TextField prefix={<MyPhonePrefix />}` (form-bound) | **every** Malaysian phone field — see below. |
-| Composite control | `InputPrefixFrame` | one border owning a fixed plate + a `bare` input (the `+60` plate, an "RM"). |
-| Modal | `Dialog*` | `DialogFooter` is full-bleed + reverses on mobile. Confirm-only flows → `ConfirmDialog`. |
-| Popover / menu | `Popover`, `DropdownMenu*` (radix) | `DropdownMenu` = a keyboard-navigable action menu (trigger → items). Use to group related actions behind one control instead of a row of competing buttons (e.g. the counter-checkout header's "New order"). Open a `Dialog` from an item via controlled state in `onSelect` — the menu→dialog focus handoff is clean. |
+| Phone — seller / platform | `MyPhoneInput` (plain state) / `TextField prefix={<MyPhonePrefix />}` (form-bound) | a **fixed** plate for the store's country — the store's own numbers. See below. |
+| Phone — buyer | `BuyerPhoneInput` (plain state) / `TextField prefix={<BuyerPhonePrefix />}` (form-bound) | the same plate **with a country picker** — every number a buyer gives. See below. |
+| Composite control | `InputPrefixFrame` | one border owning a plate + a `bare` input (the `+60` plate, the buyer picker, an "RM"). |
+| Modal | `Dialog*` | `DialogFooter` is full-bleed + reverses on mobile. Confirm-only flows → `ConfirmDialog` — **never `window.confirm`/`alert`**: a native dialog is unstyled, theme-blind, and BLOCKS the renderer until it is dismissed (the product wizard's discard froze the page for as long as it stood, found in the z8r3fdff97 test round). **`DialogContent` caps itself at `calc(100dvh-2rem)` and scrolls** — put long content straight in, no hand-rolled `max-h`; see below. |
+| Popover / menu | `Popover`, `DropdownMenu*` (radix) | `DropdownMenu` = a keyboard-navigable action menu (trigger → items). Use to group related actions behind one control instead of a row of competing buttons (e.g. the counter-checkout header's "New order"). Open a `Dialog` from an item via controlled state in `onSelect` — the menu→dialog focus handoff is clean. **`DropdownMenuContent` caps itself at the room Radix measured below the trigger and scrolls** — pass width, never your own `max-h`; see below. |
 | Copy-to-clipboard | `CopyButton` | one-tap copy w/ feedback (order IDs, bank details). |
 | Reorderable list | `SortableList` | **the** sorting standard (@dnd-kit, mobile-safe). **Never** arrow-button reordering. |
 | Loading state | `Skeleton` | prefer skeletons over spinners for content. |
@@ -91,8 +119,62 @@ Don't hand-roll what exists. From [`src/components/ui/`](../src/components/ui/):
 
 If a primitive is missing, **add it to `src/components/ui/`** — don't inline a one-off in a route.
 
+### Every `<select>` wears our chevron, never the UA caret (2026-10-01)
+`src/components/ui/select.tsx`. **Native on purpose** — on a phone a `<select>`
+opens the OS picker wheel, which beats any listbox we could draw, and it needs
+no portal, no focus trap and no JS to be accessible. This is the same posture as
+the buyer phone picker; it is not a combobox in disguise.
+
+What the primitive exists to fix: **the native macOS caret paints hard against
+the right border and ignores the control's padding.** Beside a native date or
+time `<input>` — whose calendar and clock glyphs *are* inset — the caret reads
+as shoved into the corner, and it fights a `rounded-xl` focus ring. (Spotted on
+the product wizard's event-venue picker, which sat in a row with three such
+inputs.) So the variant sets `appearance-none`, reserves the glyph's lane with
+`pr-10`, and we draw a `ChevronDown` at `right-3.5` — which also makes Safari,
+Chrome and Firefox agree instead of each shipping its own arrow.
+
+Two things that are easy to get wrong when hand-rolling it: the chevron needs
+`pointer-events-none` (otherwise it eats the click that should open the picker,
+and the control stops being one target), and it must **dim with the control** —
+a disabled select whose caret still looks live reads as merely empty, not
+locked. The dimming is keyed off the select's own `:disabled` (the select
+carries `peer`, the chevron `peer-disabled:opacity-50`), **not** off the
+`disabled` prop, so a control disabled by a wrapping `<fieldset disabled>` dims
+too. Both are pinned by `select.test.tsx`, as is the rule that an omitted
+`variant` and an explicit `variant="default"` place the glyph identically —
+`cva` resolves the omission, a bare `variant === "default"` check would not.
+
+Give long free-text options room. A native `<select>` **cannot ellipsize**: an
+option that overruns is simply cut mid-word, with nothing to say it was. Where
+the options are user-typed names of no bounded length (a venue, a location),
+size the control for them and pass `title` with the selected label so a hover
+recovers it on desktop — the width is the fix, `title` is the safety net. Fixed
+short content (a unit, a state, a currency) needs neither.
+
+`className` lands on the positioning **wrapper**, not the `<select>`: pass the
+width there (`className="w-56"`) and the select fills it, so the chevron is
+placed against the box the seller actually sees. Because the control lives
+inside that wrapper, **label it with an explicit `htmlFor`/`id`** rather than
+wrapping it in a `<label>` — an association that depends on nesting depth is one
+refactor away from silently breaking, and biome's `noLabelWithoutControl` will
+flag it.
+
 ### Images always render via `AppImage` (2026-07-24)
-`src/components/ui/app-image.tsx` — skeleton placeholder while loading → fade-in on load → a labelled fallback (muted box + icon + the alt text) on a dead URL or unset `src`, instead of a blank box. A failed load is **retried twice with jittered backoff before that fallback is shown** (2026-08-21, ClickUp `86eypxgff` — see below). Two sizing modes: **`fill` (default)** — `aspect` is the wrapper's box, the image crops to fill it (`objectFit="cover"|"contain"`); use for photo thumbnails, avatars, banners. **`fill={false}`** — `aspect` becomes the image's OWN intrinsic-ratio classes (e.g. `"h-8 w-auto"`) instead of a box to stretch into; use for fixed-height, auto-width brand-mark SVGs (forcing those through `w-full` inside an auto-width wrapper is the classic "percentage width in an indefinite container" CSS trap). `priority` (LCP candidates — storefront cover, first product-grid row) skips the lazy-loading hint. Local upload previews (`blob:`/`data:` URLs) auto-skip the skeleton (already instant). **Exceptions:** `store-poster.tsx` (print/PDF-export surface — a lazy or opacity-0 image can print blank; has its own `new Image()` onload/onerror gating) and `landing/responsive-image.tsx` (a build-time `<picture>`/srcset wrapper for static optimized assets — a different concern from `AppImage`'s runtime Convex-hosted URLs).
+`src/components/ui/app-image.tsx` — skeleton placeholder while loading → fade-in on load (after hydration; a **server-rendered** image paints opaque above its skeleton until React runs, since there is no `onLoad` to fade it in before then — z8r3fdue6f) → a labelled fallback (muted box + icon + the alt text) on a dead URL or unset `src`, instead of a blank box. A failed load is **retried twice with jittered backoff before that fallback is shown** (2026-08-21, ClickUp `86eypxgff` — see below). Two sizing modes: **`fill` (default)** — `aspect` is the wrapper's box, the image crops to fill it (`objectFit="cover"|"contain"`); use for photo thumbnails, avatars, banners. **`fill={false}`** — `aspect` becomes the image's OWN intrinsic-ratio classes (e.g. `"h-8 w-auto"`) instead of a box to stretch into; use for fixed-height, auto-width brand-mark SVGs (forcing those through `w-full` inside an auto-width wrapper is the classic "percentage width in an indefinite container" CSS trap). `priority` (LCP candidates — storefront cover, first product-grid row) skips the lazy-loading hint. Local upload previews (`blob:`/`data:` URLs) auto-skip the skeleton (already instant). **Exceptions:** `store-poster.tsx` (print/PDF-export surface — a lazy or opacity-0 image can print blank; has its own `new Image()` onload/onerror gating) and `landing/responsive-image.tsx` (a build-time `<picture>`/srcset wrapper for static optimized assets — a different concern from `AppImage`'s runtime Convex-hosted URLs).
+
+#### A photo gets an edge — `frame` (2026-10-01, ClickUp `z8r3fdm36y`)
+A product shot on a white studio background has **no edge of its own**: against `bg-card` or `bg-background` the tile reads as a caption with nothing above it, and on a store home that is most of the page. The store logo already wore a hairline (`storefront-header.tsx`) while the product grid beside it did not, so the inconsistency was visible on one screen.
+
+`AppImage` (and `ZoomableImage`, which forwards it) takes **`frame`**, opt-in **by meaning** — a full-bleed storefront cover, the Kedaipal lockup SVG and the founding emblem all read worse framed, so there is no default:
+
+- **`"hairline"`** — the photo sits inside something that already owns the elevation (the product-grid tile, the product-page thumbnail strip, a category tile). Edge only: a shadow per tile turns a 16-tile grid into mush.
+- **`"raised"`** — the photo floats straight on the page (the product-page hero and mobile gallery rail, the detail-sheet gallery), so it carries its own lift. Reuses the house soft-lift shadow already in `checkout-summary.tsx` rather than minting a second shadow vocabulary, and **drops the shadow in dark mode** (a navy glow on a near-black surface is a smudge; the hairline does the work there).
+
+Two details that are load-bearing rather than taste:
+
+- **The hairline is an overlay, never a `border` or an outward `ring` on the wrapper.** Both of those fail at the real call sites: the grid tile's `AppImage` is `absolute inset-0` inside a parent with `overflow-hidden`, which clips an outward ring away entirely, and an `inset` ring is painted *beneath* an element's own children, so the `<img>` covers it. A `pointer-events-none absolute inset-0 rounded-[inherit] ring-1 ring-inset` span placed **after** the image in DOM order paints above the photo, is never clipped, and costs no layout shift. It is rendered in the error/empty state too, so a grid of half-loaded tiles doesn't lose its edges exactly when the page looks most broken.
+- **`ring-black/10 dark:ring-white/15`, not `border-border`.** The edge has to read against an *arbitrary* photo, and a fixed token hairline disappears against a photo of its own lightness. This is the same alpha-neutral idiom the phone plate's flags already use.
 
 #### A failed load retries before it gives up (2026-08-21, ClickUp `86eypxgff`)
 Buyers were intermittently seeing the broken-image fallback on a live storefront. The images were fine — they were just **big**: 38 MB of product photos on one store home, individual files up to 4.4 MB, served straight from Convex storage with `Cache-Control: private` (so no CDN, no shared cache) at 300 ms–2.6 s per file. Under that weight the browser queues dozens of multi-MB requests against one host and some die. `AppImage`'s error state was terminal by design, so **one dead request meant a permanently broken box for that page view** — and because a cached image loads instantly forever, the same page looked fine on the next visit. That is what made it read as random.
@@ -114,24 +196,149 @@ This makes failure *recoverable* — it does not make the images small. The payl
 
 **Convex-hosted images are automatically routed through the resize proxy** (2026-08-23, ClickUp `86eypxght`): `AppImage` rewrites any `*.convex.cloud/api/storage/<uuid>` src onto our own `/img/<uuid>?w=…` Worker route, so Cloudflare resizes + re-encodes it and the result is edge-cached — fixing the whole existing catalog with no re-upload. **Give every new image surface a `sizes` prop** describing how wide it actually paints (e.g. `sizes="176px"`, or `sizes="(min-width: 1024px) 25vw, 50vw"`): that's what turns on the full `srcset`. Without `sizes` the image is still proxied, just at one fixed width — deliberately, because a `srcset` with no `sizes` makes the browser assume 100vw and fetch the LARGEST candidate, which on a grid of 180px tiles is worse than not proxying at all. Full rationale + the one-time dashboard step: [`storefront-images.md`](./storefront-images.md).
 
-### Every phone field wears the `+60` plate (2026-08-12, ClickUp `86eyknr2r`)
-`src/components/ui/my-phone-input.tsx` — flag, fixed `+60`, a rule, then what the user types, as every payment/ride app in this market renders it (Grab, Shopee, Touch 'n Go, Stripe). Before this the repo had **three** shapes for one question: this plate (storefront checkout only), a bare `<input type="tel">` with a placeholder, and a 250-country searchable combobox — a control with one valid answer for a Malaysia-only product. The combobox and its `react-phone-number-input` + `cmdk` dependencies are gone.
+### Every phone field wears the plate — fixed for the seller, a picker for the buyer (2026-08-12, ClickUp `86eyknr2r`; buyer picker 2026-09-23, `z8r3fdh274`)
+`src/components/ui/my-phone-input.tsx` — flag, dial code, a rule, then what the user types, as every payment/ride app in this market renders it (Grab, Shopee, Touch 'n Go, Stripe). Before `86eyknr2r` the repo had **three** shapes for one question: this plate (storefront checkout only), a bare `<input type="tel">` with a placeholder, and a 250-country searchable combobox — a control with one valid answer for the store's own number. The combobox and its `react-phone-number-input` + `cmdk` dependencies are gone and stay gone.
 
-**Two hosts, one plate, so they can't drift.** Form-bound fields use `TextField` with `prefix={<MyPhonePrefix />}`; plain-`useState` forms use `MyPhoneInput` (value/onChange). Both render through `InputPrefixFrame`, which owns the border, focus ring and invalid state — the inner control is `variant="bare"` and the `bare` variant deliberately paints **no** invalid ring of its own (it keeps `aria-invalid` for assistive tech, but a second destructive outline inside the frame is a bug, not emphasis).
+**Two variants, split by whose number it is** (the full rules: [`phone-numbers.md`](./phone-numbers.md)):
 
-**The plate is a promise about what the field accepts.** Only put it on a field whose server validator is `assertValidMyMobile` (`convex/lib/slug.ts`) — which takes the bare national number the plate asks for (`12-345 6789`), a local `012-…`, and a full `60…`, and rejects a landline. Adding the plate to a field that still accepts any country tells the user to do something the save then refuses. The loose `assertValidWaPhone` survives only where a number arrives from somewhere other than a Kedaipal form (inbound Meta messages, the counter's store-QR scan, the CRM rows keyed off them).
+- **Seller / platform numbers** — the store's contact, the alert number, a pickup point's manager, admin fields — wear `MyPhonePrefix` / `MyPhoneInput`: a **fixed** plate for the store's country (`+60` or `+65`, default `"MY"` for Kedaipal's own Malaysia-fixed fields). A store has one country, so here the plate really is the one valid answer.
+- **Buyer numbers** — storefront and booking checkout, the track page's number repair, the counter's manual bind — wear `BuyerPhonePrefix` / `BuyerPhoneInput`: the same plate carrying a **searchable sheet** (`ui/dial-country-picker.tsx`, z8r3fdm36y) opened by an invisible trigger over the whole 44px plate, defaulting to the store's country. A buyer's number is per-person — a Singaporean at a Johor shop, a tourist at the counter — so for them the store's country is only the likeliest answer. It began as a native `<select>`, which was the accessible zero-dependency choice but held **241 options** searchable only by the OS type-ahead over the option text — so `+81`, the string the plate itself prints, matched nothing, and a phone got a 241-stop wheel with no search at all. The sheet matches name, ISO **and** dial code, and still adds **no dependency** (house `Sheet` = radix Dialog, already in) and **no flag barrel**; this is still **not** the `cmdk` combobox coming back. Full rules: [`phone-numbers.md`](./phone-numbers.md#the-picker). The list gives **every** country a flag, from the OS emoji font, so it costs no bytes (`lib/flag-emoji.ts`); where the platform has no flag glyphs — Windows' Segoe UI Emoji — `supportsFlagEmoji()` drops the **whole** list to same-size ISO badges rather than mixing the two. The plate itself keeps the inline MY/SG SVGs, because it paints before hydration and must never degrade. Bundling artwork was measured and rejected: 600 KB gzipped for the SVG set, 91 KB for a 2× WebP sprite. **The plate carries the picker's keyboard focus state**: the select is invisible, so a Tab onto it paints the hover wash plus an inset ring on the plate (`peer-focus-visible`) — the frame's own ring can't say whether the picker or the number has focus. Order: the store's country, a **Nearby** group, then **All countries** A–Z. A `+CC` arriving at the start of the number (typed on, pasted, autofilled — never a `+` slipped in front of digits already there) switches the picker and leaves only the national part in the box; bare digits never switch anything.
 
-**Seeding from the DB goes through `toMyNationalInput`** (`src/lib/phone.ts`) — numbers are stored as `601159399791`, and rendering that beside the plate reads `+60 | 601159399791`. Comparisons ("is this dirty?") go through `normalizeMyDigits`, the same pure normalizer `myWaPhoneCheckoutSchema` runs, so a dirty-check and a validator can't disagree.
+**Two hosts per variant, one plate, so they can't drift.** Form-bound fields use `TextField` with `prefix={<MyPhonePrefix />}` or `prefix={<BuyerPhonePrefix />}` (route the buyer field's `onChange` through `applyBuyerPhoneKeystroke`); plain-`useState` forms use `MyPhoneInput` / `BuyerPhoneInput` (value/onChange). All four render through `InputPrefixFrame`, which owns the border, focus ring and invalid state — the inner control is `variant="bare"` and the `bare` variant deliberately paints **no** invalid ring of its own (it keeps `aria-invalid` for assistive tech, but a second destructive outline inside the frame is a bug, not emphasis). **The invalid state keeps its red border and ring under focus** — the frame's `focus-within` mint used to repaint it exactly while the user was fixing the error. The buyer picker's `<select>` never carries `aria-invalid`: the error belongs to the number, and focus-on-error must land in the input.
 
-**Deliberate exception:** the counter checkout's manual buyer bind keeps a bare input. It normalizes through `assertValidMyWaPhone`, which passes a foreign number through by design — a cashier may be serving a walk-in who isn't Malaysian.
+**The plate is a promise about what the field accepts — the country it shows is the country the save judges by.** A seller plate pairs with `assertValidMobileForCountry` (`convex/lib/slug.ts`) under the store's country: it takes the bare national number the plate asks for (`12-345 6789`), a local `012-…`, and a full `60…`, and rejects a landline. A buyer plate pairs with `assertValidBuyerWaPhone` / `parseBuyerWaPhone` (`convex/lib/buyerPhone.ts`) under the **picked** country, sent to the server as `waDialCountry`. Never put a fixed plate on a buyer's number (it tells a foreign buyer to type something the save refuses), and never put the picker on a store's own number. The loose `assertValidWaPhone` survives only where a number arrives from somewhere other than a Kedaipal form (inbound Meta messages, the counter's store-QR scan, the CRM rows keyed off them).
+
+**`InputPrefixFrame` takes `side`, and it LENDS the control its metrics** (2026-10-11–12, `z8r3fdr617`). `start` for a unit that PRECEDES its number (`RM`, `+60`); `end` for one that FOLLOWS it (`%`, `kg`, `km`). A "%" plate on the left renders **"%10"**, which is not how anyone writes a percentage, and it also reads as a stray glyph in front of an empty field. Both ends keep one rounded frame, one focus ring and one invalid state — only which border divides the plate from the field changes.
+
+**The frame owns `min-h-11 px-3 text-base` on its child input** (`SLOT_METRICS`), so a call site never repeats them. A `bare` input is `px-0` by design, which means the plate supplies the ONLY horizontal gap there is — so the end the plate is *not* welded to puts the value hard against the border. That shipped in the voucher dialog's percentage field (`10` touching the frame, spotted by Zaki) **after three earlier hosts had each hand-copied the same three classes and the fourth forgot** — the textbook case for one control, one rule. `input-prefix-frame.test.tsx` pins it, and 16px is load-bearing rather than cosmetic: **iOS Safari zooms the whole page when a focused input is under 16px**. The money and percentage modes of a value field should wear the **same** frame either way, so switching between them doesn't jump the dialog's height or move the helper line under it.
+
+**Seeding a seller field from the DB goes through `toNationalPhoneInput`** (`src/lib/phone.ts`) — numbers are stored as `601159399791`, and rendering that beside the plate reads `+60 | 601159399791`. Comparisons ("is this dirty?") go through `normalizeMobileDigits`, the same pure normalizer the seller schemas (`waPhoneCheckoutSchema` & co., `src/lib/schemas.ts`) run, so a dirty-check and a validator can't disagree. Buyer fields are never seeded: they start empty on the default country.
+
+**Buyer-field states to keep:** the placeholder is a real example for MY/SG and "Mobile number" elsewhere (a made-up foreign example is a format the buyer can't match); the rejection waits for blur or submit — on the plain-state hosts via `buyerPhoneRejection` (`src/lib/buyer-phone-rejection.ts`), which speaks at once when it carries a one-tap **Switch to Singapore (+65)** (that button unmounts the moment it fixes the number, so it takes the input's `inputId` and hands focus back to the field); the form-bound storefront checkout via TanStack's `isTouched`; the echo line under a parsed number carries `MASK_PII`. The counter's dialog adds a help line naming the picker ("Serving a visitor? Tap +60 to pick their country.") because the cashier is keying someone else's number, and labels its select "Country of the buyer's WhatsApp number".
+
+### A date field is a calendar, not a native `<input type="date">` (2026-10-01, ClickUp `z8r3fdm36y`)
+`src/components/ui/date-picker.tsx` — a trigger shaped class-for-class like the `field` input variant, opening the house `Calendar` in a popover. `forms/date-field.tsx` is its form-bound host; the value is still a `"YYYY-MM-DD"` string, so nothing downstream changed.
+
+**Why the native control was retired.** It takes `min`/`max` and nothing else. The storefront checkout already computed exactly which days are pickable (`isFulfilmentDaySelectable` — opening hours + `closedDates` + the cart's prep floor) and used it for the quick-pick chips, but the picker had no way to honour it, so every store-closed day inside the window was **offered** and the buyer learned it was wrong only after choosing. `checkout-form.tsx` said so in a comment: *"the native date input can't skip weekdays, so a picked closed day gets an immediate explanation instead of a submit-time bounce."* `isDayDisabled` is that way — disabled-with-reason over wrong-but-enabled — and it brings the checkout in line with its own sibling, `storefront/booking-calendar.tsx`, which has always shown unpickable days for what they are.
+
+- **`unavailableNote`** names *why* days are greyed, under the grid. A constraint the buyer can see enforced must be one they can see explained. Both checkouts pass it only when the window actually contains an unpickable day (a bounded forward scan), so a store with no closed dates, no hours and no prep shows a clean month and reads as one.
+- **Popover, not the inline grid the booking checkout locked.** There the calendar *is* the step; here the date is one field among a method, an address, a time, a name and a number, and an always-open month grid buries the rest of the form on a phone. The calendar *inside* is the same component in both — that is the part that had to stay one idea.
+- **`TOUCH_CALENDAR_CLASSNAMES` / `TOUCH_CALENDAR_STYLES`** (exported from `ui/calendar.tsx`) are the grid shape for a calendar a **thumb** drives: cells stretch to the container instead of the compact `size-9` the Insights range picker wants, and every day button clears the 44px floor. Exported rather than copied — the booking checkout and the fulfilment-date picker are two call sites for one idea, and a mobile rule like that silently drifts when it lives twice.
+- **The trigger names itself WITH the value** — `aria-label` of `"Date: Thu, 8 Oct"`. This is not belt-and-braces: the control is a `<button>`, `<button>` is a *labelable* element, so the `FieldLabel`'s `htmlFor` **wins over the button's own text** and the control announced "Date" with the chosen date nowhere in it. The native `<input type="date">` exposed its value, so without this the swap was a step backwards for a screen-reader user. Found by reading the a11y tree during the hands-on test, not by a unit test — so there is one now, and deleting the `aria-label` turns it red.
+- **The label is the chips' label, and the year only appears when it disambiguates** — `formatPickedDate` calls `ymdChipLabel`, the very formatter the quick-pick chips directly above the field already use, so one date can't be printed two ways a few pixels apart. Dropping the redundant year is also what makes it FIT: Date and Time share a two-column row, which leaves the date ~145px at 375px, where "Thu, 8 Oct 2026" truncated to "Thu, 8 Oct…". A date in another year still prints it ("Fri, 8 Jan 2027"), so a December buyer picking into January is never guessing.
+- The month on screen is **derived, never synced**: state holds only the month the buyer navigated to, and everything else falls out of the value. An effect mirroring `value` into month state renders one frame on the stale month before correcting itself.
+
+### A printed surface doesn't wear form chrome (2026-10-11, ClickUp `z8r3fdr617`)
+The storefront checkout's totals card is a **receipt**: dotted leaders, right-aligned money, a ruled total. A bordered input and an outline button dropped into it read as a form stapled to a document — which is exactly how the first voucher field shipped, and what Zaki sent back.
+
+The rule is not "style it nicer", it is **match the grammar of the surface you are standing on**, and do it without forking the component:
+
+- `src/components/vouchers/voucher-field.tsx` is one control with a `variant` of `"panel"` or `"receipt"`. The **panel** skin is house form chrome, for dashboard surfaces. The **receipt** skin is caption-type when closed (`+ Voucher code`, sitting with `+ Add more items` as a peer), and when open a **mono** field on the same dotted leader every charge row uses, with a stamped action in the **total's** type.
+- **Two skins, never two components.** The states (closed / open / applied / refused), the normalisation and the refusal copy are precisely what must never diverge between two surfaces expressing one idea — the house "one idea, one control" rule. A second component is how an app starts looking like two apps *and* behaving like two apps.
+- **A receipt's small type stops at the CONTROL.** The row may be 13px mono; the input inside it may not, because iOS Safari zooms the page on a focused sub-16px field — so the one element a thumb lands in is 16px even where its neighbours are smaller. Every other input on the storefront checkout was already 16px; the voucher field was the only one that wasn't.
+- **Don't repeat a fact the document already prints.** A green "applied" confirmation panel under a receipt whose own line already says `Voucher KP-7F3K-Q2WM −RM 10.00` states the same thing twice, louder. Make the **line** the control instead: an item-style disclosure (`aria-expanded` + chevron) whose remove appears in the same 44px icon well a product line puts its trash in. The surface then has **one** idea of "tap a line to change it" — the grammar its item rows already taught.
+
+### Settings speak one card anatomy (2026-10-14, ClickUp `86eye9xd4`)
+Every settings surface is built from `src/components/settings/settings-primitives.tsx`, so the eye and the mouse learn one layout and find it on every tab. The parts, in the order a card uses them:
+
+- **`Card` + `SectionHeading`** — the title, **one** sentence (never a paragraph), and a `Glance` on the right stating the card's live value ("Flat fee · RM 8.00", "3 points", "Setup 2 of 3"). `Glance` tones: **mint** = on / configured, **grey** = a neutral fact, **warn** = needs the seller — and a warn glance is always paired with its reason in the card body. `Card dashed` is "saved but not in use" (the manual methods while HitPay is how buyers pay).
+- **`InfoDisclosure` + `HelperBullets`** — everything past the one sentence. A native `<details>` titled as a question ("How pickup points work", "What triggers an alert"), ≤4 bullets inside. Warnings and errors are **never** tucked into a disclosure; caps and limits stay as inline field hints.
+- **`SummaryRow` / `ExpandableRow`** — a setting that's set once and read often is a row: label left, value right, chevron. `SummaryRow` navigates (Delivery card → *Pricing* opens `/app/settings/delivery-pricing`, *Courier booking* opens the same page at `#courier-booking`). A control that moves onto another page keeps a row named after ITSELF where it used to live — a seller looking for the rider switch looks for "Courier booking", never inside "Pricing"; `ExpandableRow` opens its editor in place and opens **itself** when a `?fix=`/`?spot=` deep link targets it.
+- **`ModeRowGroup` / `ModeRow`** (`src/components/ui/mode-row.tsx`) — every pick-one MODE with a real sentence per option. A real radio under a styled label. **Built-in vs partner** (Arif, `z8r3fdcx5k`) is carried by `SourceLabel` above the rows — navy "Kedaipal built-in", mint + plug "Partner integration — runs on your account" — and the partner row's dashed border, never by a second selector. Delivery pricing and *How buyers pay* are the same control with the same meaning: the rows **choose**.
+- **`SetupChecklist` / `SetupStep`** — a third-party account's setup, numbered, each step a mint tick, an amber "Action needed" with its fix **in the step**, or not started. It stays readable after onboarding: a fully set-up account reads as quiet ticked rows and one header chip.
+- **Layout** — desktop is the section rail (`SettingsRail`, each row carrying its tab's glance) beside the content; mobile is the grouped index (`SettingsIndex`, the same glances). A rail glance follows the same tones: the Store row normally reads the store's name, but a store that isn't taking orders reads **Paused** / **Offline** in warn (`storeGlance`), so it's visible from every other tab. The store on/off card sits first on the Store tab, full width above the columns. `SettingsColumns` puts two independent card columns from `xl`; `SettingsSection` labels a group of cards ("Identity", "Business & country"). Where the mobile order must differ from the desktop columns, use `contents` + `order-*` rather than rendering a card twice.
+
+### Islands — the storefront's floating surfaces (2026-10-20, ClickUp `z8r3fdvwcy`)
+
+The store home has one family of raised surfaces that float over content
+rather than sit in the flow, and they share one recipe so the page reads as
+one app: the **island store card** (`storefront-header.tsx`), the **cart pill**
+(`cart-bar.tsx`), and T2's compact scrolled bar (`z8r3fdvwcz`, to come).
+
+- **Inset 16px** from the screen edges (`mx-4` / `inset-x-4`; 32px from `lg`
+  where the page column already has `px-8`).
+- **Pill or 24px radius** — `rounded-full` for a one-line capsule (the cart
+  pill), `rounded-3xl` for a card.
+- **Soft navy lift**: `shadow-xl shadow-primary/15` plus a hairline
+  `ring-1 ring-foreground/5`, and in dark mode **no shadow, a lighter ring**
+  (`dark:shadow-none dark:ring-white/10`) — a shadow on a dark page is
+  invisible and the ring is what separates the card from the band.
+- **Frosted over content**: anything that sits on a photo is
+  `bg-primary/45 backdrop-blur ring-1 ring-white/25` with a white glyph.
+  Never lightened to match the outline variant — a pale sky would swallow
+  a pale circle.
+- The island **overlaps the band it floats over** (`-mt-18`, `lg:-mt-22`),
+  with no `z-index` of its own: it is a positioned later sibling, so it
+  paints above the band's absolute children without entering the stacking
+  fight with the grid's sticky search (`z-30`) or the cart pill.
+
+**Cover icon buttons** — actions on a cover photo or on the no-cover mint
+band are **44px icon circles** (`size-11 rounded-full`) at the band's
+top-right, right-aligned, 8px apart, each with an `aria-label` that names
+the action and its object ("Ask Kek Sayang Bakery on WhatsApp", "Share this
+store"). Two variants, chosen by what is under them: *frosted* (above) on a
+photo, *outline* (`bg-card border-border text-foreground shadow-sm`) on the
+mint band. From `lg` the same actions become a labelled row of 44px outline
+pills **inside** the island (`Share store` / `Ask on WhatsApp`) and the cover
+carries no buttons — a desktop has room for words, a phone has room for
+glyphs. Both surfaces render from the same props, so neither can offer an
+action the other lacks.
 
 ## Patterns & anti-patterns
 - **Focus:** every interactive element needs the visible ring (`focus-visible:ring-3 ring-ring/50`) — primitives already do; preserve it on custom elements.
-- **Form errors take you to the problem.** A `useAppForm` form's `onSubmit` must go through `submitThenFocusError(form, e)` ([`src/components/forms/focus-error.ts`](../src/components/forms/focus-error.ts)) instead of a bare `form.handleSubmit()`. On a failed submit it scrolls to and focuses the **first** invalid control (in DOM order, retrying a few frames so it never races React's commit) so the seller never hunts a long form for a red line. Field controls already set `aria-invalid` (via `isError`) and show their message beneath via `FieldError`. **Submit-time business rules must also be addressed to their exact input** — the pattern is the product variant grid's `VariantIssue` (`{where, index, field, message}` from `buildSubmitVariants`/`collectOptionIssues` → the editor marks that cell `aria-invalid` + message beneath, cleared on edit); same idea for the checkout pickup picker (`error` prop on the radio list) and the pickup dialog's address/fee. A `data-form-error` banner is the **fallback for true server errors only**, never for a validation the UI could point at.
+- **Form errors take you to the problem.** A `useAppForm` form's `onSubmit` must go through `submitThenFocusError(form, e)` ([`src/components/forms/focus-error.ts`](../src/components/forms/focus-error.ts)) instead of a bare `form.handleSubmit()`. On a failed submit it scrolls to and focuses the **first** invalid control (in DOM order, re-looking on a short timer so it never races React's commit) so the seller never hunts a long form for a red line. **That retry rides a timer, never `requestAnimationFrame`** — a document whose `visibilityState` is `"hidden"` runs no rAF callbacks at all, and a Chrome window fully covered by another app is hidden, which is exactly how this gets hand-tested. On rAF the whole chain ran (submit → settle → `.finally()`) and then stopped dead, so "take me to the error" looked permanently broken in the only environment anyone ever checks it in, while the seller's visible page was the one place it worked (`z8r3fdrkq2`). jsdom fires rAF regardless of visibility, so only the test that stubs rAF out can see this — keep it. Field controls already set `aria-invalid` (via `isError`) and show their message beneath via `FieldError`. **Submit-time business rules must also be addressed to their exact input** — the pattern is the product variant grid's `VariantIssue` (`{where, index, field, message}` from `buildSubmitVariants`/`collectOptionIssues` → the editor marks that cell `aria-invalid` + message beneath, cleared on edit); same idea for the checkout pickup picker (`error` prop on the radio list) and the pickup dialog's address/fee. A `data-form-error` banner is the **fallback for true server errors only**, never for a validation the UI could point at.
+- **A server error reaches a person as a sentence, never as a stack trace.** Every `toast.error` / inline server error goes through `convexErrorMessage` ([`src/lib/format.ts`](../src/lib/format.ts)) — never `err.message`, which is the raw `[CONVEX M(x:y)] [Request ID: …] Server Error / Uncaught Error: … / at …` blob the Convex client builds. What survives is decided by the error's CLASS, not by how its words read: `ConvexError` is copy we wrote for a human and is shown as-is (**so throw `ConvexError`, not `Error`, for anything a user can trigger**); a plain `Error` that crossed the wire has its wrapper stripped; a `TypeError`/`RangeError`/… is a bug of ours and becomes one generic line, because "Cannot read properties of undefined" is not something a seller can act on. Pinned by `src/lib/format.test.ts` — the wrapper, the request id and the frames can never appear on screen. This became a rule after a refused teammate was shown `Uncaught Error: Forbidden at requireRetailerAccess (convex/lib/auth.ts:156)` (26 Sep, `86exr91r4`).
 - **Cap + clamp every free-text description.** Public-facing free text (store/product/category descriptions, pickup notes) needs BOTH a server-enforced length cap (shared const, e.g. `STORE_DESCRIPTION_MAX`) AND a display `line-clamp-*` wherever it renders in a card/list/header, so one long value can't break the layout. Rule of thumb: storefront header blurb → `line-clamp-2`; a 1-line label/subtitle → `line-clamp-1`; long-form product copy renders via `Markdown` only in a dedicated scrollable panel (the product detail sheet), never raw in a tight row.
 - **Disabled-with-reason > wrong-but-enabled** (CTO lens). A disabled Button + one-line why beats an enabled button that errors.
 - **Badges/urgency:** small pill, semantic color; count badges cap at `99+` (see bottom-nav).
 - **Empty states** get a one-line hint pointing at the next action, never a blank panel (discoverability rule in `CLAUDE.md`).
+- **A dialog is never taller than the screen.** `DialogContent` caps at
+  `calc(100dvh-2rem)` — a 1rem gutter, the same rule its `max-w` already used —
+  and scrolls the y-axis; `Sheet` has always done the same. Long content goes
+  straight in. Reach for your own `max-h` only when you want a *region* to
+  scroll while the rest holds still, and put it on that region, not the shell.
+  This is a rule because the shell used to have `overflow-hidden` and no cap:
+  a dialog is centred with `-translate-y-1/2`, so oversized content overflowed
+  at BOTH ends and was clipped, not scrolled, and `DialogFooter`'s Cancel and
+  confirm buttons became unreachable with nothing to scroll back. Measured on a
+  375x667 viewport: a 1457px dialog spanning -395 to 1062, its confirm button
+  at 1006 and failing a hit test. 17 of the app's 20 shared-shell dialogs were
+  exposed. `overflow-x` stays `hidden` — that is what rounds the full-bleed
+  footer's corners — so never collapse the pair back to bare `overflow-hidden`.
+  **Machine-enforced** by `src/lib/overlay-shell-overrides.test.ts`: `cn()` is
+  `twMerge`, so a call site passing `overflow-hidden` or `max-h-none` would
+  silently strip the shell's own classes and restore the bug. A *different*
+  `max-h-*` is fine — it is still a cap.
+- **Nor is a menu.** `DropdownMenuContent` caps at
+  `--radix-dropdown-menu-content-available-height` — the room Radix measured
+  below the trigger — and scrolls the y-axis, for the same reason one
+  primitive over. A menu is *anchored*, so when it outgrows that room Radix
+  slides it upward until its first items sit above the viewport; with the bare
+  `overflow-hidden` it used to carry, both axes were hidden and there was
+  nothing to scroll back to. Found on the admin Sellers **Manage** menu, whose
+  seven described items overflow a laptop window: "Open store" — the first
+  item, and the one an admin reaches for most — was off the top edge and
+  unreachable by mouse, keyboard or trackpad. Measured in the live page: a
+  453px menu in 300px of room reported `scrollHeight === clientHeight`, i.e. no
+  scroll existed at all; capped and scrollable it gives 153px of travel.
+  Unlike the dialog, **the caller must not pass its own `max-h-*`** — a
+  hand-picked cap ignores how much room is actually below the trigger. Width
+  classes (`w-72`, `w-64`) are the normal thing to pass and are fine. Same
+  machine enforcement, same file.
+- **Centred dialog: `calc(100dvh-2rem)`. Bottom sheet: `max-h-[90dvh]`.** Both
+  appear in the codebase and that is not drift. A centred modal is pushed off
+  BOTH edges by `-translate-y-1/2`, so it wants the same 1rem gutter its
+  `max-w` already uses; a sheet anchored to the bottom edge only has a top edge
+  to keep clear, and 90dvh leaves the header behind it visible. `Sheet` and the
+  eight hand-rolled bottom sheets take the second; anything through
+  `DialogContent` gets the first for free.
+- **A scrolling dialog shows its scrollbar, deliberately.** On classic-scrollbar
+  platforms (Windows/Linux Chrome; macOS uses overlay scrollbars) that inset
+  stops the full-bleed footer ~15px short of the right rounded corner while the
+  dialog is scrolling. Left alone on purpose: `scrollbar-gutter: stable` would
+  reserve the strip permanently — an unexplained gap on dialogs that never
+  scroll — and hiding the bar removes the only signal that there is more content
+  below, which is the exact failure the cap was added to fix.
 - **Don't** introduce new raw colors, arbitrary radii, or a second modal/toast implementation. Extend the token/primitive instead.
 - **Uniform cards (2026-07-13):** sibling cards on one page must be the SAME height with rows aligned across neighbours — variable content must never grow a card. The recipe: fixed zones, not free flow. (1) Reserve multi-line text zones (`line-clamp-2` + matching `min-h`) so a 1-line name doesn't lift the price row. (2) Meta lines **truncate, never wrap** (`truncate`, no `flex-wrap`) — give each fact its own fixed line (name / price·variants / stock word) instead of one wrapping row. (3) Pin actions with `mt-auto` in a `flex flex-col h-full` card so buttons align across a grid row. (4) Conditional badges overlay the image (`absolute` + scrim/backdrop) or sit in a fixed side column — never as an extra stacked row some cards have and others don't. (5) List rows get a `min-h` (e.g. `min-h-[84px]` category/product rows) so short content centers instead of shrinking. Live examples: `storefront/product-card.tsx`, `app.products.index.tsx` rows, `dashboard/customer-card.tsx`.
 

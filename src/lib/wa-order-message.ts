@@ -1,6 +1,8 @@
+import type { Country } from "../../convex/lib/country";
 import { formatFulfilmentDateTime } from "../../convex/lib/fulfilmentDate";
 import { deriveMapsUrl } from "../../convex/lib/mapsUrl";
-import { displayAddressState } from "./address-display";
+import { noteToPlainText } from "../../convex/lib/noteLinks";
+import { addressCountryLine, displayAddressState } from "./address-display";
 import { formatPrice } from "./format";
 
 /**
@@ -18,6 +20,8 @@ import { formatPrice } from "./format";
 export interface WaOrderMessageInput {
 	shortId: string;
 	storeName: string;
+	/** The store's country — an overseas address names its country. */
+	storeCountry?: Country;
 	items: ReadonlyArray<{
 		name: string;
 		variantLabel?: string;
@@ -55,6 +59,7 @@ export interface WaOrderMessageInput {
 		latitude?: number;
 		longitude?: number;
 		placeId?: string;
+		country?: Country;
 	};
 	pickupSnapshot?: {
 		label: string;
@@ -79,6 +84,7 @@ export interface WaOrderMessageInput {
 
 function formatAddressOneLine(
 	addr: NonNullable<WaOrderMessageInput["deliveryAddress"]>,
+	storeCountry: Country | undefined,
 ): string {
 	const parts = [addr.line1];
 	if (addr.line2) parts.push(addr.line2);
@@ -86,6 +92,11 @@ function formatAddressOneLine(
 	// Skipped when it repeats the city — SG stores "Singapore" in both.
 	const stateLine = displayAddressState(addr);
 	if (stateLine) parts.push(stateLine);
+	// An overseas address names its country (z8r3fdr5yy).
+	const countryLine = storeCountry
+		? addressCountryLine(addr, storeCountry)
+		: undefined;
+	if (countryLine) parts.push(countryLine);
 	return parts.join(", ");
 }
 
@@ -141,13 +152,13 @@ export function buildOrderWaMessage(order: WaOrderMessageInput): string {
 			if (snap.scheduleNote) lines.push(`🗓️ ${snap.scheduleNote}`);
 			const mapsUrl = deriveMapsUrl(snap);
 			if (mapsUrl) lines.push(mapsUrl);
-			if (snap.notes) lines.push(snap.notes);
+			if (snap.notes) lines.push(noteToPlainText(snap.notes));
 		} else {
 			lines.push("📍 Pickup");
 		}
 	} else if (order.deliveryAddress) {
 		lines.push(
-			`🚚 ${isCollection ? "Collect from" : "Deliver to"}: ${formatAddressOneLine(order.deliveryAddress)}`,
+			`🚚 ${isCollection ? "Collect from" : "Deliver to"}: ${formatAddressOneLine(order.deliveryAddress, order.storeCountry)}`,
 		);
 		const mapsUrl = deriveMapsUrl(order.deliveryAddress);
 		if (mapsUrl) lines.push(`📍 ${mapsUrl}`);

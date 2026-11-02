@@ -1,0 +1,183 @@
+import type { Country } from "../../convex/lib/country";
+import {
+	DAY_MS,
+	formatFulfilmentDate,
+	formatFulfilmentTime,
+	todayMytMidnight,
+	weekdayIndexMyt,
+} from "../../convex/lib/fulfilmentDate";
+import { isNewStore } from "../../convex/lib/marketplaceListing";
+import {
+	openNowStatus,
+	WEEKDAY_NAMES_SHORT,
+} from "../../convex/lib/openingHours";
+import { parseShowcaseSlugParam } from "../../convex/lib/showcase";
+import type { MarketplaceStoreCard } from "../../convex/marketplace";
+import { searchText } from "./search-params";
+
+/**
+ * Marketplace page derivations (z8r3fdkmyp) — pure, so the search/chip/region
+ * behaviour is unit-tested off the DOM. The server sends EVERY listable store
+ * in one payload (see convex/marketplace.ts for why); everything the page
+ * does with it — region split, filter chips, search, the sponsored/founding
+ * shelves — happens here.
+ */
+
+export type MarketplaceChip = "all" | "open" | "new" | "delivers";
+
+const FILTER_CHIPS: ReadonlyArray<Exclude<MarketplaceChip, "all">> = [
+	"open",
+	"new",
+	"delivers",
+];
+
+/** Longest search kept in the URL — a query, not a paste of someone's essay. */
+export const SEARCH_QUERY_MAX = 80;
+
+/**
+ * The page's URL state: `?q=` and `?filter=`. In the URL rather than component
+ * state so Back from a storefront returns the buyer to the view they left,
+ * and a filtered view is a link someone can share. "All" and an empty search
+ * are the ABSENCE of a param, so the bare `/stores` stays the canonical page.
+ * Anything hand-edited or stale degrades to that default, never to a crash.
+ *
+ * Every key is RETURNED, `undefined` when absent: TanStack merges this over
+ * the raw parsed search, so an omitted key leaked the raw value — `?q=2024`
+ * parses as a number and crashed the page (z8r3fdtk87). An all-digit query
+ * is text the buyer meant, so it reads back as "2024" (`searchText`).
+ */
+export function parseMarketplaceSearch(search: Record<string, unknown>): {
+	q?: string;
+	filter?: Exclude<MarketplaceChip, "all">;
+	/** `?showcase=<slug>` (z8r3fdr6mv): the focused view of one showcase —
+	 * the link on a booth QR. An unknown slug renders the plain page. */
+	showcase?: string;
+} {
+	// Trim BEFORE the cap, so padding never spends the 80-char budget.
+	const q = searchText(search.q)?.trim().slice(0, SEARCH_QUERY_MAX);
+	const filter = FILTER_CHIPS.find((chip) => chip === search.filter);
+	// A slug can be all digits, which the URL parses as a number.
+	const showcase = parseShowcaseSlugParam(searchText(search.showcase));
+	return { q, filter, showcase };
+}
+
+/**
+ * The card's one-line live status. Reuses the storefront's own authors
+ * (`openNowStatus` + the fulfilment-date formatters), compressed to card
+ * length: the storefront header explains ("Closed today · Hari Raya · opens
+ * 9:00 AM Mon"); a card only has room to answer "can I order right now, and
+ * if not, when?".
+ *
+ * Off-Season Hold outranks the clock: a paused store is browsable but not
+ * orderable, and "Open now" over a storefront that then refuses the cart
+ * would be the card lying about what the tap leads to.
+ */
+export function cardOpenStatus(
+	card: Pick<
+		MarketplaceStoreCard,
+		"openingHours" | "closedDates" | "orderingPaused"
+	>,
+	now: number,
+): { open: boolean; label: string } {
+	if (card.orderingPaused)
+		return { open: false, label: "On a break — browse only" };
+	const status = openNowStatus(card.openingHours, now, card.closedDates);
+	if (status.open) return { open: true, label: "Open now" };
+	if (status.nextOpen) {
+		const { daysAhead, openMinutes, allDay } = status.nextOpen;
+		// "today" is silent — "opens 2:00 PM" already means today; tomorrow and
+		// beyond are named ("opens 9:00 AM tomorrow" / "… Mon" / "… 12 Oct"),
+		// same graduation as the storefront's whenAhead.
+		const today = todayMytMidnight(now);
+		const when =
+			daysAhead === 0
+				? ""
+				: daysAhead === 1
+					? " tomorrow"
+					: daysAhead < 7
+						? ` ${WEEKDAY_NAMES_SHORT[weekdayIndexMyt(today + daysAhead * DAY_MS)]}`
+						: ` ${formatFulfilmentDate(today + daysAhead * DAY_MS, { year: false }).replace(",", "")}`;
+		const reopens = allDay
+			? `reopens${when || " today"}`
+			: `opens ${formatFulfilmentTime(openMinutes)}${when}`;
+		return { open: false, label: `Closed · ${reopens}` };
+	}
+	// Defensive — the hours sanitizer refuses an all-closed week.
+	return { open: false, label: "Closed" };
+}
+
+/**
+ * One search, one rule: the query matches when any of these fields contains
+ * it. The store's name, description and area always count; a caller adds the
+ * text its own surface prints beside the store — a showcase ticket's booth
+ * label (`matchShowcases`), so "A12" finds the store at booth A12.
+ */
+export function matchesSearch(
+	card: MarketplaceStoreCard,
+	query: string,
+	extraFields: ReadonlyArray<string | undefined> = [],
+): boolean {
+	const q = query.trim().toLowerCase();
+	if (q.length === 0) return true;
+	return [
+		card.storeName,
+		card.storeDescription,
+		card.storeArea,
+		...extraFields,
+	].some((f) => f?.toLowerCase().includes(q));
+}
+
+/** The chip half of the rule — single-select, "all" lets everything by. */
+export function matchesChip(
+	card: MarketplaceStoreCard,
+	chip: MarketplaceChip,
+	now: number,
+): boolean {
+	switch (chip) {
+		case "open":
+			return cardOpenStatus(card, now).open;
+		case "new":
+			return isNewStore(card.createdAt, now);
+		case "delivers":
+			return card.offersDelivery;
+		default:
+			return true;
+	}
+}
+
+/**
+ * The visible store set for a region + chip + search. Region always applies
+ * (MY and SG are never blended silently — the count fact names the region);
+ * the chips are single-select refinements on top. A store from the other
+ * country belongs to this region's set only when the server listed it HERE
+ * because it delivers here (`shipsFrom`, z8r3fdr5yy) — its card says so.
+ */
+export function filterStores(
+	cards: MarketplaceStoreCard[],
+	opts: { region: Country; chip: MarketplaceChip; search: string; now: number },
+): MarketplaceStoreCard[] {
+	return cards.filter(
+		(card) =>
+			(card.country === opts.region || card.shipsFrom !== undefined) &&
+			matchesSearch(card, opts.search) &&
+			matchesChip(card, opts.chip, opts.now),
+	);
+}
+
+/**
+ * The two shelves above the general list. Sponsored keeps the server's
+ * (activity) order; the Founding shelf reads in rank order — rank IS its
+ * meaning. Both draw from the region-filtered set, and every shelf store
+ * still appears in "All stores": a store must never become unfindable in the
+ * full list because it was promoted out of it.
+ */
+export function partitionStores(cards: MarketplaceStoreCard[]): {
+	sponsored: MarketplaceStoreCard[];
+	founding: MarketplaceStoreCard[];
+} {
+	const sponsored = cards.filter((c) => c.sponsored);
+	const founding = cards
+		.filter((c) => c.isFoundingMember && c.foundingMemberRank !== undefined)
+		.sort((a, b) => (a.foundingMemberRank ?? 0) - (b.foundingMemberRank ?? 0));
+	return { sponsored, founding };
+}

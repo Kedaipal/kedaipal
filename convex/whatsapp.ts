@@ -5,6 +5,7 @@ import {
 	internalAction,
 	internalMutation,
 	internalQuery,
+	type QueryCtx,
 } from "./_generated/server";
 import {
 	linkOrderToCustomer,
@@ -12,14 +13,18 @@ import {
 	refreshWaProfileName,
 } from "./customers";
 import {
+	billingPastDueTemplateName,
 	claimLinkTemplateName,
 	orderConfirmTemplateName,
+	paymentReminderTemplateName,
 	templateParam,
 	sellerNewOrderTemplateName,
 	sellerPaymentClaimTemplateName,
 	sellerPaymentReceivedTemplateName,
 	WhatsAppSendError,
 } from "./lib/whatsapp";
+import { storeOwnerIsAdmin } from "./lib/auth";
+import { sellerWaAlertsSwitchedOn } from "./lib/sellerAlerts";
 import {
 	describeClaimWindow,
 	effectiveClaimStatus,
@@ -27,17 +32,26 @@ import {
 import {
 	type ConfirmationPushStatus,
 	classifyPushFailure,
+	isUnreachableMetaCode,
+	OUT_OF_WINDOW_META_CODE,
 	pushOwnsTheMessage,
 } from "./lib/confirmationPush";
+import type { SendReceipt } from "./lib/channels/types";
 import { formatFulfilmentDateTime } from "./lib/fulfilmentDate";
+import { formatEventMoment } from "./lib/productEvent";
 import { type GuardedSender, makeGuardedSender } from "./wabaProtection";
 import { stampRetailerActivation } from "./lib/activation";
 import { classifyOptOutKeyword } from "./lib/wabaLimits";
 import { redactPhone } from "./lib/logRedaction";
-import { isMockupGateClosed, isMockupPriceUnsettled } from "./lib/order";
-import type { OrderStage, StatusLabels } from "./lib/orderStatus";
+import {
+	isFreeOrder,
+	isMockupGateClosed,
+	isMockupPriceUnsettled,
+} from "./lib/order";
+import { orderPickupNotes } from "./lib/pickupNote";
 import { assertValidWaPhone } from "./lib/slug";
 import {
+	NO_PAYMENT_LABEL,
 	PENDING_TOTAL_LABEL,
 	pickLocale,
 	poweredByLine,
@@ -45,6 +59,7 @@ import {
 	renderDeliveryFeeLine,
 	renderMessage,
 	renderPickupBlock,
+	renderPickupNotes,
 	renderSystemMessage,
 	TEMPLATE_LANGUAGE,
 	type DeliveryMethod,
@@ -54,6 +69,10 @@ import {
 	type PickupSnapshot,
 } from "./lib/whatsappCopy";
 import { classifyInbound } from "./lib/inboundIntent";
+import {
+	buyerPaymentsPaused,
+	waAlertsCoveredBySubscription,
+} from "./subscriptions";
 
 /**
  * Internal mutation invoked by handleInbound when an ORD-XXXX is matched.
@@ -209,11 +228,6 @@ export const getOrderWithRetailer = internalQuery({
 		currency: string;
 		locale: Locale;
 		messageTemplates: MessageTemplates | undefined;
-		// Phase 2: stage config + this order's current stage, for stage-update
-		// notifications (notifyStageEntry).
-		orderStages: OrderStage[] | undefined;
-		statusLabels: StatusLabels | undefined;
-		currentStageId: string | undefined;
 		// Lets an in-flight confirmation-push retry bail out when the buyer has
 		// already been reached (86eyf1rck).
 		confirmationPushStatus: Doc<"orders">["confirmationPushStatus"];
@@ -224,6 +238,13 @@ export const getOrderWithRetailer = internalQuery({
 		// `changes_requested` both carry a real total.
 		mockupPriceUnsettled: boolean;
 		deliveryFeePending: boolean;
+		// Event RSVP (`z8r3fdff9u`). `isFree` decides the money parameter (see
+		// NO_PAYMENT_LABEL) and whether a payment block is appended at all;
+		// `eventLabel` names the moment on the free-form RSVP confirm. Derived
+		// from the order's FROZEN fulfilment fields + its first event line, so a
+		// later product edit never rewrites what the guest was told.
+		isFree: boolean;
+		eventLabel: string | undefined;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -251,15 +272,43 @@ export const getOrderWithRetailer = internalQuery({
 			messageTemplates: retailer.messageTemplates as
 				| MessageTemplates
 				| undefined,
-			orderStages: retailer.orderStages as OrderStage[] | undefined,
-			statusLabels: retailer.statusLabels as StatusLabels | undefined,
-			currentStageId: order.currentStageId,
 			confirmationPushStatus: order.confirmationPushStatus,
 			mockupPriceUnsettled: isMockupPriceUnsettled(order),
 			deliveryFeePending: order.deliveryFeePending === true,
+			isFree: isFreeOrder(order),
+			eventLabel: await resolveEventLabel(ctx, order),
 		};
 	},
 });
+
+/**
+ * "BNI Breakfast · Thu 25 Sep · 8:00 AM" for an order that RSVP'd to an event,
+ * or undefined for every normal order.
+ *
+ * The NAME comes from the order's frozen item snapshot and the MOMENT from the
+ * order's own `fulfilmentDate`/`fulfilmentTimeMinutes` — both stamped at
+ * create — so this never re-reads a product the seller may have edited since.
+ * The product row is consulted only to answer "was this an event at all?", the
+ * one bit the order doesn't carry.
+ */
+async function resolveEventLabel(
+	ctx: QueryCtx,
+	order: Doc<"orders">,
+): Promise<string | undefined> {
+	if (order.fulfilmentDate === undefined) return undefined;
+	for (const item of order.items) {
+		const product = await ctx.db.get(item.productId);
+		if (product?.event === undefined) continue;
+		// The moment is the ORDER's frozen check-in; only a multi-day event's
+		// last day is read live from the product (display-only, never a key).
+		return `${item.name} · ${formatEventMoment({
+			date: order.fulfilmentDate,
+			timeMinutes: order.fulfilmentTimeMinutes,
+			endDate: product.event.endDate,
+		})}`;
+	}
+	return undefined;
+}
 
 export const getRetailerLocaleForOrder = internalQuery({
 	args: { shortId: v.string() },
@@ -278,6 +327,8 @@ export const getRetailerLocaleForOrder = internalQuery({
 		// you when it ships" line to collection wording.
 		deliveryDirection: "standard" | "collection" | undefined;
 		pickupSnapshot: PickupSnapshot | undefined;
+		// Frozen per-line pickup notes (z8r3fdff97) — "before you collect".
+		pickupNotes: readonly string[];
 		// Frozen delivery charge — renders the fee line in the confirm reply.
 		deliverySnapshot: { fee: number } | undefined;
 		// Order currency — needed to render the pickup-fee line in the block.
@@ -292,6 +343,15 @@ export const getRetailerLocaleForOrder = internalQuery({
 		// confirmation-push template, so this inbound reply must stay silent —
 		// see the `pushOwnsTheMessage` guard in handleInbound.
 		confirmationPushStatus: ConfirmationPushStatus | undefined;
+		// Event RSVP (`z8r3fdff9u`): a free event's reply names the moment and
+		// skips the payment block entirely. See `resolveEventLabel`.
+		isFree: boolean;
+		eventLabel: string | undefined;
+		// A request still waiting for the seller's approval (`z8r3fdkjek`) —
+		// nothing is payable, so the reply says so instead of asking for money.
+		awaitingApproval: boolean;
+		// The store is lapsed (z8r3fdr6gg) — the reply asks for no transfer.
+		paymentsPaused: boolean;
 	} | null> => {
 		const order = await ctx.db
 			.query("orders")
@@ -315,10 +375,15 @@ export const getRetailerLocaleForOrder = internalQuery({
 			deliveryMethod: (order.deliveryMethod as DeliveryMethod | undefined) ?? "delivery",
 			deliveryDirection: order.deliveryDirection,
 			pickupSnapshot: order.pickupSnapshot,
+			pickupNotes: orderPickupNotes(order),
 			deliverySnapshot: order.deliverySnapshot,
 			currency: order.currency,
 			mockupPending: isMockupGateClosed(order),
 			deliveryFeePending: order.deliveryFeePending === true,
+			isFree: isFreeOrder(order),
+			eventLabel: await resolveEventLabel(ctx, order),
+			awaitingApproval: order.status === "booking_requested",
+			paymentsPaused: await buyerPaymentsPaused(ctx, order.retailerId),
 		};
 	},
 });
@@ -346,6 +411,10 @@ async function sendPaymentMessage(
 		storeName: string;
 		trackingUrl: string;
 		pickupSnapshot: PickupSnapshot | undefined;
+		// The frozen per-line pickup notes (z8r3fdff97). Rendered only under a
+		// pickup block, because that is the message where "before you collect"
+		// means something — a delivery buyer is not going anywhere.
+		pickupNotes: readonly string[];
 		// Frozen delivery charge — rendered as its own line under the intro so
 		// the buyer sees why the total is higher than the item sum. Optional;
 		// callers for pickup/counter orders omit it.
@@ -357,8 +426,16 @@ async function sendPaymentMessage(
 		// e.g. the always-on "Powered by Kedaipal" growth line on order
 		// confirmations. Include its own leading newlines.
 		footerLine?: string;
+		// The store is lapsed (z8r3fdr6gg): no transfer reference, the paused
+		// line in its place, and the button opens the order rather than
+		// promising a payment the page will refuse.
+		paymentsPaused?: boolean;
+		// Hand the final failure back instead of logging it away — for a caller
+		// that records the outcome on the order (the counter confirmation) and
+		// has a different message shape to fall back to.
+		throwOnFailure?: boolean;
 	},
-): Promise<void> {
+): Promise<SendReceipt | undefined> {
 	const {
 		introBody,
 		locale,
@@ -366,25 +443,35 @@ async function sendPaymentMessage(
 		storeName,
 		trackingUrl,
 		pickupSnapshot,
+		pickupNotes,
 		deliverySnapshot,
 		currency,
 		footerLine = "",
+		paymentsPaused = false,
+		throwOnFailure = false,
 	} = args;
 	// Hard-coded, non-overridable: tells the shopper to use the order ID as the
 	// transfer reference — the only deterministic way to match a bank
 	// notification to an order, so it's always present.
-	const transferReferenceLine = renderSystemMessage(locale, "transferReferenceLine", {
-		shortId,
-		storeName,
-	});
+	const transferReferenceLine = renderSystemMessage(
+		locale,
+		paymentsPaused ? "paymentsPausedLine" : "transferReferenceLine",
+		{ shortId, storeName },
+	);
 	const pickupBlock = renderPickupBlock(locale, pickupSnapshot, currency);
+	// Appended INSIDE the pickup block, not after the payment ask: it is part
+	// of "here is where you're going and what to bring", not of "here is how
+	// to pay". A delivery order never renders it.
+	const pickupNotesBlock = pickupBlock
+		? renderPickupNotes(locale, pickupNotes)
+		: "";
 	// Delivery-fee line (delivery orders) — sits where the pickup block would
 	// (an order has one or the other), explaining the total before the pay ask.
 	const deliveryFeeLine = renderDeliveryFeeLine(locale, deliverySnapshot, currency);
 	// Layout: intro (carries the order-page link) → [pickup | delivery fee] →
 	// blank line → transfer reference. The WHERE/WHY before the WHEN/HOW of paying.
 	const withPickup = pickupBlock
-		? `${introBody}\n${pickupBlock}`
+		? `${introBody}\n${pickupBlock}${pickupNotesBlock}`
 		: `${introBody}${deliveryFeeLine}`;
 	const withRef = `${withPickup}\n\n${transferReferenceLine}`;
 	// Growth footer (e.g. "Powered by Kedaipal") sits last, quiet and out of the
@@ -396,19 +483,33 @@ async function sendPaymentMessage(
 	// (e.g. non-HTTPS APP_URL in dev). The button opens the buyer's order page,
 	// where "How to pay" + the "I've paid" confirm live.
 	try {
-		await wa.send(toPhone, {
+		return await wa.send(toPhone, {
 			kind: "cta",
 			body,
-			buttonText: "Make payment",
+			buttonText: paymentsPaused ? "View order" : "Make payment",
 			url: trackingUrl,
 			imageUrl: brandImageUrl,
 		});
 	} catch (err) {
+		// The text fallback exists for the CTA *shape* being refused. A recipient
+		// Meta can't reach at all — no WhatsApp, no open service window (131047),
+		// a barred country — rejects the plain text identically, so that retry
+		// is only a second rejection in the log.
+		if (
+			err instanceof WhatsAppSendError &&
+			isUnreachableMetaCode(err.metaCode)
+		) {
+			if (throwOnFailure) throw err;
+			console.error("WA payment send failed", err);
+			return undefined;
+		}
 		console.error("WA payment send failed, falling back to text", err);
 		try {
-			await wa.send(toPhone, { kind: "text", body });
+			return await wa.send(toPhone, { kind: "text", body });
 		} catch (textErr) {
+			if (throwOnFailure) throw textErr;
 			console.error("WA payment send failed", textErr);
+			return undefined;
 		}
 	}
 }
@@ -510,6 +611,16 @@ export const handleInbound = internalAction({
 					await wa.send(fromPhone, { kind: "text", body: fallback() });
 				} catch (err) {
 					console.error("WA store-qr fallback send failed", err);
+				}
+				return;
+			}
+			if (start.result === "unavailable") {
+				// A reply to the buyer's own message, not a new send: the store
+				// isn't taking counter orders (hold / Kedaipal's switch).
+				try {
+					await wa.send(fromPhone, { kind: "text", body: start.message });
+				} catch (err) {
+					console.error("WA store-qr unavailable reply failed", err);
 				}
 				return;
 			}
@@ -624,6 +735,26 @@ export const handleInbound = internalAction({
 				: null);
 		const trackingUrl = `${appUrl}/track/${trackingToken ?? ""}`;
 
+		if (meta?.awaitingApproval) {
+			// An RSVP/booking the seller hasn't approved (`z8r3fdkjek`): the
+			// normal confirm would ask for money the page won't take. Say it's a
+			// request instead; the payment ask comes with the approval.
+			const body =
+				renderSystemMessage(locale, "requestAwaitingApproval", {
+					shortId,
+					storeName,
+					contactPhone,
+					trackingUrl,
+					eventLabel: meta.eventLabel,
+				}) + poweredByLine(locale);
+			try {
+				await sellerWa.send(fromPhone, { kind: "text", body });
+			} catch (err) {
+				console.error("WA awaiting-approval reply failed", err);
+			}
+			return;
+		}
+
 		if (meta?.mockupPending) {
 			// Order still has a custom item awaiting buyer mockup approval — defer
 			// the payment ask. Same branded layout as the normal confirm (logo
@@ -641,8 +772,14 @@ export const handleInbound = internalAction({
 				meta?.pickupSnapshot,
 				meta?.currency,
 			);
+			// The notes ride here too. A mockup-gated order is made-to-order, and
+			// made-to-order + self-collect is exactly the order most likely to
+			// have a collection instruction ("bring an ice bag") — leaving them off
+			// this path would drop them for the buyers who need them most.
 			const gatedBody =
-				(pickupBlock ? `${gatedConfirm}\n${pickupBlock}` : gatedConfirm) +
+				(pickupBlock
+					? `${gatedConfirm}\n${pickupBlock}${renderPickupNotes(locale, meta?.pickupNotes ?? [])}`
+					: gatedConfirm) +
 				// Same always-on growth line as the normal confirm — a custom-order
 				// buyer still sees it on their "order received" message.
 				poweredByLine(locale);
@@ -690,6 +827,24 @@ export const handleInbound = internalAction({
 					console.error("WA fee-held confirm send failed", textErr);
 				}
 			}
+		} else if (meta?.isFree && meta.eventLabel) {
+			// A free RSVP (`z8r3fdff9u`): nothing to pay, so the normal confirm's
+			// payment block would ask for a transfer that doesn't exist. Names the
+			// event and the moment instead, and links the page carrying the venue
+			// and the option the guest picked.
+			const rsvpBody =
+				renderSystemMessage(locale, "rsvpFreeConfirm", {
+					shortId,
+					storeName,
+					contactPhone,
+					trackingUrl,
+					eventLabel: meta.eventLabel,
+				}) + poweredByLine(locale);
+			try {
+				await sellerWa.send(fromPhone, { kind: "text", body: rsvpBody });
+			} catch (err) {
+				console.error("WA RSVP confirm send failed", err);
+			}
 		} else {
 			const confirmBody = renderMessage(
 				meta?.messageTemplates,
@@ -712,11 +867,13 @@ export const handleInbound = internalAction({
 				storeName,
 				trackingUrl,
 				pickupSnapshot: meta?.pickupSnapshot,
+				pickupNotes: meta?.pickupNotes ?? [],
 				deliverySnapshot: meta?.deliverySnapshot,
 				currency: meta?.currency,
 				// Always-on growth line — appended here (not in the confirm template)
 				// so a retailer's template override can't strip it. See poweredByLine.
 				footerLine: poweredByLine(locale),
+				paymentsPaused: meta?.paymentsPaused === true,
 			});
 		}
 
@@ -764,6 +921,10 @@ export const getManualReminderContext = internalQuery({
 		trackingToken: string | undefined;
 		locale: Locale;
 		pickupSnapshot: PickupSnapshot | undefined;
+		// A payment REMINDER repeats the pickup block, so it repeats the
+		// instruction with it — the buyer re-reading this message is the one
+		// about to set off.
+		pickupNotes: readonly string[];
 		status: Doc<"orders">["status"];
 		paymentStatus: Doc<"orders">["paymentStatus"];
 		mockupPending: boolean;
@@ -783,6 +944,7 @@ export const getManualReminderContext = internalQuery({
 			trackingToken: order.trackingToken,
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 			pickupSnapshot: order.pickupSnapshot,
+			pickupNotes: orderPickupNotes(order),
 			status: order.status,
 			paymentStatus: order.paymentStatus,
 			mockupPending: isMockupGateClosed(order),
@@ -799,12 +961,17 @@ export const getManualReminderContext = internalQuery({
  * this is ever invoked). Re-sends the full payment message — reminder intro →
  * amount + transfer ref → "Make payment" CTA to the order page.
  *
- * Sent as a gated `session_message` (kill switch / caps / opt-outs apply) and
- * best-effort: by day 11 the buyer's 24h service window is almost always
- * closed, so a free-form send can silently not deliver (Meta 131047) unless
- * the buyer has messaged recently. The button's helper copy says so — and
- * moving this onto a registered utility template is part of the remaining
- * 86eyd63r8 template work, which fixes the deliverability for good.
+ * Two wire shapes, one policy (z8r3fddtkh):
+ *  - `WHATSAPP_PAYMENT_REMINDER_TEMPLATE` set ⇒ the Meta-approved utility
+ *    template (`utility_template` category — kill switch / caps / opt-outs
+ *    apply). Templates are the ONE message shape Meta delivers with no open
+ *    service window, so by day 11 this is the only version that reliably
+ *    lands. Body {{1}} shortId, {{2}} store, {{3}} amount; button ← tracking
+ *    token.
+ *  - unset ⇒ the legacy free-form `session_message` (same gating), best
+ *    effort: the buyer's 24h window is almost always closed by day 11, so it
+ *    can silently not deliver (Meta 131047). The button's helper copy says
+ *    which shape this deployment is on (`orders.get` → paymentReminderViaTemplate).
  */
 export const notifyManualPaymentReminder = internalAction({
 	args: { orderId: v.id("orders") },
@@ -833,6 +1000,44 @@ export const notifyManualPaymentReminder = internalAction({
 		if (!trackingToken) return; // order vanished — don't ship a dead link
 		const locale = pickLocale(meta.locale);
 		const trackingUrl = `${appUrl}/track/${trackingToken}`;
+		const templateName = paymentReminderTemplateName();
+		if (templateName) {
+			const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
+			try {
+				const receipt = await wa.send(meta.customerWaPhone, {
+					kind: "template",
+					templateName,
+					languageCode: TEMPLATE_LANGUAGE[locale],
+					bodyParams: [
+						meta.shortId,
+						// Seller-authored free text rides templateParam (a tab in a
+						// store name is a terminal 132007 rejection otherwise).
+						templateParam(meta.storeName, "the store"),
+						`${meta.currency} ${(meta.total / 100).toFixed(2)}`,
+					],
+					// Approved button URL is https://kedaipal.com/track/{{1}} — Meta
+					// appends ONLY this suffix (the tracking token, not the shortId).
+					urlButtonParam: trackingToken,
+				});
+				if (receipt?.blocked) {
+					// The gateway logged why (opt-out / cap / pause). The seller's
+					// cooldown stamp stands — a blocked buyer isn't reachable by
+					// tapping again either.
+					console.warn("WA payment reminder blocked by gateway", {
+						shortId: meta.shortId,
+						blocked: receipt.blocked,
+					});
+				}
+			} catch (err) {
+				// Best-effort like the free-form path: the tap already stamped the
+				// cooldown, and a template Meta rejects will be rejected again.
+				console.error("WA payment reminder template send failed", {
+					shortId: meta.shortId,
+					err,
+				});
+			}
+			return;
+		}
 		const introBody = renderSystemMessage(locale, "paymentReminderIntro", {
 			shortId: meta.shortId,
 			storeName: meta.storeName,
@@ -849,6 +1054,7 @@ export const notifyManualPaymentReminder = internalAction({
 				storeName: meta.storeName,
 				trackingUrl,
 				pickupSnapshot: meta.pickupSnapshot,
+				pickupNotes: meta.pickupNotes,
 				currency: meta.currency,
 			},
 		);
@@ -1024,7 +1230,9 @@ export const getOrderForSellerAlert = internalQuery({
 		fulfilmentDate: number | undefined;
 		fulfilmentTimeMinutes: number | undefined;
 		notifyWaPhone: string | undefined;
-		orderWaAlerts: boolean;
+		/** Switched on (absent = on) AND the subscription covers it — the
+		 * same two inputs the email's suppression predicate reads. */
+		waAlertsOn: boolean;
 		locale: Locale;
 	} | null> => {
 		const order = await ctx.db.get(orderId);
@@ -1051,7 +1259,9 @@ export const getOrderForSellerAlert = internalQuery({
 			fulfilmentDate: order.fulfilmentDate,
 			fulfilmentTimeMinutes: order.fulfilmentTimeMinutes,
 			notifyWaPhone: retailer.notifyWaPhone,
-			orderWaAlerts: retailer.orderWaAlerts === true,
+			waAlertsOn:
+				sellerWaAlertsSwitchedOn(retailer.orderWaAlerts) &&
+				(await waAlertsCoveredBySubscription(ctx, retailer)),
 			locale: (retailer.locale as Locale | undefined) ?? "en",
 		};
 	},
@@ -1059,8 +1269,9 @@ export const getOrderForSellerAlert = internalQuery({
 
 /**
  * Seller WhatsApp order alerts (86eyhw9zy): scheduled by orders.create beside
- * the retailer email alert. Sends the opted-in seller ONE utility template on
- * their own `notifyWaPhone` the moment a storefront order lands. Counter
+ * the retailer email alert. Sends the seller ONE utility template on their own
+ * `notifyWaPhone` the moment a storefront order lands — when the switch is on
+ * (absent = on) and the subscription covers it (z8r3fdv55f). Counter
  * orders are excluded — the seller (or their cashier) is standing there
  * creating them, the same posture as the min-order/notice exemptions. Sellers
  * rarely hold an open 24h service window with the shared WABA, so the message
@@ -1104,7 +1315,7 @@ export const notifySellerNewOrder = internalAction({
 			});
 			return;
 		}
-		if (!meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		if (!meta.waAlertsOn || !meta.notifyWaPhone) return;
 		// Defence in depth: the create site never schedules this for counter
 		// orders in the first place.
 		if (meta.source === "counter") return;
@@ -1215,7 +1426,7 @@ export const notifySellerPaymentClaim = internalAction({
 			});
 			return;
 		}
-		if (!meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		if (!meta.waAlertsOn || !meta.notifyWaPhone) return;
 		if (meta.status === "cancelled") return;
 
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
@@ -1325,7 +1536,7 @@ export const notifySellerPaymentReceived = internalAction({
 			});
 			return;
 		}
-		if (!meta.orderWaAlerts || !meta.notifyWaPhone) return;
+		if (!meta.waAlertsOn || !meta.notifyWaPhone) return;
 
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
@@ -1402,6 +1613,8 @@ export const getCounterOrderMeta = internalQuery({
 		total: number;
 		currency: string;
 		paymentStatus: "unpaid" | "claimed" | "received";
+		status: Doc<"orders">["status"];
+		confirmationPushStatus: Doc<"orders">["confirmationPushStatus"];
 	} | null> => {
 		const order = await ctx.db.get(orderId);
 		if (!order) return null;
@@ -1420,6 +1633,8 @@ export const getCounterOrderMeta = internalQuery({
 				| "unpaid"
 				| "claimed"
 				| "received",
+			status: order.status,
+			confirmationPushStatus: order.confirmationPushStatus,
 		};
 	},
 });
@@ -1483,10 +1698,16 @@ export const notifyStorefrontOrderCreated = internalAction({
 		// the order page most (they approve their mockup on it) with no link to it
 		// at all, sometimes for days. Now the message always goes out on time and
 		// the money parameter tells the truth about itself.
+		// A free order says so in words (`z8r3fdff9u`). "MYR 0.00" on a
+		// confirmation reads as a failed price lookup, and the guest messages the
+		// seller to ask — exactly the question this product exists to remove.
+		// A parameter value, not a template change: no Meta re-approval needed.
 		const money =
 			meta.mockupPriceUnsettled || meta.deliveryFeePending
 				? PENDING_TOTAL_LABEL[locale]
-				: `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+				: meta.isFree
+					? NO_PAYMENT_LABEL[locale]
+					: `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
 
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 		try {
@@ -1561,26 +1782,49 @@ export const notifyStorefrontOrderCreated = internalAction({
 });
 
 /**
- * Scheduled by counterCheckout.createOrderFromSession. The buyer scanned once, so
- * everything they need lands in that chat automatically — no rescan, no manual
- * seller step:
- *   - paid-in-person → a "confirmed & paid" text, then the RECEIPT PDF;
- *   - pay-later → the payment ask (transfer reference + an "I've paid" CTA that
- *     points to the order page's "How to pay", via the shared sendPaymentMessage),
- *     then the INVOICE PDF (whose "How to pay" block carries the actual details).
- * All sends are best-effort (errors logged) so the originating mutation never
- * fails on an outbound issue; the seller can resend the document from the Done
- * screen if needed.
+ * Scheduled by counterCheckout.createOrderFromSession — the walk-in's ONE
+ * WhatsApp (86eyd63r8), carrying the link to their order page. It is THE SAME
+ * notification a storefront buyer gets: the approved
+ * `order_confirmation_utility` template (body shortId / store / total, URL
+ * button = the tracking token), sent exactly as notifyStorefrontOrderCreated
+ * sends it. One message shape for every checkout door, one Meta approval.
+ *
+ * Why a template and not the old free-form text: Meta delivers free-form
+ * ONLY inside a 24h window the BUYER opened by messaging us. A manual-phone
+ * walk-in never did, and a scan buyer whose checkout was resumed a day later
+ * has none left — Meta answered 131047, the action swallowed it as
+ * "best-effort", and the Done screen told the cashier the message had gone
+ * out: the "tracking link never arrived" bug. A template is delivered with no
+ * window at all. The outcome is stamped on the order (`confirmationPushStatus`
+ * via recordConfirmationPush) so the Done screen says what really happened and
+ * hands the cashier the link when it didn't; transient failures retry on the
+ * push schedule; a hard failure is reported as ours unless the number itself
+ * is unreachable.
+ *
+ * With no template configured (`WHATSAPP_ORDER_CONFIRM_TEMPLATE` unset — dev,
+ * legacy) the free-form confirmation is sent instead: paid-in-person → a
+ * "done & paid" text; pay-later → the payment ask (transfer reference + an
+ * "I've paid" CTA into the order page's "How to pay"); RM0 → "no payment
+ * needed". The receipt/invoice PDF is never messaged (Done screen + order page).
  */
 export const notifyCounterOrderCreated = internalAction({
 	args: {
 		orderId: v.id("orders"),
-		// Append the PDPA notice-at-collection line to the confirmation. Set for a
-		// manual-phone bind (86ey8vqp6) — the buyer never scanned, so this is our
-		// first message to them. Scan buyers already got it in the connect ack.
+		// Append the PDPA notice-at-collection line to the free-form confirmation.
+		// Set for a manual-phone bind (86ey8vqp6) — the buyer never scanned, so
+		// this is our first message to them. Scan buyers already got it in the
+		// connect ack. The template can't carry it (its body is fixed at
+		// approval); the order page it opens links the privacy notice.
 		includePrivacyNotice: v.optional(v.boolean()),
+		// 1-based; the scheduler passes attempt+1 when retrying a transient
+		// failure. Absent = first try (so existing scheduled jobs stay valid).
+		attempt: v.optional(v.number()),
 	},
-	handler: async (ctx, { orderId, includePrivacyNotice }): Promise<void> => {
+	handler: async (
+		ctx,
+		{ orderId, includePrivacyNotice, attempt: attemptArg },
+	): Promise<void> => {
+		const attempt = attemptArg ?? 1;
 		const meta = await ctx
 			.runQuery(internal.whatsapp.getCounterOrderMeta, { orderId })
 			.catch((err) => {
@@ -1590,6 +1834,17 @@ export const notifyCounterOrderCreated = internalAction({
 		// No buyer phone → nothing to send. Belt-and-braces: an anonymous walk-in
 		// (86ey8vqp6) never schedules this action in the first place.
 		if (!meta || !meta.customerWaPhone) return;
+		const to = meta.customerWaPhone;
+		// Cancelled between create and send — a confirmation must never go out.
+		if (meta.status === "cancelled") return;
+		// A retry racing a send that landed, or a buyer who reached us another
+		// way meanwhile, must not produce a second message.
+		if (
+			meta.confirmationPushStatus === "sent" ||
+			meta.confirmationPushStatus === "recovered"
+		) {
+			return;
+		}
 
 		const appUrl = process.env.APP_URL ?? "https://kedaipal.com";
 		const trackingToken =
@@ -1598,59 +1853,133 @@ export const notifyCounterOrderCreated = internalAction({
 		if (!trackingToken) return;
 		const trackingUrl = `${appUrl}/track/${trackingToken}`;
 		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const free = meta.total <= 0;
 		const paid = meta.paymentStatus === "received";
+		// Born completed (handed over at the counter) vs a collection dated for
+		// later — the copy says which, so "confirmed" never under-states a sale
+		// the buyer already walked out with.
+		const completed = meta.status === "delivered";
 		const locale = pickLocale(meta.locale);
 		const wa = makeGuardedSender(ctx, meta.retailerId, "transactional");
 		// First-contact PDPA line for the manual-phone path (blank otherwise).
 		const privacy = includePrivacyNotice ? privacyNoticeLine(locale) : "";
+		const vars = {
+			shortId: meta.shortId,
+			storeName: meta.storeName,
+			amount: money,
+			trackingUrl,
+		};
 
-		if (paid) {
-			const body =
-				renderSystemMessage(locale, "counterOrderConfirmedPaid", {
-					shortId: meta.shortId,
-					storeName: meta.storeName,
-					amount: money,
-					trackingUrl,
-				}) + privacy;
-			try {
-				await wa.send(meta.customerWaPhone, { kind: "text", body });
-			} catch (err) {
-				console.error("WA counter-order notify failed", err);
+		const sendFreeForm = async (): Promise<SendReceipt | undefined> => {
+			if (free) {
+				const body = renderSystemMessage(locale, "counterOrderFree", vars) + privacy;
+				return await wa.send(to, { kind: "text", body });
 			}
-		} else {
-			// Pay-later: send the amount + transfer reference + "I've paid" CTA so the
-			// buyer can settle from that chat without ever scanning again (boss ask).
-			// Raw bank/QR details are never in chat (ticket 86ey98ju1) — the payment
-			// CTA points to the order page's "How to pay", and the invoice PDF below
-			// carries the details as the formal document.
-			const intro =
-				renderSystemMessage(locale, "counterOrderConfirmedUnpaid", {
-					shortId: meta.shortId,
-					storeName: meta.storeName,
-					amount: money,
-					trackingUrl,
-				}) + privacy;
-			try {
-				await sendPaymentMessage(wa, meta.customerWaPhone, {
-					introBody: intro,
-					locale,
-					shortId: meta.shortId,
-					storeName: meta.storeName,
-					trackingUrl,
-					// Counter orders are collected at the counter — no pickup snapshot.
-					pickupSnapshot: undefined,
+			if (paid) {
+				const body =
+					renderSystemMessage(
+						locale,
+						completed ? "counterOrderCompletedPaid" : "counterOrderConfirmedPaid",
+						vars,
+					) + privacy;
+				return await wa.send(to, { kind: "text", body });
+			}
+			// Pay-later: amount + transfer reference + "I've paid" CTA so the buyer
+			// settles from that chat without ever scanning again. Raw bank/QR
+			// details are never in chat (86ey98ju1) — the CTA opens the order
+			// page's "How to pay"; the invoice PDF there is the formal document.
+			return await sendPaymentMessage(wa, to, {
+				introBody:
+					renderSystemMessage(locale, "counterOrderConfirmedUnpaid", vars) +
+					privacy,
+				locale,
+				shortId: meta.shortId,
+				storeName: meta.storeName,
+				trackingUrl,
+				// Counter orders are collected at the counter — no pickup snapshot.
+				pickupSnapshot: undefined,
+				// No pickup block on this path, so no notes to carry.
+				pickupNotes: [],
+				throwOnFailure: true,
+			});
+		};
+		// The approved utility template — the storefront buyer's notification,
+		// byte for byte: same name, params and button.
+		const sendTemplate = async (
+			templateName: string,
+		): Promise<SendReceipt | undefined> =>
+			await wa.send(to, {
+				kind: "template",
+				templateName,
+				languageCode: TEMPLATE_LANGUAGE[locale],
+				bodyParams: [
+					meta.shortId,
+					templateParam(meta.storeName, "the store"),
+					free ? NO_PAYMENT_LABEL[locale] : money,
+				],
+				// The approved button URL is https://kedaipal.com/track/{{1}} — Meta
+				// appends ONLY this suffix (the tracking token, not the shortId).
+				urlButtonParam: trackingToken,
+			});
+
+		try {
+			const templateName = orderConfirmTemplateName();
+			const receipt = templateName
+				? await sendTemplate(templateName)
+				: await sendFreeForm();
+			if (receipt?.blocked) {
+				// The WABA gateway suppressed it (opt-out, cap, pause). Transactional
+				// bypasses gating today, so this is defence in depth.
+				await ctx.runMutation(internal.orders.recordConfirmationPush, {
+					orderId,
+					status: "failed",
+					failureKind: "system",
 				});
-			} catch (err) {
-				console.error("WA counter-order payment ask failed", err);
+				return;
 			}
+			await ctx.runMutation(internal.orders.recordConfirmationPush, {
+				orderId,
+				status: "sent",
+				wamid: receipt?.providerMessageId,
+			});
+		} catch (err) {
+			// Retry a blip; give up at once on anything Meta rejects identically
+			// next time. 131047 (free-form with no open window — only reachable
+			// with no template configured) is reported as ours: the number is
+			// fine, we had no shape that reaches it. Never the buyer's typo.
+			const outcome = classifyPushFailure(
+				err instanceof WhatsAppSendError
+					? {
+							httpStatus: err.httpStatus,
+							metaCode: err.metaCode,
+							responded: err.responded,
+						}
+					: { responded: true },
+				attempt,
+			);
+			const ours =
+				err instanceof WhatsAppSendError &&
+				err.metaCode === OUT_OF_WINDOW_META_CODE;
+			console.error("WA counter-order notify failed", {
+				shortId: meta.shortId,
+				attempt,
+				outcome,
+				err,
+			});
+			if (outcome.retry) {
+				await ctx.scheduler.runAfter(
+					outcome.delayMs,
+					internal.whatsapp.notifyCounterOrderCreated,
+					{ orderId, includePrivacyNotice, attempt: attempt + 1 },
+				);
+				return;
+			}
+			await ctx.runMutation(internal.orders.recordConfirmationPush, {
+				orderId,
+				status: "failed",
+				failureKind: ours ? "system" : outcome.kind,
+			});
 		}
-
-		// The receipt/invoice PDF is NOT WhatsApp'd (86eyd63r8) — that was this
-		// order's second message, and a walk-in gets one like everyone else. The
-		// PDF is still one tap away in both places it's actually wanted: the
-		// cashier's Done screen (Download / Share, for handing it over there and
-		// then) and the buyer's own tracking page, whose link is in the message
-		// above.
 	},
 });
 
@@ -1804,6 +2133,151 @@ export const notifyClaimLink = internalAction({
 				claimId,
 				outcome: "failed",
 			});
+		}
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Billing lockout alert (z8r3fdg3mh)
+// ---------------------------------------------------------------------------
+
+/** Everything the past-due WhatsApp needs, in one roundtrip. Returns null when
+ * the invoice or its retailer is gone; the caller treats that as "nothing to
+ * say" (unlike the ORDER alerts, there is no email to hand back to — the
+ * overdue email is scheduled independently and has already gone out). */
+export const getInvoiceForBillingAlert = internalQuery({
+	args: { invoiceId: v.id("invoices") },
+	handler: async (
+		ctx,
+		{ invoiceId },
+	): Promise<{
+		retailerId: Id<"retailers">;
+		invoiceNumber: string;
+		status: Doc<"invoices">["status"];
+		total: number;
+		currency: string;
+		storeName: string;
+		notifyWaPhone: string | undefined;
+		locale: Locale;
+		/** An admin's own store is never soft-locked (see storeOwnerIsAdmin) —
+		 * telling them their dashboard is locked would be false. */
+		ownerIsAdmin: boolean;
+	} | null> => {
+		const invoice = await ctx.db.get(invoiceId);
+		if (!invoice) return null;
+		const retailer = await ctx.db.get(invoice.retailerId);
+		if (!retailer) return null;
+		return {
+			retailerId: invoice.retailerId,
+			invoiceNumber: invoice.invoiceNumber,
+			status: invoice.status,
+			total: invoice.total,
+			currency: invoice.currency,
+			// Same Meta-param hygiene the order alerts apply: a store name with a
+			// tab or 4+ spaces in it is a terminal template rejection, and the
+			// seller types this string themselves in Settings.
+			storeName: templateParam(retailer.storeName, "your store"),
+			notifyWaPhone: retailer.notifyWaPhone,
+			locale: pickLocale(retailer.locale),
+			ownerIsAdmin: storeOwnerIsAdmin(retailer),
+		};
+	},
+});
+
+/**
+ * The ONE WhatsApp in the billing chain (z8r3fdg3mh): the seller's dashboard
+ * just locked. Scheduled beside `billingEmail.notifyInvoiceOverdue` at the two
+ * overdue-invoice lock transitions. The other `past_due` entry points send
+ * nothing here: the legacy comped flip is retired outright (z8r3fdeub2 —
+ * comped rows are skipped whole), and a comp turned off enters `past_due`
+ * with NO invoice, so its notice is the `compEnded` email, not a lockout
+ * alert about a bill that doesn't exist.
+ *
+ * Deliberately NOT gated on `retailers.orderWaAlerts`. That toggle is order-
+ * alert scope, and the order alerts stop for a locked store (`past_due` isn't
+ * covered — z8r3fdv55f), so hanging this off them would silence exactly this
+ * message; and a billing lockout is no more opt-out-able than the invoice
+ * email itself. The WABA global opt-out still applies —
+ * that one is a standing legal instruction, not a preference — along with the
+ * kill switch, per-seller caps and quality throttle, all via the gateway.
+ *
+ * No email fallback on failure (unlike the order alerts): the overdue EMAIL is
+ * scheduled unconditionally at the same moment, so the seller has already been
+ * told through the channel that always works. This is the louder second tap,
+ * not the only one.
+ */
+export const notifyBillingPastDue = internalAction({
+	args: {
+		invoiceId: v.id("invoices"),
+		attempt: v.optional(v.number()),
+	},
+	handler: async (ctx, { invoiceId, attempt: attemptArg }): Promise<void> => {
+		const attempt = attemptArg ?? 1;
+		const templateName = billingPastDueTemplateName();
+		if (!templateName) return; // alert path inactive — email carries it alone
+		const meta = await ctx
+			.runQuery(internal.whatsapp.getInvoiceForBillingAlert, { invoiceId })
+			.catch((err) => {
+				console.error("WA billing past-due lookup failed", err);
+				return null;
+			});
+		if (!meta || !meta.notifyWaPhone) return;
+		// Never tell an operator their own dashboard is locked — it isn't.
+		if (meta.ownerIsAdmin) return;
+		// Paid between the flip and this send (a retry, or a settle racing the
+		// cron) — telling a paid-up seller they're locked is worse than silence.
+		if (meta.status !== "pending") return;
+
+		const money = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+		const wa = makeGuardedSender(ctx, meta.retailerId, "utility_template");
+		try {
+			const receipt = await wa.send(meta.notifyWaPhone, {
+				kind: "template",
+				templateName,
+				languageCode: TEMPLATE_LANGUAGE[meta.locale],
+				bodyParams: [meta.storeName, meta.invoiceNumber, money],
+				// Approved button URL is
+				// https://kedaipal.com/app/settings?tab={{1}} — the variable is a
+				// plain VALUE, not a "?tab=billing" fragment. Every other dynamic
+				// URL param in this codebase (trackingToken, shortId, claim token)
+				// is an opaque path segment, and a suffix carrying `?` and `=` is
+				// unlike anything Meta has approved for us — not worth discovering
+				// at review time. The seller is authenticated, so no capability
+				// token is involved.
+				urlButtonParam: "billing",
+			});
+			if (receipt?.blocked) {
+				// Gateway refused (opt-out / cap / quality pause). It logged the
+				// reason; the overdue email already went out, so we stop here.
+				console.warn("WA billing past-due suppressed by gateway", {
+					invoiceNumber: meta.invoiceNumber,
+					status: receipt.blocked,
+				});
+			}
+		} catch (err) {
+			const outcome = classifyPushFailure(
+				err instanceof WhatsAppSendError
+					? {
+							httpStatus: err.httpStatus,
+							metaCode: err.metaCode,
+							responded: err.responded,
+						}
+					: { responded: true },
+				attempt,
+			);
+			console.error("WA billing past-due alert failed", {
+				invoiceNumber: meta.invoiceNumber,
+				attempt,
+				outcome,
+				err,
+			});
+			if (outcome.retry) {
+				await ctx.scheduler.runAfter(
+					outcome.delayMs,
+					internal.whatsapp.notifyBillingPastDue,
+					{ invoiceId, attempt: attempt + 1 },
+				);
+			}
 		}
 	},
 });

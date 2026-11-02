@@ -1,9 +1,9 @@
 import { useRouterState } from "@tanstack/react-router";
 import type { PostHog } from "posthog-js";
 import { useEffect } from "react";
+import { posthogEnvironment } from "../../convex/lib/posthog";
 import { isCapabilityTokenPath } from "../lib/analytics-privacy";
 import { clientEnv } from "../lib/env";
-import { posthogEnvironment } from "../../convex/lib/posthog";
 import {
 	POSTHOG_DEFAULT_HOST,
 	posthogInitOptions,

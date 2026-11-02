@@ -1,0 +1,927 @@
+# Subscription auto-renewal + Pay-now — HitPay on Kedaipal's own account
+
+**ClickUp:** [`86eyb6z4r`](https://app.clickup.com/t/86eyb6z4r) · **Status:** built; sandbox-verified end-to-end on MY (TnG) and SG (PayNow) — V2 event verification pending the endpoint secret
+**Files:** `convex/lib/hitpayBilling.ts` (pure), `convex/subscriptionPayments.ts` (actions/queries), `convex/invoices.ts` (settle core + self-serve + renewal issuance), `convex/subscriptions.ts` (cron), `convex/http.ts` (webhook branches), `convex/billingEmail.ts` + `convex/lib/billingEmailCopy.ts` (emails), `src/components/settings/{billing-tab,auto-renewal-card,plan-picker-card}.tsx`, `src/routes/app.admin.billing.tsx`
+
+## What it is
+
+Sellers pay Kedaipal without a founder in the loop, on two rails that both
+funnel into the ONE settle path (`settleInvoicePaid` — the exact code the
+admin mark-paid flow uses, founding claim included):
+
+1. **Pay-now** — every issued invoice mints a one-off HitPay payment request
+   against **Kedaipal's own HitPay account**; the hosted-checkout URL is a
+   green button in the billing tab and in the issue/reminder/overdue emails.
+   The v1 completion webhook (or the seller landing back on the billing tab —
+   `verifyInvoicePayment`, the lost-webhook safety net) settles it.
+2. **Auto-renewal** — the seller authorises a **card or Touch 'n Go wallet
+   once** (`save_payment_method=true` recurring-billing session); each renewal
+   the daily cron issues is then charged merchant-initiated
+   (`POST /v1/charge/recurring-billing/{id}`) for the **invoice total** —
+   never a cached plan amount, so founding discounts and plan changes are
+   always right.
+
+Plus the piece the ticket assumed already existed and didn't: **the daily cron
+now auto-issues renewal invoices** (`invoices.internalIssueRenewalInvoice`).
+The old behaviour locked an active seller whose period lapsed with no pending
+invoice (because Arif hadn't typed one); the machine now writes the bill
+instead, and the seller keeps access through the invoice's normal 14-day
+grace. The overdue flip at `dueDate` is still the only lock.
+
+And **self-serve subscribe** (`invoices.subscribeSelf`): a trialing /
+past-due / cancelled seller picks Starter or Pro, monthly or annual (framed
+"2 months free"), gets an invoice + Pay-now button, pays, done. A store on
+founding pricing automatically gets its founding price — and is offered
+**Founding Pro only** (see "Founding Members stay on Founding Pro" below);
+founding is never otherwise self-selectable — the last slots stay Arif's to
+hand out via the admin console, and **manual admin issue/mark-paid is fully
+retained** for bank-transfer holdouts.
+
+## Why merchant-initiated charges, not HitPay's plan cycle
+
+- HitPay's scheduled-plan mode bills a **fixed amount on its schedule** —
+  wrong the moment a founding discount or plan change applies, and its
+  currency support for plans is SGD-documented only.
+- Merchant-initiated means **we own amount, timing, retries** — and the
+  charge response is **synchronous** (`status: "succeeded"` / not), which is
+  the primary success/failure signal because **HitPay ships no
+  charge-failure webhook**.
+- Structural safety: with no `autoRenew` on the sub, nothing ever charges —
+  so "turn off auto-renewal" is guaranteed by local state alone, never
+  blocked, never dependent on a remote DELETE succeeding.
+
+## The no-double-charge invariant
+
+A charge action can die between HitPay taking the money and us settling.
+Defences, in order:
+
+0. `recordChargeAttempt` is a **mutex, not a stamp**: it refuses the claim
+   while an attempt holds the lock, so two schedulers (attach webhook +
+   reconcile, or cron + heal) can never both POST. The loser stands down; the
+   owner settles or records a failure either way. Without it the reconcile in
+   (2) cannot save us — while charge A is in flight HitPay's charge count has
+   not moved, so charge B reads "remote not ahead" and charges anyway. The
+   lock lasts `CHARGE_ATTEMPT_LOCK_MS` (24h); past that a stale stamp may be
+   re-claimed, because (2) has already asked HitPay about it by then.
+1. The winner stamps `lastChargeAttemptAt` + `pendingChargeInvoiceId` **before**
+   the HTTP call, and **kills the invoice's Pay-now link** in the same breath —
+   remotely (DELETE at HitPay) *and* locally (`gatewayPayment` off the invoice,
+   in the claim's own transaction): that window (seller on HitPay's page, our
+   charge in flight) is the one place both rails could take money, and before
+   the local clear the billing tab and every email kept offering "Pay online
+   now" against a dead link for as long as a lost outcome stayed unresolved.
+   The claim also **re-verifies the invoice is still `pending`** — the action's
+   context read and the claim are separate transactions, and a Pay-now webhook
+   settling in between used to leave a charge firing at a paid bill. A decline
+   re-mints the link, because the failure email's whole CTA is "pay it
+   yourself".
+2. Any later run that finds a stamp with no recorded outcome — **at any age**
+   — **reconciles first**: `GET /recurring-billing/{id}` and compare HitPay's
+   charge count to our `autoRenew.timesCharged`. Remote ahead ⇒ the money is
+   real ⇒ settle with `recordedBy = reconciled:<session>:<n>`, never
+   re-charge. The stamp is cleared only by a recorded outcome (a settle or a
+   decline), so "still standing" means exactly "outcome unknown".
+   - **The measure is a DELTA from the attempt's own baseline, not our
+     tally.** Every charge reads HitPay's count immediately before it POSTs
+     and stores it on the stamp (`autoRenew.chargeCountAtAttempt`); the
+     reconcile then asks "has the count moved since I fired THIS charge?".
+     Comparing against `timesCharged` was a bet that nothing but our own
+     successes ever moves HitPay's number — and the obvious counter-example,
+     a *declined* charge, **cannot be observed in the sandbox** (it approves
+     everything it validates, including a RM 999,999 wallet charge; only a
+     pre-processor 422 leaves the count alone). Had declines counted, the
+     sequence [decline → later lost outcome] would have read "remote ahead"
+     and settled a bill nobody paid: a free month. The delta makes the
+     question moot. A stamp with no baseline — a GET blip at claim time, or
+     one written before the field existed — falls back to `timesCharged`,
+     i.e. exactly the old behaviour, never worse. The pre-charge read is
+     reused from the reconcile's own read when there is one, and skipped
+     entirely for a session that just answered "gone".
+   - **The count is `total_charge`, not `times_charged`.** On a save-card
+     session HitPay leaves the documented `times_charged` null for good; the
+     count lives in `total_charge` (sandbox GET, 30 Sep 2026: a session whose
+     auto-charges settled RM79 + RM149 + RM79 read `total_charge: 3` beside
+     `times_charged: null`; sessions that never charged read 0).
+     `readSessionChargeCount` probes `total_charge`, then `times_charged`, and
+     returns *undefined* — never 0 — when neither carries a count.
+   - **What HitPay's answer decides.** A count ⇒ compare as above. No count
+     in the body, a network error, 5xx, 429 or any other refusal ⇒ **can't
+     judge, so don't charge** — the retry sweep asks again tomorrow. A
+     **404/410** ⇒ HitPay has no such session (removed at their end, detach
+     webhook missed): it neither took the lost charge nor can take this one,
+     so the run falls through and the charge's own refusal becomes an
+     ordinary dunned decline instead of a silent skip every day.
+3. Network throws, HitPay 5xx and a 2xx whose body we can't read are recorded
+   as outcome **"unknown"** — not counted as an attempt, no seller email, the
+   stamp kept, retry ~24h later through the reconcile in (2). Only a
+   definitive decline (2xx-not-succeeded or 4xx) counts toward dunning. An
+   action that dies without recording anything leaves only the stamp; the
+   daily cron re-runs that bill once the lock is stale, so (2) still gets it.
+
+**Trap — why the reconcile has no age limit, and reads `total_charge`.** It
+shipped gated on "stamp younger than 24h", but the retry after an unknown
+outcome is scheduled 24h out (`nextRetryAt`) and fired by a daily cron, so it
+ALWAYS met a stamp at least 24h old: the guard never ran on the one path it
+existed for, the lock read the stamp as stale, and a charge HitPay had already
+taken was POSTed again — unless the V2 `charge.created` webhook happened to
+settle the bill first. It also read `times_charged`, which is null on every
+save-card session, so even inside the window it saw 0 and charged. Both are
+pinned by tests that drive the real path (unknown outcome → cron at +24h and
++48h, and mid-dunning) against the captured payload shape.
+
+### Only the SESSION rail answers the stamp (`viaSessionCharge`)
+
+Every `internalSettleFromGateway` caller declares WHICH RAIL the money rode:
+`true` for a saved-method session charge (the sync verdict, its
+`charge.created` webhook, the outcome-unknown reconcile, the lost-attempt
+reconcile), `false` for a Pay-now payment (v1 completion webhook, the
+redirect-return reconcile). Only a `true` settle may:
+
+- **advance `timesCharged`** — a Pay-now settle that bumped it (the
+  slipped-through checkout paying the same bill mid-charge) pushed our counter
+  ahead of HitPay's, and the NEXT lost-but-landed charge then read "remote not
+  ahead" and charged again: a double charge seeded by bookkeeping;
+- **answer the attempt stamp** — different money answering the question let a
+  landed session charge vanish unreconciled.
+
+For the same reason **`settleInvoicePaid` no longer clears the stamp**: paying
+a bill by bank transfer / mark-paid / Pay-now doesn't say what happened to the
+session charge. The stamp is resolved only by a recorded outcome on the
+session rail: the `viaSessionCharge` settle patch, `recordChargeFailure`, or —
+when the reconcile reads "count not ahead" (HitPay says it never landed) or
+the session is gone (unanswerable) — `resolveChargeAttempt`, which closes a
+**stale** stamp only (same timestamp, same bill, older than the lock): a fresh
+stamp can be a charge literally in flight whose count hasn't moved yet, and
+resolving it would hand the mutex to a second charge. Without that closer, a
+stamp whose bill settled by another rail was re-reconciled daily forever.
+
+The daily sweep hands the charge action the open bill — or, with no open bill
+but an unresolved stamp, **the bill the attempt was fired for**, so the
+reconcile runs this sweep instead of a whole cycle later. `chargeDueRenewal`
+reconciles BEFORE its is-this-bill-pending return for the same reason.
+
+### The one residual: a session HitPay deletes behind our back
+
+A `gone` (404/410) session with an unresolved stamp is the single place money
+can be lost track of for good: the count can never go "ahead", so a charge
+that *did* land can never be proven, and the charge's own refusal dunns the
+seller — whose payment would then be a second debit. It is accepted
+deliberately, for two reasons.
+
+**Every session loss we cause is already covered.** The seller's cancel and a
+HitPay-side `method_detached` both schedule `reconcileLostAttempt` *before*
+the state it needs is cleared, and cancel deletes the remote session only
+*after* the money question is answered. So this branch is reachable only if
+HitPay unilaterally deletes a session we never asked them to — undocumented,
+and unobserved.
+
+**And in the likely shape of that event the dunning is correct.** A gone
+session almost certainly means the charge never landed and auto-renewal is
+dead; the seller genuinely needs to be told to pay and re-authorise.
+Suppressing the email to protect against the rare branch would leave them
+uninformed in the common one. The CRITICAL log on this path is the hook: it
+names the session and the bill so a human can check HitPay before the
+seller acts on the email.
+
+### The seller sees "confirming", and nothing asks them to pay
+
+While a stamp is unresolved, `SubscriptionView.autoRenew.confirming` is true
+and every surface that would invite a payment stands down — an invited manual
+payment is the second payment if the sent charge landed:
+
+- the **billing tab's pay options disappear** behind an amber note that says
+  why and that they come back (or the bill flips paid);
+- the **auto-renewal card** explains (two variants: bill still open — "we've
+  charged and are confirming"; bill settled meanwhile — "if you were charged
+  on top of a payment you made, we'll be in touch to refund it");
+- the **dashboard banner** goes quiet: `confirming` outranks the declined
+  banner and the due-soon countdown (both say "pay it yourself"), but never
+  `past_due`/`stopped`;
+- the **pre-due reminder email is held** (not stamped, so it still goes out
+  once resolved-and-unpaid); a stranded charge holds it the same way;
+- **subscribe / plan-change never promise a charge** (`autoChargeIdle`): the
+  server returns `chargingSavedMethod: false`, writes the bill, and the daily
+  sweep charges it once the question resolves — and the plan picker no longer
+  falls through to the authorisation page, which refuses any store that
+  already has a method ("already on").
+
+### Cancel / detach with a charge outcome unknown
+
+Clearing `autoRenew` (seller cancel, HitPay detach) used to destroy every hook
+the reconcile hangs off — stamp, counter, session id — so cancelling
+mid-unknown made a landed charge permanently invisible. Now
+`scheduleLostAttemptReconcile` captures the question first and
+`reconcileLostAttempt` answers it independently of the sub's state:
+
+- count moved past ours ⇒ **settle the bill the attempt was fired for**
+  (`viaSessionCharge`; a non-pending bill lands in the review queue);
+- count says it never landed ⇒ **re-mint the Pay-now link** the claim killed
+  (the seller is on the manual rail now);
+- no answer (network, 5xx, no count, session gone) ⇒ retry on
+  `LOST_ATTEMPT_RETRY_DELAYS_MS` (+1h/+3h/+8h/+12h), then a CRITICAL log for a
+  human — **never re-mint on a non-answer**: inviting a manual payment while
+  the charge may have landed is the double payment;
+- on a seller cancel the **remote session is deleted only after the answer**
+  (deleting first would 404 the very count the reconcile needs); turning off
+  stays instant and ungated — `autoRenew` is cleared immediately, so nothing
+  can charge from that moment. A HitPay-side detach never deletes.
+
+### Payments to review (admin)
+
+Every gateway payment that settled nothing — `late_payment`, `amount_mismatch`
+— is **real money awaiting a human decision**, and a `late_payment` sits on a
+PAID or VOID bill by definition, so the pending-invoices list structurally
+could never show it (the console claimed to surface possible double payments
+and couldn't). `gatewayIssueOpen` + the `by_gateway_issue_open` index feed the
+**"Payments to review"** queue at the top of `/app/admin/billing` (above the
+tab fork; hidden while empty): store, bill + status, amount received vs the
+bill's total, what to do (worded by the bill's status), the HitPay ref with a
+copy button, oldest first. **Mark resolved** (`resolveGatewayIssue`,
+admin-only) records who/when/what on the stamp — resolution is written, never
+deleted — after the human refunded or applied the money; it moves no money
+itself and the dialog says so. `migrations:backfillGatewayIssueOpen` flags
+stamps from before the queue existed (run once per deployment).
+
+**Release operator steps for this machinery, in order:** deploy, then
+`npx convex run migrations:backfillGatewayIssueOpen --prod` (queue the old
+stamps), then `npx convex run subscriptionPayments:syncChargeCounters --prod`
+— the counter-parity one-shot. The pre-fix reconcile read a field that was
+always null and Pay-now settles used to bump the counter, so any LIVE
+recurring seller (her-moolah-collective was the first) may hold drift from
+before the fix: local behind ⇒ the next lost outcome settles a bill nobody
+charged; local ahead ⇒ it charges again. The sync reads each session's
+`total_charge` and aligns, skipping (and reporting) any session with an
+unresolved attempt or a stranded charge — that drift is evidence, not error.
+
+### A charge that lands on a voided bill is STRANDED (audit + hold)
+
+A stamp names the bill it was fired for (`pendingChargeInvoiceId`), and a
+reconciled charge belongs to **that** bill — `chargeContext.attemptInvoice`,
+not whichever bill the retry happens to be charging. If that bill was
+**voided** while the outcome was unknown (an admin void, or the seller
+switching plan) and HitPay did take the charge, the money is *stranded*.
+Decided (Zaki, 30 Sep 2026): **audit it and hold**, because both alternatives
+are wrong with money — booking it against the replacement records the wrong
+bill (and the wrong amount whenever the totals differ), and charging the
+replacement is the double debit this whole machine exists to prevent.
+
+- **One place decides.** `internalSettleFromGateway`'s "money on a non-pending
+  bill" branch already audits (`gatewayIssue: late_payment` on the voided
+  bill). When the sub's attempt stamp still names that bill — only a void can
+  leave it there; a settle clears it — the same branch **strands** it: resolves
+  the stamp, catches `timesCharged` up with HitPay (a counter left behind would
+  make the *next* unknown outcome read "HitPay took it" and settle a bill for
+  free), and records `autoRenew.strandedCharge` (bill number, amount, currency,
+  HitPay reference). Both doors land here: the reconcile, and a late
+  `charge.created` webhook (which resolves to the stamped bill too).
+- **Nothing charges while it's set.** `autoChargeAllowed(autoRenew)`
+  (`lib/hitpayBilling.ts`) is the ONE rule — the daily cron, renewal issue,
+  `subscribeSelf`, `changePlan` and `chargeDueRenewal` itself all ask it, so no
+  door can keep charging a stopped store. A bill written meanwhile is billed,
+  never charged (`chargingSavedMethod: false`, `autoCharge: false`).
+- **Any settle lifts it.** `settleInvoicePaid` clears `strandedCharge` with the
+  rest of the dunning state: the admin applied the money (marking the open bill
+  paid) or refunded it and the seller paid by hand — either way a human
+  decided, and charging resumes from the next renewal.
+- **The seller is told, and told not to pay twice.** `SubscriptionView.autoRenew
+  .stopped` drives the auto-renewal card's amber state, the dashboard banner
+  (`autoRenewStopped`, which outranks the declined banner), a "hold off" line
+  above the pay buttons (the options stay — we may ask them to pay), and the
+  plan cards, which stop promising a charge (the picker writes the invoice and
+  stays put instead of opening the authorisation page that would refuse,
+  "already on").
+- **Ops is emailed, once.** The seller is told "we'll be in touch", so a human
+  must actually hear about it: stranding schedules `sendStrandedChargeAlert`
+  (store, bill, amount, HitPay reference, what to do) to `ADMIN_ALERT_EMAIL`,
+  falling back to `EMAIL_FROM` — the WABA alerts' recipient rule, no new config.
+- **The admin sees it on the store's rows.** Both admin lists render one
+  component (`AutoChargePill`/`AutoChargeDetail`, `describeAutoCharge`):
+  **Auto-charge stopped** (red, with an icon) leads with the fact, then the two
+  ways out, then the HitPay reference with a copy button; stopped stores sort
+  first in the auto-renewal overview. The same component shows **Charge
+  unconfirmed** (amber) for an attempt with no outcome older than an action can
+  run (10 min) — the state that used to be invisible there.
+- **Turning auto-renewal off** drops the hold with the rest of `autoRenew`; the
+  `late_payment` stamp on the voided bill stays as the record.
+
+## Dunning (Kedaipal-owned)
+
+`AUTO_CHARGE_RETRY_DELAYS_MS` = attempt at period end, retry +2d, retry +5d
+(3 attempts total — inside the 14-day invoice grace, sized for "TnG wallet
+tops up on payday"). Each decline emails `autoRenewFailed` (Pay-now CTA;
+the final one says retries stopped). The pending invoice + Pay-now link is
+always the way out; the overdue lock at `dueDate` + its email are unchanged.
+A settle **by any rail** (auto-charge, Pay-now, admin mark-paid) clears the
+dunning state inside `settleInvoicePaid`.
+
+**Charge-on-attach, and its two guards.** Attaching a method charges the open
+bill immediately — that is what makes subscribe Netflix-shaped, and it heals a
+mid-dunning store without waiting for tomorrow's cron. Two guards keep
+"authorising IS the consent" literally true:
+
+1. **First attach only.** `applyMethodAttached` runs for every attach signal —
+   the webhook, its retries, AND the redirect reconcile — so charging on each
+   one raced two charges onto the same bill.
+2. **Only the bill the page showed.** `autoRenewSetup` records the invoice id
+   and amount displayed when the session was minted; a bill that appeared,
+   changed, or was reissued afterwards is NOT consented to and stays for the
+   cron/Pay-now rail. A stale session is likewise re-minted rather than
+   resumed when that context has moved.
+
+**What attach does NOT charge**, by the same consent rule: a store's **first
+invoice** from start-when-you-sell (`z8r3fday24`) — a bill the seller has not
+seen is never charged unseen. Held subscriptions renew through this machine
+too (`internalIssueRenewalInvoice` picks `kind: "hold"`), so the setup page and
+the pre-charge notice quote the **hold** price while a store is paused, and a
+hold bill the authorisation page displayed is charged on attach like any other.
+
+
+**Pre-charge notice:** auto-renew sellers get `autoRenewUpcoming` once per
+cycle in the 3-day window before `currentPeriodEnd` (amount + method + date +
+how to turn it off) — the no-surprise-MIT rule card networks expect.
+Deduped by `renewalNoticeSentForPeriodEnd`.
+
+## Webhooks — one route, two schemes
+
+`POST /webhook/hitpay` now discriminates on the **`Hitpay-Signature` header**:
+
+| | V2 events (new) | v1 completion (existing) |
+|---|---|---|
+| Sender | Kedaipal's account, dashboard-registered | per-request `webhook` param |
+| Body | JSON | form-encoded |
+| Signature | HMAC-SHA256 over **raw body**, header `Hitpay-Signature` | HMAC over sorted `key+value` concat, `hmac` **field** |
+| Salt | `HITPAY_BILLING_WEBHOOK_SALT` — the **endpoint's own** secret (env) | seller's stored salt (orders) / `HITPAY_BILLING_SALT` (invoices) |
+| Events | `charge.created`, `recurring_billing.method_attached/detached/subscription_updated` | `status=completed` |
+
+The v1 branch resolves **orders first** (`by_gateway_request` on orders),
+then ONE resolver for everything minted on Kedaipal's own account —
+`subscriptionPayments.resolveBillingRequestContext` answers a subscription
+**invoice** or a **credit-pack purchase** (Credits T2, `creditPurchases`, the
+same-named index) in one query hop. `handleBillingCompletionWebhook` verifies
+both with `HITPAY_BILLING_SALT` and settles through
+`invoices.internalSettleFromGateway` or `creditPurchases.settlePurchase` — each
+owns its amount check and duplicate guard; see
+[credits.md](./credits.md#the-webhook-branch). Routing never reads
+`reference_number`. Unknown ids still 200-ack.
+Recurring `charge.created` is corroboration only (the sync response settles
+first; duplicates no-op); attach/detach/status events maintain `autoRenew`.
+Event payload parsing (`extractRecurringEvent`) is deliberately tolerant and
+returns null → ack for anything unrecognised.
+
+## Settle idempotency (`invoices.internalSettleFromGateway`)
+
+- pending + amount & currency match → settle through `settleInvoicePaid`
+  (founding rank claim runs **through the same path** — no fork; pinned by
+  test).
+- already paid by the same payment id → duplicate, plain no-op.
+- paid another way / voided → **`late_payment`** stamp on
+  `invoices.gatewayIssue` (admin console shows "possible double payment"),
+  nothing else changes.
+- amount/currency mismatch → **`amount_mismatch`** stamp, NO settle (a stale
+  link paid after a reissue must not activate the wrong bill).
+- Manual `markPaid` / `voidInvoice` on a link-carrying invoice schedules a
+  best-effort DELETE of the HitPay request so the dead link stops taking
+  money.
+
+## Env vars (Convex deployment)
+
+| Var | Meaning |
+|---|---|
+| `HITPAY_BILLING_API_KEY` | Kedaipal's own HitPay API key (sandbox `test_`-prefixed; mode inferred like the BYO path) |
+| `HITPAY_BILLING_SALT` | The **API-key** salt — signs the per-request v1 completion webhooks |
+| `HITPAY_BILLING_WEBHOOK_SALT` | The **registered endpoint's** signing secret — signs the dashboard V2 events. Optional: falls back to `HITPAY_BILLING_SALT`, but on a real account the two DIFFER, and without it every V2 event 401s |
+
+**The first two, both or nothing.** Absent ⇒ every surface (Pay-now, auto-renewal, plan
+picker, and the credit-pack top-up — Credits T2) quietly stays hidden and manual
+billing renders byte-identical to before — fail-open-to-manual. These are **deployment env**, never a table:
+`billingConfig` is readable by every signed-in seller via
+`paymentInstructions`, so a platform secret can't live there.
+
+Also: the V2 events must be **registered in HitPay's dashboard** (Developers
+→ Webhook Endpoints → `<CONVEX_SITE_URL>/webhook/hitpay`, select the four
+recurring/charge events) — the signing secret shown for THAT endpoint is
+`HITPAY_BILLING_WEBHOOK_SALT`, **not** the API-key salt (sandbox-proved).
+
+## Currency + methods
+
+- Session methods per billing currency (`AUTO_RENEW_METHODS`): MYR = `card`,
+  `touch_n_go`; SGD = `card` (PayNow can't be tokenised). FPX/DuitNow are
+  push-only and never appear.
+- A 422 naming `payment_methods` retries with the param OMITTED, so the
+  ACCOUNT's own tokenisable set decides (sandbox: a TnG-only account
+  rejected `card`, and a card-only fallback would have been the one method
+  it did not have).
+- Every invoice — first, renewal, plan change, top-up — bills in the store's
+  **country's** currency (`storeBillingCurrency`, 86eyp7hn7). It used to
+  follow the last paid invoice, which let one wrong-currency bill stick.
+- **A country switch detaches the saved method.** The switch is the one way
+  to change what a store bills in, and the session HitPay authorised was in
+  the OLD currency — charging it in the new one is a charge the seller never
+  agreed to. `retailers.updateSettings` runs `detachAutoRenewForRetailer` on
+  a real country change (the same path as a store handover), reports
+  `autoRenewDetached`, and the post-switch checklist's `billing_currency` row
+  sends the seller to set auto-renewal up again. Pay-now keeps working.
+  A setup STARTED but not finished (`autoRenewSetup`) is cleared by the same
+  switch: its HitPay page was minted in the old currency, and "Finish setting
+  up" after the move would authorise that session on a store now billed in
+  the new one (found in the Chrome test, 28 Oct 2026). A half-started setup
+  was never on, so it is not reported as detached.
+- `times_to_be_charged` is NEVER sent: a save-payment-method session
+  rejects it outright ("You cant set times_to_be_charged for save_card is
+  true", sandbox 11 Sep 2026). No charge-count ceiling exists on the
+  tokenised path.
+
+**One HTTP client for the account** (`convex/lib/hitpayBillingClient.ts`,
+extracted for Credits T2): the credentials, the headers and the
+payment-request create / DELETE / status calls live there, and both the invoice
+Pay-now link and the credit-pack checkout go through them — the empty
+`payment_methods` guard (a request the account can't take money on is deleted
+and reported as failed) included, so the two can't drift.
+
+## Webhooks: TWO mechanisms, TWO secrets (sandbox-proved, 11 Sep 2026)
+
+- **Per-request v1 completion webhooks** — we pass `webhook=<our URL>` when
+  minting each invoice payment request, so they need **no dashboard setup** and
+  are signed with the **API-key salt** (`HITPAY_BILLING_SALT`), field-concat
+  HMAC. This is what settles Pay-now invoices.
+- **Dashboard-registered V2 events** (`charge.created`,
+  `recurring_billing.*`) — no per-session parameter exists, so registration in
+  Developers → Webhook Endpoints is the only way to receive them. They are
+  signed with **that endpoint's own secret** (`HITPAY_BILLING_WEBHOOK_SALT`),
+  raw-body HMAC-SHA256 hex in `Hitpay-Signature`. Proved the hard way: a real
+  `method_attached` verified against *neither* HMAC form of the API salt. The
+  var falls back to the API salt when unset, and the rejection log says so.
+
+**The real V2 payload is an ENVELOPE, not the docs' flat object:**
+
+```json
+{ "event": "recurring_billing.method_attached",
+  "affected_method_id": "…",
+  "recurring_billing": { "id": "…", "status": "active", "cycle": "save_card",
+    "reference": "<our subscription id>",
+    "payment_provider_charge_method": "touch_n_go",
+    "default_method": { "payment_provider": "touch_n_go", … } } }
+```
+
+The billing id is NESTED and the authorised rail lives in
+`payment_provider_charge_method` — the docs-derived reader found neither, which
+is why an attach recorded the default "card" for a Touch 'n Go wallet.
+`extractRecurringEvent` now reads the envelope first and keeps the flat shape
+as a fallback; both forms are pinned by tests carrying verbatim captured
+payloads.
+
+**What registration buys** (money flows without it): the true method label, and
+detach detection. Without it the redirect reconcile still attaches the method
+but cannot see WHICH, and a method removed at HitPay's end is only discovered
+when the next charge fails into normal dunning.
+
+## Subscribe = auto-renewal by default (Zaki, 11 Sep 2026)
+
+The plan picker's primary CTA is **"Subscribe to {plan}"** — invoice created,
+then straight to HitPay's authorisation page; **attaching the method charges
+the open bill immediately** (`applyMethodAttached` schedules the charge for
+ANY pending invoice — the authorisation page displayed exactly that amount,
+so authorising IS the consent) and every later renewal charges itself. The
+Netflix shape: subscribing enrols you; cancelling is the explicit act. This
+REVERSED the earlier don't-charge-self-serve-at-attach rule by owner decision.
+
+Two things keep it honest for the Malaysian rails:
+
+- **The manual rail survives implicitly, not as a second button.** The explicit
+  "get an invoice instead" link was built and then removed the same day — ONE
+  door. It still works for the DuitNow/bank seller who structurally cannot
+  tokenise: the invoice is created BEFORE the redirect, so abandoning HitPay's
+  page (or tapping Back) lands them on a pending invoice carrying both the
+  Pay-now button and the bank/DuitNow details. The opt-in "Turn on
+  auto-renewal" card remains for sellers who came in manually.
+- The authorisation session shows **the open bill's total** when one exists
+  (an annual subscribe shows the annual figure), else the current renewal
+  price; `customer_name` carries the store name so HitPay's dashboard lists a
+  real customer instead of "N/A".
+
+Sandbox-verified API rules encoded the same day: a save-payment-method
+session REJECTS `times_to_be_charged` (so no charge-count ceiling exists on
+the tokenised path), and a 422 on `payment_methods` means the account lacks
+(some of) our preferred rails — the retry omits the param and lets the
+account's own tokenisable set decide.
+
+## Changing tier mid-subscription — credit as DAYS (Zaki, 11 Sep 2026)
+
+An active seller changes tier from Settings → Billing (`invoices.changePlan`).
+The two directions are deliberately asymmetric, because what is fair differs:
+
+| | Upgrade (higher tier) | Downgrade (lower tier) |
+|---|---|---|
+| When | Immediately, on payment | End of the period already paid for |
+| Bill | An ORDINARY full-price invoice | None — the next renewal bills it |
+| The remainder | Carried over as extra DAYS | Kept as-is: they keep the tier they bought |
+| Reversible | Settle or void the invoice | `cancelPlanChange`, any time |
+
+**Direction is decided by tier RANK (`isPlanUpgrade`), never by price.** A seller
+on an annual Starter (RM790) moving to a monthly Pro (RM149) is unmistakably an
+upgrade that a price comparison would have scheduled as a downgrade.
+
+**An open invoice disables the UPGRADE, and the card names it.** `changePlan`
+keeps the one-pending-invoice rule `subscribeSelf` already enforces — a second
+bill on the table is how a seller ends up `past_due` on a tier they never got —
+so the button is disabled with the invoice number rather than erroring on
+confirm. Moving DOWN charges nothing, so it stays available throughout.
+
+### Why credit-as-days, and not "charge the difference"
+
+Charging a prorated difference was designed, reviewed and rejected. It breaks on
+this product's own rails:
+
+- **It is only sound if payment is instantaneous.** Priced at issue, a seller on
+  the 14-day manual rail who pays twelve days later has been charged for days
+  that already elapsed — and pinning their period to the old end date means a
+  late-paid upgrade can buy **zero** days and trigger an instant re-bill.
+- **A small top-up invoice inherits the service bill's lifecycle.** An unpaid
+  RM35 add-on hits `dueDate`, flips the seller to `past_due`, and soft-locks a
+  store that had fully paid for the period it is standing in — with no exit,
+  since the picker hides behind `!pending` and `subscribeSelf` refuses a second
+  pending invoice.
+- It also needed an amount override, invoice-level proration metadata, a new
+  origin literal, a PDF discount line, a sub-30-sen special case and an MRR fix.
+
+Credit-as-days needs **one pure helper and one changed line in settle**. The
+invoice stays an ordinary full-price bill, so the gateway amount check, the
+saved-method consent guard, the PDF totals and the founder report's MRR all keep
+working untouched, and no new money path exists to get wrong.
+
+### The arithmetic (`planChangeCarryoverDays`)
+
+```
+valueLeft = fromPrice × daysLeft / fromCycleDays
+carryover = valueLeft ÷ (toPrice / toCycleDays)
+```
+
+Day-rates, not a price ratio, so crossing cycles is right: RM26 left on a
+monthly Starter buys 6 days of ANNUAL Pro but only 5 of monthly Pro, because a
+year bought upfront is cheaper per day. Both prices are read at the seller's own
+founding rate and currency, and the result rounds to whole days (flooring would
+quietly shave up to a day of paid value).
+
+**Say the conversion out loud, never just the answer.** The upgrade dialog
+quotes all three numbers — days left, what they are worth, what that buys —
+because "16 days carry over" beside a billing page promising another 30 reads as
+14 days confiscated (Zaki, 13 Sep 2026, on a store that subscribed to Starter
+and upgraded the same day). Nothing is confiscated: RM79 is RM79, and it buys 16
+days of a plan costing RM4.97 a day rather than 30 of one costing RM2.63.
+`planChangeCarryover` returns that breakdown and `planChangeCarryoverDays` is a
+thin wrapper on it, so the number the copy quotes is by construction the number
+settle grants.
+
+**The settled invoice is corrected to match.** `insertPendingInvoice` can only
+ESTIMATE the period it covers — 30 days from the ISSUE date — but the period is
+granted from the moment the money lands and is stretched by any carryover, so
+settle rewrites `periodStart`/`periodEnd` on the invoice it is flipping. Without
+it the PDF receipt (the only surface that prints those two fields) said "Period:
+13 Sep - 13 Oct" for a payment that bought service to 29 Oct, and on the 14-day
+manual rail every late payment produced a receipt for days the seller never had.
+The founder report is unaffected: `monthsInInvoicePeriod` reads `billingCycle`
+and only measures the span for legacy rows that predate it. Historical invoices
+are left alone — the estimate was the only truth available when they settled, so
+there is no backfill.
+
+**Applied at SETTLE, never at issue** — `daysLeft` must be the days genuinely
+unused when the money lands. It applies to ANY invoice settled while a paid
+period is still running, not just upgrades, so an early renewal no longer
+forfeits its remainder either. A lapsed or missing period carries 0, so this can
+never resurrect a period that had already run out.
+
+### The scheduled half (`subscriptions.pendingPlanChange`)
+
+`{ plan, requestedAt }` — no `billingCycle` on purpose: a cycle change is the
+annual offer's void-and-reissue runbook, and a field that could express one would
+eventually be set by a picker that defaults to monthly. The renewal cron reads
+it, bills that plan, and **clears it** (leaving it set would re-apply the
+downgrade to every future renewal) — and if an admin **voids** that renewal, the
+change goes back on the row (`voidInvoice`), so a void can never turn a seller's
+move down into a renewal at the old tier. The pre-charge "renewing soon" email reads it
+too, so the heads-up quotes the plan and price actually about to be charged
+rather than the tier the seller is on their way out of.
+
+Nothing about entitlement moves until the renewal settles: a downgrading seller
+keeps their caps, their features and their data access for everything they paid
+for. The confirm dialog names exactly what they lose and when — losing the
+customer database by surprise is the kind of thing a seller discovers at the
+worst moment — as a scannable list, because a nine-item comma run inside a
+paragraph is not something anyone reads. It is bounded (`max-h-52`, its own
+scroll) since `DialogContent` has no max-height and clips: unbounded, the
+wrapped mobile case pushes the confirm buttons out of reach.
+
+Both the dialog and the banner that replaces it quote **the amount**, not just
+the tier: "Your next invoice is RM 79.00 for Starter, instead of RM 149.00". The
+saving is the reason the seller is there, and the auto-renewal card sitting
+beside the banner only ever names the DATE of the next charge.
+
+### The renewing window
+
+Between a period lapsing and its renewal settling, a seller is still `active`
+with a `currentPeriodEnd` in the past — access stays on through the grace by
+design. Rendered naively the plan pill read "Active · expires 29 Aug 2026" beside
+"Next charge on 29 Aug 2026", both dates already gone (Zaki, 13 Sep 2026, on a
+backdated test store). `isRenewing` (src/lib/subscription.ts) is the single
+predicate for it: the pill says "Active · renewing" and the auto-renewal line
+says the charge is happening rather than naming a date behind us. A declined
+charge still outranks both — that message names the actual problem.
+
+The window is at most a day in production, since the daily cron issues the
+renewal on the next run. It is longer whenever the cron is delayed, which is
+exactly when a stale date would be most misleading.
+
+## Founding price — the 3-month lapse window (Zaki, 3 Sep 2026)
+
+The 30% founding price survives a subscription lapse of up to **3 months**
+(`FOUNDING_PRICE_LAPSE_MS`, lib/plans.ts); sit unpaid longer and the benefits
+are **revoked for good** (see "Revocation" below — before z8r3fdfyw5 this was a
+read-time window only, so paying later silently brought the discount back). The
+**rank + badge never revert** — that is a promise in the signed agreement and in
+the billing ribbon's own copy, and revocation deliberately does not touch them.
+Only the *entitlements* are forfeited. One rule for every automated issuer, in
+two shapes (lib/plans.ts):
+
+- **`foundingPriceEligible`** — is this STORE on founding pricing? Tier-agnostic:
+  it keys off `isFoundingMember` + the sub's `currentPeriodEnd`, and a claimed
+  member's never-cleared `foundingIntent` flag deliberately cannot bypass the
+  window (unclaimed intent = the first conversion, no lapse to measure, so it
+  always qualifies). This is the answer for anything that prices MORE than one
+  tier — the billing page's cards, a Starter → Pro carryover at settle.
+- **`foundingPricingApplies`** — does a bill for `plan` get the founding price?
+  Eligibility narrowed to the tiers that have one. Asked with the store's
+  *current* plan it says "no" for a founding member on Starter — which is how
+  settle once priced their move back up at list (z8r3fdfty4, below).
+
+Cron renewals, `subscribeSelf`, `changePlan`, `switchPendingPlan`, the
+auto-renewal setup display amount and the pre-charge notice all resolve it
+identically. The **admin issue form keeps its explicit founding checkbox** —
+Arif's judgment can override in either direction.
+
+Never enforced silently: the founding ribbon states the condition (and stops
+saying "locked in" once it has lapsed), and a lapsed member's plan picker
+explains why prices read standard (`billingGatewayAvailable.foundingPricing` /
+`foundingPricingLapsed` — every card must use the server-resolved flag, never
+client-side `foundingIntent` or `isFoundingMember`, or a member would SEE one
+price while being BILLED another).
+
+### Revocation — membership is permanent, benefits are not (z8r3fdfyw5)
+
+**The split that governs everything here.** A Founding Member has an **honour**
+(rank, storefront badge, nav pill, their slot in the 10) and a set of
+**benefits** (the 30% price, the Founding-Pro lock, white-glove onboarding). The
+honour is permanent: Arif's signed agreement (`86exq9kz9`) promises "RM104/mo
+for life" with no lapse clause, and this app's own billing ribbon has told
+members since 3 Sep that "your rank and badge are permanent either way". Only
+the benefits can be taken. **Never revoke by clearing `isFoundingMember`** —
+that strips a badge we promised *and* drops through to the `foundingIntent`
+fallback in `foundingPriceEligible`, granting founding pricing for ever.
+
+**Data.** `foundingMembers.benefitsRevokedAt` / `benefitsRevokedReason`
+(`lapsed` | `admin`) / `benefitsRevokedNote` is the audit record;
+`retailers.foundingBenefitsRevokedAt` is the denormalized flag every
+`foundingPriceEligible` caller reads off the retailer doc it already loaded
+(zero extra reads, mirroring `isFoundingMember`). `benefitsRevokedAt` is a
+**required** field on `FoundingEligibilityArgs`, so a new pricing path is a
+compile error until it answers the question. The row is stamped, never deleted —
+`getSpotsRemaining` counts rows, so **a revoked slot does not free up** and
+re-granting is a deliberate admin act rather than a race for a freed spot.
+
+**The pass** (`foundingMembers.internalRevokeLapsedBenefits`, scheduled by the
+daily billing cron). It walks the `foundingMembers` ledger, not that cron's
+subscription loops, and **that is load-bearing**: those loops cover `trialing`,
+`active` and `on_hold`, while a lapsed member is `past_due` within ~14 days of
+their period ending. A pass built on them would never fire for the exact
+population it targets. The ledger is bounded at 10 for ever (the programme
+closed 30 Aug 2026), so a full `collect()` is correct.
+
+- **T-14:** `foundingBenefitsWarningDue` → one email
+  (`foundingBenefitsEndingSoon`) + the ribbon's red state. Deduped by
+  `benefitsWarningSentForPeriodEnd`, which stores the `currentPeriodEnd` the
+  warning was about (the `renewalNoticeSentForPeriodEnd` idiom) — paying
+  advances the period, so a later lapse warns again with no clearing logic.
+- **T-0:** `foundingBenefitsRevocable` → revoke + `foundingBenefitsEnded` email.
+  **Not gated on the warning** (Zaki, 18 Sep 2026): the rule is the rule, and 14
+  daily runs sit between the two.
+- **Never revoked:** `on_hold` (an Off-Season Hold is a PAYING store — its hold
+  invoice advances the period, so the status guard and the paid-through guard
+  both protect it, and both are tested), `active`, `comped`, and a member with
+  no paid period at all (`paidThrough` undefined → fail toward the promise,
+  exactly as `foundingPriceEligible` does).
+- **Orphaned rows are skipped, counted and LISTED.** A founding row can outlive
+  its retailer (a partially completed account purge — dev has a live example).
+  Revoking one patches a deleted document, which throws; and since the pass is a
+  single transaction, one bad row would abort the run so **nobody** is ever
+  revoked. The loop skips them (`orphaned` in the return), `revokeBenefits` /
+  `restoreBenefits` refuse rather than throw, and `listForAdmin` renders them as
+  "Store deleted" — because the header counts ROWS, hiding them made the console
+  read "2/10 claimed" above a single store and concealed the exact row the pass
+  has to step around. Tidying the leftovers stays `accountDeletion`'s job.
+- `foundingBenefitsEndAt` is the **one author** of the end date, and
+  **`foundingBenefitsAtRisk` is the one author of whether a date is shown at
+  all** — the revoke gate, the warning gate, the seller's ribbon and the admin
+  list all ask it. Without that second author the two disagreed: the ribbon
+  derived its countdown from paid-through alone and showed a red "your founding
+  price ends on 29 Sept" alert to a store the pass SKIPS (found 19 Sep 2026
+  testing an aged store). The realistic victim is a **comped** founding member —
+  Kedaipal is giving them the product while the page threatens to take their
+  discount on a date that can never arrive. Whatever surface shows the date must
+  gate on the same predicate the cron acts on; pinned both in `plans.test.ts`
+  and against the real queries in `foundingMembers.test.ts`. `foundingBenefitsRevocable` is
+  the **exact complement** of `foundingPriceEligible` (eligible while
+  `now <= endAt`, revocable while `now > endAt`), pinned by an hour-by-hour
+  invariant test across the boundary — a day where both said "yes" would revoke
+  a member the billing page was still quoting the discount to.
+
+**The plan lock opens for free.** `foundingPlanLocked` keys off
+`foundingPriceEligible`, so a revoked seller regains the Starter/Pro choice with
+no extra code. Pinned by a test, because it is an acceptance criterion.
+
+**Surfaces.** The billing ribbon is ONE control with **four** tones — amber
+("locked in"), red (T-14, naming the date), muted (ended, and never "renew to
+keep your founding price", which would be a lie), and a **pending** state that
+exists because its absence was one: the retailer doc resolves before
+`billingGatewayAvailable`, so every flag read `false` and the ribbon told a
+revoked member their discount was "locked in" on every page load (~310ms
+measured on localhost, longer on mobile data). The rank is true in every state
+so the title still renders; only the CLAIM waits for the server. The admin issue
+form derives its founding toggle from the same server answer rather than copying
+it into state — an effect keyed on the selection alone left the checkbox and
+Amount showing the founding discount under copy that said "standard price". The plan picker's lapsed note
+splits the same way. White-glove (`foundingMembers.myStatus.benefitsRevoked`)
+stops being offered, since it is a benefit. **The storefront badge and nav pill
+are untouched, by design.** Admin → Billing → Founding members shows each
+member's benefit state, the end date, whether they were warned, and a
+revoke/restore lever (`adminSetBenefits`) — the escape hatch for a wrong
+revocation or a deliberate re-grant; a restore also clears the warning stamp so
+a future lapse warns again.
+
+**The window: 90 days, confirmed by Arif on 19 Sep 2026** (z8r3fdfyw5). It had
+come from a verbal call (Zaki, 3 Sep 2026) and lived only in
+`FOUNDING_PRICE_LAPSE_MS` and this file, with no ticket carrying it — worth
+recording, because the signed agreement (86exq9kz9) still reads "RM104/mo for
+life" with no lapse clause, so these two lines remain the only written statement
+of the rule the code enforces. If the agreement is ever revised, revise it to
+match this.
+
+**Notice to the cohort.** The condition has been stated in-product since 3 Sep —
+the founding ribbon says the price "stays yours as long as your subscription
+doesn't lapse for more than 3 months" — and from this ticket a member also gets
+an email plus a red banner 14 days before anything is taken. Whether Arif also
+wants a direct message to the three unpaid members ahead of the first revocation
+(lekor-mr-ganu, 28 Oct 2026) is a GTM call, not a code gap.
+
+**A re-grant RESTARTS the clock** (`foundingMembers.benefitsRestoredAt`, mirrored
+to `retailers.foundingBenefitsRestoredAt`; `foundingClockFrom` takes the later of
+paid-through and the re-grant). This is not bookkeeping — without it the lever
+did nothing for the only people it exists for. A lapsed member is by definition
+past the window, so clearing the revocation stamp left `foundingPriceEligible`
+measuring from a paid-through that had already expired: the seller stayed on
+list price the moment Arif told them otherwise, and the next daily pass revoked
+them again and sent a **second** "your founding price has ended" email. Found in
+review of PR #288. A restored member now gets a fresh full window and is warned
+again at T-14 before it can lapse a second time — a re-grant, not immunity. This
+also covers the comp-through-lapse edge that was previously listed as known and
+unhandled: restore is the remedy and it now actually works.
+
+**A date already in the past is never rendered as a deadline.** The pass runs
+daily, so for up to a day a member can be past the window but not yet revoked.
+The ribbon's T-14 branch requires a FUTURE date, or it would say "founding price
+ends <yesterday> — renew before then"; it falls through to the lapsed copy for
+that day instead.
+
+## Founding Members stay on Founding Pro (Zaki, 17 Sep 2026)
+
+A store on founding pricing has **one tier: Founding Pro** (`FOUNDING_PLAN`).
+It can move between **monthly and yearly** on that tier (RM104 / RM1,040,
+S$41 / S$410), and it can **stop renewing** (turn auto-renewal off) — it
+cannot change tier — not down to Starter, and not back to list Pro, which
+costs more for the same features — and not onto an Enterprise contract either
+(`enterprise.setContract` refuses a founding store, Credits T6). Once the subscription
+lapses past the 3-month window the founding price is revoked, and from then on
+the store is an ordinary seller who can pick any plan.
+
+- **Server:** `foundingPlanLocked(plan, eligible)` is refused by
+  `subscribeSelf`, `changePlan` (both directions, before anything is scheduled
+  or billed) and `switchPendingPlan` (before the void, so a refused switch
+  leaves the bill intact), with one message that names what they CAN do.
+- **Billing page:** the plan picker shows a single "Founding Pro" card with the
+  monthly/yearly toggle; the change-plan slot reads "Your plan stays Founding
+  Pro" with the price and the lapse clause instead of offering a move; the
+  first-invoice "Switch to Starter" is not offered; the current-plan card says
+  "Founding Pro"; the annual card never describes moving up or down a tier to
+  them ("You stay on Founding Pro for the whole year, at your founding price",
+  both on the offer and once they're on annual); and the auto-renewal turn-off
+  dialog states the lapse clause.
+- **Downgrades scheduled before the lock are cancelled** (Zaki, 17 Sep 2026).
+  `renewalQuote` ignores a `pendingPlanChange` the lock forbids, so the renewal
+  bills Founding Pro and `internalIssueRenewalInvoice` clears the stale flag as
+  it writes the bill; the change card never shows it as a move that will land.
+  No backfill: the rule cancels them wherever they are read.
+- **Deliberately left alone:** the Off-Season Hold card is unchanged for
+  founding members (the credits model removes holds for everyone on 14 Oct). A
+  founding member already sitting on Starter (from before the lock, if any)
+  renews on Starter and is offered only "Move up to Founding Pro" — the lock
+  never raises a bill without the seller's own tap.
+
+## Every billing-page price is server-resolved (z8r3fdfty4, 17 Sep 2026)
+
+Reported by Arif: a founding member's billing tab quoted **RM149** where they
+pay **RM104** (S$59 vs S$41). Two defects stacked:
+
+1. **Admin act-as read the wrong store.** `invoices.myInvoices` and
+   `subscriptionPayments.billingGatewayAvailable` resolved the CALLER — inside
+   act-as, the admin's own store — so the tab showed the seller's plan priced
+   at the admin's founding status and currency, above the admin's invoices.
+   Both now take an optional `retailerId` (owner-or-admin via
+   `requireRetailerAccess`); the tab passes it only while acting-as.
+   **Billing is view-only under act-as** (Zaki, 17 Sep 2026): it is the
+   seller's money and consent, and every legitimate admin billing action
+   (issue, void, mark paid, comp) already lives in Admin → Billing. A banner
+   at the top of the tab says so; every billing control renders disabled with
+   a one-line reason — subscribe, auto-renewal on/off, plan change and its
+   undo, the first-invoice switch, the Off-Season Hold switch, the annual
+   request, "Pay online now", "I've paid — notify us" and the manual "Message
+   us". Server-side, the self-serve writes resolve the caller's own store, and
+   `setSeasonalHold` — the one billing write that accepted `retailerId` —
+   now refuses `actingAsAdmin`. Every other settings tab keeps act-as edits.
+2. **The page decided "founding?" three ways.** The picker used the server
+   flag; the plan-change card used `sub.foundingIntent` (missing every
+   admin-marked member); the annual card used the raw rank flag (ignoring the
+   lapse window); the first-invoice switch read the open invoice's discount
+   (which a Starter bill never has). All four now take
+   `billingGatewayAvailable.foundingPricing`, and cards whose price is
+   founding-sensitive wait for that read instead of flashing list.
+
+**One number everywhere.** `renewalQuote` (lib/plans.ts) is the single author
+of what the next renewal bills — tier (a scheduled downgrade lands with it),
+cycle, founding, currency (`storeBillingCurrency`: the store's country's,
+86eyp7hn7) and amount (the hold price for a paused store). The cron's renewal
+invoice, the pre-charge email, HitPay's authorisation page (which used to show
+the MONTHLY price in the COUNTRY currency — wrong for annual and SGD-billed
+stores) and the billing page (`billingGatewayAvailable.nextRenewal`) all read
+it; `subscriptionPayments.test.ts` pins that all four agree across founding
+MY/SG, annual, SGD-billed MY, lapsed, scheduled-downgrade and hold stores. The
+auto-renewal card now states the amount in every state ("Next charge of
+RM104.00 on …", the off-state pitch, an unfinished setup, the declined-charge
+line).
+
+**Found on the way:** settle priced a Starter → Pro carryover with
+`foundingPricingApplies({ plan: sub.plan })` — "no" for a founding member on
+Starter — so the remainder bought 5 days of list Pro while the page (and the
+invoice) said 8 at the founding rate. Settle now uses `foundingPriceEligible`.
+
+At go-live this needs nothing: the current founding cohort is active (inside
+the window) so they keep renewing at their price automatically; everyone else
+already bills at list.
+
+## Invariants preserved
+
+- **`subscriptions.updatedAt` is the past_due flip moment** (founder report).
+  Every new patch (`autoRenew` state, notice stamps, session records) leaves
+  it alone; only real status transitions touch it. Pinned by test.
+- `markPaid` semantics unchanged (existing suite passes untouched).
+- Buyer-gateway code paths (seller BYO) byte-identical.
+- Storefront/order pipeline never touched by any of this.
+
+## Sandbox verification checklist (before prod)
+
+1. Set sandbox `HITPAY_BILLING_API_KEY`/`_SALT` on dev, register the webhook
+   in the sandbox dashboard.
+2. Billing tab → plan picker → invoice → **Pay now** → sandbox checkout →
+   invoice flips paid (webhook), receipt email lands.
+3. **Turn on auto-renewal** → authorise a test card → attach recorded
+   (webhook or return reconcile) → confirmation email.
+4. `npx convex run subscriptionPayments:chargeDueRenewal '{"invoiceId":"…"}'`
+   against a seeded pending renewal → settles.
+5. ✅ DONE (11 Sep 2026) — the `method_attached` payload was captured from
+   live sandbox traffic and `extractRecurringEvent` rewritten against it (an
+   envelope, not the docs' flat object). `times_to_be_charged` is rejected
+   outright in save-card mode. A verbatim enveloped `charge.created` is still
+   unseen — the parser handles both shapes, and the sync response settles
+   first, so this is corroboration rather than a money path.
+6. Production: Arif's open HitPay support thread must confirm **TnG
+   tokenisation cross-border for MY customers + MYR on the tokenised charge
+   path** on the live SG account (86eyb6z2d question set). Card rail works
+   regardless.
+7. ~~**A declined auto-charge must not move `total_charge`.**~~ **CLOSED by
+   design, 1 Oct 2026** — the reconcile no longer depends on the answer. It
+   measures the delta from the baseline captured when the charge fired
+   (`chargeCountAtAttempt`), so whatever else moves HitPay's number is
+   irrelevant. Evidence gathered on the way: a SETTLED charge moves
+   `total_charge` by exactly 1 (observed twice: 3→4→5), and a 422-refused
+   charge does not move it at all. A genuine processor decline is
+   **unobservable on the dev sandbox account**, and not for want of trying:
+   HitPay documents exactly one decline trigger — the Visa test card
+   `4000 0000 0000 0002` — and **no** magic amount or e-wallet equivalent, so
+   the RM 999,999 Touch 'n Go charge it approved was never going to decline.
+   The card rail cannot be used either: asking for it returns
+   `422 … "It must be one of: touch_n_go"`, i.e. **the dev account has only
+   Touch 'n Go enabled**. (That is also live corroboration of the
+   degrade-on-422 path — the error names the account's real rail set.) A
+   decline could only be exercised on an account with cards on; if that ever
+   matters it is Arif's live account, not dev. Separately worth remembering:
+   sandbox limits are not production limits.
+   HitPay's own 7-day retry, checked at the same time, applies to a plan's
+   **scheduled charge date** — not to merchant-initiated charges, which is
+   what `lib/hitpayBilling.ts` already assumed.

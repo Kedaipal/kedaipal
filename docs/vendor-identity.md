@@ -4,6 +4,14 @@ How a retailer ("vendor") is identified, what's unique, and the deliberate
 **1 login : 1 store** decision. Flagged here so the multi-store question is a
 conscious fork, not a surprise when a multi-brand seller hits the wall.
 
+> **Team members (86exr91r4, Sep 2026):** OWNERSHIP stays strictly 1:1 —
+> `retailers.userId` is one Clerk subject and everything below still holds.
+> What changed is *operating* access: a login now either owns one store OR
+> holds one active `retailerMembers` seat on someone else's (per-area grants,
+> see [`team-members.md`](./team-members.md)). "One store per login" now means
+> owned **or** joined; switching is always an explicit act (leave the team /
+> close the store), never a side effect of accepting an invite.
+
 ## The three IDs — don't conflate them
 
 | ID | What it is | Role |
@@ -26,6 +34,71 @@ The store is owned by exactly one Clerk `userId`.
   *notification* field (normalized lowercase/trim via `assertValidEmail`); it is
   **not** an identity key.
 - **`waPhone`: NOT unique** (deliberate — see below). Optional contact field.
+
+## Reserved handles — what a store can never be called
+
+A store lives at the **root** of the domain (`kedaipal.com/<slug>`), so it shares
+one namespace with every page the app serves. Any top-level path — live today or
+plausible tomorrow — is a handle a vendor must be refused, or the day we ship
+that page every buyer link to it lands on someone's shop (or the shop breaks).
+
+**One author:** [`convex/lib/reservedSlugs.ts`](../convex/lib/reservedSlugs.ts).
+The server validator (`assertValidSlug`, used by `createRetailer`, the admin
+onboard and `renameSlug`) and the client pre-check (`validateSlugShape` /
+`slugSchema`, behind the live "URL slug" hint on onboarding, Settings → Store and
+the admin onboard form) both import `isReservedSlug` + `RESERVED_SLUG_MESSAGE`
+from it, so the two sides cannot disagree and the seller reads the same sentence
+whichever side catches it: *"Reserved by Kedaipal — pick another slug"*.
+
+**What is fenced, by group** (the file comments say why each group exists):
+
+| Group | Examples | Source of truth |
+| --- | --- | --- |
+| Live routes | `app`, `track`, `claim`, `pricing`, `privacy`, `terms`, `cost`, `stores` | derived from `src/routes/` on disk |
+| `public/` folders | `img`, `guides`, `poster`, `video` | derived from `public/` on disk |
+| Platform | `api`, `assets`, `admin`, `webhooks`, `status`, `www` | curated |
+| Auth aliases | `login`, `signup`, `register`, `reset-password`, `account` | curated |
+| Marketing pages we may add | `help`, `blog`, `changelog`, `partners`, `directory`, `enterprise`, `advertise` | curated |
+| Dashboard / buyer nouns | `orders`, `products`, `billing`, `checkout`, `pay`, `invoice`, `credits`, `top-up`, `rsvp` | curated |
+| Marketplace sub-pages | `events`, `categories`, `featured`, `sponsored`, `founding`, `near-me` | curated — the `/stores` directory's next shelves (z8r3fdkmyp) |
+| Generic tenant words | `store`, `shop`, `seller`, `vendor`, `official`, `verified` | curated |
+| Environments + bug literals | `demo`, `staging`, `sandbox`, `null`, `undefined` | curated |
+| Brand, **anywhere** in the text | `kedaipal-support`, `official-kedaipal`, `kedai-pal`, `Kedai Pal` | `containsBrand` — inside one token, or across separators when the match ends on a token boundary |
+
+**Machine-checked, not remembered.** `src/lib/reserved-slugs.test.ts` scans
+`src/routes/` and `public/` and fails the gate when a top-level segment is not
+reserved — add a route, forget the list, the build says so (with the name to
+add). It also refuses *dead* entries the slug shape could never match (a dot, an
+underscore, under 3 chars): `favicon.ico` and `_` sat in the old hand-written
+list for months protecting nothing. Dotted files (`sitemap.xml`, `robots.txt`)
+and TanStack's `_server` are therefore deliberately **not** listed — the shape
+check rejects them first, and a test pins that.
+
+**The brand rule also guards the store name.** `assertValidStoreName` (server)
+and `validateStoreName` (client, inline under the field on onboarding, Settings →
+Store and the admin onboard form) refuse any name that contains `kedaipal` inside
+one word, or spread across separators when the match ends on a word boundary
+(`Kedai Pal` refused; **`Kedai Paling Murah`, `Kedai Palma` allowed** — the
+boundary rule exists for exactly those, PR #263 review) — a store called "Kedaipal Support" on the
+slug `abc-trading` is a stronger impersonation than any URL, because the *name*
+is what renders in every WhatsApp message and on the storefront header. Substring,
+not prefix, and no "fan" exemption: buyers do not parse URL structure, the shared
+WABA already puts Kedaipal's number on every message, and no legitimate seller
+names their business after their order tool (owner call, 8 Sep 2026). The
+ordinary Malay `kedai` is untouched. Copy is one constant per rule
+(`RESERVED_SLUG_MESSAGE`, `BRAND_NAME_MESSAGE`), imported by both sides.
+
+**Not fenced, on purpose:** category and product slugs
+(they live under `/<slug>/c/…` and `/<slug>/p/…`, so they can never collide —
+`assertValidCategorySlug` skips the list); and existing stores — the check runs
+on the **new** slug at create/rename only, so a store already on a word that
+later becomes reserved keeps working. No dev or prod store sat on one when the
+list was rebuilt (Sep 2026), and prod was re-checked (stores + slug history,
+read-only) before the marketplace round added `stores` and the 17 names above
+(1 Oct 2026, z8r3fdkmyp) — 41 stores, zero collisions.
+
+To reserve a new word: add it to the right group in `reservedSlugs.ts`. A new
+route needs no thought at all — the test names the missing entry.
 
 ## Can the same email own multiple stores? No.
 

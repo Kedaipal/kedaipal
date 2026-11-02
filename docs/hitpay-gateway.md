@@ -15,6 +15,44 @@ feature independent of the still-pending HitPay *Platform* enablement
 (86eyb6z2d): the platform key/OAuth/unified-webhook layer is additive later,
 nothing here gets rebuilt.
 
+## HitPay on is THE way buyers pay (86eye9xd4, 8A)
+
+One door, chosen in one place. **Settings → Payments → How buyers pay** is a
+two-row radio: *Manual transfer* (Kedaipal built-in) or *HitPay online*
+(partner integration — the seller's own account). The choice IS
+`retailers.hitpay.enabled`; there is no second field.
+
+- **Exclusive.** While HitPay is on, `orders.getPaymentMethods` returns **no
+  manual methods for any order HitPay can take** (`gatewayCanTake` in
+  `convex/orders.ts` — the one author of the Pay-now door and of this rule),
+  so every payment confirms itself and the screenshot-chasing pain actually
+  ends. The track page drops its "Paid by bank transfer instead?" door when
+  there are no methods to show, and the order document prints a **Pay
+  online** block (and no transfer-reference footer) instead of the bank.
+- **Automatic fallback.** An order HitPay *can't* take keeps the manual
+  details: a total under `HITPAY_MIN_AMOUNT_SEN`, or a manual claim already
+  made before the switch (`claimed` → the buyer can still update their
+  proof). Price holds (mockup gate, delivery fee pending) still show their
+  hold first; once they clear, the gateway takes the order.
+- **Nothing is deleted.** The manual methods stay saved (the Payments tab
+  shows them in a dashed "Saved, hidden" card), and the keys stay in
+  Integrations — switching either way is one tap, with Undo.
+- **Connecting doesn't switch.** Connecting HitPay in Integrations stores the
+  keys with `enabled: false`, like every other account on that tab; the
+  seller turns it on under How buyers pay. Integrations shows *In use* /
+  *Not in use* and a "Choose how buyers pay" pointer instead of the old
+  Pause/Resume, so the choice has exactly one control.
+- **Who may switch.** `hitpay: { enabled }` alone is a `payments_settings`
+  write; keys and disconnect stay `integrations` (`refinedSettingsArea` in
+  `convex/retailers.ts`).
+- **Receipts.** A payment that settled through HitPay prints "Paid online ·
+  HitPay payment <id>" under *How you paid*, never the bank accounts the
+  buyer didn't use.
+
+**Behaviour change for stores that already had HitPay on:** before this, their
+buyers saw Pay now *and* the bank details. From this release they see Pay now
+only. Call it out in the release notes.
+
 ## The moving parts
 
 | Piece | Where |
@@ -23,7 +61,8 @@ nothing here gets rebuilt.
 | Checkout mint + reconcile actions, webhook correlation | `convex/hitpay.ts` |
 | Receive path (shared with manual mark-received) | `convex/orders.ts` (`applyPaymentReceived`, `receiveGatewayPayment`, `recordGatewayMethod`) |
 | Webhook route | `convex/http.ts` (`POST /webhook/hitpay`) |
-| Seller connect card | `src/components/settings/online-payments-card.tsx` (Settings → Payments) |
+| Seller connect card | `src/components/settings/online-payments-card.tsx` (Settings → Integrations) |
+| "How buyers pay" chooser | `src/components/settings/how-buyers-pay-card.tsx` (Settings → Payments) |
 | Buyer Pay-now + confirming state + collapsed manual methods | `src/routes/track.$token.tsx` |
 | Mismatch email | `convex/email.ts` `notifyGatewayPaymentMismatch` + `convex/lib/emailCopy.ts` `gatewayMismatch` (EN/MS/ZH) |
 | Credentials | `retailers.hitpay { enabled, apiKey, salt, connectedAt }` — server-only, **encrypted at rest since 86eyn25gk** (`mode`/`apiKeyHint` now stamped at save; see [`docs/credential-encryption.md`](./credential-encryption.md)); clients get `HitpaySummary` (hasCredentials/mode/apiKeyHint) |
@@ -31,13 +70,15 @@ nothing here gets rebuilt.
 
 ## Flow
 
-1. **Connect (seller, once).** Settings → Payments → "Online payments":
+1. **Connect (seller, once).** Settings → Integrations → HitPay:
    paste the API key + salt from HitPay's dashboard (Settings → API Keys —
    they sit side by side). Sandbox keys are `test_`-prefixed → mode is
    **inferred from the key** (`inferHitpayMode`), no toggle; the card badges
    "Test mode" amber on a sandbox key. Enabling is Pro-gated
-   (`PLAN_FEATURES.onlinePayments`); pause/disconnect never are, and
-   pause keeps the keys so resuming is one tap. The card links the
+   (`PLAN_FEATURES.onlinePayments`); switching back to manual and
+   disconnecting never are, and the keys stay stored either way. Connecting
+   stores the keys only — buyers move to HitPay when the seller picks it
+   under Payments → How buyers pay (see above). The card links the
    **print-ready vendor guide** `/guides/hitpay-setup.html` (86eyjmhby,
    Lalamove-guide precedent — real embedded screenshots, every claim checked
    against HitPay's live site + docs Aug 2026): sign-up at
@@ -85,8 +126,10 @@ nothing here gets rebuilt.
    `send_sms/send_email = false` (**SMS defaults ON upstream** — never drop
    that override). Lazy minting is why held orders (mockup /
    `deliveryFeePending`) can't be paid early and why a request always
-   prices the current total. Buyer `name`/`phone` are passed; `email` is
-   not (we don't collect it — see Known limitations).
+   prices the current total. Buyer `name` is passed; `phone` only when it is
+   a mobile of the **store's own country** (`STORED_MOBILE_PATTERN[storeCountry]`
+   — see Known limitations); `email` is not (we don't collect it — see Known
+   limitations).
 4. **Settle.** Two independent, idempotent paths funnel into
    `orders.receiveGatewayPayment`:
    - **Webhook** `POST /webhook/hitpay` — form-encoded v1 callback. The
@@ -157,6 +200,8 @@ every payment-request create), so:
   stored list (different account, different truth) and re-probes.
 
 ## Guard model — where each rule lives
+
+> **Lapsed store** (`z8r3fdr6gg`): `getCheckoutContext` carries `paymentsPaused` and `createCheckout` refuses **before** the fresh-link reuse, so no checkout — new or reused — is handed out while the store is past due. A payment on a link minted before the pause is still applied by the webhook / `verifyCheckout` (the money already moved). `orders.get` no longer returns `gatewayCheckoutUrl` to the buyer. See [`manual-subscription.md`](./manual-subscription.md#buyer-payments-pause-while-a-store-is-lapsed-z8r3fdr6gg).
 
 - **Holds gate the MINT, not the webhook.** `createCheckout` refuses while
   the mockup gate is closed or the delivery fee is pending (same copy
@@ -282,6 +327,20 @@ reload.
   page. TODO: check Settings → Checkout Customisation for an email-optional
   toggle / ask HitPay support; revisit passing email if checkout ever
   collects it.
+- **The buyer's phone rides the request only for a store-country mobile**
+  (`buildPaymentRequestParams`, `convex/lib/hitpay.ts`; the country is threaded
+  from `retailer.country` via `getCheckoutContext`). Buyers can give a WhatsApp
+  number from any country since
+  [`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274)
+  ([`phone-numbers.md`](./phone-numbers.md)), but HitPay documents the field
+  only as "E.164" and the only case a sandbox run has verified is an MY number
+  on an MY account (sent as bare digits). How HitPay validates anything else is
+  unknown, and a 422 would surface as `GATEWAY_DOWN` and kill Pay-now for that
+  order. The phone buys us nothing to risk that for — HitPay's SMS is off
+  (`send_sms=false`) and we never read it back — so a foreign number, or an MY
+  number on an SG store (and vice versa), is simply left off. Revisit only
+  with a sandbox run of a
+  foreign number (`+447911123456` and the bare form) on each market's account.
 - **Platform layer** (OAuth connect instead of key-pasting, unified
   `charge.*` webhooks, commission %) waits on HitPay enabling Kedaipal's
   platform account (86eyb6z2d) — additive: swap the connect card's input

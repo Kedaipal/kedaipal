@@ -34,6 +34,10 @@ type Props = ({ shortId: string } | { token: string }) & {
 	variant?: React.ComponentProps<typeof Button>["variant"];
 	size?: React.ComponentProps<typeof Button>["size"];
 	className?: string;
+	/** Seller side only (Credits T3): why handing out the document is locked
+	 * right now — the button disables and says so. The buyer's own copy on the
+	 * track page never passes this. */
+	lockedReason?: string;
 };
 
 export function ReceiptDownloadButton(props: Props) {
@@ -71,7 +75,8 @@ export function ReceiptDownloadButton(props: Props) {
 			variant={props.variant ?? "outline"}
 			size={props.size ?? "sm"}
 			onClick={handleDownload}
-			disabled={busy}
+			disabled={busy || props.lockedReason !== undefined}
+			title={props.lockedReason}
 			className={props.className}
 		>
 			{busy ? (

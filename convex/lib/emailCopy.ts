@@ -1,6 +1,7 @@
 // Retailer-facing email copy catalog. Pure — no Convex imports — to keep testable.
 // Trilingual (en / ms / zh) parity with the WhatsApp retailer alerts.
 
+import type { CourierProviderId } from "./courierProviders";
 import type { Locale } from "./locale";
 
 export type { Locale } from "./locale";
@@ -69,7 +70,7 @@ export type RetailerEmailVars = {
 	// Which booking provider the failed job belonged to (86eyjpv6z). Absent =
 	// "lalamove" (every pre-Delyva caller), so old scheduled sends render
 	// unchanged.
-	deliveryProvider?: "lalamove" | "delyva";
+	deliveryProvider?: CourierProviderId;
 	// True when the order has a made-to-order custom item that needs a mockup
 	// approved before it can be packed (and before the buyer is asked to pay).
 	// Surfaced on the newOrder / orderConfirmed alerts so the seller knows to act.
@@ -189,17 +190,45 @@ export function escapeHtml(s: string): string {
 		.replaceAll("'", "&#39;");
 }
 
-export function wrapHtml(headlineEmoji: string, headline: string, lines: string[], dashboardUrl: string, ctaLabel: string): string {
+// ── Email layout rules (z8r3fdwfb7) ─────────────────────────────────────────
+// Every Kedaipal email is read on a phone first, so three rules hold for every
+// shell, and `emailLayout.test.ts` holds both shells to them:
+//
+// 1. A CARD IS FLUID. A table may keep a fixed `width="560"` attribute — that
+//    is what Outlook desktop (Word's renderer, which ignores max-width) caps
+//    on — but its style must also say `width:100%`, which every phone and
+//    webmail client obeys. A bare `width="560"` made each wrapHtml email 592px
+//    wide on a 375px phone: a sideways scroll on every order alert.
+// 2. A LONG WORD WRAPS. An email address, URL or account number is one
+//    unbreakable word; the card sets `overflow-wrap:anywhere` (inherited by
+//    everything inside) so it breaks instead of widening the card past the
+//    screen.
+// 3. A BUTTON IS A TAP TARGET. Every CTA comes from `ctaButton`, whose fixed
+//    20px line-height + 12px padding makes it exactly 44px tall whatever the
+//    font size — the same ≥44px rule the app holds itself to.
+
+/** The one CTA button. Pass the RAW url and label — both are escaped here. */
+export function ctaButton(
+	href: string,
+	label: string,
+	o: { background: string; fontSize?: number; fontWeight?: number; radius?: number } = { background: "#111827" },
+): string {
+	return `<a href="${escapeHtml(href)}" style="display:inline-block;background:${o.background};color:#ffffff;text-decoration:none;font-size:${o.fontSize ?? 14}px;line-height:20px;font-weight:${o.fontWeight ?? 600};padding:12px 20px;border-radius:${o.radius ?? 8}px;">${escapeHtml(label)}</a>`;
+}
+
+/** `afterCta`: optional fine print under the button — for reassurance that
+ * must not sit between the reader and the action. */
+export function wrapHtml(headlineEmoji: string, headline: string, lines: string[], dashboardUrl: string, ctaLabel: string, afterCta?: string): string {
 	const body = lines.map((l) => `<p style="margin:0 0 8px 0;font-size:14px;color:#1f2937;">${l}</p>`).join("");
 	return `<!doctype html><html><body style="margin:0;padding:0;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;padding:24px 16px;">
 <tr><td align="center">
-<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="width:100%;max-width:560px;overflow-wrap:anywhere;word-break:break-word;background:#ffffff;border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;">
 <tr><td style="padding:24px;">
 ${logoHeader(16)}
 <h1 style="margin:0 0 16px 0;font-size:18px;color:#111827;">${headlineEmoji} ${escapeHtml(headline)}</h1>
 ${body}
-<p style="margin:24px 0 0 0;"><a href="${escapeHtml(dashboardUrl)}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:10px 16px;border-radius:8px;">${escapeHtml(ctaLabel)}</a></p>
+<p style="margin:24px 0 0 0;">${ctaButton(dashboardUrl, ctaLabel)}</p>${afterCta ? `\n<p style="margin:16px 0 0 0;font-size:12px;line-height:1.5;color:#6b7280;">${afterCta}</p>` : ""}
 </td></tr></table>
 <p style="margin:16px 0 0 0;font-size:12px;color:#9ca3af;">Sent by Kedaipal — your WhatsApp-first order hub.</p>
 </td></tr></table></body></html>`;
@@ -363,13 +392,19 @@ const en = {
 		return { subject, html, text };
 	},
 	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
-		const delyva = v.deliveryProvider === "delyva";
-		const provider = delyva ? "Delyva" : "Lalamove";
-		const rebook = delyva ? "rebook the courier" : "rebook a rider";
+		const courier =
+			v.deliveryProvider === "delyva" || v.deliveryProvider === "easyparcel";
+		const provider =
+			v.deliveryProvider === "delyva"
+				? "Delyva"
+				: v.deliveryProvider === "easyparcel"
+					? "EasyParcel"
+					: "Lalamove";
+		const rebook = courier ? "rebook the courier" : "rebook a rider";
 		const subject = `🚨 Delivery booking failed for ${v.shortId}`;
 		const reasonLine = v.jobFailureReason
 			? `Reason: ${v.jobFailureReason}`
-			: delyva
+			: courier
 				? `The booking ended without a courier.`
 				: `The booking ended without a rider.`;
 		const lines = [
@@ -564,13 +599,19 @@ const ms = {
 		return { subject, html, text };
 	},
 	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
-		const delyva = v.deliveryProvider === "delyva";
-		const provider = delyva ? "Delyva" : "Lalamove";
-		const rebook = delyva ? "tempah kurier semula" : "tempah rider semula";
+		const courier =
+			v.deliveryProvider === "delyva" || v.deliveryProvider === "easyparcel";
+		const provider =
+			v.deliveryProvider === "delyva"
+				? "Delyva"
+				: v.deliveryProvider === "easyparcel"
+					? "EasyParcel"
+					: "Lalamove";
+		const rebook = courier ? "tempah kurier semula" : "tempah rider semula";
 		const subject = `🚨 Tempahan penghantaran gagal untuk ${v.shortId}`;
 		const reasonLine = v.jobFailureReason
 			? `Sebab: ${v.jobFailureReason}`
-			: delyva
+			: courier
 				? `Tempahan tamat tanpa kurier.`
 				: `Tempahan tamat tanpa rider.`;
 		const lines = [
@@ -765,13 +806,19 @@ const zh = {
 		return { subject, html, text };
 	},
 	deliveryJobFailed: (v: RetailerEmailVars): RenderedEmail => {
-		const delyva = v.deliveryProvider === "delyva";
-		const provider = delyva ? "Delyva" : "Lalamove";
-		const rebook = delyva ? "重新预订快递" : "重新预订骑士";
+		const courier =
+			v.deliveryProvider === "delyva" || v.deliveryProvider === "easyparcel";
+		const provider =
+			v.deliveryProvider === "delyva"
+				? "Delyva"
+				: v.deliveryProvider === "easyparcel"
+					? "EasyParcel"
+					: "Lalamove";
+		const rebook = courier ? "重新预订快递" : "重新预订骑士";
 		const subject = `🚨 ${v.shortId} 的配送预订失败`;
 		const reasonLine = v.jobFailureReason
 			? `原因：${v.jobFailureReason}`
-			: delyva
+			: courier
 				? `预订没有配对到快递。`
 				: `预订没有配对到骑士。`;
 		const lines = [
@@ -823,4 +870,257 @@ export function renderRetailerEmail(
 	vars: RetailerEmailVars,
 ): RenderedEmail {
 	return catalog[locale][key](vars);
+}
+
+// ---------------------------------------------------------------------------
+// Team-member emails (86exr91r4, docs/team-members.md). Separate key/vars
+// space from the order alerts above — none of the order vars apply. Rendered
+// in the STORE's locale on every template: the invitee's own locale is
+// unknowable before they have an account, and the owner set the store's.
+// ---------------------------------------------------------------------------
+
+export type TeamEmailKey =
+	| "teamInvite" // → invitee: accept link, email-bound, 7-day expiry
+	| "teamAccessRevoked" // → removed member: why, and what they can do next
+	| "teamMemberJoined" // → owner: invite accepted
+	| "teamMemberLeft" // → owner: member left (incl. left to start own store)
+	| "teamSeatSummary"; // → owner: who was dropped by a plan change
+
+export type TeamEmailVars = {
+	storeName: string;
+	/** CTA target: `/join/<token>` on teamInvite; Settings → Team for the
+	 * owner alerts; the landing page on teamAccessRevoked. */
+	ctaUrl: string;
+	/** teamInvite: who invited (store owner's display name or store name). */
+	inviterName?: string;
+	/** teamInvite: days until the link expires. */
+	expiresDays?: number;
+	/** teamAccessRevoked: which flow ended the seat. */
+	revokeReason?: "removed_by_owner" | "plan_change" | "store_deleted";
+	/** Owner alerts: the teammate in question. */
+	memberName?: string;
+	memberEmail?: string;
+	/** teamSeatSummary: display names of everyone dropped, newest first. */
+	droppedNames?: string[];
+};
+
+const teamEn = {
+	teamInvite: (v: TeamEmailVars): RenderedEmail => {
+		const subject = `You're invited to help run ${v.storeName} on Kedaipal`;
+		const lines = [
+			`<strong>${escapeHtml(v.inviterName ?? v.storeName)}</strong> invited you to join the team at <strong>${escapeHtml(v.storeName)}</strong>.`,
+			`Accept below, then sign in with <strong>this email address</strong> — the invitation only works for the inbox it was sent to.`,
+			`The invitation expires in ${v.expiresDays ?? 7} days.`,
+		];
+		const html = wrapHtml("🤝", `Join ${v.storeName} on Kedaipal`, lines, v.ctaUrl, "Accept invitation");
+		const text = `🤝 ${v.inviterName ?? v.storeName} invited you to join the team at ${v.storeName} on Kedaipal.\nAccept the invitation, then sign in with this email address — it only works for the inbox it was sent to.\nExpires in ${v.expiresDays ?? 7} days.\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+	teamAccessRevoked: (v: TeamEmailVars): RenderedEmail => {
+		const reason = v.revokeReason ?? "removed_by_owner";
+		const subject =
+			reason === "plan_change"
+				? `Your access to ${v.storeName} has ended (plan change)`
+				: reason === "store_deleted"
+					? `${v.storeName} closed its Kedaipal store`
+					: `Your access to ${v.storeName} was removed`;
+		const why =
+			reason === "plan_change"
+				? `<strong>${escapeHtml(v.storeName)}</strong> moved to a plan with fewer team seats, so your seat was released. The owner can re-invite you if a seat opens up.`
+				: reason === "store_deleted"
+					? `<strong>${escapeHtml(v.storeName)}</strong> deleted their Kedaipal store, so team access ended with it.`
+					: `The owner of <strong>${escapeHtml(v.storeName)}</strong> removed your team access. If this is a surprise, ask them directly.`;
+		const lines = [
+			why,
+			`You can still start a store of your own on Kedaipal any time.`,
+		];
+		const whyText = why.replaceAll("<strong>", "").replaceAll("</strong>", "");
+		const html = wrapHtml("🔒", `Access to ${v.storeName} ended`, lines, v.ctaUrl, "Open Kedaipal");
+		const text = `🔒 Access to ${v.storeName} ended\n${whyText}\nYou can still start a store of your own on Kedaipal any time.\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+	teamMemberJoined: (v: TeamEmailVars): RenderedEmail => {
+		const subject = `🎉 ${v.memberName ?? v.memberEmail} joined your team at ${v.storeName}`;
+		const lines = [
+			`<strong>${escapeHtml(v.memberName ?? "Your teammate")}</strong> (${escapeHtml(v.memberEmail ?? "")}) accepted your invitation and can now work in <strong>${escapeHtml(v.storeName)}</strong> with the access you set.`,
+			`You can review or change what they can do any time.`,
+		];
+		const html = wrapHtml("🎉", `${v.memberName ?? "A teammate"} joined your team`, lines, v.ctaUrl, "Open Team settings");
+		const text = `🎉 ${v.memberName ?? v.memberEmail} joined your team at ${v.storeName}.\nThey can now work in your store with the access you set. Review or change it any time.\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+	teamMemberLeft: (v: TeamEmailVars): RenderedEmail => {
+		const subject = `${v.memberName ?? v.memberEmail} left your team at ${v.storeName}`;
+		const lines = [
+			`<strong>${escapeHtml(v.memberName ?? "Your teammate")}</strong> (${escapeHtml(v.memberEmail ?? "")}) left your team.`,
+			`Their seat is free again — you can invite someone else.`,
+		];
+		const html = wrapHtml("👋", `${v.memberName ?? "A teammate"} left your team`, lines, v.ctaUrl, "Open Team settings");
+		const text = `👋 ${v.memberName ?? v.memberEmail} left your team at ${v.storeName}.\nTheir seat is free again — you can invite someone else.\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+	teamSeatSummary: (v: TeamEmailVars): RenderedEmail => {
+		const names = v.droppedNames ?? [];
+		const subject = `⚠️ ${names.length} teammate${names.length === 1 ? "" : "s"} lost access after your plan change`;
+		const lines = [
+			`Your new plan has fewer team seats than you were using, so these teammates no longer have access to <strong>${escapeHtml(v.storeName)}</strong>:`,
+			...names.map((n) => `• <strong>${escapeHtml(n)}</strong>`),
+			`Each of them has been emailed. If this wasn't what you wanted, upgrade your plan and re-invite them.`,
+		];
+		const html = wrapHtml("⚠️", `Teammates lost access`, lines, v.ctaUrl, "Open Team settings");
+		const text = `⚠️ ${names.length} teammate${names.length === 1 ? "" : "s"} lost access to ${v.storeName} after your plan change:\n${names.map((n) => `- ${n}`).join("\n")}\nEach of them has been emailed. If this wasn't what you wanted, upgrade your plan and re-invite them.\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+};
+
+const teamMs = {
+	teamInvite: (v: TeamEmailVars): RenderedEmail => {
+		const subject = `Anda dijemput membantu mengurus ${v.storeName} di Kedaipal`;
+		const lines = [
+			`<strong>${escapeHtml(v.inviterName ?? v.storeName)}</strong> menjemput anda menyertai pasukan <strong>${escapeHtml(v.storeName)}</strong>.`,
+			`Terima di bawah, kemudian log masuk dengan <strong>alamat e-mel ini</strong> — jemputan hanya sah untuk peti masuk yang menerimanya.`,
+			`Jemputan luput dalam ${v.expiresDays ?? 7} hari.`,
+		];
+		const html = wrapHtml("🤝", `Sertai ${v.storeName} di Kedaipal`, lines, v.ctaUrl, "Terima jemputan");
+		const text = `🤝 ${v.inviterName ?? v.storeName} menjemput anda menyertai pasukan ${v.storeName} di Kedaipal.\nTerima jemputan, kemudian log masuk dengan alamat e-mel ini — ia hanya sah untuk peti masuk yang menerimanya.\nLuput dalam ${v.expiresDays ?? 7} hari.\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+	teamAccessRevoked: (v: TeamEmailVars): RenderedEmail => {
+		const reason = v.revokeReason ?? "removed_by_owner";
+		const subject =
+			reason === "plan_change"
+				? `Akses anda ke ${v.storeName} telah tamat (tukar pelan)`
+				: reason === "store_deleted"
+					? `${v.storeName} telah menutup kedai Kedaipal mereka`
+					: `Akses anda ke ${v.storeName} telah ditarik`;
+		const why =
+			reason === "plan_change"
+				? `<strong>${escapeHtml(v.storeName)}</strong> bertukar ke pelan dengan bilangan ahli pasukan yang lebih kecil, jadi tempat anda dilepaskan. Pemilik boleh menjemput anda semula jika ada kekosongan.`
+				: reason === "store_deleted"
+					? `<strong>${escapeHtml(v.storeName)}</strong> telah memadamkan kedai Kedaipal mereka, jadi akses pasukan turut tamat.`
+					: `Pemilik <strong>${escapeHtml(v.storeName)}</strong> telah menarik akses pasukan anda. Jika ini mengejutkan, tanya mereka secara terus.`;
+		const lines = [
+			why,
+			`Anda masih boleh membuka kedai anda sendiri di Kedaipal pada bila-bila masa.`,
+		];
+		const whyText = why.replaceAll("<strong>", "").replaceAll("</strong>", "");
+		const html = wrapHtml("🔒", `Akses ke ${v.storeName} tamat`, lines, v.ctaUrl, "Buka Kedaipal");
+		const text = `🔒 Akses ke ${v.storeName} tamat\n${whyText}\nAnda masih boleh membuka kedai anda sendiri di Kedaipal pada bila-bila masa.\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+	teamMemberJoined: (v: TeamEmailVars): RenderedEmail => {
+		const subject = `🎉 ${v.memberName ?? v.memberEmail} menyertai pasukan ${v.storeName}`;
+		const lines = [
+			`<strong>${escapeHtml(v.memberName ?? "Ahli pasukan anda")}</strong> (${escapeHtml(v.memberEmail ?? "")}) menerima jemputan anda dan kini boleh bekerja di <strong>${escapeHtml(v.storeName)}</strong> dengan akses yang anda tetapkan.`,
+			`Anda boleh semak atau ubah akses mereka pada bila-bila masa.`,
+		];
+		const html = wrapHtml("🎉", `${v.memberName ?? "Ahli pasukan"} menyertai pasukan anda`, lines, v.ctaUrl, "Buka tetapan Pasukan");
+		const text = `🎉 ${v.memberName ?? v.memberEmail} menyertai pasukan ${v.storeName}.\nMereka kini boleh bekerja di kedai anda dengan akses yang anda tetapkan. Semak atau ubah pada bila-bila masa.\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+	teamMemberLeft: (v: TeamEmailVars): RenderedEmail => {
+		const subject = `${v.memberName ?? v.memberEmail} meninggalkan pasukan ${v.storeName}`;
+		const lines = [
+			`<strong>${escapeHtml(v.memberName ?? "Ahli pasukan anda")}</strong> (${escapeHtml(v.memberEmail ?? "")}) meninggalkan pasukan anda.`,
+			`Tempat mereka kini kosong — anda boleh menjemput orang lain.`,
+		];
+		const html = wrapHtml("👋", `${v.memberName ?? "Ahli pasukan"} meninggalkan pasukan anda`, lines, v.ctaUrl, "Buka tetapan Pasukan");
+		const text = `👋 ${v.memberName ?? v.memberEmail} meninggalkan pasukan ${v.storeName}.\nTempat mereka kini kosong — anda boleh menjemput orang lain.\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+	teamSeatSummary: (v: TeamEmailVars): RenderedEmail => {
+		const names = v.droppedNames ?? [];
+		const subject = `⚠️ ${names.length} ahli pasukan hilang akses selepas pertukaran pelan anda`;
+		const lines = [
+			`Pelan baharu anda mempunyai bilangan tempat pasukan yang lebih kecil, jadi ahli berikut tiada lagi akses ke <strong>${escapeHtml(v.storeName)}</strong>:`,
+			...names.map((n) => `• <strong>${escapeHtml(n)}</strong>`),
+			`Setiap mereka telah dimaklumkan melalui e-mel. Jika ini bukan hasrat anda, naik taraf pelan dan jemput mereka semula.`,
+		];
+		const html = wrapHtml("⚠️", `Ahli pasukan hilang akses`, lines, v.ctaUrl, "Buka tetapan Pasukan");
+		const text = `⚠️ ${names.length} ahli pasukan hilang akses ke ${v.storeName} selepas pertukaran pelan anda:\n${names.map((n) => `- ${n}`).join("\n")}\nSetiap mereka telah dimaklumkan melalui e-mel. Jika ini bukan hasrat anda, naik taraf pelan dan jemput mereka semula.\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+};
+
+const teamZh = {
+	teamInvite: (v: TeamEmailVars): RenderedEmail => {
+		const subject = `邀请你协助管理 Kedaipal 上的 ${v.storeName}`;
+		const lines = [
+			`<strong>${escapeHtml(v.inviterName ?? v.storeName)}</strong> 邀请你加入 <strong>${escapeHtml(v.storeName)}</strong> 的团队。`,
+			`请点击下方按钮接受邀请，并使用<strong>此邮箱</strong>登录——邀请仅对收到它的邮箱有效。`,
+			`邀请将于 ${v.expiresDays ?? 7} 天后失效。`,
+		];
+		const html = wrapHtml("🤝", `加入 Kedaipal 上的 ${v.storeName}`, lines, v.ctaUrl, "接受邀请");
+		const text = `🤝 ${v.inviterName ?? v.storeName} 邀请你加入 Kedaipal 上 ${v.storeName} 的团队。\n请接受邀请并使用此邮箱登录——邀请仅对收到它的邮箱有效。\n${v.expiresDays ?? 7} 天后失效。\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+	teamAccessRevoked: (v: TeamEmailVars): RenderedEmail => {
+		const reason = v.revokeReason ?? "removed_by_owner";
+		const subject =
+			reason === "plan_change"
+				? `你对 ${v.storeName} 的访问已结束（套餐变更）`
+				: reason === "store_deleted"
+					? `${v.storeName} 已关闭其 Kedaipal 店铺`
+					: `你对 ${v.storeName} 的访问已被移除`;
+		const why =
+			reason === "plan_change"
+				? `<strong>${escapeHtml(v.storeName)}</strong> 更换为团队席位更少的套餐，你的席位已被释放。若有空位，店主可以重新邀请你。`
+				: reason === "store_deleted"
+					? `<strong>${escapeHtml(v.storeName)}</strong> 已删除其 Kedaipal 店铺，团队访问随之结束。`
+					: `<strong>${escapeHtml(v.storeName)}</strong> 的店主移除了你的团队访问权限。如有疑问，请直接与他们联系。`;
+		const lines = [why, `你随时可以在 Kedaipal 开设自己的店铺。`];
+		const whyText = why.replaceAll("<strong>", "").replaceAll("</strong>", "");
+		const html = wrapHtml("🔒", `对 ${v.storeName} 的访问已结束`, lines, v.ctaUrl, "打开 Kedaipal");
+		const text = `🔒 对 ${v.storeName} 的访问已结束\n${whyText}\n你随时可以在 Kedaipal 开设自己的店铺。\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+	teamMemberJoined: (v: TeamEmailVars): RenderedEmail => {
+		const subject = `🎉 ${v.memberName ?? v.memberEmail} 已加入 ${v.storeName} 的团队`;
+		const lines = [
+			`<strong>${escapeHtml(v.memberName ?? "你的队友")}</strong>（${escapeHtml(v.memberEmail ?? "")}）已接受邀请，现在可以按你设置的权限在 <strong>${escapeHtml(v.storeName)}</strong> 工作。`,
+			`你可以随时查看或调整他们的权限。`,
+		];
+		const html = wrapHtml("🎉", `${v.memberName ?? "队友"} 已加入你的团队`, lines, v.ctaUrl, "打开团队设置");
+		const text = `🎉 ${v.memberName ?? v.memberEmail} 已加入 ${v.storeName} 的团队。\n他们现在可以按你设置的权限在店铺中工作。你可以随时查看或调整。\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+	teamMemberLeft: (v: TeamEmailVars): RenderedEmail => {
+		const subject = `${v.memberName ?? v.memberEmail} 已离开 ${v.storeName} 的团队`;
+		const lines = [
+			`<strong>${escapeHtml(v.memberName ?? "你的队友")}</strong>（${escapeHtml(v.memberEmail ?? "")}）已离开你的团队。`,
+			`席位已空出——你可以邀请其他人。`,
+		];
+		const html = wrapHtml("👋", `${v.memberName ?? "队友"} 已离开你的团队`, lines, v.ctaUrl, "打开团队设置");
+		const text = `👋 ${v.memberName ?? v.memberEmail} 已离开 ${v.storeName} 的团队。\n席位已空出——你可以邀请其他人。\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+	teamSeatSummary: (v: TeamEmailVars): RenderedEmail => {
+		const names = v.droppedNames ?? [];
+		const subject = `⚠️ 套餐变更后，${names.length} 位队友失去了访问权限`;
+		const lines = [
+			`你的新套餐团队席位较少，以下队友已无法访问 <strong>${escapeHtml(v.storeName)}</strong>：`,
+			...names.map((n) => `• <strong>${escapeHtml(n)}</strong>`),
+			`我们已分别通过邮件通知他们。若这不是你的本意，可升级套餐后重新邀请。`,
+		];
+		const html = wrapHtml("⚠️", `队友失去了访问权限`, lines, v.ctaUrl, "打开团队设置");
+		const text = `⚠️ 套餐变更后，${names.length} 位队友失去了对 ${v.storeName} 的访问权限：\n${names.map((n) => `- ${n}`).join("\n")}\n我们已分别通过邮件通知他们。若这不是你的本意，可升级套餐后重新邀请。\n${v.ctaUrl}`;
+		return { subject, html, text };
+	},
+};
+
+const teamCatalog: Record<
+	Locale,
+	Record<TeamEmailKey, (v: TeamEmailVars) => RenderedEmail>
+> = {
+	en: teamEn,
+	ms: teamMs,
+	zh: teamZh,
+};
+
+export function renderTeamEmail(
+	locale: Locale,
+	key: TeamEmailKey,
+	vars: TeamEmailVars,
+): RenderedEmail {
+	return teamCatalog[locale][key](vars);
 }

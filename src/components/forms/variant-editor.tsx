@@ -9,32 +9,70 @@ import {
 	Plus,
 	X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+	type MutableRefObject,
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
+import type { Id } from "../../../convex/_generated/dataModel";
+import {
+	MAX_OPTION_AXES,
+	MAX_VARIANTS_PER_PRODUCT,
+	overCapMessage,
+} from "../../../convex/lib/variant";
+import {
+	WEIGHT_REQUIRED_COPY,
+	type WeightPricing,
+} from "../../../convex/lib/weightPricing";
 import { useRevealOnAdd } from "../../hooks/useRevealOnAdd";
+import { takePickedFiles } from "../../lib/file-input";
 import {
 	convexErrorMessage,
+	currencySymbol,
 	normalizePriceInput,
 	sanitizeIntInput,
 } from "../../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
+import { IMAGE_ACCEPT } from "../../lib/image-upload";
+import { uploadImage as uploadToStorage } from "../../lib/storage-upload";
 import { cn } from "../../lib/utils";
-import { cartesian, type OptionAxis, variantLabel } from "../../lib/variant";
+import {
+	cartesian,
+	type OptionAxis,
+	sameOptionValues,
+	variantLabel,
+} from "../../lib/variant";
+import { StockAdjustDialog, type StockLine } from "../product/stock-adjust";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { DISCLOSURE_PANEL_ATTR, REVEAL_EVENT } from "../ui/question-row";
 import { CUSTOM_LINE_COPY, MOCKUP_APPROVAL_COPY } from "./advanced-option-copy";
-
-// Mirrors the server caps in convex/lib/variant.ts.
-const MAX_AXES = 2;
-const MAX_VARIANTS = 50;
+import {
+	type Answer,
+	advancedAnswer,
+	choiceDetailsAnswer,
+	choicesAnswer,
+} from "./product-answers";
+import { settingAnchor } from "./product-setting-index";
+import { LAZY_DISCLOSURE_ATTR } from "./reveal-setting";
 
 export type VariantRow = {
 	optionValues: string[];
 	sku: string;
 	/** Major-unit price string as typed (e.g. "120.50"). */
 	price: string;
+	/** Major-unit SALE price as typed (z8r3fdcw72). Absent or "" = this line
+	 * is not on promotion, which is the overwhelming default — hence optional,
+	 * so every row literal that predates promotions stays valid. Edited in the
+	 * Promotion card, not the pricing grid: one substrate, two writers. */
+	promoPrice?: string;
 	/** Integer stock string as typed. */
 	stock: string;
 	/** Per-row deactivate — inactive variants are hidden from the storefront. */
@@ -89,20 +127,116 @@ export type VariantIssue = {
 	where: "row" | "option" | "custom";
 	/** Row index (rows), axis index (options); 0 for the custom line. */
 	index: number;
-	field: "price" | "stock" | "name" | "values" | "weight";
+	field: "price" | "promoPrice" | "stock" | "name" | "values" | "weight";
 	message: string;
+};
+
+/**
+ * A variant that already exists server-side, with its LIVE count (86eypn8ye).
+ *
+ * Present only when editing a saved product. Rows matched against this list
+ * render their stock read-only with an Adjust button, because `saveVariantGrid`
+ * no longer writes `onHand` onto an existing variant — the form's copy of that
+ * number is minutes old by the time Save is tapped, and writing it back
+ * resurrects everything sold in between.
+ *
+ * A row with NO match is a combination the seller just added, which has no
+ * stock of its own to protect: it keeps a plain input and is inserted with it.
+ */
+export type LiveVariantStock = {
+	variantId: Id<"productVariants">;
+	optionValues: string[];
+	isCustom?: boolean;
+	onHand: number;
 };
 
 interface VariantEditorProps {
 	value: VariantEditorState;
 	onChange: (next: VariantEditorState) => void;
+	/** The retailer's ISO code (`MYR`, `SGD`) — labels wear its symbol. */
 	currency: string;
 	/** Submit-time issues to render inline (cleared by the parent on any edit). */
 	issues?: VariantIssue[];
-	/** The store prices delivery by weight/zone (86eyeea1n) — promotes the
-	 * parcel-weight inputs out of Advanced into their own labelled block, since
-	 * a weightless item strands that store's checkout on "missing weights". */
-	weightMode?: boolean;
+	/** WHY the store prices delivery by weight (`weightPricingOf`, 23 Oct
+	 * 2026) — its rate card (86eyeea1n) or a live courier that quotes by
+	 * weight. Either promotes the parcel-weight inputs out of Advanced into
+	 * their own labelled block and makes them REQUIRED on every buyable
+	 * choice; the reason picks the explainer, because "can't be priced" is the
+	 * rate card's truth and "quoted as a 1 kg parcel" is the courier's. Null /
+	 * unset = optional, tucked inside Advanced. */
+	weightPricing?: WeightPricing | null;
+	/** Saved variants + their live counts. Absent on create. See LiveVariantStock. */
+	liveStock?: LiveVariantStock[];
+	/** Product name, for the adjust dialog's subtitle. */
+	productName?: string;
+	/** Moving stock is an immediate write, not part of Save — so while the
+	 * store can't write products (view-only, out of credits, a view-only
+	 * teammate) every Adjust greys out with Save, not after a dialog. */
+	stockLocked?: boolean;
+	/** The host asks mockup approval and the custom line as questions of its
+	 * own (the full product form, z8r3fdv1z2), so Advanced keeps only what
+	 * describes the CHOICES: a second axis, per-choice SKU/photo/on-off and
+	 * parcel weight. The wizard leaves this off and keeps both in Advanced. */
+	capabilitiesOutside?: boolean;
+	/** Fold the per-choice list behind a one-line summary, closed on every
+	 * visit (z8r3fdwnyk). The edit form sets it: a saved product with 20
+	 * sizes would otherwise push every other section thousands of pixels
+	 * down. Create and the wizard leave it off — a seller authoring the grid
+	 * has to see each new row to price it. */
+	collapseChoices?: boolean;
+}
+
+/**
+ * Match a grid row to its saved variant the way the SERVER does — by
+ * `(isCustom, optionValues)`, positionally. Keeping the two rules identical is
+ * what makes "this row has live stock" mean the same thing on both sides.
+ */
+function findLiveStock(
+	liveStock: LiveVariantStock[] | undefined,
+	optionValues: string[],
+	isCustom = false,
+): LiveVariantStock | undefined {
+	return liveStock?.find(
+		(e) =>
+			Boolean(e.isCustom) === isCustom &&
+			sameOptionValues(e.optionValues, optionValues),
+	);
+}
+
+/**
+ * The stock cell for a variant that already exists: its live count, read-only,
+ * beside the one control that may move it.
+ *
+ * Read-only is the point. The number is a live read that ticks down as orders
+ * land, so an open form can no longer disagree with the shelf, and the seller
+ * cannot change it as a side effect of saving something else.
+ */
+function LiveStockCell({
+	onHand,
+	onAdjust,
+	locked = false,
+}: {
+	onHand: number;
+	onAdjust: () => void;
+	locked?: boolean;
+}) {
+	return (
+		<div className="flex h-11 items-center justify-between gap-2 rounded-xl bg-muted pr-1 pl-3">
+			<span className="text-[15px] font-bold tabular-nums">{onHand}</span>
+			<Button
+				type="button"
+				variant="outline"
+				onClick={onAdjust}
+				disabled={locked}
+				// 44px: this is the ONLY way to change a saved variant's stock, and
+				// it replaced an h-11 input. Mobile-first is a hard floor
+				// (CLAUDE.md), and the cell it sits in is h-11 anyway.
+				className="h-11 bg-background px-3 text-xs"
+			>
+				Adjust
+			</Button>
+		</div>
+	);
 }
 
 /** Tiny inline error line under the offending input. */
@@ -112,6 +246,116 @@ function IssueText({ message }: { message: string | undefined }) {
 		<span role="alert" className="text-xs font-normal text-destructive">
 			{message}
 		</span>
+	);
+}
+
+/**
+ * A per-choice list folded behind a one-line summary (z8r3fdwnyk) — the price
+ * list and Advanced's per-choice details are the two parts of the editor that
+ * grow with the variant count, so on the edit page both fold the same way:
+ * one idea, one control.
+ *
+ * Controlled, because the editor decides when a list must open (a new value,
+ * a refused save). The rules a question row owns hold here too: the panel
+ * stays MOUNTED while closed (`hidden`), so a half-typed value survives and
+ * focus-error can find an invalid field in it and send {@link REVEAL_EVENT};
+ * a long open list ends in "Hide the N choices", closing it from where the
+ * seller finished and bringing the header back into view.
+ *
+ * `collapse` off renders a plain heading over an always-open list — create
+ * and the wizard, where the seller is authoring the grid.
+ */
+function ChoiceListDisclosure({
+	title,
+	summary,
+	count,
+	collapse,
+	open,
+	onOpenChange,
+	children,
+}: {
+	title: string;
+	summary: Answer;
+	count: number;
+	collapse: boolean;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	children: ReactNode;
+}) {
+	const panelId = useId();
+	const panelRef = useRef<HTMLDivElement>(null);
+	const headerRef = useRef<HTMLButtonElement>(null);
+	// Read through a ref so the listener is bound once per mount, not per render.
+	const onOpenChangeRef = useRef(onOpenChange);
+	onOpenChangeRef.current = onOpenChange;
+	useEffect(() => {
+		const panel = panelRef.current;
+		if (!collapse || !panel) return;
+		const reveal = () => onOpenChangeRef.current(true);
+		panel.addEventListener(REVEAL_EVENT, reveal);
+		return () => panel.removeEventListener(REVEAL_EVENT, reveal);
+	}, [collapse]);
+
+	return (
+		<div className="flex flex-col gap-2">
+			{collapse ? (
+				<button
+					ref={headerRef}
+					type="button"
+					aria-expanded={open}
+					aria-controls={panelId}
+					onClick={() => onOpenChange(!open)}
+					// scroll-mt clears the sticky header when "Hide" brings it back.
+					className="flex min-h-14 w-full scroll-mt-24 items-center gap-3 rounded-xl border border-border px-3 py-2.5 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+				>
+					<span className="flex min-w-0 flex-1 flex-col">
+						<span className="text-sm font-medium">{title}</span>
+						<span
+							data-choices-answer
+							className={cn(
+								"mt-0.5 line-clamp-2 text-xs leading-snug",
+								summary.tone === "warn"
+									? "font-medium text-amber-700 dark:text-amber-400"
+									: "text-muted-foreground",
+							)}
+						>
+							{summary.text}
+						</span>
+					</span>
+					<ChevronDown
+						aria-hidden="true"
+						className={cn(
+							"size-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
+							open && "rotate-180",
+						)}
+					/>
+				</button>
+			) : (
+				<span className="text-sm font-medium">{title}</span>
+			)}
+			<div
+				ref={panelRef}
+				id={panelId}
+				hidden={collapse && !open}
+				{...(collapse ? { [DISCLOSURE_PANEL_ATTR]: "" } : {})}
+				className="flex flex-col gap-2"
+			>
+				{children}
+				{collapse && count > 3 ? (
+					<button
+						type="button"
+						onClick={() => {
+							onOpenChange(false);
+							headerRef.current?.scrollIntoView?.({ block: "start" });
+						}}
+						className="flex min-h-11 items-center justify-center gap-1.5 self-center rounded-full px-4 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+					>
+						<ChevronUp className="size-4" aria-hidden />
+						Hide the {count} choices
+					</button>
+				) : null}
+			</div>
+		</div>
 	);
 }
 
@@ -147,6 +391,7 @@ export function emptyRow(optionValues: string[]): VariantRow {
 		optionValues,
 		sku: "",
 		price: "",
+		promoPrice: "",
 		stock: "",
 		active: true,
 		// Default to hard-block (the common case: real stock items). Made-to-order
@@ -194,6 +439,7 @@ export function rebuildRows(
 			return {
 				...base,
 				price: seed.price,
+				promoPrice: seed.promoPrice,
 				stock: seed.stock,
 				blockWhenOutOfStock: seed.blockWhenOutOfStock,
 				requiresProof: seed.requiresProof,
@@ -291,6 +537,11 @@ export function PriceInput({
 }) {
 	return (
 		<Input
+			// `field`, not the compact default: this sits beside the h-11 stock
+			// control and under the h-11 name/description fields, so the default's
+			// 32px read as a broken input rather than a deliberate one. It is also
+			// the mobile-first tap target the rest of the form already uses.
+			variant="field"
 			inputMode="decimal"
 			placeholder="0.00"
 			value={value}
@@ -349,7 +600,7 @@ export function StockInput({
 	return (
 		<div
 			className={cn(
-				"flex h-11 items-center overflow-hidden rounded-lg border border-input bg-background focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50",
+				"flex h-11 items-center overflow-hidden rounded-xl border border-input bg-background focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50",
 				invalid &&
 					"border-destructive ring-2 ring-destructive/20 focus-within:border-destructive",
 				className,
@@ -510,10 +761,13 @@ function MockupApprovalToggle({
 	checked,
 	indeterminate = false,
 	onChange,
+	label,
 }: {
 	checked: boolean;
 	indeterminate?: boolean;
 	onChange: (next: boolean) => void;
+	/** Replaces the feature title where the host already asked the question. */
+	label?: string;
 }) {
 	return (
 		<label className="flex items-start gap-2.5 text-sm">
@@ -523,11 +777,14 @@ function MockupApprovalToggle({
 				ref={(el) => {
 					if (el) el.indeterminate = indeterminate;
 				}}
+				aria-checked={indeterminate ? "mixed" : checked}
 				onChange={(e) => onChange(e.target.checked)}
 				className="mt-0.5 size-4 shrink-0"
 			/>
 			<span>
-				<span className="font-medium">{MOCKUP_APPROVAL_COPY.title}</span>
+				<span className="font-medium">
+					{label ?? MOCKUP_APPROVAL_COPY.title}
+				</span>
 				<span className="block text-xs text-muted-foreground">
 					{MOCKUP_APPROVAL_COPY.body}
 					{indeterminate
@@ -539,14 +796,31 @@ function MockupApprovalToggle({
 	);
 }
 
+/** One shared empty list, so a host that passes no `issues` doesn't hand the
+ * issue effects a new array — and a re-run — on every render. */
+const EMPTY_ISSUES: VariantIssue[] = [];
+
 export function VariantEditor({
 	value,
 	onChange,
 	currency,
-	issues = [],
-	weightMode = false,
+	issues = EMPTY_ISSUES,
+	weightPricing = null,
+	liveStock,
+	productName = "This product",
+	stockLocked = false,
+	capabilitiesOutside = false,
+	collapseChoices = false,
 }: VariantEditorProps) {
 	const { options, rows, customLine } = value;
+	// Layout follows WHETHER the store prices by weight; copy follows WHY.
+	const weightMode = weightPricing !== null;
+	// Every price label wears the store's symbol ("RM", "S$") — `currency` is
+	// the ISO code, which a seller never reads.
+	const moneySymbol = currencySymbol(currency);
+	// The variant whose stock the seller asked to move. Held here (not per row)
+	// so one dialog serves every row and there is one author for the copy.
+	const [adjusting, setAdjusting] = useState<StockLine | null>(null);
 	const hasOptions = options.length > 0;
 	// Third product type (86eyfq04j) — derived from the rows, never stored, so
 	// the control and the data it describes can't drift apart.
@@ -566,7 +840,6 @@ export function VariantEditor({
 	);
 	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
 	const [uploadingRow, setUploadingRow] = useState<number | null>(null);
-	const [uploadingCustom, setUploadingCustom] = useState(false);
 	// A newly added second axis appends inside Advanced — reveal + focus it.
 	const { markAdded, revealRef } = useRevealOnAdd();
 
@@ -584,30 +857,60 @@ export function VariantEditor({
 	// case), forced open when it holds pre-existing config or a submit issue
 	// points inside it. Parcel weight counts only when it LIVES here (weight
 	// mode promotes it to its own block outside).
+	//
+	// EXCEPT on the edit page (collapseChoices, z8r3fdwnyk): there the
+	// "pre-existing config" rule opened Advanced on nearly every real product
+	// (one parcel weight was enough) and its per-choice details repeated every
+	// variant again — 56 of them pushed the question groups 8,000px down. So
+	// it starts closed and its header line states what is inside instead
+	// (`advancedAnswer`): the config is still never invisible, it is just
+	// said rather than spread open. A submit issue still opens it.
 	const [advOpen, setAdvOpen] = useState(
 		() =>
-			customLine !== null ||
-			options.length > 1 ||
-			someProof ||
-			rows.some(
-				(r) =>
-					r.sku.trim().length > 0 ||
-					!r.active ||
-					(!weightMode && r.parcelWeightG.trim().length > 0),
-			),
+			!collapseChoices &&
+			((!capabilitiesOutside && (customLine !== null || someProof)) ||
+				options.length > 1 ||
+				rows.some(
+					(r) =>
+						r.sku.trim().length > 0 ||
+						!r.active ||
+						(!weightMode && r.parcelWeightG.trim().length > 0),
+				)),
 	);
+	// Advanced's per-choice details fold the same way as the price list on
+	// edit — opening Advanced to rename the second choice must not unroll
+	// every variant again. A refused parcel weight opens it (weight lives
+	// here outside weight mode); focus-error's reveal covers the rest.
+	const [detailsOpen, setDetailsOpen] = useState(!collapseChoices);
+	// Advanced is the one box on the form whose body is NOT rendered while
+	// closed, so "Find a setting" can't walk up from a field inside it — it
+	// asks this element to open first (`revealSetting`, z8r3fdwwy3).
+	// A callback ref, so the listener binds whenever the box mounts — it isn't
+	// rendered at all for made-to-order, and comes back when the type does.
+	const advancedRef = useCallback((el: HTMLDivElement | null) => {
+		if (!el) return;
+		const reveal = () => setAdvOpen(true);
+		el.addEventListener(REVEAL_EVENT, reveal);
+		return () => el.removeEventListener(REVEAL_EVENT, reveal);
+	}, []);
 	useEffect(() => {
 		if (
 			issues.some(
 				(i) =>
-					i.where === "custom" ||
+					(!capabilitiesOutside && i.where === "custom") ||
 					(i.where === "option" && i.index > 0) ||
 					(!weightMode && i.where === "row" && i.field === "weight"),
 			)
 		) {
 			setAdvOpen(true);
 		}
-	}, [issues, weightMode]);
+		if (
+			!weightMode &&
+			issues.some((i) => i.where === "row" && i.field === "weight")
+		) {
+			setDetailsOpen(true);
+		}
+	}, [issues, weightMode, capabilitiesOutside]);
 
 	// Merge a partial into the full editor state — preserves sibling fields
 	// (notably `customLine`) that a given setter doesn't touch.
@@ -633,11 +936,30 @@ export function VariantEditor({
 	}
 
 	const variantCount = useMemo(() => cartesian(options).length, [options]);
-	const overCap = variantCount > MAX_VARIANTS;
+	const overCap = variantCount > MAX_VARIANTS_PER_PRODUCT;
 	// While an axis has no values the rows still describe the PREVIOUS shape
 	// (kept deliberately — see rebuildRows), so per-choice UI must wait for the
 	// grid to actually exist rather than render a phantom blank-labelled row.
 	const gridReady = variantCount > 0;
+
+	// The per-choice list's disclosure (collapseChoices). Closed on every visit
+	// — the summary line says what is inside — and it opens itself whenever
+	// hiding it would hide something the seller must act on: a refused save
+	// pointing at a choice (the issue effect below, plus focus-error's
+	// REVEAL_EVENT for a first error the seller is taken to), and a freshly
+	// added value, whose new row has a blank price.
+	const [choicesOpen, setChoicesOpen] = useState(!collapseChoices);
+	const choicesSummary = choicesAnswer(rows, currency);
+	useEffect(() => {
+		if (
+			issues.some(
+				(i) =>
+					i.where === "row" && (i.field === "price" || i.field === "stock"),
+			)
+		) {
+			setChoicesOpen(true);
+		}
+	}, [issues]);
 
 	function setOptions(nextOptions: OptionAxis[]) {
 		update({ options: nextOptions, rows: rebuildRows(nextOptions, rows) });
@@ -652,7 +974,17 @@ export function VariantEditor({
 	// Parcel-weight input — one author for its three mounts (the weight-mode
 	// block, the Advanced per-choice line, the Advanced single-item field), so
 	// the binding and the issue anchor can't drift between them.
-	function renderWeightInput(i: number, row: VariantRow) {
+	//
+	// `issueBelow`: the promoted block renders the refusal UNDER the whole
+	// row instead of inside this column — a long message next to a `flex-1
+	// truncate` label otherwise grows the column to its text and shrinks the
+	// label to nothing (seen on the first /test-code pass: six red boxes, no
+	// choice names).
+	function renderWeightInput(
+		i: number,
+		row: VariantRow,
+		opts: { issueBelow?: boolean } = {},
+	) {
 		const issue = issueFor("row", i, "weight");
 		return (
 			<span className="flex flex-col gap-1">
@@ -663,18 +995,25 @@ export function VariantEditor({
 						placeholder="500"
 						value={row.parcelWeightG}
 						onChange={(e) => setRow(i, { parcelWeightG: e.target.value })}
-						className="h-9 w-24"
+						// Promoted (weight mode) it is a first-class field and wears
+						// the 44px `field` variant like every other; inside Advanced
+						// it stays the compact per-choice control of its row.
+						variant={weightMode ? "field" : undefined}
+						className={weightMode ? "w-28 text-right" : "h-9 w-24"}
 						aria-invalid={issue ? true : undefined}
+						// Required on a buyable choice wherever pricing depends on it
+						// (the save refuses a blank); an off-sale row can't be ordered.
+						aria-required={weightMode && row.active ? true : undefined}
 						aria-label={`Parcel weight in grams for ${variantLabel(row.optionValues) || "this product"}`}
 					/>
 					<span className="text-xs text-muted-foreground">g</span>
 				</span>
-				<IssueText message={issue} />
+				{opts.issueBelow ? null : <IssueText message={issue} />}
 			</span>
 		);
 	}
 
-	// --- Mode switch (the "What kind of product is it?" question) -------------
+	// --- Mode switch (the "Does the buyer choose anything?" question) ---------
 	function switchToChoices() {
 		if (hasOptions) return;
 		if (!confirmLosingChoices()) return;
@@ -764,7 +1103,7 @@ export function VariantEditor({
 	}
 
 	function addAxis() {
-		if (options.length >= MAX_AXES) return;
+		if (options.length >= MAX_OPTION_AXES) return;
 		markAdded(String(options.length));
 		setOptions([...options, { name: "", values: [] }]);
 		setValueDrafts((d) => [...d, ""]);
@@ -776,6 +1115,8 @@ export function VariantEditor({
 	) {
 		const axis = options[axisIndex];
 		if (!axis) return;
+		// Seeding an empty axis makes new, unpriced rows — show them.
+		if (axis.values.length === 0) setChoicesOpen(true);
 		// Rename to the preset; seed its starter values only when the axis is
 		// still empty (never clobber values the seller already typed).
 		setOptions(
@@ -791,7 +1132,7 @@ export function VariantEditor({
 	}
 
 	function addPresetAxis(preset: { name: string; values: string[] }) {
-		if (options.length >= MAX_AXES) return;
+		if (options.length >= MAX_OPTION_AXES) return;
 		if (options.some((a) => a.name.toLowerCase() === preset.name.toLowerCase()))
 			return;
 		markAdded(String(options.length));
@@ -822,6 +1163,9 @@ export function VariantEditor({
 			),
 		);
 		setValueDrafts((d) => d.map((v, i) => (i === axisIndex ? "" : v)));
+		// The new value's rows arrive with a blank price — never behind a
+		// closed list, where the seller can't see what they just made.
+		setChoicesOpen(true);
 	}
 
 	function removeValue(axisIndex: number, value: string) {
@@ -835,7 +1179,15 @@ export function VariantEditor({
 	}
 
 	function bulkFill(field: "price" | "stock", v: string) {
-		update({ rows: rows.map((r) => ({ ...r, [field]: v })) });
+		update({
+			rows: rows.map((r) =>
+				// A saved row's stock is read-only and ignored by the server, so
+				// filling it would look like it worked and change nothing.
+				field === "stock" && findLiveStock(liveStock, r.optionValues)
+					? r
+					: { ...r, [field]: v },
+			),
+		});
 	}
 
 	function bulkFillFlag(
@@ -865,70 +1217,21 @@ export function VariantEditor({
 		}
 	}
 
-	async function uploadCustomImage(files: FileList | null) {
-		if (!files || files.length === 0 || !customLine) return;
-		const file = files[0];
-		setUploadingCustom(true);
-		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
-				return;
-			}
-			const url = await generateUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const body = (await res.json()) as { storageId?: unknown };
-			if (typeof body.storageId !== "string")
-				throw new Error("Upload failed: unexpected response");
-			if (customLine.imageUrl?.startsWith("blob:")) {
-				URL.revokeObjectURL(customLine.imageUrl);
-				blobUrls.current.delete(customLine.imageUrl);
-			}
-			const previewUrl = URL.createObjectURL(prepared.blob);
-			blobUrls.current.add(previewUrl);
-			setCustomLine({
-				imageStorageIds: [body.storageId],
-				imageUrl: previewUrl,
-			});
-		} catch (err) {
-			toast.error(convexErrorMessage(err));
-		} finally {
-			setUploadingCustom(false);
-		}
-	}
-
-	async function uploadRowImage(index: number, files: FileList | null) {
-		if (!files || files.length === 0) return;
+	async function uploadRowImage(index: number, files: readonly File[]) {
+		if (files.length === 0) return;
 		const file = files[0];
 		setUploadingRow(index);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				toast.error(prepared.message);
+			const result = await uploadToStorage(file, () => generateUploadUrl());
+			if (!result.ok) {
+				toast.error(result.message);
 				return;
 			}
-			const url = await generateUploadUrl();
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			// Validate the response shape before trusting it — an error body would
-			// otherwise store `undefined` as a storage id and surface server-side.
-			const body = (await res.json()) as { storageId?: unknown };
-			if (typeof body.storageId !== "string")
-				throw new Error("Upload failed: unexpected response");
 			revokeRowBlob(index); // drop the previous preview before replacing
-			const previewUrl = URL.createObjectURL(prepared.blob);
+			const previewUrl = URL.createObjectURL(result.blob);
 			blobUrls.current.add(previewUrl);
 			setRow(index, {
-				imageStorageIds: [body.storageId],
+				imageStorageIds: [result.storageId],
 				imageUrl: previewUrl,
 			});
 		} catch (err) {
@@ -970,7 +1273,7 @@ export function VariantEditor({
 					type="file"
 					accept={IMAGE_ACCEPT}
 					disabled={uploadingRow !== null}
-					onChange={(e) => void uploadRowImage(i, e.target.files)}
+					onChange={(e) => void uploadRowImage(i, takePickedFiles(e.target))}
 					className="hidden"
 				/>
 			</label>
@@ -1057,7 +1360,32 @@ export function VariantEditor({
 						</button>
 					</div>
 				</div>
-				<IssueText message={issueFor("option", axisIndex, "values")} />
+				{/* The cap is broken by ADDING a value, so it is reported on the
+				    control that adds one. It used to render only after the price
+				    grid — which at the cap is ~13,000px further down the page, so
+				    the seller saw the count climb and nothing tell them why the
+				    product would not save (z8r3fdjgvd). Shown under both axes,
+				    since either one can be the one pushing it over, and shown LIVE
+				    rather than waiting for a submit.
+
+				    Two different things are deliberately NOT the same here. Within
+				    ONE axis card it replaces the submitted values-issue rather than
+				    sitting beside it — `collectOptionIssues` raises the same breach
+				    at submit (so the save blocks and focus lands here), and printing
+				    both would repeat one sentence in one place. The two can never be
+				    different problems: an axis with no values makes zero
+				    combinations, so "add a value" and "too many choices" cannot both
+				    be true. ACROSS axes it does repeat, once per card, and that is
+				    the point — the grid is a product of both lists, either one can
+				    be shortened to fix it, and a card that stayed silent would read
+				    as "not this one". */}
+				{overCap ? (
+					<p className="text-xs text-destructive">
+						{overCapMessage(variantCount)}
+					</p>
+				) : (
+					<IssueText message={issueFor("option", axisIndex, "values")} />
+				)}
 			</div>
 		);
 	}
@@ -1065,18 +1393,33 @@ export function VariantEditor({
 	// Made-to-order has already answered both of the first two — approval is what
 	// the type IS, and a bespoke line on a bespoke product is the same offer
 	// twice — so neither is listed or rendered below.
-	const advancedTeaser = hasOptions
-		? `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · a second choice · per-choice SKUs & photos`
-		: `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · SKU`;
+	// On edit, Advanced starts closed, so its line says what is set inside
+	// rather than what could be — falling back to the menu when nothing is.
+	const advancedState = collapseChoices
+		? advancedAnswer({ options, rows, weightMode })
+		: null;
+	const advancedTeaser = capabilitiesOutside
+		? hasOptions
+			? "A second choice · per-choice SKUs, photos & on/off"
+			: weightMode
+				? "SKU (your own item code)"
+				: "SKU · parcel weight"
+		: hasOptions
+			? `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · a second choice · per-choice SKUs & photos`
+			: `${MOCKUP_APPROVAL_COPY.teaser} · ${CUSTOM_LINE_COPY.teaser} · SKU`;
 
 	return (
 		<div className="flex flex-col gap-4">
-			{/* Q1 — what kind of product is it? Drives the shape of everything
+			{/* Q1 — does the buyer choose anything? Drives the shape of everything
 			    below: one price field, a price per choice, or no required price
 			    at all. Three segments now (86eyfq04j) — a bespoke seller had no
 			    way in without inventing a price and digging through Advanced. */}
-			<div className="flex flex-col gap-1.5">
-				<span className="text-sm font-medium">What kind of product is it?</span>
+			<div className="flex flex-col gap-1.5" {...settingAnchor("product-type")}>
+				{/* The wizard's step-2 question, in the same words (z8r3fdxt99) —
+				    "what kind of product" read as step 0's question asked twice. */}
+				<span className="text-sm font-medium">
+					Does the buyer choose anything?
+				</span>
 				<div className="flex gap-1 rounded-xl bg-muted p-1">
 					{(
 						[
@@ -1129,8 +1472,11 @@ export function VariantEditor({
 				<div className="flex flex-col gap-3">
 					{/* "Starting price", not "Price" — the same field as the bespoke
 					    line under Advanced, and the buyer sees it as "From RM 40". */}
-					<label className="flex flex-col gap-1 text-sm font-medium">
-						Starting price ({currency}){" "}
+					<label
+						className="flex flex-col gap-1 text-sm font-medium"
+						{...settingAnchor("starting-price")}
+					>
+						Starting price ({moneySymbol}){" "}
 						<span className="font-normal text-muted-foreground">
 							(optional)
 						</span>
@@ -1141,11 +1487,15 @@ export function VariantEditor({
 						/>
 						<IssueText message={issueFor("custom", 0, "price")} />
 						<span className="text-xs font-normal text-muted-foreground">
-							Buyers see “From {currency} …”, so they know the final price comes
-							with the mockup. Leave blank to show “Price on quote” instead.
+							Buyers see “From {moneySymbol} …”, so they know the final price
+							comes with the mockup. Leave blank to show “Price on quote”
+							instead.
 						</span>
 					</label>
-					<label className="flex flex-col gap-1 text-sm font-medium">
+					<label
+						className="flex flex-col gap-1 text-sm font-medium"
+						{...settingAnchor("mto-prompt")}
+					>
 						What should the buyer tell you?{" "}
 						<span className="font-normal text-muted-foreground">
 							(optional)
@@ -1173,8 +1523,11 @@ export function VariantEditor({
 				</div>
 			) : !hasOptions ? (
 				<div className="grid grid-cols-2 gap-3">
-					<label className="flex flex-col gap-1 text-sm font-medium">
-						Price ({currency})
+					<label
+						className="flex flex-col gap-1 text-sm font-medium"
+						{...settingAnchor("price")}
+					>
+						Price ({moneySymbol})
 						<PriceInput
 							value={rows[0]?.price ?? ""}
 							onChange={(v) => setRow(0, { price: v })}
@@ -1182,23 +1535,57 @@ export function VariantEditor({
 						/>
 						<IssueText message={issueFor("row", 0, "price")} />
 					</label>
-					{rows[0]?.blockWhenOutOfStock ? (
-						<label className="flex flex-col gap-1 text-sm font-medium">
-							In stock now
-							<StockInput
-								value={rows[0]?.stock ?? ""}
-								onChange={(v) => setRow(0, { stock: v })}
-								stepper
-								invalid={!!issueFor("row", 0, "stock")}
-							/>
-							<IssueText message={issueFor("row", 0, "stock")} />
-						</label>
-					) : null}
+					{rows[0]?.blockWhenOutOfStock
+						? (() => {
+								const live = findLiveStock(
+									liveStock,
+									rows[0]?.optionValues ?? [],
+								);
+								if (live)
+									return (
+										<div
+											className="flex flex-col gap-1 text-sm font-medium"
+											{...settingAnchor("stock", 0)}
+										>
+											<span>In stock</span>
+											<LiveStockCell
+												onHand={live.onHand}
+												locked={stockLocked}
+												onAdjust={() =>
+													setAdjusting({
+														variantId: live.variantId,
+														label: productName,
+														onHand: live.onHand,
+													})
+												}
+											/>
+										</div>
+									);
+								return (
+									<label
+										className="flex flex-col gap-1 text-sm font-medium"
+										{...settingAnchor("stock", 0)}
+									>
+										In stock now
+										<StockInput
+											value={rows[0]?.stock ?? ""}
+											onChange={(v) => setRow(0, { stock: v })}
+											stepper
+											invalid={!!issueFor("row", 0, "stock")}
+										/>
+										<IssueText message={issueFor("row", 0, "stock")} />
+									</label>
+								);
+							})()
+						: null}
 				</div>
 			) : (
 				<>
 					{/* First axis — what the buyer chooses by. */}
-					<div className="flex flex-col gap-2">
+					<div
+						className="flex flex-col gap-2"
+						{...settingAnchor("choice-axis")}
+					>
 						<div className="flex items-center justify-between">
 							<span className="text-sm font-medium">They choose by</span>
 							{variantCount > 0 ? (
@@ -1242,8 +1629,14 @@ export function VariantEditor({
 
 					{/* The choices & their prices. */}
 					{gridReady ? (
-						<div className="flex flex-col gap-2">
-							<span className="text-sm font-medium">The choices & prices</span>
+						<ChoiceListDisclosure
+							title="The choices & prices"
+							summary={choicesSummary}
+							count={rows.length}
+							collapse={collapseChoices}
+							open={choicesOpen}
+							onOpenChange={setChoicesOpen}
+						>
 							{rows.length > 3 ? (
 								<div className="flex items-center gap-2">
 									<Input
@@ -1255,8 +1648,19 @@ export function VariantEditor({
 											bulkFill("price", normalizePriceInput(e.target.value))
 										}
 									/>
-									{allTrack ||
-									(!allMto && rows.some((r) => r.blockWhenOutOfStock)) ? (
+									{/* Only offered while at least one tracked row is NEW. On a
+									    saved product every stock cell is read-only, so a bulk fill
+									    would type into nothing — an input that silently does
+									    nothing is worse than no input. Its absence is explained
+									    below rather than left as a control that quietly went
+									    missing. */}
+									{(allTrack ||
+										(!allMto && rows.some((r) => r.blockWhenOutOfStock))) &&
+									rows.some(
+										(r) =>
+											r.blockWhenOutOfStock &&
+											!findLiveStock(liveStock, r.optionValues),
+									) ? (
 										<Input
 											inputMode="numeric"
 											placeholder="Fill all stock"
@@ -1267,6 +1671,21 @@ export function VariantEditor({
 										/>
 									) : null}
 								</div>
+							) : null}
+							{/* The bulk stock fill is gone on a saved product, and a control
+							    that silently disappears reads as a bug. Say where stock went
+							    — the seller is looking at the row that used to hold it. */}
+							{rows.some(
+								(r) =>
+									r.blockWhenOutOfStock &&
+									findLiveStock(liveStock, r.optionValues),
+							) ? (
+								<p className="text-xs leading-relaxed text-muted-foreground">
+									Stock now has its own control — use{" "}
+									<span className="font-medium text-foreground">Adjust</span> on
+									a choice to add what you made or take off what you sold. It
+									saves on its own, so a save here can never undo a sale.
+								</p>
 							) : null}
 							<ul className="flex flex-col gap-2">
 								{rows.map((row, i) => (
@@ -1288,29 +1707,64 @@ export function VariantEditor({
 											) : null}
 										</div>
 										<div className="grid grid-cols-2 gap-2">
-											<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-												Price ({currency})
+											<label
+												className="flex flex-col gap-1 text-xs font-medium text-muted-foreground"
+												{...settingAnchor("choice-price", i)}
+											>
+												Price ({moneySymbol})
 												<PriceInput
 													value={row.price}
 													onChange={(v) => setRow(i, { price: v })}
-													className="h-10"
 													invalid={!!issueFor("row", i, "price")}
 												/>
 												<IssueText message={issueFor("row", i, "price")} />
 											</label>
-											{row.blockWhenOutOfStock ? (
-												<label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-													In stock now
-													<StockInput
-														value={row.stock}
-														onChange={(v) => setRow(i, { stock: v })}
-														className="h-11"
-														stepper
-														invalid={!!issueFor("row", i, "stock")}
-													/>
-													<IssueText message={issueFor("row", i, "stock")} />
-												</label>
-											) : null}
+											{row.blockWhenOutOfStock
+												? (() => {
+														const live = findLiveStock(
+															liveStock,
+															row.optionValues,
+														);
+														if (live)
+															return (
+																<div
+																	className="flex flex-col gap-1 text-xs font-medium text-muted-foreground"
+																	{...settingAnchor("stock", i)}
+																>
+																	<span>In stock</span>
+																	<LiveStockCell
+																		onHand={live.onHand}
+																		locked={stockLocked}
+																		onAdjust={() =>
+																			setAdjusting({
+																				variantId: live.variantId,
+																				label: variantLabel(row.optionValues),
+																				onHand: live.onHand,
+																			})
+																		}
+																	/>
+																</div>
+															);
+														return (
+															<label
+																className="flex flex-col gap-1 text-xs font-medium text-muted-foreground"
+																{...settingAnchor("stock", i)}
+															>
+																In stock now
+																<StockInput
+																	value={row.stock}
+																	onChange={(v) => setRow(i, { stock: v })}
+																	className="h-11"
+																	stepper
+																	invalid={!!issueFor("row", i, "stock")}
+																/>
+																<IssueText
+																	message={issueFor("row", i, "stock")}
+																/>
+															</label>
+														);
+													})()
+												: null}
 										</div>
 										{varyFulfilment ? (
 											<FulfilmentToggle
@@ -1321,13 +1775,7 @@ export function VariantEditor({
 									</li>
 								))}
 							</ul>
-						</div>
-					) : null}
-					{overCap ? (
-						<p className="text-xs text-destructive">
-							{variantCount} variants exceeds the max of {MAX_VARIANTS}. Remove
-							some values.
-						</p>
+						</ChoiceListDisclosure>
 					) : null}
 				</>
 			)}
@@ -1338,7 +1786,10 @@ export function VariantEditor({
 			    Skipped entirely for made-to-order: the type IS the answer, and
 			    picking "from stock" here would silently undo it. */}
 			{gridReady && !madeToOrder ? (
-				<div className="flex flex-col gap-1.5 border-t border-border pt-3">
+				<div
+					className="flex flex-col gap-1.5 border-t border-border pt-3"
+					{...settingAnchor("prepare")}
+				>
 					<PrepareQuestion
 						allTrack={allTrack}
 						allMto={allMto}
@@ -1385,26 +1836,33 @@ export function VariantEditor({
 			    Made-to-order-only products have no rows (their custom line's
 			    weight is unknowable by design — the resolver holds those orders
 			    for a seller-confirmed charge), so the block hides itself. */}
-			{weightMode && gridReady && rows.length > 0 ? (
+			{weightPricing !== null && gridReady && rows.length > 0 ? (
 				<div className="flex flex-col gap-2.5 rounded-xl border border-border p-4">
 					<span className="flex flex-col">
-						<span className="text-sm font-semibold">Parcel weight</span>
+						<span className="text-sm font-semibold">
+							Parcel weight{" "}
+							<span className="font-normal text-muted-foreground">
+								(required)
+							</span>
+						</span>
 						<span className="text-xs text-muted-foreground">
-							Your store prices delivery by weight — checkout charges each
-							item&apos;s parcel weight × quantity. An item without a weight
-							can&apos;t be priced automatically.
+							{WEIGHT_REQUIRED_COPY[weightPricing].lead}
 						</span>
 					</span>
 					<ul className="flex flex-col gap-2">
 						{rows.map((row, i) => (
 							<li
 								key={variantLabel(row.optionValues) || "single"}
-								className="flex items-center justify-between gap-3"
+								className="flex flex-col gap-1"
+								{...settingAnchor("parcel-weight", i)}
 							>
-								<span className="min-w-0 flex-1 truncate text-sm">
-									{variantLabel(row.optionValues) || "This product"}
+								<span className="flex min-h-9 items-center justify-between gap-3">
+									<span className="min-w-0 flex-1 truncate text-sm">
+										{variantLabel(row.optionValues) || "This product"}
+									</span>
+									{renderWeightInput(i, row, { issueBelow: true })}
 								</span>
-								{renderWeightInput(i, row)}
+								<IssueText message={issueFor("row", i, "weight")} />
 							</li>
 						))}
 					</ul>
@@ -1420,7 +1878,11 @@ export function VariantEditor({
 			    second axis is already gated on `hasOptions`. The approval fact is
 			    stated in the type's own setup above instead. */}
 			{madeToOrder ? null : (
-				<div className="rounded-xl border border-dashed border-border">
+				<div
+					ref={advancedRef}
+					className="rounded-xl border border-dashed border-border"
+					{...{ [LAZY_DISCLOSURE_ATTR]: "advanced" }}
+				>
 					<button
 						type="button"
 						onClick={() => setAdvOpen((v) => !v)}
@@ -1429,8 +1891,11 @@ export function VariantEditor({
 					>
 						<span className="flex min-w-0 flex-col">
 							<span className="text-sm font-semibold">Advanced</span>
-							<span className="truncate text-xs text-muted-foreground">
-								{advancedTeaser}
+							<span
+								data-advanced-answer
+								className="line-clamp-2 text-xs text-muted-foreground"
+							>
+								{advancedState ?? advancedTeaser}
 							</span>
 						</span>
 						{advOpen ? (
@@ -1442,153 +1907,67 @@ export function VariantEditor({
 
 					{advOpen ? (
 						<div className="flex flex-col gap-4 border-t border-border p-3">
-							<MockupApprovalToggle
-								checked={allProof}
-								indeterminate={someProof && !allProof}
-								onChange={(v) => bulkFillFlag("requiresProof", v)}
-							/>
-
-							{/* Custom / made-to-order line — sits OUTSIDE the grid, so a
-						    bespoke option shows up exactly once instead of multiplying
-						    across every size/flavour. See docs/custom-option.md.
-						    No border of its own: it sits inside the Advanced card, and
-						    the editor below it is already a tinted block — three nested
-						    outlines for one checkbox (86eyfq04j's card-in-card sweep).
-
-						    A made-to-order product never reaches here — the whole
-						    Advanced card is hidden for it, because that product already
-						    IS this line and offering to add one would be the same offer
-						    twice. */}
-							<div className="flex flex-col gap-3">
-								<label className="flex items-start gap-2.5 text-sm">
-									<input
-										type="checkbox"
-										checked={customLine !== null}
-										onChange={(e) => toggleCustomLine(e.target.checked)}
-										className="mt-0.5 size-4 shrink-0"
+							{capabilitiesOutside ? null : (
+								<>
+									<MockupApprovalToggle
+										checked={allProof}
+										indeterminate={someProof && !allProof}
+										onChange={(v) => bulkFillFlag("requiresProof", v)}
 									/>
-									<span>
-										<span className="font-medium">
-											{CUSTOM_LINE_COPY.title}
-										</span>
-										<span className="block text-xs text-muted-foreground">
-											{CUSTOM_LINE_COPY.body}
-										</span>
-									</span>
-								</label>
 
-								{customLine ? (
-									<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
-										<div className="flex items-start gap-3">
-											{customLine.imageUrl ? (
-												<div className="relative size-14 shrink-0">
-													<AppImage
-														src={customLine.imageUrl}
-														alt=""
-														aspect="size-14"
-														rounded="rounded-lg"
-													/>
-													<button
-														type="button"
-														onClick={() => {
-															if (customLine.imageUrl?.startsWith("blob:")) {
-																URL.revokeObjectURL(customLine.imageUrl);
-																blobUrls.current.delete(customLine.imageUrl);
-															}
-															setCustomLine({
-																imageStorageIds: [],
-																imageUrl: undefined,
-															});
-														}}
-														className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-background text-xs shadow ring-1 ring-border"
-														aria-label="Remove custom image"
-													>
-														<X className="size-3" />
-													</button>
-												</div>
-											) : (
-												<label className="flex size-14 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-ring">
-													{uploadingCustom ? (
-														<span className="text-[10px]">…</span>
-													) : (
-														<ImagePlus className="size-4" />
-													)}
-													<input
-														type="file"
-														accept={IMAGE_ACCEPT}
-														disabled={uploadingCustom}
-														onChange={(e) =>
-															void uploadCustomImage(e.target.files)
-														}
-														className="hidden"
-													/>
-												</label>
-											)}
-											<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
-												Option name
-												<Input
-													value={customLine.label}
-													onChange={(e) =>
-														setCustomLine({ label: e.target.value })
-													}
-													placeholder="Custom"
-													maxLength={40}
-												/>
-											</label>
-										</div>
-
-										<label className="flex flex-col gap-1 text-sm font-medium">
-											Starting price ({currency}){" "}
-											<span className="font-normal text-muted-foreground">
-												(optional)
-											</span>
-											<PriceInput
-												value={customLine.price}
-												onChange={(v) => setCustomLine({ price: v })}
-												invalid={!!issueFor("custom", 0, "price")}
+									{/* Custom / made-to-order line — sits OUTSIDE the grid, so a
+									    bespoke option shows up exactly once instead of multiplying
+									    across every size/flavour. See docs/custom-option.md.
+									    Never reached by a made-to-order product: the whole Advanced
+									    card is hidden for it, because that product already IS this
+									    line. The full form asks this as its own question instead
+									    (`capabilitiesOutside`, z8r3fdv1z2). */}
+									<div className="flex flex-col gap-3">
+										<label className="flex items-start gap-2.5 text-sm">
+											<input
+												type="checkbox"
+												checked={customLine !== null}
+												onChange={(e) => toggleCustomLine(e.target.checked)}
+												className="mt-0.5 size-4 shrink-0"
 											/>
-											<IssueText message={issueFor("custom", 0, "price")} />
-											<span className="text-xs font-normal text-muted-foreground">
-												Buyers see “From {currency} …”, so they know the final
-												price comes with the mockup. Leave blank to show “Price
-												on quote” instead.
+											<span>
+												<span className="font-medium">
+													{CUSTOM_LINE_COPY.title}
+												</span>
+												<span className="block text-xs text-muted-foreground">
+													{CUSTOM_LINE_COPY.body}
+												</span>
 											</span>
 										</label>
 
-										<label className="flex flex-col gap-1 text-sm font-medium">
-											What should the buyer tell you?{" "}
-											<span className="font-normal text-muted-foreground">
-												(optional)
-											</span>
-											<textarea
-												value={customLine.prompt}
-												onChange={(e) =>
-													setCustomLine({ prompt: e.target.value })
-												}
-												rows={2}
-												maxLength={280}
-												placeholder="e.g. Tell us your design, flavour, size & date needed"
-												className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+										{customLine ? (
+											<CustomLineFields
+												line={customLine}
+												onChange={(next) => update({ customLine: next })}
+												currency={currency}
+												priceIssue={issueFor("custom", 0, "price")}
+												blobUrls={blobUrls}
 											/>
-										</label>
-
-										<p className="text-xs text-muted-foreground">
-											🧑‍🍳 Made to order · ✅ buyer approves a mockup before you
-											start.
-										</p>
+										) : null}
 									</div>
-								) : null}
-							</div>
+								</>
+							)}
 
 							{/* Second axis (choices mode only) — Size × Flavour grids. */}
 							{hasOptions ? (
 								options.length > 1 ? (
-									<div className="flex flex-col gap-2">
+									<div
+										className="flex flex-col gap-2"
+										{...settingAnchor("second-choice")}
+									>
 										<span className="text-sm font-medium">Second choice</span>
 										{renderAxisEditor(1, true)}
 									</div>
 								) : (
-									<div className="flex flex-col gap-2">
+									<div
+										className="flex flex-col gap-2"
+										{...settingAnchor("second-choice")}
+									>
 										<Button
 											type="button"
 											variant="outline"
@@ -1628,10 +2007,14 @@ export function VariantEditor({
 							{/* Per-choice details: SKU, photo, on/off sale, per-choice
 						    approval. Single-item mode gets just the SKU. */}
 							{hasOptions && gridReady ? (
-								<div className="flex flex-col gap-2">
-									<span className="text-sm font-medium">
-										Per-choice details
-									</span>
+								<ChoiceListDisclosure
+									title="Per-choice details"
+									summary={choiceDetailsAnswer(rows, weightMode)}
+									count={rows.length}
+									collapse={collapseChoices}
+									open={detailsOpen}
+									onOpenChange={setDetailsOpen}
+								>
 									<ul className="flex flex-col gap-2">
 										{rows.map((row, i) => (
 											<li
@@ -1642,7 +2025,12 @@ export function VariantEditor({
 												)}
 											>
 												<div className="flex items-center gap-2.5">
-													{renderRowImage(i, row)}
+													<span
+														className="shrink-0"
+														{...settingAnchor("choice-photo", i)}
+													>
+														{renderRowImage(i, row)}
+													</span>
 													<span className="min-w-0 flex-1 truncate text-sm font-medium">
 														{variantLabel(row.optionValues)}
 													</span>
@@ -1652,10 +2040,14 @@ export function VariantEditor({
 														onChange={(e) => setRow(i, { sku: e.target.value })}
 														className="h-9 w-28"
 														aria-label={`SKU for ${variantLabel(row.optionValues)}`}
+														{...settingAnchor("sku", i)}
 													/>
 												</div>
 												<div className="flex flex-wrap items-center gap-4 text-xs">
-													<label className="flex items-center gap-1.5">
+													<label
+														className="flex items-center gap-1.5"
+														{...settingAnchor("choice-on-off", i)}
+													>
 														<input
 															type="checkbox"
 															checked={row.active}
@@ -1667,20 +2059,25 @@ export function VariantEditor({
 														/>
 														On sale
 													</label>
-													<label className="flex items-center gap-1.5">
-														<input
-															type="checkbox"
-															checked={row.requiresProof}
-															onChange={(e) =>
-																setRow(i, { requiresProof: e.target.checked })
-															}
-															className="size-4"
-															aria-label={`Require mockup approval for ${variantLabel(row.optionValues)}`}
-														/>
-														Mockup approval
-													</label>
+													{capabilitiesOutside ? null : (
+														<label className="flex items-center gap-1.5">
+															<input
+																type="checkbox"
+																checked={row.requiresProof}
+																onChange={(e) =>
+																	setRow(i, { requiresProof: e.target.checked })
+																}
+																className="size-4"
+																aria-label={`Require mockup approval for ${variantLabel(row.optionValues)}`}
+															/>
+															Mockup approval
+														</label>
+													)}
 													{!weightMode ? (
-														<span className="flex items-center gap-1.5">
+														<span
+															className="flex items-center gap-1.5"
+															{...settingAnchor("parcel-weight", i)}
+														>
 															Parcel weight
 															{renderWeightInput(i, row)}
 														</span>
@@ -1689,10 +2086,13 @@ export function VariantEditor({
 											</li>
 										))}
 									</ul>
-								</div>
+								</ChoiceListDisclosure>
 							) : null}
 							{!hasOptions ? (
-								<label className="flex flex-col gap-1 text-sm font-medium">
+								<label
+									className="flex flex-col gap-1 text-sm font-medium"
+									{...settingAnchor("sku", 0)}
+								>
 									SKU{" "}
 									<span className="font-normal text-muted-foreground">
 										(optional — your own item code)
@@ -1705,7 +2105,10 @@ export function VariantEditor({
 								</label>
 							) : null}
 							{!hasOptions && !weightMode && rows[0] ? (
-								<div className="flex flex-col gap-1 text-sm font-medium">
+								<div
+									className="flex flex-col gap-1 text-sm font-medium"
+									{...settingAnchor("parcel-weight", 0)}
+								>
 									Parcel weight{" "}
 									<span className="font-normal text-muted-foreground">
 										(grams, optional — prices delivery on courier-rate stores)
@@ -1717,6 +2120,265 @@ export function VariantEditor({
 					) : null}
 				</div>
 			)}
+			{/* One dialog for every row. Its count is re-read from `liveStock` on
+			    each render rather than frozen at open time — the whole reason stock
+			    left the Save button is that a held number goes stale. */}
+			<StockAdjustDialog
+				open={adjusting !== null}
+				onOpenChange={(next) => {
+					if (!next) setAdjusting(null);
+				}}
+				productName={productName}
+				line={
+					adjusting
+						? {
+								...adjusting,
+								onHand:
+									liveStock?.find((e) => e.variantId === adjusting.variantId)
+										?.onHand ?? adjusting.onHand,
+							}
+						: null
+				}
+			/>
+		</div>
+	);
+}
+
+/**
+ * The custom / made-to-order line's own fields — name + photo, starting
+ * price, and what the buyer should tell you. One author for both places it
+ * is edited: the variant editor's Advanced card (the wizard's path) and the
+ * full form's "Do you take custom requests on it?" question (z8r3fdv1z2).
+ *
+ * `blobUrls` lets a host that outlives this component own the preview-URL
+ * cleanup: Advanced unmounts its body when it collapses, and revoking the
+ * photo's URL then would blank a preview the line is still showing.
+ */
+export function CustomLineFields({
+	line,
+	onChange,
+	currency,
+	priceIssue,
+	blobUrls: hostBlobUrls,
+}: {
+	line: CustomLineDraft;
+	onChange: (next: CustomLineDraft) => void;
+	currency: string;
+	priceIssue?: string;
+	blobUrls?: MutableRefObject<Set<string>>;
+}) {
+	const moneySymbol = currencySymbol(currency);
+	const generateUploadUrl = useMutation(api.products.generateUploadUrl);
+	const [uploading, setUploading] = useState(false);
+	const ownBlobUrls = useRef<Set<string>>(new Set());
+	const blobUrls = hostBlobUrls ?? ownBlobUrls;
+	useEffect(() => {
+		if (hostBlobUrls) return;
+		const owned = ownBlobUrls.current;
+		return () => {
+			for (const u of owned) URL.revokeObjectURL(u);
+		};
+	}, [hostBlobUrls]);
+	// Both read through refs so an upload that resolves after more typing
+	// patches the line — and the host's state — as they are THEN, not as they
+	// were in the render the upload started from.
+	const lineRef = useRef(line);
+	lineRef.current = line;
+	const onChangeRef = useRef(onChange);
+	onChangeRef.current = onChange;
+	function patch(fields: Partial<CustomLineDraft>) {
+		onChangeRef.current({ ...lineRef.current, ...fields });
+	}
+
+	async function uploadImage(files: readonly File[]) {
+		if (files.length === 0) return;
+		const file = files[0];
+		setUploading(true);
+		try {
+			const result = await uploadToStorage(file, () => generateUploadUrl());
+			if (!result.ok) {
+				toast.error(result.message);
+				return;
+			}
+			const prev = lineRef.current.imageUrl;
+			if (prev?.startsWith("blob:")) {
+				URL.revokeObjectURL(prev);
+				blobUrls.current.delete(prev);
+			}
+			const previewUrl = URL.createObjectURL(result.blob);
+			blobUrls.current.add(previewUrl);
+			patch({ imageStorageIds: [result.storageId], imageUrl: previewUrl });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setUploading(false);
+		}
+	}
+
+	return (
+		<div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
+			<div className="flex items-start gap-3">
+				{line.imageUrl ? (
+					<div className="relative size-14 shrink-0">
+						<AppImage
+							src={line.imageUrl}
+							alt=""
+							aspect="size-14"
+							rounded="rounded-lg"
+						/>
+						<button
+							type="button"
+							onClick={() => {
+								if (line.imageUrl?.startsWith("blob:")) {
+									URL.revokeObjectURL(line.imageUrl);
+									blobUrls.current.delete(line.imageUrl);
+								}
+								patch({
+									imageStorageIds: [],
+									imageUrl: undefined,
+								});
+							}}
+							className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-background text-xs shadow ring-1 ring-border"
+							aria-label="Remove custom image"
+						>
+							<X className="size-3" />
+						</button>
+					</div>
+				) : (
+					<label className="flex size-14 shrink-0 cursor-pointer items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground hover:border-ring">
+						{uploading ? (
+							<span className="text-[10px]">…</span>
+						) : (
+							<ImagePlus className="size-4" />
+						)}
+						<input
+							type="file"
+							accept={IMAGE_ACCEPT}
+							disabled={uploading}
+							onChange={(e) => void uploadImage(takePickedFiles(e.target))}
+							className="hidden"
+						/>
+					</label>
+				)}
+				<label className="flex flex-1 flex-col gap-1 text-sm font-medium">
+					Option name
+					<Input
+						value={line.label}
+						onChange={(e) => patch({ label: e.target.value })}
+						placeholder="Custom"
+						maxLength={40}
+					/>
+				</label>
+			</div>
+
+			<label className="flex flex-col gap-1 text-sm font-medium">
+				Starting price ({moneySymbol}){" "}
+				<span className="font-normal text-muted-foreground">(optional)</span>
+				<PriceInput
+					value={line.price}
+					onChange={(v) => patch({ price: v })}
+					invalid={!!priceIssue}
+				/>
+				<IssueText message={priceIssue} />
+				<span className="text-xs font-normal text-muted-foreground">
+					Buyers see “From {moneySymbol} …”, so they know the final price comes
+					with the mockup. Leave blank to show “Price on quote” instead.
+				</span>
+			</label>
+
+			<label className="flex flex-col gap-1 text-sm font-medium">
+				What should the buyer tell you?{" "}
+				<span className="font-normal text-muted-foreground">(optional)</span>
+				<textarea
+					value={line.prompt}
+					onChange={(e) => patch({ prompt: e.target.value })}
+					rows={2}
+					maxLength={280}
+					placeholder="e.g. Tell us your design, flavour, size & date needed"
+					className="rounded-xl border border-input bg-background px-3 py-2 text-base outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
+				/>
+			</label>
+
+			<p className="text-xs text-muted-foreground">
+				🧑‍🍳 Made to order · ✅ buyer approves a mockup before you start.
+			</p>
+		</div>
+	);
+}
+
+/**
+ * Mockup approval as one place (z8r3fdv1z2): the product-level switch — a
+ * TRI-STATE checkbox, because it summarises per-choice flags — and, on a
+ * product with choices, the per-choice list it summarises, so "on for some"
+ * is fixable right where it is reported. The full form's "Does the buyer
+ * approve a mockup first?" question renders this; the per-choice checkboxes
+ * leave Advanced there (`capabilitiesOutside`) so the flag has one home.
+ */
+export function MockupApprovalFields({
+	value,
+	onChange,
+}: {
+	value: VariantEditorState;
+	onChange: (next: VariantEditorState) => void;
+}) {
+	const { options, rows } = value;
+	const allProof = rows.length > 0 && rows.every((r) => r.requiresProof);
+	const someProof = rows.some((r) => r.requiresProof);
+	const perChoice = options.length > 0 && cartesian(options).length > 1;
+	const fill = (on: boolean) =>
+		onChange({
+			...value,
+			rows: rows.map((r) => ({ ...r, requiresProof: on })),
+		});
+	return (
+		<div className="flex flex-col gap-3">
+			<MockupApprovalToggle
+				checked={allProof}
+				indeterminate={someProof && !allProof}
+				onChange={fill}
+				label={perChoice ? "Every choice" : undefined}
+			/>
+			{perChoice ? (
+				<ul
+					aria-label="Mockup approval per choice"
+					className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card"
+				>
+					{rows.map((row, i) => {
+						const label = variantLabel(row.optionValues);
+						return (
+							<li key={label}>
+								<label className="flex min-h-11 items-center gap-3 px-3 text-sm">
+									<input
+										type="checkbox"
+										checked={row.requiresProof}
+										onChange={(e) =>
+											onChange({
+												...value,
+												rows: rows.map((r, j) =>
+													j === i
+														? { ...r, requiresProof: e.target.checked }
+														: r,
+												),
+											})
+										}
+										className="size-4 shrink-0"
+										aria-label={`Require mockup approval for ${label}`}
+									/>
+									<span
+										className={cn(
+											"min-w-0 flex-1 truncate",
+											!row.active && "text-muted-foreground",
+										)}
+									>
+										{label}
+										{!row.active ? " · off sale" : ""}
+									</span>
+								</label>
+							</li>
+						);
+					})}
+				</ul>
+			) : null}
 		</div>
 	);
 }

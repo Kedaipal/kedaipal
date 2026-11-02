@@ -26,6 +26,7 @@ import {
 	parsePodImages,
 	parseQuotationResponse,
 	decryptLalamoveCredentials,
+	checkLalamoveKeyShape,
 	inferLalamoveEnv,
 	resolveLalamoveCredentials,
 	riderDrivesOrderStatus,
@@ -465,6 +466,15 @@ describe("toLalamoveContactPhone", () => {
 		expect(toLalamoveContactPhone("60123456789", "SG")).toBeNull();
 	});
 
+	test("an overseas buyer from anywhere is foreign in both markets (z8r3fdh274)", () => {
+		// Buyers may now type a number from any country. Each one must route
+		// to the store-number fallback, never reach Lalamove as a contact.
+		expect(toLalamoveContactPhone("447700900123", "MY")).toBeNull();
+		expect(toLalamoveContactPhone("447700900123", "SG")).toBeNull();
+		expect(toLalamoveContactPhone("+81 90-1234-5678", "MY")).toBeNull();
+		expect(toLalamoveContactPhone("6281234567890", "SG")).toBeNull();
+	});
+
 	test("SG length is exact — 65 plus eight digits, no more", () => {
 		expect(toLalamoveContactPhone("658181532", "SG")).toBeNull();
 		expect(toLalamoveContactPhone("65818153210", "SG")).toBeNull();
@@ -789,3 +799,49 @@ describe("the quotation locale follows the market (PR #255 review)", () => {
 		expect(body.data.language).toBe("en_MY");
 	});
 })
+
+describe("checkLalamoveKeyShape — a pasted pair must LOOK like Lalamove's (z8r3fdy5ht)", () => {
+	test("a matching live or sandbox pair passes, with its environment", () => {
+		expect(checkLalamoveKeyShape("pk_prod_abc", "sk_prod_def")).toEqual({
+			ok: true,
+			env: "production",
+		});
+		expect(checkLalamoveKeyShape(" pk_test_abc ", " sk_test_def ")).toEqual({
+			ok: true,
+			env: "sandbox",
+		});
+	});
+
+	test("another provider's client ID is named as not-a-Lalamove-key", () => {
+		const r = checkLalamoveKeyShape(
+			"1467ee4f-978c-45bb-9cf2-a3f73bd900e1",
+			"d0a7408b9e0c",
+		);
+		expect(r.ok).toBe(false);
+		expect(!r.ok && r.message).toMatch(/isn't a Lalamove API key.*pk_prod_/);
+	});
+
+	test("a bad secret behind a good key names the secret", () => {
+		const r = checkLalamoveKeyShape("pk_prod_abc", "hunter2");
+		expect(!r.ok && r.message).toMatch(/isn't a Lalamove API secret/);
+	});
+
+	test("swapped fields say so, instead of blaming the key", () => {
+		const r = checkLalamoveKeyShape("sk_prod_abc", "pk_prod_abc");
+		expect(!r.ok && r.message).toMatch(/swapped/);
+	});
+
+	test("one live and one sandbox half is refused both ways round", () => {
+		expect(
+			checkLalamoveKeyShape("pk_prod_a", "sk_test_b").ok ||
+				checkLalamoveKeyShape("pk_test_a", "sk_prod_b").ok,
+		).toBe(false);
+		const r = checkLalamoveKeyShape("pk_test_a", "sk_prod_b");
+		expect(!r.ok && r.message).toMatch(/sandbox key but the secret is a live one/);
+	});
+
+	test("a bare prefix isn't a key", () => {
+		expect(checkLalamoveKeyShape("pk_prod_", "sk_prod_").ok).toBe(false);
+	});
+});
+

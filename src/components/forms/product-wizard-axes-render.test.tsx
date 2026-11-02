@@ -69,7 +69,9 @@ function renderWizard(state: WizardState) {
 		<ProductWizard
 			retailerId={"r1" as never}
 			categoriesLocked={false}
-			currency="RM"
+			eventsLocked={false}
+			promoLocked={false}
+			currency="MYR"
 			onSubmit={vi.fn()}
 			onSkipToFullForm={vi.fn()}
 			onOpenFullForm={vi.fn()}
@@ -90,7 +92,7 @@ describe("wizard step 2 — axes render whenever they exist", () => {
 	it("mounts the axis input the issue is addressed to, despite a single-item answer", () => {
 		renderWizard(divergent());
 		// Opens on step 2 (first step with an issue).
-		expect(screen.getByText("What kind of product is it?")).toBeTruthy();
+		expect(screen.getByText("Does the buyer choose anything?")).toBeTruthy();
 		// The offending input exists, so the message has somewhere to land and
 		// the seller has a way out.
 		expect(screen.getByPlaceholderText("Add a choice")).toBeTruthy();
@@ -101,7 +103,7 @@ describe("wizard step 2 — axes render whenever they exist", () => {
 		renderWizard(divergent());
 		fireEvent.click(screen.getByRole("button", { name: /continue/i }));
 		// Still on step 2, but now WITH a visible, actionable message.
-		expect(screen.getByText("What kind of product is it?")).toBeTruthy();
+		expect(screen.getByText("Does the buyer choose anything?")).toBeTruthy();
 		expect(screen.getByText(/Give this option a name/i)).toBeTruthy();
 	});
 
@@ -109,9 +111,9 @@ describe("wizard step 2 — axes render whenever they exist", () => {
 		renderWizard(divergent());
 		// The toggle must describe the editor, not the stale flag — otherwise the
 		// screen contradicts the payload that would be submitted.
-		const single = screen.getByRole("button", { name: /just one item/i });
+		const single = screen.getByRole("button", { name: /one item, one price/i });
 		const choices = screen.getByRole("button", {
-			name: /buyer picks a choice/i,
+			name: /they pick an option/i,
 		});
 		expect(single.getAttribute("aria-pressed")).toBe("false");
 		expect(choices.getAttribute("aria-pressed")).toBe("true");

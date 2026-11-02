@@ -4,12 +4,16 @@ import {
 	addMytCalendarMonths,
 	DAY_MS,
 	assertValidFulfilmentTime,
+	clampPrepMinutes,
+	formatPrepDuration,
+	isValidPrepMinutes,
+	parsePrepMinutesText,
 	EARLIEST_FULFILMENT_LEAD_MINUTES,
+	MAX_PREP_MINUTES,
 	composeFulfilmentMoment,
 	defaultFulfilmentTimeMinutes,
 	formatFulfilmentDateTime,
 	formatFulfilmentTime,
-	hasSelectableTimeToday,
 	hhmmFromMinutes,
 	minSelectableTimeMinutes,
 	timeMinutesFromHhmm,
@@ -27,6 +31,12 @@ import {
 } from "./fulfilmentDate";
 
 const DAY = 24 * 60 * 60 * 1000;
+
+/** Does the given day still have a pickable slot at `now`? The property the
+ * deleted `hasSelectableTimeToday` wrapped (it had no production caller left
+ * once the prep floor went hours-aware) — asserted on the floor itself now. */
+const slotLeftToday = (day: number, now: number, prep = 0) =>
+	minSelectableTimeMinutes(day, now, prep) < 1440;
 
 // A reference "now": 2026-06-26 09:00 MYT == 2026-06-26 01:00 UTC.
 const NOW = Date.UTC(2026, 5, 26, 1, 0, 0);
@@ -213,7 +223,7 @@ describe("fulfilment time (86eyg0n8e follow-up)", () => {
 		// an invented wait.
 		for (let minute = 0; minute < 1440; minute += 1) {
 			const now = AUG4 + minute * 60_000;
-			if (!hasSelectableTimeToday(now)) continue;
+			if (!slotLeftToday(AUG4, now)) continue;
 			const out = defaultFulfilmentTimeMinutes(AUG4, now) - minute;
 			expect(out).toBeGreaterThanOrEqual(EARLIEST_FULFILMENT_LEAD_MINUTES);
 			expect(out).toBeLessThanOrEqual(EARLIEST_FULFILMENT_LEAD_MINUTES + 5);
@@ -252,9 +262,9 @@ describe("fulfilment time (86eyg0n8e follow-up)", () => {
 			const now = AUG4 + minute * 60_000;
 			for (const day of [AUG4, AUG4 + 86_400_000]) {
 				// Skip the last minutes of the day, where no valid slot exists at
-				// all — hasSelectableTimeToday is false and the form pushes the
+				// all — no slot is left today and the form pushes the
 				// buyer to tomorrow instead.
-				if (!hasSelectableTimeToday(now) && day === AUG4) continue;
+				if (!slotLeftToday(AUG4, now) && day === AUG4) continue;
 				const def = defaultFulfilmentTimeMinutes(day, now);
 				expect(def).toBeGreaterThanOrEqual(minSelectableTimeMinutes(day, now));
 				expect(def).toBeLessThan(1440);
@@ -270,8 +280,8 @@ describe("fulfilment time (86eyg0n8e follow-up)", () => {
 	});
 
 	test("the last minutes of the day have no bookable slot left", () => {
-		expect(hasSelectableTimeToday(NOW_1412)).toBe(true);
-		expect(hasSelectableTimeToday(AUG4 + (23 * 60 + 50) * 60_000)).toBe(false);
+		expect(slotLeftToday(AUG4, NOW_1412)).toBe(true);
+		expect(slotLeftToday(AUG4, AUG4 + (23 * 60 + 50) * 60_000)).toBe(false);
 	});
 
 	test("HH:MM round-trips; garbage becomes NaN", () => {
@@ -348,5 +358,182 @@ describe("addMytCalendarMonths (S7 — what 'monthly' actually means)", () => {
 		expect(readBack(addMytCalendarMonths(myt(2026, 2, 1), 1))).toEqual([
 			2026, 3, 1,
 		]);
+	});
+});
+
+describe("per-product prep time (z8r3fdff97)", () => {
+	const AUG4 = Date.UTC(2026, 7, 3, 16, 0, 0); // MYT midnight 4 Aug
+	const at = (h: number, m = 0) => AUG4 + (h * 60 + m) * 60_000;
+	const NOW_1412 = at(14, 12);
+	const TOMORROW = AUG4 + DAY;
+
+	test("clampPrepMinutes: blank, junk and 0 all mean no rule", () => {
+		// One spelling for "no prep window", so a stored 0 and an absent field
+		// can never describe different products.
+		expect(clampPrepMinutes(undefined)).toBe(0);
+		expect(clampPrepMinutes(Number.NaN)).toBe(0);
+		expect(clampPrepMinutes(0)).toBe(0);
+		expect(clampPrepMinutes(-30)).toBe(0);
+	});
+
+	test("clampPrepMinutes: truncates fractions and caps at one day", () => {
+		expect(clampPrepMinutes(120)).toBe(120);
+		expect(clampPrepMinutes(90.9)).toBe(90);
+		expect(clampPrepMinutes(MAX_PREP_MINUTES)).toBe(MAX_PREP_MINUTES);
+		expect(clampPrepMinutes(99_999)).toBe(MAX_PREP_MINUTES);
+		expect(MAX_PREP_MINUTES).toBe(1440);
+	});
+
+	test("prep raises TODAY's floor: order at 10:00, collect from 12:00", () => {
+		// The done criterion on the ticket, in one line.
+		expect(minSelectableTimeMinutes(AUG4, at(10), 120)).toBe(12 * 60);
+	});
+
+	test("a prep shorter than the lead time never LOWERS the floor", () => {
+		// Both are "now + something"; the floor is the later of the two, so a
+		// 5-minute prep must not undercut the 15-minute dispatch lead.
+		const plain = minSelectableTimeMinutes(AUG4, NOW_1412);
+		expect(minSelectableTimeMinutes(AUG4, NOW_1412, 5)).toBe(plain);
+		expect(minSelectableTimeMinutes(AUG4, NOW_1412, 0)).toBe(plain);
+		expect(plain).toBe(14 * 60 + 30);
+	});
+
+	test("the raised floor still rounds up to 5", () => {
+		// 10:04 + 61 = 11:05 exactly; 10:06 + 61 = 11:07 → 11:10.
+		expect(minSelectableTimeMinutes(AUG4, at(10, 4), 61)).toBe(11 * 60 + 5);
+		expect(minSelectableTimeMinutes(AUG4, at(10, 6), 61)).toBe(11 * 60 + 10);
+		for (let minute = 0; minute < 1440; minute += 7) {
+			expect(minSelectableTimeMinutes(AUG4, at(0, minute), 95) % 5).toBe(0);
+		}
+	});
+
+	test("a FUTURE day absorbs prep overnight — its floor stays 0", () => {
+		// Deliberate, and the same posture as min notice: notice moves the DATE
+		// and then stops caring about the clock. Stacking prep onto tomorrow
+		// would push a breakfast order past a time the buyer could explain.
+		expect(minSelectableTimeMinutes(TOMORROW, at(10), 120)).toBe(0);
+		expect(minSelectableTimeMinutes(TOMORROW, at(23, 55), MAX_PREP_MINUTES)).toBe(0);
+	});
+
+	test("prep that runs past midnight leaves today with no slot", () => {
+		// 22:00 + 4h is tomorrow, so today is out — the caller moves the buyer
+		// on, exactly as it already does in the last minutes before midnight.
+		expect(slotLeftToday(AUG4, at(22), 240)).toBe(false);
+		expect(slotLeftToday(AUG4, at(10), 240)).toBe(true);
+		// Unchanged for a store with no prep window at all.
+		expect(slotLeftToday(AUG4, at(22))).toBe(true);
+	});
+
+	test("at the CAP, today is unselectable at every minute of the day", () => {
+		// Raised by the split-hours branch: a 24h prep makes the floor exceed
+		// the day from midnight onwards, so the floor itself is the only
+		// thing standing between that seller and a checkout offering no time at
+		// all. The sweep above SKIPS today when this is false, so it would never
+		// have caught the property going wrong — this asserts it directly.
+		for (let minute = 0; minute < 1440; minute += 1) {
+			const now = AUG4 + minute * 60_000;
+			expect(slotLeftToday(AUG4, now, MAX_PREP_MINUTES)).toBe(false);
+			expect(
+				minSelectableTimeMinutes(AUG4, now, MAX_PREP_MINUTES),
+			).toBeGreaterThanOrEqual(1440);
+		}
+		// Which makes the cap behaviourally "same-day is gone" — the same thing
+		// minNoticeDays 1 says, reached from the other end. Tomorrow is wide
+		// open, so the caller's job is to move the DATE, not to find a time.
+		expect(minSelectableTimeMinutes(TOMORROW, at(12), MAX_PREP_MINUTES)).toBe(0);
+	});
+
+	test("THE INVARIANT still holds with a prep window in the cart", () => {
+		// The same sweep the plain floor gets: a prefill that sits under the
+		// floor is what the browser blocks submit on, with its own message.
+		for (const prep of [0, 15, 30, 120, 240, MAX_PREP_MINUTES]) {
+			for (let minute = 0; minute < 1440; minute += 1) {
+				const now = AUG4 + minute * 60_000;
+				for (const day of [AUG4, TOMORROW]) {
+					if (day === AUG4 && !slotLeftToday(AUG4, now, prep)) continue;
+					const def = defaultFulfilmentTimeMinutes(day, now, prep);
+					expect(def).toBeGreaterThanOrEqual(
+						minSelectableTimeMinutes(day, now, prep),
+					);
+					expect(def).toBeLessThan(1440);
+				}
+			}
+		}
+	});
+
+	test("every widened signature is backward-compatible", () => {
+		// Every existing call site omits the third argument — openingHours.ts,
+		// checkout-form.tsx and claim-checkout-page.tsx all still pass two.
+		expect(minSelectableTimeMinutes(AUG4, NOW_1412)).toBe(
+			minSelectableTimeMinutes(AUG4, NOW_1412, 0),
+		);
+		expect(defaultFulfilmentTimeMinutes(AUG4, NOW_1412)).toBe(
+			defaultFulfilmentTimeMinutes(AUG4, NOW_1412, 0),
+		);
+	});
+});
+
+describe("formatPrepDuration — minutes stored, hours spoken", () => {
+	test("says it the way a buyer would", () => {
+		expect(formatPrepDuration(30)).toBe("30 min");
+		expect(formatPrepDuration(45)).toBe("45 min");
+		expect(formatPrepDuration(60)).toBe("1 hour");
+		expect(formatPrepDuration(90)).toBe("1 hour 30 min");
+		expect(formatPrepDuration(120)).toBe("2 hours");
+		expect(formatPrepDuration(240)).toBe("4 hours");
+		expect(formatPrepDuration(1440)).toBe("24 hours");
+	});
+
+	test("no window renders as nothing, so callers need no branch", () => {
+		expect(formatPrepDuration(undefined)).toBe("");
+		expect(formatPrepDuration(0)).toBe("");
+		expect(formatPrepDuration(-5)).toBe("");
+	});
+
+	test("every preset the form offers reads as a round phrase", () => {
+		// If a preset ever formatted as "1 hour 0 min" the chip would look
+		// broken. Anchored, because "30 min" legitimately contains "0 min".
+		for (const minutes of [30, 60, 120, 240]) {
+			expect(formatPrepDuration(minutes)).not.toMatch(/\s0 min$/);
+		}
+	});
+});
+
+describe("prep time as typed — one rule for the form, the wizard and the import", () => {
+	test("isValidPrepMinutes: whole minutes from 0 to one day", () => {
+		for (const ok of [0, 1, 120, MAX_PREP_MINUTES]) {
+			expect(isValidPrepMinutes(ok)).toBe(true);
+		}
+		for (const bad of [-1, 90.5, MAX_PREP_MINUTES + 1, Number.NaN]) {
+			expect(isValidPrepMinutes(bad)).toBe(false);
+		}
+	});
+
+	test("blank is no answer, not zero — the caller decides what blank means", () => {
+		// The form reads blank as "none"; the spreadsheet import reads it as
+		// "keep what the product has". Both need to tell it apart from "0".
+		expect(parsePrepMinutesText(undefined)).toEqual({
+			ok: true,
+			minutes: undefined,
+		});
+		expect(parsePrepMinutesText("")).toEqual({ ok: true, minutes: undefined });
+		expect(parsePrepMinutesText("   ")).toEqual({
+			ok: true,
+			minutes: undefined,
+		});
+		expect(parsePrepMinutesText("0")).toEqual({ ok: true, minutes: 0 });
+	});
+
+	test("reads whole minutes with surrounding space", () => {
+		expect(parsePrepMinutesText(" 120 ")).toEqual({ ok: true, minutes: 120 });
+		expect(parsePrepMinutesText("1440")).toEqual({ ok: true, minutes: 1440 });
+	});
+
+	test("refuses anything a seller didn't type as whole minutes", () => {
+		// Number() would have read "1e2" as 100 and "0x10" as 16 — a value the
+		// seller never typed, saved without a word.
+		for (const bad of ["1e2", "0x10", "2 hours", "90.5", "-5", "1441"]) {
+			expect(parsePrepMinutesText(bad)).toEqual({ ok: false });
+		}
 	});
 });

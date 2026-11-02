@@ -111,6 +111,29 @@ SEO trade-off, accepted: a crawler hitting a transient blip gets a meta-less
 200 instead of a 5xx. Rare, and crawlers refetch; humans are the priority on
 these routes.
 
+**The hydrated path (z8r3fdue6f).** The storefront home, category and
+product loaders no longer read the store over a bare HTTP client: they go
+through `ssrEnsure` (`src/lib/storefront-ssr.ts`), which seeds the request's
+own query cache so the HTML ships the store and the first client render
+paints from it. The contract above is unchanged — `ssrEnsure` IS `ssrRead`
+plus two things: **one 3 s deadline per loader**, shared by the store read and
+the catalog reads after it (a slow Convex soft-degrades like a failed one
+instead of holding the first byte), and the guarantee that a failed or
+timed-out read ships **nothing** for its key (only answered queries are
+dehydrated), so the browser falls back to the skeleton + live query exactly
+as it did before seeding existed. The store failing still returns `null`; a
+catalog read failing still renders the store, with only that section painting
+live.
+
+**Reading `wrangler tail` during a slow-Convex incident:** a read that misses
+the deadline keeps running, and when it settles after the response has gone
+the SSR-query integration logs `tried to stream query … after stream was
+already closed`. It always follows our own `SSR read failed … SsrReadTimeoutError`
+line for the same request and means nothing more than that — the buyer got the
+shell and the live query, as designed. The timeout line is the signal; the
+stream line is its echo. See
+[`frontend-caching.md`](./frontend-caching.md#ssr-per-request-clients).
+
 ### 2. Branded error boundary with retry
 
 `src/components/route-error.tsx`, wired as `defaultErrorComponent` in
@@ -120,6 +143,10 @@ a calm, mobile-first card: "Something went wrong / usually temporary", one
 re-run the failed loaders (that order is load-bearing). Raw error text renders
 only in dev builds. This is the backstop for everything `ssrRead` doesn't
 cover (render errors, non-buyer routes).
+
+Its sibling for a URL nothing claims is `defaultNotFoundComponent` — the
+designed 404 with a way out per context, still served as HTTP 404. See
+[`not-found.md`](./not-found.md).
 
 ### 3. Buyer surfaces are Clerk-free
 
@@ -155,7 +182,17 @@ shape lives in pure `src/lib/sitemap.ts` with tests.
 
 ## Ops follow-ups (not code — tracked on the ticket)
 
-- `www.kedaipal.com` is NXDOMAIN — add DNS + redirect to apex in Cloudflare.
+- ~~`www.kedaipal.com` is NXDOMAIN~~ **Fixed 2 Nov 2026**
+  ([z8r3fdxrx5](https://app.clickup.com/t/z8r3fdxrx5)), Cloudflare only: an
+  `AAAA www 100::` record, **Proxied**, plus the Redirect Rule
+  "www to apex (z8r3fdxrx5)": custom filter `(http.host eq "www.kedaipal.com")`,
+  dynamic target `concat("https://kedaipal.com", http.request.uri.path)`, 301,
+  query string preserved. It catches `http://www` too, in one hop. Use the
+  custom filter, not the template's wildcard: `https://www.*` misses plain
+  HTTP, and `http*://` is read as a hostname. `www` is deliberately NOT a
+  second Worker custom domain: one canonical host keeps canonical tags and SEO
+  on the apex. Check: `curl -sI "https://www.kedaipal.com/test?x=1"` answers
+  301 with `location: https://kedaipal.com/test?x=1`.
 - No `CLOUDFLARE_API_TOKEN` on the dev machine, so `wrangler tail` (live SSR
   error stream — where these failures actually surface) is unavailable
   non-interactively. Worth setting up; Convex function logs cannot see
@@ -169,6 +206,8 @@ shape lives in pure `src/lib/sitemap.ts` with tests.
 ## Tests
 
 `src/lib/ssr-read.test.ts` (threw vs answered-null contract),
+`src/lib/storefront-ssr.test.ts` (seeded read: answer ships, failure and
+timeout ship nothing, `$slug` loader still 404s/301s/soft-degrades),
 `src/lib/sitemap.test.ts` (XML shape, lastmod truncation, priorities),
 `src/lib/buyer-routes.test.ts` (ids exist in the generated tree; Clerk
 surfaces never classified as buyer), `src/components/route-error.test.tsx`

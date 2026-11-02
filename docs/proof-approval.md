@@ -74,7 +74,7 @@ images.
 
 > **Naming (build decision, 2026-06-04):** code identifiers use **`mockup`**, not
 > `proof`, because the codebase already uses "proof" throughout for the buyer's
-> **payment** screenshot (`paymentProofStorageId`, `getPaymentProofUrl`,
+> **payment** screenshot (`paymentProofStorageId`, `listPaymentProofs`,
 > `generateOrderProofUploadUrl`, the `proofUpload` rate-limit key). So: `mockupStatus`,
 > `mockupImageStorageId`, `mockupChangeNote`, `submitMockup`, `approveMockup`,
 > `requestMockupChanges`, `waiveMockup`, `generateMockupUploadUrl`. Read "proof"
@@ -198,7 +198,7 @@ the design + price — otherwise they'd pay against an unknown (RM0) total. So t
 
 - **Gate closed** = `mockupStatus` set, not `approved`, and `mockupWaivedAt` unset. Defined once as `isMockupGateClosed` in **`convex/lib/order.ts`** and imported everywhere (server `orders.ts` + `whatsapp.ts`, and the dashboard/tracking pages) — change the gate rule in one place. Surfaced to the legacy confirm flow as `getRetailerLocaleForOrder().mockupPending`. **Not** the same question as the message hold `isMockupPriceUnsettled` — see the banner at the top of this doc.
 - **Push path (default).** There is no bot reply to gate: the order commits at "Place order" and its one confirmation goes out immediately, with the total rendered as "to be confirmed" and a button onto the order page. Nothing further is sent when the quote lands — the page shows it live.
-- **Legacy path first bot reply (custom order):** a **branded image message** (kedaipal logo header) whose caption is `mockupPendingConfirm` system copy — "order received, a design is coming to approve, no payment needed yet" — plus the pickup block when self-collect. Same visual shape as the normal confirm, just **no** transfer-reference line, **no** payment block, **no** "I've paid" CTA (an image message instead of an interactive `cta_url` so there's no button to tap). Still live, and still the one message those buyers get.
+- **Legacy path first bot reply (custom order):** a **branded image message** (kedaipal logo header) whose caption is `mockupPendingConfirm` system copy — "order received, a design is coming to approve, no payment needed yet" — plus the pickup block when self-collect, with its "Before you collect" pickup notes (`z8r3fdff97`). Same visual shape as the normal confirm, just **no** transfer-reference line, **no** payment block, **no** "I've paid" CTA (an image message instead of an interactive `cta_url` so there's no button to tap). Still live, and still the one message those buyers get.
 - **Legacy path first bot reply (normal order):** unchanged — full confirm + "Make payment" CTA to the order page.
 - **~~Gate opens → payment prompt fires.~~ REMOVED (`86eyd63r8`).** `approveMockup`, `waiveMockup` and `declineMockupItem` used to schedule `internal.whatsapp.notifyPaymentDue({ orderId, reason })` with a `paymentDueApproved` / `paymentDueWaived` / `paymentDueDeclined` intro. That action and all three intros are deleted. The gate opening is now a **page event**: the tracking page's "I've paid" button goes live the instant the gate opens, and "How to pay" is already sitting on the same screen. None of the three schedules any WhatsApp now; the `claimDeferredPush` calls they briefly carried are deleted with the mechanism.
 - **Re-confirm after the gate opens** (buyer re-sends `ORD-XXXX`): on the push path this is **suppressed** by `pushOwnsTheMessage` (`convex/whatsapp.ts:543`) — the order's message already went out, and a re-send must not cost a second one. On the legacy path it takes the normal branch as before, so the pay button shows again — idempotent.
@@ -317,6 +317,6 @@ the waiver guard, whole-order gating with mixed items.
 
 ## 12. Tier impact
 
-**Pro / Scale** — a custom-workflow differentiator for the made-to-order segment
+**Pro / Enterprise** — a custom-workflow differentiator for the made-to-order segment
 (printing, cake, engraving). Starter omits it. Final tier placement is a pricing
 call.

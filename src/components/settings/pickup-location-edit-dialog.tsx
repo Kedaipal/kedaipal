@@ -5,6 +5,7 @@ import { type FormEvent, useState } from "react";
 import { z } from "zod";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import { UNIT_LINE_MAX_LENGTH } from "../../../convex/lib/address";
 import { COUNTRY_LABELS, type Country } from "../../../convex/lib/country";
 import { STORED_MOBILE_PATTERN } from "../../../convex/lib/slug";
 import {
@@ -13,6 +14,7 @@ import {
 	normalizePriceInput,
 	parsePriceInput,
 } from "../../lib/format";
+import { NOTE_LINK_HINT } from "../../lib/linkify";
 import { toNationalPhoneInput } from "../../lib/phone";
 import { waPhoneFormOptionalSchema } from "../../lib/schemas";
 import { ProBadge } from "../app/pro-gate";
@@ -24,6 +26,7 @@ import {
 } from "../forms/google-address-autocomplete";
 import { Button } from "../ui/button";
 import { MOBILE_PLACEHOLDER, MyPhonePrefix } from "../ui/my-phone-input";
+import { ToggleSwitch } from "../ui/toggle-switch";
 
 interface PickupLocationEditDialogProps {
 	open: boolean;
@@ -43,6 +46,15 @@ interface PickupLocationEditDialogProps {
 	/** Whether the plan allows charging a pickup fee (Pro+). When false the fee
 	 * input renders disabled-with-reason; the server gate is the real lock. */
 	canChargeFee: boolean;
+	/** Which card's Add opened this — a DEFAULT for the events-only control,
+	 * never a lock; the seller can still change it before saving. Ignored when
+	 * editing an existing point, which carries its own value. */
+	defaultEventsOnly?: boolean;
+	/** Why "Only hosts events" is unavailable for THIS point, or undefined when
+	 * it's fine. Set when flipping it would leave a pickup-only storefront with
+	 * nothing a buyer can pick — the server refuses that, so the switch says so
+	 * before the tap instead of failing the save. */
+	eventsOnlyLockReason?: string;
 }
 
 /**
@@ -98,6 +110,14 @@ function KindButton({
 	);
 }
 
+/**
+ * Where the pickup unit line reaches buyers — only surfaces that really print
+ * it. NOT the WhatsApp confirmation: that push is a Meta template carrying the
+ * order number, store and total plus a button to the order page, and no
+ * address. This hint claimed WhatsApp twice (z8r3fdff8r), so a test holds it.
+ */
+export const PICKUP_UNIT_HELP = `Shown to buyers in front of the address — at checkout and on their order page. Keeps the map pin intact. Up to ${UNIT_LINE_MAX_LENGTH} characters.`;
+
 export function PickupLocationEditDialog({
 	open,
 	onClose,
@@ -106,6 +126,8 @@ export function PickupLocationEditDialog({
 	country,
 	currency,
 	canChargeFee,
+	defaultEventsOnly = false,
+	eventsOnlyLockReason,
 }: PickupLocationEditDialogProps) {
 	const createLocation = useMutation(api.pickupLocations.create);
 	const updateLocation = useMutation(api.pickupLocations.update);
@@ -121,6 +143,14 @@ export function PickupLocationEditDialog({
 	const [kind, setKind] = useState<"self_collect" | "drop_off">(
 		location?.locationType ?? "self_collect",
 	);
+	// Events-only is ORTHOGONAL to `kind`, and deliberately a separate control:
+	// kind says where the guest stands when they arrive, this says which flows
+	// the address is offered in. Folding it into the kind selector would force
+	// an either/or the seller doesn't have — "my shop, which is also where I
+	// run the class" is a self-collect point with this off (z8r3fdm32x).
+	const [eventsOnly, setEventsOnly] = useState<boolean>(
+		location?.eventsOnly ?? defaultEventsOnly,
+	);
 	// Fee as a display string (RM) — same local-state pattern as `kind`. Stored
 	// in minor units server-side; converted at submit.
 	const [feeInput, setFeeInput] = useState<string>(
@@ -133,8 +163,17 @@ export function PickupLocationEditDialog({
 	const [feePendingRemoval, setFeePendingRemoval] = useState(false);
 
 	const isEditing = location !== undefined;
-	const title = isEditing ? "Edit pickup point" : "Add pickup point";
-	const submitLabel = isEditing ? "Save changes" : "Add point";
+	// The heading follows the LIVE toggle, not the mode the dialog opened in.
+	// A seller who pressed "Add event venue" must not be told they're adding a
+	// pickup point — and flipping the toggle re-titles the dialog, which is the
+	// clearest possible statement of what that switch does (z8r3fdm32x).
+	const noun = eventsOnly ? "event venue" : "pickup point";
+	const title = `${isEditing ? "Edit" : "Add"} ${noun}`;
+	const submitLabel = isEditing
+		? "Save changes"
+		: eventsOnly
+			? "Add venue"
+			: "Add point";
 	// Locked plan sitting on an existing charge — the only fee action allowed is
 	// removal, surfaced as a dedicated "Remove fee" control below.
 	const lockedWithExistingFee =
@@ -159,6 +198,7 @@ export function PickupLocationEditDialog({
 		defaultValues: {
 			label: location?.label ?? "",
 			address: location?.address ?? "",
+			unit: location?.unit ?? "",
 			scheduleNote: location?.scheduleNote ?? "",
 			notes: location?.notes ?? "",
 			managerName: location?.managerName ?? "",
@@ -176,6 +216,13 @@ export function PickupLocationEditDialog({
 			onChange: z.object({
 				label: z.string().trim().min(1, "Give this pickup point a name."),
 				address: z.string(),
+				unit: z
+					.string()
+					.trim()
+					.max(
+						UNIT_LINE_MAX_LENGTH,
+						`Keep this to ${UNIT_LINE_MAX_LENGTH} characters.`,
+					),
 				scheduleNote: z.string(),
 				notes: z.string(),
 				managerName: z.string(),
@@ -192,6 +239,7 @@ export function PickupLocationEditDialog({
 			setFeeError(null);
 			const label = value.label.trim();
 			const address = value.address.trim();
+			const unit = value.unit.trim();
 			const scheduleNote = value.scheduleNote.trim();
 			const notes = value.notes.trim();
 			const managerName = value.managerName.trim();
@@ -217,7 +265,11 @@ export function PickupLocationEditDialog({
 						pickupLocationId: location._id,
 						label,
 						address,
+						// Sent unconditionally so clearing the field clears the
+						// stored line (empty string = clear, server-side).
+						unit,
 						locationType: kind,
+						eventsOnly,
 						// Empty string clears the note server-side; a value re-sets it.
 						scheduleNote,
 						notes,
@@ -249,7 +301,9 @@ export function PickupLocationEditDialog({
 						retailerId,
 						label,
 						address,
+						unit: unit.length > 0 ? unit : undefined,
 						locationType: kind,
+						eventsOnly: eventsOnly || undefined,
 						scheduleNote: scheduleNote.length > 0 ? scheduleNote : undefined,
 						notes: notes.length > 0 ? notes : undefined,
 						latitude: geo.latitude,
@@ -346,6 +400,31 @@ export function PickupLocationEditDialog({
 								</div>
 							</fieldset>
 
+							{/* Under the kind, because it changes what the point is FOR
+							    rather than what it is. Phrased as what the seller gets,
+							    not as a flag: the consequence (off checkout, picked on
+							    the event) is the whole point of turning it on. */}
+							<div className="flex items-start justify-between gap-4 rounded-xl border border-border px-3 py-2.5">
+								<div className="min-w-0">
+									<p className="text-sm font-medium">Only hosts events</p>
+									<p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+										{eventsOnlyLockReason ??
+											(eventsOnly
+												? "Buyers never see this at checkout. Pick it on an event and guests are sent straight here."
+												: "Buyers can choose this at checkout. It can still host events either way.")}
+									</p>
+								</div>
+								<ToggleSwitch
+									on={eventsOnly}
+									onChange={setEventsOnly}
+									// Disabled-with-reason: the server refuses this flip
+									// when it would strand the storefront, so the switch
+									// must not offer it and then fail the save.
+									disabled={eventsOnlyLockReason !== undefined}
+									label="Only hosts events"
+								/>
+							</div>
+
 							<form.AppField name="label">
 								{(field) => (
 									<field.TextField
@@ -377,6 +456,23 @@ export function PickupLocationEditDialog({
 								errorText={addressError ?? undefined}
 							/>
 
+							{/* Unit / floor / building (z8r3fdff8r). Its own field
+							    rather than "just type it into the address", because
+							    editing the address text away from its Google pick
+							    DROPS the coordinates — and with them the buyer's
+							    one-tap Waze / Maps button. */}
+							<form.AppField name="unit">
+								{(field) => (
+									<field.TextField
+										label="Unit / floor / building (optional)"
+										placeholder="Unit 3-1, Block B"
+										autoComplete="off"
+										maxLength={UNIT_LINE_MAX_LENGTH}
+										description={PICKUP_UNIT_HELP}
+									/>
+								)}
+							</form.AppField>
+
 							<form.AppField name="scheduleNote">
 								{(field) => (
 									<field.TextField
@@ -390,7 +486,11 @@ export function PickupLocationEditDialog({
 										description={
 											kind === "drop_off"
 												? "Buyers see this next to the date picker so they pick a day the meetup happens. Max 120 characters."
-												: "Optional opening hours for this point. Max 120 characters."
+												: // Store opening hours already govern which dates a
+													// buyer can pick. Inviting a second "opening hours"
+													// here is how the two drift apart, so this note is
+													// only for a point that keeps different hours.
+													"Only if this point keeps different hours from your store's opening hours. Max 120 characters."
 										}
 									/>
 								)}
@@ -447,7 +547,7 @@ export function PickupLocationEditDialog({
 								) : lockedWithExistingFee ? (
 									feePendingRemoval ? (
 										<div className="flex items-center justify-between gap-2">
-											<p className="text-xs font-medium text-amber-700 leading-relaxed">
+											<p className="text-xs font-medium text-amber-700 leading-relaxed dark:text-amber-400">
 												Pickup fee will be removed when you save.
 											</p>
 											<button
@@ -489,6 +589,7 @@ export function PickupLocationEditDialog({
 									<field.TextareaField
 										label="Notes for buyers (optional)"
 										placeholder="Parking instructions, what to bring, etc."
+										description={NOTE_LINK_HINT}
 										rows={3}
 									/>
 								)}

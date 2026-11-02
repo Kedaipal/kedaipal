@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { overCapMessage } from "../../../convex/lib/variant";
 import { buildSubmitVariants, collectOptionIssues } from "./product-form";
 import type { VariantIssue, VariantRow } from "./variant-editor";
 
@@ -163,5 +164,161 @@ describe("collectOptionIssues", () => {
 		expect(collectOptionIssues([{ name: "Size", values: ["S", "M"] }])).toEqual(
 			[],
 		);
+	});
+
+	// z8r3fdjgvd — the cap is broken by adding a VALUE, so it is reported on the
+	// axis and (being an option issue) ahead of every row issue, which is what
+	// the focus-first-error helper lands on.
+	it("reports an over-cap grid FIRST, as an axis problem", () => {
+		const issues = collectOptionIssues([
+			{
+				name: "Adult 1 size",
+				values: Array.from({ length: 11 }, (_, i) => `a${i}`),
+			},
+			{
+				name: "Adult 2 size",
+				values: Array.from({ length: 10 }, (_, i) => `b${i}`),
+			},
+		]);
+		expect(issues[0]).toEqual(
+			expect.objectContaining({ where: "option", index: 0, field: "values" }),
+		);
+		// The consequence, not just the fact.
+		// The shared sentence — states the EXCESS and asks for values, which is
+		// the only mapping that is true at every shape.
+		expect(issues[0].message).toBe(overCapMessage(110));
+		expect(issues[0].message).toMatch(/110 choices — 10 over the limit of 100/);
+	});
+
+	it("the 56-choice grid the cap was raised for reports nothing", () => {
+		const sizes = ["S", "M", "L", "XL", "2XL", "3XL", "4XL"];
+		expect(
+			collectOptionIssues([
+				{ name: "Adult 1 size", values: sizes },
+				{ name: "Adult 2 size", values: ["None", ...sizes] },
+			]),
+		).toEqual([]);
+	});
+});
+
+describe("buildSubmitVariants — sale prices (z8r3fdcw72)", () => {
+	it("converts a valid sale price to minor units and leaves blanks off promo", () => {
+		const result = buildSubmitVariants(
+			[row({ price: "45.00", promoPrice: "31.50" }), row({ price: "45.00" })],
+			null,
+		);
+		expect("variants" in result).toBe(true);
+		if ("variants" in result) {
+			expect(result.variants[0].promoPrice).toBe(3150);
+			// Blank = this line simply isn't on promotion, which is the default.
+			expect(result.variants[1].promoPrice).toBeUndefined();
+		}
+	});
+
+	it("refuses a sale price that doesn't undercut its OWN line", () => {
+		const atList = buildSubmitVariants(
+			[row({ price: "45.00", promoPrice: "45.00" })],
+			null,
+		);
+		expect("issues" in atList).toBe(true);
+		if ("issues" in atList) {
+			expect(atList.issues).toEqual([
+				{
+					where: "row",
+					index: 0,
+					field: "promoPrice",
+					message: "A sale price has to be below this line's normal price.",
+				},
+			]);
+		}
+		const above = buildSubmitVariants(
+			[row({ price: "45.00", promoPrice: "50.00" })],
+			null,
+		);
+		expect("issues" in above).toBe(true);
+		if ("issues" in above) expect(above.issues[0].field).toBe("promoPrice");
+	});
+
+	it("names a sale price that isn't a number at all", () => {
+		const result = buildSubmitVariants(
+			[row({ price: "45.00", promoPrice: "half price" })],
+			null,
+		);
+		expect("issues" in result).toBe(true);
+		if ("issues" in result) {
+			expect(result.issues[0]).toMatchObject({ field: "promoPrice" });
+			expect(result.issues[0].message).toMatch(/numbers only/);
+		}
+	});
+
+	it("an inactive row's sale price is not policed — it sells nothing", () => {
+		const result = buildSubmitVariants(
+			[row({ active: false, price: "45.00", promoPrice: "99.00" })],
+			null,
+		);
+		expect("variants" in result).toBe(true);
+	});
+});
+
+describe("buildSubmitVariants — parcel weight required where pricing depends on it (23 Oct 2026)", () => {
+	it("a buyable row with no weight is refused, addressed to its weight input, in the reason's words", () => {
+		const issues = issuesOf(
+			buildSubmitVariants([row({ parcelWeightG: "" })], null, {
+				weightRequired: "courier",
+			}),
+		);
+		expect(issues).toEqual([
+			{
+				where: "row",
+				index: 0,
+				field: "weight",
+				message:
+					"Enter the parcel weight — your couriers price by weight, and until it's weighed this item is quoted as a 1 kg parcel.",
+			},
+		]);
+	});
+
+	it("an explicit 0 is unweighed too — the same rule checkout uses", () => {
+		const issues = issuesOf(
+			buildSubmitVariants([row({ parcelWeightG: "0" })], null, {
+				weightRequired: "rate_card",
+			}),
+		);
+		expect(issues.map((i) => i.field)).toEqual(["weight"]);
+		expect(issues[0].message).toMatch(/can't be priced without one/);
+	});
+
+	it("an off-sale row can't be ordered, so it isn't asked", () => {
+		expect(
+			buildSubmitVariants([row({ parcelWeightG: "", active: false })], null, {
+				weightRequired: "courier",
+			}),
+		).toHaveProperty("variants");
+	});
+
+	it("a weighed row passes, and a store that doesn't price by weight never asks", () => {
+		expect(
+			buildSubmitVariants([row({ parcelWeightG: "250" })], null, {
+				weightRequired: "courier",
+			}),
+		).toHaveProperty("variants");
+		expect(
+			buildSubmitVariants([row({ parcelWeightG: "" })], null),
+		).toHaveProperty("variants");
+		expect(
+			buildSubmitVariants([row({ parcelWeightG: "" })], null, {
+				weightRequired: null,
+			}),
+		).toHaveProperty("variants");
+	});
+
+	it("a malformed weight gets the format issue, not the required one — one message per box", () => {
+		const issues = issuesOf(
+			buildSubmitVariants([row({ parcelWeightG: "abc" })], null, {
+				weightRequired: "courier",
+			}),
+		);
+		expect(issues).toHaveLength(1);
+		expect(issues[0].message).toMatch(/Whole grams only/);
 	});
 });

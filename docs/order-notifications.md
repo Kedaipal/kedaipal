@@ -6,7 +6,7 @@ How a seller learns something happened on an order, across three channels:
 | --- | --- | --- | --- |
 | **Email** (`convex/email.ts`) | new order, payment claim, payment received, mockup loop, delivery-job failure, gateway mismatch | Settings → Store → Notification email | `retailers.notifyEmail` |
 | **Browser** (chime + system notification, below) | new order, rider booking failed | Settings → Store → "Order alerts on this device" | a Kedaipal tab open on that device |
-| **WhatsApp** (`86eyhw9zy`, below) | new order, payment claim, payment received | Settings → Store → "WhatsApp order alerts" | Pro + opt-in + approved Meta template |
+| **WhatsApp** (`86eyhw9zy`, below) | new order, payment claim, payment received | Settings → Store → "Order alerts" → WhatsApp | a saved number + a covering subscription (any plan; the switch is on by default) + approved Meta template |
 
 ## WhatsApp order alerts (86eyhw9zy, Aug 2026)
 
@@ -30,6 +30,44 @@ the moments money moves:
   Before this the event notified the seller on **no channel at all** — there
   was no payment-received email either, so the only way to learn money had
   landed was to open the dashboard.
+
+### On by default, on every subscription (z8r3fdv55f, Oct 2026)
+
+The alert is the "you never lose an order in WhatsApp" promise, so it belongs
+to the **subscription**, not to a tier (Zaki, 16 Oct 2026). It used to be an
+opt-in Pro feature; now:
+
+- **The switch is tri-state.** `retailers.orderWaAlerts` absent = **on** (the
+  default), only an explicit `false` (the seller switched it off) = off. One
+  reader: `sellerWaAlertsSwitchedOn`. No backfill: an existing `false` is
+  either a seller who switched it off or a cleared number (the old
+  auto-off), and both stay off.
+- **No number is needed to switch it on, and clearing the number leaves the
+  switch alone.** The number is what makes an alert *send*; with none, the
+  alert can't be attempted, so the email covers the seller. Saving a number
+  later resumes WhatsApp with no second step.
+- **Entitlement is checked at SEND time** by `subscriptionCoversWaAlerts`
+  (pure, `convex/lib/sellerAlerts.ts`), read through
+  `waAlertsCoveredBySubscription` (`convex/subscriptions.ts`) by both order
+  lookups: the WA actions' `getOrderForSellerAlert` (as `waAlertsOn`) and the
+  email's `getOrderForRetailerEmail` (as `subscriptionCovers`). One author, so
+  the email never suppresses itself for an alert that won't go out.
+  A toggle-time check would not do, because an absent switch reads on for
+  every store, including one that later lapses.
+
+| Subscription | Covered? | Why |
+| --- | --- | --- |
+| `trialing` | yes | A trial is where a seller first meets the promise. |
+| `active` | yes | Also covers the renewal grace: access only changes at the lock. |
+| `past_due` | **no** | The LOCK state (trial expired unpaid, or renewal unpaid past grace). It is view-only and indefinite (nothing moves a store out of it on its own), so the free email covers it. |
+| `on_hold` / `cancelled` | no | Ordering is off / the store has left. |
+| comped, or an admin's own store | yes | Full access means full access (`storeHasFullAccess`). |
+| no subscription row | yes | A data fault that `resolveAccess` fails OPEN as comped full access. Matching it keeps the alerts card from reading "Paused" beside a Billing tab that reports full access. |
+
+**Cost.** Every covered store's order now carries one billable Meta utility
+send to the seller once a number is saved. That was a Pro-absorbed cost
+before; it is now a subscription cost. It is still a gated category
+(kill switch, caps, quality halt and opt-outs all apply).
 
 ### Why "received" is a third template, not the claim one
 
@@ -71,6 +109,22 @@ decoupled from Meta template review.
 | `WHATSAPP_SELLER_NEW_ORDER_TEMPLATE` | `seller_new_order_utility` | shortId, buyer name, total, fulfilment date-time ("—" when absent) | `https://kedaipal.com/app/orders/{{1}}` ← shortId |
 | `WHATSAPP_SELLER_PAYMENT_CLAIM_TEMPLATE` | `seller_payment_claim_utility` | buyer name, shortId, total | `https://kedaipal.com/app/orders/{{1}}` ← shortId |
 | `WHATSAPP_SELLER_PAYMENT_RECEIVED_TEMPLATE` | `seller_payment_received_utility` | buyer name, shortId, total, **gateway name** | `https://kedaipal.com/app/orders/{{1}}` ← shortId |
+
+The buyer-facing templates live beside these: `WHATSAPP_ORDER_CONFIRM_TEMPLATE`
+([`one-message-per-order.md`](./one-message-per-order.md)),
+`WHATSAPP_PAYMENT_REMINDER_TEMPLATE` ([`payment-reminder.md`](./payment-reminder.md))
+and `WHATSAPP_CLAIM_LINK_TEMPLATE` ([`claim-links.md`](./claim-links.md)). One
+more sits outside the order flow entirely — `WHATSAPP_BILLING_PAST_DUE_TEMPLATE`,
+the seller's subscription lockout alert, specified in
+[`manual-subscription.md`](./manual-subscription.md#the-one-whatsapp). All
+seven are watched for post-approval pauses and category flips — see the
+template webhook section of [`waba-protection.md`](./waba-protection.md).
+
+Note what the billing alert deliberately does NOT share with the three above:
+it is not gated on `retailers.orderWaAlerts`. That toggle is order-alert
+scope, and order alerts stop for a locked (`past_due`) store (z8r3fdv55f), so
+hanging a lockout notice off them would silence exactly this message — and a
+billing lockout is no more opt-out-able than the invoice email. The WABA global opt-out still applies.
 
 The received template's body must say the payment is **settled and needs no
 action**, and must name the gateway through a **variable**:
@@ -168,33 +222,52 @@ the gateway suppresses the send and the settings card surfaces it
 silent no-op.
 
 Failures retry on the confirm-push classifier (`classifyPushFailure`:
-30s → 2m → 8m, ambiguous 2xx never retried). Final failure is only logged —
-**this phase the email alert still fires independently for every event**, so a
-gated/failed WA alert never means zero notification. Replacing the email when
-the WA alert succeeds (with automatic email fallback on WA failure) is the
-follow-up ticket; until it lands, an opted-in seller gets both.
+30s → 2m → 8m, ambiguous 2xx never retried). A final failure (or a gateway
+block) hands the event back to email with `force` — see "WhatsApp first, email
+as fallback" below — so a gated/failed WA alert never means zero
+notification.
 
 ### Config + settings surface
 
-- Schema: `retailers.notifyWaPhone` (normalized `60…` MY mobile — deliberately
+- Schema: `retailers.notifyWaPhone` (normalized `60…`/`65…` mobile of the
+  store's country — deliberately
   separate from `waPhone`, the buyer-facing store contact / wa.me fallback /
   Lalamove sender, same split as `notifyEmail` vs the Clerk email) +
-  `retailers.orderWaAlerts` (opt-in, off by default). Dev-only widen.
-- `updateSettings`: number validated via `assertValidMyMobile` (landlines
-  rejected) and refused if it equals `WHATSAPP_CHECKOUT_PHONE` (the WABA can't
-  message itself). **Enabling is Pro-gated** (`PLAN_FEATURES.waOrderAlerts`,
-  admin act-as bypasses); disabling and clearing are un-gated (downgrade never
-  traps). Clearing the number switches the toggle off with it.
-- Settings → Store → **"WhatsApp order alerts"** card
-  (`src/components/settings/wa-order-alerts-card.tsx`), grouped with the
-  browser + email notification cards. Renders only when
-  `retailer.waOrderAlertsAvailable` (template env set). Input prefills from
-  `waPhone`; copy names both events, the counter exclusion, the alert language,
-  and that email + browser alerts keep working alongside. Starter sees
-  disabled-with-reason + the Pro chip.
-- Deliberately **not** on the /pricing table yet — the feature is env-gated on
-  Meta approval, and the table must never promise what a deployment can't do.
-  Add the row when the templates are live in prod.
+  `retailers.orderWaAlerts` (tri-state since z8r3fdv55f: absent = on).
+  Dev-only widen.
+- `updateSettings`: number validated via `assertValidMobileForCountry` under
+  the store's country (landlines rejected; a seller-side number, so it stays
+  store-locked — see [`phone-numbers.md`](./phone-numbers.md)) and refused if
+  it equals `WHATSAPP_CHECKOUT_PHONE` (the WABA can't
+  message itself). The switch takes either value on any plan, with or without
+  a number (z8r3fdv55f: `PLAN_FEATURES.waOrderAlerts` is gone), and clearing
+  the number leaves it alone. `getMyRetailer` also returns
+  `waAlertsCovered` so the card can tell "on" from "sending".
+- Settings → Store → Alerts & defaults → **"Order alerts"** card
+  (`src/components/settings/order-alerts-card.tsx`, 86eye9xd4 7A) — ONE card
+  for every channel, each a row with an On/Off chip and a switch: **WhatsApp**,
+  **this device**, **email**. The WhatsApp row renders only when
+  `retailer.waOrderAlertsAvailable` (template env set); switching it on uses
+  the store's own number in one tap. Because the switch is on by default, the
+  row's chip states whether WhatsApp is actually **sending**, not just the
+  switch: **On** (live), **Needs a number** (with a one-tap "Use <store
+  number>" and "Add number"), **Paused** (subscription not covering; points
+  at Billing), **Blocked** (STOP'd number, with the reply-START fix), or
+  **Off**. Every non-live state says the email is carrying the alerts. The
+  email row only reads "backup while WhatsApp is on" while WhatsApp is
+  actually sending. That status sits on its own line under the address, so
+  it survives a phone-width row instead of truncating into "backup while …".
+- **Remove number** lives in the WhatsApp number editor (only when one is
+  saved). It clears `notifyWaPhone` and leaves the switch alone, so the row
+  drops to "Needs a number" and email carries the alerts. The toast offers
+  Undo. An emptied field says "Enter a new number, or remove this one"
+  instead of leaving a silently greyed-out Save. The header glance counts channels on ("2 of 3
+  on", warn "No alerts on"); "What triggers an alert" names both events and the
+  counter exclusion. A teammate can switch **this device** only — WhatsApp and
+  email are the owner's, and the card says so.
+- /pricing lists "WhatsApp order alerts to seller" as included on **every**
+  plan (z8r3fdv55f), and the landing handshake's alert label no longer
+  carries "(Pro)".
 
 ## Browser alerts — chime + system notification (per device)
 
@@ -213,7 +286,15 @@ dashboard open.
   BASELINE (page loads never chime for existing orders); later increases
   raise: WebAudio two-tone chime (no asset), a system `Notification`
   (`tag`-collapsed, click focuses + navigates to the order), a 6s tab-title
-  flash, and an in-app toast fallback.
+  flash, and an in-app toast fallback. The toast **says what happened and is
+  clickable end to end** (z8r3fdff97 test round): "A new order just came in"
+  over "ORD-XCVE · Zaki T2 test · RM 63.90", the whole body opening the order
+  — a seller reaches for the words, not a 40px button — with the Open button
+  kept for keyboard focus and for anyone who reads it as the only affordance.
+  `latestActivity` returns the buyer name and total for that line; both come
+  off the order doc it already reads, so the extra facts cost nothing. A
+  counter or anonymous order has no name, and the line drops that segment
+  rather than printing a stray separator.
 - Events: **new order** and **rider booking failed** (money-relevant only —
   deliberately not every status change).
 - Preferences are **per device** (`localStorage`): master switch + sound.
@@ -222,9 +303,9 @@ dashboard open.
 
 ### Settings surface (discoverability)
 
-Settings → Store → **"Order alerts on this device"** card
-(`src/components/settings/notifications-card.tsx`). Every permission state
-has a next step:
+Settings → Store → **"Order alerts"** card, *This device* row
+(`src/components/settings/order-alerts-card.tsx`, merged in 86eye9xd4). Every
+permission state has a next step:
 - unsupported browser (iOS Safari non-PWA) → explains Add-to-Home-Screen /
   desktop Chrome;
 - `default` → "Turn on order alerts" (permission prompt + test alert);
@@ -258,10 +339,11 @@ the same as "the seller heard about it":
 1. **Schedule time** — the email no-ops when
    `sellerWaAlertWillAttempt(retailer, …)` (pure, `convex/lib/sellerAlerts.ts`)
    says the alert can actually be attempted: event template env set, the
-   seller's `orderWaAlerts` toggle on, `notifyWaPhone` saved, and — for the
+   seller's switch on (absent = on), `notifyWaPhone` saved, the subscription
+   covering it (`subscriptionCovers`, z8r3fdv55f), and — for the
    **new-order** alert only — not a counter sale. Anything falsy and the email
-   fires exactly as before. That's every Starter seller (the toggle is
-   Pro-gated) and everyone who never opted in.
+   fires exactly as before. That covers every seller with no number saved, a
+   locked or held store, and anyone who switched WhatsApp off.
 2. **Failure time** — `notifySellerNewOrder` / `notifySellerPaymentClaim` /
    `notifySellerPaymentReceived` schedule the email with **`force: true`** when
    they give up: gateway-blocked (opt-out / cap / quality pause) or a terminal /
@@ -270,7 +352,7 @@ the same as "the seller heard about it":
    silence it.
 
 The WA actions deliberately **do not** force the email on their own early
-returns (template env unset, toggle off, no number). Those are the exact
+returns (template env unset, switched off or not covered, no number). Those are the exact
 conditions `sellerWaAlertWillAttempt` reads, so the email has already decided
 not to suppress itself — forcing there would send the seller two. Pinned by
 test.

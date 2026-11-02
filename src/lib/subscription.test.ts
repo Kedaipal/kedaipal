@@ -1,14 +1,16 @@
 import { describe, expect, test } from "vitest";
-import { UNLIMITED } from "../../convex/lib/plans";
 import {
+	freePeriodState,
 	hasFeature,
 	hasSubscribed,
 	isCrmLocked,
 	isOrderInboxLocked,
-	orderCapState,
+	isRenewing,
+	isStoreReadOnly,
 	resolveBannerState,
 	type SubscriptionView,
 	shouldNudgePayment,
+	storeReadOnlyReason,
 	tierPill,
 	trialDaysLeft,
 } from "./subscription";
@@ -60,21 +62,83 @@ describe("tierPill", () => {
 		).toBe("Starter");
 	});
 
-	test("trialing → countdown (warn when ended)", () => {
+	test("free store → 'until first order', a countdown only in the backstop's last days (start-when-you-sell)", () => {
+		expect(
+			tierPill(sub({ status: "trialing", trialEndsAt: NOW + 12 * DAY }), NOW),
+		).toEqual({ label: "Free · until first order", tone: "trial" });
 		expect(
 			tierPill(sub({ status: "trialing", trialEndsAt: NOW + 5 * DAY }), NOW),
-		).toEqual({ label: "Trial · 5 days left", tone: "trial" });
+		).toEqual({ label: "Free · 5 days left", tone: "trial" });
 		expect(
 			tierPill(sub({ status: "trialing", trialEndsAt: NOW + DAY }), NOW).label,
-		).toBe("Trial · 1 day left");
+		).toBe("Free · 1 day left");
+		// Founding members keep their rank up front.
 		expect(
-			tierPill(sub({ status: "trialing", trialEndsAt: NOW - DAY }), NOW),
-		).toEqual({ label: "Trial ended", tone: "warn" });
+			tierPill(sub({ status: "trialing", trialEndsAt: NOW + 12 * DAY }), NOW, 3)
+				.label,
+		).toBe("Founding #3 · until first order");
+	});
+
+	test("first invoice out → 'First invoice due' (warn), whatever the backstop says", () => {
+		const ended = sub({
+			status: "trialing",
+			trialEndsAt: NOW + 9 * DAY,
+			freePeriodEndedAt: NOW - DAY,
+			freePeriodEndReason: "first_order",
+		});
+		expect(tierPill(ended, NOW)).toEqual({
+			label: "First invoice due",
+			tone: "warn",
+		});
+		expect(tierPill(ended, NOW, 2).label).toBe(
+			"Founding #2 · First invoice due",
+		);
+	});
+
+	test("on_hold → 'On hold'", () => {
+		expect(tierPill(sub({ status: "on_hold", held: true }), NOW)).toEqual({
+			label: "On hold",
+			tone: "trial",
+		});
+		expect(tierPill(sub({ status: "on_hold" }), NOW, 5).label).toBe(
+			"Founding #5 · On hold",
+		);
 	});
 
 	test("past_due / cancelled → warn", () => {
 		expect(tierPill(sub({ status: "past_due" }), NOW).tone).toBe("warn");
 		expect(tierPill(sub({ status: "cancelled" }), NOW).label).toBe("Cancelled");
+	});
+
+	test("comped → 'Sponsored' (z8r3fdeub2), never a tier, countdown or 'expires'", () => {
+		expect(
+			tierPill(sub({ status: "active", plan: "pro", comped: true }), NOW),
+		).toEqual({ label: "Sponsored", tone: "sponsored" });
+		// Whatever the row's leftover status/plan says.
+		expect(
+			tierPill(
+				sub({ status: "trialing", trialEndsAt: NOW + DAY, comped: true }),
+				NOW,
+			).label,
+		).toBe("Sponsored");
+		expect(tierPill(sub({ comped: true }), NOW, 4).label).toBe(
+			"Founding #4 · Sponsored",
+		);
+		// An admin on their own store still reads Admin.
+		expect(tierPill(sub({ comped: true }), NOW, undefined, true).label).toBe(
+			"Admin",
+		);
+	});
+
+	test("a comp that ENDED reads 'Expired', not 'Past due' — there's no bill behind it", () => {
+		const ended = sub({
+			status: "past_due",
+			compEnded: { at: NOW - DAY },
+		});
+		expect(tierPill(ended, NOW)).toEqual({ label: "Expired", tone: "warn" });
+		expect(tierPill(ended, NOW, 2).label).toBe("Founding #2 · Expired");
+		// An ordinary lapse is still "Past due".
+		expect(tierPill(sub({ status: "past_due" }), NOW).label).toBe("Past due");
 	});
 
 	test("admin → 'Admin', overrides every subscription state", () => {
@@ -94,7 +158,54 @@ describe("tierPill", () => {
 	});
 });
 
+describe("freePeriodState (start-when-you-sell)", () => {
+	test("free with the backstop countdown, ended with its reason, none otherwise", () => {
+		expect(
+			freePeriodState(
+				sub({ status: "trialing", trialEndsAt: NOW + 3 * DAY }),
+				NOW,
+			),
+		).toEqual({ kind: "free", daysLeft: 3 });
+		expect(
+			freePeriodState(
+				sub({
+					status: "trialing",
+					freePeriodEndedAt: NOW,
+					freePeriodEndReason: "first_order",
+				}),
+				NOW,
+			),
+		).toEqual({ kind: "ended", reason: "first_order" });
+		// A stamped end with no reason (defensive) reads as the backstop.
+		expect(
+			freePeriodState(sub({ status: "trialing", freePeriodEndedAt: NOW }), NOW),
+		).toEqual({ kind: "ended", reason: "backstop" });
+		expect(freePeriodState(sub({ status: "active" }), NOW).kind).toBe("none");
+		expect(freePeriodState(undefined, NOW).kind).toBe("none");
+	});
+});
+
 describe("shouldNudgePayment", () => {
+	test("nudges once the first invoice is out, whatever the backstop says", () => {
+		expect(
+			shouldNudgePayment(
+				sub({
+					status: "trialing",
+					trialEndsAt: NOW + 10 * DAY,
+					freePeriodEndedAt: NOW,
+				}),
+				NOW,
+			),
+		).toBe(true);
+		expect(
+			shouldNudgePayment(
+				sub({ status: "trialing", trialEndsAt: NOW + 10 * DAY }),
+				NOW,
+			),
+		).toBe(false);
+		expect(shouldNudgePayment(sub({ status: "on_hold" }), NOW)).toBe(false);
+	});
+
 	test("past_due always; trialing only in the last stretch; active never", () => {
 		expect(shouldNudgePayment(sub({ status: "past_due" }), NOW)).toBe(true);
 		expect(
@@ -119,6 +230,25 @@ describe("resolveBannerState", () => {
 		expect(resolveBannerState(sub({ comped: true }), NOW + DAY, NOW).kind).toBe(
 			"none",
 		);
+		// A comp that isn't ending soon: no nudges of any kind, even over the cap.
+		expect(
+			resolveBannerState(
+				sub({
+					comped: true,
+					comp: { kind: "sponsor" },
+					caps: { orderCap: 200, userCap: 3, broadcastQuota: 100 },
+				}),
+				undefined,
+				NOW,
+				undefined,
+				{
+					route: "topup",
+					ordersWaiting: 3,
+					total: -3,
+					periodGrant: 200,
+				},
+			).kind,
+		).toBe("none");
 		expect(
 			resolveBannerState(sub({ status: "active" }), undefined, NOW).kind,
 		).toBe("none");
@@ -128,6 +258,125 @@ describe("resolveBannerState", () => {
 		expect(
 			resolveBannerState(sub({ status: "past_due" }), NOW + DAY, NOW).kind,
 		).toBe("pastDue");
+	});
+
+	test("comp accounts (z8r3fdeub2): no warnings while comped (no end date); once turned off, 'ended' instead of 'past due'", () => {
+		expect(
+			resolveBannerState(
+				sub({ comped: true, comp: { kind: "sponsor", label: "X" } }),
+				NOW + DAY,
+				NOW,
+			).kind,
+		).toBe("none");
+		expect(
+			resolveBannerState(
+				sub({ status: "past_due", compEnded: { at: NOW - DAY } }),
+				undefined,
+				NOW,
+			).kind,
+		).toBe("compEnded");
+	});
+
+	test("a failing auto-charge outranks the invoice countdown, but not past_due (86eyb6z4r)", () => {
+		const failing = {
+			method: "card",
+			methodLabel: "Visa ·· 4242",
+			failedAttempts: 1,
+			failing: true,
+			stopped: false,
+			confirming: false,
+		};
+		expect(
+			resolveBannerState(
+				sub({ status: "active", autoRenew: failing }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("autoRenewFailed");
+		expect(
+			resolveBannerState(
+				sub({ status: "past_due", autoRenew: failing }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("pastDue");
+		// A healthy saved method changes nothing.
+		expect(
+			resolveBannerState(
+				sub({
+					status: "active",
+					autoRenew: { ...failing, failedAttempts: 0, failing: false },
+				}),
+				NOW + 30 * DAY,
+				NOW,
+			).kind,
+		).toBe("none");
+	});
+
+	test("auto-charging STOPPED over a stranded charge outranks a decline and the countdown — never past_due", () => {
+		const stopped = {
+			method: "card",
+			methodLabel: "Visa ·· 4242",
+			failedAttempts: 1,
+			failing: true,
+			stopped: true,
+			confirming: false,
+		};
+		// Stopped is the current truth, and "pay it yourself" (the failed
+		// banner) could be the second payment while we sort the first one out.
+		expect(
+			resolveBannerState(
+				sub({ status: "active", autoRenew: stopped }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("autoRenewStopped");
+		expect(
+			resolveBannerState(
+				sub({ status: "past_due", autoRenew: stopped }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("pastDue");
+	});
+
+	test("a charge being CONFIRMED silences every pay-me banner — but never past_due or stopped", () => {
+		const confirming = {
+			method: "card",
+			methodLabel: "Visa ·· 4242",
+			failedAttempts: 1,
+			failing: true,
+			stopped: false,
+			confirming: true,
+		};
+		// It outranks the declined banner AND the due-soon countdown: both say
+		// "pay it yourself", which is the double payment while the sent charge
+		// may have landed.
+		expect(
+			resolveBannerState(
+				sub({ status: "active", autoRenew: confirming }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("none");
+		// The harder locks still win: they are about ACCESS, not this charge.
+		expect(
+			resolveBannerState(
+				sub({ status: "past_due", autoRenew: confirming }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("pastDue");
+		expect(
+			resolveBannerState(
+				sub({
+					status: "active",
+					autoRenew: { ...confirming, stopped: true },
+				}),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("autoRenewStopped");
 	});
 
 	test("active with a pending invoice due within 5 days → invoiceWarn", () => {
@@ -148,7 +397,7 @@ describe("resolveBannerState", () => {
 		});
 	});
 
-	test("trialing within 5 days (no invoice) → trialWarn; ended flag at/below 0", () => {
+	test("free store: backstop within 5 days → trialWarn; a lapsed backstop with no invoice on file → ended", () => {
 		expect(
 			resolveBannerState(
 				sub({ status: "trialing", trialEndsAt: NOW + 2 * DAY }),
@@ -158,54 +407,165 @@ describe("resolveBannerState", () => {
 		).toEqual({ kind: "trialWarn", daysLeft: 2, ended: false });
 		expect(
 			resolveBannerState(
-				sub({ status: "trialing", trialEndsAt: NOW - DAY }),
+				sub({ status: "trialing", trialEndsAt: NOW + 9 * DAY }),
+				undefined,
+				NOW,
+			).kind,
+		).toBe("none");
+		// The period ended but no bill is on file yet (the minutes-long issue
+		// delay, or a voided bill the cron will rewrite) — "on its way", never
+		// the red ended state: the machine writes the bill, nothing to fix.
+		expect(
+			resolveBannerState(
+				sub({
+					status: "trialing",
+					trialEndsAt: NOW + 9 * DAY,
+					freePeriodEndedAt: NOW - DAY,
+					freePeriodEndReason: "backstop",
+				}),
 				undefined,
 				NOW,
 			),
-		).toEqual({ kind: "trialWarn", daysLeft: 0, ended: true });
+		).toEqual({ kind: "firstInvoice", reason: "backstop" });
 	});
 
-	test("soft order-cap nudge: over/near, ranked below payment deadlines", () => {
-		const caps = { orderCap: 100, userCap: 1, broadcastQuota: 0 };
-		const s = sub({ plan: "starter", status: "active", caps });
-		expect(resolveBannerState(s, undefined, NOW, undefined, 100)).toEqual({
-			kind: "orderCapOver",
-			used: 100,
-			cap: 100,
+	test("first invoice out + pending → firstInvoice nudge until the invoiceWarn window takes over (start-when-you-sell)", () => {
+		const ended = sub({
+			status: "trialing",
+			trialEndsAt: NOW + 9 * DAY,
+			freePeriodEndedAt: NOW - DAY,
+			freePeriodEndReason: "first_order",
 		});
-		expect(resolveBannerState(s, undefined, NOW, undefined, 85)).toEqual({
-			kind: "orderCapNear",
-			used: 85,
-			cap: 100,
+		expect(resolveBannerState(ended, NOW + 12 * DAY, NOW)).toEqual({
+			kind: "firstInvoice",
+			reason: "first_order",
+			daysLeft: 12,
 		});
-		expect(resolveBannerState(s, undefined, NOW, undefined, 42).kind).toBe(
-			"none",
-		);
-		// A payment deadline outranks the upsell.
-		expect(resolveBannerState(s, NOW + 2 * DAY, NOW, undefined, 200).kind).toBe(
-			"invoiceWarn",
-		);
-	});
-});
-
-describe("orderCapState (soft cap meter)", () => {
-	const caps = { orderCap: 100, userCap: 1, broadcastQuota: 0 };
-
-	test("thresholds: near at 80%, over at 100%", () => {
-		const s = sub({ caps });
-		expect(orderCapState(s, 79).kind).toBe("none");
-		expect(orderCapState(s, 80).kind).toBe("near");
-		expect(orderCapState(s, 99).kind).toBe("near");
-		expect(orderCapState(s, 100).kind).toBe("over");
+		// Inside the 5-day window the generic "pay me" outranks it.
+		expect(resolveBannerState(ended, NOW + 3 * DAY, NOW)).toEqual({
+			kind: "invoiceWarn",
+			daysLeft: 3,
+		});
 	});
 
-	test("comped, unlimited-cap, or unknown usage never nudge", () => {
-		expect(orderCapState(sub({ caps, comped: true }), 500).kind).toBe("none");
+	test("on hold → held, below every payment deadline, above the low-credits nudge", () => {
+		const caps = { orderCap: 0, userCap: 3, broadcastQuota: 100 };
 		expect(
-			orderCapState(sub({ caps: { ...caps, orderCap: UNLIMITED } }), 5000).kind,
+			resolveBannerState(
+				sub({ status: "on_hold", held: true, caps }),
+				undefined,
+				NOW,
+				undefined,
+				{
+					route: "resume",
+					ordersWaiting: 0,
+					total: 5,
+					periodGrant: 200,
+				},
+			),
+		).toEqual({ kind: "held" });
+		// A hold invoice due soon is still "pay me".
+		expect(
+			resolveBannerState(
+				sub({ status: "on_hold", held: true, caps }),
+				NOW + 2 * DAY,
+				NOW,
+			).kind,
+		).toBe("invoiceWarn");
+		// Locked over an overdue hold invoice → pastDue wins.
+		expect(
+			resolveBannerState(sub({ status: "past_due", caps }), NOW - DAY, NOW)
+				.kind,
+		).toBe("pastDue");
+	});
+
+	test("credits (T3.1): waiting orders outrank every deadline; running low is the lowest nudge", () => {
+		const s = sub({ plan: "starter", status: "active" });
+		const waiting = {
+			route: "topup" as const,
+			ordersWaiting: 4,
+			total: -4,
+			periodGrant: 100,
+		};
+		expect(
+			resolveBannerState(s, NOW + 2 * DAY, NOW, undefined, waiting),
+		).toEqual({ kind: "creditsWaiting", ordersWaiting: 4, route: "topup" });
+		// …but a past-due store is view-only, which says more.
+		expect(
+			resolveBannerState(
+				sub({ status: "past_due" }),
+				undefined,
+				NOW,
+				undefined,
+				waiting,
+			).kind,
+		).toBe("pastDue");
+		// A store can be BELOW ZERO with nothing waiting (Credits T3.1): every
+		// order it took was funded, and the debt came from an expired lot or
+		// from before the gate shipped. It still needs telling, so the low
+		// banner stays widened past "amber" — narrowing it is what left a store
+		// already into next month's credits with no banner at all.
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, {
+				...waiting,
+				ordersWaiting: 0,
+			}),
+		).toEqual({ kind: "creditsLow", total: -4 });
+		const low = {
+			route: "topup" as const,
+			ordersWaiting: 0,
+			periodGrant: 100,
+		};
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, { ...low, total: 20 }),
+		).toEqual({ kind: "creditsLow", total: 20 });
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, { ...low, total: 21 })
+				.kind,
 		).toBe("none");
-		expect(orderCapState(sub({ caps }), undefined).kind).toBe("none");
-		expect(orderCapState(undefined, 500).kind).toBe("none");
+		// A payment deadline outranks the nudge.
+		expect(
+			resolveBannerState(s, NOW + 2 * DAY, NOW, undefined, { ...low, total: 5 })
+				.kind,
+		).toBe("invoiceWarn");
+		// A custom grant is never nudged; a reader who can't see the balance
+		// isn't either.
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, {
+				...low,
+				total: 5,
+				customGrant: true,
+			}).kind,
+		).toBe("none");
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, {
+				route: "topup",
+				ordersWaiting: 0,
+			}).kind,
+		).toBe("none");
+		// A store that can never be locked has nothing to run low on.
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, {
+				...low,
+				total: 5,
+				exempt: true,
+			}).kind,
+		).toBe("none");
+		// The line is 20% of THIS month's credits: 60 on Founding Pro's 300.
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, {
+				...low,
+				periodGrant: 300,
+				total: 60,
+			}).kind,
+		).toBe("creditsLow");
+		expect(
+			resolveBannerState(s, undefined, NOW, undefined, {
+				...low,
+				periodGrant: 300,
+				total: 61,
+			}).kind,
+		).toBe("none");
 	});
 });
 
@@ -222,7 +582,10 @@ describe("hasFeature (client plan gate)", () => {
 				radiusDelivery: false,
 				delivery: false,
 				onlinePayments: false,
-				waOrderAlerts: false,
+				events: false,
+				promo: false,
+				vouchers: false,
+				crossBorder: false,
 			},
 		});
 		expect(hasFeature(starter, "crm")).toBe(false);
@@ -232,7 +595,6 @@ describe("hasFeature (client plan gate)", () => {
 		expect(hasFeature(starter, "insights")).toBe(false);
 		expect(hasFeature(starter, "radiusDelivery")).toBe(false);
 		expect(hasFeature(starter, "onlinePayments")).toBe(false);
-		expect(hasFeature(starter, "waOrderAlerts")).toBe(false);
 		const pro = sub({
 			features: {
 				crm: true,
@@ -243,7 +605,10 @@ describe("hasFeature (client plan gate)", () => {
 				radiusDelivery: true,
 				delivery: true,
 				onlinePayments: true,
-				waOrderAlerts: true,
+				events: true,
+				promo: true,
+				vouchers: true,
+				crossBorder: true,
 			},
 		});
 		expect(hasFeature(pro, "crm")).toBe(true);
@@ -252,7 +617,6 @@ describe("hasFeature (client plan gate)", () => {
 		expect(hasFeature(pro, "insights")).toBe(true);
 		expect(hasFeature(pro, "radiusDelivery")).toBe(true);
 		expect(hasFeature(pro, "onlinePayments")).toBe(true);
-		expect(hasFeature(pro, "waOrderAlerts")).toBe(true);
 	});
 
 	test("fails open when the subscription/features are missing (loading, comped)", () => {
@@ -272,7 +636,10 @@ describe("isCrmLocked", () => {
 			radiusDelivery: false,
 			delivery: false,
 			onlinePayments: false,
-			waOrderAlerts: false,
+			events: false,
+			promo: false,
+			vouchers: false,
+			crossBorder: false,
 		},
 	});
 
@@ -314,7 +681,10 @@ describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", 
 			radiusDelivery: false,
 			delivery: false,
 			onlinePayments: false,
-			waOrderAlerts: false,
+			events: false,
+			promo: false,
+			vouchers: false,
+			crossBorder: false,
 		},
 	});
 
@@ -357,7 +727,10 @@ describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", 
 				radiusDelivery: false,
 				delivery: false,
 				onlinePayments: false,
-				waOrderAlerts: false,
+				events: false,
+				promo: false,
+				vouchers: false,
+				crossBorder: false,
 			},
 		});
 		expect(
@@ -366,5 +739,109 @@ describe("isOrderInboxLocked (order-detail 'Came from' drill-down, 86eyq0eq9)", 
 		expect(isCrmLocked({ actingAsAdmin: false, subscription: crmOnly })).toBe(
 			false,
 		);
+	});
+});
+
+describe("isRenewing — the lapsed-but-not-yet-renewed window", () => {
+	const NOW = Date.UTC(2026, 8, 13);
+	const DAY = 24 * 60 * 60 * 1000;
+	const base = {
+		plan: "pro",
+		status: "active",
+		currentPeriodEnd: NOW + 10 * DAY,
+	} as SubscriptionView;
+
+	test("is false while the paid period is still running", () => {
+		expect(isRenewing(base, NOW)).toBe(false);
+	});
+
+	test("is true the moment it runs out, and stays true until the renewal settles", () => {
+		expect(isRenewing({ ...base, currentPeriodEnd: NOW }, NOW)).toBe(true);
+		expect(isRenewing({ ...base, currentPeriodEnd: NOW - DAY }, NOW)).toBe(
+			true,
+		);
+	});
+
+	test("is false for every state that already has its own words", () => {
+		// past_due says "Past due", a trial counts down, a comped account never
+		// renews at all — a second label on any of them would be noise.
+		for (const status of ["past_due", "trialing", "cancelled"] as const) {
+			expect(
+				isRenewing({ ...base, status, currentPeriodEnd: NOW - DAY }, NOW),
+			).toBe(false);
+		}
+		expect(
+			isRenewing({ ...base, comped: true, currentPeriodEnd: NOW - DAY }, NOW),
+		).toBe(false);
+	});
+
+	test("is false with no period at all, and for a missing payload", () => {
+		expect(isRenewing({ ...base, currentPeriodEnd: undefined }, NOW)).toBe(
+			false,
+		);
+		expect(isRenewing(undefined, NOW)).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// View-only lock (z8r3fdeub2) — the client mirror of assertSubscriptionActive
+// ---------------------------------------------------------------------------
+
+describe("isStoreReadOnly", () => {
+	const store = (s: Partial<SubscriptionView>, actingAsAdmin = false) => ({
+		actingAsAdmin,
+		subscription: sub(s),
+	});
+
+	test("a lapsed store is view-only — that IS the lock", () => {
+		expect(isStoreReadOnly(store({ status: "past_due" }))).toBe(true);
+		expect(
+			isStoreReadOnly(store({ status: "past_due", compEnded: { at: NOW } })),
+		).toBe(true);
+	});
+
+	test("every other status is writable, comped included", () => {
+		for (const status of [
+			"active",
+			"trialing",
+			"on_hold",
+			"cancelled",
+		] as const)
+			expect(isStoreReadOnly(store({ status }))).toBe(false);
+		// A comp can't be past_due in practice, but a fail-open row could read
+		// that way — and a sponsored store must never see a lock.
+		expect(isStoreReadOnly(store({ status: "past_due", comped: true }))).toBe(
+			false,
+		);
+	});
+
+	test("mirrors both server bypasses: act-as and an admin's own store", () => {
+		expect(isStoreReadOnly(store({ status: "past_due" }, true))).toBe(false);
+		expect(isStoreReadOnly(store({ status: "past_due" }), true)).toBe(false);
+	});
+
+	test("fails open while loading, and with no subscription at all", () => {
+		// A control that flickers disabled mid-load is worse than one that
+		// refuses the tap — and the server is the real lock either way.
+		expect(isStoreReadOnly(undefined)).toBe(false);
+		expect(isStoreReadOnly(null)).toBe(false);
+		expect(isStoreReadOnly({ actingAsAdmin: false })).toBe(false);
+	});
+});
+
+describe("storeReadOnlyReason", () => {
+	test("a lapsed subscription is told to pay its invoice", () => {
+		const reason = storeReadOnlyReason(sub({ status: "past_due" }));
+		expect(reason).toMatch(/view-only/);
+		expect(reason).toMatch(/invoice/i);
+	});
+
+	test("a revoked comp is never sent hunting for a bill it never had", () => {
+		const reason = storeReadOnlyReason(
+			sub({ status: "past_due", compEnded: { at: NOW } }),
+		);
+		expect(reason).toMatch(/sponsored access has ended/i);
+		expect(reason).toMatch(/view-only/);
+		expect(reason).not.toMatch(/invoice/i);
 	});
 });

@@ -11,11 +11,14 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { requireRetailerAccess, resolveMyRetailer } from "./lib/auth";
 import {
+	type ActionCtx,
 	action,
 	internalAction,
 	internalMutation,
 	internalQuery,
+	type MutationCtx,
 	query,
 	type QueryCtx,
 } from "./_generated/server";
@@ -23,11 +26,13 @@ import {
 	buildLalamoveHeaders,
 	buildPlaceOrderBody,
 	buildQuotationBody,
+	checkLalamoveKeyShape,
 	classifyQuoteFailure,
 	type DeliveryJobStatus,
 	isActiveJobStatus,
 	LALAMOVE_BASE_URL,
 	type LalamoveCredentials,
+	type LalamoveMarket,
 	lalamoveAmountToSen,
 	normalizeLalamoveStatus,
 	parseLalamoveEventTime,
@@ -35,15 +40,37 @@ import {
 	parsePodImages,
 	parseQuotationResponse,
 	decryptLalamoveCredentials,
+	lalamoveMarketForCountry,
 	resolveDispatchSchedule,
 	resolveLalamoveCredentials,
 	classifyBookingFailure,
 	resolveScheduleAt,
 	toLalamoveContactPhone,
 	toLalamovePhone,
+	hasLalamoveCredentials,
 } from "./lib/lalamove";
-import { DEFAULT_COUNTRY } from "./lib/country";
-import { riderBookingAllowed } from "./lib/delivery";
+import {
+	type LalamoveDisconnectBlock,
+	lalamovePricingBlock,
+	lalamoveRiderOutBlock,
+} from "./lib/lalamoveDisconnect";
+import { priorityFeeWire, TIP_OPTIONS } from "./lib/lalamoveTip";
+import { formatBusinessAddress } from "./lib/address";
+import { COUNTRY_LABELS, type Country, DEFAULT_COUNTRY } from "./lib/country";
+import { courierProviderValidator } from "./lib/courierProviders";
+import {
+	lalamoveBookingArmed,
+	servesOrderDestination,
+} from "./lib/courierBooking";
+import { type CartWeightItem, riderBookingAllowed } from "./lib/delivery";
+import {
+	chooseRiderVehicle,
+	loadOf,
+	parseVehicleLoads,
+	VEHICLE_LOADS_TTL_MS,
+	type VehicleLoad,
+} from "./lib/lalamoveVehicle";
+import { liveQuoteWeightKg } from "./lib/liveQuote";
 import { rateLimiter } from "./lib/rateLimiter";
 import { composeFulfilmentMoment } from "./lib/fulfilmentDate";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
@@ -70,8 +97,17 @@ async function callLalamove(
 	method: "GET" | "POST" | "DELETE" | "PATCH",
 	path: string,
 	body?: { data: Record<string, unknown> },
+	/** Abort the request after this long. Only the vehicle-loads read sets
+	 * it: it runs serially before a buyer's quote, so a hanging endpoint
+	 * must fail open in seconds. Every other call is unchanged. */
+	opts?: { timeoutMs?: number },
 ): Promise<unknown> {
 	const live = await decryptLalamoveCredentials(credentials);
+	const abort =
+		opts?.timeoutMs !== undefined ? new AbortController() : undefined;
+	const timer = abort
+		? setTimeout(() => abort.abort(), opts?.timeoutMs)
+		: undefined;
 	const bodyStr = body ? JSON.stringify(body) : "";
 	const headers = await buildLalamoveHeaders({
 		credentials: live,
@@ -81,14 +117,19 @@ async function callLalamove(
 		timestamp: Date.now(),
 		requestId: crypto.randomUUID(),
 	});
-	const res = await fetch(`${LALAMOVE_BASE_URL[live.env]}${path}`, {
-		method,
-		headers,
-		...(body ? { body: bodyStr } : {}),
-	});
-	const text = await res.text();
-	if (!res.ok) throw new LalamoveApiError(res.status, text);
-	return text ? JSON.parse(text) : {};
+	try {
+		const res = await fetch(`${LALAMOVE_BASE_URL[live.env]}${path}`, {
+			method,
+			headers,
+			...(body ? { body: bodyStr } : {}),
+			...(abort ? { signal: abort.signal } : {}),
+		});
+		const text = await res.text();
+		if (!res.ok) throw new LalamoveApiError(res.status, text);
+		return text ? JSON.parse(text) : {};
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +153,9 @@ export type LalamoveQuoteContext = {
 	 * where the flag is simply ignored). */
 	providerAware: boolean;
 	deliveryDirection: "standard" | "collection";
+	/** The STAMPED Lalamove world (86eypncfy) — keys the vehicle-load cache.
+	 * Never `credentials.env`, which is inferred from ciphertext. */
+	env?: "sandbox" | "production";
 };
 
 export const getQuoteContext = internalQuery({
@@ -146,16 +190,263 @@ export const getQuoteContext = internalQuery({
 			providerAware: retailer.deliveryConfig?.mode === "live",
 			deliveryDirection:
 				retailer.deliveryBooking?.deliveryDirection ?? "standard",
+			env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
 		};
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Vehicle loads (25 Oct 2026) — which vehicle can carry the cart
+// ---------------------------------------------------------------------------
+
+export const getVehicleLoads = internalQuery({
+	args: {
+		market: v.union(v.literal("MY"), v.literal("SG")),
+		env: v.union(v.literal("sandbox"), v.literal("production")),
+	},
+	handler: async (
+		ctx,
+		{ market, env },
+	): Promise<{ loads: VehicleLoad[]; fetchedAt: number } | null> => {
+		const row = await ctx.db
+			.query("lalamoveVehicleLoads")
+			.withIndex("by_market_env", (q) => q.eq("market", market).eq("env", env))
+			.unique();
+		return row ? { loads: row.loads, fetchedAt: row.fetchedAt } : null;
+	},
+});
+
+export const saveVehicleLoads = internalMutation({
+	args: {
+		market: v.union(v.literal("MY"), v.literal("SG")),
+		env: v.union(v.literal("sandbox"), v.literal("production")),
+		loads: v.array(v.object({ key: v.string(), loadKg: v.number() })),
+	},
+	handler: async (ctx, { market, env, loads }): Promise<void> => {
+		const row = await ctx.db
+			.query("lalamoveVehicleLoads")
+			.withIndex("by_market_env", (q) => q.eq("market", market).eq("env", env))
+			.unique();
+		const fetchedAt = Date.now();
+		if (row)
+			await ctx.db.patch(row._id, {
+				loads,
+				fetchedAt,
+				refreshScheduledAt: undefined,
+			});
+		else await ctx.db.insert("lalamoveVehicleLoads", { market, env, loads, fetchedAt });
+	},
+});
+
+/** How long one scheduled refresh of a stale row stands before another may
+ * be scheduled (PR #418 review). */
+export const VEHICLE_LOADS_REFRESH_GAP_MS = 5 * 60 * 1000;
+
+/**
+ * May this caller schedule a refresh of the market's loads? True at most once
+ * per `VEHICLE_LOADS_REFRESH_GAP_MS` for a row that exists (the stamp is the
+ * claim, in the same transaction as the read, so concurrent quotes can't both
+ * win). With no row there is nothing to stamp: dispatch on a cold market is
+ * rare, because the checkout fetches inline and fills it.
+ */
+export const claimVehicleLoadsRefresh = internalMutation({
+	args: {
+		market: v.union(v.literal("MY"), v.literal("SG")),
+		env: v.union(v.literal("sandbox"), v.literal("production")),
+	},
+	handler: async (ctx, { market, env }): Promise<boolean> => {
+		const row = await ctx.db
+			.query("lalamoveVehicleLoads")
+			.withIndex("by_market_env", (q) => q.eq("market", market).eq("env", env))
+			.unique();
+		if (!row) return true;
+		const now = Date.now();
+		if (
+			row.refreshScheduledAt !== undefined &&
+			now - row.refreshScheduledAt < VEHICLE_LOADS_REFRESH_GAP_MS
+		)
+			return false;
+		await ctx.db.patch(row._id, { refreshScheduledAt: now });
+		return true;
+	},
+});
+
+/**
+ * Which row of the shared cache this store reads and writes (PR #418 review).
+ * The stamped env when there is one (86eypncfy); otherwise the env of the
+ * DECRYPTED key — exactly how `callLalamove` picks the host — and never a
+ * default to production. An unstamped sandbox-key store fetches from the
+ * sandbox host, so defaulting would write sandbox limits into the row every
+ * real store in the market reads.
+ */
+async function vehicleLoadsEnv(
+	credentials: LalamoveCredentials,
+	stamped: "sandbox" | "production" | undefined,
+): Promise<"sandbox" | "production"> {
+	return stamped ?? (await decryptLalamoveCredentials(credentials)).env;
+}
+
+/** Bounded so a hanging `/v3/cities` fails open (seller's vehicle) within
+ * seconds instead of holding the buyer's checkout (PR #418 review). */
+const VEHICLE_LOADS_TIMEOUT_MS = 4000;
+
+/** The store's key pair + where it books — enough to read `/v3/cities`. */
+export const getVehicleLoadContext = internalQuery({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		booking: { apiKey?: string; apiSecret?: string };
+		country: string | undefined;
+		env?: "sandbox" | "production";
+	} | null> => {
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer?.deliveryBooking) return null;
+		const booking = retailer.deliveryBooking as BookingConfig;
+		return {
+			booking: { apiKey: booking.apiKey, apiSecret: booking.apiSecret },
+			country: retailer.country,
+			env: booking.env,
+		};
+	},
+});
+
+/** `GET /v3/cities` → the market's loads, stored. Null on any failure —
+ * callers fail OPEN (quote the seller's vehicle) rather than refuse. */
+async function fetchAndStoreVehicleLoads(
+	ctx: ActionCtx,
+	credentials: LalamoveCredentials,
+	env: "sandbox" | "production",
+): Promise<VehicleLoad[] | null> {
+	try {
+		const loads = parseVehicleLoads(
+			await callLalamove(credentials, "GET", "/v3/cities", undefined, {
+				timeoutMs: VEHICLE_LOADS_TIMEOUT_MS,
+			}),
+		);
+		if (loads.length === 0) return null;
+		await ctx.runMutation(internal.lalamove.saveVehicleLoads, {
+			market: credentials.market,
+			env,
+			loads,
+		});
+		return loads;
+	} catch (err) {
+		console.warn("[lalamove] vehicle loads fetch failed", {
+			market: credentials.market,
+			message: err instanceof Error ? err.message : String(err),
+		});
+		return null;
+	}
+}
+
+/** Background refresh of a market's loads, scheduled when the cache is
+ * stale. Also the operator's probe: `npx convex run
+ * lalamove:refreshVehicleLoads '{"retailerId":"…"}'` prints what Lalamove
+ * publishes for that store's market. */
+export const refreshVehicleLoads = internalAction({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<VehicleLoad[] | null> => {
+		const context = await ctx.runQuery(internal.lalamove.getVehicleLoadContext, {
+			retailerId,
+		});
+		if (!context) return null;
+		const credentials = resolveLalamoveCredentials(
+			context.booking,
+			context.country,
+		);
+		if (!credentials) return null;
+		return fetchAndStoreVehicleLoads(
+			ctx,
+			credentials,
+			await vehicleLoadsEnv(credentials, context.env),
+		);
+	},
+});
+
+/**
+ * The market's vehicle loads, cheaply: the cached row when there is one (a
+ * stale one is still used, and refreshed in the background so nobody waits
+ * on it). With no row at all, `inlineFetch` decides: the checkout fetches
+ * once inline (the first time a market is ever quoted, so the very first
+ * heavy cart is still priced right), dispatch only schedules the fetch — a
+ * money flow shouldn't grow an extra network call, and by dispatch time the
+ * checkout has almost always filled the cache. Null = unknown, and every
+ * caller fails open on unknown.
+ */
+export async function vehicleLoadsFor(
+	ctx: ActionCtx,
+	args: {
+		retailerId: Id<"retailers">;
+		credentials: LalamoveCredentials;
+		env: "sandbox" | "production" | undefined;
+		inlineFetch: boolean;
+	},
+): Promise<VehicleLoad[] | null> {
+	const env = await vehicleLoadsEnv(args.credentials, args.env);
+	const market = args.credentials.market;
+	const cached = await ctx.runQuery(internal.lalamove.getVehicleLoads, {
+		market,
+		env,
+	});
+	if (cached && Date.now() - cached.fetchedAt <= VEHICLE_LOADS_TTL_MS)
+		return cached.loads;
+	if (cached || !args.inlineFetch) {
+		// One refresh per market per few minutes, not one per checkout.
+		if (
+			await ctx.runMutation(internal.lalamove.claimVehicleLoadsRefresh, {
+				market,
+				env,
+			})
+		)
+			await ctx.scheduler.runAfter(0, internal.lalamove.refreshVehicleLoads, {
+				retailerId: args.retailerId,
+			});
+		return cached?.loads ?? null;
+	}
+	return fetchAndStoreVehicleLoads(ctx, args.credentials, env);
+}
+
+/**
+ * The store's market's vehicle loads, for the delivery-pricing card's
+ * "Lalamove's limits" (25 Oct 2026). A catalogue fact Lalamove publishes —
+ * no order, buyer or credential data — so a fulfilment reader may see it.
+ * Null until the market has been quoted once (the card then says the rule
+ * without numbers).
+ */
+export const vehicleLoads = query({
+	args: { retailerId: v.id("retailers") },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ loads: VehicleLoad[] } | null> => {
+		const { retailer } = await requireRetailerAccess(ctx, retailerId, {
+			area: "fulfilment",
+			level: "read",
+		});
+		const booking = retailer.deliveryBooking as BookingConfig | undefined;
+		// An unstamped store's world is unknown here (a query can't decrypt the
+		// key), and unknown is never production (86eypncfy, PR #418 review):
+		// null, and the card states the rule without numbers.
+		const env = booking?.env;
+		if (!booking || !env) return null;
+		const row = await ctx.db
+			.query("lalamoveVehicleLoads")
+			.withIndex("by_market_env", (q) =>
+				q
+					.eq("market", lalamoveMarketForCountry(retailer.country))
+					.eq("env", env),
+			)
+			.unique();
+		return row ? { loads: row.loads } : null;
 	},
 });
 
 export const saveCheckoutQuote = internalMutation({
 	args: {
 		retailerId: v.id("retailers"),
-		provider: v.optional(
-			v.union(v.literal("lalamove"), v.literal("delyva")),
-		),
+		provider: v.optional(courierProviderValidator),
 		quotationId: v.optional(v.string()),
 		fee: v.number(),
 		currency: v.optional(v.string()),
@@ -165,7 +456,7 @@ export const saveCheckoutQuote = internalMutation({
 		considered: v.optional(
 			v.array(
 				v.object({
-					provider: v.union(v.literal("lalamove"), v.literal("delyva")),
+					provider: courierProviderValidator,
 					fee: v.number(),
 					currency: v.string(),
 				}),
@@ -179,8 +470,13 @@ export const saveCheckoutQuote = internalMutation({
 				}),
 			),
 		),
-		latitude: v.number(),
-		longitude: v.number(),
+		latitude: v.optional(v.number()),
+		longitude: v.optional(v.number()),
+		postcode: v.optional(v.string()),
+		// The one-kilo floor stamp (`liveQuoteWeightFacts`) — Delyva-won
+		// provider-aware quotes only; a rider quote never carries it.
+		weightFloored: v.optional(v.boolean()),
+		unweighedLines: v.optional(v.number()),
 	},
 	handler: async (ctx, args): Promise<Id<"deliveryQuotes">> => {
 		return await ctx.db.insert("deliveryQuotes", {
@@ -265,6 +561,9 @@ export const quoteForCheckout = action({
 			fulfilmentDate: args.fulfilmentDate,
 			fulfilmentTimeMinutes: args.fulfilmentTimeMinutes,
 		});
+		// No cart reaches this legacy action, so "too heavy" can't arise — the
+		// narrowing keeps its public contract exactly as it was.
+		if (quote.status === "too_heavy") return { status: "unavailable" };
 		if (quote.status !== "quoted") return { status: quote.status };
 		const quoteId: Id<"deliveryQuotes"> = await ctx.runMutation(
 			internal.lalamove.saveCheckoutQuote,
@@ -293,7 +592,9 @@ export type LalamoveCheckoutQuote =
 			quotationId: string;
 			vehicleType: string;
 	  }
-	| { status: "out_of_range" | "store_unavailable" | "unavailable" };
+	| {
+			status: "out_of_range" | "store_unavailable" | "too_heavy" | "unavailable";
+	  };
 
 /**
  * Fetch a live Lalamove price WITHOUT recording it (z8r3fdbvdy).
@@ -314,8 +615,24 @@ export async function fetchLalamoveQuote(args: {
 	address: string;
 	fulfilmentDate?: number;
 	fulfilmentTimeMinutes?: number;
+	/** The cart's weight (kg, floored for unweighed lines — see
+	 * `liveQuoteWeightKg`) and the market's vehicle loads. Both optional:
+	 * the legacy single-provider action has no cart, and either missing
+	 * quotes the seller's vehicle exactly as before (fail open). */
+	cartKg?: number | null;
+	loads?: readonly VehicleLoad[] | null;
 }): Promise<LalamoveCheckoutQuote> {
 	const { context } = args;
+	// Lalamove prices by vehicle and never refuses an overweight trip, so the
+	// cart chooses the vehicle: the seller's setting, or the smallest bigger
+	// one that can carry it (25 Oct 2026, `chooseRiderVehicle`).
+	const choice = chooseRiderVehicle({
+		preferred: context.vehicleType,
+		cartKg: args.cartKg,
+		loads: args.loads ?? null,
+	});
+	if (choice.kind === "too_heavy") return { status: "too_heavy" };
+	const vehicleType: string = choice.vehicle;
 	const credentials = resolveLalamoveCredentials(
 		context.booking,
 		context.country,
@@ -360,7 +677,7 @@ export async function fetchLalamoveQuote(args: {
 				"POST",
 				"/v3/quotations",
 				buildQuotationBody({
-					serviceType: context.vehicleType,
+					serviceType: vehicleType,
 					market: credentials.market,
 					scheduleAt,
 					// Collection service quotes the trip the rider will actually
@@ -380,7 +697,9 @@ export async function fetchLalamoveQuote(args: {
 				fee: parsed.priceTotal,
 				currency: parsed.currency,
 				quotationId: parsed.quotationId,
-				vehicleType: context.vehicleType,
+				// The vehicle actually priced — frozen onto the order's snapshot,
+				// so dispatch and the seller can see a car was quoted.
+				vehicleType,
 			};
 		} catch (err) {
 			// Three buyer stories, three copies — and only ONE is retryable.
@@ -460,6 +779,295 @@ export const getWebhookContext = internalQuery({
 	},
 });
 
+/** Mark the store's Lalamove webhook as known-good, unless it already is. */
+async function stampWebhookKnown(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+): Promise<void> {
+	const retailer = await ctx.db.get(retailerId);
+	const booking = retailer?.deliveryBooking;
+	if (!retailer || !booking || booking.webhookRegisteredAt !== undefined) return;
+	await ctx.db.patch(retailerId, {
+		deliveryBooking: { ...booking, webhookRegisteredAt: Date.now() },
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Key check + disconnect state (z8r3fdy5ht)
+// ---------------------------------------------------------------------------
+
+/** Bounded so a hanging Lalamove doesn't hold the seller's Save button. */
+const KEY_CHECK_TIMEOUT_MS = 8000;
+
+/** Integrations write on the target store + its country (= Lalamove market). */
+export const getKeyCheckContext = internalQuery({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{ retailerId: Id<"retailers">; country: Country }> => {
+		let target = retailerId;
+		if (!target) {
+			const my = await resolveMyRetailer(ctx);
+			if (!my) throw new ConvexError("No store found");
+			target = my.retailer._id;
+		}
+		const access = await requireRetailerAccess(ctx, target, {
+			area: "integrations",
+			level: "write",
+		});
+		return {
+			retailerId: target,
+			country: access.retailer.country ?? DEFAULT_COUNTRY,
+		};
+	},
+});
+
+/**
+ * Is this pasted pair really a working Lalamove key for this store's market?
+ * The card calls it before saving (z8r3fdy5ht): shape first (the same rule
+ * `retailers.updateSettings` enforces), then a signed `GET /v3/cities`
+ * against the store's own market — the cheapest call that proves the key,
+ * the secret AND the country line up. Nothing is stored here.
+ *
+ * Fails CLOSED: an unreachable Lalamove says "try again", never "saved", so
+ * an unproven pair can't be badged Live. Rate-limited per store — this is an
+ * oracle for "does this key pair work", and a stolen-key tester is exactly
+ * who would hammer it.
+ */
+export const verifyKeys = action({
+	args: {
+		retailerId: v.optional(v.id("retailers")),
+		apiKey: v.string(),
+		apiSecret: v.string(),
+	},
+	handler: async (
+		ctx,
+		args,
+	): Promise<
+		| { ok: true; env: "sandbox" | "production" }
+		| { ok: false; message: string }
+	> => {
+		const target = await ctx.runQuery(internal.lalamove.getKeyCheckContext, {
+			retailerId: args.retailerId,
+		});
+		// The save this precedes is locked for a view-only store — say so
+		// before asking Lalamove anything, not after a check that "passed".
+		await ctx.runQuery(internal.subscriptions.assertWritable, {
+			retailerId: target.retailerId,
+		});
+		await rateLimiter.limit(ctx, "lalamoveKeyCheck", {
+			key: target.retailerId,
+			throws: true,
+		});
+		const shape = checkLalamoveKeyShape(args.apiKey, args.apiSecret);
+		if (!shape.ok) return shape;
+		const place = COUNTRY_LABELS[target.country];
+		try {
+			await callLalamove(
+				{
+					apiKey: args.apiKey.trim(),
+					apiSecret: args.apiSecret.trim(),
+					env: shape.env,
+					market: lalamoveMarketForCountry(target.country),
+				},
+				"GET",
+				"/v3/cities",
+				undefined,
+				{ timeoutMs: KEY_CHECK_TIMEOUT_MS },
+			);
+			return { ok: true, env: shape.env };
+		} catch (err) {
+			const status = err instanceof LalamoveApiError ? err.status : undefined;
+			// Lalamove answered, and said no: a definite verdict on this pair.
+			if (status !== undefined && status >= 400 && status < 500 && status !== 429) {
+				return {
+					ok: false,
+					message: `Lalamove didn't accept this key and secret for ${place}. Check both came from the same Lalamove account, set up for ${place}.`,
+				};
+			}
+			console.warn("[lalamove] key check couldn't reach Lalamove", {
+				status,
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return {
+				ok: false,
+				message:
+					"Couldn't reach Lalamove to check these keys — nothing was saved. Try again in a minute.",
+			};
+		}
+	},
+});
+
+/**
+ * Why the card's Disconnect is greyed out right now, or null when it isn't —
+ * the same rule `retailers.updateSettings` applies to `deliveryBooking: null`
+ * (`convex/lib/lalamoveDisconnect.ts`), read ahead of the tap.
+ */
+export const getDisconnectState = query({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<LalamoveDisconnectBlock | null> => {
+		let target = retailerId;
+		if (!target) {
+			const my = await resolveMyRetailer(ctx);
+			if (!my) return null;
+			target = my.retailer._id;
+		}
+		const access = await requireRetailerAccess(ctx, target, {
+			area: "integrations",
+			level: "read",
+		});
+		const retailer = access.retailer;
+		if (!hasLalamoveCredentials(retailer.deliveryBooking)) return null;
+		return (
+			lalamovePricingBlock(
+				retailer,
+				(retailer.deliveryConfig as { mode?: string } | undefined)?.mode,
+			) ?? (await lalamoveRiderOutBlock(ctx, retailer._id))
+		);
+	},
+});
+
+// ---------------------------------------------------------------------------
+// One-tap webhook registration (86eye9xd4, 5A)
+// ---------------------------------------------------------------------------
+
+/** Integrations write + the stored key pair, for registering the webhook. */
+export const getWebhookRegistrationContext = internalQuery({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		retailerId: Id<"retailers">;
+		credentials: LalamoveCredentials;
+	} | null> => {
+		let target = retailerId;
+		if (!target) {
+			const my = await resolveMyRetailer(ctx);
+			if (!my) throw new ConvexError("No store found");
+			target = my.retailer._id;
+		}
+		const access = await requireRetailerAccess(ctx, target, {
+			area: "integrations",
+			level: "write",
+		});
+		const credentials = resolveLalamoveCredentials(
+			access.retailer.deliveryBooking as BookingConfig | undefined,
+			access.retailer.country,
+		);
+		return credentials ? { retailerId: target, credentials } : null;
+	},
+});
+
+export const markWebhookRegistered = internalMutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }) => {
+		const retailer = await ctx.db.get(retailerId);
+		const booking = retailer?.deliveryBooking;
+		if (!retailer || !booking) return;
+		await ctx.db.patch(retailerId, {
+			deliveryBooking: { ...booking, webhookRegisteredAt: Date.now() },
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Stores whose webhook demonstrably works from BEFORE the setup checklist
+ * existed (86eye9xd4): a job with `lastEventAt` received a verified event
+ * (`applyWebhookEvent` only runs after the signature checks), so the
+ * checklist's webhook step must read done — not "Action needed" on an account
+ * that has been updating itself for months. Idempotent (stamped stores are
+ * skipped) and self-continuing; operator step, once per deployment.
+ *
+ * Run: `npx convex run lalamove:backfillWebhookKnown`
+ */
+export const backfillWebhookKnown = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }): Promise<{ stamped: number }> => {
+		const page = await ctx.db
+			.query("retailers")
+			.paginate({ numItems: 50, cursor: cursor ?? null });
+		let stamped = 0;
+		for (const retailer of page.page) {
+			const booking = retailer.deliveryBooking;
+			if (!booking?.apiKey || booking.webhookRegisteredAt !== undefined) continue;
+			const jobs = await ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_retailer", (q) => q.eq("retailerId", retailer._id))
+				.order("desc")
+				.take(50);
+			const heard = jobs.find(
+				(j) => j.provider === "lalamove" && j.lastEventAt !== undefined,
+			);
+			if (!heard?.lastEventAt) continue;
+			await ctx.db.patch(retailer._id, {
+				deliveryBooking: { ...booking, webhookRegisteredAt: heard.lastEventAt },
+			});
+			stamped++;
+		}
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.lalamove.backfillWebhookKnown, {
+				cursor: page.continueCursor,
+			});
+		}
+		return { stamped };
+	},
+});
+
+/**
+ * Point the seller's Lalamove account at our webhook — `PATCH /v3/webhook`,
+ * free, so the Partner Portal copy-paste becomes one tap. Lalamove keeps ONE
+ * webhook URL per account, so this replaces whatever was there; the settings
+ * card says so before the tap. The manual paste stays as the fallback when
+ * Lalamove refuses (shown with the URL to copy).
+ */
+export const registerWebhook = action({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		args,
+	): Promise<{ ok: true } | { ok: false; message: string }> => {
+		const target = await ctx.runQuery(
+			internal.lalamove.getWebhookRegistrationContext,
+			{ retailerId: args.retailerId },
+		);
+		if (!target) return { ok: false, message: "Save your Lalamove keys first." };
+		await ctx.runQuery(internal.subscriptions.assertWritable, {
+			retailerId: target.retailerId,
+		});
+		const siteUrl = process.env.CONVEX_SITE_URL;
+		if (!siteUrl) {
+			return {
+				ok: false,
+				message: "The webhook address isn't available — paste it by hand below.",
+			};
+		}
+		try {
+			await callLalamove(target.credentials, "PATCH", "/v3/webhook", {
+				data: { url: `${siteUrl}/webhook/lalamove` },
+			});
+		} catch (err) {
+			console.warn("[lalamove] webhook registration failed", {
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return {
+				ok: false,
+				message:
+					"Lalamove didn't accept the registration — paste the address in your Partner Portal instead.",
+			};
+		}
+		await ctx.runMutation(internal.lalamove.markWebhookRegistered, {
+			retailerId: target.retailerId,
+		});
+		return { ok: true };
+	},
+});
+
 /** Order statuses that may auto-advance from a rider event. `pending` is
  * deliberately absent — an unconfirmed order never ships itself. */
 const SHIPPABLE_FROM = new Set(["confirmed", "packed"]);
@@ -488,6 +1096,11 @@ export const applyWebhookEvent = internalMutation({
 	handler: async (ctx, { jobId, eventType, data, eventTimestamp }) => {
 		const job = await ctx.db.get(jobId);
 		if (!job) return;
+		// A verified event is proof this store's webhook reaches us — however
+		// it was set up — so the Integrations checklist can tick it (86eye9xd4).
+		// Once only: a per-event retailer patch would re-run every open
+		// storefront tab for nothing.
+		await stampWebhookKnown(ctx, job.retailerId);
 		const payload = (data ?? {}) as Record<string, unknown>;
 		const orderData = (payload.order ?? {}) as Record<string, unknown>;
 		const eventAt = parseLalamoveEventTime(data, eventTimestamp);
@@ -727,6 +1340,10 @@ export const applyWebhookEvent = internalMutation({
  * on order detail (never a dead end; each reason maps to copy + a fix path). */
 export type DispatchBlock =
 	| "country_unsupported"
+	/** The order is going somewhere this provider doesn't carry from this
+	 * store (z8r3fdr5yy): a cross-border order on Lalamove/Delyva, or a
+	 * domestic one on a MY store's EasyParcel. */
+	| "destination_unsupported"
 	| "not_delivery"
 	| "bad_status"
 	| "job_active"
@@ -756,6 +1373,8 @@ function dispatchBlockReason(args: {
 	// country switch itself refuses to let them take (86eyqgujv).
 	if (!riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY))
 		return "country_unsupported";
+	if (!servesOrderDestination("lalamove", order, retailer))
+		return "destination_unsupported";
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
 	if (order.status !== "confirmed" && order.status !== "packed")
 		return "bad_status";
@@ -808,9 +1427,10 @@ type DispatchContext =
 			destination: { latitude: number; longitude: number; address: string };
 			sender: { name: string; phone: string };
 			recipient: { name: string; phone: string; remarks?: string };
-			/** True when the buyer's WhatsApp isn't a Malaysian number — the
-			 * rider contact fell back to the seller (surfaced in the confirm
-			 * dialog so nobody is surprised when the rider calls the store). */
+			/** True when the buyer's WhatsApp isn't from the store's market —
+			 * the buyer-side rider contact fell back to the seller, with the
+			 * buyer's real number in the remarks (surfaced in the confirm dialog
+			 * so nobody is surprised when the rider calls the store). */
 			buyerContactFallback: boolean;
 			vehicleType: string;
 			/** "collection" reverses the trip: origin/sender are the BUYER's
@@ -832,12 +1452,39 @@ type DispatchContext =
 			 * yet; callers must treat that as "unknown", never as production. */
 			env?: "sandbox" | "production";
 			credentials: LalamoveCredentials;
+			/** The order's parcel weight, kg (unweighed lines at the one-kilo
+			 * floor) — chooses the default vehicle with the market's loads. */
+			cartKg: number | null;
 	  };
 
 /**
  * Shared eligibility + payload assembly for one booking attempt (used by the
  * dispatch context read below).
  */
+/** The order's parcel weight for choosing a vehicle — the same floor rule
+ * the checkout quote used (`liveQuoteWeightKg`), so dispatch defaults to the
+ * vehicle the buyer was priced on. */
+async function orderCartKg(
+	ctx: QueryCtx,
+	order: Doc<"orders">,
+): Promise<number | null> {
+	// Every line, where the checkout weighed at most `MAX_QUOTE_ITEMS` (100):
+	// the same thing, because `orders.create` caps an order at
+	// `MAX_ITEMS_PER_ORDER`, also 100 — no order carries a line the checkout
+	// didn't weigh.
+	const items: CartWeightItem[] = await Promise.all(
+		order.items.map(async (item): Promise<CartWeightItem> => {
+			const variant = item.variantId ? await ctx.db.get(item.variantId) : null;
+			return {
+				parcelWeightG: variant?.parcelWeightG ?? 0,
+				quantity: item.quantity,
+				isCustom: variant?.isCustom === true,
+			};
+		}),
+	);
+	return liveQuoteWeightKg(items);
+}
+
 async function dispatchContextForOrder(
 	ctx: QueryCtx,
 	order: Doc<"orders">,
@@ -870,9 +1517,12 @@ async function dispatchContextForOrder(
 	const businessAddress = retailer.businessAddress!;
 	// Lalamove rejects a phone from outside the request's market (422 on a
 	// +65 number in MY, and now on a +60 number in SG — the JB cross-border
-	// buyer, in both directions). The rider contact falls back to the SELLER
-	// when the buyer's number is foreign, with the buyer's actual number
-	// carried in remarks so the rider can still reach them via the seller.
+	// buyer, in both directions — and, since buyers may type a number from any
+	// country (z8r3fdh274), on every overseas number). The rider contact falls
+	// back to the SELLER when the buyer's number is foreign, and the buyer's
+	// actual number rides the remarks — second, right after the order ref, so
+	// the 400-char cut can't reach it — for the rider to reach them via the
+	// seller.
 	const sellerPhone = toLalamoveContactPhone(
 		retailer.waPhone,
 		credentials.market,
@@ -894,7 +1544,10 @@ async function dispatchContextForOrder(
 	const storePoint = {
 		latitude: businessAddress.latitude,
 		longitude: businessAddress.longitude,
-		address: businessAddress.label,
+		// Unit / floor / building first (z8r3fdff8r) — riders were arriving at
+		// the block and phoning the seller. Display only: the quote and the
+		// route key on lat/lng, so this never changes a price or a pin.
+		address: formatBusinessAddress(businessAddress),
 	};
 	const buyerPoint = {
 		latitude: address.latitude!,
@@ -907,10 +1560,10 @@ async function dispatchContextForOrder(
 		phone: buyerLocalPhone ?? sellerPhone,
 	};
 	// Collection service (86eyg0n8e): the whole trip reverses — rider collects
-	// at the BUYER's address (buyer becomes the sender contact, same +60
-	// fallback) and drops off at the store. Remarks always ride the recipient
-	// stop (the only remarks slot in Lalamove v3), which either way is the stop
-	// where the order ref matters at hand-over.
+	// at the BUYER's address (buyer becomes the sender contact, with the same
+	// store-number fallback) and drops off at the store. Remarks always ride
+	// the recipient stop (the only remarks slot in Lalamove v3), which either
+	// way is the stop where the order ref matters at hand-over.
 	const collection =
 		(retailer.deliveryBooking as BookingConfig).deliveryDirection ===
 		"collection";
@@ -935,6 +1588,7 @@ async function dispatchContextForOrder(
 		env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
 		vehicleType:
 			(retailer.deliveryBooking as BookingConfig).vehicleType ?? "MOTORCYCLE",
+		cartKg: await orderCartKg(ctx, order),
 		deliveryDirection: collection ? "collection" : "standard",
 		requestedMoment:
 			order.fulfilmentDate !== undefined &&
@@ -962,12 +1616,16 @@ export const getDispatchContext = internalQuery({
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return { ok: false, reason: "not_found" };
 
-		// Plan gate — admin act-as bypasses (white-glove), mirroring updateSettings.
-		const identity = await ctx.auth.getUserIdentity();
-		const actingAsAdmin =
-			identity !== null && retailer.userId !== identity.subject;
+		// The caller's REAL role from the gate (86exr91r4 audit fix): "not the
+		// owner" used to read as acting-admin here, which would have handed every
+		// team member the admin plan-gate bypass. Booking a rider is orders work,
+		// so the write level applies; only a true admin skips the plan gate.
+		const access = await requireRetailerAccess(ctx, retailer._id, {
+			area: "orders",
+			level: "write",
+		});
 		let planOk = true;
-		if (!actingAsAdmin) {
+		if (access.role !== "admin") {
 			try {
 				await assertPlanFeature(ctx, retailer._id, "delivery");
 			} catch {
@@ -1001,7 +1659,7 @@ function friendlyBookingError(
 			case "wallet":
 				return env === "sandbox"
 					? "These are Lalamove TEST keys, so this booking is hitting the sandbox — its balance is play money and topping up your real wallet can't change it. Paste your live keys (they start with pk_prod_) in Settings → Fulfilment to book real riders."
-					: "Your Lalamove wallet doesn't have enough balance. Top it up in the Lalamove Business account these API keys belong to — a top-up in the personal Lalamove app credits a different wallet — then book again.";
+					: "Your Lalamove wallet doesn't have enough balance. Top it up in Lalamove's Partner Portal, the account these API keys come from — a top-up in the Lalamove app credits a different wallet — then book again.";
 			case "quote_expired":
 				return "The price quote expired — get a fresh price and confirm within 5 minutes.";
 			case "bad_phone":
@@ -1053,7 +1711,24 @@ export const prepareBooking = action({
 				fee: number;
 				buyerPaidFee: number;
 				vehicleType: string;
+				/** Why the default vehicle isn't the seller's setting, or that no
+				 * rider vehicle can carry the order (25 Oct 2026) — the dialog
+				 * says so beside the vehicle switch. Undefined = the setting fits. */
+				vehicleAdvice?:
+					| {
+							kind: "escalated";
+							from: string;
+							to: string;
+							cartKg: number;
+							fromLoadKg?: number;
+					  }
+					| { kind: "too_heavy"; cartKg: number; maxKg: number };
 				buyerContactFallback: boolean;
+				/** The market the booking is made in (the store's country) — lets
+				 * the confirm dialog name it when `buyerContactFallback` is set,
+				 * since the client can't tell the market from the order (its
+				 * currency can diverge from the store's country). */
+				market: LalamoveMarket;
 				/** The pickup moment this quotation was scheduled for — the
 				 * buyer's fulfilment date+time (or the seller's override,
 				 * 86eyp5qd1) when still ahead at prepare time. Undefined = the
@@ -1073,11 +1748,55 @@ export const prepareBooking = action({
 				expiresAt?: number;
 		  }
 	> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: shortId,
+		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+			shortId: shortId,
+		});
 		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
 			shortId,
 		});
 		if (!context.ok) return context;
-		const vehicleType = vehicleOverride ?? context.vehicleType;
+		// Default to the vehicle that can carry THIS order (25 Oct 2026): the
+		// checkout priced it on that one, and a motorcycle booked for a 25 kg
+		// order is a rider who arrives and leaves. The seller's switch still
+		// wins — they may be splitting the parcel or know better.
+		const loads = await vehicleLoadsFor(ctx, {
+			retailerId: context.retailerId,
+			credentials: context.credentials,
+			env: context.env,
+			inlineFetch: false,
+		});
+		const choice = chooseRiderVehicle({
+			preferred: context.vehicleType,
+			cartKg: context.cartKg,
+			loads,
+		});
+		const defaultVehicle =
+			choice.kind === "fits" ? choice.vehicle : ("CAR" as const);
+		const vehicleAdvice:
+			| {
+					kind: "escalated";
+					from: string;
+					to: string;
+					cartKg: number;
+					fromLoadKg?: number;
+			  }
+			| { kind: "too_heavy"; cartKg: number; maxKg: number }
+			| undefined =
+			choice.kind === "too_heavy"
+				? { kind: "too_heavy", cartKg: choice.cartKg, maxKg: choice.maxKg }
+				: choice.escalatedFrom && choice.cartKg !== undefined
+					? {
+							kind: "escalated",
+							from: choice.escalatedFrom,
+							to: choice.vehicle,
+							cartKg: choice.cartKg,
+							fromLoadKg: loadOf(loads, choice.escalatedFrom),
+						}
+					: undefined;
+		const vehicleType = vehicleOverride ?? defaultVehicle;
 		// The buyer's ask is the DEFAULT; past or imminent books now — the
 		// same pure rule the checkout quote used to price the fee. A seller
 		// override (86eyp5qd1) rides the same clamps; only an explicit pick
@@ -1120,7 +1839,9 @@ export const prepareBooking = action({
 				fee: parsed.priceTotal,
 				buyerPaidFee: context.buyerPaidFee,
 				vehicleType,
+				vehicleAdvice,
 				buyerContactFallback: context.buyerContactFallback,
+				market: context.credentials.market,
 				scheduledFor,
 				buyerRequestedMoment: context.requestedMoment,
 				expiresAt: parsed.expiresAt
@@ -1183,6 +1904,12 @@ export const confirmBooking = action({
 		  }
 		| { ok: true; providerOrderId: string; costActual: number }
 	> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: args.shortId,
+		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+			shortId: args.shortId,
+		});
 		const context = await ctx.runQuery(internal.lalamove.getDispatchContext, {
 			shortId: args.shortId,
 		});
@@ -1246,6 +1973,23 @@ export const confirmBooking = action({
 				message: err instanceof Error ? err.message : String(err),
 			});
 			const message = friendlyBookingError(err, context.env);
+			// An insufficient-balance refusal is news about the WALLET too: the
+			// seller's other surfaces should say "short" before the next tap,
+			// not just this order's failed card. Lalamove names no amount, so it
+			// records a refusal, never a balance. Sandbox refusals are play
+			// money and say nothing about the real wallet.
+			if (
+				err instanceof LalamoveApiError &&
+				classifyBookingFailure(err.body) === "wallet" &&
+				context.env !== "sandbox"
+			) {
+				await ctx.runMutation(internal.courierWallets.record, {
+					retailerId: context.retailerId,
+					provider: "lalamove",
+					at: Date.now(),
+					observation: { kind: "refused" },
+				});
+			}
 			// Free the slot so the seller can rebook immediately; the released row
 			// doubles as the amber failed card.
 			await ctx.runMutation(internal.lalamove.releaseReservation, {
@@ -1618,6 +2362,9 @@ export const cancelBooking = action({
 		ctx,
 		{ shortId },
 	): Promise<{ ok: boolean; message?: string }> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: shortId,
+		});
 		const target = await ctx.runQuery(internal.lalamove.getCancelContext, {
 			shortId,
 		});
@@ -1643,6 +2390,207 @@ export const cancelBooking = action({
 			jobId: target.jobId,
 		});
 		return { ok: true };
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Tip a booking that's waiting for a rider (86eye9xd4)
+// ---------------------------------------------------------------------------
+
+export type TipRefusal =
+	| "no_booking"
+	| "rider_found"
+	| "bad_amount"
+	| "over_cap";
+
+/** The active Lalamove booking a tip would land on, with what's been tipped. */
+export const getTipContext = internalQuery({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<
+		| { ok: false; reason: TipRefusal }
+		| {
+				ok: true;
+				jobId: Id<"deliveryJobs">;
+				providerOrderId: string;
+				credentials: LalamoveCredentials;
+				market: LalamoveMarket;
+				tipped: number;
+		  }
+	> => {
+		const order = await resolveSharedOrder(ctx, { shortId });
+		if (!order) return { ok: false, reason: "no_booking" };
+		// Spending the store's money is orders WORK, not a read.
+		await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "write",
+		});
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.collect();
+		const active = jobs.find(
+			(j) => j.provider === "lalamove" && isActiveJobStatus(j.status),
+		);
+		if (!active || active.providerOrderId === undefined)
+			return { ok: false, reason: "no_booking" };
+		// Lalamove only takes a priority fee while it is still finding a rider.
+		if (active.status !== "assigning") return { ok: false, reason: "rider_found" };
+		const retailer = await ctx.db.get(order.retailerId);
+		const credentials = resolveLalamoveCredentials(
+			retailer?.deliveryBooking as BookingConfig | undefined,
+			retailer?.country,
+		);
+		if (!credentials) return { ok: false, reason: "no_booking" };
+		return {
+			ok: true,
+			jobId: active._id,
+			providerOrderId: active.providerOrderId,
+			credentials,
+			market: credentials.market,
+			tipped: active.priorityFee ?? 0,
+		};
+	},
+});
+
+/**
+ * A tip is RESERVED before Lalamove is called, then confirmed or released —
+ * the cap check and the count live in one transaction, so two tabs tipping at
+ * once can't both pass it (the action's own pre-check reads a snapshot). If the
+ * process dies between the reserve and the confirm, the tip stays counted:
+ * that blocks a further tip, which is the safe side — it can never let one
+ * overspend. `costActual` moves only on confirm, and Lalamove's
+ * `ORDER_AMOUNT_CHANGED` overwrites it with their own total anyway.
+ */
+export const reservePriorityFee = internalMutation({
+	args: { jobId: v.id("deliveryJobs"), amount: v.number(), cap: v.number() },
+	handler: async (
+		ctx,
+		{ jobId, amount, cap },
+	): Promise<{ ok: true } | { ok: false; reason: "rider_found" | "cap" }> => {
+		const job = await ctx.db.get(jobId);
+		if (!job || job.status !== "assigning")
+			return { ok: false, reason: "rider_found" };
+		const tipped = job.priorityFee ?? 0;
+		if (tipped + amount > cap) return { ok: false, reason: "cap" };
+		await ctx.db.patch(jobId, {
+			priorityFee: tipped + amount,
+			updatedAt: Date.now(),
+		});
+		return { ok: true };
+	},
+});
+
+/** Lalamove refused the tip — hand the reservation back. */
+export const releasePriorityFee = internalMutation({
+	args: { jobId: v.id("deliveryJobs"), amount: v.number() },
+	handler: async (ctx, { jobId, amount }) => {
+		const job = await ctx.db.get(jobId);
+		if (!job) return;
+		const left = (job.priorityFee ?? 0) - amount;
+		await ctx.db.patch(jobId, {
+			priorityFee: left > 0 ? left : undefined,
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/** Lalamove took the tip — it's now part of what the booking costs. */
+export const confirmPriorityFee = internalMutation({
+	args: { jobId: v.id("deliveryJobs"), amount: v.number() },
+	handler: async (ctx, { jobId, amount }) => {
+		const job = await ctx.db.get(jobId);
+		if (!job) return;
+		await ctx.db.patch(jobId, {
+			costActual: job.costActual + amount,
+			updatedAt: Date.now(),
+		});
+	},
+});
+
+/**
+ * Add a tip to a booking stuck finding a rider — Lalamove's priority fee
+ * (`POST /v3/orders/{id}/priority-fee`). A booking that nobody accepts
+ * EXPIRES; a tip is the lever that makes a nearby rider take it. Fixed steps
+ * and a per-booking cap (`TIP_OPTIONS`); charged to the seller's own
+ * Lalamove wallet; never undone.
+ */
+export const addPriorityFee = action({
+	args: { shortId: v.string(), amount: v.number() },
+	handler: async (
+		ctx,
+		{ shortId, amount },
+	): Promise<{ ok: true; tipped: number } | { ok: false; message: string }> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId,
+		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+			shortId,
+		});
+		const target = await ctx.runQuery(internal.lalamove.getTipContext, {
+			shortId,
+		});
+		if (!target.ok) {
+			return {
+				ok: false,
+				message:
+					target.reason === "rider_found"
+						? "A rider has already taken this booking — no tip needed."
+						: "There's no Lalamove booking waiting for a rider on this order.",
+			};
+		}
+		const rule = TIP_OPTIONS[target.market];
+		if (!rule.amounts.includes(amount)) {
+			return { ok: false, message: "Pick one of the tip amounts shown." };
+		}
+		const LIMIT = "That's past the tip limit for one booking.";
+		// A fast answer from the snapshot; the reserve below is the real check.
+		if (target.tipped + amount > rule.cap) return { ok: false, message: LIMIT };
+		const reserved = await ctx.runMutation(
+			internal.lalamove.reservePriorityFee,
+			{ jobId: target.jobId, amount, cap: rule.cap },
+		);
+		if (!reserved.ok) {
+			return {
+				ok: false,
+				message:
+					reserved.reason === "cap"
+						? LIMIT
+						: "A rider has already taken this booking — no tip needed.",
+			};
+		}
+		try {
+			await callLalamove(
+				target.credentials,
+				"POST",
+				`/v3/orders/${target.providerOrderId}/priority-fee`,
+				{ data: { priorityFee: priorityFeeWire(amount) } },
+			);
+		} catch (err) {
+			console.warn("[lalamove] priority fee failed", {
+				shortId,
+				message: err instanceof Error ? err.message : String(err),
+			});
+			await ctx.runMutation(internal.lalamove.releasePriorityFee, {
+				jobId: target.jobId,
+				amount,
+			});
+			return {
+				ok: false,
+				message:
+					err instanceof LalamoveApiError &&
+					classifyBookingFailure(err.body) === "wallet"
+						? "Your Lalamove wallet doesn't have enough for the tip — top it up, then try again."
+						: "Lalamove didn't take the tip — the booking may have just been accepted. Check its status and try again if it's still waiting.",
+			};
+		}
+		await ctx.runMutation(internal.lalamove.confirmPriorityFee, {
+			jobId: target.jobId,
+			amount,
+		});
+		return { ok: true, tipped: target.tipped + amount };
 	},
 });
 
@@ -1722,6 +2670,8 @@ export type DeliveryJobView = {
 	 * lets the card say "Scheduled · 3:30 PM" instead of sitting on
 	 * "Finding rider" for hours. Unset = immediate booking. */
 	scheduledAt?: number;
+	/** Tips added while it waited for a rider — already inside costActual. */
+	priorityFee?: number;
 };
 
 /**
@@ -1789,11 +2739,15 @@ export const getDeliveryJob = query({
 			retailer.deliveryBooking as BookingConfig | undefined,
 			retailer.country,
 		);
-		const identity = await ctx.auth.getUserIdentity();
-		const actingAsAdmin =
-			identity !== null && retailer.userId !== identity.subject;
+		// Real role from the gate (86exr91r4) — read level: this is the dispatch
+		// card's state, booking itself re-gates at write. Only a true admin
+		// skips the plan gate.
+		const access = await requireRetailerAccess(ctx, retailer._id, {
+			area: "orders",
+			level: "read",
+		});
 		let planOk = true;
-		if (!actingAsAdmin) {
+		if (access.role !== "admin") {
 			try {
 				await assertPlanFeature(ctx, retailer._id, "delivery");
 			} catch {
@@ -1821,12 +2775,11 @@ export const getDeliveryJob = query({
 		return {
 			promptBookOnPacked,
 			env: (retailer.deliveryBooking as BookingConfig | undefined)?.env,
-			// Agrees with `blockReason` by construction: a stored `enabled` flag
-			// carried in from Malaysia is not a working booking setup, and the
+			// Agrees with `blockReason` by construction (the shared predicate
+			// reads the same country gate): a stored `enabled` flag carried
+			// across a country switch is not a working booking setup, and the
 			// mark-shipped prompt keys off this to decide rider-vs-courier.
-			bookingEnabled:
-				retailer.deliveryBooking?.enabled === true &&
-				riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
+			bookingEnabled: lalamoveBookingArmed(retailer),
 			riderOnlyStore:
 				retailer.deliveryConfig?.mode === "lalamove" &&
 				riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
@@ -1848,6 +2801,7 @@ export const getDeliveryJob = query({
 						// which is exactly what those trips were.
 						deliveryDirection: latest.deliveryDirection ?? "standard",
 						scheduledAt: latest.scheduledAt,
+						priorityFee: latest.priorityFee,
 					}
 				: null,
 			blockReason,
@@ -1979,7 +2933,7 @@ export const getProbeContext = internalQuery({
 				origin: {
 					latitude: r.businessAddress.latitude,
 					longitude: r.businessAddress.longitude,
-					label: r.businessAddress.label,
+					label: formatBusinessAddress(r.businessAddress),
 				},
 				credentials,
 			};

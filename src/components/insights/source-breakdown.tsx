@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { sourceLabel } from "../../../convex/lib/attribution";
 import type { SourceStat } from "../../../convex/lib/insights";
+import { REVENUE_LEAVES } from "../../../convex/lib/orderBuckets";
 import { formatPrice, formatPriceCompact } from "../../lib/format";
 
 // Horizontal-bar breakdown of where orders come from (86eyq0eq9): the
@@ -67,7 +68,7 @@ export function SourceBreakdown({
 									    filter by hand in the inbox. */}
 									<Link
 										to="/app/orders"
-										search={{ asrc: [s.source] }}
+										search={{ asrc: [s.source], st: [...REVENUE_LEAVES] }}
 										className="tap-target -mx-2 flex flex-col gap-1 rounded-xl px-2 py-1.5 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
 										aria-label={`View ${s.orderCount} ${
 											s.orderCount === 1 ? "order" : "orders"

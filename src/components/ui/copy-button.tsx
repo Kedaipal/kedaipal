@@ -6,8 +6,12 @@ import { cn } from "../../lib/utils";
 interface CopyButtonProps {
 	/** Text written to the clipboard on tap. */
 	value: string;
-	/** Accessible label (the visible text stays "Copy"/"Copied"). */
+	/** Accessible label (the visible text stays `label`/"Copied"). */
 	ariaLabel?: string;
+	/** Visible text before the tap. "Copy" by default; a button that copies a
+	 * composed block says what ("Copy summary"). After the tap it reads
+	 * "Copied" either way. */
+	label?: string;
 	/** Toast shown on a successful copy. */
 	successMessage?: string;
 	className?: string;
@@ -25,6 +29,7 @@ interface CopyButtonProps {
 export function CopyButton({
 	value,
 	ariaLabel = "Copy",
+	label = "Copy",
 	successMessage = "Copied",
 	className,
 	labelClassName,
@@ -54,13 +59,13 @@ export function CopyButton({
 			className={cn(
 				"flex h-11 min-h-[44px] shrink-0 items-center gap-1 rounded-full px-3 text-xs font-medium transition-colors",
 				copied
-					? "text-emerald-600"
+					? "text-emerald-600 dark:text-emerald-400"
 					: "text-muted-foreground hover:bg-muted hover:text-foreground",
 				className,
 			)}
 		>
 			{copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-			<span className={labelClassName}>{copied ? "Copied" : "Copy"}</span>
+			<span className={labelClassName}>{copied ? "Copied" : label}</span>
 		</button>
 	);
 }

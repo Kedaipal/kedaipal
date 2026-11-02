@@ -1,4 +1,5 @@
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
@@ -7,16 +8,26 @@ import {
 	type RetailerAccess,
 	requireRetailerAccess,
 } from "./lib/auth";
+import type { PermissionLevel } from "./lib/permissions";
 import {
 	isProductVisible,
 	recomputeCategoryCount,
 	recomputeHiddenByCategoryForCategory,
 	recomputeProductHiddenByCategory,
 } from "./lib/categoryCounts";
+import { filePastOrdersPage } from "./lib/orderCategoryNames";
 import { rateLimiter } from "./lib/rateLimiter";
+import { MAX_PRODUCTS_PER_RETAILER } from "./lib/productCap";
 import { assertValidCategorySlug } from "./lib/slug";
+import { hiddenFromStorefront } from "./lib/productEvent";
 import { productWithVariants } from "./products";
-import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
+import {
+	assertPlanFeature,
+	assertSubscriptionActive,
+	getAccess,
+} from "./subscriptions";
+import { isStoreOffline } from "./storeAvailability";
+import { indexableStores } from "./storefrontIndex";
 
 const NAME_MAX = 60;
 const DESCRIPTION_MAX = 280;
@@ -25,10 +36,11 @@ const DESCRIPTION_MAX = 280;
  * Archived memberships are preserved beyond this (they don't count). */
 export const MAX_CATEGORIES_PER_PRODUCT = 10;
 /** Hard ceiling on products enriched for one public category page. A category
- * can't hold more than the per-retailer product cap (50), so this never
- * truncates today — it's a defensive bound so the buyer page can't fan out
- * unboundedly if that cap ever rises. */
-const CATEGORY_PAGE_PRODUCT_LIMIT = 100;
+ * can't hold more than the per-retailer product cap, so this never truncates
+ * — it's a defensive bound so the buyer page can't fan out unboundedly. It
+ * was 100 against a cap that had risen to 200, and it bounded the junction
+ * read BEFORE the visibility filter, so archived members used up slots. */
+const CATEGORY_PAGE_PRODUCT_LIMIT = MAX_PRODUCTS_PER_RETAILER;
 
 // ---------------------------------------------------------------------------
 // Auth helpers — mirror the pattern in convex/pickupLocations.ts so each
@@ -37,20 +49,27 @@ const CATEGORY_PAGE_PRODUCT_LIMIT = 100;
 
 // Owner-OR-admin access (see convex/lib/auth.ts) so a Kedaipal admin can set up
 // a seller's categories during white-glove onboarding.
+// Categories ride the PRODUCTS grant (86exr91r4) — they're catalog structure,
+// and a separate row on the permissions page would gate nothing meaningful.
 async function requireRetailerOwner(
 	ctx: QueryCtx | MutationCtx,
 	retailerId: Id<"retailers">,
+	level: PermissionLevel,
 ): Promise<RetailerAccess> {
-	return requireRetailerAccess(ctx, retailerId);
+	return requireRetailerAccess(ctx, retailerId, { area: "products", level });
 }
 
 async function requireOwnedCategory(
 	ctx: QueryCtx | MutationCtx,
 	categoryId: Id<"categories">,
+	level: PermissionLevel,
 ): Promise<{ category: Doc<"categories">; access: RetailerAccess }> {
 	const category = await ctx.db.get(categoryId);
 	if (!category) throw new Error("Category not found");
-	const access = await requireRetailerAccess(ctx, category.retailerId);
+	const access = await requireRetailerAccess(ctx, category.retailerId, {
+		area: "products",
+		level,
+	});
 	return { category, access };
 }
 
@@ -136,7 +155,7 @@ export const listForRetailer = query({
 	): Promise<
 		Array<Doc<"categories"> & { productCount: number; imageUrl: string | null }>
 	> => {
-		await requireRetailerOwner(ctx, retailerId);
+		await requireRetailerOwner(ctx, retailerId, "read");
 		const rows = await ctx.db
 			.query("categories")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
@@ -177,6 +196,8 @@ export const listActivePublic = query({
 			productCount: number;
 		}>
 	> => {
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return [];
 		const rows = await ctx.db
 			.query("categories")
 			.withIndex("by_retailer_active", (q) =>
@@ -215,6 +236,8 @@ export const getPublicPage = query({
 	handler: async (ctx, { retailerId, categorySlug }) => {
 		const normalized = categorySlug.trim().toLowerCase();
 		if (normalized.length === 0) return null;
+		// Offline (Kedaipal took the store down): no public catalogue (z8r3fdudf7).
+		if (await isStoreOffline(ctx, retailerId)) return null;
 		const category = await ctx.db
 			.query("categories")
 			.withIndex("by_retailer_slug", (q) =>
@@ -231,12 +254,15 @@ export const getPublicPage = query({
 			.withIndex("by_category_sort", (q) => q.eq("categoryId", category._id))
 			.take(CATEGORY_PAGE_PRODUCT_LIMIT);
 		const products = [];
+		const plan = (await getAccess(ctx, retailerId)).plan;
 		for (const junction of junctions) {
 			const product = await ctx.db.get(junction.productId);
-			// Same visibility rules as products.list: active + not hidden.
+			// Same visibility rules as products.list: active, not hidden, and not
+			// a finished event (which takes itself off the storefront).
 			if (!product || !product.active || product.hidden === true) continue;
+			if (hiddenFromStorefront(product)) continue;
 			products.push(
-				await productWithVariants(ctx, product, { activeOnly: true }),
+				await productWithVariants(ctx, product, { activeOnly: true, plan }),
 			);
 		}
 		return {
@@ -274,7 +300,7 @@ export const listProductsForCategory = query({
 			imageUrl: string | null;
 		}>
 	> => {
-		await requireOwnedCategory(ctx, categoryId);
+		await requireOwnedCategory(ctx, categoryId, "read");
 		const junctions = await ctx.db
 			.query("productCategories")
 			.withIndex("by_category_sort", (q) => q.eq("categoryId", categoryId))
@@ -324,7 +350,7 @@ export const listProductsForCategory = query({
 export const namesByProduct = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<Record<string, string[]>> => {
-		await requireRetailerOwner(ctx, retailerId);
+		await requireRetailerOwner(ctx, retailerId, "read");
 		const joins = await ctx.db
 			.query("productCategories")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
@@ -351,7 +377,7 @@ export const getProductCategoryIds = query({
 	handler: async (ctx, { productId }): Promise<Id<"categories">[]> => {
 		const product = await ctx.db.get(productId);
 		if (!product) return [];
-		await requireRetailerOwner(ctx, product.retailerId);
+		await requireRetailerOwner(ctx, product.retailerId, "read");
 		const rows = await ctx.db
 			.query("productCategories")
 			.withIndex("by_product", (q) => q.eq("productId", productId))
@@ -383,7 +409,7 @@ export const create = mutation({
 		ctx,
 		{ retailerId, name, slug, description, imageStorageId },
 	): Promise<{ categoryId: Id<"categories"> }> => {
-		const access = await requireRetailerOwner(ctx, retailerId);
+		const access = await requireRetailerOwner(ctx, retailerId, "write");
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses (white-glove).
@@ -440,12 +466,17 @@ export const update = mutation({
 		ctx,
 		{ categoryId, name, slug, description, imageStorageId },
 	): Promise<void> => {
-		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const { category, access } = await requireOwnedCategory(
+			ctx,
+			categoryId,
+			"write",
+		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
+		}
 		// Editing category structure is Pro; archive/restore (setActive) is the
 		// un-gated escape hatch, not this. Admin act-as bypasses.
 		if (!access.actingAsAdmin)
@@ -504,12 +535,17 @@ export const update = mutation({
 export const setActive = mutation({
 	args: { categoryId: v.id("categories"), active: v.boolean() },
 	handler: async (ctx, { categoryId, active }): Promise<void> => {
-		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const { category, access } = await requireOwnedCategory(
+			ctx,
+			categoryId,
+			"write",
+		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
+		}
 		if (category.active === active) return; // idempotent
 
 		const patch: Partial<Doc<"categories">> = {
@@ -546,7 +582,7 @@ export const reorder = mutation({
 		orderedIds: v.array(v.id("categories")),
 	},
 	handler: async (ctx, { retailerId, orderedIds }): Promise<void> => {
-		const access = await requireRetailerOwner(ctx, retailerId);
+		const access = await requireRetailerOwner(ctx, retailerId, "write");
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
@@ -597,12 +633,17 @@ export const reorderProducts = mutation({
 		orderedProductIds: v.array(v.id("products")),
 	},
 	handler: async (ctx, { categoryId, orderedProductIds }): Promise<void> => {
-		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const { category, access } = await requireOwnedCategory(
+			ctx,
+			categoryId,
+			"write",
+		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
+		}
 		// Structure-building — Pro. Admin act-as bypasses.
 		if (!access.actingAsAdmin)
 			await assertPlanFeature(ctx, category.retailerId, "categories");
@@ -649,21 +690,29 @@ export const reorderProducts = mutation({
  * (chargeablePickup's set-gated/clear-ungated precedent). The denormalized
  * `categories.productCount` is adjusted for each add/remove when the product is
  * storefront-visible.
+ *
+ * ADDING a category also files the product's past orders that recorded none
+ * (`filePastOrdersPage`): the newest batch here, so the save can say how many,
+ * the rest as scheduled batches. Lines that already carry a category keep it.
  */
 export const setProductCategories = mutation({
 	args: {
 		productId: v.id("products"),
 		categoryIds: v.array(v.id("categories")),
 	},
-	handler: async (ctx, { productId, categoryIds }): Promise<void> => {
+	handler: async (
+		ctx,
+		{ productId, categoryIds },
+	): Promise<PastOrderFiling> => {
 		const product = await ctx.db.get(productId);
 		if (!product) throw new Error("Product not found");
-		const access = await requireRetailerOwner(ctx, product.retailerId);
+		const access = await requireRetailerOwner(ctx, product.retailerId, "write");
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
 		// Soft-lock (growth-write); admin act-as bypasses.
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, product.retailerId);
+		}
 
 		const requested = new Set(categoryIds);
 		if (requested.size !== categoryIds.length) {
@@ -760,6 +809,65 @@ export const setProductCategories = mutation({
 				productId,
 			);
 		}
+		if (added.length === 0) return NOTHING_FILED;
+
+		const page = await filePastOrdersPage(ctx, {
+			retailerId: product.retailerId,
+			productId,
+			cursor: null,
+		});
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.categories.filePastOrders, {
+				retailerId: product.retailerId,
+				productId,
+				cursor: page.continueCursor,
+			});
+		}
+		const categoryNames = (
+			await Promise.all(added.map((id) => ctx.db.get(id)))
+		)
+			.flatMap((c) => (c ? [c.name] : []))
+			.sort((a, b) => a.localeCompare(b));
+		return {
+			filedOrders: page.filed,
+			filingContinues: !page.isDone,
+			categoryNames,
+		};
+	},
+});
+
+/** What a category save did to past orders — the product page's toast reads it. */
+export interface PastOrderFiling {
+	/** Orders filed in the save itself (the newest batch). */
+	filedOrders: number;
+	/** Older orders are still being filed in the background. */
+	filingContinues: boolean;
+	/** The categories this save ADDED, by name — what the toast names. */
+	categoryNames: string[];
+}
+
+const NOTHING_FILED: PastOrderFiling = {
+	filedOrders: 0,
+	filingContinues: false,
+	categoryNames: [],
+};
+
+/** The scheduled continuation of `setProductCategories`' past-order filing,
+ * one batch per run until the store's history is walked. */
+export const filePastOrders = internalMutation({
+	args: {
+		retailerId: v.id("retailers"),
+		productId: v.id("products"),
+		cursor: v.string(),
+	},
+	handler: async (ctx, args): Promise<void> => {
+		const page = await filePastOrdersPage(ctx, args);
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.categories.filePastOrders, {
+				...args,
+				cursor: page.continueCursor,
+			});
+		}
 	},
 });
 
@@ -774,11 +882,16 @@ export const setProductCategories = mutation({
 export const setHidden = mutation({
 	args: { categoryId: v.id("categories"), hidden: v.boolean() },
 	handler: async (ctx, { categoryId, hidden }): Promise<void> => {
-		const { category, access } = await requireOwnedCategory(ctx, categoryId);
+		const { category, access } = await requireOwnedCategory(
+			ctx,
+			categoryId,
+			"write",
+		);
 		const userId = await requireUserId(ctx);
 		await rateLimiter.limit(ctx, "productWrite", { key: userId, throws: true });
-		if (!access.actingAsAdmin)
+		if (!access.actingAsAdmin) {
 			await assertSubscriptionActive(ctx, category.retailerId);
+		}
 		if ((category.hidden ?? false) === hidden) return; // idempotent
 
 		await ctx.db.patch(categoryId, { hidden, updatedAt: Date.now() });
@@ -800,5 +913,73 @@ export const recomputeAllCounts = internalMutation({
 			await recomputeCategoryCount(ctx, category._id);
 		}
 		return { recomputed: categories.length };
+	},
+});
+
+/**
+ * The category a product page's breadcrumb names (z8r3fdh2z3): the product's
+ * FIRST visible category, or null. "First" is the order the seller assigned
+ * them (`productCategories.createdAt`); a product can sit in up to ten, and a
+ * breadcrumb shows one trail. Hidden or archived categories are skipped —
+ * their page 404s, so the crumb must not link there.
+ */
+export const primaryPublicForProduct = query({
+	args: { retailerId: v.id("retailers"), productId: v.id("products") },
+	handler: async (
+		ctx,
+		{ retailerId, productId },
+	): Promise<{ name: string; slug: string } | null> => {
+		if (await isStoreOffline(ctx, retailerId)) return null;
+		const junctions = await ctx.db
+			.query("productCategories")
+			.withIndex("by_product", (q) => q.eq("productId", productId))
+			.collect();
+		for (const junction of [...junctions].sort(
+			(a, b) => a.createdAt - b.createdAt,
+		)) {
+			const category = await ctx.db.get(junction.categoryId);
+			if (!category || category.retailerId !== retailerId) continue;
+			if (!category.active || category.hidden === true) continue;
+			return { name: category.name, slug: category.slug };
+		}
+		return null;
+	},
+});
+
+/**
+ * Category pages for the sitemap (z8r3fdh2ye): every store the sitemap
+ * lists, every category its rail shows — the `listActivePublic` rule (active,
+ * not hidden, at least one visible product). `updatedAt` is the category's
+ * last write.
+ */
+export const listForSitemap = query({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<
+		Array<{ storeSlug: string; categorySlug: string; updatedAt: number }>
+	> => {
+		const out: Array<{
+			storeSlug: string;
+			categorySlug: string;
+			updatedAt: number;
+		}> = [];
+		for (const { retailer } of await indexableStores(ctx)) {
+			const rows = await ctx.db
+				.query("categories")
+				.withIndex("by_retailer_active", (q) =>
+					q.eq("retailerId", retailer._id).eq("active", true),
+				)
+				.collect();
+			for (const row of rows) {
+				if (row.hidden === true || (row.productCount ?? 0) === 0) continue;
+				out.push({
+					storeSlug: retailer.slug,
+					categorySlug: row.slug,
+					updatedAt: row.updatedAt,
+				});
+			}
+		}
+		return out;
 	},
 });

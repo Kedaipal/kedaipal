@@ -73,6 +73,29 @@ describe("OrderItemLine", () => {
 		expect(detail.textContent).not.toContain("×");
 	});
 
+	it("an open-days package names its skipped days as labelled rows under its window (z8r3fdhpm7, z8r3fdh3ay)", () => {
+		line({
+			quantity: 1,
+			unitPrice: 50000,
+			lineTotal: 50000,
+			booking: {
+				checkIn: day(0),
+				checkOut: day(7),
+				packaged: true,
+				skippedDays: [day(1), day(4), day(5)],
+				customerSkips: [day(5)],
+			},
+		});
+		// The window line carries the window only — one fact per row.
+		const detail = screen.getByText(/Valid/);
+		expect(detail.textContent).not.toMatch(/skip/i);
+		const rows = screen.getAllByRole("listitem").map((li) => li.textContent);
+		expect(rows.some((t) => /^Store closed: .+, .+$/.test(t ?? ""))).toBe(true);
+		expect(
+			rows.some((t) => /^Skipped on request: \S+ \d+ \S+$/.test(t ?? "")),
+		).toBe(true);
+	});
+
 	it("names the kind of night on a split stay, without repeating the label (S13)", () => {
 		// Thu 10 → Mon 14 Sep: the weekend line charges 2 of the 4 nights.
 		const thu = Date.UTC(2026, 8, 10) - MYT_OFFSET_MS;
@@ -187,5 +210,54 @@ describe("OrderItemLine", () => {
 		line({ variantLabel: "Riverside", lineTotal: 16000 });
 		expect(screen.getByText("Riverside")).toBeTruthy();
 		expect(screen.getByText("RM 160.00")).toBeTruthy();
+	});
+});
+
+describe("OrderItemLine — buyer answers (z8r3fdkjek)", () => {
+	it("prints each answer as Label: answer under the line", () => {
+		line({
+			name: "Into The Falls",
+			answers: [
+				{ label: "What are you bringing?", answer: "Helinox tent" },
+				{ label: "Tent model", answer: "Tactical One" },
+			],
+		});
+		// A question keeps its own "?" — never "bringing?:".
+		expect(screen.getByText("What are you bringing?")).toBeTruthy();
+		expect(screen.getByText("Tent model:")).toBeTruthy();
+		expect(screen.getByText("Helinox tent")).toBeTruthy();
+		expect(screen.getByText("Tactical One")).toBeTruthy();
+	});
+
+	it("flows a long question and its answer as wrapping text, not a squeezed column", () => {
+		// The reported bug: a flex row with a `shrink-0` label let a long
+		// question take the full width, wrapping the answer one letter per line.
+		line({
+			answers: [
+				{
+					label:
+						"What tent will you be using during the campmeet? eg Helinox V-tarp",
+					answer: "Helinox furniture tent",
+				},
+			],
+		});
+		const dt = screen.getByText(/What tent will you be using/);
+		const row = dt.parentElement as HTMLElement;
+		expect(row.className).not.toMatch(/\bflex\b/);
+		expect(dt.className).toMatch(/\binline\b/);
+		expect(dt.className).not.toMatch(/shrink-0/);
+		expect(screen.getByText("Helinox furniture tent").className).toMatch(
+			/\binline\b/,
+		);
+	});
+
+	it("renders an answer as text, never as markup", () => {
+		line({ answers: [{ label: "Message", answer: "<b>Happy</b>" }] });
+		expect(screen.getByText("<b>Happy</b>")).toBeTruthy();
+	});
+
+	it("adds nothing when there are no answers", () => {
+		const { container } = line();
+		expect(container.querySelector("dl")).toBeNull();
 	});
 });

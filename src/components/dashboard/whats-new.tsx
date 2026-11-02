@@ -4,10 +4,13 @@ import { Link, useLocation } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
 import {
 	ArrowRight,
+	CalendarClock,
 	CalendarRange,
 	ChartLine,
 	Check,
 	Clock,
+	Gauge,
+	History,
 	type LucideIcon,
 	Megaphone,
 	Package,
@@ -16,6 +19,7 @@ import {
 	Settings,
 	Sparkles,
 	Truck,
+	UsersRound,
 	Wallet,
 	X,
 } from "lucide-react";
@@ -38,7 +42,11 @@ import type {
 } from "../../content/releases";
 import { RELEASE_KIND_LABELS, RELEASES } from "../../content/releases";
 import { APP_VERSION, isCalendarVersion } from "../../lib/app-version";
-import { localized, resolveWhatsNew } from "../../lib/releases";
+import {
+	localized,
+	resolveWhatsNew,
+	splitPanelReleases,
+} from "../../lib/releases";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import {
@@ -206,6 +214,9 @@ const ENTRY_ICONS: Record<ReleaseIconName, LucideIcon> = {
 	chart: ChartLine,
 	table: Rows3,
 	calendar: CalendarRange,
+	"calendar-clock": CalendarClock,
+	users: UsersRound,
+	gauge: Gauge,
 };
 
 /**
@@ -291,6 +302,15 @@ function WhatsNewDialog({
 }) {
 	const newest = releases[0];
 	const caughtUp = unseenVersions.size === 0;
+	// The panel shows the newest few and folds the rest (PANEL_RELEASE_LIMIT).
+	// Local, not persisted: every open starts folded, because "the rest" is
+	// history the seller asked for once, not a preference.
+	const [showOlder, setShowOlder] = useState(false);
+	useEffect(() => {
+		if (!open) setShowOlder(false);
+	}, [open]);
+	const { shown, older } = splitPanelReleases(releases, unseenVersions);
+	const visible = showOlder ? releases : shown;
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -299,9 +319,16 @@ function WhatsNewDialog({
 			    Widened past the default `sm:max-w-sm` (384px): the entry cards are
 			    an icon column plus two lines of copy, which reads cramped there. */}
 			<DialogContent className="gap-0 p-0 sm:max-w-lg" showCloseButton={false}>
+				{/* The tile is mint-on-navy in light. In dark the band itself turns
+				    mint (`--primary` and `--accent` share the hue there), so the
+				    same classes render mint-on-mint and the tile disappears — the
+				    dark pair draws it in the band's own foreground instead. */}
 				<div className="flex items-center gap-3 bg-primary p-4">
-					<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent/20">
-						<Sparkles className="size-4.5 text-accent" strokeWidth={2} />
+					<span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent/20 dark:bg-primary-foreground/15">
+						<Sparkles
+							className="size-4.5 text-accent dark:text-primary-foreground"
+							strokeWidth={2}
+						/>
 					</span>
 					<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 						<DialogTitle className="text-primary-foreground">
@@ -332,7 +359,7 @@ function WhatsNewDialog({
 				{/* Scrolls inside the dialog rather than growing it — on a phone a few
 				    releases would otherwise push the footer off screen. */}
 				<div className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto p-4">
-					{releases.map((release) => {
+					{visible.map((release) => {
 						const isNew = unseenVersions.has(release.version);
 						return (
 							<section
@@ -432,6 +459,21 @@ function WhatsNewDialog({
 							</section>
 						);
 					})}
+					{older.length > 0 && !showOlder ? (
+						// Inside the scroll area, after the last shown release, so it
+						// reads as "the list continues" — in the footer it would compete
+						// with "Got it". Names the count: "Show older" alone doesn't say
+						// whether that is one release or forty.
+						<Button
+							variant="outline"
+							onClick={() => setShowOlder(true)}
+							className="tap-target w-full"
+						>
+							<History className="size-4" />
+							Show {older.length} older{" "}
+							{older.length === 1 ? "release" : "releases"}
+						</Button>
+					) : null}
 				</div>
 
 				<DialogFooter className="mx-0 mb-0 sm:justify-between">

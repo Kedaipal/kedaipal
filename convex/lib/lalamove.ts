@@ -13,6 +13,7 @@
 //    1dp precision) — converted to integer sen at this boundary, like every
 //    other money field in the repo.
 
+import { toDomesticContactPhone } from "./courierContact";
 import { decryptSecret } from "./credentialCrypto";
 import type { DeliveryJobStatus } from "./deliveryJobs";
 import { EARLIEST_FULFILMENT_LEAD_MINUTES } from "./fulfilmentDate";
@@ -52,7 +53,7 @@ export const LALAMOVE_BASE_URL: Record<LalamoveEnv, string> = {
  *
  * Kept as its own type rather than reusing `Country` because the two answer
  * different questions — a country we sell in is not automatically a market
- * Lalamove operates in, and `COUNTRY_RIDER_BOOKING` is where that judgement
+ * Lalamove operates in, and `COUNTRY_COURIER_BOOKING.lalamove` is where that judgement
  * lives.
  */
 export type LalamoveMarket = "MY" | "SG";
@@ -60,7 +61,7 @@ export type LalamoveMarket = "MY" | "SG";
 export const DEFAULT_LALAMOVE_MARKET: LalamoveMarket = "MY";
 
 /** Store country → Lalamove market. Only markets we've verified end to end
- * appear here; anything else has no rider booking (`COUNTRY_RIDER_BOOKING`). */
+ * appear here; anything else has no rider booking (`COUNTRY_COURIER_BOOKING.lalamove`). */
 export function lalamoveMarketForCountry(
 	country: string | undefined,
 ): LalamoveMarket {
@@ -147,6 +148,66 @@ export async function decryptLalamoveCredentials(
  * `pk_test_…` for sandbox and `pk_prod_…` for production. */
 export function inferLalamoveEnv(apiKey: string): LalamoveEnv {
 	return apiKey.startsWith("pk_test_") ? "sandbox" : "production";
+}
+
+const LALAMOVE_KEY = /^pk_(test|prod)_\S+$/;
+const LALAMOVE_SECRET = /^sk_(test|prod)_\S+$/;
+
+const ENV_WORD: Record<"test" | "prod", string> = {
+	test: "sandbox",
+	prod: "live",
+};
+
+/**
+ * Does a key pair a seller pasted LOOK like Lalamove's (z8r3fdy5ht)? Before
+ * this, `inferLalamoveEnv` filed anything that wasn't `pk_test_` as a live
+ * key, so an EasyParcel client ID pasted into the wrong card was stored and
+ * badged "Live" — and failed only at the first quote, far from the mistake.
+ *
+ * Shape only: a pair can be well-formed and still wrong, which the
+ * `lalamove.verifyKeys` probe catches. This half is pure so the card says it
+ * while the seller types and `retailers.updateSettings` enforces it as the
+ * lock. Never applied to keys already stored — only to a new paste.
+ */
+export function checkLalamoveKeyShape(
+	apiKey: string,
+	apiSecret: string,
+): { ok: true; env: LalamoveEnv } | { ok: false; message: string } {
+	const key = apiKey.trim();
+	const secret = apiSecret.trim();
+	if (LALAMOVE_SECRET.test(key) && LALAMOVE_KEY.test(secret)) {
+		return {
+			ok: false,
+			message:
+				"These look swapped — the API key starts with pk_, the secret with sk_.",
+		};
+	}
+	const keyEnv = LALAMOVE_KEY.exec(key)?.[1] as "test" | "prod" | undefined;
+	if (!keyEnv) {
+		return {
+			ok: false,
+			message:
+				"That isn't a Lalamove API key — Lalamove keys start with pk_prod_ (live) or pk_test_ (sandbox). Copy it from the Lalamove Partner Portal → Developers.",
+		};
+	}
+	const secretEnv = LALAMOVE_SECRET.exec(secret)?.[1] as
+		| "test"
+		| "prod"
+		| undefined;
+	if (!secretEnv) {
+		return {
+			ok: false,
+			message:
+				"That isn't a Lalamove API secret — it starts with sk_prod_ (live) or sk_test_ (sandbox), right beside the key in the Partner Portal.",
+		};
+	}
+	if (keyEnv !== secretEnv) {
+		return {
+			ok: false,
+			message: `The key is a ${ENV_WORD[keyEnv]} key but the secret is a ${ENV_WORD[secretEnv]} one — copy both from the same place in the Partner Portal.`,
+		};
+	}
+	return { ok: true, env: keyEnv === "test" ? "sandbox" : "production" };
 }
 
 const encoder = new TextEncoder();
@@ -242,23 +303,12 @@ export function toLalamoveCoordinates(c: {
 }
 
 /** Our WhatsApp phones are stored as bare digits ("60123456789"); Lalamove
- * wants E.164. Malaysian numbers only — everything in the repo already is. */
+ * wants E.164. Formatting only — whether a number may be a Lalamove CONTACT
+ * at all is `toLalamoveContactPhone`'s question. */
 export function toLalamovePhone(waPhone: string): string {
 	const digits = waPhone.replace(/\D/g, "");
 	return `+${digits}`;
 }
-
-/** What each market will accept as a contact number, in stored bare-digit
- * form. Lengths INCLUDE the country code. */
-const MARKET_PHONE: Record<
-	LalamoveMarket,
-	{ prefix: string; minDigits: number; maxDigits: number }
-> = {
-	// MY mobiles are 60 + 9–11 digits.
-	MY: { prefix: "60", minDigits: 11, maxDigits: 13 },
-	// SG mobiles are 65 + exactly 8.
-	SG: { prefix: "65", minDigits: 10, maxDigits: 10 },
-};
 
 /**
  * Normalize a stored WhatsApp number to an E.164 phone the given market will
@@ -267,21 +317,16 @@ const MARKET_PHONE: Record<
  * Lalamove validates the AREA CODE per market, so a number from the wrong
  * country is a 422 at booking time rather than a soft failure — returning
  * null lets dispatch fall back to the seller's own number as the rider
- * contact instead. A +65 buyer on a Johor store was always a real case; a +60
- * buyer on a Singapore store now is too, and the old MY-only helper would
- * have accepted exactly the wrong one of those.
+ * contact instead. Buyers can type a WhatsApp number from any country
+ * (z8r3fdh274), so that fallback is an everyday path, not a Johor edge case.
+ * The rule itself is provider-neutral and lives in `./courierContact` — Delyva
+ * applies the same one.
  */
 export function toLalamoveContactPhone(
 	waPhone: string | undefined,
 	market: LalamoveMarket,
 ): string | null {
-	if (!waPhone) return null;
-	const digits = waPhone.replace(/\D/g, "");
-	const rule = MARKET_PHONE[market];
-	if (!digits.startsWith(rule.prefix)) return null;
-	if (digits.length < rule.minDigits || digits.length > rule.maxDigits)
-		return null;
-	return `+${digits}`;
+	return toDomesticContactPhone(waPhone, market);
 }
 
 export type LalamoveStop = {

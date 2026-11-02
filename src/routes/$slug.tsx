@@ -2,35 +2,64 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
+import type { ClosedDateRange } from "../../convex/lib/closedDates";
 import { type Locale, OG_LOCALE } from "../../convex/lib/locale";
 import {
+	closedDatesSpecification,
 	type OpeningHours,
 	openingHoursSpecification,
 } from "../../convex/lib/openingHours";
+import { NotFoundPage } from "../components/not-found/not-found-page";
 import { CartBar } from "../components/storefront/cart-bar";
 import { CategoryRail } from "../components/storefront/category-rail";
 import { FeaturedProduct } from "../components/storefront/featured-product";
+import { ProductGrid } from "../components/storefront/product-grid";
 import {
-	AllProductsDivider,
-	ProductGrid,
-} from "../components/storefront/product-grid";
+	OrderingPausedProvider,
+	SeasonalBreakNotice,
+} from "../components/storefront/seasonal-break";
+import { HomeOnlyLabelProvider } from "../components/storefront/ships-abroad";
+import {
+	StoreUnavailable,
+	type StoreUnavailableLoaderData,
+	storeUnavailableHead,
+} from "../components/storefront/store-unavailable";
 import { StorefrontFooter } from "../components/storefront/storefront-footer";
 import { StorefrontHeader } from "../components/storefront/storefront-header";
 import { Skeleton } from "../components/ui/skeleton";
 import { useCart } from "../hooks/useCart";
 import { useCaptureAttribution } from "../hooks/useSourceAttribution";
-import { getConvexHttpClient, SITE_URL } from "../lib/convex-server";
+import { useCaptureVoucherParam } from "../hooks/useVoucherParam";
+import { SITE_URL } from "../lib/convex-server";
 import {
 	absoluteProxiedImageUrl,
 	imageSrcSet,
 	proxiedImageUrl,
 } from "../lib/image-proxy";
-import { ssrRead } from "../lib/ssr-read";
+import { jsonLdScript } from "../lib/json-ld";
+import { notFoundHeadMeta, pageHead, rendersNotFound } from "../lib/not-found";
+import { seoDescription } from "../lib/seo-text";
+import {
+	ssrDeadline,
+	ssrRetailerBySlug,
+	ssrStorefrontHome,
+} from "../lib/storefront-ssr";
 
 interface StorefrontLoaderData {
 	storeName: string;
 	slug: string;
 	checkoutPhone: string | undefined;
+	/** The SELLER's number for the Store JSON-LD — `checkoutPhone` is the
+	 * shared Kedaipal WABA, so publishing it would give every store the same
+	 * `telephone` and let Google merge them into one business. */
+	waPhone: string | undefined;
+	/** Public locality + country for the Store's `address` (Google requires
+	 * one for a LocalBusiness rich result). The owner-only business address
+	 * is never used here — it is often a home address. */
+	storeArea: string | undefined;
+	country: string;
+	currency: string;
+	logoUrl: string | undefined;
 	locale: Locale;
 	// SEO meta/OG/JSON-LD description. Prefers the seller's own store description
 	// (single-lined) and falls back to a generated blurb.
@@ -45,13 +74,28 @@ interface StorefrontLoaderData {
 	// Store opening hours (86eyp5rav) — feeds the Store JSON-LD's
 	// openingHoursSpecification (local SEO). Undefined = open 24/7, no block.
 	openingHours: OpeningHours | undefined;
+	// Closed dates (z8r3fdhpm7) — the JSON-LD's holiday hours
+	// (specialOpeningHoursSpecification). Undefined = none.
+	closedDates: ClosedDateRange[] | undefined;
+	/** The sitemap's rule (z8r3fdh2ye): a store the sitemap leaves out is
+	 * also `noindex`, or excluding it would leave the page indexable anyway. */
+	indexable: boolean;
 }
 
 export const Route = createFileRoute("/$slug")({
-	loader: async ({ params }): Promise<StorefrontLoaderData | null> => {
-		const client = getConvexHttpClient();
-		const read = await ssrRead(() =>
-			client.query(api.retailers.getRetailerBySlug, { slug: params.slug }),
+	loader: async ({
+		params,
+		context,
+		preload,
+	}): Promise<StorefrontLoaderData | StoreUnavailableLoaderData | null> => {
+		// Seeds the cache the page renders from, so the SSR HTML carries the
+		// store and its catalog, not only their meta (z8r3fdue6f —
+		// lib/storefront-ssr.ts). One deadline caps the whole loader.
+		const deadline = ssrDeadline();
+		const read = await ssrRetailerBySlug(
+			context.queryClient,
+			params.slug,
+			deadline,
 		);
 		// Transient upstream failure: render the shell (head() falls back to
 		// defaults, the client's reactive query paints the store) instead of
@@ -70,8 +114,22 @@ export const Route = createFileRoute("/$slug")({
 		if (result.status === "notFound") {
 			throw notFound();
 		}
+		// Taken offline by Kedaipal (z8r3fdudf7): no store data to preload —
+		// the component renders the neutral unavailable page, and head()
+		// takes it out of search in the SSR HTML.
+		if (result.status === "unavailable")
+			return { unavailable: true, storeName: result.storeName };
 
 		const retailer = result.retailer;
+		// A hover or touchstart on a store link (every card on /stores, the
+		// showcases, a sponsored slot) PRELOADS this route. Seeding the whole
+		// catalog there would cost ~100 KB and three Convex reads per card a
+		// cursor merely crossed, for stores most visitors never open — so a
+		// preload resolves the store (cheap; it settles redirect/404 early) and
+		// the catalog is read on the visit itself. Server renders never preload.
+		const products = preload
+			? ({ ok: false } as const)
+			: await ssrStorefrontHome(context.queryClient, retailer._id, deadline);
 
 		// Social cards + JSON-LD go through the image proxy too: link unfurlers
 		// are known to skip oversized images outright, and a 4 MB cover is
@@ -80,26 +138,19 @@ export const Route = createFileRoute("/$slug")({
 		// can't resolve a root-relative path.
 		//
 		// OG/social-share image precedence: cover banner (wide, ideal for a
-		// summary_large_image card) → logo → first product image.
-		let ogImageUrl: string | undefined =
-			retailer.coverImageUrl ?? retailer.logoUrl;
-		if (!ogImageUrl) {
-			try {
-				const products = await client.query(api.products.list, {
-					retailerId: retailer._id,
-				});
-				ogImageUrl = products.find((p) => p.imageUrls[0])?.imageUrls[0];
-			} catch {
-				ogImageUrl = undefined;
-			}
-		}
+		// summary_large_image card) → logo → first product image (from the
+		// catalog the page just seeded, never a second read).
+		const ogImageUrl: string | undefined =
+			retailer.coverImageUrl ??
+			retailer.logoUrl ??
+			(products.ok
+				? products.value.find((p) => p.imageUrls[0])?.imageUrls[0]
+				: undefined);
 
 		// The seller's own description is the stronger trust/SEO signal — prefer it
 		// for meta tags, collapsing newlines to a single line. Fall back to the
 		// generated blurb when unset.
-		const sellerDescription = retailer.storeDescription
-			?.replace(/\s+/g, " ")
-			.trim();
+		const sellerDescription = seoDescription(retailer.storeDescription);
 		const description =
 			sellerDescription ||
 			`Shop ${retailer.storeName} on Kedaipal — browse the catalog and place your order on WhatsApp.`;
@@ -108,6 +159,13 @@ export const Route = createFileRoute("/$slug")({
 			storeName: retailer.storeName,
 			slug: retailer.slug,
 			checkoutPhone: retailer.checkoutPhone,
+			waPhone: retailer.waPhone,
+			storeArea: retailer.storeArea,
+			country: retailer.country,
+			currency: retailer.currency,
+			logoUrl: retailer.logoUrl
+				? absoluteProxiedImageUrl(retailer.logoUrl, SITE_URL)
+				: undefined,
 			locale: retailer.locale ?? "en",
 			description,
 			canonicalUrl: `${SITE_URL}/${retailer.slug}`,
@@ -116,125 +174,157 @@ export const Route = createFileRoute("/$slug")({
 				: undefined,
 			coverImageUrl: retailer.coverImageUrl ?? undefined,
 			openingHours: retailer.openingHours,
+			closedDates: retailer.closedDates,
+			indexable: retailer.indexable ?? true,
 		};
 	},
-	head: ({ loaderData }) => {
-		if (!loaderData) return {};
-		const {
-			storeName,
-			description,
-			canonicalUrl,
-			ogImageUrl,
-			coverImageUrl,
-			checkoutPhone,
-			locale,
-			openingHours,
-		} = loaderData;
-		const title = `${storeName} — Order on WhatsApp | Kedaipal`;
-		const ogLocale = OG_LOCALE[locale];
+	head: (ctx) =>
+		pageHead(ctx, ({ loaderData, match }) => {
+			if (rendersNotFound(match)) return { meta: notFoundHeadMeta("store") };
+			if (!loaderData) return {};
+			if ("unavailable" in loaderData)
+				return storeUnavailableHead(loaderData.storeName);
+			const {
+				storeName,
+				description,
+				canonicalUrl,
+				ogImageUrl,
+				coverImageUrl,
+				waPhone,
+				storeArea,
+				country,
+				currency,
+				logoUrl,
+				locale,
+				openingHours,
+				closedDates,
+				indexable,
+			} = loaderData;
+			const title = `${storeName} — Order on WhatsApp | Kedaipal`;
+			const ogLocale = OG_LOCALE[locale];
 
-		const meta = [
-			{ title },
-			{ name: "description", content: description },
-			{ name: "robots", content: "index, follow" },
-			// Open Graph
-			{ property: "og:type", content: "website" },
-			{ property: "og:site_name", content: "Kedaipal" },
-			{ property: "og:locale", content: ogLocale },
-			{ property: "og:title", content: title },
-			{ property: "og:description", content: description },
-			{ property: "og:url", content: canonicalUrl },
-			// Twitter
-			{
-				name: "twitter:card",
-				content: ogImageUrl ? "summary_large_image" : "summary",
-			},
-			{ name: "twitter:title", content: title },
-			{ name: "twitter:description", content: description },
-		];
-		if (ogImageUrl) {
-			meta.push(
-				{ property: "og:image", content: ogImageUrl },
-				{ name: "twitter:image", content: ogImageUrl },
-			);
-		}
-
-		const jsonLd = {
-			"@context": "https://schema.org",
-			"@type": "Store",
-			name: storeName,
-			url: canonicalUrl,
-			description,
-			...(ogImageUrl ? { image: ogImageUrl } : {}),
-			...(checkoutPhone ? { telephone: `+${checkoutPhone}` } : {}),
-			// Configured hours only — the 24/7 default claims nothing rather
-			// than asserting "always open" (86eyp5rav).
-			...(openingHours
-				? {
-						openingHoursSpecification: openingHoursSpecification(openingHours),
-					}
-				: {}),
-		};
-
-		return {
-			meta,
-			links: [
-				{ rel: "canonical", href: canonicalUrl },
-				// LCP preload — StorefrontHeader renders this URL with `priority`
-				// the moment retailer data resolves; hinting the browser before
-				// the JS bundle even parses shaves the fetch off the critical path.
-				// The preload MUST name the same candidate StorefrontHeader will
-				// actually request — it renders the cover through AppImage, which
-				// proxies it and emits a srcset. Preloading the raw storage URL
-				// would download a file the page never uses AND leave the real LCP
-				// element unpreloaded, so `imagesrcset`/`imagesizes` mirror the
-				// component's own `sizes="100vw"`.
-				...(coverImageUrl
-					? [
-							{
-								rel: "preload",
-								as: "image",
-								href: proxiedImageUrl(coverImageUrl),
-								imagesrcset: imageSrcSet(coverImageUrl) ?? undefined,
-								imagesizes: "100vw",
-							},
-						]
-					: []),
-			],
-			scripts: [
+			const meta = [
+				{ title },
+				{ name: "description", content: description },
+				// A cancelled or empty store still serves 200, so the sitemap rule
+				// is repeated here as `noindex` — same answer, same source.
 				{
-					type: "application/ld+json",
-					children: JSON.stringify(jsonLd),
+					name: "robots",
+					content: indexable ? "index, follow" : "noindex, follow",
 				},
-			],
-		};
-	},
+				// Open Graph
+				{ property: "og:type", content: "website" },
+				{ property: "og:site_name", content: "Kedaipal" },
+				{ property: "og:locale", content: ogLocale },
+				{ property: "og:title", content: title },
+				{ property: "og:description", content: description },
+				{ property: "og:url", content: canonicalUrl },
+				// Twitter
+				{
+					name: "twitter:card",
+					content: ogImageUrl ? "summary_large_image" : "summary",
+				},
+				{ name: "twitter:title", content: title },
+				{ name: "twitter:description", content: description },
+			];
+			if (ogImageUrl) {
+				meta.push(
+					{ property: "og:image", content: ogImageUrl },
+					{ property: "og:image:alt", content: storeName },
+					{ name: "twitter:image", content: ogImageUrl },
+				);
+			}
+
+			const jsonLd = {
+				"@context": "https://schema.org",
+				"@type": "Store",
+				"@id": `${canonicalUrl}#store`,
+				name: storeName,
+				url: canonicalUrl,
+				description,
+				...(ogImageUrl ? { image: ogImageUrl } : {}),
+				...(logoUrl ? { logo: logoUrl } : {}),
+				// The seller's own number — never the shared checkout number, which
+				// is the same on every store (storefront SEO audit, 21 Oct 2026).
+				...(waPhone ? { telephone: `+${waPhone}` } : {}),
+				address: {
+					"@type": "PostalAddress",
+					...(storeArea ? { addressLocality: storeArea } : {}),
+					addressCountry: country,
+				},
+				currenciesAccepted: currency,
+				// Configured hours only — the 24/7 default claims nothing rather
+				// than asserting "always open" (86eyp5rav).
+				...(openingHours
+					? {
+							openingHoursSpecification:
+								openingHoursSpecification(openingHours),
+						}
+					: {}),
+				// Upcoming closed dates as schema.org holiday hours (z8r3fdhpm7) —
+				// search shows "Closed" on Raya instead of the weekly hours.
+				...(closedDatesSpecification(closedDates).length > 0
+					? {
+							specialOpeningHoursSpecification:
+								closedDatesSpecification(closedDates),
+						}
+					: {}),
+			};
+
+			return {
+				meta,
+				links: [
+					{ rel: "canonical", href: canonicalUrl },
+					// LCP preload — StorefrontHeader renders this URL with `priority`
+					// the moment retailer data resolves; hinting the browser before
+					// the JS bundle even parses shaves the fetch off the critical path.
+					// The preload MUST name the same candidate StorefrontHeader will
+					// actually request — it renders the cover through AppImage, which
+					// proxies it and emits a srcset. Preloading the raw storage URL
+					// would download a file the page never uses AND leave the real LCP
+					// element unpreloaded, so `imagesrcset`/`imagesizes` mirror the
+					// component's own `sizes="100vw"`.
+					...(coverImageUrl
+						? [
+								{
+									rel: "preload",
+									as: "image",
+									href: proxiedImageUrl(coverImageUrl),
+									imagesrcset: imageSrcSet(coverImageUrl) ?? undefined,
+									imagesizes: "100vw",
+								},
+							]
+						: []),
+				],
+				scripts: [jsonLdScript(jsonLd)],
+			};
+		}),
 	notFoundComponent: StoreNotFound,
 	component: StorefrontRoute,
 });
 
 function StoreNotFound() {
 	const { slug } = Route.useParams();
-	return (
-		<main className="mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-3 px-5 text-center">
-			<h1 className="text-3xl font-bold">Store not found</h1>
-			<p className="text-sm text-muted-foreground">
-				No retailer uses <span className="font-mono">/{slug}</span>.
-			</p>
-		</main>
-	);
+	// The shared not-found page in its store context, so a dead store link
+	// reads the same here, at /<slug>/checkout and from the router's default.
+	return <NotFoundPage context="store" path={`/${slug}`} />;
 }
 
 function StorefrontSkeleton() {
 	return (
 		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-32">
-			<header className="flex flex-col gap-4 bg-gradient-to-b from-accent/10 to-background px-5 pb-6 pt-10 lg:rounded-b-3xl lg:px-8">
-				<Skeleton className="h-5 w-24" />
-				<div className="flex items-center gap-4">
-					<Skeleton className="h-16 w-16 shrink-0 rounded-2xl" />
-					<div className="flex flex-col gap-2">
-						<Skeleton className="h-7 w-40" />
-						<Skeleton className="h-4 w-48" />
+			{/* Mirrors the island shape (z8r3fdvwcy) — a band, then the card
+			    floating over its edge with the tile beside a name + blurb stack,
+			    no Kedaipal mark (the footer carries "Powered by"). */}
+			<header>
+				<div className="h-44 bg-gradient-to-b from-accent/15 to-accent/5 lg:h-56 lg:rounded-b-3xl" />
+				<div className="relative -mt-18 mx-4 rounded-3xl bg-card p-4 ring-1 ring-foreground/5 lg:-mt-22 lg:mx-8 lg:px-7 lg:py-6 dark:ring-white/10">
+					<div className="flex items-start gap-3.5">
+						<Skeleton className="size-16 shrink-0 rounded-[18px] lg:size-21 lg:rounded-[22px]" />
+						<div className="flex flex-col gap-2 pt-1">
+							<Skeleton className="h-6 w-40" />
+							<Skeleton className="h-4 w-48" />
+						</div>
 					</div>
 				</div>
 			</header>
@@ -261,6 +351,9 @@ function StorefrontRoute() {
 	// Persist the visit's ?src=/utm_source tag for this session (86eyq0eq9) —
 	// checkout stamps it onto the order so Insights can report per-source.
 	useCaptureAttribution(slug);
+	// A `?voucher=` link lands on an EMPTY cart, so the code has to survive the
+	// browsing that follows (`z8r3fdr617`) — same reason as the line above.
+	useCaptureVoucherParam(slug);
 	// Live query keeps the catalog reactive after the SSR'd loader response.
 	const result = useQuery(
 		convexQuery(api.retailers.getRetailerBySlug, { slug }),
@@ -269,6 +362,9 @@ function StorefrontRoute() {
 		result && result.status === "ok" ? result.retailer._id : undefined,
 	);
 
+	if (result?.status === "unavailable") {
+		return <StoreUnavailable storeName={result.storeName} />;
+	}
 	if (result === undefined || result.status !== "ok") {
 		return <StorefrontSkeleton />;
 	}
@@ -276,52 +372,66 @@ function StorefrontRoute() {
 	const retailer = result.retailer;
 
 	return (
-		<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-20">
-			{/* Shared brand header (cover/logo/name) — identical on the category
-			    pages so buyers always know whose store they're in. */}
-			<StorefrontHeader retailer={retailer} />
+		<OrderingPausedProvider
+			paused={retailer.orderingPaused === true}
+			pausedBy={retailer.orderingPausedBy}
+		>
+			<HomeOnlyLabelProvider
+				storeCountry={retailer.country}
+				shipsAbroadTo={retailer.shipsAbroadTo}
+			>
+				{/* pb-28 keeps ≥96px clear under the content for the floating cart
+			    pill (z8r3fdegb5) so it never sits on the footer. */}
+				<div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col pb-28">
+					{/* The full brand hero renders ONLY here (z8r3fdegb5) — subpages
+			    carry the compact StorefrontAppBar so deep links reach their
+			    subject on the first screen. */}
+					<StorefrontHeader retailer={retailer} slug={retailer.slug} />
+					{/* Off-Season Hold: the store is browsable, not orderable. */}
+					<SeasonalBreakNotice storeName={retailer.storeName} />
 
-			<section className="mt-2 px-5 lg:px-8">
-				{/* Search first (sticky inside the grid), then the merchandised lead:
+					<section className="mt-2 px-5 lg:px-8">
+						{/* Search first (sticky inside the grid), then the merchandised lead:
 				    the category rail + the "Popular this week" shelf, then
 				    the full grid (86eybrhrt PR3). Both lead pieces render nothing when
 				    they have nothing honest to show (no categories / no qualifying
 				    orders), so quiet stores stay search + grid. */}
-				<ProductGrid
-					retailerId={retailer._id}
-					cart={cart}
-					storeSlug={retailer.slug}
-					beforeGrid={
-						<>
-							{/* `gap-6` owns the rhythm between the two lead sections
-							    rather than either one carrying a trailing margin: each
-							    renders null on a store with no categories / no qualifying
-							    orders, and a gap only applies between siblings that
-							    actually exist — so neither can leave a dangling space.
-							    `peer` lets the divider below detect whether either one
-							    rendered at all. */}
-							<div className="peer flex flex-col gap-6">
-								<CategoryRail
-									retailerId={retailer._id}
-									storeSlug={retailer.slug}
-								/>
-								<FeaturedProduct
-									retailerId={retailer._id}
-									storeSlug={retailer.slug}
-									cart={cart}
-								/>
-							</div>
-							{/* Shows only when something above it rendered — otherwise the
-							    grid follows the search bar directly. */}
-							<AllProductsDivider />
-						</>
-					}
-				/>
-			</section>
+						<ProductGrid
+							retailerId={retailer._id}
+							cart={cart}
+							storeSlug={retailer.slug}
+							beforeGrid={
+								// `gap-6` owns the rhythm between the two lead sections
+								// rather than either one carrying a trailing margin: each
+								// renders null on a store with no categories / no qualifying
+								// orders, and a gap only applies between siblings that
+								// actually exist — so neither can leave a dangling space.
+								// `peer` lets the grid's "All products" heading (rendered as
+								// this wrapper's next sibling) detect whether either one
+								// rendered at all.
+								<div className="peer flex flex-col gap-6">
+									<CategoryRail
+										retailerId={retailer._id}
+										storeSlug={retailer.slug}
+									/>
+									<FeaturedProduct
+										retailerId={retailer._id}
+										storeSlug={retailer.slug}
+										cart={cart}
+									/>
+								</div>
+							}
+						/>
+					</section>
 
-			<StorefrontFooter />
+					<StorefrontFooter
+						slug={slug}
+						discover={retailer.marketplaceUnlisted !== true}
+					/>
 
-			<CartBar cart={cart} storeSlug={retailer.slug} />
-		</div>
+					<CartBar cart={cart} storeSlug={retailer.slug} />
+				</div>
+			</HomeOnlyLabelProvider>
+		</OrderingPausedProvider>
 	);
 }

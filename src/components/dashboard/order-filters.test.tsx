@@ -2,13 +2,12 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-	INBOX_BUCKETS,
-	statusToBucket,
-} from "../../../convex/lib/orderBuckets";
-import {
 	BUCKET_LEAVES,
+	HOLDING_LEAVES,
+	INBOX_BUCKETS,
 	INBOX_LEAF_KEYS,
 	leafBucket,
+	statusToBucket,
 } from "../../../convex/lib/orderBuckets";
 import {
 	activeFilterCount,
@@ -38,6 +37,7 @@ const EMPTY: Pick<
 	| "methodUnspecified"
 	| "attributionSources"
 	| "sources"
+	| "fulfilments"
 	| "statuses"
 	| "bookingPeriods"
 	| "categories"
@@ -48,6 +48,7 @@ const EMPTY: Pick<
 	methodUnspecified: false,
 	attributionSources: [],
 	sources: [],
+	fulfilments: [],
 	statuses: [],
 	bookingPeriods: [],
 	categories: [],
@@ -77,10 +78,11 @@ function openFilters() {
 }
 
 describe("OrderFilters", () => {
-	it("counts payment + method + unspecified + date range + mockup + source + came-from", () => {
+	it("counts payment + method + unspecified + date range + mockup + source + fulfilment + came-from", () => {
 		expect(activeFilterCount({ ...EMPTY, mockup: false })).toBe(0);
 		// 2 payment + 1 method + 1 unspecified + 1 date range + 1 mockup + 1 source
-		// + 2 came-from = 9 (each selected origin counts on its own, like payment).
+		// + 2 fulfilment + 2 came-from = 11 (each selected value counts on its own,
+		// like payment).
 		expect(
 			activeFilterCount({
 				payment: ["unpaid", "received"],
@@ -91,12 +93,13 @@ describe("OrderFilters", () => {
 				to: 2,
 				mockup: true,
 				sources: ["counter"],
+				fulfilments: ["delivery", "drop_off"],
 				attributionSources: ["tiktok", "direct"],
 				statuses: [],
 				categories: [],
 				categoriesUnspecified: false,
 			}),
-		).toBe(9);
+		).toBe(11);
 		expect(activeFilterCount({ ...EMPTY, from: 1, mockup: false })).toBe(1);
 		// Each selected surface counts on its own, like payment (86eyrtz74).
 		expect(
@@ -316,6 +319,45 @@ describe("OrderFilters — status + categories mirror the header filters (86eyrt
 		});
 	});
 
+	it("the seat-holding set (every leaf but cancelled) is ONE token, cleared as one", () => {
+		// The Schedule row and the RSVP panel open the inbox on this exact set
+		// (`listingOrdersSearch`); seven pills for "not cancelled" read as
+		// clutter on a phone (staging test, 31 Oct 2026).
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: [...HOLDING_LEAVES] },
+		});
+		expect(
+			screen.getAllByRole("button", {
+				name: /remove filter: excluding cancelled/i,
+			}),
+		).toHaveLength(1);
+		expect(
+			screen.queryByRole("button", { name: /remove filter: packed/i }),
+		).toBeNull();
+		fireEvent.click(
+			screen.getAllByRole("button", {
+				name: /remove filter: excluding cancelled/i,
+			})[0],
+		);
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ statuses: [] }),
+		);
+	});
+
+	it("any other mix of leaves stays one token per leaf", () => {
+		renderFilters({
+			value: { ...EMPTY, mockup: false, statuses: ["packed", "shipped"] },
+		});
+		expect(
+			screen.queryByRole("button", {
+				name: /remove filter: excluding cancelled/i,
+			}),
+		).toBeNull();
+		expect(
+			screen.getAllByRole("button", { name: /remove filter: packed/i }).length,
+		).toBeGreaterThan(0);
+	});
+
 	it("lets a cards-view seller set a status, which has no table header to click", () => {
 		const { onChange } = renderFilters({
 			statusLabel: (st) => (st === "packed" ? "Ready for Pickup" : st),
@@ -345,7 +387,8 @@ describe("OrderFilters — status + categories mirror the header filters (86eyrt
 describe("OrderFilters — the sheet (Direction A, 86eyrtz74)", () => {
 	const FACETS = {
 		statusLeaf: { packed: 6, delivered: 0 },
-		category: { Cakes: 9 },
+		fulfilment: {},
+		category: [{ name: "Cakes", count: 9 }],
 		source: { counter: 4 },
 		paymentStatus: { unpaid: 7 },
 		paymentMethod: { cash: 5, "": 4 },
@@ -525,7 +568,11 @@ describe("OrderFilters — select-all must not lie (PR #235 review)", () => {
 
 	const FACETS = {
 		statusLeaf: {},
-		category: { Cakes: 9, "": 4 },
+		fulfilment: {},
+		category: [
+			{ name: "Cakes", count: 9 },
+			{ name: "", count: 4 },
+		],
 		source: {},
 		paymentStatus: {},
 		// An MY store whose HitPay settled a GrabPay order. GrabPay is not an MY
@@ -651,5 +698,326 @@ describe("STATUS is grouped by bucket, and nothing falls out", () => {
 		expect(
 			(["confirmed", "packed", "shipped"] as const).map(statusToBucket),
 		).toEqual(["in_progress", "in_progress", "in_progress"]);
+	});
+});
+
+/**
+ * Fulfilment (z8r3fdfau9) — the dimension the panel was missing: every other
+ * enumerable thing about an order could be filtered, but not the one question a
+ * seller planning tomorrow actually asks ("which of these do I have to deliver,
+ * and which are people coming to collect?").
+ */
+describe("OrderFilters — Fulfilment", () => {
+	const facets = (fulfilment: Record<string, number>) => ({
+		statusLeaf: {},
+		fulfilment,
+		category: [],
+		source: {},
+		paymentStatus: {},
+		paymentMethod: {},
+		attribution: {},
+	});
+
+	it("is hidden on a store that only ever does one kind", () => {
+		// A single-option filter can only narrow to what you already have. The
+		// rule Categories and Came-from already follow — and the same helper the
+		// column funnel asks, so the two surfaces appear and disappear together.
+		renderFilters({ facets: facets({ delivery: 14 }) });
+		openFilters();
+		expect(screen.queryByText("Fulfilment")).toBeNull();
+	});
+
+	it("appears once there are two kinds, with the registry's own words and counts", () => {
+		renderFilters({
+			facets: facets({ delivery: 14, self_collect: 6, drop_off: 2 }),
+		});
+		openFilters();
+		expect(screen.getByText("Fulfilment")).toBeTruthy();
+		expect(screen.getByText("how it reaches them")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Delivery, 14 orders" }),
+		).toBeTruthy();
+		// Drop-off is its own answer, not folded into Self-collect — three pasar
+		// meetups are a different day out from a counter full of collections.
+		expect(
+			screen.getByRole("button", { name: "Self-collect, 6 orders" }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Drop-off, 2 orders" }),
+		).toBeTruthy();
+		// Never offered: kinds this seller has no orders for.
+		expect(screen.queryByRole("button", { name: /^Booking,/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^Event,/ })).toBeNull();
+	});
+
+	it("offers Event for a store running RSVPs (z8r3fdff9u)", () => {
+		// An RSVP is stored `self_collect`, so before the flow kind was read this
+		// store's events were indistinguishable from counter pickups — one row,
+		// one count, no way to ask for either alone.
+		renderFilters({ facets: facets({ self_collect: 4, event: 9 }) });
+		openFilters();
+		expect(
+			screen.getByRole("button", { name: "Event, 9 orders" }),
+		).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Self-collect, 4 orders" }),
+		).toBeTruthy();
+	});
+
+	it("ticking a kind writes only that kind", () => {
+		const { onChange } = renderFilters({
+			facets: facets({ delivery: 14, self_collect: 6 }),
+		});
+		openFilters();
+		fireEvent.click(
+			screen.getByRole("button", { name: "Self-collect, 6 orders" }),
+		);
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ fulfilments: ["self_collect"] }),
+		);
+	});
+
+	it("select-all writes exactly the options it offered, and says it narrows nothing", () => {
+		const { onChange } = renderFilters({
+			facets: facets({ delivery: 14, self_collect: 6 }),
+		});
+		openFilters();
+		fireEvent.click(screen.getByRole("checkbox", { name: /^Fulfilment —/i }));
+		// The rows, the total and the select-all set all read ONE array — so
+		// "every option selected" can't mean a different set from what it writes.
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ fulfilments: ["delivery", "self_collect"] }),
+		);
+		cleanup();
+		renderFilters({
+			facets: facets({ delivery: 14, self_collect: 6 }),
+			value: {
+				...EMPTY,
+				mockup: false,
+				fulfilments: ["delivery", "self_collect"],
+			},
+		});
+		openFilters();
+		expect(
+			screen.getByText("Every option selected — same as no fulfilment filter."),
+		).toBeTruthy();
+	});
+
+	it("stays visible for a selected kind the window no longer contains", () => {
+		// Otherwise the panel hides a lit filter, the list stays narrowed, and the
+		// seller has no control to switch it off.
+		renderFilters({
+			facets: facets({ delivery: 14 }),
+			value: { ...EMPTY, mockup: false, fulfilments: ["booking"] },
+		});
+		openFilters();
+		expect(screen.getByText("Fulfilment")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Booking, 0 orders" }),
+		).toBeTruthy();
+	});
+
+	it("each selected kind is its own removable token", () => {
+		const { onChange } = renderFilters({
+			facets: facets({ delivery: 14, drop_off: 2 }),
+			value: { ...EMPTY, mockup: false, fulfilments: ["delivery", "drop_off"] },
+		});
+		const token = screen.getAllByRole("button", {
+			name: "Remove filter: Drop-off",
+		})[0];
+		fireEvent.click(token);
+		// Removes only its own kind — the other selection survives.
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ fulfilments: ["delivery"] }),
+		);
+	});
+
+	it("is cleared by Clear all", () => {
+		const { onChange } = renderFilters({
+			facets: facets({ delivery: 14, drop_off: 2 }),
+			value: { ...EMPTY, mockup: false, fulfilments: ["drop_off"] },
+		});
+		openFilters();
+		fireEvent.click(screen.getByRole("button", { name: /clear all \(1\)/i }));
+		expect(onChange).toHaveBeenCalledWith(
+			expect.objectContaining({ fulfilments: [] }),
+		);
+	});
+});
+
+/**
+ * The due-date axis (PR #358 review).
+ *
+ * Home's Plan ahead tiles open an arbitrary single day through `ffrom`/`fto`,
+ * where the panel's own control only names three windows. The span shipped
+ * READ by the route and COUNTED as active, but nothing rendered it and nothing
+ * cleared it — so a seller who tapped "2 due Thursday" landed on a list
+ * narrowed to one day with no sign of it, and on an empty Thursday the
+ * resulting "Clear filters" left the list just as empty. Both halves are one
+ * question, so they are one filter, one chip and one clear.
+ */
+describe("OrderFilters — the due-date axis is one control", () => {
+	const DUE = Date.parse("2026-10-15T00:00:00+08:00");
+	const LATER = Date.parse("2026-10-22T00:00:00+08:00");
+
+	it("counts a span as ONE filter, exactly like the named window", () => {
+		expect(activeFilterCount({ ...EMPTY, mockup: false, fwin: "today" })).toBe(
+			1,
+		);
+		expect(
+			activeFilterCount({ ...EMPTY, mockup: false, dueFrom: DUE, dueTo: DUE }),
+		).toBe(1);
+		// And never two — they are the same axis, so a value in each is still
+		// one answer to "due when".
+		expect(
+			activeFilterCount({
+				...EMPTY,
+				mockup: false,
+				fwin: "today",
+				dueFrom: DUE,
+				dueTo: DUE,
+			}),
+		).toBe(1);
+	});
+
+	it("names a single day with its weekday, and a span with both dates", () => {
+		renderFilters({
+			value: { ...EMPTY, mockup: false, dueFrom: DUE, dueTo: DUE },
+		});
+		// The word the Plan ahead tile used, so the seller recognises the filter
+		// they just tapped.
+		expect(screen.getAllByText(/Thu 15 Oct/).length).toBeGreaterThan(0);
+		cleanup();
+		renderFilters({
+			value: { ...EMPTY, mockup: false, dueFrom: DUE, dueTo: LATER },
+		});
+		expect(screen.getAllByText(/15 Oct – 22 Oct/).length).toBeGreaterThan(0);
+	});
+
+	it("shows the span as a removable chip above the list", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, dueFrom: DUE, dueTo: DUE },
+		});
+		openFilters();
+		fireEvent.click(
+			screen.getAllByRole("button", {
+				name: /remove filter: due thu 15 oct/i,
+			})[0],
+		);
+		// The WHOLE axis goes, not half of it.
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.dueFrom).toBeUndefined();
+		expect(next.dueTo).toBeUndefined();
+		expect(next.fwin).toBeUndefined();
+	});
+
+	it("offers the span as a selected row in Due date, switchable off in place", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, dueFrom: DUE, dueTo: DUE },
+		});
+		openFilters();
+		const row = screen.getByRole("button", { name: optionNamed("Thu 15 Oct") });
+		expect(row.getAttribute("aria-pressed")).toBe("true");
+		fireEvent.click(row);
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.dueFrom).toBeUndefined();
+		expect(next.dueTo).toBeUndefined();
+	});
+
+	it("picking a named window retires the span rather than ANDing with it", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, dueFrom: DUE, dueTo: DUE },
+		});
+		openFilters();
+		fireEvent.click(screen.getByRole("button", { name: optionNamed("Today") }));
+		// Both in force would match nothing at all: a Thursday span ANDed with
+		// today is the empty set, and the seller asked for one thing.
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.fwin).toBe("today");
+		expect(next.dueFrom).toBeUndefined();
+		expect(next.dueTo).toBeUndefined();
+	});
+
+	it("Clear all counts and clears the span", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, dueFrom: DUE, dueTo: DUE },
+		});
+		openFilters();
+		fireEvent.click(screen.getByRole("button", { name: "Clear all (1)" }));
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.dueFrom).toBeUndefined();
+		expect(next.dueTo).toBeUndefined();
+		// The key must be PRESENT and undefined, not absent: the route spreads
+		// this over the URL, and a missing key leaves the old value in place.
+		expect("dueFrom" in next).toBe(true);
+		expect("dueTo" in next).toBe(true);
+	});
+});
+
+/**
+ * The Schedule's drill-down (`z8r3fdjv0d`): a row opens the inbox narrowed to
+ * ONE listing. No picker writes it, so the panel's whole job is to name it and
+ * let it go — a filter in force that the seller can't see would leave them
+ * wondering where their other orders went.
+ */
+describe("OrderFilters — the listing filter is named and removable", () => {
+	it("counts as one filter and reads the listing's name", () => {
+		expect(activeFilterCount({ ...EMPTY, mockup: false, listing: "p1" })).toBe(
+			1,
+		);
+		renderFilters({
+			value: { ...EMPTY, mockup: false, listing: "p1" },
+			listingName: "Luncheon",
+		});
+		expect(
+			screen.getAllByRole("button", {
+				name: /remove filter: listing: luncheon/i,
+			}).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("says so when the id names no listing, rather than hiding the filter", () => {
+		renderFilters({
+			value: { ...EMPTY, mockup: false, listing: "gone" },
+			listingName: null,
+		});
+		expect(
+			screen.getAllByRole("button", {
+				name: /remove filter: listing not found/i,
+			}).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("removing it clears the listing and nothing else", () => {
+		const DUE = Date.parse("2026-11-13T00:00:00+08:00");
+		const { onChange } = renderFilters({
+			value: {
+				...EMPTY,
+				mockup: false,
+				listing: "p1",
+				dueFrom: DUE,
+				dueTo: DUE,
+			},
+			listingName: "Luncheon",
+		});
+		fireEvent.click(
+			screen.getAllByRole("button", {
+				name: /remove filter: listing: luncheon/i,
+			})[0],
+		);
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.listing).toBeUndefined();
+		// The date the row was about stays — the seller dropped one filter.
+		expect(next.dueFrom).toBe(DUE);
+	});
+
+	it("Clear all drops it too", () => {
+		const { onChange } = renderFilters({
+			value: { ...EMPTY, mockup: false, listing: "p1" },
+			listingName: "Luncheon",
+		});
+		fireEvent.click(screen.getAllByRole("button", { name: /^clear all/i })[0]);
+		const next = onChange.mock.calls[0][0] as OrderFilterValue;
+		expect(next.listing).toBeUndefined();
 	});
 });

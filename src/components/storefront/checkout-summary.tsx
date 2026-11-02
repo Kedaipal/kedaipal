@@ -3,6 +3,11 @@ import { type ReactNode, useState } from "react";
 import type { PublicDeliveryQuote } from "../../../convex/delivery";
 import type { CartItem, UseCart } from "../../hooks/useCart";
 import { formatPrice } from "../../lib/format";
+import {
+	RECEIPT_LABEL_CLASS,
+	RECEIPT_VARIANT_CLASS,
+	receiptLineLabel,
+} from "../../lib/receipt-line";
 
 /**
  * The checkout page's order summary — the "Order Ticket" from the storefront
@@ -47,9 +52,16 @@ function receiptAmount(sen: number): string {
 	return (sen / 100).toFixed(2);
 }
 
-/** "1× Kek Batik · 1kg" — the receipt line's left column. */
+/**
+ * "1× Kek Batik" — the receipt line's name column.
+ *
+ * Built by the shared `receiptLineLabel`, which the claim checkout's identical
+ * ticket also uses: the variant is deliberately NOT joined on (it renders as
+ * its own muted sub-line) and the quantity leads, so neither can be the part a
+ * narrow column cuts. See `src/lib/receipt-line.ts` for the why (`z8r3fdhpaj`).
+ */
 function receiptLabel(item: CartItem): string {
-	return `${item.quantity}× ${item.name}${item.optionLabel ? ` · ${item.optionLabel}` : ""}`;
+	return receiptLineLabel(item.quantity, item.name);
 }
 
 interface CheckoutSummaryProps {
@@ -143,20 +155,36 @@ export function CheckoutSummary({
 											prev === item.variantId ? null : item.variantId,
 										)
 									}
-									className="flex min-h-8 w-full items-baseline gap-2 py-1 text-left font-mono text-[13px] leading-6"
+									className="flex w-full items-baseline gap-2 py-2.5 text-left font-mono text-[13px] leading-6"
 								>
 									{/* Disclosure caret — these rows have been tappable since the
 									    ticket redesign, but the only hint was a caption under the
 									    whole list. Sits on the LEFT so the money column stays
-									    flush; its ~1rem footprint matches the `pl-4` the note /
-									    attachment sub-lines already indent by. */}
+									    flush; its 12px plus the row's 8px gap is the 20px the note
+									    / attachment sub-lines indent by (`pl-5`). */}
 									<ChevronDown
 										aria-hidden
 										className={`size-3 shrink-0 translate-y-0.5 text-muted-foreground transition-transform motion-reduce:transition-none ${
 											expanded ? "rotate-180" : ""
 										}`}
 									/>
-									<span className="min-w-0 truncate">{receiptLabel(item)}</span>
+									{/* Wraps, never truncates — this is the last screen before the
+									    wa.me handoff, so every character of the name and the option
+									    has to be readable without tapping (`z8r3fdhpaj`). The class
+									    and the reasoning are shared with the claim ticket. */}
+									<span className={RECEIPT_LABEL_CLASS}>
+										{receiptLabel(item)}
+										{item.optionLabel ? (
+											<span className={RECEIPT_VARIANT_CLASS}>
+												{item.optionLabel}
+											</span>
+										) : null}
+									</span>
+									{/* The dotted leader takes the space left over — which is how it
+									    bows out on its own when the name is long enough to wrap: a
+									    `flex-1` item with a 0 basis simply has nothing to grow into
+									    once the label has claimed the row. Baseline alignment keeps
+									    the caret and the amount on the label's FIRST line. */}
 									<span
 										aria-hidden
 										className="flex-1 border-b-2 border-dotted border-border"
@@ -174,12 +202,12 @@ export function CheckoutSummary({
 								</button>
 
 								{item.note ? (
-									<p className="mb-1 truncate pl-4 font-mono text-[11px] text-muted-foreground">
+									<p className="mb-1 whitespace-pre-line pl-5 font-mono text-[11px] text-muted-foreground wrap-anywhere">
 										📝 {item.note}
 									</p>
 								) : null}
 								{item.customImageStorageId ? (
-									<p className="mb-1 pl-4 font-mono text-[11px] text-muted-foreground">
+									<p className="mb-1 pl-5 font-mono text-[11px] text-muted-foreground">
 										📎 Reference photo attached
 									</p>
 								) : null}
@@ -326,8 +354,12 @@ function QtyStepper({
 /** The checkout form's collapsed quote view (static config + live Lalamove
  * both map onto this — see checkout-form.tsx). */
 export type CheckoutQuoteView =
-	| PublicDeliveryQuote
+	| Exclude<PublicDeliveryQuote, { kind: "home_only" } | { kind: "no_lane" }>
 	| { kind: "calculating" }
+	// Cross-border (z8r3fdr5yy): checkout folds the server's `home_only` /
+	// `no_lane` answers into a block, worded by the caller's `blockedCopy`.
+	// An overseas live quote waits on a complete postal code (`no_postcode`).
+	| { kind: "blocked"; reason: "home_only" | "no_lane" | "no_postcode" }
 	| undefined;
 
 interface CheckoutTotalsProps {
@@ -347,11 +379,38 @@ interface CheckoutTotalsProps {
 	/** Collection-service store (86eyg0n8e) — the rider fee line reads
 	 * "Collection" instead of "Delivery". */
 	collectsFromCustomer?: boolean;
+	/** The fee line's name on an OVERSEAS delivery (z8r3fdr5yy) —
+	 * `overseasFeeLabel`'s "Delivery to Malaysia", so the buyer sees the
+	 * overseas price is the one being charged. Undefined at home. */
+	overseasFeeLabel?: string;
 	/** The cart holds a custom line, so this TOTAL is not the bill: a quote-only
 	 * line contributes nothing yet, and a starting-price line only contributes
 	 * its floor — the seller settles both on the mockup. Prints "+ your quote"
 	 * beside the total, the same posture as a pending delivery fee (86eyhn4mr). */
 	awaitingQuote?: boolean;
+	/** The voucher's deduction in minor units (`z8r3fdr617`), 0 for none. The
+	 * ONE subtractive line in the receipt, so it renders as a credit (a minus
+	 * and the accent colour) rather than quietly joining the charges above it.
+	 * Computed by the caller through the shared `previewDiscount`, so it is the
+	 * sen the server will charge. */
+	voucherDiscount?: number;
+	/** The applied code, printed on its receipt line — the buyer should be able
+	 * to see WHICH voucher is taking money off. */
+	voucherCode?: string;
+	/**
+	 * The voucher control (`VoucherField variant="receipt"`), rendered under
+	 * the charges and above the TOTAL rule so applying one visibly moves the
+	 * number below it.
+	 *
+	 * While a voucher IS applied this holds only the remove affordance, and it
+	 * is shown by tapping the voucher's own receipt line — the line already
+	 * states the discount, so a second panel repeating it was noise.
+	 */
+	voucherField?: ReactNode;
+	/** The applied code's notes (`z8r3fdz0pw`) — per-buyer, minimum spend,
+	 * cap. Rendered UNDER the voucher line and outside its disclosure, so a
+	 * buyer reads them without opening it. */
+	voucherNote?: ReactNode;
 }
 
 /**
@@ -386,11 +445,24 @@ export function CheckoutTotals({
 	blockedCopy,
 	minRuleAlerts,
 	collectsFromCustomer = false,
+	overseasFeeLabel,
 	awaitingQuote = false,
+	voucherDiscount = 0,
+	voucherCode,
+	voucherField,
+	voucherNote,
 }: CheckoutTotalsProps) {
+	// The applied voucher line discloses its remove the way an ITEM line
+	// discloses its stepper — same interaction, so the ticket has one idea of
+	// "tap a line to change it".
+	const [voucherOpen, setVoucherOpen] = useState(false);
 	const deliveryFee = quote?.kind === "fee" ? quote.fee : 0;
-	const total = subtotal + pickupFee + deliveryFee;
-	const feeLabel = collectsFromCustomer ? "Collection" : "Delivery";
+	// The discount is CLAMPED to the item subtotal upstream, so it can never
+	// drive this below the fees — the same invariant the server holds.
+	const total = subtotal + pickupFee + deliveryFee - voucherDiscount;
+	const feeLabel = collectsFromCustomer
+		? "Collection"
+		: (overseasFeeLabel ?? "Delivery");
 	const pendingParts = pendingTotalParts({
 		awaitingQuote,
 		quotePending: quote?.kind === "pending",
@@ -439,6 +511,58 @@ export function CheckoutTotals({
 			{quote?.kind === "calculating" ? (
 				<FeeLine icon={truck} label={feeLabel} value="Calculating…" pulse />
 			) : null}
+
+			{/* The voucher's own receipt line. It behaves like an ITEM line, not
+			    a fee line: tapping it discloses the way to take it off, in the
+			    same icon well a product line puts its trash in. That is why the
+			    applied state needs no panel of its own — this line already says
+			    what is on, and the disclosure is where it comes off
+			    (`z8r3fdr617`, Zaki 12 Oct). */}
+			{/* An applied code that takes nothing off YET (under its minimum
+			    spend, `z8r3fdz0pw`) still gets its line — muted, reading "not
+			    yet" — so the ticket never shows a voucher only as a Remove
+			    button with no code above it. */}
+			{voucherDiscount > 0 || voucherCode !== undefined ? (
+				<>
+					<button
+						type="button"
+						aria-expanded={voucherOpen}
+						onClick={() => setVoucherOpen((v) => !v)}
+						className={`flex w-full items-baseline gap-2 py-0.5 text-left font-mono text-[13px] leading-6 ${
+							voucherDiscount > 0
+								? "text-accent-emphasis"
+								: "text-muted-foreground"
+						}`}
+					>
+						<ChevronDown
+							aria-hidden
+							className={`size-3 shrink-0 translate-y-0.5 transition-transform motion-reduce:transition-none ${
+								voucherOpen ? "rotate-180" : ""
+							}`}
+						/>
+						<span className="min-w-0 wrap-anywhere">
+							{voucherCode ? `Voucher · ${voucherCode}` : "Voucher"}
+						</span>
+						<span
+							aria-hidden
+							className="flex-1 border-b-2 border-dotted border-border"
+						/>
+						<span className="shrink-0 tabular-nums">
+							{voucherDiscount > 0
+								? `−${receiptAmount(voucherDiscount)}`
+								: "not yet"}
+						</span>
+					</button>
+					{voucherNote}
+					{voucherOpen ? voucherField : null}
+				</>
+			) : (
+				// Not applied: the control is its own quiet line in the money
+				// block — closed it is one caption, open it is a receipt row.
+				// Kept HERE rather than in the ticket footer so the whole control
+				// lives in one component, beside the number it changes.
+				voucherField
+			)}
 
 			<div className="mt-2 flex items-center justify-between border-t-2 border-dashed border-border pt-3">
 				<span className="-rotate-2 rounded-md border-2 border-accent/50 px-2 py-0.5 font-mono text-[11px] font-extrabold uppercase tracking-[0.14em] text-accent-emphasis">

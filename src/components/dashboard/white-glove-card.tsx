@@ -9,8 +9,14 @@ import { buildWaContactLink } from "../../lib/contact";
 /**
  * One-time celebratory card shown to a freshly-minted Founding Member, prompting
  * them to schedule the white-glove onboarding call. Dismisses (and never returns)
- * once they tap the CTA or close it (`markWhiteGloveScheduled`). See
- * docs/manual-subscription.md.
+ * once they tap the CTA or close it (`markWhiteGloveScheduled`).
+ *
+ * Hidden once founding BENEFITS are revoked (z8r3fdfyw5): white-glove sits
+ * beside the discount in the agreement's offer, so a member whose entitlements
+ * lapsed must not still be offered Arif's personal setup session — the app
+ * would be taking with one hand and giving with the other. Their rank is
+ * untouched, which is why this reads `benefitsRevoked` and not the rank.
+ * See docs/manual-subscription.md.
  */
 export function WhiteGloveCard({ slug }: { slug: string }) {
 	const status = useQuery(convexQuery(api.foundingMembers.myStatus, {})).data;
@@ -19,7 +25,8 @@ export function WhiteGloveCard({ slug }: { slug: string }) {
 		api.foundingMembers.markWhiteGloveScheduled,
 	);
 
-	if (!status || status.whiteGloveScheduled) return null;
+	if (!status || status.whiteGloveScheduled || status.benefitsRevoked)
+		return null;
 
 	const waUrl = buildWaContactLink(
 		`Hi Arif! I'm Founding Member #${status.rank} (/${slug}) — I'd like to schedule my white-glove onboarding call.`,
@@ -32,11 +39,11 @@ export function WhiteGloveCard({ slug }: { slug: string }) {
 				type="button"
 				onClick={() => markScheduled({})}
 				aria-label="Dismiss"
-				className="absolute right-2 top-2 flex size-8 items-center justify-center rounded-full text-amber-700/70 hover:bg-amber-100 dark:hover:bg-amber-900"
+				className="absolute right-2 top-2 flex size-8 items-center justify-center rounded-full text-amber-700/70 hover:bg-amber-100 dark:text-amber-300/70 dark:hover:bg-amber-900"
 			>
 				<X className="size-4" />
 			</button>
-			<Award className="size-6 shrink-0 text-amber-600" />
+			<Award className="size-6 shrink-0 text-amber-600 dark:text-amber-400" />
 			<div className="flex min-w-0 flex-col gap-2">
 				<div>
 					<p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
@@ -52,7 +59,7 @@ export function WhiteGloveCard({ slug }: { slug: string }) {
 					target="_blank"
 					rel="noopener noreferrer"
 					onClick={() => markScheduled({})}
-					className="inline-flex h-9 w-fit items-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background"
+					className="inline-flex h-9 w-fit items-center rounded-lg bg-primary px-3.5 text-sm font-medium text-background dark:text-primary-foreground"
 				>
 					Schedule your call
 				</a>

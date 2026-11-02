@@ -3,13 +3,21 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import {
-	adminUserIds,
 	logAdminAction,
 	type RetailerAccess,
 	requireRetailerAccess,
+	tryRetailerAccess,
 } from "./lib/auth";
+import type { PermissionLevel } from "./lib/permissions";
 import { assertValidMapsUrl } from "./lib/mapsUrl";
+import { isChoosablePickupPoint } from "./lib/pickupChoice";
+import {
+	formatPickupAddress,
+	sanitizeUnitLine,
+	UNIT_LINE_MAX_LENGTH,
+} from "./lib/address";
 import { type Country, DEFAULT_COUNTRY } from "./lib/country";
+import { resolveEventVenue } from "./orders";
 import { assertValidMobileForCountry } from "./lib/slug";
 import { assertPlanFeature, assertSubscriptionActive } from "./subscriptions";
 
@@ -41,22 +49,28 @@ export const PICKUP_FEE_MAX = 1_000_000;
 // search-and-replace.
 // ---------------------------------------------------------------------------
 
-// Owner-OR-admin access (see convex/lib/auth.ts) so a Kedaipal admin can set up
-// a seller's pickup points during white-glove onboarding.
+// Owner, member with the fulfilment grant, or admin act-as (convex/lib/auth.ts)
+// so a Kedaipal admin can set up a seller's pickup points during white-glove
+// onboarding and a trusted helper can maintain them day to day.
 async function requireRetailerOwner(
 	ctx: QueryCtx | MutationCtx,
 	retailerId: Id<"retailers">,
+	level: PermissionLevel,
 ): Promise<RetailerAccess> {
-	return requireRetailerAccess(ctx, retailerId);
+	return requireRetailerAccess(ctx, retailerId, { area: "fulfilment", level });
 }
 
 async function requireOwnedLocation(
 	ctx: QueryCtx | MutationCtx,
 	pickupLocationId: Id<"pickupLocations">,
+	level: PermissionLevel,
 ): Promise<{ location: Doc<"pickupLocations">; access: RetailerAccess }> {
 	const location = await ctx.db.get(pickupLocationId);
 	if (!location) throw new Error("Pickup location not found");
-	const access = await requireRetailerAccess(ctx, location.retailerId);
+	const access = await requireRetailerAccess(ctx, location.retailerId, {
+		area: "fulfilment",
+		level,
+	});
 	return { location, access };
 }
 
@@ -84,6 +98,20 @@ function sanitizeAddress(raw: string): string {
 		throw new ConvexError(`Address must be at most ${ADDRESS_MAX} characters`);
 	}
 	return trimmed;
+}
+
+/** Unit / floor / building line (z8r3fdff8r) — one line of door detail beside
+ * the Google-pinned address. Kept out of `address` so a seller adding it never
+ * has to edit the autocomplete text, which would drop the coordinates and with
+ * them the buyer's one-tap Waze / Maps button. */
+function sanitizeUnit(raw: string | undefined): string | undefined {
+	const result = sanitizeUnitLine(raw);
+	if (!result.ok) {
+		throw new ConvexError(
+			`Unit / floor / building must be at most ${UNIT_LINE_MAX_LENGTH} characters`,
+		);
+	}
+	return result.value;
 }
 
 function sanitizeMapsUrl(raw: string | undefined): string | undefined {
@@ -220,7 +248,7 @@ function sanitizeCoords(
 export const listForRetailer = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<Doc<"pickupLocations">[]> => {
-		await requireRetailerOwner(ctx, retailerId);
+		await requireRetailerOwner(ctx, retailerId, "read");
 		const rows = await ctx.db
 			.query("pickupLocations")
 			.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
@@ -229,6 +257,51 @@ export const listForRetailer = query({
 	},
 });
 
+/** The buyer-safe projection of a pickup location — everything a storefront
+ * surface may see, none of the internal flags. ONE author, shared by the
+ * standard-order picker (`listActivePublicBySlug`) and the event-venue read
+ * (`eventVenuePublicBySlug`), so the two can't drift. */
+export type PublicPickupPoint = {
+	_id: Id<"pickupLocations">;
+	label: string;
+	address: string;
+	locationType: "self_collect" | "drop_off";
+	scheduleNote?: string;
+	mapsUrl?: string;
+	notes?: string;
+	latitude?: number;
+	longitude?: number;
+	placeId?: string;
+	/** Flat fee (minor units) added to the order total when the buyer
+	 * picks this point. Undefined = free. Public by design — the buyer
+	 * must see the charge in the picker before choosing. */
+	fee?: number;
+	sortOrder: number;
+};
+
+function toPublicPickup(r: Doc<"pickupLocations">): PublicPickupPoint {
+	return {
+		_id: r._id,
+		label: r.label,
+		// The unit line is COMPOSED here, at the buyer boundary
+		// (z8r3fdff8r) — the storefront picker, checkout and every
+		// downstream snapshot read one address string, so the door
+		// detail needs no plumbing of its own.
+		address: formatPickupAddress(r),
+		// Legacy rows (created before drop-off) read as self-collect so
+		// the storefront never groups them under a blank/wrong heading.
+		locationType: r.locationType ?? "self_collect",
+		scheduleNote: r.scheduleNote,
+		mapsUrl: r.mapsUrl,
+		notes: r.notes,
+		latitude: r.latitude,
+		longitude: r.longitude,
+		placeId: r.placeId,
+		fee: r.fee,
+		sortOrder: r.sortOrder,
+	};
+}
+
 /**
  * Public, unauthed list of active pickup locations for a storefront slug.
  * Returns only public-safe fields so the storefront picker doesn't leak
@@ -236,28 +309,7 @@ export const listForRetailer = query({
  */
 export const listActivePublicBySlug = query({
 	args: { slug: v.string() },
-	handler: async (
-		ctx,
-		{ slug },
-	): Promise<
-		Array<{
-			_id: Id<"pickupLocations">;
-			label: string;
-			address: string;
-			locationType: "self_collect" | "drop_off";
-			scheduleNote?: string;
-			mapsUrl?: string;
-			notes?: string;
-			latitude?: number;
-			longitude?: number;
-			placeId?: string;
-			/** Flat fee (minor units) added to the order total when the buyer
-			 * picks this point. Undefined = free. Public by design — the buyer
-			 * must see the charge in the picker before choosing. */
-			fee?: number;
-			sortOrder: number;
-		}>
-	> => {
+	handler: async (ctx, { slug }): Promise<Array<PublicPickupPoint>> => {
 		const normalized = slug.trim().toLowerCase();
 		if (normalized.length === 0) return [];
 		const retailer = await ctx.db
@@ -272,24 +324,67 @@ export const listActivePublicBySlug = query({
 				q.eq("retailerId", retailer._id).eq("isActive", true),
 			)
 			.collect();
-		return rows
-			.sort((a, b) => a.sortOrder - b.sortOrder)
-			.map((r) => ({
-				_id: r._id,
-				label: r.label,
-				address: r.address,
-				// Legacy rows (created before drop-off) read as self-collect so
-				// the storefront never groups them under a blank/wrong heading.
-				locationType: r.locationType ?? "self_collect",
-				scheduleNote: r.scheduleNote,
-				mapsUrl: r.mapsUrl,
-				notes: r.notes,
-				latitude: r.latitude,
-				longitude: r.longitude,
-				placeId: r.placeId,
-				fee: r.fee,
-				sortOrder: r.sortOrder,
-			}));
+		return (
+			rows
+				// An event venue is ACTIVE (it is in use) but is not a checkout
+				// option — the guest is sent to the event's address, never asked
+				// to choose one. Filtered here rather than in the index because
+				// the set is already small and per-retailer, and `isActive` is
+				// what the index is for (z8r3fdm32x).
+				.filter((r) => r.eventsOnly !== true)
+				.sort((a, b) => a.sortOrder - b.sortOrder)
+				.map(toPublicPickup)
+		);
+	},
+});
+
+/**
+ * Public, unauthed read of the venue HOSTING an event (`z8r3fdff9u`): the
+ * buyer checkout's venue card. An event's venue may be a HIDDEN point (an
+ * RSVP-only location), so it's absent from `listActivePublicBySlug` — this
+ * query is how the storefront still shows its address. Same resolver as
+ * order time (`resolveEventVenue`), so what the checkout shows is what the
+ * order will freeze. Gated: a hidden point's address is served only when
+ * some LIVE event product of this store actually names it as its venue —
+ * a bare id fished from anywhere else answers null.
+ */
+export const eventVenuePublicBySlug = query({
+	args: {
+		slug: v.string(),
+		venueId: v.optional(v.id("pickupLocations")),
+	},
+	handler: async (
+		ctx,
+		{ slug, venueId },
+	): Promise<PublicPickupPoint | null> => {
+		const normalized = slug.trim().toLowerCase();
+		if (normalized.length === 0) return null;
+		const retailer = await ctx.db
+			.query("retailers")
+			.withIndex("by_slug", (q) => q.eq("slug", normalized))
+			.first();
+		if (!retailer) return null;
+
+		// The gate: only venues (or fallbacks) of a live event product are
+		// public. One retailer's active products, capped small — cheap. The
+		// unset branch requires an event that actually RESOLVES by fallback
+		// (venueId unset) — "any event exists" would let the fallback serve a
+		// hidden point that no event is at.
+		const products = await ctx.db
+			.query("products")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailer._id).eq("active", true),
+			)
+			.collect();
+		const referenced = venueId
+			? products.some((p) => p.event?.venueId === venueId)
+			: products.some(
+					(p) => p.event !== undefined && p.event.venueId === undefined,
+				);
+		if (!referenced) return null;
+
+		const venue = await resolveEventVenue(ctx, retailer._id, { venueId });
+		return venue ? toPublicPickup(venue) : null;
 	},
 });
 
@@ -309,18 +404,15 @@ export const getOwnedById = query({
 		ctx,
 		{ pickupLocationId },
 	): Promise<Doc<"pickupLocations"> | null> => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) return null;
 		const location = await ctx.db.get(pickupLocationId);
 		if (!location) return null;
-		const retailer = await ctx.db.get(location.retailerId);
-		// Owner OR a Kedaipal admin operating this store (act-as).
-		if (
-			!retailer ||
-			(retailer.userId !== identity.subject &&
-				!adminUserIds().includes(identity.subject))
-		)
-			return null;
+		// Owner, member with fulfilment access, or admin act-as; null (not a
+		// throw) for everyone else — a stale/foreign id degrades quietly.
+		const access = await tryRetailerAccess(ctx, location.retailerId, {
+			area: "fulfilment",
+			level: "read",
+		});
+		if (!access) return null;
 		return location;
 	},
 });
@@ -332,14 +424,21 @@ export const getOwnedById = query({
 export const hasAnyActive = query({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<{ hasAny: boolean }> => {
-		await requireRetailerOwner(ctx, retailerId);
-		const first = await ctx.db
-			.query("pickupLocations")
-			.withIndex("by_retailer_active", (q) =>
-				q.eq("retailerId", retailerId).eq("isActive", true),
-			)
-			.first();
-		return { hasAny: first !== null };
+		await requireRetailerOwner(ctx, retailerId, "read");
+		// This answers "can a buyer collect anywhere yet?" — it ticks the
+		// dashboard's pickup checklist step — so an EVENT VENUE must not count:
+		// it is active and in use, but no buyer can choose it at checkout, and
+		// a ticked step would tell the seller they'd finished setting up pickup
+		// when they hadn't (z8r3fdm32x).
+		const choosable = (
+			await ctx.db
+				.query("pickupLocations")
+				.withIndex("by_retailer_active", (q) =>
+					q.eq("retailerId", retailerId).eq("isActive", true),
+				)
+				.collect()
+		).some(isChoosablePickupPoint);
+		return { hasAny: choosable };
 	},
 });
 
@@ -352,11 +451,18 @@ export const create = mutation({
 		retailerId: v.id("retailers"),
 		label: v.string(),
 		address: v.string(),
+		// Unit / floor / building (z8r3fdff8r), composed onto `address` for
+		// every buyer surface by `formatPickupAddress`.
+		unit: v.optional(v.string()),
 		// Pickup kind. Omitted → "self_collect" (the legacy default + the
 		// common case), so older clients that don't send it keep working.
 		locationType: v.optional(
 			v.union(v.literal("self_collect"), v.literal("drop_off")),
 		),
+		// Hosts events, never offered at checkout (z8r3fdm32x). Orthogonal to
+		// `locationType`, which still says where the guest stands when they
+		// get there.
+		eventsOnly: v.optional(v.boolean()),
 		scheduleNote: v.optional(v.string()),
 		mapsUrl: v.optional(v.string()),
 		notes: v.optional(v.string()),
@@ -380,7 +486,9 @@ export const create = mutation({
 			retailerId,
 			label,
 			address,
+			unit,
 			locationType,
+			eventsOnly,
 			scheduleNote,
 			mapsUrl,
 			notes,
@@ -392,7 +500,7 @@ export const create = mutation({
 			fee,
 		},
 	): Promise<{ pickupLocationId: Id<"pickupLocations"> }> => {
-		const access = await requireRetailerOwner(ctx, retailerId);
+		const access = await requireRetailerOwner(ctx, retailerId, "write");
 		// Soft-lock: a past_due seller can't edit fulfilment setup (growth-write,
 		// same class as updateSettings). Admin act-as bypasses (white-glove).
 		if (!access.actingAsAdmin)
@@ -408,6 +516,7 @@ export const create = mutation({
 
 		const cleanLabel = sanitizeLabel(label);
 		const cleanAddress = sanitizeAddress(address);
+		const cleanUnit = sanitizeUnit(unit);
 		const cleanLocationType = locationType ?? "self_collect";
 		const cleanScheduleNote = sanitizeScheduleNote(scheduleNote);
 		const cleanMapsUrl = sanitizeMapsUrl(mapsUrl);
@@ -440,7 +549,11 @@ export const create = mutation({
 			retailerId,
 			label: cleanLabel,
 			address: cleanAddress,
+			unit: cleanUnit,
 			locationType: cleanLocationType,
+			// Stored only when true — an absent field and `false` mean the same
+			// thing everywhere that reads it, so we don't write the noise.
+			eventsOnly: eventsOnly === true ? true : undefined,
 			scheduleNote: cleanScheduleNote,
 			mapsUrl: cleanMapsUrl,
 			notes: cleanNotes,
@@ -474,10 +587,18 @@ export const update = mutation({
 		pickupLocationId: v.id("pickupLocations"),
 		label: v.optional(v.string()),
 		address: v.optional(v.string()),
+		// Unit / floor / building (z8r3fdff8r). Empty string clears it,
+		// undefined = no change — the scheduleNote convention. Deliberately NOT
+		// part of `addressMoved` below: door detail inside the same building
+		// can't change which country the address was captured in.
+		unit: v.optional(v.string()),
 		// Pickup kind. Undefined = "no change"; a value re-tags the point.
 		locationType: v.optional(
 			v.union(v.literal("self_collect"), v.literal("drop_off")),
 		),
+		// Undefined = no change; a boolean moves the point between the
+		// checkout picker and the event-venue list (z8r3fdm32x).
+		eventsOnly: v.optional(v.boolean()),
 		// Empty string clears the field. Undefined means "no change".
 		scheduleNote: v.optional(v.string()),
 		mapsUrl: v.optional(v.string()),
@@ -503,7 +624,9 @@ export const update = mutation({
 			pickupLocationId,
 			label,
 			address,
+			unit,
 			locationType,
+			eventsOnly,
 			scheduleNote,
 			mapsUrl,
 			notes,
@@ -518,6 +641,7 @@ export const update = mutation({
 		const { location, access } = await requireOwnedLocation(
 			ctx,
 			pickupLocationId,
+			"write",
 		);
 		// Soft-lock (growth-write); admin act-as bypasses.
 		if (!access.actingAsAdmin)
@@ -537,7 +661,9 @@ export const update = mutation({
 		const patch: Partial<{
 			label: string;
 			address: string;
+			unit: string | undefined;
 			locationType: "self_collect" | "drop_off";
+			eventsOnly: boolean | undefined;
 			scheduleNote: string | undefined;
 			mapsUrl: string | undefined;
 			notes: string | undefined;
@@ -556,6 +682,7 @@ export const update = mutation({
 
 		if (label !== undefined) patch.label = sanitizeLabel(label);
 		if (address !== undefined) patch.address = sanitizeAddress(address);
+		if (unit !== undefined) patch.unit = sanitizeUnit(unit);
 		// Re-stamp the captured country only when the ADDRESS itself moved, or a
 		// fresh Places pick landed. The edit dialog submits every field on every
 		// save, so stamping on any save would let a seller clear a wrong-country
@@ -575,6 +702,27 @@ export const update = mutation({
 			patch.country = access.retailer.country ?? DEFAULT_COUNTRY;
 		}
 		if (locationType !== undefined) patch.locationType = locationType;
+		// `false` CLEARS the field rather than storing it, so "moved back to
+		// the checkout picker" and "never was an event venue" are one state —
+		// every reader treats absent and false alike, and a stored `false`
+		// would be a second spelling of the same answer.
+		if (eventsOnly !== undefined) {
+			// Flipping a CHOOSABLE point to events-only takes it out of the
+			// buyer's picker just as surely as deactivating it does, so it gets
+			// the same fulfilment invariant (`z8r3fdm32x` review). Without this a
+			// pickup-only seller with one point could tick "Only hosts events",
+			// save, and silently take their storefront offline: delivery off +
+			// self-collect on + nothing choosable is the state `checkout-form`
+			// calls "a defensive fallback, not a normal state".
+			if (
+				eventsOnly === true &&
+				isChoosablePickupPoint(location) &&
+				(await wouldStrandStorefront(ctx, location.retailerId, location._id))
+			) {
+				throw new ConvexError(STRAND_MESSAGE);
+			}
+			patch.eventsOnly = eventsOnly === true ? true : undefined;
+		}
 		// Empty string clears the note; a value re-sanitizes it.
 		if (scheduleNote !== undefined)
 			patch.scheduleNote = sanitizeScheduleNote(scheduleNote);
@@ -623,6 +771,49 @@ export const update = mutation({
  * just stops appearing on the storefront. Reactivating sends it back to the
  * end of the list so it doesn't ambush the retailer's current ordering.
  */
+/**
+ * Would the storefront be left with NO way to receive orders if this row
+ * stopped being choosable? (`z8r3fdm32x` review.)
+ *
+ * Asks the question the right way round. The old `setActive` guard counted the
+ * active rows and compared `<= 1`, relying on the subject row being among
+ * them — a premise `isChoosablePickupPoint` quietly broke, because a row that
+ * is itself an event venue is filtered OUT, so retiring a venue looked like
+ * retiring the last real point and was refused with a message that made no
+ * sense ("hiding this one would leave your storefront with no way to receive
+ * orders" — it would not; nobody could choose it anyway).
+ *
+ * Excluding the subject explicitly and asking "is anything left?" is immune to
+ * that: it needs no assumption about whether the subject counts, and it answers
+ * for BOTH ways a point stops being choosable — deactivation (`setActive`) and
+ * the flip to events-only (`update`).
+ *
+ * Delivery undefined → effectively on (legacy default), so this only ever
+ * blocks a pickup-only seller.
+ */
+async function wouldStrandStorefront(
+	ctx: MutationCtx,
+	retailerId: Id<"retailers">,
+	excludeId: Id<"pickupLocations">,
+): Promise<boolean> {
+	const retailer = await ctx.db.get(retailerId);
+	if ((retailer?.offerDelivery ?? true) === true) return false;
+	const choosable = (
+		await ctx.db
+			.query("pickupLocations")
+			.withIndex("by_retailer_active", (q) =>
+				q.eq("retailerId", retailerId).eq("isActive", true),
+			)
+			.collect()
+	).filter((l) => l._id !== excludeId && isChoosablePickupPoint(l));
+	return choosable.length === 0;
+}
+
+/** One sentence for both doors, so the seller never gets two wordings for the
+ * same refusal. */
+const STRAND_MESSAGE =
+	"Turn delivery back on or add another pickup location first — this would leave your storefront with no way to receive orders.";
+
 export const setActive = mutation({
 	args: {
 		pickupLocationId: v.id("pickupLocations"),
@@ -632,33 +823,22 @@ export const setActive = mutation({
 		const { location, access } = await requireOwnedLocation(
 			ctx,
 			pickupLocationId,
+			"write",
 		);
 		// Soft-lock (growth-write); admin act-as bypasses.
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, location.retailerId);
 		if (location.isActive === isActive) return; // idempotent
 
-		// Fulfilment invariant: don't let the seller hide the LAST active pickup
-		// location while delivery is off — that would leave the storefront with no
-		// working way to receive orders. `location` is still active here (we
-		// returned early above if it already matched), so it's counted among the
-		// active rows below. Delivery undefined → effectively on (legacy default),
-		// so this only ever blocks a pickup-only seller.
-		if (!isActive) {
-			const retailer = await ctx.db.get(location.retailerId);
-			const offersDelivery = (retailer?.offerDelivery ?? true) === true;
-			if (!offersDelivery) {
-				const activeRows = await ctx.db
-					.query("pickupLocations")
-					.withIndex("by_retailer_active", (q) =>
-						q.eq("retailerId", location.retailerId).eq("isActive", true),
-					)
-					.collect();
-				if (activeRows.length <= 1) {
-					throw new ConvexError(
-						"Turn delivery back on or add another pickup location first — hiding this one would leave your storefront with no way to receive orders.",
-					);
-				}
+		// Fulfilment invariant: don't let the seller hide the last CHOOSABLE
+		// pickup point while delivery is off. Skipped entirely when the row
+		// being hidden is itself an event venue — nobody could choose it, so
+		// retiring it cannot strand anything.
+		if (!isActive && isChoosablePickupPoint(location)) {
+			if (
+				await wouldStrandStorefront(ctx, location.retailerId, location._id)
+			) {
+				throw new ConvexError(STRAND_MESSAGE);
 			}
 		}
 
@@ -710,7 +890,7 @@ export const reorder = mutation({
 		orderedIds: v.array(v.id("pickupLocations")),
 	},
 	handler: async (ctx, { retailerId, orderedIds }): Promise<void> => {
-		const access = await requireRetailerOwner(ctx, retailerId);
+		const access = await requireRetailerOwner(ctx, retailerId, "write");
 		// Soft-lock (growth-write); admin act-as bypasses.
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, retailerId);

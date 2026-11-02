@@ -3,7 +3,13 @@
 // that must never be a dead end: no couriers, an unweighable cart, a failed
 // booking, a blocked order. The Convex layer is mocked; the assertions are all
 // about what the seller sees and can do next.
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+	cleanup,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
@@ -25,13 +31,34 @@ vi.mock("convex/react", async () => {
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ fn, args }),
 }));
-vi.mock("@tanstack/react-query", () => ({
-	useQuery: () => ({ data: state.dispatch }),
+vi.mock("@tanstack/react-query", async () => {
+	const { getFunctionName } = await import("convex/server");
+	return {
+		// The courier-wallet line (z8r3fdx34j) reads its own query; everything
+		// else answers with this card's own state.
+		useQuery: (q: { fn: unknown }) => ({
+			data:
+				getFunctionName(q.fn as never) === "courierWallets:list"
+					? walletState.wallets
+					: getFunctionName(q.fn as never) === "courierWallets:topUpSuggestion"
+						? undefined
+						: state.dispatch,
+		}),
+	};
+});
+const walletState = vi.hoisted(() => ({
+	wallets: [] as unknown[],
 }));
 vi.mock("@tanstack/react-router", () => ({
 	Link: ({ to, search, ...props }: Record<string, unknown>) => (
 		<a href={String(to)} {...props} />
 	),
+}));
+vi.mock("../../hooks/usePermission", () => ({
+	// The top-up sheet inside `DispatchWalletLine` gates its re-check on the
+	// integrations grant; these tests are about the card, so the reader has it.
+	usePermission: () => ({ canRead: true, canWrite: true, role: "owner" }),
+	useStoreRole: () => "owner",
 }));
 vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
@@ -95,6 +122,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	cleanup();
+	walletState.wallets = [];
 	vi.clearAllMocks();
 });
 
@@ -138,7 +166,9 @@ describe("visibility", () => {
 			blockReason: "plan_gated",
 		});
 		const { container } = render(<DelyvaDispatchCard order={order} />);
-		expect(container.textContent).toContain("Book couriers straight from an order");
+		expect(container.textContent).toContain(
+			"Book couriers straight from an order",
+		);
 		expect(container.textContent).toContain("Pro");
 	});
 });
@@ -150,7 +180,9 @@ describe("blocked states name their fix", () => {
 		const button = screen.getByRole("button", { name: /book a courier/i });
 		expect(button.hasAttribute("disabled")).toBe(true);
 		expect(
-			screen.getByText(/only be booked while the order is confirmed or packed/i),
+			screen.getByText(
+				/only be booked while the order is confirmed or packed/i,
+			),
 		).toBeTruthy();
 	});
 
@@ -160,6 +192,29 @@ describe("blocked states name their fix", () => {
 		expect(
 			screen.getByText(/Add your pickup address under Settings/i),
 		).toBeTruthy();
+	});
+
+	// Credits T3: out of credits, no quote is offered (it would be refused);
+	// the booking control stays in place, disabled, saying why — and the
+	// store-wide lock outranks the order's own block, since it's the one the
+	// seller can clear today.
+	it("out of credits: no quote, a disabled Book with the lock's reason", () => {
+		const reason =
+			"You're out of credits, so accepting and updating orders and editing products are paused.";
+		render(<DelyvaDispatchCard order={order} lockedReason={reason} />);
+		expect(
+			screen.queryByRole("button", { name: /get courier prices/i }),
+		).toBeNull();
+		const button = screen.getByRole("button", { name: /book a courier/i });
+		expect(button.hasAttribute("disabled")).toBe(true);
+		expect(screen.getByText(reason)).toBeTruthy();
+		cleanup();
+		state.dispatch = dispatchState({ blockReason: "no_pickup_address" });
+		render(<DelyvaDispatchCard order={order} lockedReason={reason} />);
+		expect(screen.getByText(reason)).toBeTruthy();
+		expect(
+			screen.queryByText(/Add your pickup address under Settings/i),
+		).toBeNull();
 	});
 });
 
@@ -175,7 +230,9 @@ describe("quote → pick → book", () => {
 		state.actions.set(NAME.prepare, prepare);
 		const { container } = render(<DelyvaDispatchCard order={order} />);
 
-		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
 		await waitFor(() => expect(prepare).toHaveBeenCalled());
 
 		expect(prepare).toHaveBeenCalledWith({
@@ -194,6 +251,46 @@ describe("quote → pick → book", () => {
 		expect(container.textContent).toContain("12.00");
 	});
 
+	it("a balance read with the quote that can't pay disables Book, the wallet line as its reason", async () => {
+		// Since 31 Oct the quote reads Delyva's wallet (GET /customer/{id}).
+		walletState.wallets = [
+			{
+				provider: "delyva",
+				armed: true,
+				isTest: false,
+				state: "low",
+				balanceMinor: 900,
+				currency: "MYR",
+				at: Date.now(),
+				lowAlertMinor: 3000,
+				lowAlertCustom: false,
+				source: "pull",
+				refusedAt: null,
+				refusedPriceMinor: null,
+			},
+		];
+		state.actions.set(
+			NAME.prepare,
+			vi.fn().mockResolvedValue({
+				ok: true,
+				services: SERVICES,
+				weightKg: 2.5,
+				itemType: "CHILLED",
+				buyerPaidFee: 1200,
+			}),
+		);
+		render(<DelyvaDispatchCard order={order} />);
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
+		const book = await screen.findByRole("button", { name: /Book Ninja Cold/ });
+		expect((book as HTMLButtonElement).disabled).toBe(true);
+		expect(book.getAttribute("aria-describedby")).toBe(
+			"delyva-wallet-ORD-1234",
+		);
+		walletState.wallets = [];
+	});
+
 	it("books the courier the seller selected, not the default", async () => {
 		const prepare = vi.fn().mockResolvedValue({
 			ok: true,
@@ -209,8 +306,12 @@ describe("quote → pick → book", () => {
 		state.actions.set(NAME.confirm, confirm);
 		render(<DelyvaDispatchCard order={order} />);
 
-		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
-		await waitFor(() => expect(screen.getByText("DD Express Chilled")).toBeTruthy());
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
+		await waitFor(() =>
+			expect(screen.getByText("DD Express Chilled")).toBeTruthy(),
+		);
 		fireEvent.click(screen.getByText("DD Express Chilled"));
 		fireEvent.click(screen.getByRole("button", { name: /book DD Express/i }));
 
@@ -241,7 +342,9 @@ describe("quote → pick → book", () => {
 		state.actions.set(NAME.confirm, confirm);
 		render(<DelyvaDispatchCard order={order} />);
 
-		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
 		await waitFor(() => expect(screen.getByText("Ninja Cold")).toBeTruthy());
 		fireEvent.click(screen.getByRole("button", { name: /book Ninja Cold/i }));
 
@@ -263,7 +366,9 @@ describe("quote → pick → book", () => {
 		state.actions.set(NAME.prepare, prepare);
 		const { container } = render(<DelyvaDispatchCard order={order} />);
 
-		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
 		await waitFor(() =>
 			expect(screen.getByText(/No courier can take/i)).toBeTruthy(),
 		);
@@ -284,13 +389,17 @@ describe("quote → pick → book", () => {
 		state.actions.set(NAME.prepare, prepare);
 		render(<DelyvaDispatchCard order={order} />);
 
-		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
 		await waitFor(() => expect(screen.getByText("Ninja Cold")).toBeTruthy());
 
 		// A different parcel type is a different set of couriers and prices.
 		fireEvent.click(screen.getByRole("button", { name: /^Parcel$/i }));
 		expect(screen.queryByText("Ninja Cold")).toBeNull();
-		expect(screen.getByRole("button", { name: /get courier prices/i })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		).toBeTruthy();
 	});
 
 	it("re-quotes with the per-order parcel type after an override", async () => {
@@ -305,7 +414,9 @@ describe("quote → pick → book", () => {
 		render(<DelyvaDispatchCard order={order} />);
 
 		fireEvent.click(screen.getByRole("button", { name: /^Parcel$/i }));
-		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
 		await waitFor(() => expect(prepare).toHaveBeenCalled());
 		expect(prepare.mock.calls[0][0].itemType).toBe("PARCEL");
 	});
@@ -346,16 +457,22 @@ describe("weight", () => {
 	});
 
 	it("sends a seller's overridden weight, not the computed one", async () => {
-		const prepare = vi
-			.fn()
-			.mockResolvedValue({ ok: true, services: [], weightKg: 9, itemType: "CHILLED", buyerPaidFee: 0 });
+		const prepare = vi.fn().mockResolvedValue({
+			ok: true,
+			services: [],
+			weightKg: 9,
+			itemType: "CHILLED",
+			buyerPaidFee: 0,
+		});
 		state.actions.set(NAME.prepare, prepare);
 		render(<DelyvaDispatchCard order={order} />);
 
 		fireEvent.change(screen.getByLabelText(/parcel weight in kilograms/i), {
 			target: { value: "9" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
 		await waitFor(() => expect(prepare).toHaveBeenCalled());
 		expect(prepare.mock.calls[0][0].weightKgOverride).toBe(9);
 	});
@@ -390,8 +507,41 @@ describe("booked states", () => {
 		expect(screen.getByText("Ninja Cold")).toBeTruthy();
 		expect(container.textContent).toContain("In transit");
 		expect(container.textContent).toContain("18.50");
-		expect(screen.getByRole("button", { name: /cancel booking/i })).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: /cancel booking/i }),
+		).toBeTruthy();
 		expect(screen.getByText(/track parcel/i)).toBeTruthy();
+	});
+
+	it("delivered says scan-not-photo and never claims the buyer was messaged (z8r3fdytmq)", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: {
+				status: "completed",
+				providerOrderId: "delyva-1",
+				costActual: 1850,
+				serviceCode: "NINJA-COLD",
+				serviceName: "Ninja Cold",
+				itemType: "CHILLED",
+				awb: "MY0012345678",
+				createdAt: Date.now(),
+			},
+		});
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={
+					{
+						...order,
+						status: "delivered",
+						carrierTrackingUrl: "https://track.example/MY0012345678",
+					} as Doc<"orders">
+				}
+			/>,
+		);
+		expect(container.textContent).toContain(
+			"tracking scan, not a photo: Track parcel shows it",
+		);
+		expect(container.textContent).not.toMatch(/notified automatically/);
 	});
 
 	it("says the tracking number is still coming rather than showing a blank", () => {
@@ -407,7 +557,9 @@ describe("booked states", () => {
 			},
 		});
 		render(<DelyvaDispatchCard order={order} />);
-		expect(screen.getByText(/waiting for DHL eCommerce to issue/i)).toBeTruthy();
+		expect(
+			screen.getByText(/waiting for DHL eCommerce to issue/i),
+		).toBeTruthy();
 	});
 
 	it("offers one-tap retry after a failed booking and says the buyer wasn't told", () => {
@@ -442,7 +594,9 @@ describe("booked states", () => {
 		});
 		const { container } = render(<DelyvaDispatchCard order={order} />);
 		expect(container.textContent).toContain("Delivered");
-		expect(screen.queryByRole("button", { name: /cancel booking/i })).toBeNull();
+		expect(
+			screen.queryByRole("button", { name: /cancel booking/i }),
+		).toBeNull();
 	});
 });
 
@@ -456,13 +610,69 @@ describe("collect-from line", () => {
 		});
 		const { container } = render(<DelyvaDispatchCard order={order} />);
 		expect(container.textContent).toContain("Collecting from");
-		expect(container.textContent).toContain("55 Jln Eco Majestic, 43500 Semenyih");
+		expect(container.textContent).toContain(
+			"55 Jln Eco Majestic, 43500 Semenyih",
+		);
 		expect(screen.getByRole("link", { name: /edit/i })).toBeTruthy();
 	});
 
 	it("says nothing when no address is stored — the block reason covers that", () => {
 		const { container } = render(<DelyvaDispatchCard order={order} />);
 		expect(container.textContent).not.toContain("Collecting from");
+	});
+});
+
+describe("overseas buyer number (z8r3fdh274)", () => {
+	// A foreign buyer number hands the courier the STORE's number. The card
+	// says so before the first quote, naming the store's market, so the seller
+	// isn't surprised when the courier phones them about this parcel.
+	it("says the courier will call the store, in the store's market", () => {
+		state.dispatch = dispatchState({
+			buyerContactFallback: true,
+			country: "MY",
+		});
+		render(<DelyvaDispatchCard order={order} />);
+		expect(
+			screen.getByText(
+				"This buyer's WhatsApp number isn't a Malaysian number, so the courier gets your store's number instead, with the buyer's real number in the booking note.",
+			),
+		).toBeTruthy();
+	});
+
+	it("names Singapore on an SG store", () => {
+		state.dispatch = dispatchState({
+			buyerContactFallback: true,
+			country: "SG",
+		});
+		render(<DelyvaDispatchCard order={order} />);
+		expect(screen.getByText(/isn't a Singapore number/)).toBeTruthy();
+	});
+
+	it("says nothing for a local buyer", () => {
+		state.dispatch = dispatchState({
+			buyerContactFallback: false,
+			country: "MY",
+		});
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		expect(container.textContent).not.toContain("store's number");
+	});
+
+	it("says nothing once a courier is booked — the notice is about the NEXT booking", () => {
+		state.dispatch = dispatchState({
+			buyerContactFallback: true,
+			country: "MY",
+			blockReason: "job_active",
+			job: {
+				status: "picked_up",
+				costActual: 1850,
+				serviceCode: "NINJA-COLD",
+				serviceName: "Ninja Cold",
+				awb: "MY0012345678",
+				createdAt: Date.now(),
+			},
+		});
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		expect(container.textContent).not.toContain("store's number");
 	});
 });
 
@@ -507,9 +717,7 @@ describe("a closed order's failed booking is history, not a retry", () => {
 
 describe("embedded in the dispatch hub", () => {
 	it("drops its own border so the hub's shell isn't a card inside a card", () => {
-		const { container } = render(
-			<DelyvaDispatchCard order={order} embedded />,
-		);
+		const { container } = render(<DelyvaDispatchCard order={order} embedded />);
 		const root = container.querySelector("section");
 		expect(root?.className).not.toContain("border");
 		expect(root?.className).not.toContain("rounded-2xl");
@@ -546,7 +754,7 @@ describe("the hint names the RIGHT next step", () => {
 		expect(container.textContent).toContain("connect Delyva");
 		expect(container.textContent).not.toContain("paused");
 	});
-})
+});
 
 describe("an empty courier list says WHICH kind of empty", () => {
 	// Zaki's SG account, 3 Sep: no couriers connected, so every address he
@@ -563,16 +771,16 @@ describe("an empty courier list says WHICH kind of empty", () => {
 		});
 		state.actions.set(NAME.prepare, prepare);
 		const view = render(<DelyvaDispatchCard order={order} />);
-		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
 		await waitFor(() => expect(prepare).toHaveBeenCalled());
 		return view;
 	}
 
 	it("names the account when nothing is switched on — and clears the address of blame", async () => {
 		const { container } = await quoteEmpty(true);
-		expect(container.textContent).toContain(
-			"no couriers switched on yet",
-		);
+		expect(container.textContent).toContain("no couriers switched on yet");
 		expect(container.textContent).toContain("isn't about this order's address");
 		expect(container.textContent).not.toContain("No courier can take a");
 	});
@@ -587,7 +795,7 @@ describe("an empty courier list says WHICH kind of empty", () => {
 		const { container } = await quoteEmpty(undefined);
 		expect(container.textContent).toContain("No courier can take a");
 	});
-})
+});
 
 describe("cold chain gets its own diagnosis", () => {
 	// Chilled/frozen is the ICP's core need, and it fails identically to an
@@ -605,7 +813,9 @@ describe("cold chain gets its own diagnosis", () => {
 		});
 		state.actions.set(NAME.prepare, prepare);
 		const view = render(<DelyvaDispatchCard order={order} />);
-		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
 		await waitFor(() => expect(prepare).toHaveBeenCalled());
 		return view;
 	}
@@ -616,7 +826,9 @@ describe("cold chain gets its own diagnosis", () => {
 			"None of the couriers on your Delyva account carries",
 		);
 		expect(container.textContent).toContain("isn't the address or the weight");
-		expect(container.textContent).toContain("Ask Delyva to enable a cold-chain");
+		expect(container.textContent).toContain(
+			"Ask Delyva to enable a cold-chain",
+		);
 		expect(container.textContent).not.toContain("No courier can take a");
 	});
 
@@ -645,7 +857,9 @@ describe("cross-currency quotes are never presented as comparable", () => {
 				order={{ ...order, currency: "SGD" } as Doc<"orders">}
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
 		await waitFor(() => expect(prepare).toHaveBeenCalled());
 		expect(container.textContent).toContain("aren't directly comparable");
 	});
@@ -660,9 +874,11 @@ describe("cross-currency quotes are never presented as comparable", () => {
 		});
 		state.actions.set(NAME.prepare, prepare);
 		const { container } = render(<DelyvaDispatchCard order={order} />);
-		fireEvent.click(screen.getByRole("button", { name: /get courier prices/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
 		await waitFor(() => expect(prepare).toHaveBeenCalled());
 		expect(container.textContent).toContain("Buyer paid");
 		expect(container.textContent).not.toContain("aren't directly comparable");
 	});
-})
+});

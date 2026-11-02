@@ -14,6 +14,8 @@ import {
 	MAX_BOOKING_SPAN_DAYS,
 	maxPackageQuantity,
 } from "./lib/bookingAvailability";
+import { revenueExcludingDeposit } from "./lib/order";
+import { UNKNOWN_DIAL_COUNTRY_MESSAGE } from "./lib/buyerPhone";
 import {
 	addMytCalendarMonths,
 	DAY_MS,
@@ -25,13 +27,24 @@ import {
 	WEEKDAY_NIGHTS_LABEL,
 	weekendNightsLabel,
 } from "./lib/productKind";
+import { settleScheduled } from "./lib/convexTestSettle";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
 
+// Drain each test's scheduled work before the next test starts — see
+// `settleScheduled` for the convex-test hazard this closes.
+let current: ReturnType<typeof convexTest> | undefined;
+afterEach(async () => {
+	const t = current;
+	current = undefined;
+	if (t) await settleScheduled(t);
+});
+
 function setup() {
 	const t = convexTest(schema, modules);
 	registerRateLimiter(t);
+	current = t;
 	return t;
 }
 
@@ -151,7 +164,52 @@ describe("bookings.availability", () => {
 	});
 });
 
+/** Files a product under a named category, straight into the tables. */
+async function fileUnder(
+	t: { run: ReturnType<typeof setup>["run"] },
+	productId: Id<"products">,
+	name: string,
+) {
+	await t.run(async (ctx) => {
+		const product = await ctx.db.get(productId);
+		if (!product) throw new Error("product missing");
+		const now = Date.now();
+		const categoryId = await ctx.db.insert("categories", {
+			retailerId: product.retailerId,
+			name,
+			slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+			active: true,
+			sortOrder: 0,
+			createdAt: now,
+			updatedAt: now,
+		});
+		await ctx.db.insert("productCategories", {
+			productId,
+			categoryId,
+			retailerId: product.retailerId,
+			sortOrder: 0,
+			createdAt: now,
+		});
+	});
+}
+
 describe("bookings.requestBooking", () => {
+	test("freezes the listing's categories onto every line (86eyrtz74)", async () => {
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup());
+		await fileUnder(t, productId, "Riverside");
+		const result = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			customer: guest(1),
+		});
+		const order = await asOwner.query(api.orders.get, {
+			shortId: result.shortId,
+		});
+		expect(order?.items.map((i) => i.categoryNames)).toEqual([["Riverside"]]);
+	});
+
 	test("lands as booking_requested with the stay priced × nights", async () => {
 		const { t, asOwner, retailer, productId } = await seedBookingStore(setup());
 		const result = await t.mutation(api.bookings.requestBooking, {
@@ -190,6 +248,72 @@ describe("bookings.requestBooking", () => {
 				customer: { name: "Nameful Guest" },
 			}),
 		).rejects.toThrow(/WhatsApp number/);
+	});
+
+	test("a guest's number can come from any country — stored as Meta delivers it", async () => {
+		// z8r3fdh274: same authority and contract as orders.create — the picked
+		// country rides `customer.waDialCountry`, the trunk 0 is the country's
+		// own to drop, and the stored digits match the inbound form.
+		const { t, asOwner, retailer, productId } = await seedBookingStore(setup());
+		const { shortId } = await t.mutation(api.bookings.requestBooking, {
+			retailerId: retailer._id,
+			productId,
+			checkIn: day(3),
+			checkOut: day(5),
+			customer: {
+				name: "Haruto Sato",
+				waPhone: "090-1234-5678",
+				waDialCountry: "JP",
+			},
+		});
+		const order = await asOwner.query(api.orders.get, { shortId });
+		expect(order?.customer.waPhone).toBe("819012345678");
+	});
+
+	test("no dial country keeps the store's arm — bare SG digits at an MY store are refused, never sniffed", async () => {
+		const { t, retailer, productId } = await seedBookingStore(setup());
+		await expect(
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(3),
+				checkOut: day(5),
+				customer: { name: "Wei Ling", waPhone: "9123 4567" },
+			}),
+		).rejects.toThrow(/switch the country to \+65/);
+	});
+
+	test("junk and an unknown dial country are refused", async () => {
+		const { t, retailer, productId } = await seedBookingStore(setup());
+		const request = (customer: {
+			name: string;
+			waPhone: string;
+			waDialCountry?: string;
+		}) =>
+			t.mutation(api.bookings.requestBooking, {
+				retailerId: retailer._id,
+				productId,
+				checkIn: day(3),
+				checkOut: day(5),
+				customer,
+			});
+		await expect(
+			request({ name: "Nameful Guest", waPhone: "12345" }),
+		).rejects.toThrow(/Malaysian mobile/);
+		await expect(
+			request({
+				name: "Nameful Guest",
+				waPhone: "7911 1234",
+				waDialCountry: "GB",
+			}),
+		).rejects.toThrow(/United Kingdom mobile/);
+		await expect(
+			request({
+				name: "Nameful Guest",
+				waPhone: "012-345 6789",
+				waDialCountry: "XX",
+			}),
+		).rejects.toThrow(UNKNOWN_DIAL_COUNTRY_MESSAGE);
 	});
 
 	test("holds capacity from the request — the last spot can't double-book", async () => {
@@ -516,7 +640,6 @@ describe("approve / decline (S3)", () => {
 		expect(sellerRead?.bookingContext).toEqual({
 			capacityPerNight: 5,
 			peakOtherBookings: 2,
-			nights: 1,
 		});
 		const buyerRead = await t.query(api.orders.get, {
 			token: third.trackingToken,
@@ -608,6 +731,9 @@ describe("security deposit (S5)", () => {
 			}),
 		).rejects.toThrow(/reason/i);
 		// Partial keep records the split + reason.
+		const before = await asOwner.query(api.orders.get, {
+			shortId: order.shortId,
+		});
 		await asOwner.mutation(api.bookings.settleSecurityDeposit, {
 			orderId: order._id,
 			keptAmount: 4_000,
@@ -619,6 +745,16 @@ describe("security deposit (S5)", () => {
 		expect(settled?.securityDepositReturnedAt).toBeDefined();
 		expect(settled?.securityDepositKeptAmount).toBe(4_000);
 		expect(settled?.securityDepositKeptReason).toBe("Broken camp chair");
+		// A keep is compensation, not sales (owner call, 4 Sep 2026): settling
+		// touches neither `total` nor the frozen `securityDeposit`, so every
+		// revenue surface still nets out the WHOLE deposit and the kept part
+		// re-enters nothing. The Insights hover says exactly this, and said the
+		// opposite until z8r3fdcw70 — pinned here so the copy has a fact to sit on.
+		expect(settled?.total).toBe(before?.total);
+		expect(settled?.securityDeposit).toBe(before?.securityDeposit);
+		expect(revenueExcludingDeposit(settled!)).toBe(
+			revenueExcludingDeposit(before!),
+		);
 		// One shot.
 		await expect(
 			asOwner.mutation(api.bookings.settleSecurityDeposit, {
@@ -986,6 +1122,9 @@ describe("fixed-length packages + instant book (S7)", () => {
 
 		// A block still closes the day — unlimited means "no capacity ceiling",
 		// not "never unavailable".
+		// The requests above scheduled seller-alert work; let it finish before
+		// seeding, or the block can be lost to the harness (`settleScheduled`).
+		await settleScheduled(t);
 		await asOwner.mutation(api.bookingBlocks.blockDays, {
 			retailerId: retailer._id,
 			startDate: day(5),

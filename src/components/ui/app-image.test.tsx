@@ -6,6 +6,8 @@ import {
 	render,
 	screen,
 } from "@testing-library/react";
+import { hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppImage, MAX_LOAD_RETRIES } from "./app-image";
 
@@ -566,6 +568,53 @@ describe("AppImage — retry (86eypxgff) composed with the proxy (86eypxght)", (
 	});
 });
 
+describe("AppImage — server-rendered images show before hydration (z8r3fdue6f)", () => {
+	const SRC = "https://example.com/cover.jpg";
+
+	it("the server render paints the photo opaque, above the skeleton", () => {
+		const host = document.createElement("div");
+		host.innerHTML = renderToString(<AppImage src={SRC} alt="Cover" />);
+		const img = imgIn(host);
+
+		// No onLoad exists until React runs, so an opacity-0 photo in the HTML
+		// would stay invisible until the bundle hydrates — never with JS off.
+		expect(img?.className).toContain("opacity-100");
+		expect(img?.className).not.toContain("opacity-0");
+		// The skeleton still sits beneath it until the bytes decode; `relative`
+		// is what puts the later-in-DOM photo on top of the absolute skeleton.
+		expect(skeletonIn(host)).not.toBeNull();
+		expect(img?.className).toContain("relative");
+	});
+
+	it("hydration keeps the server markup, then a still-loading photo hands over to the fade-in", async () => {
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		host.innerHTML = renderToString(<AppImage src={SRC} alt="Cover" />);
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await act(async () => {
+			hydrateRoot(host, <AppImage src={SRC} alt="Cover" />);
+		});
+
+		// No hydration mismatch, and after hydration an image that hasn't
+		// loaded is back on the fade-in path…
+		expect(errors).not.toHaveBeenCalled();
+		const img = imgIn(host);
+		expect(img?.className).toContain("opacity-0");
+		// …which onLoad completes exactly as before.
+		await act(async () => {
+			if (img) fireEvent.load(img);
+		});
+		expect(imgIn(host)?.className).toContain("opacity-100");
+		host.remove();
+	});
+
+	it("a client-side mount (no hydration) still fades in — dashboard and SPA navs unchanged", () => {
+		const { container } = render(<AppImage src={SRC} alt="Cover" />);
+		expect(imgIn(container)?.className).toContain("opacity-0");
+	});
+});
+
 describe("AppImage — reduced motion", () => {
 	const originalMatchMedia = window.matchMedia;
 
@@ -601,6 +650,76 @@ describe("AppImage — reduced motion", () => {
 		);
 		expect(skeletonIn(container)?.className).toContain(
 			"motion-reduce:animate-none",
+		);
+	});
+});
+
+describe("the photo frame (z8r3fdm36y)", () => {
+	/** The hairline overlay — the only `ring-inset` span in the wrapper. */
+	function frameIn(container: HTMLElement) {
+		return container.querySelector("span.ring-inset");
+	}
+
+	it("draws no frame unless asked", () => {
+		// A full-bleed storefront cover and a brand-mark SVG both read worse
+		// framed, so this is opt-in by meaning rather than a default.
+		const { container } = render(
+			<AppImage src="https://example.com/a.jpg" alt="A" />,
+		);
+		expect(frameIn(container)).toBeNull();
+	});
+
+	it("paints the hairline ABOVE the photo, not as a border on the box", () => {
+		// A product shot on a white background has no edge of its own. The
+		// overlay is why it works at the real call sites: the grid tile's image
+		// is `absolute inset-0` inside a parent with `overflow-hidden`, which
+		// clips an outward ring away, and an inset ring on the wrapper is painted
+		// beneath its own children — so the <img> covers it.
+		const { container } = render(
+			<AppImage src="https://example.com/a.jpg" alt="A" frame="hairline" />,
+		);
+		const overlay = frameIn(container);
+		expect(overlay).not.toBeNull();
+		const img = imgIn(container);
+		expect(img).not.toBeNull();
+		// After the image in DOM order is what puts it on top.
+		expect(
+			(img as HTMLImageElement).compareDocumentPosition(overlay as Node) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(overlay?.getAttribute("aria-hidden")).toBe("true");
+		expect(overlay?.className).toContain("pointer-events-none");
+		// Reads against an arbitrary photo in both themes.
+		expect(overlay?.className).toContain("ring-black/10");
+		expect(overlay?.className).toContain("dark:ring-white/15");
+	});
+
+	it("keeps the frame when the photo is missing or dead", () => {
+		// Otherwise a grid of half-loaded tiles loses its edges exactly when the
+		// page looks most broken.
+		const { container } = render(
+			<AppImage src={null} alt="A" frame="hairline" />,
+		);
+		expect(frameIn(container)).not.toBeNull();
+	});
+
+	it("only `raised` carries the lift — a card already owns its shadow", () => {
+		// A shadow per tile turns a 16-tile grid into mush, so the grid asks for
+		// `hairline` and the free-floating gallery asks for `raised`.
+		const hair = render(
+			<AppImage src="https://example.com/a.jpg" alt="A" frame="hairline" />,
+		);
+		expect(hair.container.firstElementChild?.className).not.toContain(
+			"shadow-",
+		);
+		cleanup();
+		const raised = render(
+			<AppImage src="https://example.com/a.jpg" alt="A" frame="raised" />,
+		);
+		expect(raised.container.firstElementChild?.className).toContain("shadow-");
+		// Dark mode drops it: a navy glow on a near-black surface is a smudge.
+		expect(raised.container.firstElementChild?.className).toContain(
+			"dark:shadow-none",
 		);
 	});
 });

@@ -3,15 +3,41 @@
 // seller confirms what they have before touching anything. Pure — derived from
 // the variant editor's draft state, so it live-updates as they edit.
 // See docs/product-setup-wizard.md.
+//
+// `currency` is the retailer's ISO code (`MYR`, `SGD`). Amounts are spelled
+// by `formatDraftPrice` — "RM 12", "S$ 12" — never the raw code.
 
-import { weekendDaysLabel } from "../../convex/lib/productKind";
-import { parsePriceInput } from "./format";
+import { describeEvent } from "../../convex/lib/productEvent";
+import {
+	MAX_SECURITY_DEPOSIT,
+	MAX_SKIPS_CAP,
+	type PackageUnit,
+	weekendDaysLabel,
+} from "../../convex/lib/productKind";
+import { bookingPriceSuffix } from "./booking-dates";
+import {
+	formatDraftAmount,
+	formatDraftPrice,
+	formatDraftPriceRange,
+	parsePriceInput,
+} from "./format";
 
 export type SummaryInput = {
+	/** Fixed event config (`z8r3fdff9u`), or null/absent for a normal product.
+	 * Leads the strip ("Event · Fri 25 Sep · 8:00 AM · 30 seats") because it's
+	 * what the product IS — the choices and stock words describe the rest. */
+	event?: {
+		date: number;
+		timeMinutes?: number;
+		seats?: number;
+		endDate?: number;
+	} | null;
 	options: { name: string; values: string[] }[];
 	rows: {
 		optionValues: string[];
 		price: string;
+		/** Sale price as typed; "" / absent = this line isn't on promotion. */
+		promoPrice?: string;
 		active: boolean;
 		blockWhenOutOfStock: boolean;
 		/** Needed to tell a **made-to-order** product (bespoke, quoted, mockup
@@ -22,23 +48,29 @@ export type SummaryInput = {
 	 * starting price, so the strip needs the value, not just its presence. */
 	customLine: { price: string } | null;
 	/** Booking kind describes itself in booking words — "Booking · 5
-	 * spots/night · RM 80/night" for a free-range stay, "Booking · 30-day
-	 * package · RM 150 per package" for a fixed-length one (S7). */
+	 * spots/night · RM 80/night" for a free-range stay, "Booking · 1-month
+	 * package · 20 at a time · RM 150/month" for a fixed-length one (S7).
+	 *
+	 * `packageUnit` is required knowledge, not decoration: the strip was
+	 * written when every package was days and kept saying "1-day package" on
+	 * a 1-month membership after units shipped, which on the edit page reads
+	 * exactly like the unit silently going back to days. Absent = days, the
+	 * same default `isMonthlyUnit` reads for a pre-units listing. */
 	booking?: {
 		capacityPerNight: string;
 		packageLength?: string;
+		packageUnit?: PackageUnit;
 		autoAccept?: boolean;
-		/** Weekend per-night rate as typed (RM) + the nights it covers (S13).
+		/** "Only days you're open" (z8r3fdhpm7) — named on a day package. */
+		skipsClosedDays?: boolean;
+		/** "Skips per package" as typed (z8r3fdh3ay); blank = no limit. */
+		maxSkips?: string;
+		/** Weekend per-night rate as typed (major units) + the nights it covers (S13).
 		 * Blank/absent = one rate; ignored on a package. */
 		weekendPrice?: string;
 		weekendDays?: readonly number[];
 	} | null;
 };
-
-/** "12" / "12.50" — trailing .00 dropped so the strip reads like speech. */
-function formatMajor(n: number): string {
-	return Number.isInteger(n) ? String(n) : n.toFixed(2);
-}
 
 /**
  * The one-line consequence under the seller's weekend-rate field (S13) —
@@ -69,16 +101,45 @@ export function weekendRateConsequence(
 	const base = parsePriceInput(basePrice.trim());
 	const other =
 		base !== null && base > 0
-			? `, other nights ${currency} ${formatMajor(base)}`
+			? `, other nights ${formatDraftPrice(base, currency)}`
 			: "";
-	return `${nights} nights charge ${currency} ${formatMajor(weekend)}${other}.`;
+	return `${nights} nights charge ${formatDraftPrice(weekend, currency)}${other}.`;
+}
+
+/** The refundable deposit ceiling in the seller's typed major units — the
+ * server sanitizer's own `MAX_SECURITY_DEPOSIT` (sen), so the wizard and the
+ * edit form can't accept what save refuses. The number is the same in every
+ * supported currency (10,000). */
+const MAX_SECURITY_DEPOSIT_MAJOR = MAX_SECURITY_DEPOSIT / 100;
+
+/** Is a typed, parsed deposit inside what save accepts? `null` (unparseable)
+ * is out. Shared by the wizard's step check and the edit form's field. */
+export function isSecurityDepositInRange(major: number | null): boolean {
+	return major !== null && major >= 0 && major <= MAX_SECURITY_DEPOSIT_MAJOR;
+}
+
+/**
+ * "Enter an amount between RM 0 and RM 10,000, or leave blank." — in the
+ * store's own symbol ("S$ 0 and S$ 10,000" for SG). Both product forms used
+ * to hardcode "RM" here. Without a `currency` (a caller that only counts
+ * issues) it names the numbers alone rather than guessing a symbol.
+ */
+export function securityDepositRangeMessage(currency?: string): string {
+	const range =
+		currency === undefined
+			? `0 and ${formatDraftAmount(MAX_SECURITY_DEPOSIT_MAJOR)}`
+			: `${formatDraftPrice(0, currency)} and ${formatDraftPrice(MAX_SECURITY_DEPOSIT_MAJOR, currency)}`;
+	return `Enter an amount between ${range}, or leave blank.`;
 }
 
 export function describeProduct(
-	{ options, rows, customLine, booking }: SummaryInput,
+	{ event, options, rows, customLine, booking }: SummaryInput,
 	currency: string,
 ): string {
 	const parts: string[] = [];
+	// An event announces itself first — a booking never carries one, so this
+	// only ever prefixes the product branches below.
+	if (event) parts.push(describeEvent(event));
 
 	// A booking listing speaks its own vocabulary: capacity per night + a
 	// per-night price ("Booking · 5 spots/night · RM 80/night"). Choices, stock
@@ -86,20 +147,30 @@ export function describeProduct(
 	if (booking) {
 		const price = parsePriceInput(rows[0]?.price.trim() ?? "");
 		const cap = booking.capacityPerNight.trim();
-		const days = Number(booking.packageLength?.trim() || "0");
-		const isPackage = Number.isFinite(days) && days > 0;
+		const length = Number(booking.packageLength?.trim() || "0");
+		const isPackage = Number.isFinite(length) && length > 0;
+		const unit: PackageUnit = booking.packageUnit ?? "day";
 		const parts = ["Booking"];
-		if (isPackage) parts.push(`${days}-day package`);
-		// Blank capacity = unlimited (S7); saying "1 spot/night" there would be
-		// a different product from the one the seller configured.
-		parts.push(
-			cap.length === 0
-				? "Unlimited spots"
-				: `${cap} spot${cap === "1" ? "" : "s"}/night`,
-		);
+		// Hyphenated adjective, singular unit: "1-month package", "30-day
+		// package", "2-night package" — the shape packageCountLabel already uses.
+		if (isPackage) {
+			parts.push(
+				// The counting rule is part of what's sold (z8r3fdhpm7): a 5-day
+				// course that skips closed days is a different product from five
+				// days in a row, so the strip says which.
+				unit === "day" && booking.skipsClosedDays
+					? `${length}-day package (open days only${skipsCapSuffix(booking.maxSkips)})`
+					: `${length}-${unit} package`,
+			);
+		}
+		parts.push(bookingCapacityLabel(cap, isPackage));
+		// The ONE span author, so this strip, the storefront card and the price
+		// field say "RM 150/month" alike. "Per package" is the wording that
+		// helper's own docblock retired: it made the reader open the listing to
+		// find out what span they were buying.
 		parts.push(
 			price && price > 0
-				? `${currency} ${formatMajor(price)}${isPackage ? " per package" : "/night"}`
+				? `${formatDraftPrice(price, currency)}${bookingPriceSuffix(isPackage ? length : undefined, unit)}`
 				: "No price yet",
 		);
 		// The second rate, named by its nights: "RM 120 Fri & Sat". A package
@@ -113,7 +184,7 @@ export function describeProduct(
 			booking.weekendDays.length > 0
 		) {
 			parts.push(
-				`${currency} ${formatMajor(weekend)} ${weekendDaysLabel(booking.weekendDays)}`,
+				`${formatDraftPrice(weekend, currency)} ${weekendDaysLabel(booking.weekendDays)}`,
 			);
 		}
 		if (booking.autoAccept) parts.push("Instant book");
@@ -132,8 +203,9 @@ export function describeProduct(
 		const base = parsePriceInput(rows[0].price.trim());
 		// No "from" prefix: one variant means the storefront prints a flat price.
 		return [
+			...parts,
 			"Made to order",
-			base && base > 0 ? `${currency} ${formatMajor(base)}` : "Price on quote",
+			base && base > 0 ? formatDraftPrice(base, currency) : "Price on quote",
 		].join(" · ");
 	}
 
@@ -141,14 +213,15 @@ export function describeProduct(
 	// bespoke line (see VariantEditor.switchToMadeToOrder). Without this the
 	// strip fell through to "One item · No price yet · + custom option" — three
 	// wrong statements about a perfectly configured product. Its price is a
-	// STARTING price (the mockup quote lands on top), so this says exactly what
-	// the storefront prints: "From RM 40" (86eyhn4mr).
+	// STARTING price (the mockup quote lands on top), so this says "From" like
+	// the storefront does (86eyhn4mr) — "From RM 40" in the strip's spelling.
 	if (options.length === 0 && rows.length === 0 && customLine) {
 		const base = parsePriceInput(customLine.price.trim());
 		return [
+			...parts,
 			"Made to order",
 			base && base > 0
-				? `From ${currency} ${formatMajor(base)}`
+				? `From ${formatDraftPrice(base, currency)}`
 				: "Price on quote",
 		].join(" · ");
 	}
@@ -185,16 +258,92 @@ export function describeProduct(
 	if (prices.length === 0) {
 		parts.push("No price yet");
 	} else {
-		const min = Math.min(...prices);
-		const max = Math.max(...prices);
 		parts.push(
-			min === max
-				? `${currency} ${formatMajor(min)}`
-				: `${currency} ${formatMajor(min)}–${formatMajor(max)}`,
+			formatDraftPriceRange(Math.min(...prices), Math.max(...prices), currency),
+		);
+	}
+
+	// A configured sale price belongs in the one line that claims to summarise
+	// the product: the strip printed the LIST price beside a live promotion, so
+	// a seller opening the product to check their sale read the old number
+	// (found by hand-testing). Plain text, so it states the sale rather than
+	// striking the list — this strip has no markup.
+	const salePrices = activeRows
+		.map((r) => parsePriceInput((r.promoPrice ?? "").trim()))
+		.filter((v): v is number => v !== null && v > 0);
+	if (salePrices.length > 0) {
+		parts.push(
+			`Sale ${formatDraftPriceRange(
+				Math.min(...salePrices),
+				Math.max(...salePrices),
+				currency,
+			)}`,
 		);
 	}
 
 	if (customLine) parts.push("+ custom option");
 
 	return parts.join(" · ");
+}
+
+/**
+ * Why a typed "skips per package" draft (z8r3fdh3ay) can't be saved, or null
+ * when it can. Blank = no limit. Mirrors the server's `sanitizeMaxSkips`
+ * bound, shared by the form and the wizard so the two can't drift.
+ */
+export function maxSkipsDraftIssue(draft: string): string | null {
+	const trimmed = draft.trim();
+	if (trimmed.length === 0) return null;
+	const n = Number(trimmed);
+	if (!/^\d+$/.test(trimmed) || n < 1 || n > MAX_SKIPS_CAP) {
+		return `Enter a whole number from 1 to ${MAX_SKIPS_CAP}, or leave it blank for no limit`;
+	}
+	return null;
+}
+
+/** The draft as the mutation takes it — 0 clears (the server's one spelling
+ * for "no limit"). Only call once `maxSkipsDraftIssue` is null. */
+export function maxSkipsFromDraft(draft: string): number {
+	const trimmed = draft.trim();
+	return trimmed.length === 0 ? 0 : Number(trimmed);
+}
+
+/** ", up to 3 skips" for the summary strip when a valid cap is typed. */
+function skipsCapSuffix(draft: string | undefined): string {
+	const trimmed = draft?.trim() ?? "";
+	if (trimmed.length === 0 || maxSkipsDraftIssue(trimmed) !== null) return "";
+	return `, up to ${trimmed} skip${trimmed === "1" ? "" : "s"}`;
+}
+
+/**
+ * A booking listing's capacity in words — the one author, shared by the
+ * summary strip and the products list.
+ *
+ * Blank / unset = unlimited (S7); saying "1 spot/night" there would be a
+ * different product from the one the seller configured. A package is counted
+ * AT A TIME, not per night — the words the capacity field and the wizard
+ * review already use for it. Takes the edit form's draft string or the stored
+ * number alike.
+ */
+export function bookingCapacityLabel(
+	capacity: string | number | undefined,
+	isPackage: boolean,
+): string {
+	const cap = String(capacity ?? "").trim();
+	if (cap.length === 0) return "Unlimited spots";
+	return isPackage
+		? `${cap} at a time`
+		: `${cap} spot${cap === "1" ? "" : "s"}/night`;
+}
+
+/**
+ * A booking listing's capacity as the edit form's draft. UNSET means
+ * unlimited (S7) and seeds a BLANK field — `String(undefined)` seeded the
+ * literal "undefined", which the number input showed as empty while the
+ * form refused it as invalid, so no unlimited listing (every gym and meal
+ * plan) could be saved from its edit page, and the summary strip read
+ * "undefined at a time". Found in the z8r3fdh3ay hands-on test.
+ */
+export function capacityDraftFromListing(capacity: number | undefined): string {
+	return capacity === undefined ? "" : String(capacity);
 }

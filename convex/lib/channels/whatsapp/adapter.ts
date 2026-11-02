@@ -60,20 +60,27 @@ function ctaButtonUrl(url: string): string | null {
 	return null;
 }
 
+/** Meta's `wamid` as a receipt — the ONE key the `statuses` webhook later
+ * identifies the message by, so every kind reports it (a plain-text counter
+ * confirmation that Meta accepts then fails to deliver flips to `failed` the
+ * same way a template push does). */
+function asReceipt(providerMessageId: string | undefined): SendReceipt | undefined {
+	return providerMessageId ? { providerMessageId } : undefined;
+}
+
 async function send(
 	to: string,
 	msg: OutboundMessage,
 ): Promise<SendReceipt | undefined> {
 	switch (msg.kind) {
 		case "text":
-			await sendText(to, msg.body);
-			return;
+			return asReceipt(await sendText(to, msg.body));
 		case "image":
-			await sendImage(to, msg.imageUrl, msg.caption);
-			return;
+			return asReceipt(await sendImage(to, msg.imageUrl, msg.caption));
 		case "document":
-			await sendDocument(to, msg.documentUrl, msg.filename, msg.caption);
-			return;
+			return asReceipt(
+				await sendDocument(to, msg.documentUrl, msg.filename, msg.caption),
+			);
 		case "template": {
 			// Meta numbers body and button parameters INDEPENDENTLY — the button's
 			// {{1}} is its own namespace, filled from `urlButtonParam` (the value
@@ -92,40 +99,34 @@ async function send(
 					parameters: [{ type: "text", text: msg.urlButtonParam }],
 				});
 			}
-			const providerMessageId = await sendTemplate(
-				to,
-				msg.templateName,
-				msg.languageCode,
-				components,
+			return asReceipt(
+				await sendTemplate(to, msg.templateName, msg.languageCode, components),
 			);
-			return providerMessageId ? { providerMessageId } : undefined;
 		}
 		case "cta": {
 			const buttonUrl = ctaButtonUrl(msg.url);
 			if (buttonUrl) {
-				if (msg.imageUrl) {
-					await sendCtaUrlWithImage(
-						to,
-						msg.imageUrl,
-						msg.body,
-						msg.buttonText,
-						buttonUrl,
-					);
-				} else {
-					await sendCtaUrlButton(to, msg.body, msg.buttonText, buttonUrl);
-				}
-				return;
+				return asReceipt(
+					msg.imageUrl
+						? await sendCtaUrlWithImage(
+								to,
+								msg.imageUrl,
+								msg.body,
+								msg.buttonText,
+								buttonUrl,
+							)
+						: await sendCtaUrlButton(to, msg.body, msg.buttonText, buttonUrl),
+				);
 			}
 			// Degraded path: no interactive button. Keep the image header if one
 			// was provided, otherwise fall back to plain text. (Today's only
 			// caller always supplies imageUrl, so the text fallback is a forward
 			// affordance for future callers, not a path the order flow hits.)
-			if (msg.imageUrl) {
-				await sendImage(to, msg.imageUrl, msg.body);
-			} else {
-				await sendText(to, msg.body);
-			}
-			return;
+			return asReceipt(
+				msg.imageUrl
+					? await sendImage(to, msg.imageUrl, msg.body)
+					: await sendText(to, msg.body),
+			);
 		}
 	}
 }

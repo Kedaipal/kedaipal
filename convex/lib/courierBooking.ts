@@ -1,0 +1,132 @@
+/**
+ * "Does this store book couriers?" — one answer for the dispatch cards and the
+ * public storefront read (z8r3fdh274). The storefront exposes it as the
+ * one-bit `booksCouriers`, behind the checkout's overseas-number delivery
+ * note: only when a courier will actually be handed the buyer's contact is it
+ * worth telling a buyer with a foreign number that the rider will call the
+ * store instead of them. Contact numbers themselves: `./courierContact`.
+ */
+
+import { type Country, DEFAULT_COUNTRY } from "./country";
+import {
+	COURIER_PROVIDER_IDS,
+	courierBookingAllowed,
+	type CourierProviderId,
+	courierServesDestination,
+} from "./courierProviders";
+import { delyvaBookingAllowed, riderBookingAllowed } from "./delivery";
+import { resolveDelyvaCredentials } from "./delyva";
+
+/** The slice of a retailer row the booking predicates read. */
+export type CourierRetailer = {
+	country?: Country;
+	deliveryBooking?: { enabled?: boolean };
+	delyva?: {
+		enabled?: boolean;
+		apiKey?: string;
+		apiSecret?: string;
+		customerId?: number;
+		pickupAddress?: unknown;
+	};
+	/**
+	 * EasyParcel's grant lives in its own table (`easyparcelConnections` —
+	 * tokens off every retailer read), so a caller that wants this provider
+	 * judged loads the summary with `loadEasyparcelArming` and passes it here.
+	 * Absent = not loaded = not armed: failing closed is the safe direction
+	 * for a "will a courier call this buyer" bit.
+	 */
+	easyparcel?: {
+		/** A live grant exists AND this deployment is configured. */
+		connected: boolean;
+		enabled: boolean;
+	};
+};
+
+/** Lalamove rider booking is switched on and allowed in the store's country —
+ * the same bit the dispatch card's `bookingEnabled` reports. */
+export function lalamoveBookingArmed(retailer: CourierRetailer): boolean {
+	return (
+		retailer.deliveryBooking?.enabled === true &&
+		riderBookingAllowed(retailer.country ?? DEFAULT_COUNTRY)
+	);
+}
+
+/** Delyva courier booking is connected, switched on and allowed in the
+ * store's country — the same bit the Delyva card's `bookingEnabled` reports. */
+export function delyvaBookingArmed(retailer: CourierRetailer): boolean {
+	return (
+		resolveDelyvaCredentials(retailer.delyva) !== null &&
+		retailer.delyva?.enabled === true &&
+		delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY)
+	);
+}
+
+/** EasyParcel parcel booking is connected, switched on and allowed in the
+ * store's country — the same bit the EasyParcel card's `bookingEnabled`
+ * reports. */
+export function easyparcelBookingArmed(retailer: CourierRetailer): boolean {
+	return (
+		retailer.easyparcel?.connected === true &&
+		retailer.easyparcel.enabled === true &&
+		courierBookingAllowed("easyparcel", retailer.country ?? DEFAULT_COUNTRY)
+	);
+}
+
+/**
+ * Delyva will actually BID on a live checkout quote: armed, and with the
+ * pickup address an instantQuote needs (without it the call is a 400, so an
+ * account half-way through connecting simply doesn't bid). This is the one
+ * condition `getLiveQuoteContext` arms Delyva on, exported so the public
+ * `delivery.quote` can tell the checkout which providers can price the
+ * address — "by rider" copy on a store whose courier reaches the whole
+ * country was a lie (`/test-code` on PR #415).
+ */
+export function delyvaBidsAtCheckout(retailer: CourierRetailer): boolean {
+	return (
+		delyvaBookingArmed(retailer) && retailer.delyva?.pickupAddress !== undefined
+	);
+}
+
+/**
+ * One armed predicate per provider — the registry shape (Record over
+ * `CourierProviderId`) is what turns "forgot to wire the new provider into
+ * the storefront's booksCouriers bit" into a compile error.
+ */
+const PROVIDER_BOOKING_ARMED: Record<
+	CourierProviderId,
+	(retailer: CourierRetailer) => boolean
+> = {
+	lalamove: lalamoveBookingArmed,
+	delyva: delyvaBookingArmed,
+	easyparcel: easyparcelBookingArmed,
+};
+
+/**
+ * Whether a delivery order at this store may be handed to a courier. Plan
+ * gating is deliberately not read (it would cost the hot public storefront
+ * read a subscription lookup); a lapsed store with booking still switched on
+ * reads true, which only means a buyer sees a note that turns out moot.
+ */
+export function storeBooksCouriers(retailer: CourierRetailer): boolean {
+	return COURIER_PROVIDER_IDS.some((id) =>
+		PROVIDER_BOOKING_ARMED[id](retailer),
+	);
+}
+
+/**
+ * Can `provider` carry THIS order — judged by where its address is going
+ * (z8r3fdr5yy). An order with no address (self-collect) or no stamped country
+ * (every order from before cross-border) is domestic.
+ */
+export function servesOrderDestination(
+	provider: CourierProviderId,
+	order: { deliveryAddress?: { country?: Country } },
+	retailer: { country?: Country },
+): boolean {
+	const storeCountry = retailer.country ?? DEFAULT_COUNTRY;
+	return courierServesDestination(
+		provider,
+		storeCountry,
+		order.deliveryAddress?.country ?? storeCountry,
+	);
+}

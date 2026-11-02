@@ -155,9 +155,13 @@ root's pageview effect).
 | `land_marketing` | once per page load, first marketing-route mount | `/`, `/pricing`, `/cost` via [`useMarketingLanding`](../src/hooks/useMarketingLanding.ts) |
 | `view_pricing` | every `/pricing` mount | `pricing.tsx` |
 | `calc_used` | first calculator input change per visit | `cost.tsx` (`syncToUrl` choke point) |
-| `cta_signup_click` | every signup CTA click, `placement` param (`nav`, `nav-mobile`, `hero`, `hero-secondary`, `final-cta`, `pricing-teaser-<tier>`, `pricing-card-<tier>`, `pricing-bottom`) | landing components + `pricing.tsx` via `trackSignupCta` |
+| `cta_signup_click` | every signup CTA click, `placement` param (`nav`, `nav-mobile`, `hero`, `hero-secondary (retired 13 Sep 2026 with the hero's secondary link — landing v2)`, `final-cta`, `pricing-teaser-<tier>`, `pricing-card-<tier>`, `pricing-bottom`) | landing components + `pricing.tsx` via `trackSignupCta` |
+| `demo_cta` | every WhatsApp "Book a demo" link click (demo-first landing, z8r3fdtpub T1, 19 Oct 2026) — `placement` = `hero` \| `nav` \| `nav-mobile` \| `final` \| `pricing` \| `pricing-bottom` \| `fit` \| `dock`. The counterpart of `cta_signup_click` now that the demo is the primary ask: the two-week read compares the two per 100 visits. **Operator step:** mark it a key event in the GA4 UI like `onboarding_start` | `DemoPill` in `landing-ui.tsx`, `wa-dock.tsx`, `fit-check.tsx` via `trackDemoCta` |
 | `onboarding_start` | signed-in seller reaches the store-creation form AND the retailer query resolved to "no store yet" — an already-onboarded seller hitting `/onboarding` gets redirected, never counted | `onboarding.tsx` via [`useOnboardingStart`](../src/hooks/useOnboardingStart.ts) |
 | `store_created` | `createRetailer` succeeded (never on validation failure) | `onboarding.tsx` |
+| `credits_topup_started` | a seller (or a teammate with credits write) submits the credit-pack picker — `pack_id`, `value` (major units), `currency`. Fired BEFORE the HitPay redirect; the paid half is the server-side `credits_topup_paid` below, so started ÷ paid is the checkout drop-off (Credits T2, z8r3fdf8ht) | `credit-top-up-dialog.tsx` |
+| `enterprise_talk_clicked` | someone taps **Get an Enterprise quote** (formerly "Talk to Arif") on an Enterprise card — `surface` = `pricing` \| `teaser` \| `billing`. Enterprise has no checkout, so this chat is its only door and this is its one lead signal (Credits T6, z8r3fdkp8h). Not a key event: a lead, not revenue — the contract is set by hand | `pricing.tsx`, `pricing-teaser.tsx`, `enterprise-offer.tsx` |
+| `referral_share` | a seller shared their referral link — `channel` = `whatsapp` \| `copy_link` \| `copy_message` \| `image` (PNG saved) \| `image_share` (PNG handed to the system share sheet), `surface` = `home` (the Home teaser) \| `page` (`/app/refer`). The T3 card shipped with no event, so nobody could tell whether anyone had tapped Share; this is the first half of "did the push work" (the second is `store_created` with a `referral-<slug>` src). Not a key event (docs/referrals.md § The push, 28 Oct 2026) | `refer-sections.tsx` via `trackReferralShare` |
 
 **Every event auto-carries the `src` param** when the session arrived tagged:
 [`src/lib/marketing-attribution.ts`](../src/lib/marketing-attribution.ts)
@@ -172,9 +176,37 @@ At `createRetailer` the tag is re-sanitized server-side and stamped onto
 admin sellers directory.
 
 **Naming convention** for tags Kedaipal itself emits: `powered-by` (the
-storefront badge — renamed from `storefront_badge`), `spotlight-<member>`,
+storefront badge — renamed from `storefront_badge`) and its per-surface
+siblings `powered-by-track` / `powered-by-claim` / `powered-by-receipt` (one
+author, `convex/lib/poweredBy.ts` — see
+[`powered-by-badge.md`](./powered-by-badge.md)), `spotlight-<member>`,
 `referral-<member>`, `tiktok-live`, `directory`, `qr-poster`. Free-form tags
 sanitize and store verbatim.
+
+**Two loops, two meanings (z8r3fdetf5).** The BADGE loop (`powered-by*` +
+`store=`) says which store's buyer-facing surface a seller clicked through —
+attribution only, no reward. The REFERRAL loop is a seller's own link,
+`kedaipal.com/referral/<slug>`: the route hands the capture
+`src=referral-<slug>&store=<slug>` (the URL carries no query), and a valid
+invite is also kept in a 30-day `kp_referral` cookie so the referral survives
+a closed tab. The tag is analytics only — `referral-` + a 32-char slug
+truncates — and the reward keys off the `referrals` row, never off
+`signupSource`. A referral outranks a badge referrer as `signupReferrerId`.
+See [`referrals.md`](./referrals.md).
+
+**`signupSource` is a signal, not the channel (86eye3eyp).** It's null for
+walk-ins, talks and personal intros, so CAC by channel reads
+`retailers.acquisitionSource` — set by an admin, suggested from this tag. See
+[`acquisition-attribution.md`](./acquisition-attribution.md).
+
+**The badge also names its store (z8r3fdcwd0):** `?store=<slug>` is captured
+beside the tag (same last-touch rule, its own key — the pair is rewritten
+together, so a later tagged hit without `store=` clears a stale referrer),
+rides every funnel event as `ref_store`, and lands as
+**`retailers.signupReferrerId`** — the slug resolved to a store id at
+`createRetailer`, dropped when it names no store. The admin pill reads
+`via powered-by-track · /<referrer-slug>`. Register `ref_store` as a GA4 custom
+dimension to report on it; the param is sent either way.
 
 **Operator step (GA4 UI, once per property):** mark `onboarding_start` and
 `store_created` as **key events** (Admin → Events → toggle "Mark as key
@@ -241,6 +273,8 @@ them. Two server events extend the funnel past `store_created` via the GA4
 | --- | --- | --- |
 | `first_order` | ONCE per retailer ever — the moment `retailers.activatedAt` transitions unset → set (the existing write-once activation stamp IS the dedupe guard; all 8 confirm sites go through it) | [`stampRetailerActivation`](../convex/lib/activation.ts) |
 | `subscribe_paid` | every `invoices.markPaid` — renewals too, distinguished by `first_time`; carries `plan`, `cycle`, `value` (major units) + `currency` so revenue segments by channel | [`invoices.markPaid`](../convex/invoices.ts) |
+| `credits_topup_paid` | a credit-pack top-up settles (Credits T2, z8r3fdf8ht) — once per purchase: the settle's paid guard is the dedupe, so a repeated webhook never double-counts. Carries `value` (major units), `currency`, `pack_id` and `source` (always `manual` — packs never auto-reload; T4 was cancelled 1 Oct 2026) | [`creditPurchases.settlePurchase`](../convex/creditPurchases.ts) |
+| `credits_low_nudge_sent` · `credits_seller_locked` · `credits_seller_unlocked` | a balance notice goes out (Credits T3, z8r3fdf8hy) — once per threshold per period, deduped by `creditAccounts.notices`, so a burst is one event. `low` carries `orders_left`; `locked` carries `balance` and `still` (a refresh left it at or below zero); `unlocked` carries `route` | [`creditNotices.evaluate`](../convex/creditNotices.ts) |
 
 Both carry the retailer's stored **`src`** (`retailers.signupSource`), so the
 whole funnel — `land_marketing → … → store_created → first_order →
@@ -270,7 +304,10 @@ they show in user-scoped explorations and key-event counts but can read as
 
 **Convex env vars (prod deployment):** both are forwarded by `deploy.yml`'s
 *Sync Convex environment variables* step — add them in GitHub → Environments →
-**prod** and the deploy pushes them. The wiring is pinned by
+**prod** and every deploy pushes them. Setting them by hand on the prod Convex
+deployment (`npx convex env set --prod …`) also works and persists; the sync
+step is the reproducible route, and it overwrites a hand-set value on each
+deploy only when the GitHub value is non-empty. The wiring is pinned by
 [`src/lib/deploy-env-wiring.test.ts`](../src/lib/deploy-env-wiring.test.ts).
 
 | Var | Value | GitHub `prod` store |
@@ -279,17 +316,39 @@ they show in user-scoped explorations and key-event counts but can read as
 | `GA4_MP_API_SECRET` | GA4 UI → Admin → Data streams → *stream* → Measurement Protocol API secrets → Create | **Secret** — it lets anyone inject events into the property |
 
 Both unset (local dev, preview) → the action is a silent no-op, same posture
-as the client providers. **That silence is also the trap:** z8r3fdd1v1 shipped
-with neither var wired into `deploy.yml`, so in production the key events
-no-op'd behind a green deploy until the PostHog rollout audit (86eyrayux)
-caught it. Adding a GitHub value is necessary, not sufficient — the workflow
-has to forward it.
+as the client providers. **That silence is also the trap:** nothing tells you
+the events aren't firing. z8r3fdd1v1 shipped with neither var forwarded by
+`deploy.yml` — so in production they exist only if someone set them on the
+deployment by hand. The PostHog rollout (z8r3fddaq4) wired both into the sync
+step; whether prod had them before that was not verified (it needs a prod env
+read). The way to know: GA4 → Realtime should show `first_order` within minutes
+of a store's first confirmed order.
 
 **Operator steps (GA4 UI, once per property):** create the MP API secret
-(above), add both GitHub `prod` values (above), then mark `first_order` and
-`subscribe_paid` as **key events** (Admin → Events). Verify with a test
+(above), add both GitHub `prod` values (above), then mark `first_order`,
+`subscribe_paid` and `credits_topup_paid` as **key events** (Admin → Events). Verify with a test
 retailer's first confirmed order in Realtime/DebugView (server events appear
 within minutes), then check Funnel Exploration segments by `src`.
+
+## Kedaipal Credits events (Credits T2/T3)
+
+The credits release adds five events. **T5 (the public surfaces) fires none of
+them** — this catalog is written down here, ahead of the tickets that fire
+them, so their names, params and key-event status are settled once rather
+than per branch. There are **no store-paused events**: the storefront never
+pauses when a seller runs out ([`credits.md`](./credits.md)), so there is
+nothing of that shape to measure.
+
+| Event | Fires | Fired by | Key event? |
+| --- | --- | --- | --- |
+| `credits_topup_started` | a seller starts a top-up pack checkout (the HitPay page opens) | T2 (`z8r3fdf8ht`) | no |
+| `credits_topup_paid` | a pack purchase settles and its lot lands — server-side, like `subscribe_paid` | T2 | **yes** — revenue |
+| `credits_low_nudge_sent` | the once-per-period "running low" notice goes out | T3 (`z8r3fdf8hy`) | no |
+| `credits_seller_locked` | a store's total reaches zero or below and the seller lock applies (never for comped or admin-owned stores) | T3 | no |
+| `credits_seller_unlocked` | the lock lifts; carries `route` = `topup` \| `upgrade` \| `refresh` \| `settle` \| `resume` \| `adjust` \| `refund` — what brought the balance back above zero | T3 | no |
+
+Every one carries the store's `src` like the funnel events above. Operator
+step when T2 ships: mark `credits_topup_paid` as a **key event** in GA4.
 
 ## Clarity — configuration
 
@@ -634,7 +693,9 @@ dashboard setting for that subtree:
 | Done screen — download/share button labels + helper copy | `src/components/order/order-document-actions.tsx` |
 | Lalamove rider name/plate (third-party PII) | `src/components/order/book-delivery-card.tsx` |
 | Pickup-point manager name + phone (third-party PII) | `src/components/settings/fulfilment-tab.tsx` |
-| Storefront checkout — the phone-echo line (the one rendered-text PII on the storefront; inputs are auto-masked) | `src/components/storefront/checkout-form.tsx` |
+| Storefront checkout — the phone-echo line (inputs are auto-masked) | `src/components/storefront/checkout-form.tsx` |
+| Booking checkout — the phone-echo line ("We'll WhatsApp the decision to …"; shipped unmasked on `/$slug/checkout`, where Clarity boots, until z8r3fdh274 rewrote that line) | `src/components/storefront/booking-checkout-form.tsx` |
+| Claim links — the buyer's name and phone on the claim page (belt-and-braces: `/claim` doesn't boot Clarity at all), and the buyer on the seller's send / waiting-on-buyer cards in the dashboard | `src/routes/claim.$token.tsx`, `src/components/claim/claim-checkout-page.tsx`, `src/components/claim/send-claim.tsx`, `src/components/claim/waiting-on-buyer.tsx` |
 
 `grep -rn MASK_PII src` audits coverage, and
 `src/lib/analytics-privacy.test.tsx` **pins a minimum spread count per file**
@@ -670,8 +731,8 @@ never a shopper's name, phone, or address — that is the contract
 [`src/lib/legal.ts`](../src/lib/legal.ts) and
 [`convex/lib/legal.ts`](../convex/lib/legal.ts)** — it drives the "Last updated"
 date and `consentIsStale()`, which triggers the dashboard re-acceptance banner.
-Clarity's PR bumped it to `2026-08-04`; PostHog (86eyrayux) bumped it to
-`2026-09-09`, naming PostHog as a processor and in the cookie section.
+Clarity's PR bumped it to `2026-08-04`; PostHog (z8r3fddaq4) bumped it to
+`2026-11-02`, naming PostHog as a processor and in the cookie section.
 
 Clarity also exposes `consent()` / `consentV2()`. Unused today (there's no
 cookie banner, and GA already runs without one); that's the hook if the

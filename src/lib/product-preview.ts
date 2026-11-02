@@ -7,7 +7,9 @@
 // See docs/product-setup-wizard.md.
 
 import type { ProductFormDraft } from "../components/forms/product-form";
+import type { LiveVariantStock } from "../components/forms/variant-editor";
 import { parsePriceInput } from "./format";
+import { sameOptionValues } from "./variant";
 
 export type PreviewVariant = {
 	_id: string;
@@ -34,7 +36,18 @@ function int(raw: string): number {
 	return /^\d+$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : 0;
 }
 
-export function draftPreviewOverlay(draft: ProductFormDraft) {
+/**
+ * @param liveStock Saved variants + their real counts, when previewing an
+ * EXISTING product (86eypn8ye). Since stock left the product save, a saved
+ * row's `stock` string is a seeded number the seller can no longer change from
+ * this form — previewing it would show a buyer-eye view that disagrees with the
+ * actual storefront, which is the one thing this preview exists to prevent.
+ * Absent on create, where the typed number IS the truth.
+ */
+export function draftPreviewOverlay(
+	draft: ProductFormDraft,
+	liveStock?: LiveVariantStock[],
+) {
 	// Buyers only ever see active variants.
 	const activeRows = draft.editor.rows.filter((r) => r.active);
 	const variants: PreviewVariant[] = activeRows.map((row, i) => ({
@@ -42,7 +55,11 @@ export function draftPreviewOverlay(draft: ProductFormDraft) {
 		optionValues: row.optionValues,
 		sku: row.sku.trim() || undefined,
 		price: sen(row.price),
-		onHand: int(row.stock),
+		onHand:
+			liveStock?.find(
+				(e) =>
+					!e.isCustom && sameOptionValues(e.optionValues, row.optionValues),
+			)?.onHand ?? int(row.stock),
 		active: true,
 		blockWhenOutOfStock: row.blockWhenOutOfStock,
 		requiresProof: row.requiresProof,

@@ -15,9 +15,11 @@ import { ConvexError, v } from "convex/values";
 import { query } from "./_generated/server";
 import { internalQuery, mutation } from "./_generated/server";
 import { logAdminAction, requireRetailerAccess } from "./lib/auth";
+import { assertSubscriptionActive } from "./subscriptions";
 import {
 	bookingsOverlapping,
 	loadBlocksForWindow,
+	usedDayRuns,
 } from "./lib/bookingAvailability";
 import { DAY_MS, todayMytMidnight } from "./lib/fulfilmentDate";
 import {
@@ -26,6 +28,7 @@ import {
 	inclusiveEndToExclusive,
 } from "./lib/icsFeed";
 import { generateTrackingToken } from "./lib/order";
+import { isOrderGated, resolveCreditGate } from "./creditLock";
 import { effectiveKind } from "./lib/productKind";
 
 /** How far back the feed reaches (past work keeps its history in GCal) and how
@@ -68,7 +71,10 @@ export const getCalendarFeed = query({
 		ctx,
 		{ retailerId },
 	): Promise<{ token: string | null; hasBookingListings: boolean }> => {
-		const access = await requireRetailerAccess(ctx, retailerId);
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			area: "bookings",
+			level: "read",
+		});
 		const products = await ctx.db
 			.query("products")
 			.withIndex("by_retailer_active", (q) =>
@@ -91,7 +97,12 @@ export const getCalendarFeed = query({
 export const ensureCalendarFeedToken = mutation({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<string> => {
-		const access = await requireRetailerAccess(ctx, retailerId);
+		// Minting the feed URL hands booking data to an external calendar, so it
+		// needs the write level even though it looks like a read.
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			area: "bookings",
+			level: "write",
+		});
 		const existing = access.retailer.calendarFeedToken;
 		if (existing) return existing;
 		const token = generateTrackingToken();
@@ -117,7 +128,11 @@ export const ensureCalendarFeedToken = mutation({
 export const rotateCalendarFeedToken = mutation({
 	args: { retailerId: v.id("retailers") },
 	handler: async (ctx, { retailerId }): Promise<string> => {
-		const access = await requireRetailerAccess(ctx, retailerId);
+		const access = await requireRetailerAccess(ctx, retailerId, {
+			area: "bookings",
+			level: "write",
+		});
+		await assertSubscriptionActive(ctx, retailerId);
 		if (!access.retailer.calendarFeedToken) {
 			throw new ConvexError("Connect the calendar first");
 		}
@@ -170,6 +185,15 @@ export const feedByToken = internalQuery({
 			.unique();
 		if (!retailer) return null;
 
+		// Credits (T3.1): the .ics hands booking details to an EXTERNAL calendar,
+		// where every event's summary is the guest's name. A booking waiting on
+		// credits must not reach it — the feed is one of the easiest ways to
+		// read a gated order without opening the dashboard at all. There is no
+		// signed-in identity on this path (the feed URL is its own capability),
+		// so `resolveCreditGate` simply applies; an admin store, a comped store
+		// and a store in credit all resolve to an open gate as usual.
+		const gate = await resolveCreditGate(ctx, retailer, Date.now());
+
 		const today = todayMytMidnight(Date.now());
 		const from = today - FEED_PAST_DAYS * DAY_MS;
 		const to = today + FEED_FUTURE_DAYS * DAY_MS;
@@ -204,13 +228,36 @@ export const feedByToken = internalQuery({
 				// one extra exclusion: it self-destructs on a 24h clock, and
 				// Google refreshes about daily, so it would mostly be dead noise.
 				if (order.status === "booking_requested") continue;
-				events.push({
-					uid: `booking-${order.shortId}`,
-					summary: `${order.customer.name?.trim() || "Guest"} — ${listing.name}`,
-					start: order.bookingCheckIn as number,
-					endExclusive: order.bookingCheckOut as number,
-					createdAt: order.createdAt,
-					url: orderUrl(order.shortId),
+				// Waiting on credits (Credits T3.1) — SKIPPED, not redacted. An
+				// .ics event's whole payload is the guest's name and the listing;
+				// with both removed it is noise in the seller's calendar, and a
+				// title that has to change once the order is funded is worse than
+				// an event that appears then (Google refreshes about daily). The
+				// waiting orders are surfaced where they can be acted on: the
+				// inbox count, the chip, and the credit banner.
+				if (isOrderGated(gate, order)) continue;
+				// An open-days package (z8r3fdhpm7) is drawn only on the days it
+				// counts — one event per unbroken run, matching the in-app grid,
+				// which drops the member on a skipped day. Everything else is one
+				// run, so its UID is unchanged and nothing already on a seller's
+				// calendar moves.
+				const runs = usedDayRuns(
+					order.bookingCheckIn as number,
+					order.bookingCheckOut as number,
+					order.bookingSkippedDays,
+				);
+				runs.forEach((run, index) => {
+					events.push({
+						uid:
+							runs.length === 1
+								? `booking-${order.shortId}`
+								: `booking-${order.shortId}-${index + 1}`,
+						summary: `${order.customer.name?.trim() || "Guest"} — ${listing.name}`,
+						start: run.start,
+						endExclusive: run.endExclusive,
+						createdAt: order.createdAt,
+						url: orderUrl(order.shortId),
+					});
 				});
 			}
 		}
@@ -250,6 +297,8 @@ export const feedByToken = internalQuery({
 			// out of sight. Booking REQUESTS are the one exception, excluded in
 			// the pass above because they self-destruct on a 24 h clock.
 			if (order.status === "cancelled") continue;
+			// Waiting on credits (Credits T3.1) — see the booking pass above.
+			if (isOrderGated(gate, order)) continue;
 			events.push({
 				uid: `order-${order.shortId}`,
 				summary: `${order.customer.name?.trim() || "Order"} — ${describeOrderItems(order.items)}`,

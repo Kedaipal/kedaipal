@@ -16,6 +16,7 @@ import {
 	internalMutation,
 	internalQuery,
 	mutation,
+	type QueryCtx,
 	query,
 } from "./_generated/server";
 import {
@@ -23,6 +24,11 @@ import {
 	logDestructiveAdminAction,
 	requireAdmin,
 } from "./lib/auth";
+import {
+	type Country,
+	DEFAULT_COUNTRY,
+	storeCurrencyOf,
+} from "./lib/country";
 import {
 	BUSINESS_REPORT_ORDER_SCAN_CAP,
 	type BusinessReport,
@@ -35,15 +41,51 @@ import {
 	ADMIN_AUDIT_LOG_RETENTION_MS,
 	LOG_PURGE_PAGE_SIZE,
 } from "./lib/retention";
-import { loadSubscription } from "./subscriptions";
+import {
+	compHighlightEligible,
+	sanitizeHiddenNote,
+} from "./lib/marketplaceListing";
+import {
+	type BillingCurrency,
+	isUnlimited,
+	storeBillingCurrency,
+} from "./lib/plans";
+import { loadCreditAccount } from "./credits";
+import { referralForReferee } from "./referrals";
+import { storeIsInternal } from "./marketplace";
+import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
+import { contractForAdmin } from "./lib/enterprise";
+import {
+	type AcquisitionChannel,
+	type AcquisitionSetBy,
+	suggestChannel,
+} from "./lib/metrics";
+import { isUnclaimed } from "./lib/unclaimedStore";
+import {
+	cleanAvailabilityNote,
+	resolveStoreAvailability,
+	type StoreAvailability,
+} from "./lib/storeAvailability";
+import { loadAvailabilityRow, storeAvailabilityOf } from "./storeAvailability";
+import { loadSubscription, resolveAccess } from "./subscriptions";
 
 /** How many sellers the directory pulls. The Founding cohort is ~10 and the whole
- * book is small for a while yet; 500 is generous headroom without pagination. */
-const SELLER_LIMIT = 500;
+ * book is small for a while yet; 500 is generous headroom without pagination.
+ * Shared with the billing picker (`ADMIN_STORE_LIST_LIMIT`) — two lists of the
+ * same stores must not disagree about which ones exist. */
+const SELLER_LIMIT = ADMIN_STORE_LIST_LIMIT;
 /** Recent audit rows surfaced per store in the console. */
 const AUDIT_LIMIT = 50;
 
 export type AdminSellerRow = {
+	/** Store availability (`z8r3fdudf7`) — the resolved state, from the one
+	 * resolver the order doors use, plus Kedaipal's own switch and note so the
+	 * sheet can show and lift it. */
+	availability: StoreAvailability;
+	adminAvailability?: { mode: "paused" | "offline"; note?: string; at?: number };
+	/** The seller's own pause, which an admin switch on top hides from the
+	 * resolved state — so "Reopen" can say what will still be off. */
+	sellerPaused?: boolean;
 	_id: Id<"retailers">;
 	storeName: string;
 	slug: string;
@@ -55,20 +97,279 @@ export type AdminSellerRow = {
 	 * trial/plan countdown would be misleading. A boolean only: the allowlist
 	 * itself never crosses to the client. See docs/admin-console.md. */
 	ownerIsAdmin: boolean;
+	/** Team seats (86exr91r4): people with access (owner + active members) over
+	 * the plan's total-people cap; `capUnlimited` for comped/admin stores.
+	 * Pending invites shown separately so "2/3 +1 invited" reads at a glance. */
+	seats: { active: number; cap: number; capUnlimited: boolean; invited: number };
 	isFoundingMember: boolean;
+	/** Onboarded with a founding promise (`subscriptions.foundingIntent`) — a
+	 * founding store in waiting, refused an Enterprise contract like a member
+	 * (T6), so the contract form says so before the tap. */
+	foundingIntent: boolean;
 	foundingMemberRank?: number;
 	subscriptionStatus?: Doc<"subscriptions">["status"];
 	plan?: Doc<"subscriptions">["plan"];
+	/** The Enterprise contract (Credits T6) — admin-only, so the whole thing
+	 * rides here (contact, notes) for the seller sheet's Enterprise section;
+	 * `setBy` stays server-side (the audit log answers "who"). */
+	enterprise?: Omit<NonNullable<Doc<"subscriptions">["enterprise"]>, "setBy">;
+	/** A scheduled tier move (a downgrade, or an Enterprise store's move to
+	 * Pro) and when it lands. */
+	pendingPlanChange?: {
+		plan: NonNullable<Doc<"subscriptions">["pendingPlanChange"]>["plan"];
+		requestedAt: number;
+	};
+	/** The owner tapped the in-app "Talk to Arif" (z8r3fdkp8h follow-up) —
+	 * an open Enterprise lead. Absent once a contract lands or an admin
+	 * dismisses it; drives the "Wants Enterprise" filter. */
+	enterpriseInterestAt?: number;
+	/** On the house (z8r3fdeub2). True for an admin-granted comp AND for a
+	 * legacy stampless comped row — the chip renders either way. */
+	comped: boolean;
+	/** The admin-granted stamp (kind/label/note, since when) — prefills the comp
+	 * dialog for edits. `grantedBy` stays server-side (a raw Clerk subject is
+	 * noise here; the audit log answers "who"). Absent on legacy rows. */
+	comp?: {
+		kind: "partner" | "sponsor" | "pilot" | "internal";
+		label?: string;
+		note?: string;
+		grantedAt: number;
+	};
+	/** When an admin turned this store's comp upgrade off, while the store is
+	 * still an expired seller because of it (cleared once it pays or is
+	 * re-comped). Lets the directory say why a store is past due. */
+	compEnded?: { at: number };
 	/** Marketing tag the seller signed up with (`retailers.signupSource`,
 	 * z8r3fdd1v0). Absent = untagged/direct. Rendered verbatim — these are
 	 * Kedaipal's own acquisition tags (`powered-by`, `spotlight-<member>`, …),
 	 * not the buyer-side labels. */
 	signupSource?: string;
+	/** The store whose "Powered by Kedaipal" badge brought this seller in
+	 * (`retailers.signupReferrerId`, z8r3fdcwd0), resolved to its CURRENT slug
+	 * + name. Absent = no badge referrer, or one that has since been purged. */
+	signupReferrer?: { slug: string; storeName: string };
+	/** Who REFERRED this store through the referral programme (z8r3fdetf5) —
+	 * the `referrals` row the reward keys off, distinct from the badge
+	 * attribution above. `referrer` is null when that store has since been
+	 * deleted (the referral stands). */
+	referral?: {
+		referrer: { slug: string; storeName: string } | null;
+		via: "link" | "admin";
+		at: number;
+		/** The reward (T2), once the store's first invoice was paid. */
+		reward?: {
+			refereeCredits: number;
+			referrerCredits?: number;
+			referrerOutcome: "granted" | "unmetered" | "deleted" | "self";
+		};
+	};
+	/** Whether an admin can still set, change or remove the referral: the
+	 * store hasn't paid its first plan invoice (the reward's moment). */
+	referralEditable: boolean;
+	/** Any invoice has ever been paid — a paying store, churned ones
+	 * included. Drives the "Untagged payers" filter. */
+	hasPaidInvoice: boolean;
+	/** Which motion won this store (86eye3eyp): the channel, who set it
+	 * (an admin tag is authoritative; a seller's onboarding answer waits for
+	 * confirmation) and the channel the captured signals point at, for the
+	 * tag dialog to pre-select. `channel` absent = untagged. */
+	acquisition: {
+		channel?: string;
+		setBy?: AcquisitionSetBy;
+		note?: string;
+		at?: number;
+		suggested: AcquisitionChannel | null;
+	};
 	createdAt: number;
+	/** Pre-built store, not yet handed over (docs/prebuilt-stores.md). An admin
+	 * built it before the vendor had an account, so it has no owner: every
+	 * owner-shaped fact on this row (`ownerUserId`, `ownerEmail`, seats) is a
+	 * placeholder or absent, and the directory must say "Unclaimed" rather than
+	 * render a blank person. Flips to false the moment the vendor claims it. */
+	unclaimed: boolean;
+	/** The address that will claim it (`retailers.pendingOwnerEmail`). Only ever
+	 * set while `unclaimed` — absent means an admin is still building and hasn't
+	 * been given the vendor's email, which is a normal state the console names
+	 * ("No handover email yet") rather than leaving blank. */
+	pendingOwnerEmail?: string;
+	/** When the handover invitation was last emailed (z8r3fdmy7n). Absent while
+	 * an address is named but never told — the commonest way a handover stalls,
+	 * so the console surfaces it rather than leaving the admin to remember. */
+	handoverInviteSentAt?: number;
+	/** When a pre-built store was handed over. Set = this store started life
+	 * unclaimed; absent = it was created by its own owner, like every store
+	 * before this feature. */
+	claimedAt?: number;
 	/** A dev-only purge cascade is running (z8r3fdbmc9) — the directory locks
 	 * the row (no Manage, no second purge) until it disappears. */
 	purging: boolean;
+	/** Marketplace state (z8r3fdkmyp): the seller's own opt-out stamp
+	 * (read-only here — only the seller flips it), the admin-set paid window,
+	 * the admin's "keep this comped store off the rail" override, the admin's
+	 * hide (with its note to the seller), and whether the store is internal
+	 * (never listed). Whether it's ON the rail is judged with
+	 * `highlightSource` over these + `comped`/`comp.kind` — never re-derived
+	 * inline. */
+	marketplace: {
+		unlistedAt?: number;
+		sponsoredUntil?: number;
+		compHighlightOffAt?: number;
+		hidden?: { at: number; note?: string };
+		internal: boolean;
+	};
+	// --- Contact + billing facts (z8r3fdh37c) ------------------------------
+	// Everything an admin used to open a second tab for. All of it already
+	// lived on `retailers` / `subscriptions` / `invoices` / `adminAuditLog`;
+	// the directory just never carried it.
+	/** The owner's email. Clerk's identity email is never stored, so this is
+	 * `retailers.notifyEmail` — prefilled from Clerk at createRetailer and
+	 * backfilled by `ensureNotifyEmailFromIdentity`. Absent = the seller cleared
+	 * it, so the row says "no email on file" rather than showing nothing. */
+	ownerEmail?: string;
+	/** Buyer-facing store WhatsApp (`retailers.waPhone`), stored digits. */
+	waPhone?: string;
+	/** Where seller order alerts go (`retailers.notifyWaPhone`), stored digits.
+	 * Often the same number as `waPhone`; the sheet collapses the duplicate. */
+	notifyWaPhone?: string;
+	country: Country;
+	currency: string;
+	billingCycle?: Doc<"subscriptions">["billingCycle"];
+	/** The free period's backstop deadline — what "trial ends" means while the
+	 * row is `trialing` and no invoice has been issued yet. */
+	trialEndsAt?: number;
+	/** When the free period actually ended (first order or the backstop) — set
+	 * once the first invoice is issued; absent = still free. */
+	freePeriodEndedAt?: number;
+	freePeriodEndReason?: Doc<"subscriptions">["freePeriodEndReason"];
+	/** What an `active` row renews at, and what an `on_hold` row's next hold
+	 * period bills at. */
+	currentPeriodEnd?: number;
+	cancelledAt?: number;
+	/** When the current Off-Season Hold began (z8r3fday24). */
+	heldAt?: number;
+	/** Saved auto-renew method (86eyb6z4r) — the rail, plus dunning state so
+	 * "card failing ×2" reads on the row instead of in a webhook log. */
+	autoRenew?: {
+		method: string;
+		methodLabel?: string;
+		attachedAt: number;
+		failedAttempts?: number;
+		nextRetryAt?: number;
+	};
+	/** The open bill, if any — the thing to chase on a past-due row. Its
+	 * tier and term say, before the tap, why a contract can't be saved or a
+	 * move to Pro scheduled while it's open (T6). */
+	pendingInvoice?: {
+		invoiceNumber: string;
+		dueDate: number;
+		total: number;
+		currency: string;
+		hasPayNowLink: boolean;
+		plan: Doc<"subscriptions">["plan"];
+		billingCycle: Doc<"subscriptions">["billingCycle"];
+		kind: "plan" | "hold";
+	};
+	/** The currency this store is billed in — its country's
+	 * (`storeBillingCurrency`). A new Enterprise contract is frozen in exactly
+	 * this, so the form labels the fee with it (T6). */
+	billingCurrency: BillingCurrency;
+	/** The most recently settled bill — "when did they last pay, how much". */
+	lastPaidInvoice?: {
+		invoiceNumber: string;
+		paidAt: number;
+		total: number;
+		currency: string;
+	};
+	/** When a Kedaipal admin last opened this store in act-as mode
+	 * (`adminAuditLog` `actAs.sessionStart`). Absent = never. */
+	lastActAsAt?: number;
+	/** Kedaipal Credits (T5, docs/credits.md): the store's CACHED balances —
+	 * the plan bucket (this period's monthly credits; negative = orders owed),
+	 * purchased credits (packs and admin lots), the usage period they belong
+	 * to and what it granted, when the total last reached zero (`exhaustedAt`,
+	 * set only while it's still there — "out of credits since"), and an
+	 * admin's custom monthly grant. Absent = no credit account yet (a store
+	 * the backfill hasn't reached). The drawer reads the live projection
+	 * (`credits.adminGetAccount`); the directory reads the cache, which can
+	 * lag a month boundary by the few minutes before the 00:05 MYT roll. */
+	credits?: {
+		plan: number;
+		purchased: number;
+		periodKey: string;
+		periodGrant: number;
+		exhaustedAt?: number;
+		customGrant?: number;
+	};
 };
+
+/** The two per-store invoice facts the directory shows: the open bill and the
+ * last settled one. Both are index reads that stop at the first hit — never a
+ * collect over a store's whole billing history. */
+async function loadInvoiceFacts(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+	fallback: { plan: Doc<"subscriptions">["plan"]; billingCycle: Doc<"subscriptions">["billingCycle"] },
+): Promise<
+	Pick<AdminSellerRow, "pendingInvoice" | "lastPaidInvoice"> & {
+		/** Any bill has been paid, stamp or no stamp — what
+		 * `referralEditable` reads. */
+		hasPaidInvoice: boolean;
+	}
+> {
+	const pending = await ctx.db
+		.query("invoices")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.order("desc")
+		.filter((q) => q.eq(q.field("status"), "pending"))
+		.first();
+	const paid = await ctx.db
+		.query("invoices")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.order("desc")
+		.filter((q) => q.eq(q.field("status"), "paid"))
+		.first();
+	return {
+		...(pending
+			? {
+					pendingInvoice: {
+						invoiceNumber: pending.invoiceNumber,
+						dueDate: pending.dueDate,
+						total: pending.total,
+						currency: pending.currency,
+						hasPayNowLink: pending.gatewayPayment !== undefined,
+						plan: pending.plan ?? fallback.plan,
+						billingCycle: pending.billingCycle ?? fallback.billingCycle,
+						kind: pending.kind ?? "plan",
+					},
+				}
+			: {}),
+		...(paid?.markedPaidAt !== undefined
+			? {
+					lastPaidInvoice: {
+						invoiceNumber: paid.invoiceNumber,
+						paidAt: paid.markedPaidAt,
+						total: paid.total,
+						currency: paid.currency,
+					},
+				}
+			: {}),
+		hasPaidInvoice: paid !== null,
+	};
+}
+
+/** The last time an admin entered this store (read-side trail). */
+async function loadLastActAs(
+	ctx: QueryCtx,
+	retailerId: Id<"retailers">,
+): Promise<number | undefined> {
+	const row = await ctx.db
+		.query("adminAuditLog")
+		.withIndex("by_retailer", (q) => q.eq("retailerId", retailerId))
+		.order("desc")
+		.filter((q) => q.eq(q.field("action"), "actAs.sessionStart"))
+		.first();
+	return row?.ts;
+}
 
 /**
  * Every seller, for the admin act-as directory. Richer than
@@ -79,29 +380,235 @@ export type AdminSellerRow = {
  */
 export const listSellersForAdmin = query({
 	args: {},
-	handler: async (ctx): Promise<AdminSellerRow[]> => {
+	handler: async (
+		ctx,
+	): Promise<{
+		sellers: AdminSellerRow[];
+		/** The book runs past the cap, so this list is the NEWEST
+		 * `ADMIN_STORE_LIST_LIMIT` stores and the oldest are missing. The
+		 * directory says so rather than letting "Showing 500 of 500" read as
+		 * the whole book (z8r3fdpm2p). */
+		capped: boolean;
+	}> => {
 		await requireAdmin(ctx);
 		const adminIds = new Set(adminUserIds());
-		const retailers = await ctx.db
+		// +1 to learn whether the book runs past the cap, the same shape
+		// `BUSINESS_REPORT_ORDER_SCAN_CAP` uses. The extra row never returns.
+		const scanned = await ctx.db
 			.query("retailers")
 			.order("desc")
-			.take(SELLER_LIMIT);
+			.take(SELLER_LIMIT + 1);
+		const capped = scanned.length > SELLER_LIMIT;
+		const retailers = scanned.slice(0, SELLER_LIMIT);
 		const rows: AdminSellerRow[] = [];
+		// One read of the (small) availability table, not one per store.
+		const availabilityRows = new Map(
+			(await ctx.db.query("storeAvailability").collect()).map((a) => [
+				a.retailerId as string,
+				a,
+			]),
+		);
 		for (const r of retailers) {
+			const availabilityRow = availabilityRows.get(r._id);
 			const sub = await loadSubscription(ctx, r._id);
+			// Dangling once the referrer is purged (no referential integrity) —
+			// a missing doc simply reads as "no referrer".
+			const referrer = r.signupReferrerId
+				? await ctx.db.get(r.signupReferrerId)
+				: null;
+			const { hasPaidInvoice, ...invoiceFacts } = await loadInvoiceFacts(
+				ctx,
+				r._id,
+				{ plan: sub?.plan ?? "pro", billingCycle: sub?.billingCycle ?? "monthly" },
+			);
+			const lastActAsAt = await loadLastActAs(ctx, r._id);
+			// One index read per store (`by_referee`); the referrer's doc only
+			// when there is a referral.
+			const referral = await referralForReferee(ctx, r._id);
+			const referralReferrer = referral
+				? await ctx.db.get(referral.referrerId)
+				: null;
+			// One index read per store (`by_retailer`), the cached balances only.
+			const creditAccount = await loadCreditAccount(ctx, r._id);
+			// Seats (86exr91r4) — two short index reads per store; cap through
+			// resolveAccess so comped stores read as unlimited here too.
+			const activeMembers = await ctx.db
+				.query("retailerMembers")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", r._id).eq("status", "active"),
+				)
+				.collect();
+			const invitedMembers = await ctx.db
+				.query("retailerMembers")
+				.withIndex("by_retailer_status", (q) =>
+					q.eq("retailerId", r._id).eq("status", "invited"),
+				)
+				.collect();
+			const seatCap = resolveAccess(sub, {
+				adminFullAccess: adminIds.has(r.userId),
+			}).caps.userCap;
+			const country = r.country ?? DEFAULT_COUNTRY;
 			rows.push({
 				_id: r._id,
 				storeName: r.storeName,
 				slug: r.slug,
 				ownerUserId: r.userId,
 				ownerIsAdmin: adminIds.has(r.userId),
+				seats: {
+					// The `1` is the OWNER. A pre-built store has none, so counting
+					// one renders "1/3 seats" against a store with nobody in it —
+					// spotted by rendering the card, not by reading the code.
+					active: (isUnclaimed(r) ? 0 : 1) + activeMembers.length,
+					cap: seatCap,
+					capUnlimited: isUnlimited(seatCap),
+					invited: invitedMembers.length,
+				},
 				isFoundingMember: r.isFoundingMember === true,
+				foundingIntent: sub?.foundingIntent === true,
 				foundingMemberRank: r.foundingMemberRank,
 				subscriptionStatus: sub?.status,
 				plan: sub?.plan,
+				// The WHOLE deal minus `setBy` — allowances included. They were
+				// once hand-listed here and the day they were left out,
+				// reopening a contract showed them blank: a fee typo-fix away
+				// from silently resetting a deal to unlimited seats (found
+				// hands-on, 2 Oct). `contractForAdmin` is a rest spread, so no
+				// future field can be dropped the same way; the admin.test.ts
+				// pin stays as the second guard.
+				enterprise: sub?.enterprise
+					? contractForAdmin(sub.enterprise)
+					: undefined,
+				pendingPlanChange: sub?.pendingPlanChange,
+				enterpriseInterestAt: r.enterpriseInterestAt,
+				comped: sub?.comped === true,
+				comp: sub?.comp
+					? {
+							kind: sub.comp.kind,
+							label: sub.comp.label,
+							note: sub.comp.note,
+							grantedAt: sub.comp.grantedAt,
+						}
+					: undefined,
+				compEnded:
+					sub?.compEndedAt !== undefined ? { at: sub.compEndedAt } : undefined,
 				signupSource: r.signupSource,
+				...(referrer
+					? {
+							signupReferrer: {
+								slug: referrer.slug,
+								storeName: referrer.storeName,
+							},
+						}
+					: {}),
+				...(referral
+					? {
+							referral: {
+								referrer: referralReferrer
+									? {
+											slug: referralReferrer.slug,
+											storeName: referralReferrer.storeName,
+										}
+									: null,
+								via: referral.via,
+								at: referral.createdAt,
+								...(referral.rewardedAt !== undefined
+									? {
+											reward: {
+												refereeCredits: referral.refereeCredits ?? 0,
+												referrerCredits: referral.referrerCredits,
+												referrerOutcome: referral.referrerOutcome ?? "granted",
+											},
+										}
+									: {}),
+							},
+						}
+					: {}),
+				// Any paid invoice means the first plan invoice is paid (a hold
+				// bill only ever follows one) — the same answer
+				// `referrals.hasPaidPlanInvoice` gives the mutations that
+				// enforce it.
+				referralEditable: !hasPaidInvoice,
+				hasPaidInvoice,
+				acquisition: {
+					...(r.acquisitionSource !== undefined
+						? {
+								channel: r.acquisitionSource,
+								setBy: r.acquisitionSetBy ?? "admin",
+								...(r.acquisitionNote !== undefined
+									? { note: r.acquisitionNote }
+									: {}),
+								...(r.acquisitionSetAt !== undefined
+									? { at: r.acquisitionSetAt }
+									: {}),
+							}
+						: {}),
+					suggested: suggestChannel({
+						signupSource: r.signupSource,
+						hasReferral: referral !== null,
+					}),
+				},
 				createdAt: r._creationTime,
+				unclaimed: isUnclaimed(r),
+				pendingOwnerEmail: r.pendingOwnerEmail,
+				handoverInviteSentAt: r.handoverInviteSentAt,
+				claimedAt: r.claimedAt,
 				purging: r.purgeStartedAt !== undefined,
+				availability: resolveStoreAvailability({
+					holdPausedAt: r.orderingPausedAt,
+					row: availabilityRow,
+				}),
+				adminAvailability:
+					availabilityRow?.adminMode !== undefined
+						? {
+								mode: availabilityRow.adminMode,
+								note: availabilityRow.adminNote,
+								at: availabilityRow.adminAt,
+							}
+						: undefined,
+				sellerPaused: availabilityRow?.sellerPausedAt !== undefined || undefined,
+				marketplace: {
+					unlistedAt: r.marketplaceUnlistedAt,
+					sponsoredUntil: r.marketplaceSponsoredUntil,
+					compHighlightOffAt: r.marketplaceCompHighlightOffAt,
+					hidden: r.marketplaceHidden,
+					internal: storeIsInternal(r, sub, adminUserIds()),
+				},
+				ownerEmail: r.notifyEmail,
+				waPhone: r.waPhone,
+				notifyWaPhone: r.notifyWaPhone,
+				country,
+				currency: storeCurrencyOf(r),
+				billingCycle: sub?.billingCycle,
+				trialEndsAt: sub?.trialEndsAt,
+				freePeriodEndedAt: sub?.freePeriodEndedAt,
+				freePeriodEndReason: sub?.freePeriodEndReason,
+				currentPeriodEnd: sub?.currentPeriodEnd,
+				cancelledAt: sub?.cancelledAt,
+				heldAt: sub?.heldAt,
+				autoRenew: sub?.autoRenew
+					? {
+							method: sub.autoRenew.method,
+							methodLabel: sub.autoRenew.methodLabel,
+							attachedAt: sub.autoRenew.attachedAt,
+							failedAttempts: sub.autoRenew.failedAttempts,
+							nextRetryAt: sub.autoRenew.nextRetryAt,
+						}
+					: undefined,
+				...invoiceFacts,
+				billingCurrency: storeBillingCurrency(r.country),
+				lastActAsAt,
+				...(creditAccount
+					? {
+							credits: {
+								plan: creditAccount.planBalance,
+								purchased: creditAccount.purchasedBalance,
+								periodKey: creditAccount.periodKey,
+								periodGrant: creditAccount.periodGrant,
+								exhaustedAt: creditAccount.exhaustedAt,
+								customGrant: creditAccount.grantOverride,
+							},
+						}
+					: {}),
 			});
 		}
 		rows.sort((a, b) => {
@@ -113,7 +620,246 @@ export const listSellersForAdmin = query({
 			if (rb !== undefined) return 1;
 			return b.createdAt - a.createdAt;
 		});
-		return rows;
+		return { sellers: rows, capped };
+	},
+});
+
+/**
+ * Start or move a store's marketplace "Store highlights" sponsorship window
+ * (z8r3fdkmyp). Admin-only and audited: v1 sponsorship is sold by hand
+ * (manual invoice), so the admin console is the ONE writer — a self-serve
+ * purchase path would arrive as its own ticket, not as a widening of this.
+ * A past `until` is refused rather than stored as an already-expired window
+ * that reads like a bug in the directory. Expiry itself is read-time
+ * (`sponsorshipActive`), so nothing needs a cron. Ending one early is its own
+ * act — `endMarketplaceSponsorship` — so the audit log says which happened
+ * (the setComp / revokeComp pair's shape).
+ */
+export const setMarketplaceSponsorship = mutation({
+	args: { retailerId: v.id("retailers"), until: v.number() },
+	handler: async (ctx, { retailerId, until }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (until <= Date.now()) {
+			throw new ConvexError("Sponsorship end must be in the future");
+		}
+		await ctx.db.patch(retailerId, {
+			marketplaceSponsoredUntil: until,
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.setMarketplaceSponsorship",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/** End a store's sponsorship now (z8r3fdkmyp) — the card leaves the rail on
+ * the next read. Idempotent: ending a window that isn't running writes
+ * nothing, so a double-click can't litter the audit log. */
+export const endMarketplaceSponsorship = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (retailer.marketplaceSponsoredUntil === undefined) return;
+		await ctx.db.patch(retailerId, {
+			marketplaceSponsoredUntil: undefined,
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.endMarketplaceSponsorship",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/**
+ * The admin's one override of the comp-driven highlight (z8r3fdkmyp): comped
+ * partner / sponsor / pilot stores ride Store highlights automatically, and
+ * this switch keeps a particular one OFF (or puts it back). Only meaningful
+ * for a comp-eligible store; refused otherwise rather than storing a stamp
+ * that silently does nothing. Turning off keeps the FIRST stamp on a re-save.
+ */
+export const setCompHighlight = mutation({
+	args: { retailerId: v.id("retailers"), on: v.boolean() },
+	handler: async (ctx, { retailerId, on }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const sub = await loadSubscription(ctx, retailerId);
+		if (!compHighlightEligible(sub?.comped === true, sub?.comp?.kind)) {
+			throw new ConvexError(
+				"Only comped partner, sponsor or pilot stores are featured automatically",
+			);
+		}
+		const next = on
+			? undefined
+			: (retailer.marketplaceCompHighlightOffAt ?? Date.now());
+		if (next === retailer.marketplaceCompHighlightOffAt) return;
+		await ctx.db.patch(retailerId, {
+			marketplaceCompHighlightOffAt: next,
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.setCompHighlight",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/**
+ * Take a store off /stores (z8r3fdkmyp, Zaki 1 Oct 2026) — junk trials,
+ * quality, policy. It outranks the seller's own "List my store" switch, and
+ * touches nothing else: the storefront, orders and WhatsApp all carry on.
+ * The optional `note` is shown to the seller on their settings card, so a
+ * hide for a fixable reason tells them what to fix. Refused for an internal
+ * store (never listed anyway — a stamp there would do nothing). Hiding a
+ * store that is already hidden writes nothing, so the first stamp and note
+ * stand and a double-click can't litter the audit log. Undone by its own act,
+ * `showOnMarketplace`, so the log says which happened.
+ */
+export const hideFromMarketplace = mutation({
+	args: { retailerId: v.id("retailers"), note: v.optional(v.string()) },
+	handler: async (ctx, { retailerId, note }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const sub = await loadSubscription(ctx, retailerId);
+		if (storeIsInternal(retailer, sub, adminUserIds())) {
+			throw new ConvexError(
+				"Internal stores are never listed on /stores — nothing to hide",
+			);
+		}
+		const cleanNote = sanitizeHiddenNote(note);
+		if (retailer.marketplaceHidden !== undefined) return;
+		await ctx.db.patch(retailerId, {
+			marketplaceHidden: {
+				at: Date.now(),
+				...(cleanNote ? { note: cleanNote } : {}),
+			},
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.hideFromMarketplace",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/** Put a hidden store back (z8r3fdkmyp). It lists again once the rest of the
+ * listable rule holds — the seller's own opt-out still applies. Idempotent,
+ * like the hide. */
+export const showOnMarketplace = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		if (retailer.marketplaceHidden === undefined) return;
+		await ctx.db.patch(retailerId, {
+			marketplaceHidden: undefined,
+			updatedAt: Date.now(),
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.showOnMarketplace",
+			targetId: retailerId,
+			ts: Date.now(),
+		});
+	},
+});
+
+/**
+ * Kedaipal switches a store off (`z8r3fdudf7`): `paused` keeps the storefront
+ * browse-only and closes every order door INCLUDING the counter; `offline`
+ * takes the storefront itself down (neutral unavailable page, off /stores and
+ * the sitemap). Its own stamp, so it never clears the seller's pause or an
+ * Off-Season Hold, and lifting it reveals whichever of those is still on.
+ * The note is shown to the SELLER ("Kedaipal paused this store: …") — never
+ * to buyers, who only ever see a neutral "isn't available right now".
+ * Existing orders are untouched: tracking pages, transactional messages and
+ * the seller's progress / refund controls all keep working.
+ */
+export const setStoreAvailability = mutation({
+	args: {
+		retailerId: v.id("retailers"),
+		mode: v.union(v.literal("paused"), v.literal("offline")),
+		note: v.optional(v.string()),
+	},
+	handler: async (ctx, { retailerId, mode, note }): Promise<void> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const now = Date.now();
+		const fields = {
+			adminMode: mode,
+			adminNote: cleanAvailabilityNote(note),
+			adminAt: now,
+			adminByUserId: adminUserId,
+			updatedAt: now,
+		};
+		const row = await loadAvailabilityRow(ctx, retailerId);
+		if (row) await ctx.db.patch(row._id, fields);
+		else await ctx.db.insert("storeAvailability", { retailerId, ...fields });
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: mode === "offline" ? "admin.takeStoreOffline" : "admin.pauseStore",
+			targetId: retailerId,
+			ts: now,
+		});
+	},
+});
+
+/** Lift Kedaipal's switch. The seller's own pause and a hold, if either is
+ * on, keep speaking — a reopen never silently reopens what someone else shut. */
+/**
+ * "Reopen store" — lifts Kedaipal's switch only. Returns the store's state
+ * AFTERWARDS from the resolver, so the admin toast says what still keeps
+ * orders off (a hold, the seller's own pause) from the same author every
+ * door uses, never from a status proxy (PR #369 review).
+ */
+export const clearStoreAvailability = mutation({
+	args: { retailerId: v.id("retailers") },
+	handler: async (ctx, { retailerId }): Promise<StoreAvailability> => {
+		const adminUserId = await requireAdmin(ctx);
+		const retailer = await ctx.db.get(retailerId);
+		if (!retailer) throw new ConvexError("Store not found");
+		const row = await loadAvailabilityRow(ctx, retailerId);
+		if (!row || row.adminMode === undefined)
+			return storeAvailabilityOf(ctx, retailer);
+		const now = Date.now();
+		await ctx.db.patch(row._id, {
+			adminMode: undefined,
+			adminNote: undefined,
+			adminAt: undefined,
+			adminByUserId: undefined,
+			updatedAt: now,
+		});
+		await ctx.db.insert("adminAuditLog", {
+			adminUserId,
+			retailerId,
+			action: "admin.reopenStore",
+			targetId: retailerId,
+			ts: now,
+		});
+		return storeAvailabilityOf(ctx, retailer);
 	},
 });
 
@@ -265,6 +1011,7 @@ export const businessReport = internalQuery({
 					retailerId: s.retailerId,
 					status: s.status,
 					comped: s.comped,
+					compEndedAt: s.compEndedAt,
 					updatedAt: s.updatedAt,
 				}),
 			),
@@ -417,6 +1164,7 @@ export const purgeStoreForAdmin = mutation({
 			ctx,
 			{
 				retailer,
+				role: retailer.userId === adminUserId ? "owner" : "admin",
 				actingAsAdmin: retailer.userId !== adminUserId,
 				userId: adminUserId,
 			},

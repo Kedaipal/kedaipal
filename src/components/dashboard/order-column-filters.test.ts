@@ -7,6 +7,7 @@ import {
 } from "../../../convex/lib/orderCsv";
 import {
 	buildOrderColumnFilters,
+	CATEGORY_UNCATEGORIZED,
 	METHOD_UNSPECIFIED,
 } from "./order-column-filters";
 
@@ -15,19 +16,22 @@ const ORDER: CsvOrder = {
 	createdAt: 0,
 	status: "confirmed",
 	customer: { name: "Aisha" },
-	items: [{ name: "Cake", quantity: 1 }],
+	items: [{ name: "Cake", quantity: 1, price: 1000 }],
 	subtotal: 1000,
 	total: 1000,
 	currency: "MYR",
 };
 
-function filters() {
+function filters(
+	overrides: Partial<Parameters<typeof buildOrderColumnFilters>[0]> = {},
+) {
 	return buildOrderColumnFilters({
 		state: {
 			statuses: [],
 			categories: [],
 			categoriesUnspecified: false,
 			sources: [],
+			fulfilments: [],
 			paymentStatuses: [],
 			paymentMethods: [],
 			attributionSources: [],
@@ -37,8 +41,28 @@ function filters() {
 		country: "MY",
 		statusLabel: (s) => s,
 		onApply: () => {},
+		...overrides,
 	});
 }
+
+/** A facet tally holding every fulfilment kind, so the presence-driven picker
+ * offers all of them. */
+const ALL_FULFILMENTS = {
+	statusLeaf: {},
+	category: [],
+	source: {},
+	fulfilment: {
+		delivery: 3,
+		self_collect: 2,
+		drop_off: 1,
+		collection: 1,
+		booking: 1,
+		event: 1,
+	},
+	paymentStatus: {},
+	paymentMethod: {},
+	attribution: {},
+};
 
 /**
  * The bug this pins (86eyrtz74): the Order type header filter offered "Online"
@@ -71,11 +95,48 @@ describe("a header filter's options read exactly like the column it filters", ()
 			columnKey: "paymentMethod",
 			apply: (paymentMethod) => ({ ...ORDER, paymentMethod }),
 		},
+		{
+			// The inverse of `fulfilmentKey`: build the order that produces each
+			// key, and check the column prints the word the filter offered. Drop-off
+			// is the one that would have caught the old flattening — it comes from a
+			// snapshot field, not from `deliveryMethod`.
+			columnKey: "fulfilment",
+			apply: (key) => {
+				// An RSVP is STORED self_collect and known only by the marker — the
+				// case that would silently read "Self-collect" in the column while
+				// the filter offered "Event".
+				if (key === "event")
+					return {
+						...ORDER,
+						deliveryMethod: "self_collect",
+						eventRsvp: true,
+					};
+				if (key === "collection")
+					return {
+						...ORDER,
+						deliveryMethod: "delivery",
+						deliveryDirection: "collection",
+					};
+				if (key === "drop_off")
+					return {
+						...ORDER,
+						deliveryMethod: "self_collect",
+						pickupSnapshot: {
+							label: "Pasar",
+							address: "Jalan 1",
+							locationType: "drop_off" as const,
+						},
+					};
+				return { ...ORDER, deliveryMethod: key };
+			},
+		},
 	];
 
 	for (const { columnKey, apply } of CASES) {
 		it(`${columnKey}`, () => {
-			const binding = filters().get(columnKey as never);
+			const binding = filters({ facets: ALL_FULFILMENTS }).get(
+				columnKey as never,
+			);
 			const column = ORDER_COLUMNS_BY_KEY.get(columnKey as never);
 			if (!binding || !column) throw new Error(`missing ${columnKey}`);
 			expect(binding.options.length).toBeGreaterThan(0);
@@ -97,4 +158,125 @@ describe("a header filter's options read exactly like the column it filters", ()
 			}
 		});
 	}
+});
+
+/**
+ * The fulfilment funnel is presence-driven (z8r3fdfau9): most stores only ever
+ * do one or two kinds, and a picker whose rows can only ever read 0 teaches the
+ * seller that the control is broken. The funnel icon itself is the signal, so
+ * the binding has to be absent — not present-and-empty.
+ */
+describe("the Fulfilment header filter only exists when there's a choice to make", () => {
+	const facetsWith = (fulfilment: Record<string, number>) => ({
+		...ALL_FULFILMENTS,
+		fulfilment,
+	});
+
+	it("is absent on a delivery-only store", () => {
+		expect(
+			filters({ facets: facetsWith({ delivery: 12 }) }).get("fulfilment"),
+		).toBeUndefined();
+	});
+
+	it("is absent before the first result arrives", () => {
+		// `facets` is undefined while the query is in flight — showing a funnel
+		// that then disappears is worse than showing it a beat late.
+		expect(filters({ facets: undefined }).get("fulfilment")).toBeUndefined();
+	});
+
+	it("appears the moment a second kind shows up, offering only what's there", () => {
+		const binding = filters({
+			facets: facetsWith({ delivery: 12, self_collect: 3 }),
+		}).get("fulfilment");
+		expect(binding?.options.map((o) => o.value)).toEqual([
+			"delivery",
+			"self_collect",
+		]);
+		// Registry order, never by count — a list that reshuffles as orders land
+		// is a list the seller has to re-read every time.
+		expect(binding?.options.map((o) => o.label)).toEqual([
+			"Delivery",
+			"Self-collect",
+		]);
+		expect(binding?.options.map((o) => o.count)).toEqual([12, 3]);
+	});
+
+	it("keeps a SELECTED kind pickable even when nothing matches it any more", () => {
+		// A lit filter with no visible row is a filter the seller cannot switch
+		// off — the rule `methodChoicesFor` already follows for payment rails.
+		const binding = filters({
+			facets: facetsWith({ delivery: 12 }),
+			state: {
+				statuses: [],
+				categories: [],
+				categoriesUnspecified: false,
+				sources: [],
+				fulfilments: ["booking"],
+				paymentStatuses: [],
+				paymentMethods: [],
+				attributionSources: [],
+			},
+		}).get("fulfilment");
+		expect(binding?.options.map((o) => o.value)).toEqual([
+			"delivery",
+			"booking",
+		]);
+		expect(binding?.options.at(-1)?.count).toBe(0);
+	});
+});
+
+/**
+ * Dr Niki Trainings (28 Oct 2026): she filed products under a category, opened
+ * this filter, and saw only "Uncategorized 23" with nothing saying why. Each
+ * of the three empty-ish states now says which one it is.
+ */
+describe("the Categories filter says why a category isn't offered", () => {
+	const facets = {
+		...ALL_FULFILMENTS,
+		category: [
+			{ name: "Combo Books", count: 16 },
+			{ name: CATEGORY_UNCATEGORIZED, count: 7 },
+		],
+	};
+
+	it("a store with no categories gets a set-up prompt, not an 'Uncategorized: everything' option", () => {
+		const cat = filters({ storeHasCategories: false }).get("categories");
+		expect(cat?.options).toEqual([]);
+		expect(cat?.emptyHint).toMatch(/group your products into categories/i);
+		expect(cat?.emptyAction).toEqual({
+			label: "Set up categories",
+			to: "/app/products/categories",
+		});
+	});
+
+	it("categories exist but no order uses one: offer Uncategorized and say so", () => {
+		const cat = filters({ storeHasCategories: true }).get("categories");
+		expect(cat?.options.map((o) => o.label)).toEqual(["Uncategorized"]);
+		expect(cat?.note?.text).toMatch(
+			/none of these orders is for a product in a category/i,
+		);
+		expect(cat?.note?.link?.to).toBe("/app/products/categories");
+	});
+
+	it("while loading, never flashes the set-up prompt", () => {
+		const cat = filters({ storeHasCategories: undefined }).get("categories");
+		expect(cat?.emptyAction).toBeUndefined();
+		expect(cat?.options.map((o) => o.label)).toEqual(["Uncategorized"]);
+	});
+
+	it("with categories on orders, states the filing rule under the options", () => {
+		const cat = filters({
+			facets,
+			availableCategories: ["Combo Books"],
+			storeHasCategories: true,
+		}).get("categories");
+		expect(cat?.options).toEqual([
+			{ value: "Combo Books", label: "Combo Books", count: 16 },
+			{ value: CATEGORY_UNCATEGORIZED, label: "Uncategorized", count: 7 },
+		]);
+		expect(cat?.note?.text).toMatch(
+			/also files its earlier uncategorized orders/i,
+		);
+		expect(cat?.note?.link).toBeUndefined();
+	});
 });

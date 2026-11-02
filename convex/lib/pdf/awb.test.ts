@@ -130,6 +130,32 @@ describe("addressLines", () => {
 	});
 });
 
+describe("an overseas parcel's label ends with its country (z8r3fdr5yy)", () => {
+	// The code was there, but nothing pinned it (found on the /test-code pass).
+	test("SG store → MY address: MALAYSIA is the last line, the one a courier sorts on", () => {
+		const l = orderToAwbLabelData({
+			order: order({ deliveryAddress: { ...myAddress, country: "MY" } }),
+			retailer: { ...retailer, country: "SG" },
+			config: AWB_DEFAULTS,
+		});
+		expect(l.recipient.lines.at(-1)).toBe("MALAYSIA");
+		expect(l.recipient.lines).toContain("47100 Puchong");
+	});
+
+	test("MY store → SG address: '560123 Singapore' already says it — no repeat", () => {
+		expect(addressLines({ ...sgAddress, country: "SG" }, "MY")).toEqual([
+			"Blk 123 Ang Mo Kio Ave 4, #05-678",
+			"560123 Singapore",
+		]);
+	});
+
+	test("a domestic parcel never prints its own country", () => {
+		expect(addressLines({ ...myAddress, country: "MY" }, "MY")).not.toContain(
+			"MALAYSIA",
+		);
+	});
+});
+
 describe("formatParcelWeight", () => {
 	test("under a kilo stays grams; above reads in kilos", () => {
 		expect(formatParcelWeight(850)).toBe("850 g");
@@ -526,6 +552,45 @@ describe("a country switch never leaves a foreign return address (86eyqgujv)", (
 		);
 		// The store still names itself — a label with no sender at all is worse.
 		expect(l.sender.name).toBe("Wagyu Walid");
+	});
+
+	test("the unit / floor line prints on the return address too (z8r3fdff8r)", () => {
+		const l = orderToAwbLabelData({
+			order: order(),
+			retailer: {
+				storeName: "Wagyu Walid",
+				waPhone: "60123456789",
+				country: "MY",
+				businessAddress: {
+					label: MY_LABEL,
+					unit: "Unit 3-1, Block B",
+					country: "MY",
+				},
+			},
+			config: AWB_DEFAULTS,
+		});
+		// A returned parcel has the same find-the-door problem as an arriving
+		// rider, and this block IS the return address.
+		expect(l.sender.lines.join(" ")).toContain("Unit 3-1, Block B");
+		expect(l.sender.warning).toBeUndefined();
+	});
+
+	test("a foreign-stamped address drops the unit with the rest of it", () => {
+		const l = orderToAwbLabelData({
+			order: order({ deliveryAddress: sgAddress }),
+			retailer: {
+				storeName: "Wagyu Walid",
+				waPhone: "6512345678",
+				country: "SG",
+				businessAddress: {
+					label: MY_LABEL,
+					unit: "Unit 3-1, Block B",
+					country: "MY",
+				},
+			},
+			config: AWB_DEFAULTS,
+		});
+		expect(l.sender.lines).toEqual([]);
 	});
 
 	test("a matching stamp prints exactly as before", () => {

@@ -327,16 +327,43 @@ doesn't fire the dialog (no modal-spam). This replaced the briefly-built
 silent auto-book (`autoBookForOrder`/`getAutoBookContext`, removed) — see
 git history if a zero-tap option is ever wanted for high-volume sellers.
 
-### Phones — Lalamove MY only accepts +60
+### Phones — contacts come from the booking's market
 
-Lalamove validates the rider-contact area code per market (a +65 buyer
-422'd in testing — real JB cross-border case). `toLalamoveMyPhone`
-normalizes to `+60…` or returns null: a non-MY **buyer** number falls back
-to the seller as rider contact (buyer's real number in the rider remarks;
-the confirm dialog says so up front), while a non-MY **seller** number
-blocks dispatch with "add a Malaysian (+60) WhatsApp number in Settings →
-Store". `friendlyBookingError` names phone rejections honestly if one ever
-slips through.
+Lalamove validates the contact's area code per market (a +65 buyer 422'd on a
+Malaysian booking in testing — the real JB cross-border case — and a +60 one
+fails the same way on a Singapore booking). Buyers can give a WhatsApp number
+from any country ([`z8r3fdh274`](https://app.clickup.com/t/z8r3fdh274), see
+[`phone-numbers.md`](./phone-numbers.md)), so a foreign buyer number is an
+everyday path, not an edge case. `toLalamoveContactPhone(phone, market)`
+delegates to the provider-neutral `toDomesticContactPhone`
+(`convex/lib/courierContact.ts` — Delyva applies the same rule): `+60…` with
+60 + 9–11 digits in MY, `+65…` with exactly 8 in SG, else null. It is a
+country check, not a mobile check — a rider can phone a landline.
+
+- **A foreign buyer number** falls back to the **store's** number as the
+  buyer-side contact, and `Buyer WhatsApp: +…` rides the remarks second, right
+  after the order ref, so the 400-character cut can never reach it. In
+  **collection** mode the buyer's stop is the pickup, so the fallback lands on
+  the sender; the remarks still ride the **recipient** stop — the only remarks
+  slot in v3 — which on a collection trip is the store.
+- **The confirm dialog says so before the tap**, naming the store's own market
+  and the direction (`riderContactFallbackCopy`, `src/lib/dispatch-block.ts`):
+  *"This buyer's WhatsApp number isn't a Malaysian number, and Lalamove only
+  takes Malaysian contacts — the rider gets your store's number instead, with
+  the buyer's real number in the rider notes."* — "a Singapore number" on an SG
+  store, "the rider collecting from the buyer" on a collection trip.
+  `prepareBooking` returns the booking's `market` for it, because the client
+  can't read the market off the order (its currency can diverge from the
+  store's country).
+- **A non-domestic seller number** blocks dispatch with `no_seller_phone` —
+  "Add a local WhatsApp number for your store's country in Settings → Store
+  first (+60 in Malaysia, +65 in Singapore)".
+- `friendlyBookingError` names phone rejections honestly (`bad_phone`) if one
+  ever slips through.
+
+The buyer hears about the reroute too: a store that books couriers shows an
+overseas buyer a note on the checkout's delivery step (`booksCouriers` —
+[`phone-numbers.md` § Telling the buyer](./phone-numbers.md#telling-the-buyer-at-checkout--bookscouriers)).
 
 ### Webhook
 
@@ -378,7 +405,7 @@ secrets → verify → act → ack. Lalamove-specific twists:
 | `ORDER_AMOUNT_CHANGED` | **after** matching/completion when the final charge differs from the quote — waiting-time fees, priority fee/tip added, toll adjustments | `costActual` updated on the job | the card's "Booking cost" updates reactively (the drift ledger vs buyer-paid fee) | nothing — buyer price is frozen |
 | `ORDER_REPLACED` | Lalamove's **cancel-and-clone**: for post-match adjustments THEY cancel the original and re-create it under a new orderId (sequence: CANCELED old → ORDER_REPLACED → clone's own events) | job repointed to the new id, **revived** to "assigning", stale failure cleared | card returns to active; if the clone-cancel briefly emailed a failure, the booking visibly recovers (rare, self-healing) | nothing |
 | `POD_STATUS_CHANGED` | rider uploaded the drop-off photo / signature | trigger only — the truth is read from `GET /v3/orders` by the idempotent `fetchPodImages` (also scheduled at COMPLETED, whichever lands first wins; the loser's blobs are cleaned) | photo thumbnails on the delivered dispatch card | **"Delivery photo" card on the order page** — page-only (`86eyd63r8`) |
-| `WALLET_BALANCE_CHANGED` | vendor wallet balance moved | logged only (proactive low-balance banner = named follow-up) | — | — |
+| `WALLET_BALANCE_CHANGED` | vendor wallet balance moved | recorded through `courierWallets.recordObservation` (attributed by key fingerprint, verified by the store's secret; timestamp normalised to ms) → the shared wallet row on Home, Deliveries, Integrations and above Book ([`courier-wallets.md`](./courier-wallets.md)) | — | — |
 | `ORDER_CREATED` (undocumented but real) | at booking | logged only | — | — |
 
 **Proof of delivery (POD) — rider drop-off photo:** every placed order
@@ -447,15 +474,36 @@ Terminal failures email the seller (EN+BM `deliveryJobFailed` template),
 raise a browser alert on devices with order alerts on, leave the order
 untouched, and the card offers one-tap rebook.
 
-**Registration is per SELLER** (BYO-only): each vendor pastes OUR webhook
-URL into THEIR Partner Portal → Developers → Webhook URL (Version 3). The
-settings card surfaces the exact URL with a copy button and the vendor
-guide walks it (Step E5). Graceful degradation if a seller skips it:
+**Registration is per SELLER** (BYO-only), and since 86eye9xd4 (5A) it is
+**one tap**: the Integrations card's setup checklist (pickup address → API
+key → webhook) calls `lalamove.registerWebhook`, which sends Lalamove's free
+`PATCH /v3/webhook` with `{ data: { url: <CONVEX_SITE_URL>/webhook/lalamove } }`
+on the seller's own keys and stamps `deliveryBooking.webhookRegisteredAt`.
+Lalamove keeps ONE webhook URL per account, so this replaces whatever the
+account pointed at. The manual paste (Partner Portal → Developers → Webhook
+URL, Version 3; vendor guide Step E5) stays as the fallback the card opens
+when Lalamove refuses. A **verified event** for one of the store's jobs also
+stamps `webhookRegisteredAt` (once — `stampWebhookKnown` in
+`applyWebhookEvent`), so a hand-pasted webhook ticks the step too; **typing
+a new key clears it**, because a different account has its own webhook
+setting. Stores whose bookings heard back BEFORE the checklist existed are
+stamped by `npx convex run lalamove:backfillWebhookKnown` (operator step,
+once per deployment) — without it every working store would read "Action
+needed" after the deploy. Graceful degradation if a seller skips it:
 bookings still work, but shipped/delivered stop being automatic — the
 order stays where it is until the seller advances it by hand, which since
 3 Aug costs one confirm per transition while a booking is active (the
 "Update manually" escape; see the manual-advance gate below). Dev
 deployment URL: `https://qualified-chihuahua-441.convex.site/webhook/lalamove`.
+
+**Tip a booking stuck finding a rider (86eye9xd4):** while a job is
+`assigning`, the rider card and its Deliveries row offer **Add tip** —
+Lalamove's priority fee (`POST /v3/orders/{id}/priority-fee`, body
+`{ data: { priorityFee: "5.00" } }`), fixed steps and a per-booking cap from
+`convex/lib/lalamoveTip.ts` (reserved against the cap in one transaction
+before the call, released if Lalamove refuses), charged to the seller's wallet
+and added to the job's `priorityFee` + `costActual`. See
+[`deliveries.md`](./deliveries.md#add-a-tip--a-booking-still-finding-a-rider).
 
 **Manual-advance gate while the rider drives (26 Jul hotfix; tightened
 3 Aug; server-enforced 14 Aug, ClickUp `86eydum6y`):** while an order has
@@ -580,8 +628,10 @@ Three freezes, one setting:
 - **`deliveryJobs.deliveryDirection`** — snapshotted at `reserveBooking` so
   the webhook obeys what was BOOKED, not the live setting.
 - **Dispatch swap** — `dispatchContextForOrder` swaps stops AND contacts:
-  origin/sender = buyer (same +60 fallback → seller number, buyer's real
-  number in remarks), destination/recipient = the outlet. The checkout
+  origin/sender = buyer (same store-number fallback when the buyer's number
+  isn't from the store's market, buyer's real number in the remarks — which
+  ride the recipient stop, here the outlet), destination/recipient = the
+  outlet. The checkout
   quote (`quoteForCheckout`) prices the same buyer→store direction (route
   prices aren't guaranteed symmetric), so buyer-paid fee and dispatch
   re-quote can't systematically drift.
@@ -722,6 +772,10 @@ order left the vendor choosing between a 3 AM rider and no rider.
 - The seller-side reschedule of the ORDER's fulfilment moment (what the buyer
   sees) is `orders.rescheduleFulfilment` — see docs/fulfilment-date.md
   ("Seller reschedule"). Its hard guard: refused while a rider job is ACTIVE.
+- **A self-collect order's time is never a rider schedule** (`z8r3fdff97`,
+  when pickups gained a time): `dispatchBlockReason` returns `not_delivery`
+  before `requestedMoment` is ever composed, here and in Delyva — pinned by a
+  test in each provider's suite.
 
 ### Rebook path + order sync (canonical bug 86eyp63xn, Wagyu Walid)
 
@@ -885,6 +939,110 @@ Rejected: pointer-move scroll-vs-tap discrimination (it would guard a gesture
 that can't happen, per the scroll-lock above) and hold-to-confirm (friction on
 every seller's happy path for an accident the arm delay already covers).
 
+## Heavy carts — the vehicle that can carry it (25 Oct 2026)
+
+**The gap.** Lalamove prices by VEHICLE and distance, never by weight. The
+quotation's optional `item.weight` exists only in Thailand, Vietnam and Hong
+Kong, and Lalamove has no "overweight" refusal — so a store whose rider
+setting is Motorcycle was quoted a motorcycle for a 25 kg cart, a trip the
+rider can't make. The seller found out at pickup and absorbed the car's
+price when they rebooked. Found auditing PR #416's weight units.
+
+**The limits are Lalamove's own.** `GET /v3/cities` (market-scoped) lists
+every service with `load: { value, unit }`. `parseVehicleLoads`
+(`convex/lib/lalamoveVehicle.ts`) keeps the SMALLEST load per vehicle across
+the market's cities — the store's city isn't known in Lalamove's terms, and
+quoting a car for a cart the motorcycle could take costs the buyer a little
+while the reverse strands the order. Measured on the MY sandbox, 25 Oct
+2026: MOTORCYCLE 10 kg, CAR 40 kg (also 4X4 250, VAN 500, LARGEVAN 750,
+TRUCK330 1000, TRUCK550 2500). Third-party guides disagreed (motorcycle 8–10
+kg, car 20–40 kg), which is why nothing is hardcoded.
+
+**The cache.** `lalamoveVehicleLoads` — one row per `(market, env)`, a list
+of `{ key, loadKg }` pairs. `vehicleLoadsFor` reads it; a row older than a
+day is still used and refreshed in the background (`refreshVehicleLoads`,
+scheduled). With no row at all the CHECKOUT fetches inline (the first heavy
+cart in a market is still priced right); DISPATCH only schedules the fetch,
+so a booking never grows an extra network call.
+
+- **Which row a store uses** (PR #418 review): the stamped
+  `deliveryBooking.env`, or for an unstamped store the env of its
+  DECRYPTED key, exactly how `callLalamove` picks the host
+  (`vehicleLoadsEnv`). Never a default to production: an unstamped
+  sandbox-key store fetches from the sandbox host, and the row it would
+  have written is the one every real store in the market reads. The
+  pricing card's query can't decrypt, so an unstamped store gets `null`
+  there (the card states the rule without numbers). This holds whatever a
+  backfill stamped; the code follows the 86eypncfy rule on its own.
+- **One refresh per market per 5 minutes.** A stale row is read by every
+  quote and dispatch, so `claimVehicleLoadsRefresh` stamps
+  `refreshScheduledAt` in the same transaction as the read and only the
+  winner schedules `refreshVehicleLoads`. A failing `/v3/cities` then
+  retries at that pace, not once per checkout; a successful save clears the
+  stamp.
+- **The inline fetch is bounded.** It runs before the parallel provider
+  quotes, so `callLalamove` aborts this one call after 4 s
+  (`VEHICLE_LOADS_TIMEOUT_MS`) and the quote fails open on the seller's
+  vehicle. Every other Lalamove call is unchanged.
+- **Line cap:** checkout weighs at most `MAX_QUOTE_ITEMS` (100) lines and
+  dispatch weighs every line; they agree because `orders.create` caps an
+  order at `MAX_ITEMS_PER_ORDER`, also 100.
+
+Probe it:
+
+```
+npx convex run lalamove:refreshVehicleLoads '{"retailerId":"…"}'
+```
+
+**The rule** — `chooseRiderVehicle`: start at the seller's vehicle, only ever
+go UP the ladder we surface (Motorcycle → Car), take the first whose load
+carries the cart. Over the car's load → `too_heavy`: no rider bids. Fails
+OPEN on anything unknown (no cart weight, no loads, a vehicle with no
+published load) — the rule stops a motorcycle being quoted 25 kg, it never
+refuses an order on missing data. An unweighed cart is priced at the
+one-kilo floor (`liveQuoteWeightKg`), so it never escalates.
+
+- **Checkout** (`liveQuote.quoteForCheckout` → `fetchLalamoveQuote`): the
+  cart's weight picks the vehicle; the quote row and the order's snapshot
+  record the vehicle actually priced. `too_heavy` joins the provider-neutral
+  refusals; if a courier priced the cart it wins, and alone it reaches the
+  buyer as "This order is too heavy for a delivery rider — choose pickup, or
+  message the store" (storefront, claim and address-edit surfaces). It
+  outranks a coverage refusal: the address may be fine, the ORDER is too big.
+  The legacy single-provider action has no cart and is unchanged.
+- **Dispatch** (`prepareBooking`): defaults to the same vehicle from the
+  order's weight, and returns `vehicleAdvice` — the card says "Car picked —
+  this order weighs 25 kg, over a motorcycle's 10 kg", warns amber if the
+  seller switches back ("The rider may refuse it at pickup"), and over a
+  car's load says no rider vehicle here fits. The seller's switch still wins.
+- **Dispatch, nothing fits** (`/test-code`, 26 Oct 2026): the dialog still
+  prices the biggest vehicle — the store's product weights may be wrong, and
+  it's the seller's call — but stops presenting that as the next step. The
+  "difference stays with you" price comparison is hidden (it rewarded the
+  booking the line advises against), and Confirm becomes **Book a car
+  anyway**. Inside the dispatch hub (both providers armed) the primary action
+  is **Use a Delyva courier**, which switches the hub's tab
+  (`onUseCourier`), and the line names the courier when one won the
+  buyer's checkout ("Your buyer paid a DHL eCommerce price at checkout").
+  Without a courier tab it points at a Lalamove van or the seller's own
+  courier plus the tracking box.
+- **Settings**: under the Default vehicle picker, a motorcycle store reads
+  "A cart over a motorcycle's 10 kg is priced on a car at checkout, and
+  booking opens on one" (`vehiclePickerHint`) — the choice is made there,
+  so the rule is said there. "Lalamove's limits — good to know" states the
+  full rule with this market's numbers (`lalamove.vehicleLoads`), or the rule
+  alone before the market has been quoted. Past a car's load it says a Delyva
+  courier prices the cart **if one carries that weight** — a Delyva account
+  only covers the weights its couriers take (the demo has none from 10.4 to
+  40.4 kg to KL), so the unconditional "your couriers price it" was a
+  promise the store couldn't keep.
+
+**Rejected:** sending `item.weight` (not offered in MY/SG); hardcoding the
+limits (they disagreed and Lalamove changes them); refusing every cart over
+the SELLER's vehicle (a car exists and the dispatch card already lets the
+seller book one — refusing would lose the sale); escalating past Car to
+vans (not a vehicle the seller can see or book from the order).
+
 ## Markets — how Singapore gets riders (z8r3fdch3r)
 
 **Lalamove serves Singapore.** Its REST API is segmented by a `Market` header
@@ -919,7 +1077,10 @@ the remarks). The old helper's test carried a warning that a future "accept
 +65 everywhere" sweep would break real bookings; that warning still holds and
 is honoured — **+65 is accepted in SG and still rejected in MY**, and the
 mirror case (+60 in SG) now fails the same way. The Johor cross-border buyer
-exists in both directions.
+exists in both directions. (Since z8r3fdh274 the rule itself is the
+provider-neutral `toDomesticContactPhone` in `convex/lib/courierContact.ts`,
+which this helper delegates to — see
+[§ Phones](#phones--contacts-come-from-the-bookings-market).)
 
 ### Swept late: the quotation locale
 
@@ -974,13 +1135,76 @@ stored keys belong to the old market — quotes then fail at the point of use.
 The country-switch checklist's `delivery_booking` item now covers exactly
 this (money severity, ACKABLE — we cannot see which market a stored key was
 created for, so the seller confirms), and the switch dialog warns in the same
-sentence.
+sentence. A key pair pasted **after** the switch is checked against the new
+market before it is stored ([below](#keys-checked-before-theyre-stored-and-removable-z8r3fdy5ht)),
+so the hazard is only ever a key that predates the switch.
 
 **Still genuinely unverified: one live SG booking end to end.** The first SG
 vendor run is the verification. If anything surprises, it will surface as a
 named quote/booking failure on their dispatch card — collect the message and
 it locates the layer immediately. `COUNTRY_DELIVERY_MODES.SG` gaining
 `"live"` pricing waits for z8r3fdbvdy to merge (one line there).
+
+## Keys: checked before they're stored, and removable (z8r3fdy5ht)
+
+Found 28 Oct 2026 during the EasyParcel test: an EasyParcel OAuth client ID +
+secret pasted into the Lalamove card was stored and badged **Live** —
+`inferLalamoveEnv` files anything that isn't `pk_test_` as production — and
+the card had no way to remove it. Both halves are fixed.
+
+**A pasted pair is checked three times, cheapest first.**
+
+| Check | Where | Catches |
+| --- | --- | --- |
+| Shape, as the seller types | `checkLalamoveKeyShape` (`convex/lib/lalamove.ts`), run by the card | another provider's ID, a stray secret, swapped fields, a live key with a sandbox secret |
+| Lalamove itself, on Save | `lalamove.verifyKeys` — signed `GET /v3/cities` with the pair, on the store's own `Market` | a well-formed pair that is wrong, revoked, or from the other country's app |
+| The lock | `retailers.updateSettings` refuses a NEW paste that fails the shape rule | anything that skipped the card |
+
+The shape rule is the server's lock; the probe is not (it is an action, and
+a mutation can't call Lalamove). A seller bypassing their own probe only
+hurts themselves, and the shape rule still holds. **Stored keys are never
+re-judged** — only a new paste — so a legacy row keeps working.
+
+`verifyKeys` **fails closed**: a 4xx (except 429) is a verdict ("Lalamove
+didn't accept this key and secret for Malaysia"); a 429, 5xx, timeout (8 s)
+or network error says "couldn't reach Lalamove — nothing was saved", never a
+pass. It writes nothing, refuses a view-only store (`assertWritable`, so a
+lapsed seller hears the lock before the probe, not after a check that
+"passed"), and is rate-limited per store (`lalamoveKeyCheck`, 6/min, burst
+3) because "does this key pair work?" is an oracle a stolen-key tester would
+hammer.
+
+**Disconnect** is `updateSettings({ deliveryBooking: null })` — the path
+existed, with no UI. It removes the key, secret and everything learned from
+them (env, hint, webhook stamp, the wallet snapshot) and **keeps** the
+seller's rider preferences (vehicle, collection direction, prompt-on-packed),
+so reconnecting is one paste — the Delyva posture. Never plan-gated. It is
+refused only where removing the keys would break something the seller can't
+see, by one rule (`convex/lib/lalamoveDisconnect.ts`) shared by the mutation
+and the card's `lalamove.getDisconnectState` read, so the button is greyed
+out with the reason **before** the tap:
+
+- **`pricing`** — the delivery charge is quoted by Lalamove: the `lalamove`
+  mode, or `live` mode where Lalamove is the only courier bidding
+  (`delyvaBidsAtCheckout` false). Links to Delivery pricing. A seller
+  switching the charge in the same call is honoured.
+- **`rider_out`** — a Lalamove job is still active. Cancelling and following
+  it both need the keys. Names the orders and links the first. Read exactly:
+  one `deliveryJobs.by_retailer_status` query per active status
+  (`assigning` / `ongoing` / `picked_up`), never a "newest N" window — a
+  scheduled booking can sit in `assigning` for 30 days while a busy store
+  books dozens more trips, and the first review draft (a 50-job window) would
+  have let it slip past and stranded it. The index was added for this.
+
+The seller's Lalamove account is untouched: its wallet is theirs, and its
+webhook keeps pointing at us. Events that arrive afterwards fail signature
+verification (no stored secret) and are ignored — harmless, which the confirm
+dialog says.
+
+**Not changed:** switching rider booking OFF under `live` pricing is still
+guarded only in the client (`courier-booking-section.tsx`'s last-bidder
+check); the server guard here covers disconnect. Worth aligning when that
+toggle is next touched.
 
 ## Sandbox E2E — verified 21 Jul 2026
 
@@ -1038,8 +1262,6 @@ Full step table, credential rules + the POD injector: [`dev-scripts.md`](./dev-s
 
 ## Follow-ups (named, not built)
 
-- Low-balance banner from `WALLET_BALANCE_CHANGED` (store last-known
-  balance, warn before a booking ever fails).
 - Prompt to cancel the Lalamove job inside the order-cancel flow (today the
   job card's cancel button is the path).
 - Multi-outlet origin (per-dispatch origin picker) — dispatch already reads

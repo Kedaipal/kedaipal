@@ -28,6 +28,21 @@ import { components } from "../_generated/api";
  *   than a midnight window, so recovery is gradual and there's no reset to
  *   time an attack against. If a real store ever hits it, that's a support
  *   conversation, not a config tweak.
+ * - `teamInvite` + `teamInviteEmail`: the team-seat invitation (86exr91r4), the
+ *   only authenticated write that mails an arbitrary address from Kedaipal's
+ *   own sending domain. The seat cap bounds how many invites can be OPEN at
+ *   once, not how many can be SENT: `cancelInvite` deletes the row, freeing the
+ *   seat, the duplicate check and the resend cooldown's anchor in one go, so
+ *   `invite → cancel → invite` was an unbounded loop. Two ceilings because the
+ *   abuse has two shapes — `teamInvite` (keyed by retailerId) bounds what one
+ *   store can spend of the shared Resend quota and domain reputation, the same
+ *   shared-resource logic the WABA caps exist for; `teamInviteEmail` (keyed by
+ *   retailerId + a HASH of the address, so no inbox is stored here) bounds what
+ *   one person can be made to receive, which a store-wide limit alone doesn't.
+ *   Resend spends both too — its 60s cooldown throttles the rate but caps no
+ *   total, so on its own it still allowed ~60 mails/hour at one address.
+ *   Sized well above a real store: Pro is owner + 2, and a generous
+ *   onboarding is five invites, a few typo re-sends and a couple of nudges.
  * - `productWrite`: authenticated retailer mutations. Keyed by Clerk subject so
  *   a single user cannot bulk-trash inventory.
  * - `addressUpdate`: public mutation that lets a shopper edit their delivery
@@ -40,8 +55,8 @@ import { components } from "../_generated/api";
  *   a small burst.
  * - `proofUpload`: public mutation that mints a one-shot Convex storage upload
  *   URL for a payment screenshot. Keyed by shortId so a single order can't
- *   exhaust the system. Slightly tighter than paymentClaim — one upload URL
- *   per claim attempt is the realistic ceiling.
+ *   exhaust the system. Sized for one URL per file the buyer PICKS, not per
+ *   claim — see the entry below.
  * - `googleAutocomplete`: public (storefront) + authenticated (settings)
  *   Convex action that proxies Google Places autocomplete. Keyed by retailerId
  *   for storefront callers and Clerk subject for settings callers. Bucket sized
@@ -62,6 +77,18 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		rate: 500,
 		period: 24 * 60 * MINUTE,
 		capacity: 500,
+	},
+	teamInvite: {
+		kind: "token bucket",
+		rate: 20,
+		period: 60 * MINUTE,
+		capacity: 10,
+	},
+	teamInviteEmail: {
+		kind: "token bucket",
+		rate: 5,
+		period: 24 * 60 * MINUTE,
+		capacity: 3,
 	},
 	productWrite: {
 		kind: "fixed window",
@@ -110,6 +137,16 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 3,
 	},
+	// EasyParcel webhooks are UNSIGNED (z8r3fdcje2), so each one only schedules
+	// a re-read of the shipment with the seller's own token. Keyed per job: a
+	// real shipment emits a few events per status change, and a flood of
+	// forged ones for the same shipment number costs at most this many reads.
+	easyparcelWebhookSync: {
+		kind: "token bucket",
+		rate: 6,
+		period: MINUTE,
+		capacity: 4,
+	},
 	// Buyer's "Pay now" tap (86eyb6z3a) — mints (or reuses) a HitPay payment
 	// request. Keyed by tracking token. Each fresh mint is an outbound API call
 	// on the SELLER's HitPay account, so sized like paymentClaim: a burst of
@@ -129,11 +166,19 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 4,
 	},
+	// One URL per file the buyer PICKS, not per claim (z8r3fdnpxf): the sheet
+	// now uploads the moment a screenshot is chosen, so the submit can be held
+	// until the image is genuinely stored rather than hoping it lands. Picking
+	// the wrong screenshot out of a camera roll and replacing it a couple of
+	// times is ordinary behaviour, and proof is now MANDATORY — so a limiter hit
+	// here no longer costs a retry, it blocks the payment outright. Sized for
+	// fumbling rather than for one perfect attempt. Still cheap to serve: the
+	// mutation only mints a URL, and the bytes behind it are capped client-side.
 	proofUpload: {
 		kind: "token bucket",
-		rate: 3,
+		rate: 10,
 		period: MINUTE,
-		capacity: 2,
+		capacity: 5,
 	},
 	// Public mutation that mints an upload URL for a buyer's reference image on a
 	// custom/made-to-order line — BEFORE the order exists, so keyed by retailerId
@@ -143,6 +188,44 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		rate: 3,
 		period: MINUTE,
 		capacity: 2,
+	},
+	// Voucher codes (`z8r3fdr617`), keyed by retailerId at both doors. Their
+	// OWN bucket, deliberately, for two reasons: a voucher code is the only
+	// GUESSABLE secret the storefront accepts, and sharing `orderCreate`'s
+	// budget would mean someone probing codes could starve a live drop of real
+	// checkouts.
+	//
+	//   `voucherCheck` — the storefront field's "is this code good?" probe and
+	//   the `?voucher=` link's on-load check. The tighter of the two, because
+	//   it is the one an attacker would hammer: 8 symbols over a 32-symbol
+	//   alphabet is 2^40 codes, and 20/min per store puts an exhaustive search
+	//   at roughly a hundred thousand years. Sized generously for a human
+	//   typing (debounced client-side) and for a shared link being opened by a
+	//   whole WhatsApp group at once.
+	//
+	//   `voucherRedeem` — only reached when an order is actually being placed
+	//   with a code, so it rides behind the order limiters as a second ceiling
+	//   on the same act. Lower volume than checking by construction.
+	voucherCheck: {
+		kind: "token bucket",
+		rate: 20,
+		period: MINUTE,
+		capacity: 10,
+	},
+	voucherRedeem: {
+		kind: "token bucket",
+		rate: 10,
+		period: MINUTE,
+		capacity: 5,
+	},
+	// Authenticated seller voucher ISSUING (keyed by Clerk subject) — minting
+	// codes writes a row each and a batch writes up to 50, so this is sized
+	// like `productBulkImport` rather than like a read.
+	voucherIssue: {
+		kind: "token bucket",
+		rate: 10,
+		period: MINUTE,
+		capacity: 5,
 	},
 	// Public buyer mockup approve / request-changes actions (keyed by retailerId).
 	mockupReview: {
@@ -179,11 +262,31 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 4,
 	},
+	// The seller's "is this pasted Lalamove pair real?" probe (z8r3fdy5ht).
+	// Authenticated + keyed by retailer, but it answers "does this key pair
+	// work" — an oracle a stolen-key tester would hammer. A seller retyping a
+	// pair a few times never notices.
+	lalamoveKeyCheck: {
+		kind: "token bucket",
+		rate: 6,
+		period: MINUTE,
+		capacity: 3,
+	},
 	googlePlaceDetails: {
 		kind: "token bucket",
 		rate: 10,
 		period: MINUTE,
 		capacity: 3,
+	},
+	// Seller self-serve billing (86eyb6z4r): subscribeSelf + the auto-renewal
+	// setup/reconcile actions. Authenticated, keyed by retailer/Clerk subject;
+	// each accepted call is at most one outbound HitPay API call on KEDAIPAL's
+	// own account. A couple of retries after a flaky redirect is legitimate.
+	billingSelfServe: {
+		kind: "token bucket",
+		rate: 6,
+		period: MINUTE,
+		capacity: 4,
 	},
 	// Public poster scan (`KPS-<token>`) starting a buyer-initiated counter
 	// session. The token is printed on a wall, so this limit IS the security

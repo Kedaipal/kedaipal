@@ -1,6 +1,9 @@
 import { useMutation } from "convex/react";
 import {
 	ArrowRight,
+	CalendarClock,
+	Clock,
+	Globe,
 	ImagePlus,
 	Link as LinkIcon,
 	Loader2,
@@ -12,9 +15,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { formatPrepDuration } from "../../../convex/lib/fulfilmentDate";
+import { formatEventMoment } from "../../../convex/lib/productEvent";
 import type { UseCart } from "../../hooks/useCart";
+import { usePromoClock } from "../../hooks/usePromoClock";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
-import { IMAGE_ACCEPT, prepareImageUpload } from "../../lib/image-upload";
+import { IMAGE_ACCEPT } from "../../lib/image-upload";
+import { effectivePriceFrom, effectiveVariantPrice } from "../../lib/promo";
+import { shareLink } from "../../lib/share";
+import { uploadImage } from "../../lib/storage-upload";
 import { cn } from "../../lib/utils";
 import {
 	availableValuesPerAxis,
@@ -26,8 +35,11 @@ import {
 	variantLabel,
 } from "../../lib/variant";
 import { Button } from "../ui/button";
+import { ClampedNote } from "../ui/clamped-note";
 import { ZoomableImage } from "../ui/zoomable-image";
 import type { StorefrontProduct } from "./product-card";
+import { ORDERING_PAUSED_CTA, useOrderingPaused } from "./seasonal-break";
+import { useHomeOnlyLabel } from "./ships-abroad";
 
 export type StorefrontVariant = StorefrontProduct["variants"][number];
 
@@ -39,7 +51,13 @@ export type CustomAddPayload = { note?: string; imageStorageId?: string };
  * the same way — a small muted word ahead of the amount, never part of the big
  * bold number it qualifies.
  */
-export type PriceLabelValue = { from?: boolean; text: string };
+export type PriceLabelValue = {
+	from?: boolean;
+	text: string;
+	/** The list price, struck through beside the sale price (z8r3fdcw72).
+	 * Present only while a promotion is actually in force. */
+	was?: string;
+};
 
 /**
  * The one renderer for a storefront headline price (product page + detail
@@ -61,6 +79,11 @@ export function PriceLabel({
 				</span>
 			) : null}
 			{value.text}
+			{value.was ? (
+				<span className="ml-2 align-baseline text-sm font-medium text-muted-foreground line-through">
+					{value.was}
+				</span>
+			) : null}
 		</p>
 	);
 }
@@ -171,25 +194,17 @@ export function useProductPurchase({
 		setImageError(null);
 		setUploadingImage(true);
 		try {
-			const prepared = await prepareImageUpload(file);
-			if (!prepared.ok) {
-				setImageError(prepared.message);
+			const upload = await uploadImage(file, () =>
+				generateCustomImageUploadUrl({ retailerId }),
+			);
+			if (!upload.ok) {
+				setImageError(upload.message);
 				return;
 			}
-			const url = await generateCustomImageUploadUrl({ retailerId });
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": prepared.contentType },
-				body: prepared.blob,
-			});
-			if (!res.ok) throw new Error("Upload failed");
-			const body = (await res.json()) as { storageId?: unknown };
-			if (typeof body.storageId !== "string")
-				throw new Error("Upload failed: unexpected response");
 			if (blobRef.current) URL.revokeObjectURL(blobRef.current);
-			const preview = URL.createObjectURL(prepared.blob);
+			const preview = URL.createObjectURL(upload.blob);
 			blobRef.current = preview;
-			setCustomImage({ storageId: body.storageId, preview });
+			setCustomImage({ storageId: upload.storageId, preview });
 		} catch (err) {
 			setImageError(convexErrorMessage(err));
 		} finally {
@@ -245,10 +260,45 @@ export function useProductPurchase({
 		selectedVariant && selectedVariant.imageUrls.length > 0
 			? selectedVariant.imageUrls
 			: (product?.imageUrls ?? []);
+	// Seats are a SECOND ceiling alongside per-variant stock (`z8r3fdff9u`) —
+	// whichever is tighter wins, exactly as the server enforces both. Counted
+	// against what this cart already holds for the product, so the stepper can
+	// never offer a seat the checkout would then refuse. Uncapped events and
+	// every normal product have no ceiling here.
+	const eventSeatsLeft = product?.eventSeatsLeft;
+	const seatCeiling =
+		eventSeatsLeft === undefined
+			? Number.POSITIVE_INFINITY
+			: Math.max(0, eventSeatsLeft - cartQuantity);
+	const eventFull = eventSeatsLeft !== undefined && eventSeatsLeft <= 0;
+	// A live flash sale's per-order cap is a ceiling of exactly the same kind
+	// as stock and seats, so it joins the same Math.min rather than becoming a
+	// second mechanism. Counted against what's ALREADY in the cart because the
+	// server sums every variant of the product in the order
+	// (`orders.create`). Without it the stepper happily climbed past the cap
+	// its own hint printed, and the server refused with a bare sentence that
+	// has no recovery action — unlike the units-left case, which throws the
+	// typed price_changed error the checkout knows how to fix.
+	const promoState = product?.promoState;
+	const perOrderCeiling =
+		promoState?.phase === "live" && promoState.maxPerOrder !== undefined
+			? Math.max(0, promoState.maxPerOrder - cartQuantity)
+			: Number.POSITIVE_INFINITY;
+	/** The cart ALREADY holds the whole per-order allowance. `maxQty` floors at
+	 * 1 so the stepper always shows a number, which would otherwise let one
+	 * more through — so this gates the ACTION rather than the display. */
+	const promoCapReached = perOrderCeiling === 0;
+	const promoMaxPerOrder =
+		promoState?.phase === "live" ? promoState.maxPerOrder : undefined;
 	const maxQty = selectedVariant
-		? variantBlocks
-			? Math.max(1, selectedVariant.onHand)
-			: 99
+		? Math.max(
+				1,
+				Math.min(
+					variantBlocks ? Math.max(1, selectedVariant.onHand) : 99,
+					seatCeiling,
+					perOrderCeiling,
+				),
+			)
 		: 1;
 	// Minimum-order-quantity easement (86ey9unyx): the amount still needed to
 	// reach the product's minimum, given what's already in the cart. On a
@@ -268,6 +318,8 @@ export function useProductPurchase({
 	// Never render/add more than the stock ceiling, even if the min default
 	// exceeds it (the buyer sees the stock hint explain the tension).
 	const displayQuantity = Math.min(quantity, maxQty);
+	// Ticks only while this product has a deadline to watch (z8r3fdcw72).
+	const promoClock = usePromoClock(product?.promoState);
 
 	function toggle(axisIndex: number, value: string) {
 		setSelection((prev) => {
@@ -295,11 +347,40 @@ export function useProductPurchase({
 	 * exact price: a custom line elsewhere on the product doesn't make that
 	 * fixed size negotiable.
 	 */
+	// What the selected line costs RIGHT NOW. The server has already decided
+	// whether the promotion applies (plan, window, cap) and stripped the sale
+	// prices when it doesn't; `promoClock` only carries the passing of time, so
+	// a page left open stops quoting a sale the instant its window shuts.
+	const selectedEffective =
+		selectedVariant !== null && selectedVariant !== undefined
+			? effectiveVariantPrice(selectedVariant, product?.promoState, promoClock)
+			: undefined;
+	const selectedOnPromo =
+		selectedVariant != null &&
+		selectedEffective !== undefined &&
+		selectedEffective < selectedVariant.price;
+	const fromEffective =
+		product !== null && product !== undefined
+			? effectivePriceFrom(product, promoClock)
+			: undefined;
+	const fromOnPromo =
+		product != null &&
+		fromEffective !== undefined &&
+		fromEffective < product.priceFrom;
+
 	const priceLabel: PriceLabelValue = product
 		? selectedVariant
 			? selectedIsQuote
 				? { text: "Price on quote" }
-				: { text: formatPrice(selectedVariant.price, product.currency) }
+				: {
+						text: formatPrice(
+							selectedEffective ?? selectedVariant.price,
+							product.currency,
+						),
+						was: selectedOnPromo
+							? formatPrice(selectedVariant.price, product.currency)
+							: undefined,
+					}
 			: product.hasQuotePricing && product.priceTo === 0
 				? { text: "Price on quote" }
 				: {
@@ -307,7 +388,13 @@ export function useProductPurchase({
 							priceVaries ||
 							product.hasQuotePricing ||
 							hasStartingPrice(variants),
-						text: formatPrice(product.priceFrom, product.currency),
+						text: formatPrice(
+							fromEffective ?? product.priceFrom,
+							product.currency,
+						),
+						was: fromOnPromo
+							? formatPrice(product.priceFrom, product.currency)
+							: undefined,
 					}
 		: { text: "" };
 
@@ -327,8 +414,8 @@ export function useProductPurchase({
 	const totalPreview =
 		selectedVariant && sellable && !selectedIsQuote
 			? {
-					unit: selectedVariant.price,
-					total: selectedVariant.price * displayQuantity,
+					unit: selectedEffective ?? selectedVariant.price,
+					total: (selectedEffective ?? selectedVariant.price) * displayQuantity,
 				}
 			: null;
 
@@ -347,6 +434,10 @@ export function useProductPurchase({
 		sellsStandardLine,
 		images,
 		maxQty,
+		eventSeatsLeft,
+		eventFull,
+		promoCapReached,
+		promoMaxPerOrder,
 		minQuantity,
 		minFloor,
 		minUnreachable,
@@ -396,11 +487,18 @@ export function addVariantToCart(
 			productId: p._id,
 			name: p.name,
 			optionLabel: label || undefined,
-			price: variant.price,
+			// The sale price, when one is in force (z8r3fdcw72). The cart freezes
+			// what it was added at — checkout reconciles against the live
+			// catalogue, and `orders.create` is the final authority.
+			price: effectiveVariantPrice(variant, p.promoState, Date.now()),
 			currency: p.currency,
 			imageUrl: variant.imageUrls[0] ?? p.imageUrls[0],
 			quoteOnRequest: variant.requiresProof === true && variant.price === 0,
 			minNoticeDays: p.minNoticeDays,
+			// Frozen at add time alongside the notice override — the cart line
+			// is what checkout reads to floor the date and the time.
+			prepMinutes: p.prepMinutes,
+			pickupNote: p.pickupNote,
 			isCustom: variant.isCustom,
 			minQuantity: p.minQuantity,
 			note: custom?.note,
@@ -436,6 +534,9 @@ export function quickAddProductToCart(cart: UseCart, p: StorefrontProduct) {
 		variant.blockWhenOutOfStock === true
 			? Math.max(1, variant.onHand - inCart)
 			: Number.POSITIVE_INFINITY;
+	// No seat clamp here: an event is never quick-addable (`z8r3fdhh45`) — its
+	// card routes to the product page and from there to the standalone RSVP
+	// checkout, which owns the seat ceiling.
 	addVariantToCart(
 		cart,
 		p,
@@ -444,34 +545,12 @@ export function quickAddProductToCart(cart: UseCart, p: StorefrontProduct) {
 	);
 }
 
-/** Share/copy a product link: OS share sheet when available (the WhatsApp
- * path on mobile), clipboard + toast otherwise. `url` may be relative — it's
- * absolutized against the current origin at call time (SSR-safe: only ever
- * called from a click). */
-export async function shareProductLink(url: string) {
-	const absolute = new URL(url, window.location.origin).toString();
-	if (navigator.share) {
-		try {
-			await navigator.share({ url: absolute });
-			return;
-		} catch {
-			// Cancelled or unsupported payload — fall through to copy.
-		}
-	}
-	try {
-		await navigator.clipboard.writeText(absolute);
-		toast.success("Link copied — paste it anywhere");
-	} catch {
-		toast.error("Couldn't copy the link");
-	}
-}
-
 /** "🔗 Copy link" chip — the product page's share affordance. */
 export function ShareLinkChip({ url }: { url: string }) {
 	return (
 		<button
 			type="button"
-			onClick={() => void shareProductLink(url)}
+			onClick={() => void shareLink(url)}
 			className="tap-target flex w-fit items-center gap-1.5 rounded-full bg-accent/10 px-3 py-1 text-xs font-semibold text-accent-emphasis transition-colors hover:bg-accent/15"
 		>
 			<LinkIcon className="size-3.5" aria-hidden />
@@ -527,22 +606,167 @@ export function OptionPills({ pp }: { pp: ProductPurchase }) {
 	);
 }
 
+/**
+ * The event's terms, stated on the product page BEFORE the buyer commits
+ * (`z8r3fdff9u`).
+ *
+ * A guest tapping "RSVP" is agreeing to a date they can't change and a pickup
+ * they can't swap for delivery. Discovering either at checkout is exactly the
+ * silent surprise the min-order hint above already exists to prevent — so the
+ * same treatment, one card, above the buy box.
+ */
+export function EventNotice({ pp }: { pp: ProductPurchase }) {
+	const event = pp.product?.event;
+	if (!event) return null;
+	const left = pp.eventSeatsLeft;
+	return (
+		<div className="mt-3 flex flex-col gap-1.5 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2.5">
+			<p className="flex items-center gap-2 text-sm font-semibold">
+				<CalendarClock className="size-4 shrink-0 text-accent" aria-hidden />
+				{/* The FULL spelling — this card is where the guest decides, and a
+				    multi-day badge drops the start time the decision needs. */}
+				{formatEventMoment(event)}
+			</p>
+			<p className="text-xs leading-relaxed text-muted-foreground">
+				{pp.eventFull
+					? "This event is fully booked."
+					: left !== undefined
+						? `${left} ${left === 1 ? "seat" : "seats"} left. `
+						: ""}
+				{pp.eventFull
+					? " Message the store to ask about a cancellation."
+					: event.requiresApproval === true
+						? `The host approves each RSVP — your seat is held while they review it, and you pay only once it's approved. It's at the venue on ${event.endDate !== undefined ? "these dates" : "this date"}, so there's no delivery and no date to pick.`
+						: `RSVP and you're booked for ${event.endDate !== undefined ? "these dates" : "this date"} — it's collected at the venue, so there's no delivery and no date to pick at checkout.`}
+			</p>
+		</div>
+	);
+}
+
 /** Stock hint + minimum-order hint/unreachable alert — surfaced on the product
  * (not only at checkout) so neither rule is ever a surprise. */
 export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
+	// Cross-border (z8r3fdr5yy): an overseas visitor learns a product stays
+	// home HERE, before the add — never at checkout. Called before the early
+	// return below (a hook).
+	const homeOnly = useHomeOnlyLabel(pp.product ?? {});
+	// "Ready in ~2 hours" is only TRUE when same-day is possible. A product that
+	// needs a day or more of notice can never be ready two hours from now, so
+	// the chip would promise something checkout then refuses — the buyer-side
+	// twin of the seller form's "prep won't apply" note. An EVENT product is
+	// the same case (`z8r3fdff9u`): its moment is the seller's fixed date, the
+	// prep floor is exempt there, and the badge beside this one already says
+	// when it happens — so "ready in ~2 hours" would answer a question the
+	// guest isn't asking.
+	const prepLabel =
+		(pp.product?.minNoticeDays ?? 0) >= 1 || pp.product?.event !== undefined
+			? ""
+			: formatPrepDuration(pp.product?.prepMinutes);
+	const pickupNote = pp.product?.pickupNote?.trim();
 	const product = pp.product;
 	if (!product) return null;
+	const promo = product.promoState;
+	// How many are left AT THE SALE PRICE. Its own line, above the buy box,
+	// because it is the one fact the countdown band at the top of the page
+	// cannot carry — and the one that decides whether to hurry (z8r3fdcw72).
+	const saleUnitsLeft =
+		promo?.phase === "live" &&
+		promo.unitCap !== undefined &&
+		promo.unitsLeft !== undefined
+			? promo.unitsLeft
+			: undefined;
+	const maxPerOrder = promo?.phase === "live" ? promo.maxPerOrder : undefined;
+	const payWithin =
+		promo?.phase === "live" ? promo.payWithinMinutes : undefined;
 	return (
 		<>
-			{/* Stock hint — only meaningful for hard-block variants. */}
-			{pp.selectedVariant && pp.variantBlocks ? (
-				<p className="mt-3 text-xs text-muted-foreground">
-					{pp.selectedVariant.onHand <= 0
-						? "Out of stock"
-						: pp.selectedVariant.onHand <= 5
-							? `Only ${pp.selectedVariant.onHand} left`
-							: `${pp.selectedVariant.onHand} in stock`}
+			{homeOnly ? (
+				<p className="mt-3 flex items-center gap-2 rounded-xl bg-muted px-3 py-2.5 text-sm text-foreground">
+					<Globe
+						className="size-4 shrink-0 text-muted-foreground"
+						aria-hidden
+					/>
+					{homeOnly}
 				</p>
+			) : null}
+			{saleUnitsLeft !== undefined ? (
+				<div className="mt-3 flex flex-col gap-1.5 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2.5">
+					<p className="text-sm font-semibold text-accent-emphasis">
+						{saleUnitsLeft > 0
+							? `${saleUnitsLeft} of ${promo?.unitCap} left at this price`
+							: "The sale price has sold out"}
+					</p>
+					<div
+						className="h-1.5 overflow-hidden rounded-full bg-accent/20"
+						aria-hidden
+					>
+						<div
+							className="h-full rounded-full bg-accent"
+							style={{
+								width: `${Math.max(0, Math.min(100, (saleUnitsLeft / (promo?.unitCap ?? 1)) * 100))}%`,
+							}}
+						/>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						{saleUnitsLeft > 0
+							? "After that it goes back to the normal price."
+							: "It is back at the normal price now."}
+					</p>
+				</div>
+			) : null}
+			{payWithin !== undefined ? (
+				// Stated where they decide, not on the track page afterwards. A
+				// deadline the buyer only meets once it has already cancelled
+				// their order is enforced silently, which the house rule forbids
+				// — and this is a buyer who orders then goes to WhatsApp.
+				<p className="mt-3 text-xs text-muted-foreground">
+					{`Pay within ${payWithin} ${payWithin === 1 ? "minute" : "minutes"} of ordering or the sale price is released.`}
+				</p>
+			) : null}
+			{maxPerOrder !== undefined ? (
+				// Says which state the buyer is in, because the stepper now stops
+				// at this number: a ceiling you hit with no word for it reads as a
+				// broken button (CLAUDE.md — a constraint is surfaced, never
+				// enforced silently).
+				<p
+					className={cn(
+						"mt-3 text-xs",
+						pp.promoCapReached
+							? "font-medium text-foreground"
+							: "text-muted-foreground",
+					)}
+				>
+					{pp.promoCapReached
+						? `That's the limit — max ${maxPerOrder} per order during this sale.`
+						: `Max ${maxPerOrder} per order during this sale`}
+				</p>
+			) : null}
+			{/* Stock hint — only meaningful for hard-block variants. On an EVENT
+			    the seats chip above already carries availability, so this line
+			    speaks only when THIS option's stock binds tighter than the seat
+			    pool ("50 in stock" under "10 seats left" was two numbers telling
+			    two stories) — and then in per-option words. */}
+			{pp.selectedVariant && pp.variantBlocks ? (
+				product.event !== undefined ? (
+					pp.selectedVariant.onHand <= 0 ? (
+						<p className="mt-3 text-xs text-muted-foreground">
+							This option is fully taken
+						</p>
+					) : pp.eventSeatsLeft === undefined ||
+						pp.selectedVariant.onHand < pp.eventSeatsLeft ? (
+						<p className="mt-3 text-xs text-muted-foreground">
+							{`Only ${pp.selectedVariant.onHand} of this option left`}
+						</p>
+					) : null
+				) : (
+					<p className="mt-3 text-xs text-muted-foreground">
+						{pp.selectedVariant.onHand <= 0
+							? "Out of stock"
+							: pp.selectedVariant.onHand <= 5
+								? `Only ${pp.selectedVariant.onHand} left`
+								: `${pp.selectedVariant.onHand} in stock`}
+					</p>
+				)
 			) : null}
 
 			{pp.minQuantity >= 2 ? (
@@ -568,6 +792,34 @@ export function PurchaseHints({ pp }: { pp: ProductPurchase }) {
 							: ""}
 					</p>
 				)
+			) : null}
+
+			{/* Prep window (z8r3fdff97) — said BEFORE the buyer commits, not
+			    discovered as a floor at checkout. The tilde is doing work: this
+			    is the seller's making time, not a promise of a slot. */}
+			{prepLabel ? (
+				<p className="mt-3 flex w-fit items-center gap-1.5 rounded-full bg-accent/10 px-3 py-1 text-xs font-semibold text-accent-emphasis">
+					<Clock className="size-3.5 shrink-0" aria-hidden="true" />
+					Ready in ~{prepLabel}
+				</p>
+			) : null}
+
+			{/* The seller's collection instruction. Deliberately NOT gated on the
+			    store's offerSelfCollect here: this component is handed only a
+			    retailerId, and the buyer has not chosen a method yet anyway — so
+			    the copy self-qualifies with "Collecting?" and the authoritative
+			    gate lives at checkout, where the method IS known. Escaped text,
+			    clamped, so a long note can't take over the card. */}
+			{pickupNote ? (
+				<p className="mt-3 rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+					{/* Two lines on purpose: `line-clamp-3` makes the note a block
+					    anyway (it sets display:-webkit-box), so an inline prefix
+					    with a trailing space would be a lie about the layout. */}
+					<span className="block font-semibold text-foreground">
+						Collecting?
+					</span>
+					<ClampedNote text={pickupNote} />
+				</p>
 			) : null}
 		</>
 	);
@@ -758,13 +1010,14 @@ function CustomOrderButton({
 }) {
 	const product = pp.product;
 	const customLine = pp.customLine;
+	const paused = useOrderingPaused();
 	if (!product || !customLine) return null;
 	const isTheProduct = !pp.sellsStandardLine;
 	return (
 		<Button
 			type="button"
 			variant={isTheProduct ? "default" : "outline"}
-			disabled={pp.uploadingImage}
+			disabled={pp.uploadingImage || paused}
 			onClick={() => {
 				onAdd(product, customLine, 1, {
 					note: pp.customNote.trim() || undefined,
@@ -774,7 +1027,7 @@ function CustomOrderButton({
 			}}
 			className={isTheProduct ? "h-12 w-full text-base" : "mt-3 h-11 w-full"}
 		>
-			Request custom order
+			{paused ? ORDERING_PAUSED_CTA : "Request custom order"}
 		</Button>
 	);
 }
@@ -857,7 +1110,10 @@ function PurchaseStepper({ pp }: { pp: ProductPurchase }) {
 					pp.setQuantity(Math.min(pp.maxQty, pp.displayQuantity + 1))
 				}
 				disabled={
-					pp.displayQuantity >= pp.maxQty || !pp.sellable || pp.minUnreachable
+					pp.displayQuantity >= pp.maxQty ||
+					!pp.sellable ||
+					pp.minUnreachable ||
+					pp.promoCapReached
 				}
 				className="flex size-11 items-center justify-center rounded-full border border-border disabled:opacity-40"
 				aria-label="Increase quantity"
@@ -877,10 +1133,18 @@ function AddToCartButton({
 	pp: ProductPurchase;
 	onAdd: OnAddVariant;
 }) {
+	// Off-Season Hold (z8r3fday24): disabled-with-reason beats a button that
+	// adds to a cart nobody can check out.
+	const paused = useOrderingPaused();
+	// No event branch here: an RSVP never reaches this button (`z8r3fdhh45`) —
+	// an event's CTA is a link into the standalone RSVP checkout, on every
+	// surface that has one.
 	return (
 		<Button
 			type="button"
-			disabled={!pp.sellable || pp.minUnreachable}
+			disabled={
+				paused || !pp.sellable || pp.minUnreachable || pp.promoCapReached
+			}
 			onClick={() =>
 				pp.product &&
 				pp.selectedVariant &&
@@ -888,15 +1152,19 @@ function AddToCartButton({
 			}
 			className="h-12 w-full text-base"
 		>
-			{pp.minUnreachable
-				? "Not enough stock"
-				: !pp.selectedVariant
-					? pp.hasOptions
-						? "Select options"
-						: "Unavailable"
-					: !pp.sellable
-						? "Out of stock"
-						: "Add to cart"}
+			{paused
+				? ORDERING_PAUSED_CTA
+				: pp.promoCapReached
+					? "Sale limit reached"
+					: pp.minUnreachable
+						? "Not enough stock"
+						: !pp.selectedVariant
+							? pp.hasOptions
+								? "Select options"
+								: "Unavailable"
+							: !pp.sellable
+								? "Out of stock"
+								: "Add to cart"}
 		</Button>
 	);
 }
@@ -916,7 +1184,8 @@ export function GoToCheckoutBar({
 	currency: string;
 	onCheckout?: () => void;
 }) {
-	if (!onCheckout || cartItemCount <= 0) return null;
+	const paused = useOrderingPaused();
+	if (!onCheckout || cartItemCount <= 0 || paused) return null;
 	return (
 		<button
 			type="button"
@@ -926,7 +1195,7 @@ export function GoToCheckoutBar({
 			<span className="flex items-center gap-2.5 text-sm font-semibold text-foreground">
 				<span className="relative flex size-6 items-center justify-center">
 					<ShoppingBag className="size-5 text-accent" />
-					<span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+					<span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-segment px-1 text-[10px] font-bold text-segment-foreground">
 						{cartItemCount}
 					</span>
 				</span>

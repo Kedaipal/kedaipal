@@ -20,7 +20,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
  * columns, grouped by the registry's own sections so a seller hunting for the
  * address doesn't scan an alphabetical wall.
  *
- * **Bulk selection is part of the design, not an extra.** With 36 columns,
+ * **Bulk selection is part of the design, not an extra.** With ~40 columns,
  * ticking them one at a time is the whole interaction, so there are three
  * levels of the SAME control: all columns, one group, one column. The first two
  * are TRI-STATE — a parent that read "unchecked" while three of its seven
@@ -37,6 +37,8 @@ const GROUP_ORDER: OrderColumnGroup[] = [
 	"money",
 	"payment",
 	"fulfilment",
+	// Right after Fulfilment: a booking's span refines its fulfilment date.
+	"booking",
 ];
 
 export function OrderColumnPicker({
@@ -76,8 +78,19 @@ export function OrderColumnPicker({
 					</span>
 				</Button>
 			</PopoverTrigger>
-			<PopoverContent align="end" className="w-72 p-0">
-				<div className="flex items-start justify-between gap-2 border-b border-border px-3 py-2.5">
+			{/* Two caps, two jobs. The PANEL is capped at Radix's MEASURED room
+			    below the trigger, with the list as its one flexible region — that
+			    is what keeps every row reachable. The list's own `52vh` only keeps
+			    the panel compact on a tall monitor; on its own it ignored the
+			    header and the page banner, so on a laptop window the panel ran
+			    past the viewport and its last rows — the Booking group, which
+			    sits last — could not be scrolled to. */}
+			<PopoverContent
+				align="end"
+				data-testid="column-picker-panel"
+				className="flex max-h-(--radix-popover-content-available-height) w-72 flex-col p-0"
+			>
+				<div className="flex shrink-0 items-start justify-between gap-2 border-b border-border px-3 py-2.5">
 					<div className="min-w-0">
 						<p className="text-[13px] font-semibold">Columns</p>
 						<p className="text-[11.5px] leading-snug text-muted-foreground">
@@ -100,7 +113,7 @@ export function OrderColumnPicker({
 				    reads as the first row of the same hierarchy — all → group →
 				    column — instead of competing with Reset, which does a different
 				    job (defaults, including order and widths). */}
-				<div className="border-b border-border px-1.5 py-1">
+				<div className="shrink-0 border-b border-border px-1.5 py-1">
 					<BulkSelectRow
 						tone="master"
 						label="All columns"
@@ -118,7 +131,10 @@ export function OrderColumnPicker({
 					) : null}
 				</div>
 
-				<div className="max-h-[52vh] overflow-y-auto px-1.5 py-1">
+				<div
+					data-testid="column-picker-list"
+					className="max-h-[52vh] min-h-0 flex-1 overflow-y-auto px-1.5 py-1"
+				>
 					{GROUP_ORDER.map((group) => {
 						const cols = ORDER_COLUMNS.filter((c) => c.group === group);
 						if (cols.length === 0) return null;

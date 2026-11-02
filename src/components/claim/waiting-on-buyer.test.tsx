@@ -10,6 +10,11 @@ vi.mock("convex/react", () => ({
 	useMutation: (fn: { toString: () => string }) =>
 		String(fn).includes("cancel") ? cancelClaim : resendClaim,
 }));
+// The counter is open in these tests — its closed states are pinned in
+// claim-actions.test.tsx and the counter page tests.
+vi.mock("../../hooks/useCounterClosed", () => ({
+	useCounterClosedReason: () => null,
+}));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("../../../convex/_generated/api", () => ({
 	api: {
@@ -36,7 +41,7 @@ function claim(overrides: Record<string, unknown> = {}) {
 		expiresAt: NOW + 8 * 60_000,
 		windowMinutes: 15,
 		currency: "MYR",
-		itemsTotal: 24600,
+		total: 24600,
 		lines: [
 			{
 				name: "Ribeye MS5",
@@ -80,6 +85,31 @@ describe("WaitingOnBuyerScreen", () => {
 	});
 
 	// A seller who can't find the Add buttons must not be left guessing.
+	test("a voucher still applying draws its line between the items and the total", () => {
+		// Without it the items read 24600 above a locked total of 19600 and
+		// nothing between them explained the gap (found hands-on, 30 Oct 2026).
+		render(
+			<WaitingOnBuyerScreen
+				claim={claim({
+					total: 19600,
+					voucher: { code: "SALE20", discount: 5000 },
+				})}
+				buyerName="Aina"
+			/>,
+		);
+		expect(screen.getByText("Items")).toBeTruthy();
+		expect(screen.getByText(/^RM.246\.00$/)).toBeTruthy();
+		expect(screen.getByText(/Voucher · SALE20/)).toBeTruthy();
+		expect(screen.getByText(/^−RM.50\.00$/)).toBeTruthy();
+		expect(screen.getByText(/^RM.196\.00$/)).toBeTruthy();
+	});
+
+	test("no voucher, no extra lines — the total stands alone", () => {
+		render(<WaitingOnBuyerScreen claim={claim()} buyerName="Aina" />);
+		expect(screen.queryByText("Items")).toBeNull();
+		expect(screen.queryByText(/Voucher ·/)).toBeNull();
+	});
+
 	test("states the lock instead of just enforcing it", () => {
 		render(<WaitingOnBuyerScreen claim={claim()} buyerName="Aina" />);
 		expect(screen.getByText(/locked while the link is out/i)).toBeTruthy();

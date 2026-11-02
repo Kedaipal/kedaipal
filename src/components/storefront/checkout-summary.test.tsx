@@ -37,12 +37,16 @@ function makeCart(items: CartItem[]): UseCart {
 		itemCount: count,
 		total: sum,
 		currency: "MYR",
-		addItem: vi.fn(),
+		// Honors the real contract: addItem returns a result the add helper
+		// reads (`z8r3fdff9u` — the cart can refuse a second event date). A bare
+		// vi.fn() returned undefined and threw inside the click handler, which
+		// vitest reported as an unhandled error while every assertion passed.
+		addItem: vi.fn(() => ({ ok: true as const })),
 		updateQuantity: vi.fn(),
 		removeItem: vi.fn(),
 		clearCart: vi.fn(),
+		setAnswer: vi.fn(),
 		quantityForProduct: vi.fn(() => 0),
-		subtotalForProduct: vi.fn(() => 0),
 	} as unknown as UseCart;
 }
 
@@ -73,10 +77,10 @@ describe("CheckoutSummary (order ticket)", () => {
 		renderSummary(cart);
 		expect(screen.getByText("Sue Chef Kitchen")).toBeTruthy();
 		expect(screen.getByText("Order ticket · Draft")).toBeTruthy();
-		// "2× Kek Batik · 1kg …… 90.00" — RM only appears on the TOTAL row.
-		expect(
-			screen.getByRole("button", { name: /2× Kek Batik · 1kg/ }),
-		).toBeTruthy();
+		// "2× Kek Batik …… 90.00" with "1kg" on its own line under it — RM only
+		// appears on the TOTAL row.
+		expect(screen.getByRole("button", { name: /2× Kek Batik/ })).toBeTruthy();
+		expect(screen.getByText("1kg")).toBeTruthy();
 		expect(screen.getByText("90.00")).toBeTruthy();
 	});
 
@@ -297,6 +301,20 @@ describe("CheckoutTotals", () => {
 		expect(screen.getByText("+ collection")).toBeTruthy();
 	});
 
+	it("names the country on an overseas delivery fee (z8r3fdr5yy)", () => {
+		render(
+			<CheckoutTotals
+				subtotal={1500}
+				currency="SGD"
+				pickupFee={0}
+				overseasFeeLabel="Delivery to Malaysia"
+				quote={{ kind: "fee", fee: 1200 }}
+			/>,
+		);
+		expect(screen.getByText("Delivery to Malaysia")).toBeTruthy();
+		expect(screen.queryByText("Delivery")).toBeNull();
+	});
+
 	it("renders blocked copy as an alert", () => {
 		render(
 			<CheckoutTotals
@@ -357,5 +375,183 @@ describe("checkout summary — 31 Jul bug fixes (86eyfq04j)", () => {
 			<CheckoutTotals subtotal={9000} currency="MYR" pickupFee={200} />,
 		);
 		expect(container.querySelector("svg.lucide-package")).toBeTruthy();
+	});
+});
+
+describe("checkout receipt — long names stay readable (z8r3fdhpaj)", () => {
+	const LONG_NAME =
+		"Kek Coklat Moist Premium Extra Large Special Edition Hari Raya Aidilfitri";
+	const LONG_NOTE =
+		"Tulis 'Happy Birthday Amirul Hakim' guna buttercream putih, jangan letak topper plastik sebab budak alah";
+
+	/** The receipt row's label cell — the span the amount is measured against. */
+	function labelCell(container: HTMLElement): HTMLElement {
+		const cell = container.querySelector<HTMLElement>(
+			"li button > span.min-w-0",
+		);
+		if (!cell) throw new Error("no receipt label cell");
+		return cell;
+	}
+
+	it("prints a long name, its variant and its note in full", () => {
+		const { container } = renderSummary(
+			makeCart([
+				makeItem({
+					variantId: "v1",
+					quantity: 2,
+					name: LONG_NAME,
+					optionLabel: "8 inch · Tulisan nama · Buttercream",
+					note: LONG_NOTE,
+				}),
+			]),
+		);
+		// Every character is on the page, uncollapsed — this is the last screen
+		// before the wa.me handoff, so nothing may need a tap to be read.
+		expect(screen.getByText(`2× ${LONG_NAME}`)).toBeTruthy();
+		expect(
+			screen.getByText("8 inch · Tulisan nama · Buttercream"),
+		).toBeTruthy();
+		expect(screen.getByText(`📝 ${LONG_NOTE}`)).toBeTruthy();
+
+		// ...and nothing that carries buyer-authored text clips it. `truncate`
+		// is what shipped the bug: it cut the variant off the end of the name.
+		const cell = labelCell(container);
+		expect(cell.className).not.toContain("truncate");
+		expect(cell.className).toContain("wrap-anywhere");
+		const note = screen.getByText(`📝 ${LONG_NOTE}`);
+		expect(note.className).not.toContain("truncate");
+	});
+
+	it("keeps the variant out of the name string, so length can never push it out of view", () => {
+		renderSummary(
+			makeCart([
+				makeItem({ variantId: "v1", name: LONG_NAME, optionLabel: "1kg" }),
+			]),
+		);
+		// The two are separate elements now, not one "name · variant" string:
+		// an exact-text match on the name alone would fail if they were joined.
+		expect(screen.getByText(`1× ${LONG_NAME}`)).toBeTruthy();
+		expect(screen.getByText("1kg")).toBeTruthy();
+	});
+
+	it("breaks an unbroken SKU-style name instead of letting the ticket scroll sideways", () => {
+		// `break-words` would NOT do this: only `overflow-wrap: anywhere` lets the
+		// flex item shrink below the long word, which is what stops the overflow.
+		const { container } = renderSummary(
+			makeCart([
+				makeItem({
+					variantId: "v1",
+					name: "KEKCOKLATMOISTPREMIUMEXTRALARGESPECIALEDITION2026MY01",
+				}),
+			]),
+		);
+		expect(labelCell(container).className).toContain("wrap-anywhere");
+	});
+
+	it("gives every receipt row a 44px tap target, however long the name", () => {
+		const { container } = renderSummary(
+			makeCart([makeItem({ variantId: "v1", name: LONG_NAME })]),
+		);
+		// py-2.5 on a leading-6 line = 44px, the mobile floor. jsdom lays out
+		// nothing, so the class is the contract.
+		const row = container.querySelector("li button");
+		expect(row?.className).toContain("py-2.5");
+	});
+});
+
+/**
+ * The voucher row (`z8r3fdr617`) — the ONE subtractive line the receipt has
+ * ever had. It must read as a credit, not join the charges above it, and the
+ * printed TOTAL must be net of it: the receipt and the mobile bottom bar share
+ * a screen at desktop widths, so a discount that moved one and not the other
+ * is the exact drift this card's shared helpers exist to prevent.
+ */
+describe("CheckoutTotals — the voucher line", () => {
+	it("prints the discount SIGNED and takes it off the total", () => {
+		render(
+			<CheckoutTotals
+				subtotal={5000}
+				currency="MYR"
+				pickupFee={0}
+				voucherDiscount={1000}
+				voucherCode="KP-7F3K-Q2WM"
+			/>,
+		);
+		expect(screen.getByText("−10.00")).toBeTruthy();
+		expect(screen.getByText(/Voucher · KP-7F3K-Q2WM/)).toBeTruthy();
+		expect(screen.getByText(/RM.?40\.00/)).toBeTruthy();
+	});
+
+	it("never eats a fee — the courier is still paid", () => {
+		// A RM50 code on a RM30 basket with RM8 delivery: the goods go to zero,
+		// the delivery stands. Mirrors the server's clamp.
+		render(
+			<CheckoutTotals
+				subtotal={3000}
+				currency="MYR"
+				pickupFee={0}
+				quote={{ kind: "fee", fee: 800 } as CheckoutQuoteView}
+				voucherDiscount={3000}
+			/>,
+		);
+		expect(screen.getByText(/RM.?8\.00/)).toBeTruthy();
+	});
+
+	it("renders no voucher line when there is none", () => {
+		render(<CheckoutTotals subtotal={5000} currency="MYR" pickupFee={0} />);
+		expect(screen.queryByText(/Voucher/)).toBeNull();
+		expect(screen.getByText(/RM.?50\.00/)).toBeTruthy();
+	});
+
+	it("hosts the field between the charges and the TOTAL rule", () => {
+		// Applying a voucher must visibly move the number BELOW the control —
+		// which is why the slot sits here and not under the total.
+		render(
+			<CheckoutTotals
+				subtotal={5000}
+				currency="MYR"
+				pickupFee={0}
+				voucherField={<button type="button">Have a voucher?</button>}
+			/>,
+		);
+		expect(
+			screen.getByRole("button", { name: "Have a voucher?" }),
+		).toBeTruthy();
+	});
+});
+
+describe("CheckoutTotals — the voucher line is an ITEM-style disclosure", () => {
+	it("hides the remove until the line is tapped, like a product line", () => {
+		render(
+			<CheckoutTotals
+				subtotal={5000}
+				currency="MYR"
+				pickupFee={0}
+				voucherDiscount={1000}
+				voucherCode="KP-7F3K-Q2WM"
+				voucherField={<button type="button">Remove voucher</button>}
+			/>,
+		);
+		// Collapsed: the line states the discount and nothing else competes.
+		expect(screen.queryByRole("button", { name: "Remove voucher" })).toBeNull();
+		const line = screen.getByRole("button", { name: /Voucher · KP-7F3K-Q2WM/ });
+		expect(line.getAttribute("aria-expanded")).toBe("false");
+
+		fireEvent.click(line);
+		expect(line.getAttribute("aria-expanded")).toBe("true");
+		expect(screen.getByRole("button", { name: "Remove voucher" })).toBeTruthy();
+	});
+
+	it("with no voucher the slot renders the open control directly", () => {
+		// Un-applied there is no line to tap, so the control is simply there.
+		render(
+			<CheckoutTotals
+				subtotal={5000}
+				currency="MYR"
+				pickupFee={0}
+				voucherField={<button type="button">+ Voucher code</button>}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "+ Voucher code" })).toBeTruthy();
 	});
 });

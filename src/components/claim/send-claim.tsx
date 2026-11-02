@@ -2,13 +2,14 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useMutation } from "convex/react";
-import { Check, ChevronRight, Clock, Link2 } from "lucide-react";
+import { Check, ChevronRight, Clock, Link2, Lock } from "lucide-react";
 import { useMemo } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { useActAsRetailerId } from "../../hooks/useActAs";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { formatClaimCountdown } from "../../lib/countdown";
+import { formatTimeLeft } from "../../lib/countdown";
+import { orderGatedLine } from "../../lib/credits-ui";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import {
 	ClaimCopyLinkButton,
@@ -105,7 +106,7 @@ export function ClaimsPanel({
 										</span>
 										<span className="block text-xs text-muted-foreground">
 											{claim.itemCount} item{claim.itemCount === 1 ? "" : "s"} ·{" "}
-											{formatPrice(claim.itemsTotal, claim.currency)}
+											{formatPrice(claim.total, claim.currency)}
 										</span>
 									</span>
 									<ChevronRight
@@ -121,7 +122,7 @@ export function ClaimsPanel({
 									}`}
 								>
 									<Clock className="size-3" aria-hidden />
-									{stillOpen ? formatClaimCountdown(remaining) : "Expired"}
+									{stillOpen ? formatTimeLeft(remaining) : "Expired"}
 								</span>
 								<div className="flex w-full shrink-0 gap-2 sm:w-auto">
 									<ClaimCopyLinkButton
@@ -159,12 +160,22 @@ export function ClaimsPanel({
 					<div
 						key={claim.claimId}
 						className={`flex items-center gap-3 rounded-2xl border p-4 ${
-							claim.status === "completed"
+							claim.status === "completed" &&
+							claim.orderCreditsToUnlock === undefined
 								? "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30"
-								: "border-dashed border-border bg-card"
+								: claim.status === "completed"
+									? "border-border bg-card"
+									: "border-dashed border-border bg-card"
 						}`}
 					>
-						{claim.status === "completed" ? (
+						{/* A completed claim whose order waits on credits is not a
+						    finished sale yet — no success tick over it. */}
+						{claim.status === "completed" &&
+						claim.orderCreditsToUnlock !== undefined ? (
+							<span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+								<Lock className="size-4" aria-hidden />
+							</span>
+						) : claim.status === "completed" ? (
 							<span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground">
 								<Check className="size-4" aria-hidden />
 							</span>
@@ -179,12 +190,18 @@ export function ClaimsPanel({
 							</p>
 							<p className="text-xs text-muted-foreground">
 								{claim.status === "completed"
-									? `Completed${claim.orderShortId ? ` · ${claim.orderShortId}` : ""}`
+									? // Completed after the credits ran out: the BUYER's part
+										// is done, but the order is waiting, so the row leads with
+										// the wait — "Completed" is the word the eye lands on, and
+										// it would read as a sale the seller can open (#408 review).
+										claim.orderCreditsToUnlock !== undefined
+										? `Buyer finished · ${orderGatedLine(claim.orderCreditsToUnlock)}${claim.orderShortId ? ` · ${claim.orderShortId}` : ""}`
+										: `Completed${claim.orderShortId ? ` · ${claim.orderShortId}` : ""}`
 									: claim.status === "expired"
 										? "Expired · nothing charged"
 										: "Cancelled"}
 								{" · "}
-								{formatPrice(claim.itemsTotal, claim.currency)}
+								{formatPrice(claim.total, claim.currency)}
 							</p>
 						</div>
 						{claim.status === "completed" && claim.orderShortId ? (

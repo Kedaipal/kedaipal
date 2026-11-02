@@ -7,16 +7,27 @@
  */
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import { DAY_MS, todayMytMidnight } from "./lib/fulfilmentDate";
+import { settleScheduled } from "./lib/convexTestSettle";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
 
+// Drain each test's scheduled work before the next test starts — see
+// `settleScheduled` for the convex-test hazard this closes.
+let current: ReturnType<typeof convexTest> | undefined;
+afterEach(async () => {
+	const t = current;
+	current = undefined;
+	if (t) await settleScheduled(t);
+});
+
 function setup() {
 	const t = convexTest(schema, modules);
 	registerRateLimiter(t);
+	current = t;
 	return t;
 }
 
@@ -147,14 +158,19 @@ describe("calendarFeed content", () => {
 			orderId: declined._id,
 			reason: "Closed that week",
 		});
+		// The requests above scheduled seller-alert work; let it finish before
+		// seeding, or a write can be lost to the harness (`settleScheduled`).
+		await settleScheduled(ctx.t);
 		// A per-listing block with a note.
-		await ctx.asOwner.mutation(api.bookingBlocks.blockDays, {
+		const blockId = await ctx.asOwner.mutation(api.bookingBlocks.blockDays, {
 			retailerId: ctx.retailer._id,
 			productId: ctx.productId,
 			startDate: day(15),
 			endDate: day(16),
 			note: "Maintenance",
 		});
+		// Precondition, so a lost seed can't masquerade as a feed bug.
+		expect(await ctx.t.run((c) => c.db.get(blockId))).not.toBeNull();
 
 		const token = await ctx.asOwner.mutation(
 			api.calendarFeed.ensureCalendarFeedToken,
@@ -332,6 +348,64 @@ describe("calendarFeed — every order, not just bookings", () => {
 		expect(feed.split("BEGIN:VEVENT").length - 1).toBe(1);
 		expect(feed).toContain(`UID:booking-${shortId}@kedaipal.com`);
 		expect(feed).not.toContain(`UID:order-${shortId}@kedaipal.com`);
+	});
+});
+
+describe("calendarFeed — an open-days package (z8r3fdhpm7)", () => {
+	test("is drawn only on the days it counts — one event per run, matching the grid", async () => {
+		const ctx = await seedBookingStore(setup());
+		const productId = await ctx.asOwner.mutation(api.products.create, {
+			retailerId: ctx.retailer._id,
+			name: "Kayak course",
+			currency: "MYR",
+			imageStorageIds: [],
+			sortOrder: 1,
+			kind: "booking" as const,
+			booking: {
+				capacityPerNight: 4,
+				packageLength: 3,
+				packageUnit: "day",
+				skipsClosedDays: true,
+				autoAccept: true,
+			},
+			variants: [{ optionValues: [], price: 30000, onHand: 0 }],
+		});
+		await ctx.asOwner.mutation(api.closedDates.add, {
+			retailerId: ctx.retailer._id,
+			startDate: day(5),
+			endDate: day(5),
+			label: "Hari Raya",
+		});
+		// Counts days 4, 6, 7 — steps over the closure on day 5.
+		const { shortId } = await ctx.t.mutation(api.bookings.requestBooking, {
+			retailerId: ctx.retailer._id,
+			productId,
+			checkIn: day(4),
+			customer: { name: "Aisyah", waPhone: "0123456781" },
+		});
+		const token = await ctx.asOwner.mutation(
+			api.calendarFeed.ensureCalendarFeedToken,
+			{ retailerId: ctx.retailer._id },
+		);
+		const feed = await ctx.t.query(internal.calendarFeed.feedByToken, {
+			token,
+		});
+		if (feed === null) throw new Error("feed missing");
+		const events = feed
+			.split("BEGIN:VEVENT")
+			.slice(1)
+			.filter((chunk) => chunk.includes(`UID:booking-${shortId}`));
+		const ymd = (epoch: number) =>
+			new Date(epoch + 8 * 3_600_000).toISOString().slice(0, 10).replaceAll("-", "");
+		expect(events).toHaveLength(2);
+		expect(events[0]).toContain(`UID:booking-${shortId}-1@kedaipal.com`);
+		expect(events[0]).toContain(`DTSTART;VALUE=DATE:${ymd(day(4))}`);
+		expect(events[0]).toContain(`DTEND;VALUE=DATE:${ymd(day(5))}`);
+		expect(events[1]).toContain(`UID:booking-${shortId}-2@kedaipal.com`);
+		expect(events[1]).toContain(`DTSTART;VALUE=DATE:${ymd(day(6))}`);
+		expect(events[1]).toContain(`DTEND;VALUE=DATE:${ymd(day(8))}`);
+		// Nothing drawn on the closed day itself.
+		expect(feed).not.toContain(`DTSTART;VALUE=DATE:${ymd(day(5))}`);
 	});
 });
 

@@ -1,9 +1,19 @@
+import { Link } from "@tanstack/react-router";
 import useEmblaCarousel from "embla-carousel-react";
-import { ShieldCheck } from "lucide-react";
+import { ArrowRight, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import { COUNTRIES, type Country } from "../../../convex/lib/country";
+import type { BillingCycle } from "../../../convex/lib/plans";
+import { useSupportWaNumber } from "../../hooks/useSupportWaNumber";
+import { buildWaContactLink } from "../../lib/contact";
+import {
+	type DemoPlacement,
+	trackDemoCta,
+	trackSignupCta,
+} from "../../lib/ga-events";
 import { cn } from "../../lib/utils";
 import { m } from "../../paraglide/messages";
+import { WhatsAppIcon } from "../dashboard/brand-icons";
 
 /**
  * Shared primitives for the landing page redesign. Everything uses the
@@ -29,6 +39,170 @@ export function ctaPillClass(
 }
 
 /**
+ * The page's ONE accent ask (demo-first, z8r3fdtpub T1, 19 Oct 2026): a
+ * WhatsApp link that opens a chat with Kedaipal, prefilled. Every payer to
+ * date closed on a demo or a referral, so this pill carries the mint
+ * everywhere it appears — hero, nav, final CTA, dock — and the self-serve
+ * sign-up is a text link beside it (`StartFreeLink`). The `ctaPillClass`
+ * accent variant is reserved for it: a second mint pill is a second ask.
+ */
+export function DemoPill({
+	placement,
+	long = false,
+	className,
+}: {
+	placement: DemoPlacement;
+	/** "Book a demo on WhatsApp" rather than "Book a demo" — where the pill has the room. */
+	long?: boolean;
+	className?: string;
+}) {
+	const supportWa = useSupportWaNumber();
+	return (
+		<a
+			href={buildWaContactLink(m.demo_wa_message(), supportWa)}
+			target="_blank"
+			rel="noopener noreferrer"
+			className={cn(ctaPillClass("accent"), className)}
+			onClick={() => trackDemoCta(placement)}
+		>
+			<WhatsAppIcon className="size-[1.1em] shrink-0" />
+			{long ? m.book_demo_cta_long() : m.book_demo_cta()}
+		</a>
+	);
+}
+
+/**
+ * The self-serve door, a rung below the demo: "Start free — pay when you
+ * sell" as a text link. Keeps its own `cta_signup_click` so the two asks
+ * stay comparable in GA4 (the two-week read the ticket calls for).
+ */
+export function StartFreeLink({
+	placement,
+	className,
+}: {
+	placement: string;
+	className?: string;
+}) {
+	return (
+		<Link
+			to="/sign-up/$"
+			params={{ _splat: "" }}
+			className={cn(
+				"group inline-flex min-h-11 items-center gap-1.5 text-sm font-semibold underline-offset-4 transition-colors hover:underline",
+				className,
+			)}
+			onClick={() => trackSignupCta(placement)}
+		>
+			{m.final_cta()}
+			<ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
+		</Link>
+	);
+}
+
+/**
+ * Holds a CTA slot while Clerk works out whether the visitor is signed in
+ * (`useAuthState` → `"loading"`, z8r3fdy2m0). Before this, the slot painted
+ * the signed-out doors and a signed-in seller watched them flip to "Go to
+ * Dashboard". Children are the skeleton shapes — sized to the signed-out
+ * layout, the common case, so a prospect's page doesn't jump. One `<output>`
+ * (role `status`) per slot names what is pending for screen readers.
+ */
+export function AuthCtaPlaceholder({
+	children,
+	className,
+}: {
+	children: ReactNode;
+	className?: string;
+}) {
+	return (
+		<output
+			aria-busy="true"
+			aria-label={m.nav_auth_checking()}
+			className={className}
+		>
+			{children}
+		</output>
+	);
+}
+
+/**
+ * "Flat fee. Never a cut of your sales." — the commission badge (Arif, 14 Oct
+ * 2026), in the hero and on the pricing surfaces. Credits are live (one per
+ * order), so the TRUE claim is "no cut of your sales": never "zero fees" or
+ * "free per order" (`pricing-copy.test.ts` guards the vocabulary).
+ */
+export function CommissionBadge({ className }: { className?: string }) {
+	return (
+		<span
+			className={cn(
+				"inline-flex w-fit items-center gap-2 rounded-full border border-foreground/80 px-3.5 py-1.5 text-xs font-semibold text-foreground",
+				className,
+			)}
+		>
+			<span aria-hidden className="size-2 rounded-full bg-accent" />
+			{m.commission_badge()}
+		</span>
+	);
+}
+
+/**
+ * Monthly / annual, the one control for it on `/` and `/pricing` (one idea,
+ * one control). The annual badge is "2 months free", never a percentage — a
+ * standing % badge reads as a markdown on a flat price (Arif, 28 Jul + 9 Aug
+ * 2026). The credits rule sits under it in BOTH positions so flipping the
+ * toggle moves nothing: credits stay monthly on annual, locked for the
+ * prepaid year.
+ */
+export function BillingCycleToggle({
+	cycle,
+	onChange,
+	className,
+}: {
+	cycle: BillingCycle;
+	onChange: (cycle: BillingCycle) => void;
+	className?: string;
+}) {
+	const pill = (active: boolean) =>
+		cn(
+			"relative min-h-10 rounded-full px-5 text-sm font-semibold transition-colors",
+			active
+				? "bg-segment text-segment-foreground"
+				: "text-muted-foreground hover:text-foreground",
+		);
+	return (
+		<div className={cn("flex flex-col items-center", className)}>
+			<fieldset
+				aria-label={m.pricingpage_toggle_label()}
+				className="m-0 inline-flex items-center rounded-full border border-border bg-card p-1.5 shadow-sm"
+			>
+				<button
+					type="button"
+					aria-pressed={cycle === "monthly"}
+					onClick={() => onChange("monthly")}
+					className={pill(cycle === "monthly")}
+				>
+					{m.pricingpage_toggle_monthly()}
+				</button>
+				<button
+					type="button"
+					aria-pressed={cycle === "annual"}
+					onClick={() => onChange("annual")}
+					className={pill(cycle === "annual")}
+				>
+					{m.pricingpage_toggle_annual()}
+					<span className="absolute -right-2 -top-2.5 whitespace-nowrap rounded-full bg-accent px-2 py-0.5 text-[9px] font-bold uppercase leading-none text-accent-foreground">
+						{m.pricingpage_annual_badge()}
+					</span>
+				</button>
+			</fieldset>
+			<p className="mx-auto mt-3 max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
+				{m.pricingpage_annual_credits_note()}
+			</p>
+		</div>
+	);
+}
+
+/**
  * The one answer to the "another dead app" fear — white-glove onboarding,
  * stated as a promise, directly under the primary CTA (ClickUp 86eye3p6z §B).
  *
@@ -45,44 +219,6 @@ export function GuaranteeLine({ className }: { className?: string }) {
 			<span className="font-medium">{m.guarantee_line()}</span>
 		</p>
 	);
-}
-
-/**
- * Mobile-only horizontal snap carousel (86eye3p6z follow-up: the stacked
- * landing sections made the mobile page enormously long). Below `md` the
- * track is a full-bleed snap scroller — same mechanics as the storefront's
- * category rail: `-mx-5/px-5` slides cards under the screen edge, and
- * `scroll-pl-5` keeps the snapped rest position aligned with the section
- * padding (snap measures from the padding box). At `md` it resets to whatever
- * the caller's `desktop` classes say (usually the original grid), so desktop
- * is untouched.
- *
- * Slides are sized at 85% so the next card always peeks — that peek IS the
- * "swipe for more" affordance, which is also why carousel slides must NOT be
- * individually FadeIn-wrapped: a peeking slide sits inside FadeIn's -80px
- * viewport inset and would hold at opacity 0 until swiped, hiding the
- * affordance. Wrap the whole track in one FadeIn instead.
- */
-export function carouselTrackClass(desktop: string) {
-	return cn(
-		"-mx-5 flex snap-x snap-mandatory scroll-pl-5 gap-4 overflow-x-auto px-5 pb-3 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-		"md:mx-0 md:snap-none md:overflow-visible md:px-0 md:pb-0 md:pt-0",
-		desktop,
-	);
-}
-
-/**
- * A slide inside `carouselTrackClass` — full-size again at `md`.
- *
- * `relative` is load-bearing: slides carry absolutely-positioned descendants
- * (`sr-only` spans, mockup badges), and with no positioned ancestor inside the
- * track those resolve their containing block ABOVE the scroller — an absolute
- * element escapes an ancestor's overflow clip unless that ancestor chain
- * contains its containing block, so a slide scrolled to x≈900 widened the
- * whole PAGE to 978px. Positioning the slide pins them inside it.
- */
-export function carouselSlideClass(extra?: string) {
-	return cn("relative w-[85%] shrink-0 snap-start sm:w-[60%] md:w-auto", extra);
 }
 
 /**
@@ -119,7 +255,10 @@ export function CenterSnapCarousel({
 	return (
 		<div
 			ref={emblaRef}
-			className={cn("-mx-5 overflow-hidden md:mx-0 md:overflow-visible", className)}
+			className={cn(
+				"-mx-5 overflow-hidden md:mx-0 md:overflow-visible",
+				className,
+			)}
 		>
 			<div className={cn("flex touch-pan-y", desktopClass)}>{children}</div>
 		</div>
@@ -132,29 +271,6 @@ export function centerSnapSlideClass(extra?: string) {
 	return cn(
 		"min-w-0 shrink-0 grow-0 basis-[80%] px-2 first:pl-4 last:pr-4 sm:basis-[60%] md:basis-auto md:px-0 md:first:pl-0 md:last:pr-0",
 		extra,
-	);
-}
-
-/** Decorative QR pattern — a grid of squares standing in for a real code. */
-export function QrPattern({ className }: { className?: string }) {
-	return (
-		<div
-			className={cn(
-				"grid grid-cols-8 grid-rows-8 gap-0.5 rounded-xl bg-foreground p-2",
-				className,
-			)}
-		>
-			{Array.from({ length: 64 }).map((_, i) => (
-				<span
-					// biome-ignore lint/suspicious/noArrayIndexKey: static decorative grid, never reorders
-					key={i}
-					className={cn(
-						"rounded-[1px]",
-						i % 3 === 0 || i % 7 === 0 ? "bg-background" : "bg-transparent",
-					)}
-				/>
-			))}
-		</div>
 	);
 }
 
@@ -215,6 +331,117 @@ export function Eyebrow({ children, className }: EyebrowProps) {
 	);
 }
 
+interface RegionToggleProps {
+	region: Country;
+	onChange: (next: Country) => void;
+	className?: string;
+}
+
+/**
+ * MY/SG segmented toggle, on all three public pricing surfaces (landing
+ * teaser, `/pricing`, `/cost`) — overrides the region detected from the
+ * visitor's IP and persists the pick in a cookie, which then outranks
+ * detection on every later visit, server-side included (`lib/geo-region.ts`).
+ *
+ * Geo-IP is a guess about a person, and it is wrong often enough to matter —
+ * VPNs, corporate proxies, carrier NAT egressing in another country, and the
+ * JB commuter on a Singapore network. This control is what stops a wrong guess
+ * from being a dead end. Short "MY"/"SG" labels keep the pill compact; the
+ * full country name rides `aria-label` per button so a screen-reader user
+ * hears "Malaysia" / "Singapore", not two letters.
+ */
+export function RegionToggle({
+	region,
+	onChange,
+	className,
+}: RegionToggleProps) {
+	return (
+		<fieldset
+			aria-label={m.region_toggle_label()}
+			className={cn(
+				"m-0 inline-flex rounded-full border border-border bg-card p-1",
+				className,
+			)}
+		>
+			{COUNTRIES.map((c) => (
+				<button
+					key={c}
+					type="button"
+					aria-pressed={region === c}
+					aria-label={c === "MY" ? m.region_my() : m.region_sg()}
+					onClick={() => onChange(c)}
+					className={cn(
+						// tap-target: 44px is the touch-rule floor (design-system §mobile) —
+						// the first cut's min-h-9 (36px) failed the 29 Aug mobile audit.
+						"tap-target min-w-16 rounded-full px-4 text-sm font-semibold transition-colors",
+						region === c
+							? "bg-segment text-segment-foreground"
+							: "text-muted-foreground hover:text-foreground",
+					)}
+				>
+					{c}
+				</button>
+			))}
+		</fieldset>
+	);
+}
+
+/**
+ * White pill shared by every third-party brand mark on the landing (payment
+ * rails, couriers) so each chip has one silhouette in both themes: official
+ * marks may not be recoloured and most carry their own colours, so a white
+ * ground is the only treatment that stays legible and compliant when the page
+ * flips to dark. One idea, one control — the payment wall and the courier rail
+ * render the identical chip.
+ */
+export const logoPillClass =
+	// dark-ok: a white plate under third-party brand logos (payment methods,
+	// couriers) — the rasters need white behind them in both themes.
+	"inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-border bg-white shadow-sm transition-transform duration-200 hover:-translate-y-0.5";
+
+/**
+ * One auto-scrolling row of chips (the Mobbin logo-wall rows). Renders the
+ * children twice — the second copy `aria-hidden` — so the loop is seamless;
+ * hovering the ROW pauses it, so a reader can chase a chip without it
+ * escaping. Reduced motion stops it via the shared `animate-kp-marquee*` CSS.
+ *
+ * `children` is a render function so the duplicate copy can pass `hidden` to
+ * its images (empty `alt`) and the names aren't announced twice.
+ */
+export function LogoMarqueeRow({
+	children,
+	reverse = false,
+	className,
+}: {
+	children: (hidden: boolean) => ReactNode;
+	reverse?: boolean;
+	className?: string;
+}) {
+	const copy = (hidden: boolean) => (
+		<div
+			aria-hidden={hidden || undefined}
+			className="flex shrink-0 items-center gap-2.5 pr-2.5"
+		>
+			{children(hidden)}
+		</div>
+	);
+	return (
+		<div className={cn("flex overflow-hidden py-1", className)}>
+			<div
+				className={cn(
+					"flex hover:[animation-play-state:paused]",
+					reverse
+						? "animate-kp-marquee-slow-reverse"
+						: "animate-kp-marquee-slow",
+				)}
+			>
+				{copy(false)}
+				{copy(true)}
+			</div>
+		</div>
+	);
+}
+
 interface MarqueeProps {
 	items: string[];
 	className?: string;
@@ -247,63 +474,12 @@ function MarqueeRow({
 	);
 }
 
-interface RegionToggleProps {
-	region: Country;
-	onChange: (next: Country) => void;
-	className?: string;
-}
-
-/**
- * MY/SG segmented toggle, on all three public pricing surfaces (landing
- * teaser, `/pricing`, `/cost`) — overrides the region detected from the
- * visitor's IP and persists the pick in a cookie, which then outranks
- * detection on every later visit, server-side included (`lib/geo-region.ts`).
- *
- * Geo-IP is a guess about a person, and it is wrong often enough to matter —
- * VPNs, corporate proxies, carrier NAT egressing in another country, and the
- * JB commuter on a Singapore network. This control is what stops a wrong guess
- * from being a dead end. Short "MY"/"SG" labels keep the pill compact; the
- * full country name rides `aria-label` per button so a screen-reader user
- * hears "Malaysia" / "Singapore", not two letters.
- */
-export function RegionToggle({ region, onChange, className }: RegionToggleProps) {
-	return (
-		<fieldset
-			aria-label={m.region_toggle_label()}
-			className={cn(
-				"m-0 inline-flex rounded-full border border-border bg-card p-1",
-				className,
-			)}
-		>
-			{COUNTRIES.map((c) => (
-				<button
-					key={c}
-					type="button"
-					aria-pressed={region === c}
-					aria-label={c === "MY" ? m.region_my() : m.region_sg()}
-					onClick={() => onChange(c)}
-					className={cn(
-						// tap-target: 44px is the touch-rule floor (design-system §mobile) —
-						// the first cut's min-h-9 (36px) failed the 29 Aug mobile audit.
-						"tap-target min-w-16 rounded-full px-4 text-sm font-semibold transition-colors",
-						region === c
-							? "bg-primary text-primary-foreground"
-							: "text-muted-foreground hover:text-foreground",
-					)}
-				>
-					{c}
-				</button>
-			))}
-		</fieldset>
-	);
-}
-
 /** Full-bleed scrolling strip. Content duplicated for a seamless loop. */
 export function Marquee({ items, className, separator = "✶" }: MarqueeProps) {
 	return (
 		<div
 			className={cn(
-				"relative flex overflow-hidden bg-primary py-3 text-primary-foreground",
+				"relative flex overflow-hidden bg-primary py-3 text-primary-foreground dark:border dark:border-accent/30 dark:bg-accent/12 dark:text-foreground",
 				className,
 			)}
 		>

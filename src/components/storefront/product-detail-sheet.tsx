@@ -1,4 +1,4 @@
-import { CalendarRange, X } from "lucide-react";
+import { CalendarClock, CalendarRange, X } from "lucide-react";
 import { Dialog } from "radix-ui";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { weekendRateSuffix } from "../../lib/booking-dates";
@@ -10,6 +10,7 @@ import type { StorefrontProduct } from "./product-card";
 import {
 	CustomOrderCard,
 	EmptyGallery,
+	EventNotice,
 	type OnAddVariant,
 	OptionPills,
 	PriceLabel,
@@ -57,6 +58,10 @@ export function ProductDetailSheet({
 	// Mirrors product-page.tsx's booking branch — same three signals, so the
 	// preview and the real page can't disagree about what the buyer is offered.
 	const isBooking = product?.kind === "booking";
+	// An RSVP is checked out standalone (`z8r3fdhh45`) — no cart line, so this
+	// preview must not show the seller a stepper + Add-to-cart their event
+	// doesn't have, the same reason a booking listing doesn't.
+	const isEvent = product?.event !== undefined;
 	const instantBook = product?.booking?.autoAccept === true;
 	const isPackage = (product?.booking?.packageLength ?? 0) > 0;
 	const securityDeposit = product?.booking?.securityDeposit ?? 0;
@@ -94,7 +99,7 @@ export function ProductDetailSheet({
 
 					<div className="flex-1 overflow-y-auto px-5 py-4 sm:px-6">
 						{pp.images.length > 0 ? (
-							<div className="-mx-5 mb-4 flex snap-x snap-mandatory gap-2 overflow-x-auto px-5 sm:mx-0 sm:grid sm:grid-cols-2 sm:gap-3 sm:overflow-visible sm:px-0">
+							<div className="-mx-5 mb-4 flex snap-x snap-mandatory gap-2 overflow-x-auto scrollbar-none px-5 sm:mx-0 sm:grid sm:grid-cols-2 sm:gap-3 sm:overflow-visible sm:px-0">
 								{pp.images.map((url) => (
 									<ZoomableImage
 										key={url}
@@ -103,6 +108,7 @@ export function ProductDetailSheet({
 										caption={product.name}
 										wrapperClassName="w-64 shrink-0 snap-start sm:w-full"
 										className="aspect-square w-full rounded-2xl object-cover"
+										frame="raised"
 									/>
 								))}
 							</div>
@@ -149,6 +155,15 @@ export function ProductDetailSheet({
 										: " and nothing is paid until you approve the request."}
 								</p>
 							</div>
+						) : isEvent ? (
+							<>
+								<EventNotice pp={pp} />
+								<p className="mt-2 rounded-xl bg-accent/5 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+									{pp.hasOptions
+										? "Guests pick their option and how many seats on the RSVP page."
+										: "Guests pick how many seats on the RSVP page."}
+								</p>
+							</>
 						) : (
 							<>
 								<OptionPills pp={pp} />
@@ -181,6 +196,21 @@ export function ProductDetailSheet({
 									{instantBook
 										? "Confirmed instantly — payment details follow."
 										: "You confirm within 24 hours — nothing is paid yet."}
+								</p>
+							</div>
+						) : isEvent ? (
+							// Same reason as the booking preview above: an RSVP has no
+							// cart, and the seller has nothing to add to. Disabled, so
+							// the preview matches what the guest will actually get.
+							<div className="flex flex-col gap-1.5">
+								<Button disabled className="tap-target h-12 w-full">
+									<CalendarClock className="size-4" aria-hidden />
+									RSVP
+								</Button>
+								<p className="text-center text-xs text-muted-foreground">
+									{pp.eventFull
+										? "Every seat is taken."
+										: "The seat is held once a guest RSVPs — nothing is paid on this page."}
 								</p>
 							</div>
 						) : (

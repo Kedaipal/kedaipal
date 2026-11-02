@@ -1,5 +1,10 @@
 # Landing funnel — money math, guarantee, one CTA, payment strip
 
+> **Landing v2 (13 Sep 2026, `z8r3fdegej`):** the `MoneyMath` block, the problem
+> strip, the how-it-works timeline and the features bento are **off `/`**; only
+> `MoneyMathRow` survives, on `/pricing`. The section order below is historical —
+> the current one is in [`landing-v2.md`](./landing-v2.md).
+
 ClickUp [`86eye3p6z`](https://app.clickup.com/t/86eye3p6z) · shipped 2026-08-14 · dev
 
 The 27 Jul 2026 funnel audit found the strongest argument we own — that we never
@@ -70,6 +75,14 @@ they have already been onboarded, and promising them a first order would read
 as a bug.
 
 ## One primary CTA (§C)
+
+> **Demo-first (19 Oct 2026, z8r3fdtpub T1).** The one accent pill is now
+> **Book a demo on WhatsApp** (`DemoPill`), on the hero, the nav bar, the
+> final CTA, the dock and `/pricing`'s close; "Start free — pay when you sell"
+> is a text link (`StartFreeLink`) a rung below on each. §C's rule survives as
+> "one KIND of accent pill on the page". The reasoning and the numbers are in
+> [landing-v2.md](./landing-v2.md#demo-first-and-the-seller-flow-walkthrough-19-oct-2026).
+> What follows is the 14 Aug 2026 state.
 
 `Start 14-day free trial` is the only filled/accent button on `/`. Demoted to
 text links in their own sections:

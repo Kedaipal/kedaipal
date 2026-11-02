@@ -11,9 +11,13 @@ import { type ChangeEvent, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import { fitsWithinProductCap } from "../../convex/lib/productCap";
+import { MAX_VARIANTS_PER_PRODUCT } from "../../convex/lib/variant";
+import { NeedsAccessNote } from "../components/app/owner-only-note";
+import { ViewOnlyNote } from "../components/app/view-only-note";
 import { PageHeader } from "../components/dashboard/page-header";
 import { Button } from "../components/ui/button";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import {
 	downloadProductCsvTemplate,
 	downloadSampleProductsCsv,
@@ -22,10 +26,12 @@ import {
 import { BULK_IO_ENABLED } from "../lib/feature-flags";
 import { convexErrorMessage } from "../lib/format";
 import {
+	describeOrderRuleChanges,
 	type GroupedImportResult,
 	type GroupedProductImport,
 	VARIANT_IMPORT_COLUMNS,
 } from "../lib/product-import";
+import { cn } from "../lib/utils";
 import { parseProductsXlsx } from "../lib/xlsx";
 
 export const Route = createFileRoute("/app/products/import")({
@@ -34,10 +40,6 @@ export const Route = createFileRoute("/app/products/import")({
 	},
 	component: ImportProductsRoute,
 });
-
-// Each bulkUpsert call carries at most this many VARIANT rows (mirrors
-// MAX_BULK_IMPORT_BATCH on the server). Products are chunked to stay under it.
-const MAX_VARIANTS_PER_BATCH = 50;
 
 const SCHEMA_DOCS: Array<{ column: string; required: boolean; notes: string }> =
 	[
@@ -72,11 +74,28 @@ const SCHEMA_DOCS: Array<{ column: string; required: boolean; notes: string }> =
 			required: true,
 			notes: "Major units, rounded to 2 dp (e.g. 120 or 120.50)",
 		},
-		{ column: "stock", required: true, notes: "Whole number ≥ 0" },
+		{
+			column: "stock",
+			required: true,
+			notes:
+				'Whole number ≥ 0. Applied to NEW products; for products you already have, only if you tick "Update stock too"',
+		},
 		{
 			column: "weight_grams",
 			required: false,
 			notes: "Parcel weight (for delivery). Defaults to 0.",
+		},
+		{
+			column: "prep_minutes",
+			required: false,
+			notes:
+				"Minutes it takes to make, 0–1440 (120 = 2 hours). Buyers can't pick a same-day time sooner. Blank keeps the current value; 0 removes it.",
+		},
+		{
+			column: "pickup_note",
+			required: false,
+			notes:
+				"One line buyers read before collecting, max 200 characters. Blank keeps the current note — remove a note on the product itself.",
 		},
 	];
 
@@ -91,6 +110,9 @@ function toApiProduct(p: GroupedProductImport) {
 		name: p.name,
 		description: p.description,
 		active: p.active,
+		prepMinutes: p.prepMinutes,
+		pickupNote: p.pickupNote,
+		handle: p.handle,
 		options: p.options,
 		variants: p.variants.map((vr) => ({
 			optionValues: vr.optionValues,
@@ -103,7 +125,16 @@ function toApiProduct(p: GroupedProductImport) {
 	};
 }
 
-/** Split products into batches whose total variant count stays under the cap. */
+/**
+ * Split products into batches whose total variant count stays under the cap
+ * (`MAX_BULK_IMPORT_BATCH` on the server is the same constant).
+ *
+ * One product is NEVER split — `cur.length > 0` lets a single oversized product
+ * form a chunk of its own — because its variants must be written in one call.
+ * That is why the batch ceiling has to equal the per-product variant cap: a
+ * 56-variant product forms a 56-row chunk, which a ceiling of 50 would refuse
+ * after the editor had already accepted the same grid (z8r3fdjgvd).
+ */
 function chunkByVariants(
 	products: GroupedProductImport[],
 ): GroupedProductImport[][] {
@@ -112,7 +143,7 @@ function chunkByVariants(
 	let count = 0;
 	for (const p of products) {
 		const n = p.variants.length;
-		if (cur.length > 0 && count + n > MAX_VARIANTS_PER_BATCH) {
+		if (cur.length > 0 && count + n > MAX_VARIANTS_PER_PRODUCT) {
 			chunks.push(cur);
 			cur = [];
 			count = 0;
@@ -134,11 +165,17 @@ function ImportProductsRoute() {
 	const [fileName, setFileName] = useState<string | null>(null);
 	const [importing, setImporting] = useState(false);
 	const [previewing, setPreviewing] = useState(false);
+	// OFF by default — see `StockChoice` and convex/products.ts `bulkUpsert`.
+	const [updateStock, setUpdateStock] = useState(false);
 	const [preview, setPreview] = useState<{
 		plan: PlanEntry[];
 		summary: PreviewSummary;
 		cap: PreviewCap;
 	} | null>(null);
+	// An import writes the catalogue, so it waits out the same locks every
+	// product save does (view-only, out of credits, a view-only teammate).
+	// Reading the file and previewing stay open — only Confirm greys out.
+	const importLock = useAreaLock("products");
 
 	if (!retailer) return null;
 
@@ -147,6 +184,11 @@ function ImportProductsRoute() {
 		if (!file) return;
 		setPreview(null);
 		setFileName(file.name);
+		// A tick made against one sheet must never carry to the next — the counts
+		// it was consented to no longer describe anything. `reset()` said this and
+		// enforced it, but only on the Clear button; swapping the file in place is
+		// the likelier route and skipped it entirely.
+		setUpdateStock(false);
 		try {
 			const lower = file.name.toLowerCase();
 			if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
@@ -164,10 +206,16 @@ function ImportProductsRoute() {
 		setParsed(null);
 		setPreview(null);
 		setFileName(null);
+		// A tick made against one sheet must never carry to the next — the counts
+		// it was consented to no longer describe anything.
+		setUpdateStock(false);
 	}
 
 	async function handlePreview() {
 		if (!parsed || parsed.products.length === 0 || !retailer) return;
+		// Same rule as picking a new file: the numbers the tick was consented to
+		// are about to be recomputed, so the consent restarts with them.
+		setUpdateStock(false);
 		setPreviewing(true);
 		try {
 			const plan: PlanEntry[] = [];
@@ -177,6 +225,8 @@ function ImportProductsRoute() {
 				updates: 0,
 				variants: 0,
 				autoFilled: 0,
+				stockChanges: 0,
+				stockIncreases: 0,
 			};
 			// Identical on every chunk (a preview writes nothing), so the last one
 			// stands for all — kept out of the summary because it describes the
@@ -193,6 +243,8 @@ function ImportProductsRoute() {
 				summary.updates += res.summary.updates;
 				summary.variants += res.summary.variants;
 				summary.autoFilled += res.summary.autoFilled;
+				summary.stockChanges += res.summary.stockChanges;
+				summary.stockIncreases += res.summary.stockIncreases;
 				cap = res.cap;
 			}
 			if (cap) setPreview({ plan, summary, cap });
@@ -212,6 +264,7 @@ function ImportProductsRoute() {
 					retailerId: retailer._id,
 					currency: retailer.currency,
 					products: chunk.map(toApiProduct),
+					updateStock,
 				});
 			}
 			toast.success("Import complete");
@@ -254,6 +307,9 @@ function ImportProductsRoute() {
 					← Products
 				</Link>
 			</div>
+
+			<ViewOnlyNote />
+			<NeedsAccessNote area="products" />
 
 			<section className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4">
 				<div className="flex items-start gap-3">
@@ -307,7 +363,11 @@ function ImportProductsRoute() {
 						price / 0 stock. Re-activate it from the product editor when you
 						have stock. Rows with a SKU matching an existing variant{" "}
 						<strong>update</strong> it; unlisted variants are never deleted.
-						Images aren't imported — add them per product. Prices use{" "}
+						Stock is the exception: for products you already have it changes
+						only if you tick <strong>Update stock too</strong> after the
+						preview, so a sheet you exported hours ago can't undo sales made
+						since. Images aren't imported — add them per product. Prices use{" "}
+						{/* currency-literal-ok: names the currency SETTING the sheet uses */}
 						{retailer.currency}.
 					</span>
 				</div>
@@ -339,7 +399,7 @@ function ImportProductsRoute() {
 						{fileName ?? "Choose a CSV or Excel file"}
 					</span>
 					<span className="text-xs text-muted-foreground">
-						Imported in batches of {MAX_VARIANTS_PER_BATCH} variant rows.
+						Imported in batches of {MAX_VARIANTS_PER_PRODUCT} variant rows.
 					</span>
 					<input
 						type="file"
@@ -360,10 +420,24 @@ function ImportProductsRoute() {
 				) : null}
 			</section>
 
-			{parsed ? <ParseSummary parsed={parsed} /> : null}
+			{parsed ? (
+				<ParseSummary
+					parsed={parsed}
+					offerSelfCollect={retailer.offerSelfCollect !== false}
+				/>
+			) : null}
 
 			{preview ? (
 				<PreviewSection plan={preview.plan} summary={preview.summary} />
+			) : null}
+
+			{preview && preview.summary.stockChanges > 0 ? (
+				<StockChoice
+					checked={updateStock}
+					onChange={setUpdateStock}
+					summary={preview.summary}
+					plan={preview.plan}
+				/>
 			) : null}
 
 			{/* The cap is only mentioned when it actually bears on this import —
@@ -405,12 +479,19 @@ function ImportProductsRoute() {
 					<Button
 						type="button"
 						onClick={handleConfirm}
-						disabled={importing || hasPreviewErrors || capOverflow}
+						disabled={
+							importing ||
+							hasPreviewErrors ||
+							capOverflow ||
+							importLock.readOnly
+						}
 						className="h-12 flex-1"
 					>
 						{importing
 							? "Importing…"
-							: `Confirm — ${preview.summary.creates} new, ${preview.summary.updates} updated`}
+							: importLock.readOnly
+								? `Confirm — ${lockLabel(importLock.cause)}`
+								: `Confirm — ${preview.summary.creates} new, ${preview.summary.updates} updated`}
 					</Button>
 					<Button
 						type="button"
@@ -427,7 +508,24 @@ function ImportProductsRoute() {
 	);
 }
 
-function ParseSummary({ parsed }: { parsed: GroupedImportResult }) {
+function ParseSummary({
+	parsed,
+	offerSelfCollect,
+}: {
+	parsed: GroupedImportResult;
+	/** `retailers.offerSelfCollect` — a pickup note reaches no buyer without it. */
+	offerSelfCollect: boolean;
+}) {
+	const withPrep = parsed.products.filter(
+		(p) => (p.prepMinutes ?? 0) > 0,
+	).length;
+	const withNote = parsed.products.filter(
+		(p) => p.pickupNote !== undefined,
+	).length;
+	// Drift between a product's rows ("Multiple prep times; using 2 hours").
+	// Computed by the grouping all along and never shown until z8r3fdff97 —
+	// a warning nobody can read is a silent last-row-wins.
+	const warned = parsed.products.filter((p) => p.warnings.length > 0);
 	return (
 		<section className="flex flex-col gap-3">
 			<div className="flex flex-wrap items-center gap-3 text-xs">
@@ -440,6 +538,14 @@ function ParseSummary({ parsed }: { parsed: GroupedImportResult }) {
 				{parsed.summary.autoFilledCount > 0 ? (
 					<span className="text-muted-foreground">
 						{parsed.summary.autoFilledCount} auto-filled
+					</span>
+				) : null}
+				{withPrep > 0 ? (
+					<span className="text-muted-foreground">Prep time on {withPrep}</span>
+				) : null}
+				{withNote > 0 ? (
+					<span className="text-muted-foreground">
+						Pickup note on {withNote}
 					</span>
 				) : null}
 				{parsed.errorRows.length > 0 ? (
@@ -463,14 +569,48 @@ function ParseSummary({ parsed }: { parsed: GroupedImportResult }) {
 						This file came from an export, so it carries{" "}
 						{parsed.summary.ignoredColumns.length} extra column
 						{parsed.summary.ignoredColumns.length === 1 ? "" : "s"} for
-						reference. Import updates prices, stock and weight —{" "}
+						reference. Import updates names, descriptions, prices, weights, prep
+						times and pickup notes —{" "}
 						<span className="font-medium text-foreground">
 							changes to {parsed.summary.ignoredColumns.join(", ")} won't be
 							applied.
 						</span>{" "}
-						Edit those on the product itself.
+						Edit those on the product itself. Stock is its own choice below.
 					</p>
 				</div>
+			) : null}
+			{withNote > 0 && !offerSelfCollect ? (
+				<div className="flex gap-2.5 rounded-xl border border-border bg-muted/40 p-3 text-sm">
+					<Info
+						className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+						aria-hidden="true"
+					/>
+					<p className="text-muted-foreground">
+						Pickup notes are saved, but buyers only see them once your store
+						offers self-collect —{" "}
+						<Link
+							to="/app/settings"
+							search={{ tab: "fulfilment" }}
+							className="font-medium text-foreground underline underline-offset-2"
+						>
+							Settings → Fulfilment
+						</Link>
+						.
+					</p>
+				</div>
+			) : null}
+			{warned.length > 0 ? (
+				<ul className="flex flex-col gap-1 rounded-xl border border-amber-300 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
+					{warned.map((p) => (
+						<li
+							key={p.name}
+							className="text-[13px] text-amber-800 dark:text-amber-300"
+						>
+							<span className="font-medium">{p.name}:</span>{" "}
+							{p.warnings.join("; ")}
+						</li>
+					))}
+				</ul>
 			) : null}
 			{parsed.errorRows.length > 0 ? (
 				<ul className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3">
@@ -521,9 +661,35 @@ function PreviewSection({
 						</div>
 						<p className="mt-1 text-xs text-muted-foreground">
 							{p.action === "create"
-								? `${p.variantCount} variant${p.variantCount === 1 ? "" : "s"}${p.autoFilled > 0 ? ` · ${p.autoFilled} auto-filled inactive` : ""}`
+								? [
+										`${p.variantCount} variant${p.variantCount === 1 ? "" : "s"}`,
+										p.autoFilled > 0
+											? `${p.autoFilled} auto-filled inactive`
+											: null,
+										...describeOrderRuleChanges(p),
+									]
+										.filter(Boolean)
+										.join(" · ")
 								: p.action === "update"
-									? `${p.changedVariants} changed${p.skippedVariants > 0 ? ` · ${p.skippedVariants} skipped` : ""}`
+									? // "changed" counts PRICE changes only — stock is its own
+										// opt-in choice with its own counts below. Saying
+										// "0 changed" on a row whose name or weight IS being
+										// patched under-states it, so the row names the price
+										// it is actually talking about and adds the stock
+										// figure beside it rather than folding the two into
+										// one number that means neither.
+										[
+											`${p.changedVariants} price${p.changedVariants === 1 ? "" : "s"} changed`,
+											p.stockChanges > 0
+												? `${p.stockChanges} stock${p.stockChanges === 1 ? "" : "s"} differ`
+												: null,
+											p.skippedVariants > 0
+												? `${p.skippedVariants} skipped`
+												: null,
+											...describeOrderRuleChanges(p),
+										]
+											.filter(Boolean)
+											.join(" · ")
 									: null}
 						</p>
 						{p.warnings.length > 0 ? (
@@ -570,5 +736,130 @@ function Badge({ action }: { action: PlanEntry["action"] }) {
 		<span className={`rounded-full px-2 py-0.5 text-xs ${map[action]}`}>
 			{label[action]}
 		</span>
+	);
+}
+
+/**
+ * "Update stock too" — the import's stock decision (86eypn8ye).
+ *
+ * Import is the third door onto `onHand`, and the widest: the seller exports at
+ * 10am, edits the sheet over lunch and imports at 3pm, so every unit sold in
+ * those five hours comes back. The editor's answer — never write stock here —
+ * doesn't transfer, because export → edit → re-import is a documented
+ * round-trip and `stock` is a required column: a genuine stock take pasted into
+ * a spreadsheet has to keep working.
+ *
+ * So the side effect becomes a choice, defaulting to the safe answer. Ticking
+ * it is not a leap of faith: the box states how many counts it replaces, how
+ * many would go UP (the direction that invents units, and the likeliest sign of
+ * a sale made after the export), and names them.
+ *
+ * Products being CREATED always take the sheet's stock — no orders, nothing to
+ * overwrite — so this only ever speaks about updates.
+ */
+function StockChoice({
+	checked,
+	onChange,
+	summary,
+	plan,
+}: {
+	checked: boolean;
+	onChange: (next: boolean) => void;
+	summary: PreviewSummary;
+	plan: PlanEntry[];
+}) {
+	const [showList, setShowList] = useState(false);
+	const increases = plan.filter((e) => e.stockIncreaseSamples.length > 0);
+	// Every listed row is a sample, so the cap can hide some of them — say so
+	// rather than letting a short list read as the whole story.
+	const listed = increases.reduce(
+		(n, e) => n + e.stockIncreaseSamples.length,
+		0,
+	);
+
+	return (
+		<section
+			className={cn(
+				"rounded-2xl border-2 p-4",
+				checked
+					? "border-amber-300 bg-amber-50/60 dark:border-amber-800 dark:bg-amber-950/30"
+					: "border-primary/70",
+			)}
+		>
+			<label className="flex cursor-pointer items-start gap-3">
+				<input
+					type="checkbox"
+					checked={checked}
+					onChange={(e) => onChange(e.target.checked)}
+					className="mt-0.5 size-5 shrink-0 accent-accent"
+				/>
+				<span className="flex min-w-0 flex-col gap-1">
+					<span className="text-sm font-semibold text-foreground">
+						Update stock too
+					</span>
+					<span className="text-[13px] leading-relaxed text-muted-foreground">
+						{checked ? (
+							<>
+								Your sheet's counts will <strong>replace</strong> what Kedaipal
+								holds for{" "}
+								<strong>
+									{summary.stockChanges}{" "}
+									{summary.stockChanges === 1 ? "choice" : "choices"}
+								</strong>
+								.
+							</>
+						) : (
+							<>
+								Off — your sheet's <strong>stock</strong> column is ignored for
+								products you already have, so sales made since you exported are
+								kept. Prices, names, descriptions, weights, prep times and
+								pickup notes update either way.
+							</>
+						)}
+					</span>
+				</span>
+			</label>
+
+			{checked && summary.stockIncreases > 0 ? (
+				<div className="mt-3 rounded-xl border border-amber-300 bg-background/60 p-3 dark:border-amber-800">
+					<p className="text-[13px] leading-relaxed text-amber-800 dark:text-amber-300">
+						<strong className="font-bold">
+							{summary.stockIncreases} would go up
+						</strong>{" "}
+						— your sheet holds more than the store does. If that's because they
+						sold after you exported, importing writes those sales out of the
+						count.
+					</p>
+					<Button
+						type="button"
+						variant="secondary"
+						onClick={() => setShowList((v) => !v)}
+						className="mt-2 h-9 text-xs"
+					>
+						{showList ? "Hide" : `See ${summary.stockIncreases}`}
+					</Button>
+					{showList ? (
+						<ul className="mt-2 flex flex-col gap-1.5">
+							{increases.map((entry) => (
+								<li key={entry.name} className="text-[12.5px]">
+									<span className="font-semibold">{entry.name}</span>
+									<span className="text-muted-foreground">
+										{" — "}
+										{entry.stockIncreaseSamples
+											.map((v) => `${v.sku}: ${v.from} → ${v.to}`)
+											.join(", ")}
+									</span>
+								</li>
+							))}
+							{listed < summary.stockIncreases ? (
+								<li className="text-[12.5px] text-muted-foreground">
+									…and {summary.stockIncreases - listed} more.
+								</li>
+							) : null}
+						</ul>
+					) : null}
+				</div>
+			) : null}
+		</section>
 	);
 }

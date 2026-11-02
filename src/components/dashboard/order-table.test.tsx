@@ -41,7 +41,7 @@ const base: TableOrder = {
 	createdAt: Date.UTC(2026, 5, 29, 16, 0, 0),
 	status: "confirmed",
 	customer: { name: "Aisha", waPhone: "+60123456789" },
-	items: [{ name: "Kek Lapis", variantLabel: "1kg", quantity: 2 }],
+	items: [{ name: "Kek Lapis", variantLabel: "1kg", quantity: 2, price: 1000 }],
 	subtotal: 12500,
 	total: 12500,
 	currency: "MYR",

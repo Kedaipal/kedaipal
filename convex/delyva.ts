@@ -41,6 +41,7 @@ import {
 	parseDelyvaErrorMessage,
 	parseCompanyResponse,
 	countActiveDelyvaServices,
+	parseDelyvaWalletBalance,
 	parseInstantQuoteResponse,
 	parseOrderResponse,
 	resolveDelyvaCredentials,
@@ -49,15 +50,31 @@ import { isActiveJobStatus } from "./lib/deliveryJobs";
 import { encryptSecret } from "./lib/credentialCrypto";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { isColdItemType } from "./lib/liveQuote";
-import { DEFAULT_COUNTRY, type Country } from "./lib/country";
+import { COUNTRY_CURRENCY, DEFAULT_COUNTRY, type Country } from "./lib/country";
+import { clearCourierWallet, forgetWalletBalance } from "./courierWallets";
+import {
+	delyvaBookingArmed,
+	servesOrderDestination,
+} from "./lib/courierBooking";
+import {
+	assertCatalogueWeighed,
+	collectUnweighedChoices,
+} from "./lib/parcelWeights";
+import { toDomesticContactPhone } from "./lib/courierContact";
 import {
 	type CartWeightItem,
 	delyvaBookingAllowed,
 	summarizeCartWeight,
 } from "./lib/delivery";
 import { findCourier } from "./lib/couriers";
-import { requireRetailerAccess, logAdminAction } from "./lib/auth";
+import {
+	logAdminAction,
+	requireRetailerAccess,
+	resolveMyRetailer,
+	tryRetailerAccess,
+} from "./lib/auth";
 import type { RetailerAccess } from "./lib/auth";
+import type { PermissionLevel } from "./lib/permissions";
 import { applyStatusTransition, resolveSharedOrder } from "./orders";
 import {
 	assertPlanFeature,
@@ -137,21 +154,30 @@ const pickupAddressValidator = v.object({
 // ---------------------------------------------------------------------------
 
 /** Resolve the target store for a settings-flavoured call: explicit
- * `retailerId` = admin act-as, absent = the caller's own store. Mirrors
- * retailers.updateSettings. */
+ * `retailerId` = admin act-as, absent = the store the caller works in (their
+ * own, else their active membership — 86exr91r4). Mirrors
+ * retailers.updateSettings. Courier accounts are third-party credentials, so
+ * every surface here sits behind the `integrations` grant. */
 async function resolveStoreAccess(
 	ctx: QueryCtx,
 	retailerId: Id<"retailers"> | undefined,
+	level: PermissionLevel,
 ): Promise<RetailerAccess> {
-	if (retailerId) return requireRetailerAccess(ctx, retailerId);
-	const identity = await ctx.auth.getUserIdentity();
-	if (!identity) throw new Error("Not authenticated");
-	const own = await ctx.db
-		.query("retailers")
-		.withIndex("by_user", (q) => q.eq("userId", identity.subject))
-		.first();
-	if (!own) throw new ConvexError("No store found");
-	return { retailer: own, actingAsAdmin: false, userId: identity.subject };
+	if (retailerId)
+		return requireRetailerAccess(ctx, retailerId, {
+			area: "integrations",
+			level,
+		});
+	const my = await resolveMyRetailer(ctx);
+	if (!my) {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Not authenticated");
+		throw new ConvexError("No store found");
+	}
+	return requireRetailerAccess(ctx, my.retailer._id, {
+		area: "integrations",
+		level,
+	});
 }
 
 /** Everything the connect action needs to know before touching the network. */
@@ -169,7 +195,7 @@ export const getConnectContext = internalQuery({
 				country: Country;
 		  }
 	> => {
-		const access = await resolveStoreAccess(ctx, retailerId);
+		const access = await resolveStoreAccess(ctx, retailerId, "write");
 		const country = access.retailer.country ?? DEFAULT_COUNTRY;
 		if (!delyvaBookingAllowed(country)) {
 			return {
@@ -216,13 +242,37 @@ export const storeConnection = internalMutation({
 	},
 	handler: async (ctx, args) => {
 		const retailer = await ctx.db.get(args.retailerId);
-		if (!retailer) return;
+		if (!retailer) return { bookingHeldForWeights: 0 };
 		const prev = retailer.delyva as DelyvaConfig | undefined;
+		// Connecting on a LIVE-pricing store would arm a courier that quotes by
+		// weight (23 Oct 2026). While buyable choices are unweighed the key is
+		// stored but booking stays OFF — the same refusal the toggle gives, said
+		// in the connect result so the card can point at the fix — because
+		// flipping it on silently is exactly how Mandos came to under-collect.
+		//
+		// Only the off→on move is gated. Replacing the key on a store whose
+		// booking is already ON is maintenance, not an arming gesture: it keeps
+		// booking on, or a key rotation would silently stop Delyva quoting at
+		// checkout (PR #416 review).
+		// A key for a DIFFERENT Delyva account (customer id) describes a
+		// different wallet: forget the old one's last-seen balance. The seller's
+		// alert line is the store's, not the account's, and stays.
+		if (prev?.customerId !== args.customerId)
+			await forgetWalletBalance(ctx, args.retailerId, "delyva", {
+				sameAccount: false,
+			});
+		const alreadyArmed = prev?.enabled === true;
+		const unweighed =
+			!alreadyArmed &&
+			(retailer.deliveryConfig as { mode?: string } | undefined)?.mode === "live"
+				? (await collectUnweighedChoices(ctx, args.retailerId)).length
+				: 0;
 		await ctx.db.patch(args.retailerId, {
 			delyva: {
 				// A fresh key connects ENABLED — connecting is the enable gesture
 				// (one less switch to discover); updateSettings can pause later.
-				enabled: true,
+				// Unless the weights hold above applies, in which case it waits.
+				enabled: alreadyArmed || unweighed === 0,
 				apiKey: args.apiKey,
 				apiSecret: args.apiSecret,
 				apiKeyHint: args.apiKeyHint,
@@ -241,6 +291,7 @@ export const storeConnection = internalMutation({
 			},
 			updatedAt: Date.now(),
 		});
+		return { bookingHeldForWeights: unweighed };
 	},
 });
 
@@ -302,12 +353,21 @@ export const connect = action({
 				accountName?: string;
 				webhooksSubscribed: boolean;
 				isDemo?: boolean;
+				/** Set when the key was stored but booking stayed OFF: the store
+				 * prices live and this many products have no parcel weight, so
+				 * arming the courier waited (23 Oct 2026). The card says so and
+				 * links the fix; the Courier-booking toggle carries the same
+				 * reason. */
+				bookingHeldForWeights?: number;
 		  }
 	> => {
 		const context = await ctx.runQuery(internal.delyva.getConnectContext, {
 			retailerId: args.retailerId,
 		});
 		if (!context.ok) return context;
+		await ctx.runQuery(internal.subscriptions.assertWritable, {
+			retailerId: context.retailerId,
+		});
 		const apiKey = args.apiKey.trim();
 		if (!apiKey) {
 			return { ok: false, message: "Paste your Delyva API key first." };
@@ -319,6 +379,7 @@ export const connect = action({
 		let accountName: string | undefined;
 		let isDemo: boolean | undefined;
 		let companyCode: string | undefined;
+		let walletBalanceSen: number | null = null;
 		let importedPickupAddress:
 			| {
 					address1: string;
@@ -354,6 +415,10 @@ export const connect = action({
 			};
 			customerId =
 				typeof customer.data?.id === "number" ? customer.data.id : undefined;
+			// The profile carries the wallet too (found 31 Oct 2026) — read on
+			// connect, like EasyParcel's, so a new account shows its balance at
+			// once instead of "Not reported yet".
+			walletBalanceSen = parseDelyvaWalletBalance(customer);
 			accountName =
 				typeof customer.data?.name === "string" && customer.data.name
 					? customer.data.name
@@ -442,7 +507,7 @@ export const connect = action({
 			};
 		}
 
-		await ctx.runMutation(internal.delyva.storeConnection, {
+		const stored = await ctx.runMutation(internal.delyva.storeConnection, {
 			retailerId: context.retailerId,
 			apiKey: await encryptSecret(apiKey),
 			apiSecret: apiSecret ? await encryptSecret(apiSecret) : undefined,
@@ -454,6 +519,21 @@ export const connect = action({
 			companyCode,
 			importedPickupAddress,
 		});
+		// After storeConnection: a different account clears the wallet row
+		// first, so this reading is the new account's own.
+		if (walletBalanceSen !== null) {
+			await ctx.runMutation(internal.courierWallets.record, {
+				retailerId: context.retailerId,
+				provider: "delyva",
+				at: Date.now(),
+				observation: {
+					kind: "balance",
+					balanceMinor: walletBalanceSen,
+					currency: COUNTRY_CURRENCY[context.country],
+					source: "pull",
+				},
+			});
+		}
 
 		// Webhooks: best-effort — a subscribe failure must not fail the connect
 		// (bookings work without it; status just won't flow). The unset
@@ -477,7 +557,96 @@ export const connect = action({
 				});
 			}
 		}
-		return { ok: true, accountName, webhooksSubscribed, isDemo };
+		return {
+			ok: true,
+			accountName,
+			webhooksSubscribed,
+			isDemo,
+			bookingHeldForWeights: stored?.bookingHeldForWeights || undefined,
+		};
+	},
+});
+
+/** What a wallet re-read needs: the store, its credentials and currency.
+ * Integrations READ, like EasyParcel's Refresh — reading a balance changes
+ * nothing. */
+export const getBalanceContext = internalQuery({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<{
+		retailerId: Id<"retailers">;
+		credentials: DelyvaCredentials;
+		currency: string;
+	} | null> => {
+		const access = await resolveStoreAccess(ctx, retailerId, "read");
+		const credentials = resolveDelyvaCredentials(
+			access.retailer.delyva as DelyvaConfig | undefined,
+		);
+		if (!credentials) return null;
+		return {
+			retailerId: access.retailer._id,
+			credentials,
+			currency: COUNTRY_CURRENCY[access.retailer.country ?? DEFAULT_COUNTRY],
+		};
+	},
+});
+
+/**
+ * Ask Delyva for the wallet balance now — the Integrations/Deliveries Refresh
+ * and the top-up sheet's "I've topped up — check again". `GET /customer/{id}`
+ * with the seller's own key carries `walletBalance` (found 31 Oct 2026), so
+ * Delyva is a PULL wallet like EasyParcel, no longer refusal-only.
+ */
+export const refreshBalance = action({
+	args: { retailerId: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ retailerId },
+	): Promise<
+		| { ok: false; message: string }
+		| { ok: true; balanceMinor: number; currency: string }
+	> => {
+		const context = await ctx.runQuery(internal.delyva.getBalanceContext, {
+			retailerId,
+		});
+		if (!context) return { ok: false, message: "Connect Delyva first." };
+		try {
+			const balanceMinor = parseDelyvaWalletBalance(
+				await callDelyva(
+					context.credentials,
+					"GET",
+					`/customer/${context.credentials.customerId}`,
+				),
+			);
+			if (balanceMinor === null)
+				return {
+					ok: false,
+					message:
+						"Delyva answered without a wallet balance — check it in the Delyva app.",
+				};
+			await ctx.runMutation(internal.courierWallets.record, {
+				retailerId: context.retailerId,
+				provider: "delyva",
+				at: Date.now(),
+				observation: {
+					kind: "balance",
+					balanceMinor,
+					currency: context.currency,
+					source: "pull",
+				},
+			});
+			return { ok: true, balanceMinor, currency: context.currency };
+		} catch (err) {
+			console.warn("[delyva] wallet refresh failed", {
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return {
+				ok: false,
+				message: "Couldn't reach Delyva just now. Try again in a moment.",
+			};
+		}
 	},
 });
 
@@ -493,6 +662,9 @@ export const resubscribeWebhooks = action({
 			retailerId: args.retailerId,
 		});
 		if (!target) return { ok: false, message: "Connect Delyva first." };
+		await ctx.runQuery(internal.subscriptions.assertWritable, {
+			retailerId: target.retailerId,
+		});
 		const siteUrl = process.env.CONVEX_SITE_URL;
 		if (!siteUrl) {
 			return { ok: false, message: "Webhook URL unavailable — contact support." };
@@ -532,7 +704,7 @@ export const getAccountContext = internalQuery({
 		 * refreshEnvironment has something to heal. */
 		environmentUnknown: boolean;
 	} | null> => {
-		const access = await resolveStoreAccess(ctx, retailerId);
+		const access = await resolveStoreAccess(ctx, retailerId, "write");
 		const config = access.retailer.delyva as DelyvaConfig | undefined;
 		const credentials = resolveDelyvaCredentials(config);
 		if (!credentials) return null;
@@ -636,6 +808,9 @@ export const refreshEnvironment = action({
 		if (!target || !target.environmentUnknown || !target.companyId) {
 			return { ok: false };
 		}
+		await ctx.runQuery(internal.subscriptions.assertWritable, {
+			retailerId: target.retailerId,
+		});
 		try {
 			const live = await decryptDelyvaCredentials(target.credentials);
 			const company = parseCompanyResponse(
@@ -668,7 +843,8 @@ export const clearConnection = internalMutation({
 		if (!retailer || !config) return;
 		// Keep the seller's own setup (pickup address, parcel-type default) so
 		// a reconnect is one key-paste, not a re-setup; drop everything the old
-		// key owned.
+		// key owned — its wallet balance included.
+		await clearCourierWallet(ctx, retailerId, "delyva");
 		await ctx.db.patch(retailerId, {
 			delyva: {
 				enabled: false,
@@ -689,6 +865,9 @@ export const disconnect = action({
 			retailerId: args.retailerId,
 		});
 		if (target) {
+			await ctx.runQuery(internal.subscriptions.assertWritable, {
+				retailerId: target.retailerId,
+			});
 			const siteUrl = process.env.CONVEX_SITE_URL;
 			if (siteUrl) {
 				try {
@@ -735,7 +914,7 @@ export const updateSettings = mutation({
 		pickupAddress: v.optional(v.union(pickupAddressValidator, v.null())),
 	},
 	handler: async (ctx, args): Promise<{ ok: true }> => {
-		const access = await resolveStoreAccess(ctx, args.retailerId);
+		const access = await resolveStoreAccess(ctx, args.retailerId, "write");
 		if (!access.actingAsAdmin)
 			await assertSubscriptionActive(ctx, access.retailer._id);
 		const prev = access.retailer.delyva as DelyvaConfig | undefined;
@@ -744,6 +923,16 @@ export const updateSettings = mutation({
 			// Same gate as connect — re-enabling after a downgrade is the moment
 			// this needs to hold. Disabling stays free.
 			await assertPlanFeature(ctx, access.retailer._id, "delivery");
+		}
+		if (args.enabled === true && !prev.enabled) {
+			// Arming Delyva on a live-pricing store starts quoting every order by
+			// parcel weight (23 Oct 2026) — refused while buyable choices are
+			// unweighed, with the count and the page that fixes it. Only the
+			// OFF→ON flip is gated; a paused store keeps editing its address.
+			const mode = (access.retailer.deliveryConfig as { mode?: string } | undefined)
+				?.mode;
+			if (mode === "live")
+				await assertCatalogueWeighed(ctx, access.retailer._id, "courier");
 		}
 		const pickupAddress =
 			args.pickupAddress === undefined
@@ -796,6 +985,11 @@ export const updateSettings = mutation({
 
 /** Secret-free settings summary for the fulfilment card. Owner-or-admin. */
 export type DelyvaSummary = {
+	/** True when the CALLER may not see this store's courier account (a team
+	 * member without the integrations grant, 86exr91r4). Every other field is
+	 * zeroed — the tab renders a locked card instead of crashing, and no
+	 * credential hint leaks. Owner/admin never see this. */
+	locked?: true;
 	connected: boolean;
 	enabled: boolean;
 	apiKeyHint?: string;
@@ -816,17 +1010,64 @@ export type DelyvaSummary = {
 	connectedAt?: number;
 	webhooksSubscribed: boolean;
 	countryAllowed: boolean;
+	/** Booking is OFF and switching it on would be refused: the store prices
+	 * live and this many products have no parcel weight (23 Oct 2026). The
+	 * Courier-booking toggle greys out with this reason and the Integrations
+	 * card says it, both from this one server answer — neither re-derives
+	 * the mode. Undefined whenever the toggle would be accepted. */
+	bookingHeldForWeights?: number;
 };
+
+/** The zeroed summary a member without the integrations grant reads — no
+ * credential hints, nothing to render but the locked card. */
+function lockedDelyvaSummary(): DelyvaSummary {
+	return {
+		locked: true,
+		connected: false,
+		enabled: false,
+		defaultItemType: "PARCEL",
+		webhooksSubscribed: false,
+		countryAllowed: false,
+	};
+}
 
 export const getSettings = query({
 	args: { retailerId: v.optional(v.id("retailers")) },
 	handler: async (ctx, args): Promise<DelyvaSummary> => {
-		const access = await resolveStoreAccess(ctx, args.retailerId);
+		// A member without the integrations grant gets a LOCKED summary, never a
+		// throw — this read sits inside the Fulfilment tab, which members with
+		// the fulfilment grant legitimately open (audit fix #3, 86exr91r4).
+		let access: RetailerAccess;
+		if (args.retailerId) {
+			const attempt = await tryRetailerAccess(ctx, args.retailerId, {
+				area: "integrations",
+				level: "read",
+			});
+			if (!attempt) return lockedDelyvaSummary();
+			access = attempt;
+		} else {
+			const my = await resolveMyRetailer(ctx);
+			if (!my) throw new ConvexError("No store found");
+			const attempt = await tryRetailerAccess(ctx, my.retailer._id, {
+				area: "integrations",
+				level: "read",
+			});
+			if (!attempt) return lockedDelyvaSummary();
+			access = attempt;
+		}
 		const config = access.retailer.delyva as DelyvaConfig | undefined;
 		const connected = resolveDelyvaCredentials(config) !== null;
+		const held =
+			connected &&
+			config?.enabled !== true &&
+			(access.retailer.deliveryConfig as { mode?: string } | undefined)?.mode ===
+				"live"
+				? (await collectUnweighedChoices(ctx, access.retailer._id)).length
+				: 0;
 		return {
 			connected,
 			enabled: config?.enabled === true,
+			bookingHeldForWeights: held > 0 ? held : undefined,
 			apiKeyHint: config?.apiKeyHint,
 			accountName: config?.accountName,
 			isDemo: config?.isDemo,
@@ -849,6 +1090,10 @@ export const getSettings = query({
 /** Why the Book button is disabled for this order (null = live). */
 export type DelyvaDispatchBlock =
 	| "country_unsupported"
+	/** The order is going somewhere this provider doesn't carry from this
+	 * store (z8r3fdr5yy): a cross-border order on Lalamove/Delyva, or a
+	 * domestic one on a MY store's EasyParcel. */
+	| "destination_unsupported"
 	| "not_delivery"
 	| "bad_status"
 	| "job_active"
@@ -877,6 +1122,40 @@ function formatBuyerAddress(
 		// parcel is how a quote silently returns nothing.
 		country,
 	};
+}
+
+/**
+ * The phone a booking hands the courier for the BUYER's stop (z8r3fdh274).
+ * Buyers may type a WhatsApp number from any country, but a Delyva booking
+ * lives inside the store's country (one tenant per country), and a domestic
+ * courier handed an overseas number may not be able to call it (whether every
+ * downstream courier would even accept one is unverified) — so a foreign
+ * buyer number gives the courier the STORE's number instead, the rule
+ * Lalamove dispatch already follows (`./lib/courierContact`). The buyer's
+ * real number then rides in the booking note (the caller puts it first).
+ *
+ * A store with no number of its own keeps the buyer's: a foreign contact beats
+ * an empty one. Inputs and output are bare digits — Delyva takes MSISDNs
+ * without the '+'.
+ */
+function buyerContactPhone(
+	buyerPhone: string,
+	sellerPhone: string,
+	country: Country,
+): { phone: string; fallback: boolean } {
+	const fallback =
+		buyerPhone !== "" &&
+		sellerPhone !== "" &&
+		toDomesticContactPhone(buyerPhone, country) === null;
+	return {
+		phone: fallback ? sellerPhone : buyerPhone || sellerPhone,
+		fallback,
+	};
+}
+
+/** Stored phone → the bare digits Delyva wants ("" when there is none). */
+function phoneDigits(waPhone: string | undefined): string {
+	return (waPhone ?? "").replace(/\D/g, "");
 }
 
 /** The order's parcel weight through the SAME summariser the weight/zone
@@ -927,6 +1206,10 @@ type DelyvaDispatchContext =
 			buyerPaidFee: number;
 			currency: string;
 			note?: string;
+			/** The buyer's number isn't from the store's country, so the
+			 * destination contact is the STORE's number and the buyer's real
+			 * one leads the note (see buyerContactPhone). */
+			buyerContactFallback: boolean;
 			/** The demo-vs-live lookup never ran for this row — prepareBooking
 			 * schedules the heal so the badge appears without a reconnect. */
 			environmentUnknown: boolean;
@@ -941,10 +1224,13 @@ function dispatchBlockReason(args: {
 }): DelyvaDispatchBlock | null {
 	const { order, retailer, activeJob, credentials, planOk } = args;
 	const config = retailer.delyva as DelyvaConfig | undefined;
-	// Country first — every reason below names a fix; outside Malaysia there
-	// is none to name (the Lalamove 86eyqgujv lesson).
+	// Country first — every reason below names a fix; in a country Delyva
+	// booking doesn't serve there is none to name (the Lalamove 86eyqgujv
+	// lesson).
 	if (!delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY))
 		return "country_unsupported";
+	if (!servesOrderDestination("delyva", order, retailer))
+		return "destination_unsupported";
 	if (order.deliveryMethod !== "delivery") return "not_delivery";
 	// Same eligible window as Lalamove: a pending order never ships itself,
 	// shipped/delivered orders are already on their way.
@@ -972,11 +1258,16 @@ export const getDispatchContext = internalQuery({
 		const retailer = await ctx.db.get(order.retailerId);
 		if (!retailer) return { ok: false, reason: "not_found" };
 
-		const identity = await ctx.auth.getUserIdentity();
-		const actingAsAdmin =
-			identity !== null && retailer.userId !== identity.subject;
+		// The caller's REAL role from the gate (86exr91r4 audit fix): "not the
+		// owner" used to read as acting-admin here, which would have handed every
+		// team member the admin plan-gate bypass. Booking a courier is orders
+		// work, so the write level applies; only a true admin skips the plan gate.
+		const access = await requireRetailerAccess(ctx, retailer._id, {
+			area: "orders",
+			level: "write",
+		});
 		let planOk = true;
-		if (!actingAsAdmin) {
+		if (access.role !== "admin") {
 			try {
 				await assertPlanFeature(ctx, retailer._id, "delivery");
 			} catch {
@@ -1006,8 +1297,13 @@ export const getDispatchContext = internalQuery({
 		const weight = await resolveOrderWeightKg(ctx, order);
 		const storeCountry = retailer.country ?? DEFAULT_COUNTRY;
 		const buyerAddress = formatBuyerAddress(order.deliveryAddress, storeCountry);
-		const buyerPhone = (order.customer.waPhone ?? "").replace(/\D/g, "");
-		const sellerPhone = (retailer.waPhone ?? "").replace(/\D/g, "");
+		const buyerPhone = phoneDigits(order.customer.waPhone);
+		const sellerPhone = phoneDigits(retailer.waPhone);
+		const buyerContact = buyerContactPhone(
+			buyerPhone,
+			sellerPhone,
+			storeCountry,
+		);
 		const inventory: DelyvaInventoryLine[] = await Promise.all(
 			order.items.map(async (item): Promise<DelyvaInventoryLine> => {
 				const variant = item.variantId
@@ -1023,7 +1319,11 @@ export const getDispatchContext = internalQuery({
 				};
 			}),
 		);
+		// The buyer's real number FIRST when the courier got the store's:
+		// buildCreateOrderBody cuts the note at 400 chars, and a long address
+		// note must never be what pushes the one way to reach the buyer out.
 		const noteParts = [
+			buyerContact.fallback ? `Buyer WhatsApp: +${buyerPhone}` : undefined,
 			order.deliveryAddress.notes,
 			order.customerNote,
 		].filter((p): p is string => !!p && p.trim().length > 0);
@@ -1044,7 +1344,7 @@ export const getDispatchContext = internalQuery({
 			destination: {
 				...buyerAddress,
 				name: order.customer.name ?? "Customer",
-				phone: buyerPhone || sellerPhone,
+				phone: buyerContact.phone,
 			},
 			inventory,
 			computedWeightKg: weight.kind === "ok" ? weight.kg : null,
@@ -1053,6 +1353,7 @@ export const getDispatchContext = internalQuery({
 			buyerPaidFee: order.deliveryFee ?? 0,
 			currency: order.currency,
 			note: noteParts.length ? noteParts.join(" · ") : undefined,
+			buyerContactFallback: buyerContact.fallback,
 			environmentUnknown: config.isDemo === undefined,
 		};
 	},
@@ -1095,7 +1396,7 @@ function friendlyBookingError(err: unknown): string {
 		const detail = parseDelyvaErrorMessage(err.body);
 		switch (classifyDelyvaFailure(err.body)) {
 			case "credit":
-				return `Your Delyva account doesn't have enough credit${detail ? ` (Delyva says: “${detail}”)` : ""}. Top up in the Delyva app, then book again — nothing was booked and your buyer wasn't notified.`;
+				return `Your Delyva wallet doesn't have enough in it${detail ? ` (Delyva says: “${detail}”)` : ""}. Top up in Delyva, then book again — nothing was booked and your buyer wasn't notified.`;
 			case "not_activated":
 				return "Delyva hasn't activated your pickup address for this parcel type yet (cold chain needs a one-time activation). We can chase it with Delyva — nothing was booked.";
 			case "no_service":
@@ -1147,6 +1448,10 @@ export const prepareBooking = action({
 				 * of which covers this shipment. undefined = the extra lookup
 				 * failed, so the card stays with its generic wording. */
 				accountHasNoCouriers?: boolean;
+				/** How many couriers are switched on in the seller's Delyva
+				 * account (`GET /service`), for the "N couriers on" footer;
+				 * undefined = Delyva didn't say. */
+				activeCourierCount?: number;
 				/** Only set when a CHILLED/FROZEN quote came back empty: true means
 				 * the identical route quotes fine as an ordinary parcel, so this is
 				 * a cold-chain gap on the Delyva account rather than anything about
@@ -1154,6 +1459,12 @@ export const prepareBooking = action({
 				coldChainUnavailable?: boolean;
 		  }
 	> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: args.shortId,
+		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+			shortId: args.shortId,
+		});
 		const context = await ctx.runQuery(internal.delyva.getDispatchContext, {
 			shortId: args.shortId,
 		});
@@ -1192,12 +1503,45 @@ export const prepareBooking = action({
 					weightKg: weight.kg,
 					itemType: forItemType,
 				});
-			const response = await callDelyva(
-				context.credentials,
-				"POST",
-				"/service/instantQuote",
-				quoteBody(itemType),
-			);
+			// The account's switched-on courier count rides alongside the quote
+			// (z8r3fdx34j): a fresh Delyva account has NONE on, and the seller
+			// only learns couriers are opt-in if the card says "N couriers on".
+			// In parallel, and it can never fail the quote.
+			// The wallet rides along too (z8r3fdx34j, 31 Oct): a balance read
+			// with the quote is what lets the card disable Book on a wallet that
+			// can't pay, before the tap. Never fails the quote.
+			const [response, activeCourierCount, walletBalanceSen] =
+				await Promise.all([
+					callDelyva(
+						context.credentials,
+						"POST",
+						"/service/instantQuote",
+						quoteBody(itemType),
+					),
+					callDelyva(context.credentials, "GET", "/service")
+						.then((json) => countActiveDelyvaServices(json))
+						.catch(() => null),
+					callDelyva(
+						context.credentials,
+						"GET",
+						`/customer/${context.customerId}`,
+					)
+						.then((json) => parseDelyvaWalletBalance(json))
+						.catch(() => null),
+				]);
+			if (walletBalanceSen !== null) {
+				await ctx.runMutation(internal.courierWallets.record, {
+					retailerId: context.retailerId,
+					provider: "delyva",
+					at: Date.now(),
+					observation: {
+						kind: "balance",
+						balanceMinor: walletBalanceSen,
+						currency: context.currency,
+						source: "pull",
+					},
+				});
+			}
 			const services = parseInstantQuoteResponse(response).sort(
 				(a, b) => a.price - b.price,
 			);
@@ -1210,14 +1554,8 @@ export const prepareBooking = action({
 			let accountHasNoCouriers: boolean | undefined;
 			let coldChainUnavailable: boolean | undefined;
 			if (services.length === 0) {
-				try {
-					const active = countActiveDelyvaServices(
-						await callDelyva(context.credentials, "GET", "/service"),
-					);
-					accountHasNoCouriers = active === null ? undefined : active === 0;
-				} catch {
-					accountHasNoCouriers = undefined;
-				}
+				accountHasNoCouriers =
+					activeCourierCount === null ? undefined : activeCourierCount === 0;
 				// Cold chain is the ICP's whole reason for being here (frozen and
 				// kuih sellers), and it fails in a way that reads as an address
 				// problem: Delyva filters by item type SERVER-side, so a chilled
@@ -1251,6 +1589,7 @@ export const prepareBooking = action({
 				buyerPaidFee: context.buyerPaidFee,
 				accountHasNoCouriers,
 				coldChainUnavailable,
+				activeCourierCount: activeCourierCount ?? undefined,
 			};
 		} catch (err) {
 			console.warn("[delyva] dispatch quote failed", {
@@ -1424,6 +1763,12 @@ export const confirmBooking = action({
 		  }
 		| { ok: true; providerOrderId: string; costActual: number; awb?: string }
 	> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: args.shortId,
+		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+			shortId: args.shortId,
+		});
 		const context = await ctx.runQuery(internal.delyva.getDispatchContext, {
 			shortId: args.shortId,
 		});
@@ -1515,6 +1860,17 @@ export const confirmBooking = action({
 				message: err instanceof Error ? err.message : String(err),
 			});
 			const message = friendlyBookingError(err);
+			// A credit refusal carries the wallet's balance — the only way Delyva
+			// ever tells us — so every other surface learns it before the next tap.
+			if (
+				err instanceof DelyvaApiError &&
+				classifyDelyvaFailure(err.body) === "credit"
+			) {
+				await ctx.runMutation(internal.courierWallets.recordDelyvaRefusal, {
+					retailerId: context.retailerId,
+					message: parseDelyvaErrorMessage(err.body),
+				});
+			}
 			// A draft that was created but never processed is an orphan in the
 			// seller's Delyva dashboard — cancel it best-effort.
 			if (delyvaOrderId) {
@@ -1544,6 +1900,9 @@ export const cancelBooking = action({
 		ctx,
 		{ shortId },
 	): Promise<{ ok: boolean; message?: string }> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId: shortId,
+		});
 		const target = await ctx.runQuery(internal.delyva.getCancelContext, {
 			shortId,
 		});
@@ -1799,6 +2158,14 @@ export const getDispatchState = query({
 		blockReason: DelyvaDispatchBlock | null;
 		/** The store has a working, enabled Delyva connection. */
 		bookingEnabled: boolean;
+		/** The store's country — the market its Delyva tenant books in, and
+		 * the noun the buyer-contact notice names. */
+		country: Country;
+		/** A booking would hand the courier the STORE's number for the buyer's
+		 * stop, because the buyer's WhatsApp isn't from `country` (see
+		 * buyerContactPhone) — said on the card before the first quote, so
+		 * nobody is surprised when the courier calls the store. */
+		buyerContactFallback: boolean;
 		defaultItemType: DelyvaItemType;
 		/** One-line render of the stored pickup address ("55 Jln Eco Majestic,
 		 * 43700 Beranang") — the dispatch card shows it before the first quote
@@ -1831,11 +2198,15 @@ export const getDispatchState = query({
 			[...delyvaJobs].sort((a, b) => b.createdAt - a.createdAt)[0] ??
 			null;
 
-		const identity = await ctx.auth.getUserIdentity();
-		const actingAsAdmin =
-			identity !== null && retailer.userId !== identity.subject;
+		// Real role from the gate (86exr91r4) — read level: this is the dispatch
+		// card's state, booking itself re-gates at write. Only a true admin
+		// skips the plan gate.
+		const access = await requireRetailerAccess(ctx, retailer._id, {
+			area: "orders",
+			level: "read",
+		});
 		let planOk = true;
-		if (!actingAsAdmin) {
+		if (access.role !== "admin") {
 			try {
 				await assertPlanFeature(ctx, retailer._id, "delivery");
 			} catch {
@@ -1850,6 +2221,7 @@ export const getDispatchState = query({
 			planOk,
 		});
 		const weight = await resolveOrderWeightKg(ctx, order);
+		const country = retailer.country ?? DEFAULT_COUNTRY;
 		return {
 			job: latest
 				? {
@@ -1866,10 +2238,13 @@ export const getDispatchState = query({
 					}
 				: null,
 			blockReason,
-			bookingEnabled:
-				credentials !== null &&
-				config?.enabled === true &&
-				delyvaBookingAllowed(retailer.country ?? DEFAULT_COUNTRY),
+			bookingEnabled: delyvaBookingArmed(retailer),
+			country,
+			buyerContactFallback: buyerContactPhone(
+				phoneDigits(order.customer.waPhone),
+				phoneDigits(retailer.waPhone),
+				country,
+			).fallback,
 			defaultItemType: config?.defaultItemType ?? "PARCEL",
 			pickupSummary: config?.pickupAddress
 				? [

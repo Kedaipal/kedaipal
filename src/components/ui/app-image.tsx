@@ -1,5 +1,11 @@
 import { ImageOff } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import {
 	DEFAULT_IMAGE_WIDTH,
 	imageSrcSet,
@@ -21,11 +27,39 @@ import { Skeleton } from "./skeleton";
  * `MAX_LOAD_RETRIES`. An unset `src` renders the same fallback with zero
  * network request.
  *
+ * Server-rendered images are VISIBLE until hydration (z8r3fdue6f). The
+ * fade-in needs `onLoad`, which only exists once React runs; an `opacity-0`
+ * image in the SSR HTML stays invisible until the JS bundle has downloaded and
+ * hydrated — so the storefront's server-rendered catalog would show blank
+ * tiles, the cover image (the page's LCP element — Chrome doesn't count an
+ * invisible one) would wait on the bundle, and with JS off no photo would
+ * ever show. So the server render and the hydration pass paint the `<img>`
+ * opaque, layered ABOVE the skeleton: it shows the moment its bytes decode,
+ * and until then the skeleton beneath shows through. After hydration (and on
+ * every client-side mount, which never hydrates) the fade-in runs as before.
+ *
  * Deliberately NOT used by `store-poster.tsx` (a print/PDF-export surface —
  * a lazy or opacity-0 image can print blank).
  */
 
 type ImageStatus = "loading" | "loaded" | "error";
+
+/** `false` in the server render and through hydration, `true` after. */
+function useHydrated(): boolean {
+	return useSyncExternalStore(subscribeNever, hydratedOnClient, notHydrated);
+}
+function subscribeNever(): () => void {
+	return () => {};
+}
+function hydratedOnClient(): boolean {
+	return true;
+}
+function notHydrated(): boolean {
+	return false;
+}
+
+/** See `FRAME_WRAPPER` below for what each level is for. */
+export type ImageFrame = "hairline" | "raised";
 
 /**
  * How many times a failed load is retried before the error state becomes
@@ -102,6 +136,14 @@ export interface AppImageProps {
 	aspect?: string;
 	/** Above-the-fold hint: skips the lazy-loading attribute and requests high fetch priority (LCP candidates — hero/cover images, first grid row). */
 	priority?: boolean;
+	/**
+	 * Skips the lazy-loading attribute at NORMAL fetch priority. For small marks
+	 * inside a drifting marquee (the payment wall, the courier rail): a lazy
+	 * image there only starts loading as its pill enters the viewport, so the
+	 * pill drifts in empty and paints mid-row. Not `priority` — forty logos
+	 * must never outrank the hero's LCP image.
+	 */
+	eager?: boolean;
 	/** Custom empty/error-state node. Defaults to a muted box + `ImageOff` icon + the alt text. */
 	fallback?: React.ReactNode;
 	/** Rounded-corner utility class for the wrapper, e.g. `"rounded-2xl"`. */
@@ -121,6 +163,13 @@ export interface AppImageProps {
 	 * is the classic "percentage width in an indefinite container" CSS trap.
 	 */
 	fill?: boolean;
+	/**
+	 * Draw a photo edge (and, at `raised`, a soft lift). Opt-in by MEANING, not
+	 * a default: a full-bleed storefront cover, a brand-mark SVG and the
+	 * founding emblem all read worse with a frame around them. See
+	 * `FRAME_WRAPPER`.
+	 */
+	frame?: ImageFrame;
 }
 
 /** Local upload previews (`URL.createObjectURL`) and inline data URIs resolve
@@ -129,6 +178,49 @@ export interface AppImageProps {
 function isLocalPreviewUrl(src: string): boolean {
 	return src.startsWith("blob:") || src.startsWith("data:");
 }
+
+/**
+ * Photo-edge treatments (`frame`), z8r3fdm36y.
+ *
+ * A product shot on a white studio background has no edge of its own: against
+ * `bg-card` or `bg-background` the tile reads as a caption with nothing above
+ * it, and on a store home that is most of the page. The store logo already
+ * wore a hairline (`storefront-header.tsx`) while the product grid beside it
+ * did not, so the inconsistency was visible on one screen.
+ *
+ * Two levels, because the surfaces genuinely differ — the shadow is NOT
+ * decoration applied evenly:
+ *
+ * - `hairline` — the photo sits inside something that already owns the
+ *   elevation (a product card, a thumbnail button, a category tile). A second
+ *   shadow there turns a 16-tile grid into mush, so this is the edge only.
+ * - `raised` — the photo floats straight on the page (the product-page hero,
+ *   the detail-sheet gallery), so it carries its own lift. Reuses the house
+ *   soft-lift shadow already in `checkout-summary.tsx`, rather than minting a
+ *   second shadow vocabulary.
+ *
+ * The hairline is drawn as an **overlay** (see the render below), never as a
+ * `border` or an outward `ring` on the wrapper. Both of those fail at the real
+ * call sites: the grid tile's AppImage is `absolute inset-0` inside a parent
+ * with `overflow-hidden`, which clips an outward ring away entirely, and an
+ * `inset` ring is painted beneath the element's own children — so the `<img>`
+ * covers it. An overlay after the image in DOM order paints above the photo,
+ * is never clipped, and costs no layout shift.
+ *
+ * `ring-black/10 dark:ring-white/15` and not `border-border`: the edge has to
+ * read against an ARBITRARY photo, and a fixed token hairline disappears
+ * against a photo of its own lightness. This is the same alpha-neutral idiom
+ * the phone plate's flags already use (`my-phone-input.tsx`).
+ */
+const FRAME_HAIRLINE = "ring-1 ring-inset ring-black/10 dark:ring-white/15";
+
+const FRAME_WRAPPER: Record<ImageFrame, string> = {
+	hairline: "",
+	// Dark mode drops the shadow: a navy glow under a photo on a near-black
+	// surface is invisible at best and a grey smudge at worst — the hairline is
+	// what does the work there.
+	raised: "shadow-[0_2px_12px_rgba(15,23,42,0.08)] dark:shadow-none",
+};
 
 function DefaultFallback({ alt }: { alt: string }) {
 	const decorative = alt === "";
@@ -153,12 +245,14 @@ export function AppImage({
 	className,
 	aspect,
 	priority = false,
+	eager: eagerHint = false,
 	fallback,
 	rounded,
 	objectFit = "cover",
 	fill = true,
 	sizes,
 	sensitive = false,
+	frame,
 }: AppImageProps) {
 	const hasSrc = typeof src === "string" && src.length > 0;
 	const isLocalPreview = hasSrc && isLocalPreviewUrl(src);
@@ -179,6 +273,9 @@ export function AppImage({
 	const initialStatus: ImageStatus = isLocalPreview ? "loaded" : "loading";
 
 	const [status, setStatus] = useState<ImageStatus>(initialStatus);
+	// See the header: before hydration there is no onLoad to fade the image
+	// in, so it paints as soon as it decodes.
+	const hydrated = useHydrated();
 	// Bumped on each retry and folded into the <img> `key`, which remounts the
 	// element and issues a genuinely fresh request. Same URL on purpose: a
 	// failed load leaves no cache entry to bust, and a cache-busting param would
@@ -236,6 +333,7 @@ export function AppImage({
 		"relative block overflow-hidden",
 		aspect,
 		rounded,
+		frame ? FRAME_WRAPPER[frame] : undefined,
 		className,
 	);
 
@@ -243,6 +341,16 @@ export function AppImage({
 		return (
 			<span className={wrapperClassName}>
 				{fallback ?? <DefaultFallback alt={alt} />}
+				{/* The photo edge, painted ABOVE the image — see `FRAME_HAIRLINE`. */}
+				{frame ? (
+					<span
+						aria-hidden
+						className={cn(
+							"pointer-events-none absolute inset-0 rounded-[inherit]",
+							FRAME_HAIRLINE,
+						)}
+					/>
+				) : null}
 			</span>
 		);
 	}
@@ -272,7 +380,7 @@ export function AppImage({
 		}, retryDelayMs(attempt));
 	};
 
-	const eager = priority || isLocalPreview;
+	const eager = priority || eagerHint || isLocalPreview;
 
 	return (
 		<span className={wrapperClassName}>
@@ -289,10 +397,14 @@ export function AppImage({
 				aria-hidden={alt === "" || undefined}
 				draggable={false}
 				className={cn(
+					// `relative` layers the photo above the absolutely positioned
+					// skeleton (DOM order then decides), which only matters while it
+					// is visible-before-hydration; it adds no offset.
+					"relative",
 					fill ? "h-full w-full" : aspect,
 					fill && (objectFit === "contain" ? "object-contain" : "object-cover"),
 					"transition-opacity duration-200 motion-reduce:transition-none",
-					status === "loaded" ? "opacity-100" : "opacity-0",
+					status === "loaded" || !hydrated ? "opacity-100" : "opacity-0",
 				)}
 				loading={eager ? "eager" : "lazy"}
 				decoding="async"
@@ -300,6 +412,16 @@ export function AppImage({
 				onLoad={() => setStatus("loaded")}
 				onError={handleError}
 			/>
+			{/* The photo edge, painted ABOVE the image — see `FRAME_HAIRLINE`. */}
+			{frame ? (
+				<span
+					aria-hidden
+					className={cn(
+						"pointer-events-none absolute inset-0 rounded-[inherit]",
+						FRAME_HAIRLINE,
+					)}
+				/>
+			) : null}
 		</span>
 	);
 }

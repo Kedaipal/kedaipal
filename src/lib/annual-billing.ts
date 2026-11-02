@@ -11,31 +11,30 @@
 //
 // See docs/pricing.md § Annual billing.
 
+import type { Country } from "../../convex/lib/country";
 import {
 	type AnnualQuote,
 	annualQuote,
 	type BillingCurrency,
-	BILLING_CURRENCIES,
-	DEFAULT_BILLING_CURRENCY,
+	type ListedPlan,
 	type Plan,
+	storeBillingCurrency,
 } from "../../convex/lib/plans";
 import { daysUntil } from "./subscription";
 
 /**
  * Plans the annual switch is offered on.
  *
- * **Pro only.** Not Starter, by owner decision: Starter is moving to
+ * **Pro.** Not Starter, by owner decision: Starter is moving to
  * start-when-you-sell billing, so asking that seller for a year upfront
- * contradicts the premise of the tier. Not Scale either — `issueInvoice` throws
- * "Scale is unavailable for v1." (convex/invoices.ts), so offering it would
- * reproduce in-app exactly the dead-end CTA we refuse to ship on the public
- * pricing page. Add `"scale"` in the same change that makes Scale purchasable
- * (ClickUp z8r3fday24).
+ * contradicts the premise of the tier. Not Enterprise either (T6): an
+ * Enterprise term — monthly or a prepaid year — is part of the contract an
+ * admin sets, never a self-serve switch.
  *
  * A Starter seller is still TOLD annual exists, in the Starter → Pro nudge —
  * a constraint is surfaced, never enforced silently.
  */
-export const ANNUAL_OFFER_PLANS: readonly Plan[] = ["pro"];
+export const ANNUAL_OFFER_PLANS: readonly ListedPlan[] = ["pro"];
 
 /**
  * Paid invoices a seller must already have before annual is offered.
@@ -67,7 +66,7 @@ export const ANNUAL_SWAP_MIN_DAYS = 4;
  * satisfy it without either importing the other. */
 export type AnnualOfferSubscription = {
 	plan: Plan;
-	status: "trialing" | "active" | "past_due" | "cancelled";
+	status: "trialing" | "active" | "past_due" | "cancelled" | "on_hold";
 	billingCycle?: "monthly" | "annual";
 	comped?: boolean;
 	currentPeriodEnd?: number;
@@ -115,29 +114,6 @@ export type AnnualOfferState =
 			quote: AnnualQuote;
 	  };
 
-function isBillingCurrency(value: string): value is BillingCurrency {
-	return (BILLING_CURRENCIES as readonly string[]).includes(value);
-}
-
-/**
- * Which currency to quote this seller in.
- *
- * Their own settled invoices, not the visitor geo-detection the marketing pages
- * use: a seller who has paid us twice has already told us what we bill them in,
- * and a VPN or a trip must not re-price their subscription. Falls back to the
- * default billing currency for a seller with no readable invoice currency — who
- * cannot reach the offer anyway, since it needs two paid invoices.
- */
-export function offerCurrency(
-	invoices: readonly AnnualOfferInvoice[],
-): BillingCurrency {
-	for (const invoice of invoices) {
-		if (invoice.status === "paid" && isBillingCurrency(invoice.currency))
-			return invoice.currency;
-	}
-	return DEFAULT_BILLING_CURRENCY;
-}
-
 /**
  * What the annual card should render for this seller.
  *
@@ -165,6 +141,12 @@ export function resolveAnnualOffer(input: {
 	/** A Kedaipal admin on their OWN store runs the app for free and is on no
 	 * tier — the tab replaces the whole plan apparatus for them. */
 	adminOwnAccount?: boolean;
+	/** The store's country — the ONE thing that decides what Kedaipal bills it
+	 * in (`storeBillingCurrency`, 86eyp7hn7). This used to follow the last PAID
+	 * invoice with an MYR default, so a Singapore store read "RM 149.00 a
+	 * month" on the same tab as its S$ hold and renewal (staging test, 31 Oct
+	 * 2026). Undefined reads as Malaysia, the default country. */
+	country: Country | undefined;
 }): AnnualOfferState {
 	const {
 		subscription: sub,
@@ -172,16 +154,24 @@ export function resolveAnnualOffer(input: {
 		now,
 		founding = false,
 		adminOwnAccount,
+		country,
 	} = input;
 
 	if (adminOwnAccount) return { kind: "hidden" };
 	if (!sub) return { kind: "hidden" };
 	if (sub.comped) return { kind: "hidden" };
+	// An Enterprise term is part of its contract (T6): the contract card
+	// states it, so there is no switch to offer and no second card to repeat
+	// it — least of all one inviting a self-serve plan change.
+	if (sub.plan === "enterprise") return { kind: "hidden" };
 
 	const pendingInvoice = invoices.find((i) => i.status === "pending");
 
 	if (pendingInvoice?.billingCycle === "annual")
-		return { kind: "pendingAnnual", invoiceNumber: pendingInvoice.invoiceNumber };
+		return {
+			kind: "pendingAnnual",
+			invoiceNumber: pendingInvoice.invoiceNumber,
+		};
 
 	if (sub.billingCycle === "annual")
 		return { kind: "onAnnual", plan: sub.plan, renewsAt: sub.currentPeriodEnd };
@@ -192,7 +182,7 @@ export function resolveAnnualOffer(input: {
 	const paidCount = invoices.filter((i) => i.status === "paid").length;
 	if (paidCount < ANNUAL_MIN_PAID_INVOICES) return { kind: "hidden" };
 
-	const currency = offerCurrency(invoices);
+	const currency = storeBillingCurrency(country);
 	const quote = annualQuote(sub.plan, founding, currency);
 
 	if (pendingInvoice) {

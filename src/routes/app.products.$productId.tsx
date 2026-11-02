@@ -14,6 +14,9 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { EventRsvpPanel } from "../components/app/event-rsvp-panel";
+import { UnsavedChangesGuard } from "../components/app/unsaved-changes-guard";
+import { ViewOnlyNote } from "../components/app/view-only-note";
 import {
 	PageHeader,
 	PageHeaderSkeleton,
@@ -35,9 +38,14 @@ import {
 } from "../components/ui/dialog";
 import { Skeleton } from "../components/ui/skeleton";
 import { useDashboardRetailer } from "../hooks/useDashboardRetailer";
+import { lockLabel, useAreaLock } from "../hooks/useStoreLock";
 import { convexErrorMessage } from "../lib/format";
+import { overseasOf } from "../lib/overseas-delivery";
+import { pastOrderFilingMessage } from "../lib/past-order-filing";
+import type { UnsavedState } from "../lib/product-form-dirty";
 import { draftPreviewOverlay } from "../lib/product-preview";
 import { type ProductStatus, productStatus } from "../lib/product-status";
+import { capacityDraftFromListing } from "../lib/product-summary";
 import {
 	isProductSpotlightKey,
 	type ProductSpotlightKey,
@@ -53,7 +61,9 @@ export const Route = createFileRoute("/app/products/$productId")({
 	validateSearch: (
 		search: Record<string, unknown>,
 	): { spot?: ProductSpotlightKey } =>
-		isProductSpotlightKey(search.spot) ? { spot: search.spot } : {},
+		// Returned even when absent — an omitted key leaks its raw value
+		// (z8r3fdtk87, src/lib/search-params.ts).
+		({ spot: isProductSpotlightKey(search.spot) ? search.spot : undefined }),
 	component: EditProductRoute,
 });
 
@@ -78,6 +88,8 @@ function StatusChip({ status }: { status: ProductStatus }) {
 				className={cn(
 					"inline-block size-2 rounded-full",
 					status.tone === "live" && "bg-accent",
+					// Saturated mid-tone dot carrying no text — reads against both the
+					// light and the dark page, so it stays theme-invariant.
 					status.tone === "warn" && "bg-amber-500",
 					status.tone === "muted" && "bg-muted-foreground/50",
 				)}
@@ -149,6 +161,22 @@ function EditProductRoute() {
 			productId: productId as Id<"products">,
 		}),
 	).data;
+	// Live RSVP headcount for an event product (`z8r3fdff9u`). Returns null for
+	// every normal product, so the panel simply doesn't render — no second
+	// "is this an event" round trip.
+	const headcount = useQuery(
+		convexQuery(api.products.eventHeadcount, {
+			productId: productId as Id<"products">,
+		}),
+	).data;
+	// The bulk promotion holding this product (z8r3fducfd), or null. Awaited
+	// with the product: the Promotion card mounts once, and must know before
+	// it does whether its window is its own or the promotion's.
+	const groupedPromotion = useQuery(
+		convexQuery(api.promotions.forProduct, {
+			productId: productId as Id<"products">,
+		}),
+	).data;
 	const update = useMutation(api.products.update);
 	const saveVariantGrid = useMutation(api.products.saveVariantGrid);
 	const setProductCategories = useMutation(api.categories.setProductCategories);
@@ -157,6 +185,8 @@ function EditProductRoute() {
 	const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 	const [whyCantDeleteOpen, setWhyCantDeleteOpen] = useState(false);
 	const [deleting, setDeleting] = useState(false);
+	// What leaving would lose, reported by the form — drives the leave guard.
+	const [unsaved, setUnsaved] = useState<UnsavedState>("none");
 	// Buyer-eye preview: mounts the REAL storefront detail sheet in-page (the
 	// same bottom sheet buyers get) — no new tab — rendered from the form's
 	// LIVE DRAFT so unsaved edits show exactly as buyers would see them after
@@ -167,8 +197,22 @@ function EditProductRoute() {
 		string,
 		unknown
 	> | null>(null);
+	// Can't change products right now — view-only, out of credits (Credits
+	// T3), or a teammate with view on products. Every write on this page greys
+	// out together; the form's fields stay editable so an edit already under
+	// way survives until saving is possible again.
+	const productsLock = useAreaLock("products");
+	const saveLock = productsLock.readOnly
+		? { reason: productsLock.reason, label: lockLabel(productsLock.cause) }
+		: undefined;
+	const locked = saveLock !== undefined;
 
-	if (product === undefined || categoryIds === undefined || !retailer) {
+	if (
+		product === undefined ||
+		categoryIds === undefined ||
+		groupedPromotion === undefined ||
+		!retailer
+	) {
 		return <ProductDetailSkeleton />;
 	}
 	if (product === null) {
@@ -183,16 +227,54 @@ function EditProductRoute() {
 
 	function openPreview() {
 		const draft = formDraftRef.current?.();
-		if (!draft) return;
+		// Narrowed above at the render guards, but this closure is created before
+		// them, so TS can't see it.
+		if (!draft || !product) return;
 		// Identity fields (_id, retailerId, currency, _creationTime…) come from
 		// the saved row; everything the buyer SEES comes from the draft overlay.
 		// The cast covers the fabricated preview variant ids — the sheet only
 		// uses them as keys and through the stubbed onAdd.
-		setPreviewProduct({ ...product, ...draftPreviewOverlay(draft) });
+		// Live counts, not the form's seeded ones — stock is no longer editable
+		// here (86eypn8ye), so previewing the draft's copy would show the seller a
+		// buyer view that disagrees with their own storefront.
+		setPreviewProduct({
+			...product,
+			...draftPreviewOverlay(
+				draft,
+				product.variants.map((vr) => ({
+					variantId: vr._id,
+					optionValues: vr.optionValues,
+					isCustom: vr.isCustom,
+					onHand: vr.onHand,
+				})),
+			),
+		});
+	}
+
+	// One author per action — the header, the sticky bar and the can't-delete
+	// dialog all call these, so a refusal reads as a toast, never an unhandled
+	// rejection that looks like nothing happened.
+	async function archiveProduct() {
+		if (!product) return;
+		try {
+			await archive({ productId: product._id });
+			navigate({ to: "/app/products" });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		}
+	}
+	async function restoreProduct() {
+		if (!product) return;
+		try {
+			await update({ productId: product._id, active: true });
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		}
 	}
 
 	return (
 		<div className="flex flex-col gap-4 lg:max-w-2xl">
+			<UnsavedChangesGuard state={unsaved} />
 			<PageHeader
 				title="Edit product"
 				subtitle={product.name}
@@ -211,19 +293,16 @@ function EditProductRoute() {
 						{product.active ? (
 							<Button
 								variant="secondary"
-								onClick={async () => {
-									await archive({ productId: product._id });
-									navigate({ to: "/app/products" });
-								}}
+								disabled={locked}
+								onClick={() => void archiveProduct()}
 							>
 								Archive
 							</Button>
 						) : (
 							<Button
 								variant="secondary"
-								onClick={async () => {
-									await update({ productId: product._id, active: true });
-								}}
+								disabled={locked}
+								onClick={() => void restoreProduct()}
 							>
 								Restore
 							</Button>
@@ -231,6 +310,17 @@ function EditProductRoute() {
 					</>
 				}
 			/>
+			{/* The headcount leads on an event product: tapping into "BNI
+			    Breakfast" the morning of the event, "18 RSVPs · 11 Set A" is what
+			    she came for — not the name field. Absent on every other product. */}
+			{headcount ? (
+				<EventRsvpPanel
+					headcount={headcount}
+					productId={product._id}
+					productName={product.name}
+				/>
+			) : null}
+
 			{/* Mobile header — back button, title, storefront preview + the honest
 			    status chip (Live / Sold out / Hidden / Archived), visible from the
 			    top of a long form. */}
@@ -257,23 +347,48 @@ function EditProductRoute() {
 				<StatusChip status={status} />
 			</div>
 
+			{/* Why nothing here saves right now — a lapsed store, or one out of
+			    credits (Credits T3). Each renders nothing otherwise. */}
+			<ViewOnlyNote />
+
 			<ProductForm
 				key={product._id}
 				retailerId={product.retailerId}
+				overseas={retailer ? overseasOf(retailer) : undefined}
+				saveLock={saveLock}
 				draftRef={formDraftRef}
+				onUnsavedChange={setUnsaved}
+				// Photos save the moment they change — a seller who adds one and
+				// leaves (or whose phone drops the tab) keeps it (z8r3fdtk82).
+				// Only the image list is sent; every other field waits for Save.
+				onImagesAutosave={async (imageStorageIds) => {
+					await update({ productId: product._id, imageStorageIds });
+				}}
 				spotlight={spot}
 				categoriesLocked={
 					!retailer.actingAsAdmin &&
 					!hasFeature(retailer.subscription, "categories")
 				}
+				groupedPromotion={groupedPromotion}
+				promoLocked={
+					!retailer.actingAsAdmin && !hasFeature(retailer.subscription, "promo")
+				}
+				eventsLocked={
+					!retailer.actingAsAdmin &&
+					!hasFeature(retailer.subscription, "events")
+				}
+				// Live RSVPs lock the date + the toggle, mirroring the server's
+				// refusal so the seller never types a change that can't save.
+				eventRsvpCount={headcount?.taken}
 				currency={product.currency}
 				initialValues={{
 					name: product.name,
 					description: product.description,
 					hidden: product.hidden,
+					domesticOnly: product.domesticOnly,
 					kind: product.kind,
 					capacityPerNight: product.booking
-						? String(product.booking.capacityPerNight)
+						? capacityDraftFromListing(product.booking.capacityPerNight)
 						: undefined,
 					securityDeposit: product.booking?.securityDeposit
 						? (product.booking.securityDeposit / 100).toFixed(2)
@@ -286,20 +401,30 @@ function EditProductRoute() {
 					// edit. Found while adding the weekend rate (S13).
 					packageUnit: product.booking?.packageUnit,
 					autoAccept: product.booking?.autoAccept === true,
+					skipsClosedDays: product.booking?.skipsClosedDays === true,
+					maxSkips: product.booking?.maxSkips?.toString() ?? "",
 					weekendPrice: product.booking?.weekendPrice
 						? (product.booking.weekendPrice / 100).toFixed(2)
 						: undefined,
 					weekendDays: product.booking?.weekendDays,
 					minNoticeDays: product.minNoticeDays,
+					prepMinutes: product.prepMinutes,
+					pickupNote: product.pickupNote,
 					minQuantity: product.minQuantity,
+					event: product.event,
+					buyerQuestions: product.buyerQuestions,
 					categoryIds,
 					imageStorageIds: product.imageStorageIds,
 					imageUrls: product.imageUrls,
 					options: product.options ?? [],
+					// The raw promo config is owner-only in the projection, so it
+					// is readable here and nowhere a buyer can see it.
+					promo: product.promo,
 					variants: product.variants.map((vr) => ({
 						optionValues: vr.optionValues,
 						sku: vr.sku,
 						price: vr.price,
+						promoPrice: vr.promoPrice,
 						onHand: vr.onHand,
 						active: vr.active,
 						// Resolved per-variant server-side (override ?? product default).
@@ -313,25 +438,42 @@ function EditProductRoute() {
 						customPrompt: vr.customPrompt,
 					})),
 				}}
-				// Weight/zone-priced store (86eyeea1n): parcel weight is promoted to
-				// a first-class field in the editor — a weightless item strands that
-				// store's checkout on "missing weights".
-				weightMode={retailer.deliveryConfig?.mode === "weight"}
+				// A store that prices delivery by weight (its rate card, or a live
+				// courier — `weightPricingOf`): parcel weight is promoted to a
+				// first-class, required field in the editor.
+				weightPricing={retailer.weightPricing ?? null}
+				storeSchedule={{
+					openingHours: retailer.openingHours,
+					closedDates: retailer.closedDates,
+				}}
+				// Legacy stores have the flag unset and DO offer collection, so
+				// only an explicit false hides the pickup note.
+				offerSelfCollect={retailer.offerSelfCollect !== false}
+				// Stock is no longer part of the product save (86eypn8ye): these
+				// saved variants render their count read-only, live, with an Adjust
+				// button. `product` is a reactive read, so the number ticks down as
+				// orders land instead of going stale behind an open form.
+				liveStock={product.variants.map((vr) => ({
+					variantId: vr._id,
+					optionValues: vr.optionValues,
+					isCustom: vr.isCustom,
+					onHand: vr.onHand,
+				}))}
 				submitLabel="Save changes"
 				stickyAction={
 					// Labelled, and NOT tinted red — an icon-only red button here read
 					// as "delete", when archive is the reversible, gentle action. The
 					// word is the disambiguation; red is reserved for the true
-					// destructive CTA below the form.
+					// destructive CTA below the form. Opaque in dark too: the outline
+					// variant's dark fill is see-through, and the bar is sticky over
+					// the form on a phone.
 					product.active ? (
 						<Button
 							type="button"
 							variant="outline"
-							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4"
-							onClick={async () => {
-								await archive({ productId: product._id });
-								navigate({ to: "/app/products" });
-							}}
+							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4 dark:bg-background dark:hover:bg-muted"
+							disabled={locked}
+							onClick={() => void archiveProduct()}
 						>
 							<Archive className="size-4" />
 							Archive
@@ -340,10 +482,9 @@ function EditProductRoute() {
 						<Button
 							type="button"
 							variant="outline"
-							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4"
-							onClick={async () => {
-								await update({ productId: product._id, active: true });
-							}}
+							className="h-12 shrink-0 gap-2 rounded-xl bg-background px-4 dark:bg-background dark:hover:bg-muted"
+							disabled={locked}
+							onClick={() => void restoreProduct()}
 						>
 							<ArchiveRestore className="size-4" />
 							Restore
@@ -359,13 +500,24 @@ function EditProductRoute() {
 						name: values.name,
 						description: values.description ?? null,
 						hidden: values.hidden,
+						domesticOnly: values.domesticOnly,
 						minNoticeDays: values.minNoticeDays,
+						prepMinutes: values.prepMinutes ?? 0,
+						pickupNote: values.pickupNote ?? "",
 						// 0 clears the rule (blank input) — server normalizes to unset.
 						minQuantity: values.minQuantity ?? 0,
 						imageStorageIds: values.imageStorageIds,
 						// Booking capacity (kind itself is immutable — update has no
 						// kind arg by design). undefined on non-booking = no change.
 						booking: values.booking,
+						// `null` clears a stored event (toggle off); the form never
+						// sends undefined, so an event can always be turned off.
+						event: values.event,
+						// Same `null` = clear contract as `event` (z8r3fdcw72), and
+						// clearing is deliberately un-gated server-side so a store
+						// that drops to Starter can still switch a promotion off.
+						promo: values.promo,
+						buyerQuestions: values.buyerQuestions,
 					});
 					await saveVariantGrid({
 						productId: product._id,
@@ -374,11 +526,36 @@ function EditProductRoute() {
 					});
 					// Category membership last — a plan-gate error here can't block
 					// the core save above. Server diffs, so unchanged = no-op.
-					await setProductCategories({
+					const filing = await setProductCategories({
 						productId: product._id,
 						categoryIds: values.categoryIds,
 					});
-					navigate({ to: "/app/products" });
+					// Saving navigated away in silence, so the only feedback was the
+					// page changing — and now that stock confirms its own writes with
+					// a toast, a silent product save read as the one that didn't
+					// land. Same confirmation as delete, which already had one.
+					// Adding a category also filed this product's earlier
+					// uncategorized orders server-side — say so, or the inbox filter
+					// changing under the seller is behaviour they never asked for.
+					const filed = pastOrderFilingMessage(filing);
+					toast.success(
+						"Product saved.",
+						filed
+							? {
+									description: filed,
+									action: {
+										label: "View in orders",
+										onClick: () =>
+											navigate({
+												to: "/app/orders",
+												search: { cat: filing.categoryNames },
+											}),
+									},
+								}
+							: undefined,
+					);
+					// Everything just saved, so the leave guard has nothing to protect.
+					navigate({ to: "/app/products", ignoreBlocker: true });
 				}}
 			/>
 
@@ -428,7 +605,7 @@ function EditProductRoute() {
 					type="button"
 					variant="ghost"
 					onClick={() => setConfirmDeleteOpen(true)}
-					disabled={deleting}
+					disabled={deleting || locked}
 					className="h-11 self-start gap-2 px-3 text-sm font-medium text-destructive hover:bg-destructive/10 hover:text-destructive"
 				>
 					<Trash2 className="size-4" aria-hidden="true" />
@@ -456,12 +633,7 @@ function EditProductRoute() {
 							Close
 						</Button>
 						{product.active ? (
-							<Button
-								onClick={async () => {
-									await archive({ productId: product._id });
-									navigate({ to: "/app/products" });
-								}}
-							>
+							<Button disabled={locked} onClick={() => void archiveProduct()}>
 								<Archive className="size-4" />
 								Archive instead
 							</Button>
@@ -482,7 +654,8 @@ function EditProductRoute() {
 					try {
 						await deletePermanently({ productId: product._id });
 						toast.success("Product deleted.");
-						navigate({ to: "/app/products" });
+						// The product is gone, so there's no draft left to keep.
+						navigate({ to: "/app/products", ignoreBlocker: true });
 					} catch (err) {
 						toast.error(convexErrorMessage(err));
 						throw err; // keeps the dialog open so the seller can retry

@@ -16,7 +16,11 @@
  * least as often as after.
  */
 
-import { displayAddressState } from "../address";
+import {
+	addressCountryLine,
+	displayAddressState,
+	formatBusinessAddress,
+} from "../address";
 import { type Country, DEFAULT_COUNTRY } from "../country";
 import { formatPhone } from "../customer";
 import { formatFulfilmentDateTime } from "../fulfilmentDate";
@@ -96,18 +100,27 @@ export type AwbLabelData = {
 // --- Eligibility -----------------------------------------------------------
 
 /** Why an order can't be given a despatch label. */
-export type AwbSkipReason = "cancelled" | "no_address" | "not_found";
+export type AwbSkipReason =
+	| "cancelled"
+	| "no_address"
+	| "not_found"
+	/** Waiting on credits (Credits T3.1) — the seller can't see this order, so
+	 * they certainly can't print its address on a parcel. Decided by the gate
+	 * at the call site, not by `labelSkipReason`, which is pure and knows
+	 * nothing about a store's balance. */
+	| "credit_gated";
 
 export const AWB_SKIP_REASONS: readonly AwbSkipReason[] = [
 	"cancelled",
 	"no_address",
 	"not_found",
+	"credit_gated",
 ];
 
 export type AwbSkipCounts = Record<AwbSkipReason, number>;
 
 export function emptySkipCounts(): AwbSkipCounts {
-	return { cancelled: 0, no_address: 0, not_found: 0 };
+	return { cancelled: 0, no_address: 0, not_found: 0, credit_gated: 0 };
 }
 
 type EligibilityOrder = {
@@ -286,6 +299,7 @@ type AddressForAwb = {
 	state: string;
 	postcode: string;
 	notes?: string;
+	country?: Country;
 };
 
 export type OrderForAwb = {
@@ -317,7 +331,7 @@ export type RetailerForAwb = {
 	 * capture country to catch a return address left behind by a country
 	 * switch (86eyqgujv). */
 	country?: Country;
-	businessAddress?: { label: string; country?: Country };
+	businessAddress?: { label: string; unit?: string; country?: Country };
 };
 
 /**
@@ -328,13 +342,20 @@ export type RetailerForAwb = {
  * `clampLines`' job, deliberately kept separate so this stays a pure statement
  * about how a Malaysian or Singaporean address is laid out.
  */
-export function addressLines(address: AddressForAwb): string[] {
+export function addressLines(
+	address: AddressForAwb,
+	/** The store's country — a parcel going abroad (z8r3fdr5yy) gets its
+	 * country as the last line, the one a courier sorts on. */
+	storeCountry: Country = DEFAULT_COUNTRY,
+): string[] {
 	const lines = [address.line1.trim()];
 	const line2 = address.line2?.trim();
 	if (line2) lines.push(line2);
 	lines.push(`${address.postcode.trim()} ${address.city.trim()}`.trim());
 	const state = displayAddressState(address);
 	if (state) lines.push(state);
+	const country = addressCountryLine(address, storeCountry);
+	if (country) lines.push(country.toUpperCase());
 	return lines.filter((l) => l.length > 0);
 }
 
@@ -414,7 +435,10 @@ export function orderToAwbLabelData(args: {
 		retailer.businessAddress.country !== (retailer.country ?? DEFAULT_COUNTRY);
 	const storeAddress = clampLines(
 		retailer.businessAddress && !foreignReturnAddress
-			? [retailer.businessAddress.label]
+			// Unit / floor / building included (z8r3fdff8r): a returned parcel
+			// has the same find-the-door problem as an arriving rider, and this
+			// block IS the return address.
+			? [formatBusinessAddress(retailer.businessAddress)]
 			: [],
 	);
 	const storeParty: Omit<AwbParty, "heading"> = {
@@ -428,7 +452,11 @@ export function orderToAwbLabelData(args: {
 				: undefined,
 	};
 
-	const buyerAddress = clampLines(address ? addressLines(address) : []);
+	const buyerAddress = clampLines(
+		address
+			? addressLines(address, retailer.country ?? DEFAULT_COUNTRY)
+			: [],
+	);
 	// Address notes are addressing information (gate codes, landmarks), so losing
 	// them counts against the same warning as losing a street.
 	const notesLost = address?.notes !== undefined && losesCharacters(address.notes);

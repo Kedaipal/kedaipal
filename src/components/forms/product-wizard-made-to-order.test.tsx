@@ -60,7 +60,9 @@ function renderWizard(state: WizardState) {
 		<ProductWizard
 			retailerId={"r1" as never}
 			categoriesLocked={false}
-			currency="RM"
+			eventsLocked={false}
+			promoLocked={false}
+			currency="MYR"
 			onSubmit={vi.fn()}
 			onSkipToFullForm={vi.fn()}
 			onOpenFullForm={vi.fn()}
@@ -76,11 +78,11 @@ const pickMadeToOrder = () =>
 describe("wizard — the Made to order type is reachable and self-explaining", () => {
 	it("offers it as a third answer, with what it means", () => {
 		renderWizard(atTypeStep());
-		expect(screen.getByText("What kind of product is it?")).toBeTruthy();
+		expect(screen.getByText("Does the buyer choose anything?")).toBeTruthy();
 		const card = screen.getByRole("button", { name: /made to order/i });
 		expect(card.getAttribute("aria-pressed")).toBe("false");
 		expect(
-			screen.getByText(/you quote a price and get a mockup approved/i),
+			screen.getByText(/you quote it and get a mockup approved/i),
 		).toBeTruthy();
 
 		pickMadeToOrder();
@@ -110,11 +112,13 @@ describe("wizard — the Made to order type is reachable and self-explaining", (
 		// "no choices, no stock" note stayed on screen under it.
 		renderWizard(atTypeStep());
 		pickMadeToOrder();
-		fireEvent.click(screen.getByRole("button", { name: /just one item/i }));
+		fireEvent.click(
+			screen.getByRole("button", { name: /one item, one price/i }),
+		);
 
 		expect(
 			screen
-				.getByRole("button", { name: /just one item/i })
+				.getByRole("button", { name: /one item, one price/i })
 				.getAttribute("aria-pressed"),
 		).toBe("true");
 		expect(

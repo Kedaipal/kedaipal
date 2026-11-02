@@ -6,7 +6,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { ClaimSendOutcome } from "../../../convex/lib/orderClaims";
 import { MASK_PII } from "../../lib/analytics-privacy";
-import { formatClaimCountdown } from "../../lib/countdown";
+import { formatTimeLeft } from "../../lib/countdown";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import {
@@ -22,7 +22,11 @@ export type LiveClaim = {
 	expiresAt: number;
 	windowMinutes: number;
 	currency: string;
-	itemsTotal: number;
+	/** Net of the voucher — see `ClaimListRow.total`. */
+	total: number;
+	/** The voucher still applying to this claim, if one does — the line the
+	 * buyer's ticket draws between the items and the total. */
+	voucher?: { code: string; discount: number };
 	lines: Array<{
 		name: string;
 		variantLabel: string | undefined;
@@ -110,7 +114,7 @@ export function WaitingOnBuyerScreen({
 						}`}
 					>
 						<Clock className="size-3.5" aria-hidden />
-						{stillOpen ? formatClaimCountdown(remaining) : "Expired"}
+						{stillOpen ? formatTimeLeft(remaining) : "Expired"}
 					</span>
 				</div>
 
@@ -156,6 +160,31 @@ export function WaitingOnBuyerScreen({
 						</li>
 					))}
 				</ul>
+				{/* The voucher's line, exactly as the buyer's ticket draws it: without
+				    it this screen showed the items at full price directly above a
+				    total that didn't add up to them. Items first, so the deduction
+				    has a figure to come off. */}
+				{claim.voucher ? (
+					<>
+						<div className="flex items-center justify-between text-sm">
+							<span className="text-muted-foreground">Items</span>
+							<span className="tabular-nums text-muted-foreground">
+								{formatPrice(
+									claim.total + claim.voucher.discount,
+									claim.currency,
+								)}
+							</span>
+						</div>
+						<div className="flex items-center justify-between text-sm">
+							<span className="truncate text-accent-emphasis">
+								Voucher · {claim.voucher.code}
+							</span>
+							<span className="shrink-0 tabular-nums font-medium text-accent-emphasis">
+								−{formatPrice(claim.voucher.discount, claim.currency)}
+							</span>
+						</div>
+					</>
+				) : null}
 				<div className="flex items-center justify-between text-sm">
 					{/* "Locked total", not "Total": the buyer adds delivery on their own
 					    page, so this figure is the commitment, not the final bill. */}
@@ -163,7 +192,7 @@ export function WaitingOnBuyerScreen({
 						Locked total
 					</span>
 					<span className="text-lg font-bold tabular-nums">
-						{formatPrice(claim.itemsTotal, claim.currency)}
+						{formatPrice(claim.total, claim.currency)}
 					</span>
 				</div>
 

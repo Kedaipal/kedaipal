@@ -31,11 +31,14 @@ to hand the buyer a link to the page that carries the rest.
 
 Two paths keep a *different* single message, and both are still one:
 
-- **Counter checkout** — the walk-in's message is the free-form order
-  confirmation (`whatsapp.notifyCounterOrderCreated`), sent in the session
-  window their QR scan opened. (A poster scan also earns a one-line ack with
-  their pairing code — a reply to the buyer's own message, not a proactive send,
-  but see [Known edges](#known-edges).) See
+- **Counter checkout** — since Oct 2026 the walk-in's message IS the
+  storefront's template (`whatsapp.notifyCounterOrderCreated` sends
+  `order_confirmation_utility` with the same params and button), so it no
+  longer depends on a session window Meta may have closed. Its outcome is
+  stamped on the order like the storefront's. The free-form confirmation
+  survives only where the template env is unset. (A poster scan also earns a
+  one-line ack with their pairing code — a reply to the buyer's own message,
+  not a proactive send, but see [Known edges](#known-edges).) See
   [`counter-checkout.md`](./counter-checkout.md).
 - **Legacy / no-template stores** (`WHATSAPP_ORDER_CONFIRM_TEMPLATE` unset, or a
   phone-less direct create) — the buyer sends their `ORD-XXXX` first and the
@@ -280,12 +283,13 @@ fine and costs nothing. Adding a `wa.send` is the thing to stop at.
   simplification; if counter volume makes it material, folding the pairing code
   into the confirmation (and acking nothing at scan) is the obvious next move,
   but it costs the buyer their code while they queue.
-- **A counter buyer who types their `ORD-` reference gets a reply.** Counter
-  orders carry no `confirmationPushStatus`, so `pushOwnsTheMessage` is false and
-  `handleInbound` answers with the legacy free-form confirm. It is buyer-
-  initiated and inside their own session window, so it isn't a proactive send —
-  but it is technically another message on that order. Left alone rather than
-  silencing a buyer who wrote in; revisit if the logs show it happening.
+- **A counter buyer who types their `ORD-` reference gets NO reply once their
+  confirmation landed.** Since Oct 2026 counter orders carry
+  `confirmationPushStatus` (stamped by `notifyCounterOrderCreated`), so
+  `pushOwnsTheMessage` is true for a `sent` one and `handleInbound` stays
+  silent, exactly as for a storefront push — the buyer already holds the link.
+  A `failed` counter confirmation still earns the reply: that push reached
+  nobody, so the reply IS their one message and their recovery route.
 - **The sent message's `Total:` is never corrected.** A held price went out as
   "to be confirmed" and stays that way; a settled one goes out as a number and
   keeps it through any later re-price (`updateMockupQuote`, a re-submit,

@@ -2,6 +2,7 @@ import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "../../convex/_generated/api";
+import { RESERVED_SLUG_MESSAGE } from "../../convex/lib/reservedSlugs";
 import { validateSlugShape } from "../lib/slug";
 
 export type SlugAvailabilityState =
@@ -19,14 +20,23 @@ const INVALID_MESSAGES: Record<
 	tooShort: "At least 3 characters",
 	tooLong: "At most 32 characters",
 	invalid: "Lowercase letters, numbers and single dashes only",
-	reserved: "That slug is reserved",
+	reserved: RESERVED_SLUG_MESSAGE,
 };
 
 /**
  * Live slug availability hook. 300ms debounce between user input and the
  * Convex query so we don't thrash the backend while typing.
+ *
+ * `purpose` is REQUIRED and threads straight through to the server, because a
+ * store being BORN and a store being RENAMED need opposite answers about the
+ * caller's own slug — see `checkSlugAvailability`. The hook deliberately has no
+ * default: a screen that doesn't say which it is would silently get the wrong
+ * verdict, which is exactly the bug this argument exists to kill.
  */
-export function useSlugAvailability(rawSlug: string): SlugAvailabilityState {
+export function useSlugAvailability(
+	rawSlug: string,
+	purpose: "create" | "rename",
+): SlugAvailabilityState {
 	const [debounced, setDebounced] = useState(rawSlug);
 
 	useEffect(() => {
@@ -35,7 +45,7 @@ export function useSlugAvailability(rawSlug: string): SlugAvailabilityState {
 	}, [rawSlug]);
 
 	const shape = validateSlugShape(debounced);
-	const queryArgs = shape.ok ? { slug: shape.value } : "skip";
+	const queryArgs = shape.ok ? { slug: shape.value, purpose } : "skip";
 	const result = useQuery(
 		convexQuery(api.retailers.checkSlugAvailability, queryArgs),
 	).data;

@@ -3,6 +3,8 @@ import type { ReactNode } from "react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { formatPrice } from "../../lib/format";
 import { deriveMapsUrl } from "../../lib/google-address";
+import { TONE_CHIP } from "../../lib/tone";
+import { ClampedNote } from "../ui/clamped-note";
 
 /** Pickup kind — "self_collect" (seller's place) or "drop_off" (meetup point). */
 export type PickupKind = "self_collect" | "drop_off";
@@ -46,9 +48,28 @@ export const PICKUP_KIND_HEADING: Record<PickupKind, string> = {
 export function PickupSummaryCard({
 	location,
 	currency,
+	asEventVenue = false,
 }: {
 	location: PublicPickupLocation;
 	currency: string;
+	/**
+	 * This card is showing WHERE AN EVENT HAPPENS, not a pickup option the
+	 * buyer chose. One prop, because the two things it suppresses are one
+	 * idea — both say "the pickup subsystem's vocabulary doesn't apply here":
+	 *
+	 * - **The fee chip.** An event venue never charges its pickup fee (see
+	 *   `buildEventVenueSnapshot`). The chip exists to make a real charge
+	 *   visible, so showing it where nothing is charged is the same lie in
+	 *   reverse.
+	 * - **The kind badge.** "Self-collect" / "Drop-off" describe how a buyer
+	 *   receives an ORDER. A guest attending an event is doing neither — they
+	 *   are going to an address — so the badge reads as a category error
+	 *   (found driving the RSVP page, 6 Oct 2026, `z8r3fdm32x`).
+	 *
+	 * An address is a pickup point only because that is where a store keeps
+	 * its addresses; that storage detail should not reach the guest.
+	 */
+	asEventVenue?: boolean;
 }) {
 	return (
 		// Fill only, no outline: this renders inside the checkout's bordered
@@ -64,8 +85,12 @@ export function PickupSummaryCard({
 						<p className="text-sm font-semibold leading-tight">
 							{location.label}
 						</p>
-						<PickupKindBadge kind={location.locationType} />
-						<PickupFeeChip fee={location.fee} currency={currency} />
+						{asEventVenue ? null : (
+							<>
+								<PickupKindBadge kind={location.locationType} />
+								<PickupFeeChip fee={location.fee} currency={currency} />
+							</>
+						)}
 					</div>
 					<p className="text-xs text-muted-foreground whitespace-pre-line">
 						{location.address}
@@ -91,9 +116,10 @@ export function PickupSummaryCard({
 						) : null;
 					})()}
 					{location.notes ? (
-						<p className="line-clamp-3 text-xs text-muted-foreground whitespace-pre-line">
-							{location.notes}
-						</p>
+						<ClampedNote
+							text={location.notes}
+							className="text-xs text-muted-foreground whitespace-pre-line"
+						/>
 					) : null}
 				</div>
 			</div>
@@ -102,7 +128,10 @@ export function PickupSummaryCard({
 }
 
 /** "+ RM2.00 fee" chip on a paid pickup point — the charge must be visible on
- *  the option itself, before the buyer picks it, not only in the totals. */
+ *  the option itself, before the buyer picks it, not only in the totals.
+ *  Tone comes from the shared registry rather than hand-written classes: the
+ *  identical pill also renders seller-side (Settings → Fulfilment), and two
+ *  hand-copied colour maps drift on the first change — dark mode was the proof. */
 function PickupFeeChip({
 	fee,
 	currency,
@@ -112,7 +141,9 @@ function PickupFeeChip({
 }) {
 	if (!fee || fee <= 0) return null;
 	return (
-		<span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+		<span
+			className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${TONE_CHIP.warn}`}
+		>
 			+ {formatPrice(fee, currency)} fee
 		</span>
 	);
@@ -159,6 +190,14 @@ export function PickupLocationRadioList({
 
 	const renderOption = (loc: PublicPickupLocation) => {
 		const selected = value === loc._id;
+		// The radio is named by the point's label alone and described by its
+		// address + note: wrapped in the <label>, it would otherwise announce the
+		// whole card as its NAME — maps link and the note's "Show more"
+		// included. The note is part of the description because it's what
+		// carries the instructions (and the link) for this point.
+		const nameId = `pickup-${loc._id}-name`;
+		const detailId = `pickup-${loc._id}-detail`;
+		const noteId = `pickup-${loc._id}-note`;
 		const mapsUrl = deriveMapsUrl(loc);
 		return (
 			// Fill, not outline — see PickupSummaryCard. The radio itself is the
@@ -176,12 +215,14 @@ export function PickupLocationRadioList({
 					value={loc._id}
 					checked={selected}
 					onChange={() => onChange(loc._id)}
+					aria-labelledby={nameId}
+					aria-describedby={loc.notes ? `${detailId} ${noteId}` : detailId}
 					aria-invalid={error ? true : undefined}
 					className="mt-1 size-4 shrink-0 accent-accent"
 				/>
 				<div className="flex min-w-0 flex-1 flex-col gap-1">
 					<span className="flex items-center gap-2">
-						<span className="text-sm font-semibold leading-tight">
+						<span id={nameId} className="text-sm font-semibold leading-tight">
 							{loc.label}
 						</span>
 						{/* Badge only when headings are off — otherwise the group
@@ -189,7 +230,10 @@ export function PickupLocationRadioList({
 						{showHeadings ? null : <PickupKindBadge kind={loc.locationType} />}
 						<PickupFeeChip fee={loc.fee} currency={currency} />
 					</span>
-					<span className="text-xs text-muted-foreground whitespace-pre-line">
+					<span
+						id={detailId}
+						className="text-xs text-muted-foreground whitespace-pre-line"
+					>
 						{loc.address}
 					</span>
 					{loc.scheduleNote ? (
@@ -209,6 +253,17 @@ export function PickupLocationRadioList({
 							<ExternalLink className="size-3" />
 							Open in maps
 						</a>
+					) : null}
+					{/* The spot's own note ("park at the back", a parking-guide
+					    link) — read while CHOOSING, not only after ordering. Was
+					    missing here, shown only on the single-spot summary card. */}
+					{loc.notes ? (
+						<ClampedNote
+							text={loc.notes}
+							textId={noteId}
+							lines={2}
+							className="text-xs text-muted-foreground whitespace-pre-line"
+						/>
 					) : null}
 				</div>
 			</label>

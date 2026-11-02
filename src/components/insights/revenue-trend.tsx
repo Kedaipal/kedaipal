@@ -3,6 +3,7 @@ import { ArrowRight, X } from "lucide-react";
 import { useRef, useState } from "react";
 import { formatFulfilmentDate } from "../../../convex/lib/fulfilmentDate";
 import type { Bucketing, TrendBucket } from "../../../convex/lib/insights";
+import { REVENUE_LEAVES } from "../../../convex/lib/orderBuckets";
 import { formatPrice, formatPriceCompact } from "../../lib/format";
 import { bucketLabel } from "../../lib/insights-view";
 import { cn } from "../../lib/utils";
@@ -150,7 +151,10 @@ export function RevenueTrend({
 									{sel.orderCount > 0 ? (
 										<Link
 											to="/app/orders"
-											search={bucketRange(sel.start, bucketing)}
+											search={{
+												...bucketRange(sel.start, bucketing),
+												st: [...REVENUE_LEAVES],
+											}}
 											className="-my-1 flex h-8 shrink-0 items-center gap-1 rounded-lg px-1.5 text-xs font-semibold text-accent-emphasis transition-colors hover:bg-accent/10"
 										>
 											View orders

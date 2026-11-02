@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import type { DeliveryJobStatus } from "../../../convex/lib/deliveryJobs";
 import {
 	formatFulfilmentDateTime,
 	hhmmFromMinutes,
@@ -26,12 +27,24 @@ import {
 	todayMytMidnight,
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
+import type { LalamoveMarket } from "../../../convex/lib/lalamove";
+import { formatKg, vehicleWord } from "../../../convex/lib/lalamoveVehicle";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { formatCountdown } from "../../lib/countdown";
-import { dispatchBlockCopy } from "../../lib/dispatch-block";
+import {
+	JOB_TONE_CLASS,
+	jobStatusLabel,
+	jobStatusTone,
+} from "../../lib/delivery-job-status";
+import {
+	dispatchBlockCopy,
+	riderContactFallbackCopy,
+} from "../../lib/dispatch-block";
 import { lalamoveSurface } from "../../lib/dispatch-surface";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { ProBadge } from "../app/pro-gate";
+import { DispatchWalletLine } from "../deliveries/dispatch-wallet-line";
+import { HelperBullets, InfoDisclosure } from "../settings/settings-primitives";
 import { AppImage } from "../ui/app-image";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -44,6 +57,7 @@ import {
 	DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { AddTipDialog, canTipMore } from "./add-tip-dialog";
 
 /** How long "Confirm & dispatch" stays inert after it appears (86eypjfuf).
  * Long enough that a tap already in flight — the one that opened the dialog,
@@ -61,7 +75,21 @@ type QuoteState = {
 	fee: number;
 	buyerPaidFee: number;
 	vehicleType: string;
+	/** Why the default vehicle isn't the store's setting, or that no rider
+	 * vehicle can carry the order (25 Oct 2026, `prepareBooking`). */
+	vehicleAdvice?:
+		| {
+				kind: "escalated";
+				from: string;
+				to: string;
+				cartKg: number;
+				fromLoadKg?: number;
+		  }
+		| { kind: "too_heavy"; cartKg: number; maxKg: number };
 	buyerContactFallback: boolean;
+	/** The store's Lalamove market — the country the `buyerContactFallback`
+	 * notice names (z8r3fdh274). */
+	market: LalamoveMarket;
 	/** The pickup moment this quote is scheduled for — undefined = the rider
 	 * comes now (86eyg0n8e follow-up). */
 	scheduledFor?: number;
@@ -92,8 +120,15 @@ export function BookDeliveryCard({
 	advanceWithoutRider,
 	onAdvanceBookUnavailable,
 	embedded = false,
+	lockedReason,
+	onUseCourier,
 }: {
 	order: Doc<"orders">;
+	/** Set while the store can't book right now — out of credits (Credits T3)
+	 * or view-only. The Book button stays where it is, disabled, with this
+	 * sentence under it, and nothing auto-opens a quote the server would
+	 * refuse. Cancelling a live booking stays open: it releases the order. */
+	lockedReason?: string;
 	/** Rendered inside the dispatch hub's shell, which already draws the
 	 * border and padding around the provider switch — so the card drops its
 	 * own chrome rather than nesting a card in a card. */
@@ -114,6 +149,10 @@ export function BookDeliveryCard({
 	 * provider down). The seller asked to move the order and got a toast — the
 	 * page owes them the other route out, so it reopens its own prompt. */
 	onAdvanceBookUnavailable?: () => void;
+	/** Hands the seller to the Delyva courier tab — set only by the dispatch
+	 * hub, i.e. when this order can also go by courier. Offered when no rider
+	 * vehicle can carry the order (25 Oct 2026). */
+	onUseCourier?: () => void;
 }) {
 	const dispatch = useQuery(
 		convexQuery(api.lalamove.getDeliveryJob, { shortId: order.shortId }),
@@ -121,6 +160,7 @@ export function BookDeliveryCard({
 	const prepareBooking = useAction(api.lalamove.prepareBooking);
 	const confirmBooking = useAction(api.lalamove.confirmBooking);
 	const cancelBooking = useAction(api.lalamove.cancelBooking);
+	const [tipOpen, setTipOpen] = useState(false);
 	// AC2 of the rebook fix (86eyp63xn): booking at a seller-picked moment can
 	// also move the ORDER's promise in the same action — see syncOrderTime.
 	const rescheduleFulfilment = useMutation(api.orders.rescheduleFulfilment);
@@ -196,6 +236,7 @@ export function BookDeliveryCard({
 		if (!dispatch || prev === undefined) return; // loading / mount baseline
 		const justPacked = prev !== "packed" && order.status === "packed";
 		if (!justPacked) return;
+		if (lockedReason) return; // the Book button says why
 		if (!dispatch.promptBookOnPacked) return;
 		if (order.paymentStatus !== "received") return; // only paid orders
 		if (dispatch.blockReason !== null) return; // not bookable (keys/pin/plan/…)
@@ -260,6 +301,7 @@ export function BookDeliveryCard({
 		prevTokenRef.current = bookRequestToken;
 		if (bookRequestToken === prev) return;
 		if (!dispatch || dispatch.blockReason !== null) return;
+		if (lockedReason) return; // the Book button says why
 		// Same collection stop as the packed prompt. Unreachable today (a
 		// collection order's advance never raises this token) — kept as defence
 		// in depth so a future caller can't auto-dispatch a collection the
@@ -318,11 +360,12 @@ export function BookDeliveryCard({
 		!["completed", "canceled", "expired", "rejected"].includes(job.status)
 			? job
 			: null;
-	// Lalamove is a Malaysian market for us. On a Singapore store the card has
-	// nothing true to offer — not a Book button, and not the "set Lalamove up"
-	// hint either, since there is no setup that would work. A completed or
-	// failed Malaysian trip belongs on the order timeline rather than under a
-	// live dispatch card that would re-offer a booking (86eyqgujv).
+	// In a country rider booking doesn't serve (COUNTRY_COURIER_BOOKING.lalamove — MY and
+	// SG both do today) the card has nothing true to offer — not a Book button,
+	// and not the "set Lalamove up" hint either, since there is no setup that
+	// would work. A completed or failed trip from before a country switch
+	// belongs on the order timeline rather than under a live dispatch card that
+	// would re-offer a booking (86eyqgujv). `lalamoveSurface` above decides it.
 	//
 	// But NEVER while a rider is still out (PR #221 review). Cancelling is the
 	// seller's only way to stop a trip they are being billed for, and the
@@ -367,11 +410,11 @@ export function BookDeliveryCard({
 				Book Lalamove riders in one tap from here — turn on{" "}
 				<b>Lalamove riders</b> under Courier booking in{" "}
 				<Link
-					to="/app/settings"
-					search={{ tab: "fulfilment" }}
+					to="/app/settings/delivery-pricing"
+					hash="courier-booking"
 					className="font-medium text-accent hover:underline"
 				>
-					Settings → Fulfilment
+					Settings → Delivery pricing
 				</Link>
 				.
 			</p>
@@ -599,6 +642,20 @@ export function BookDeliveryCard({
 	}
 
 	const variance = quote ? quote.fee - quote.buyerPaidFee : 0;
+	// No rider vehicle can carry this order. The dialog still prices the
+	// biggest one — the seller's product weights may be wrong, and it is their
+	// call — but it stops presenting that booking as the obvious next step.
+	const tooHeavy = quote?.vehicleAdvice?.kind === "too_heavy";
+	const snapshot = order.deliverySnapshot;
+	const buyerPaidCourier =
+		snapshot?.mode === "live" && snapshot.quoteProvider === "delyva"
+			? (snapshot.quoteServiceName ?? "Delyva courier")
+			: null;
+	const courierFirst = tooHeavy && onUseCourier !== undefined;
+	// Says what it books: the override is a specific vehicle, not "Confirm".
+	const bookAnywayLabel = quote
+		? `Book a ${vehicleWord(quote.vehicleType).toLowerCase()} anyway`
+		: "Book anyway";
 	// A quote past its window can't be dispatched, and neither can one whose
 	// confirm already failed — both need a fresh price, not another press.
 	const quoteStale = quote !== null && now >= quote.expiresAt;
@@ -705,9 +762,53 @@ export function BookDeliveryCard({
 								: "Finding a rider… this usually takes a few minutes. When one picks up, the order moves itself to Shipped and the live tracking link appears on the buyer's order page — nothing for you to do."}
 						</p>
 					)}
+					{/* A booking nobody accepts expires — the tip is the lever
+					    (86eye9xd4). Offered only while it's still finding a rider. */}
+					{activeJob.status === "assigning" &&
+					activeJob.providerOrderId !== undefined &&
+					!(
+						activeJob.scheduledAt !== undefined &&
+						activeJob.scheduledAt > Date.now()
+					) ? (
+						<div className="flex items-center gap-3 rounded-xl border border-border px-3 py-2.5">
+							<p className="min-w-0 flex-1 text-xs text-muted-foreground">
+								{(activeJob.priorityFee ?? 0) > 0
+									? `Tip of ${formatPrice(activeJob.priorityFee ?? 0, order.currency)} added. Still waiting?`
+									: "Taking a while? A tip helps a nearby rider take it sooner."}
+							</p>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="tap-target shrink-0"
+								disabled={
+									!canTipMore(order.currency, activeJob.priorityFee ?? 0)
+								}
+								title={
+									canTipMore(order.currency, activeJob.priorityFee ?? 0)
+										? undefined
+										: "This booking has reached its tip limit"
+								}
+								onClick={() => setTipOpen(true)}
+							>
+								Add tip
+							</Button>
+							<AddTipDialog
+								open={tipOpen}
+								onOpenChange={setTipOpen}
+								shortId={order.shortId}
+								currency={order.currency}
+								fare={activeJob.costActual}
+								tipped={activeJob.priorityFee ?? 0}
+							/>
+						</div>
+					) : null}
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
 						<span>
 							Booking cost {formatPrice(activeJob.costActual, order.currency)}
+							{(activeJob.priorityFee ?? 0) > 0
+								? ` (incl. ${formatPrice(activeJob.priorityFee ?? 0, order.currency)} tip)`
+								: ""}
 						</span>
 						{activeJob.shareLink ? (
 							<a
@@ -822,7 +923,15 @@ export function BookDeliveryCard({
 
 			{/* Book / rebook — or the disabled-with-reason state. */}
 			{!activeJob && bookable && !collectionDone ? (
-				blockReason === null || blockReason === "job_active" ? (
+				lockedReason ? (
+					<div className="flex flex-col gap-2">
+						<Button type="button" className="h-11 w-full" disabled>
+							<Truck className="size-4" />{" "}
+							{collection ? "Send rider to collect" : "Book delivery"}
+						</Button>
+						<p className="text-xs text-muted-foreground">{lockedReason}</p>
+					</div>
+				) : blockReason === null || blockReason === "job_active" ? (
 					<Button
 						type="button"
 						className="h-11 w-full"
@@ -1121,6 +1230,16 @@ export function BookDeliveryCard({
 									</button>
 								))}
 							</div>
+							{/* Why this vehicle (25 Oct 2026): Lalamove prices by vehicle
+							    and never refuses an overweight trip, so the default is
+							    the one that can carry THIS order — and the seller is told
+							    when that isn't their setting, or when nothing fits. */}
+							<VehicleAdviceLine
+								advice={quote.vehicleAdvice}
+								quotedVehicle={quote.vehicleType}
+								courierOffered={onUseCourier !== undefined}
+								buyerPaidCourier={buyerPaidCourier}
+							/>
 							<div className="flex items-center justify-between">
 								<span className="text-muted-foreground">
 									Rider ({quote.vehicleType === "CAR" ? "Car" : "Motorcycle"})
@@ -1150,13 +1269,12 @@ export function BookDeliveryCard({
 							) : null}
 							{quote.buyerContactFallback ? (
 								<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-									This buyer&apos;s WhatsApp isn&apos;t a Malaysian number, and
-									Lalamove only accepts +60 contacts — the rider will get{" "}
-									<span className="font-medium">your store&apos;s number</span>{" "}
-									instead, with the buyer&apos;s real number in the rider notes.
+									{riderContactFallbackCopy(quote.market, collection)}
 								</p>
 							) : null}
-							{variance !== 0 ? (
+							{/* "The difference stays with you" would reward the one
+							    booking the line above advises against. */}
+							{variance !== 0 && !tooHeavy ? (
 								<p
 									className={`rounded-lg px-3 py-2 text-xs ${
 										variance > 0
@@ -1169,6 +1287,25 @@ export function BookDeliveryCard({
 										: `Today's price is ${formatPrice(-variance, order.currency)} less than the buyer paid — the difference stays with you.`}
 								</p>
 							) : null}
+							{/* Can the wallet pay for THIS trip — said before the tap
+							    (z8r3fdx34j). Lalamove only pushes its balance, so a short
+							    wallet warns and Book stays enabled: Lalamove judges. */}
+							<DispatchWalletLine
+								provider="lalamove"
+								priceMinor={requoting ? null : quote.fee}
+								priceCurrency={order.currency}
+								retailerId={order.retailerId}
+								country={quote.market}
+							/>
+							<InfoDisclosure summary="Good to know">
+								<HelperBullets
+									items={[
+										"Riders cover your city zone only — roughly 40 to 70 km from your pickup address.",
+										"Cancelling is free until a rider accepts. After that, Lalamove may charge a fee.",
+										"A booking no rider takes expires. Adding a tip makes it more likely to be picked up.",
+									]}
+								/>
+							</InfoDisclosure>
 						</div>
 					)}
 					{/* The way out for an order going by hand. Its own full-width row,
@@ -1224,6 +1361,43 @@ export function BookDeliveryCard({
 							Price locked for {formatCountdown(quote.expiresAt - now)}
 						</p>
 					) : null}
+					{/* Nothing a rider can carry, and a courier is one tab away:
+					    the courier is the primary action and the rider booking a
+					    deliberate override on its own full-width row — the same
+					    shape as the no-rider way out above, so the footer never
+					    holds three equal-looking choices. */}
+					{courierFirst ? (
+						needsFreshQuote ? (
+							<Button
+								type="button"
+								variant="outline"
+								className="w-full"
+								onClick={() => void handleRequote({})}
+								disabled={booking || requoting || quote === null}
+							>
+								{requoting ? (
+									<>
+										<Loader2 className="size-4 animate-spin" /> Getting a fresh
+										price…
+									</>
+								) : (
+									<>
+										<RefreshCw className="size-4" /> Get a fresh price
+									</>
+								)}
+							</Button>
+						) : (
+							<Button
+								type="button"
+								variant="outline"
+								className="w-full"
+								onClick={handleConfirm}
+								disabled={booking || requoting || quote === null || !spendArmed}
+							>
+								{booking ? "Booking…" : bookAnywayLabel}
+							</Button>
+						)
+					) : null}
 					<DialogFooter>
 						<Button
 							type="button"
@@ -1240,7 +1414,19 @@ export function BookDeliveryCard({
 						    actually succeed: dispatch while the price is live, a
 						    re-quote once it isn't. Re-pressing a dead "Confirm" was
 						    the trap. */}
-						{needsFreshQuote ? (
+						{courierFirst ? (
+							<Button
+								type="button"
+								disabled={booking}
+								onClick={() => {
+									setQuote(null);
+									setBookingError(null);
+									onUseCourier?.();
+								}}
+							>
+								Use a Delyva courier
+							</Button>
+						) : needsFreshQuote ? (
 							<Button
 								type="button"
 								onClick={() => void handleRequote({})}
@@ -1265,7 +1451,11 @@ export function BookDeliveryCard({
 								// silently swallows a real tap reads as broken.
 								disabled={booking || requoting || quote === null || !spendArmed}
 							>
-								{booking ? "Booking…" : "Confirm & dispatch"}
+								{booking
+									? "Booking…"
+									: tooHeavy
+										? bookAnywayLabel
+										: "Confirm & dispatch"}
 							</Button>
 						)}
 					</DialogFooter>
@@ -1299,34 +1489,80 @@ function JobStatusPill({
 	status,
 	collection,
 }: {
-	status: string;
+	status: DeliveryJobStatus;
 	collection: boolean;
 }) {
-	// Delivered is a terminal, settled state — match the order status badge's
-	// green rather than the in-progress mint. Collection trips end at the
-	// SELLER's outlet, so "Delivered" would misread — "Arrived" it is.
-	if (status === "completed") {
+	// Delivered is a terminal, settled state — the order status badge's green
+	// rather than the in-progress mint. Words from the shared author, so this
+	// card and the Deliveries page never disagree.
+	return (
+		<span
+			className={`rounded-full px-2.5 py-1 text-xs font-medium ${JOB_TONE_CLASS[jobStatusTone(status)]}`}
+		>
+			{jobStatusLabel(status, { provider: "lalamove", collection })}
+		</span>
+	);
+}
+
+/**
+ * The dispatch card's vehicle reason (25 Oct 2026). Silent when the store's
+ * setting carries the order. Muted when a bigger vehicle was picked for it;
+ * amber when the seller has switched back to one the order is too heavy
+ * for, or when no rider vehicle can carry it at all.
+ */
+export function VehicleAdviceLine({
+	advice,
+	quotedVehicle,
+	courierOffered = false,
+	buyerPaidCourier = null,
+}: {
+	advice: QuoteState["vehicleAdvice"];
+	quotedVehicle: string;
+	/** The Delyva tab is one tap away (the dispatch hub's switch). */
+	courierOffered?: boolean;
+	/** The courier service whose price the buyer paid at checkout, when a
+	 * Delyva quote won it. */
+	buyerPaidCourier?: string | null;
+}) {
+	if (!advice) return null;
+	const amber =
+		"rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200";
+	if (advice.kind === "too_heavy") {
+		const weight = `This order weighs ${formatKg(advice.cartKg)} — over a car's ${formatKg(advice.maxKg)}, so no rider vehicle here can carry it.`;
+		if (courierOffered) {
+			return (
+				<p className={amber}>
+					{weight}{" "}
+					{buyerPaidCourier
+						? `Your buyer paid a ${buyerPaidCourier} price at checkout — book the courier instead.`
+						: "Send it by Delyva courier instead, or book a van in the Lalamove app."}
+				</p>
+			);
+		}
 		return (
-			<span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-200">
-				{collection ? "Arrived" : "Delivered"}
-			</span>
+			<p className={amber}>
+				{weight} Book a van in the Lalamove app, or arrange your own courier and
+				add the tracking number below.
+			</p>
 		);
 	}
-	const label =
-		status === "assigning"
-			? "Finding rider"
-			: status === "ongoing"
-				? collection
-					? "Heading to customer"
-					: "Rider on the way"
-				: status === "picked_up"
-					? collection
-						? "Collected"
-						: "Picked up"
-					: status;
+	const fromLimit =
+		advice.fromLoadKg !== undefined
+			? ` ${formatKg(advice.fromLoadKg)}`
+			: " limit";
+	const fromWord = vehicleWord(advice.from).toLowerCase();
+	if (quotedVehicle === advice.from) {
+		return (
+			<p className={amber}>
+				This order weighs {formatKg(advice.cartKg)} — over a {fromWord}&apos;s
+				{fromLimit}. The rider may refuse it at pickup.
+			</p>
+		);
+	}
 	return (
-		<span className="rounded-full bg-accent/15 px-2.5 py-1 text-xs font-medium text-accent-emphasis">
-			{label}
-		</span>
+		<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+			{vehicleWord(advice.to)} picked — this order weighs{" "}
+			{formatKg(advice.cartKg)}, over a {fromWord}&apos;s{fromLimit}.
+		</p>
 	);
 }

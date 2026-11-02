@@ -5,10 +5,14 @@ import { AlertTriangle, Share2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
 import { DEFAULT_CURRENCY } from "../../convex/lib/currency";
-import { todayMytMidnight } from "../../convex/lib/fulfilmentDate";
+import {
+	isMytMidnight,
+	todayMytMidnight,
+} from "../../convex/lib/fulfilmentDate";
 import type { ProductMetric } from "../../convex/lib/insights";
 import { PageHeader } from "../components/dashboard/page-header";
 import { DateRangeControl } from "../components/insights/date-range-control";
+import { DepositNote } from "../components/insights/deposit-note";
 import { KpiRow } from "../components/insights/kpi-row";
 import { LockedTeaser } from "../components/insights/locked-teaser";
 import { PaymentDonut } from "../components/insights/payment-donut";
@@ -26,13 +30,48 @@ import { hasFeature } from "../lib/subscription";
 
 export const Route = createFileRoute("/app/insights")({
 	component: InsightsRoute,
+	/**
+	 * An opening range, so a link can hand this page the window the seller was
+	 * already looking at (z8r3fdrgzj). Home's "Open full Insights" used to pass a
+	 * range that this route ignored, which meant tapping it from a 7-day Home
+	 * silently landed on 30 days — the figures changed under the seller between
+	 * one tap and the next.
+	 *
+	 * Both are MYT midnights and both must be present to mean anything; a half
+	 * range is no range. The page keeps its own 30-day default otherwise, and
+	 * the picker still owns the range after first paint — this only decides
+	 * where it opens.
+	 */
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { from?: number; to?: number } => {
+		const from = typeof search.from === "number" ? search.from : undefined;
+		const to = typeof search.to === "number" ? search.to : undefined;
+		// Both keys are returned even when rejected: an omitted key lets the raw
+		// value through TanStack's merge (z8r3fdtk87, src/lib/search-params.ts).
+		if (
+			from === undefined ||
+			to === undefined ||
+			to < from ||
+			!isMytMidnight(from) ||
+			!isMytMidnight(to)
+		)
+			return { from: undefined, to: undefined };
+		return { from, to };
+	},
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function InsightsRoute() {
 	const retailer = useDashboardRetailer();
-	const initial = rangeForPreset("30d");
+	const opening = Route.useSearch();
+	// The link's range wins the FIRST paint only; `setRange` owns it after that,
+	// so the picker is never fighting the URL.
+	const initial =
+		opening.from !== undefined && opening.to !== undefined
+			? { from: opening.from, to: opening.to }
+			: rangeForPreset("30d");
 	const [range, setRange] = useState(initial);
 	const [metric, setMetric] = useState<ProductMetric>("revenue");
 
@@ -130,7 +169,7 @@ function InsightsRoute() {
 			/>
 
 			{view.capped ? (
-				<div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300">
+				<div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
 					<AlertTriangle className="mt-0.5 size-4 shrink-0" />
 					<span>
 						This range has more orders than we can total in one pass, so the
@@ -151,6 +190,10 @@ function InsightsRoute() {
 						collected={view.collected}
 						orderCount={view.orderCount}
 						aov={view.aov}
+						currency={currency}
+					/>
+					<DepositNote
+						depositsExcluded={view.depositsExcluded}
 						currency={currency}
 					/>
 					<RevenueTrend

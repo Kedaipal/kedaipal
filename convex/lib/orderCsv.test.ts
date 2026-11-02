@@ -1,4 +1,6 @@
 import { describe, expect, test } from "vitest";
+import type { Doc } from "../_generated/dataModel";
+import { redactGatedOrder } from "./orderGate";
 import {
 	ALL_ORDER_COLUMN_KEYS,
 	csvAmount,
@@ -7,6 +9,11 @@ import {
 	type CsvOrder,
 	DEFAULT_ORDER_COLUMN_KEYS,
 	escapeCsvField,
+	FULFILMENT_KEYS,
+	FULFILMENT_LABELS,
+	fulfilmentKey,
+	fulfilmentLabel,
+	fulfilmentMomentSortKey,
 	ORDER_COLUMNS,
 	ORDER_COLUMNS_BY_KEY,
 	humanizeEnum,
@@ -61,8 +68,8 @@ describe("orderToCsvRow", () => {
 		deliveryMethod: "delivery",
 		customer: { name: "Aisha", waPhone: "+60123456789" },
 		items: [
-			{ name: "Cake", variantLabel: "1kg", quantity: 2 },
-			{ name: "Brownie", quantity: 1 },
+			{ name: "Cake", variantLabel: "1kg", quantity: 2, price: 1000 },
+			{ name: "Brownie", quantity: 1, price: 1000 },
 		],
 		subtotal: 12500,
 		total: 12500,
@@ -90,6 +97,157 @@ describe("orderToCsvRow", () => {
 				CSV_COLUMNS.indexOf("Fulfilment")
 			],
 		).toBe("self_collect");
+	});
+
+	test("a drop-off order is its own fulfilment kind, not flattened into self-collect (z8r3fdfau9)", () => {
+		const dropOff = {
+			...base,
+			deliveryMethod: "self_collect",
+			pickupSnapshot: {
+				label: "Pasar Chow Kit",
+				address: "Jalan Raja Alang",
+				locationType: "drop_off" as const,
+			},
+		};
+		expect(orderToCsvRow(dropOff)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"drop_off",
+		);
+		// A pickup point at the seller's OWN place, and a legacy snapshot from
+		// before drop-off existed, both stay self-collect.
+		const ownPlace = {
+			...base,
+			deliveryMethod: "self_collect",
+			pickupSnapshot: {
+				label: "Shop",
+				address: "Jalan 1",
+				locationType: "self_collect" as const,
+			},
+		};
+		expect(orderToCsvRow(ownPlace)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"self_collect",
+		);
+		const legacy = {
+			...base,
+			deliveryMethod: "self_collect",
+			pickupSnapshot: { label: "Shop", address: "Jalan 1" },
+		};
+		expect(orderToCsvRow(legacy)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"self_collect",
+		);
+	});
+
+	test("an RSVP is its own fulfilment kind even though it is STORED self_collect (z8r3fdff9u)", () => {
+		// The trap this pins: an event RSVP is collected at the venue, so it is
+		// stored `deliveryMethod: "self_collect"` and told apart only by the
+		// frozen `eventRsvp` marker. Read the method and every RSVP files under
+		// Self-collect — exactly the flattening drop-off already suffered.
+		const rsvp = { ...base, deliveryMethod: "self_collect", eventRsvp: true };
+		expect(orderToCsvRow(rsvp)[CSV_COLUMNS.indexOf("Fulfilment")]).toBe(
+			"event",
+		);
+		// The flow kind outranks BOTH refinements — an RSVP at a venue is not a
+		// pasar meetup and not a rider collection, whatever a row happens to
+		// carry. Neither shape is reachable through `orders.create` today (it
+		// takes delivery/self_collect only), which is exactly why the precedence
+		// needs pinning: the next flow kind added is the one that finds out.
+		expect(
+			fulfilmentKey({
+				...rsvp,
+				pickupSnapshot: {
+					label: "Dewan",
+					address: "Jalan 1",
+					locationType: "drop_off",
+				},
+			}),
+		).toBe("event");
+		expect(fulfilmentKey({ ...rsvp, deliveryDirection: "collection" })).toBe(
+			"event",
+		);
+		expect(
+			fulfilmentKey({
+				...base,
+				deliveryMethod: "booking",
+				deliveryDirection: "collection",
+			}),
+		).toBe("booking");
+		// A plain self-collect order is untouched.
+		expect(
+			fulfilmentKey({ ...base, deliveryMethod: "self_collect" }),
+		).toBe("self_collect");
+	});
+
+	test("fulfilmentKey precedence: collection beats the method, drop-off beats self-collect, legacy reads as delivery", () => {
+		const csv = (o: Partial<CsvOrder>) => fulfilmentKey({ ...base, ...o });
+		// A collection order is a DELIVERY order in the schema — the direction is
+		// what makes it the opposite trip, so it has to win.
+		expect(
+			csv({ deliveryMethod: "delivery", deliveryDirection: "collection" }),
+		).toBe("collection");
+		// A collection order carrying a pickup snapshot stays a collection: the
+		// direction refines the DELIVERY kind, and a snapshot picked up through a
+		// mid-flight settings change doesn't turn a rider trip into a meet-up.
+		expect(
+			csv({
+				deliveryMethod: "delivery",
+				deliveryDirection: "collection",
+				pickupSnapshot: {
+					label: "X",
+					address: "Y",
+					locationType: "drop_off",
+				},
+			}),
+		).toBe("collection");
+		// `self_collect` + a collection direction is NOT reachable — the direction
+		// is only stamped when the method isn't self_collect (orders.create) — and
+		// if a row ever held both, the buyer is collecting and no rider is moving,
+		// so the method is the trustworthy half. Pinned so the answer is a
+		// decision rather than a side effect of branch order.
+		expect(
+			csv({
+				deliveryMethod: "self_collect",
+				deliveryDirection: "collection",
+				pickupSnapshot: {
+					label: "X",
+					address: "Y",
+					locationType: "drop_off",
+				},
+			}),
+		).toBe("drop_off");
+		expect(csv({ deliveryMethod: "booking" })).toBe("booking");
+		// No method at all — every order created before the field existed. It
+		// reads as delivery (the schema's own default) rather than going blank,
+		// so the Delivery filter row keeps them instead of silently hiding them.
+		expect(csv({ deliveryMethod: undefined })).toBe("delivery");
+	});
+
+	test("fulfilmentLabel is the one author, and it humanises what it doesn't know", () => {
+		// The column, the CSV, the column funnel and the Filters panel each used
+		// to carry their OWN fallback, and they disagreed: the column humanised
+		// (`Drop Off`) while the three pickers printed the raw key (`drop_off`).
+		// All four now call this, so there is one answer to pin.
+		//
+		// Note what this does and does not prove: `fulfilmentKey` returns a closed
+		// union, so no unknown key can actually reach the column today — the four
+		// surfaces could only have disagreed about a value that cannot occur. The
+		// fix is de-duplication, and THIS is the assertion with teeth: change the
+		// shared fallback and it goes red.
+		expect(fulfilmentLabel("some_future_kind")).toBe("Some future kind");
+		for (const key of FULFILMENT_KEYS) {
+			expect(fulfilmentLabel(key)).toBe(FULFILMENT_LABELS[key]);
+		}
+	});
+
+	test("every fulfilment key has a real label — none falls through to humanizeEnum", () => {
+		for (const key of FULFILMENT_KEYS) {
+			expect(FULFILMENT_LABELS[key]).toBeTruthy();
+		}
+		// The two the fallback would have got wrong: `humanizeEnum` produces
+		// "Self collect" (no hyphen) and "Collection" (which reads as the opposite
+		// direction next to "Self-collect").
+		expect(FULFILMENT_LABELS.self_collect).toBe("Self-collect");
+		expect(FULFILMENT_LABELS.collection).toBe("We collect");
+		expect(FULFILMENT_LABELS.drop_off).toBe("Drop-off");
+		expect(FULFILMENT_LABELS.event).toBe("Event");
 	});
 
 	test("summarizes items as 'qty x name (variant)'", () => {
@@ -173,7 +331,7 @@ describe("orderToCsvRow — security deposit (86eyn4kee)", () => {
 			status: "confirmed",
 			deliveryMethod: "booking",
 			customer: { name: "Guest", waPhone: "+60123456789" },
-			items: [{ name: "Riverside Plot", quantity: 2 }],
+			items: [{ name: "Riverside Plot", quantity: 2, price: 1000 }],
 			subtotal: 16_000,
 			securityDeposit: 10_000,
 			total: 26_000,
@@ -186,7 +344,7 @@ describe("orderToCsvRow — security deposit (86eyn4kee)", () => {
 			status: "confirmed",
 			deliveryMethod: "delivery",
 			customer: { name: "Aisha", waPhone: "+60123456789" },
-			items: [{ name: "Cake", quantity: 1 }],
+			items: [{ name: "Cake", quantity: 1, price: 1000 }],
 			subtotal: 5_000,
 			total: 5_000,
 			currency: "MYR",
@@ -203,7 +361,7 @@ describe("ordersToCsv", () => {
 				createdAt: JUN_30_MYT,
 				status: "pending",
 				customer: { name: "A" },
-				items: [{ name: "X", quantity: 1 }],
+				items: [{ name: "X", quantity: 1, price: 1000 }],
 				subtotal: 100,
 				total: 100,
 				currency: "MYR",
@@ -233,7 +391,7 @@ const minimal: CsvOrder = {
 	createdAt: JUN_30_MYT,
 	status: "confirmed",
 	customer: { name: "Aisha" },
-	items: [{ name: "Cake", quantity: 1 }],
+	items: [{ name: "Cake", quantity: 1, price: 1000 }],
 	subtotal: 10000,
 	total: 10000,
 	currency: "MYR",
@@ -274,8 +432,59 @@ describe("totals reconcile (the arithmetic hole)", () => {
 		}
 	});
 
+	// The voucher's own reconciliation (`z8r3fdr617`). It is the first column
+	// that SUBTRACTS, so it prints negative — a column reading "10.00" for money
+	// that came off would break the identity on every voucher order, which is
+	// the exact shape of the bug `Custom work` exists to fix.
+	test("Voucher prints NEGATIVE, so the money run still sums to Total", () => {
+		const shapes: CsvOrder[] = [
+			// fixed voucher
+			{ ...minimal, subtotal: 12500, voucherDiscount: 1000, total: 11500 },
+			// alongside fees: the discount never eats them
+			{
+				...minimal,
+				subtotal: 12500,
+				pickupFee: 500,
+				deliveryFee: 800,
+				voucherDiscount: 1000,
+				total: 12800,
+			},
+			// a 100% voucher with fees left standing
+			{
+				...minimal,
+				subtotal: 12500,
+				deliveryFee: 800,
+				voucherDiscount: 12500,
+				total: 800,
+			},
+		];
+		for (const o of shapes) {
+			expect(Number(cell(o, "Voucher"))).toBeLessThan(0);
+			const sum =
+				Number(cell(o, "Subtotal")) +
+				Number(cell(o, "Custom work")) +
+				Number(cell(o, "Pickup fee")) +
+				Number(cell(o, "Delivery fee")) +
+				Number(cell(o, "Security deposit")) +
+				Number(cell(o, "Voucher"));
+			expect(sum.toFixed(2)).toBe(cell(o, "Total"));
+		}
+	});
+
+	test("the code rides along so a giveaway run can be reconciled", () => {
+		expect(
+			cell({ ...minimal, voucherCode: "KP-7F3K-Q2WM" }, "Voucher code"),
+		).toBe("KP-7F3K-Q2WM");
+		expect(cell(minimal, "Voucher code")).toBe("");
+	});
+
 	test("every money column prints 0.00, never blank, so the sum works", () => {
-		for (const label of ["Custom work", "Pickup fee", "Delivery fee"]) {
+		for (const label of [
+			"Custom work",
+			"Pickup fee",
+			"Delivery fee",
+			"Voucher",
+		]) {
 			expect(cell(minimal, label)).toBe("0.00");
 		}
 	});
@@ -335,8 +544,8 @@ describe("categories column — frozen per line at sale time", () => {
 	const twoLines = (a?: string[], b?: string[]): CsvOrder => ({
 		...minimal,
 		items: [
-			{ name: "Kek Lapis", quantity: 1, categoryNames: a },
-			{ name: "Karipap", quantity: 2, categoryNames: b },
+			{ name: "Kek Lapis", quantity: 1, categoryNames: a, price: 1000 },
+			{ name: "Karipap", quantity: 2, categoryNames: b, price: 1000 },
 		],
 	});
 
@@ -373,6 +582,301 @@ describe("categories column — frozen per line at sale time", () => {
 	});
 });
 
+describe("pickup notes column (z8r3fdff97)", () => {
+	const puffs: CsvOrder = {
+		...minimal,
+		deliveryMethod: "self_collect",
+		pickupSnapshot: { label: "Huff & Puff SS2", address: "22 Jalan SS2/64" },
+		items: [
+			{ name: "Ice cream puff", quantity: 6, pickupNote: "Bring an ice bag.", price: 1000 },
+			{ name: "Cream puff", quantity: 6, pickupNote: "Side counter.", price: 1000 },
+			{ name: "Choux", quantity: 2, pickupNote: "Bring an ice bag.", price: 1000 },
+		],
+	};
+
+	test("a self-collect order exports its frozen notes, deduped in cart order", () => {
+		expect(cell(puffs, "Pickup notes")).toBe(
+			"Bring an ice bag. | Side counter.",
+		);
+	});
+
+	test("a delivery order prints blank even though its lines froze a note", () => {
+		// orders.create freezes the note on EVERY order; the column follows what
+		// the buyer was told, and a delivery buyer was never told to collect.
+		expect(cell({ ...puffs, deliveryMethod: "delivery" }, "Pickup notes")).toBe(
+			"",
+		);
+		expect(
+			cell(
+				{ ...puffs, deliveryMethod: "delivery", deliveryDirection: "collection" },
+				"Pickup notes",
+			),
+		).toBe("");
+	});
+
+	test("a counter sale prints blank — the buyer was standing at the counter", () => {
+		expect(cell({ ...puffs, source: "counter" }, "Pickup notes")).toBe("");
+	});
+
+	test("no notes, or lines predating the field, read blank — never 'undefined'", () => {
+		expect(cell({ ...minimal, deliveryMethod: "self_collect" }, "Pickup notes")).toBe(
+			"",
+		);
+	});
+
+	test("sits right after Pickup address, in the fulfilment group, opt-in", () => {
+		expect(CSV_COLUMNS.indexOf("Pickup notes")).toBe(
+			CSV_COLUMNS.indexOf("Pickup address") + 1,
+		);
+		expect(ORDER_COLUMNS_BY_KEY.get("pickupNotes")?.group).toBe("fulfilment");
+		expect(DEFAULT_ORDER_COLUMN_KEYS).not.toContain("pickupNotes");
+	});
+
+	test("a note that starts like a formula is escaped", () => {
+		const hostile: CsvOrder = {
+			...puffs,
+			items: [{ name: "Puff", quantity: 1, pickupNote: "=HYPERLINK(1)", price: 1000 }],
+		};
+		expect(ordersToCsv([hostile])).toContain("'=HYPERLINK(1)");
+	});
+});
+
+describe("fulfilment date sorts by the moment (z8r3fdff97)", () => {
+	const JUL_1_MYT = JUN_30_MYT + 24 * 60 * 60 * 1000;
+	const at = (date: number, minutes?: number): CsvOrder => ({
+		...minimal,
+		fulfilmentDate: date,
+		fulfilmentTimeMinutes: minutes,
+	});
+
+	test("same-day orders fall in time order, untimed after them", () => {
+		const nine = fulfilmentMomentSortKey(at(JUN_30_MYT, 540)) as number;
+		const threeThirty = fulfilmentMomentSortKey(at(JUN_30_MYT, 930)) as number;
+		const lastSlot = fulfilmentMomentSortKey(at(JUN_30_MYT, 1439)) as number;
+		const untimed = fulfilmentMomentSortKey(at(JUN_30_MYT)) as number;
+		expect(nine).toBeLessThan(threeThirty);
+		expect(lastSlot).toBeLessThan(untimed);
+	});
+
+	test("an untimed order never slides into the next day", () => {
+		const untimedToday = fulfilmentMomentSortKey(at(JUN_30_MYT)) as number;
+		const midnightTomorrow = fulfilmentMomentSortKey(at(JUL_1_MYT, 0)) as number;
+		expect(untimedToday).toBeLessThan(midnightTomorrow);
+	});
+
+	test("a dateless order has no value, so it sinks either way", () => {
+		expect(fulfilmentMomentSortKey(minimal)).toBeUndefined();
+		expect(fulfilmentMomentSortKey({ ...minimal, fulfilmentTimeMinutes: 600 })).toBeUndefined();
+	});
+
+	test("the Fulfilment date column sorts on it", () => {
+		const column = ORDER_COLUMNS_BY_KEY.get("fulfilmentDate");
+		if (!column) throw new Error("missing fulfilmentDate column");
+		expect(orderColumnSortValue(column, at(JUN_30_MYT, 930))).toBe(
+			fulfilmentMomentSortKey(at(JUN_30_MYT, 930)),
+		);
+	});
+});
+
+describe("booking span columns", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	// MYT midnights, the way the booking fields are stored.
+	const SEP_1 = Date.UTC(2026, 7, 31, 16, 0, 0);
+	const day = (n: number) => SEP_1 + (n - 1) * DAY; // day(n) = n Sep
+	const col = (
+		key: "bookingStart" | "bookingLastDay" | "bookingDays" | "bookingSkips",
+	) => {
+		const c = ORDER_COLUMNS_BY_KEY.get(key);
+		if (!c) throw new Error(`missing ${key} column`);
+		return c;
+	};
+	const booking = (over: Partial<CsvOrder>): CsvOrder => ({
+		...minimal,
+		deliveryMethod: "booking",
+		fulfilmentDate: over.bookingCheckIn,
+		...over,
+	});
+
+	test("a STAY: check-in, the check-out itself, and its nights", () => {
+		const stay = booking({ bookingCheckIn: day(25), bookingCheckOut: day(27) });
+		expect(cell(stay, "Booking start")).toBe("2026-09-25");
+		// The check-out morning is a day the guest is still on site.
+		expect(cell(stay, "Booking last day")).toBe("2026-09-27");
+		expect(cell(stay, "Booking days")).toBe("2");
+		expect(orderColumnDisplay(col("bookingDays"), stay)).toBe("2 nights");
+	});
+
+	test("a PACKAGE: the last day is the night before the exclusive check-out (S7)", () => {
+		const month = booking({
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(31), // 1 Oct, exclusive
+			bookingPackaged: true,
+		});
+		expect(cell(month, "Booking start")).toBe("2026-09-01");
+		// Never "2026-10-01" — that would promise a day the buyer doesn't have.
+		expect(cell(month, "Booking last day")).toBe("2026-09-30");
+		expect(cell(month, "Booking days")).toBe("30");
+		expect(orderColumnDisplay(col("bookingDays"), month)).toBe("30 days");
+	});
+
+	test("an OPEN-DAYS package counts only the days it uses (z8r3fdhpm7)", () => {
+		// 7-day span with Sat 5 / Sun 6 Sep shut: 5 open days.
+		const openDays = booking({
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(8),
+			bookingPackaged: true,
+			bookingSkippedDays: [day(5), day(6)],
+		});
+		expect(cell(openDays, "Booking last day")).toBe("2026-09-07");
+		expect(cell(openDays, "Booking days")).toBe("5");
+		expect(orderColumnDisplay(col("bookingDays"), openDays)).toBe("5 days");
+	});
+
+	test("a customer SKIP moves the last day out, stays out of Days, and is counted (z8r3fdh3ay)", () => {
+		// The 5-open-day plan above, after the seller skipped Thu 3 Sep for the
+		// customer: check-out moved out one open day (8 → 9 Sep) and the skip
+		// joined the unused days, so the member still gets 5.
+		const skipped = booking({
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(9),
+			bookingPackaged: true,
+			bookingOpenDays: true,
+			bookingSkippedDays: [day(3), day(5), day(6)],
+			bookingCustomerSkips: [day(3)],
+		});
+		expect(cell(skipped, "Booking last day")).toBe("2026-09-08");
+		expect(cell(skipped, "Booking days")).toBe("5");
+		expect(cell(skipped, "Booking skips")).toBe("1");
+		expect(orderColumnDisplay(col("bookingSkips"), skipped)).toBe("1 skip");
+		expect(
+			orderColumnDisplay(col("bookingSkips"), {
+				...skipped,
+				bookingCustomerSkips: [day(3), day(4)],
+			}),
+		).toBe("2 skips");
+	});
+
+	test("Skips reads 0 only on a plan that CAN be skipped", () => {
+		const skippable = booking({
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(8),
+			bookingPackaged: true,
+			bookingOpenDays: true,
+		});
+		expect(cell(skippable, "Booking skips")).toBe("0");
+		expect(orderColumnDisplay(col("bookingSkips"), skippable)).toBe("None");
+		// A stay or a calendar package never had the option — "0" would offer it.
+		const stay = booking({ bookingCheckIn: day(25), bookingCheckOut: day(27) });
+		expect(cell(stay, "Booking skips")).toBe("");
+		expect(orderColumnSortValue(col("bookingSkips"), stay)).toBeUndefined();
+	});
+
+	test("one day reads singular", () => {
+		const one = booking({
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(2),
+			bookingPackaged: true,
+		});
+		expect(orderColumnDisplay(col("bookingDays"), one)).toBe("1 day");
+	});
+
+	test("a non-booking order blanks all three, and sinks in a sort", () => {
+		for (const label of [
+			"Booking start",
+			"Booking last day",
+			"Booking days",
+			"Booking skips",
+		]) {
+			expect(cell(minimal, label)).toBe("");
+		}
+		for (const key of [
+			"bookingStart",
+			"bookingLastDay",
+			"bookingDays",
+			"bookingSkips",
+		] as const) {
+			expect(orderColumnDisplay(col(key), minimal)).toBe("");
+			expect(orderColumnSortValue(col(key), minimal)).toBeUndefined();
+		}
+	});
+
+	test("sorts on the epoch / the number, not the text", () => {
+		const short = booking({ bookingCheckIn: day(1), bookingCheckOut: day(3) });
+		const long = booking({ bookingCheckIn: day(1), bookingCheckOut: day(13) });
+		// "12 nights" < "2 nights" as text; the number sorts it right.
+		expect(orderColumnSortValue(col("bookingDays"), short)).toBe(2);
+		expect(orderColumnSortValue(col("bookingDays"), long)).toBe(12);
+		expect(orderColumnSortValue(col("bookingLastDay"), long)).toBe(day(13));
+		expect(orderColumnSortValue(col("bookingStart"), long)).toBe(day(1));
+	});
+
+	test("a GATED booking keeps its span AND its shut days — Days never overcounts", () => {
+		// Run the real redaction, so this breaks if the allowlist ever drops the
+		// span (dates go blank), the skipped days (Days silently reads 8) or the
+		// customer skips (Skips blanks beside a Days that already took them).
+		const doc = {
+			shortId: "ORD-7001",
+			createdAt: SEP_1,
+			status: "confirmed",
+			deliveryMethod: "booking",
+			fulfilmentDate: day(1),
+			bookingCheckIn: day(1),
+			bookingCheckOut: day(9),
+			bookingPackaged: true,
+			bookingOpenDays: true,
+			bookingSkippedDays: [day(3), day(5), day(6)],
+			bookingCustomerSkips: [day(3)],
+			customer: { name: "Siti Secret", waPhone: "+60199999999" },
+			items: [{ name: "Meal plan", quantity: 1, price: 30000 }],
+			subtotal: 30000,
+			total: 30000,
+			currency: "MYR",
+		} as unknown as Doc<"orders">;
+		const gated = redactGatedOrder(doc, { gated: true, creditsToUnlock: 1 });
+		const row: CsvOrder = {
+			shortId: gated.shortId,
+			createdAt: gated.createdAt,
+			status: gated.status,
+			creditGated: gated.creditGated,
+			deliveryMethod: gated.deliveryMethod,
+			bookingCheckIn: gated.bookingCheckIn,
+			bookingCheckOut: gated.bookingCheckOut,
+			bookingPackaged: gated.bookingPackaged,
+			bookingSkippedDays: gated.bookingSkippedDays,
+			bookingCustomerSkips: gated.bookingCustomerSkips,
+			bookingOpenDays: gated.bookingOpenDays,
+			customer: gated.customer,
+			items: gated.items,
+			subtotal: gated.subtotal,
+			total: gated.total,
+			currency: gated.currency,
+		};
+		expect(cell(row, "Booking start")).toBe("2026-09-01");
+		expect(cell(row, "Booking last day")).toBe("2026-09-08");
+		expect(cell(row, "Booking skips")).toBe("1");
+		// The span is 8; the member bought 5.
+		expect(cell(row, "Booking days")).toBe("5");
+		expect(orderColumnDisplay(col("bookingDays"), row)).toBe("5 days");
+		expect(ordersToCsv([row])).not.toContain("Siti Secret");
+	});
+
+	test("sit beside the fulfilment date, as one set — not appended last", () => {
+		const keys = ALL_ORDER_COLUMN_KEYS;
+		const at = keys.indexOf("fulfilmentTime");
+		const set = [
+			"bookingStart",
+			"bookingLastDay",
+			"bookingDays",
+			"bookingSkips",
+		] as const;
+		expect(keys.slice(at + 1, at + 1 + set.length)).toEqual([...set]);
+		for (const k of set) {
+			expect(col(k).group).toBe("booking");
+			expect(DEFAULT_ORDER_COLUMN_KEYS).not.toContain(k);
+		}
+	});
+});
+
 describe("the rest of the missing fields", () => {
 	test("payment reference and paid-on date export", () => {
 		const o: CsvOrder = {
@@ -393,6 +897,15 @@ describe("the rest of the missing fields", () => {
 		expect(cell(o, "Fulfilment time")).toBe("3:30 PM");
 		expect(cell(o, "Order type")).toBe("counter");
 		expect(cell(o, "Came from")).toBe("TikTok");
+	});
+	test("a self-collect pickup time exports like a delivery slot (z8r3fdff97)", () => {
+		const o: CsvOrder = {
+			...minimal,
+			deliveryMethod: "self_collect",
+			fulfilmentDate: JUN_30_MYT,
+			fulfilmentTimeMinutes: 690,
+		};
+		expect(cell(o, "Fulfilment time")).toBe("11:30 AM");
 	});
 	test("a legacy order with no stamped source reads as storefront", () => {
 		expect(cell(minimal, "Order type")).toBe("storefront");
@@ -418,15 +931,19 @@ describe("the money run stays adjacent", () => {
 	// addends: Security deposit joined it in S5 (`86eyn4kee`) because a booking
 	// deposit is collected in the same payment and folds into `total` through
 	// the same extras seam as the fees — leaving it outside the run would make
-	// the identity read FALSE on every booking order.
-	test("Subtotal · Custom work · Pickup fee · Delivery fee · Security deposit · Total are consecutive", () => {
+	// the identity read FALSE on every booking order. `Voucher` joined for the
+	// same reason (`z8r3fdr617`) — it is folded into `total` through the same
+	// extras seam, just with the opposite sign, so leaving it out would make the
+	// identity read false on every voucher order.
+	test("Subtotal · Custom work · Pickup fee · Delivery fee · Security deposit · Voucher · Total are consecutive", () => {
 		const start = CSV_COLUMNS.indexOf("Subtotal");
-		expect(CSV_COLUMNS.slice(start, start + 6)).toEqual([
+		expect(CSV_COLUMNS.slice(start, start + 7)).toEqual([
 			"Subtotal",
 			"Custom work",
 			"Pickup fee",
 			"Delivery fee",
 			"Security deposit",
+			"Voucher",
 			"Total",
 		]);
 	});
@@ -439,7 +956,7 @@ describe("the money run stays adjacent", () => {
 			status: "confirmed",
 			deliveryMethod: "booking",
 			customer: { name: "Guest", waPhone: "+60123456789" },
-			items: [{ name: "Riverside Plot", quantity: 2 }],
+			items: [{ name: "Riverside Plot", quantity: 2, price: 1000 }],
 			subtotal: 16_000,
 			securityDeposit: 10_000,
 			total: 26_000,
@@ -514,7 +1031,7 @@ describe("the registry never leaks a secret", () => {
 });
 
 describe("default column set", () => {
-	test("is a real subset — the table opens readable, not with 36 columns", () => {
+	test("is a real subset — the table opens readable, not with every column", () => {
 		expect(DEFAULT_ORDER_COLUMN_KEYS.length).toBeGreaterThan(0);
 		expect(DEFAULT_ORDER_COLUMN_KEYS.length).toBeLessThan(
 			ALL_ORDER_COLUMN_KEYS.length,

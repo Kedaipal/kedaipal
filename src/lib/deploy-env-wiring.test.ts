@@ -5,14 +5,15 @@ import { describe, expect, it } from "vitest";
 /**
  * Pins the production env-var wiring in `.github/workflows/deploy.yml`.
  *
- * The failure this guards against is SILENT: the workflow enumerates every
- * variable it forwards, so a `VITE_` var missing from the Build step's `env:`
- * block is simply blank in the bundle, and a Convex var missing from the
- * `CONVEX_ENV_VARS` array never reaches the deployment. The deploy goes green
- * and the feature no-ops. That happened to the server-side GA4 key events
- * (z8r3fdd1v1 shipped with neither var wired) and was caught only while
- * wiring PostHog (86eyrayux). Adding a repo variable is necessary but not
- * sufficient — this test is the "not sufficient" half made loud.
+ * The failure this guards against is SILENT, and it is sharpest for `VITE_`
+ * vars: they are baked in at BUILD time, so one missing from the Build step's
+ * `env:` block is blank in the bundle and there is no other way in — the
+ * deploy goes green and the browser half of a feature no-ops. Convex vars are
+ * softer: they persist on the deployment and can be set there by hand (most of
+ * this project's are), so the sync step is the reproducible route rather than
+ * the only one. The vars pinned below are the analytics ones that are meant to
+ * come from GitHub; adding a repo variable is necessary but not sufficient,
+ * and this test is the "not sufficient" half made loud.
  *
  * Keep the lists below in step with the runtime readers: `clientEnv` in
  * `src/lib/env.ts` for the browser, and `process.env.*` in `convex/` for the
@@ -56,30 +57,30 @@ function convexEnvVarsArray(): string {
 }
 
 describe("deploy.yml forwards every production env var", () => {
-	it.each(REQUIRED_BUILD_VARS)(
-		"passes %s to the Build step so Vite bakes it into the bundle",
-		(name) => {
-			expect(buildStepEnv()).toMatch(
-				new RegExp(`^\\s+${name}: \\$\\{\\{ vars\\.${name} \\}\\}$`, "m"),
-			);
-		},
-	);
+	it.each(
+		REQUIRED_BUILD_VARS,
+	)("passes %s to the Build step so Vite bakes it into the bundle", (name) => {
+		expect(buildStepEnv()).toMatch(
+			new RegExp(`^\\s+${name}: \\$\\{\\{ vars\\.${name} \\}\\}$`, "m"),
+		);
+	});
 
-	it.each(REQUIRED_CONVEX_VARS)(
-		"lists %s in CONVEX_ENV_VARS so the sync step pushes it",
-		(name) => {
-			expect(convexEnvVarsArray()).toContain(`"${name}"`);
-		},
-	);
+	it.each(
+		REQUIRED_CONVEX_VARS,
+	)("lists %s in CONVEX_ENV_VARS so the sync step pushes it", (name) => {
+		expect(convexEnvVarsArray()).toContain(`"${name}"`);
+	});
 
-	it.each(REQUIRED_CONVEX_VARS)(
-		"maps %s from a GitHub value in the sync step env block",
-		(name) => {
-			expect(deployYml).toMatch(
-				new RegExp(`^\\s+${name}: \\$\\{\\{ (vars|secrets)\\.${name} \\}\\}$`, "m"),
-			);
-		},
-	);
+	it.each(
+		REQUIRED_CONVEX_VARS,
+	)("maps %s from a GitHub value in the sync step env block", (name) => {
+		expect(deployYml).toMatch(
+			new RegExp(
+				`^\\s+${name}: \\$\\{\\{ (vars|secrets)\\.${name} \\}\\}$`,
+				"m",
+			),
+		);
+	});
 
 	// Reading a secret from `vars.*` would work in CI and leak the value in
 	// the workflow's environment listing. The distinction is the point.
