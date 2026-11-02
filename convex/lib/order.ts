@@ -269,6 +269,7 @@ export function isMockupPriceUnsettled(order: MockupGateFields): boolean {
 export type CounterDateFields = {
 	source?: string;
 	fulfilmentDate?: number;
+	fulfilmentTimeMinutes?: number;
 	createdAt: number;
 };
 
@@ -288,6 +289,13 @@ export type CounterDateFields = {
  * counter date was set on purpose or by an event (information — show it).
  * Storefront/claim orders never hit this: their date is always buyer-chosen.
  *
+ * A TIME is never a default (`z8r3fdkugx`): the counter has no clock to fill
+ * in, so a time on a same-day order means the seller keyed "3:00 PM" on
+ * purpose — the date it rides on is then a promise too.
+ *
+ * The same predicate is the counter's RESCHEDULE gate: a defaulted date has
+ * nothing to move (the sale happened at the counter), a chosen one does.
+ *
  * **Single source of truth** — the inbox card's date badge and the order
  * detail's "Collect on" row both ask here, so the two seller surfaces can't
  * disagree about whether a counter date is worth showing.
@@ -295,6 +303,7 @@ export type CounterDateFields = {
 export function isDefaultedCounterDate(order: CounterDateFields): boolean {
 	if (order.source !== "counter") return false;
 	if (order.fulfilmentDate === undefined) return true;
+	if (order.fulfilmentTimeMinutes !== undefined) return false;
 	return order.fulfilmentDate === todayMytMidnight(order.createdAt);
 }
 

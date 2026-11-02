@@ -1737,7 +1737,8 @@ function OrderDetailRoute() {
 						) : null}
 					</div>
 					{/* Seller reschedule (86eyp5qd1) — renders only inside the
-					    reschedule window (pre-shipped, non-counter, not collected). */}
+					    reschedule window (pre-shipped, not a defaulted counter date,
+					    not collected). */}
 					{/* Not on a booking: this dialog moves `fulfilmentDate` only,
 					    while a stay's real dates are bookingCheckIn/Out under a
 					    capacity check — rescheduling one without the other would

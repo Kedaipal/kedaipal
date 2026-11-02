@@ -41,7 +41,10 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { formatFulfilmentDate } from "../../../convex/lib/fulfilmentDate";
+import {
+	formatFulfilmentDate,
+	formatFulfilmentTime,
+} from "../../../convex/lib/fulfilmentDate";
 import { useCreditGate } from "../../hooks/useCreditGate";
 import { MASK_PII } from "../../lib/analytics-privacy";
 import { lockCta, orderGatedLine } from "../../lib/credits-ui";
@@ -227,6 +230,7 @@ export function DoneScreen({
 							isFree={isFree}
 							amount={amount}
 							fulfilmentDate={order?.fulfilmentDate}
+							fulfilmentTimeMinutes={order?.fulfilmentTimeMinutes}
 						/>
 					</p>
 				</div>
@@ -305,6 +309,7 @@ function OrderLine({
 	isFree,
 	amount,
 	fulfilmentDate,
+	fulfilmentTimeMinutes,
 }: {
 	shortId: string | undefined;
 	isCompleted: boolean;
@@ -313,6 +318,8 @@ function OrderLine({
 	isFree: boolean;
 	amount: string | undefined;
 	fulfilmentDate: number | undefined;
+	/** The seller-keyed time (`z8r3fdkugx`) — "collecting Mon, 2 Nov at 3:00 PM". */
+	fulfilmentTimeMinutes?: number;
 }) {
 	const money = stillToPay
 		? amount
@@ -326,7 +333,7 @@ function OrderLine({
 		: eventRsvp
 			? "is confirmed — the guest checks in at the event."
 			: fulfilmentDate !== undefined
-				? `is confirmed — collecting ${formatFulfilmentDate(fulfilmentDate, { year: false })}. It stays open until it's handed over.`
+				? `is confirmed — collecting ${formatFulfilmentDate(fulfilmentDate, { year: false })}${fulfilmentTimeMinutes !== undefined ? ` at ${formatFulfilmentTime(fulfilmentTimeMinutes)}` : ""}. It stays open until it's handed over.`
 				: "is confirmed and stays open until it's handed over.";
 	if (!shortId)
 		return (

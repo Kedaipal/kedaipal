@@ -67,6 +67,9 @@ import {
 } from "./lib/customer";
 import {
 	assertValidFulfilmentDate,
+	assertValidFulfilmentTime,
+	composeFulfilmentMoment,
+	MINUTES_PER_DAY,
 	todayMytMidnight,
 } from "./lib/fulfilmentDate";
 import {
@@ -652,6 +655,10 @@ const draftValidator = v.object({
 		}),
 	),
 	fulfilmentDate: v.optional(v.number()),
+	// The time on that date (`z8r3fdkugx`). Kept only beside a date and only
+	// when it is a real time of day — dropped, not refused, like the voucher
+	// below (a debounced autosave must never fail mid-edit).
+	fulfilmentTimeMinutes: v.optional(v.number()),
 	paidInPerson: v.optional(v.boolean()),
 	paymentMethod: v.optional(orderPaymentMethodValidator),
 	// Voucher code (`z8r3fdr617`) — a scratchpad value like the prices, kept
@@ -714,6 +721,15 @@ export const saveSessionDraft = mutation({
 			draft: {
 				...draft,
 				items,
+				// Never an orphan clock — see `draftValidator`.
+				fulfilmentTimeMinutes:
+					draft.fulfilmentDate !== undefined &&
+					draft.fulfilmentTimeMinutes !== undefined &&
+					Number.isInteger(draft.fulfilmentTimeMinutes) &&
+					draft.fulfilmentTimeMinutes >= 0 &&
+					draft.fulfilmentTimeMinutes < MINUTES_PER_DAY
+						? draft.fulfilmentTimeMinutes
+						: undefined,
 				// Canonical spelling or nothing — see `draftValidator`.
 				voucherCode:
 					draft.voucherCode === undefined
@@ -859,6 +875,12 @@ export const createOrderFromSession = mutation({
 		// person, so it's validated against a 0-day notice (today always allowed),
 		// ignoring the storefront buyer-notice setting. See convex/lib/fulfilmentDate.ts.
 		fulfilmentDate: v.optional(v.number()),
+		// The time on that date (`z8r3fdkugx`) — a 3:00 PM session, a 10 AM cake
+		// collection. Minutes past MYT midnight. Refused without a date (the
+		// storefront's rule: a clock needs a day). Seller-keyed, so neither the
+		// opening hours nor a product's prep floor binds it, same as the date.
+		// An event in the cart overrides both — see the event lock below.
+		fulfilmentTimeMinutes: v.optional(v.number()),
 		// The voucher the seller keyed (`z8r3fdr617`), passed EXPLICITLY like
 		// `items` rather than read off `session.draft`. The draft is a DEBOUNCED
 		// autosave, so reading it here would lose a code applied in the second
@@ -913,6 +935,18 @@ export const createOrderFromSession = mutation({
 				sanitizedFulfilmentDate = assertValidFulfilmentDate(
 					args.fulfilmentDate,
 					0,
+				);
+			} catch (err) {
+				throw new ConvexError((err as Error).message);
+			}
+		}
+		let sanitizedFulfilmentTime: number | undefined;
+		if (args.fulfilmentTimeMinutes !== undefined) {
+			if (sanitizedFulfilmentDate === undefined)
+				throw new ConvexError("Pick a collection date before setting a time");
+			try {
+				sanitizedFulfilmentTime = assertValidFulfilmentTime(
+					args.fulfilmentTimeMinutes,
 				);
 			} catch (err) {
 				throw new ConvexError((err as Error).message);
@@ -1102,8 +1136,9 @@ export const createOrderFromSession = mutation({
 		//
 		// The date is FORCED here rather than refused, unlike the storefront: the
 		// counter's date field is a convenience the seller may simply not have
-		// filled, and there is exactly one date this order can mean.
-		let sanitizedFulfilmentTime: number | undefined;
+		// filled, and there is exactly one date this order can mean. The time
+		// is forced the same way: the panel hides its time field for an RSVP,
+		// and a stale tab's clock must not land a guest at the wrong hour.
 		const eventLock = [...eventProducts.values()][0]?.event;
 		let eventPickupLocationId: Id<"pickupLocations"> | undefined;
 		let eventPickupSnapshot: PickupSnapshot | undefined;
@@ -1238,10 +1273,20 @@ export const createOrderFromSession = mutation({
 		// attends later; it completes at the event). Payment is its own axis —
 		// a pay-later walk-in still left with the goods, and settles from the
 		// link in their confirmation.
+		//
+		// A TIME later today is the same "later" (`z8r3fdkugx`): a 3:00 PM
+		// session keyed at 10 AM hasn't happened yet, and an order born
+		// Completed would tell the seller's calendar it had. A time already
+		// past (backfilling the 10 AM sale at 11) is still handed over now.
 		const handedOverNow =
 			eventLock === undefined &&
 			(sanitizedFulfilmentDate === undefined ||
-				sanitizedFulfilmentDate <= todayMytMidnight(now));
+				(sanitizedFulfilmentDate <= todayMytMidnight(now) &&
+					(sanitizedFulfilmentTime === undefined ||
+						composeFulfilmentMoment(
+							sanitizedFulfilmentDate,
+							sanitizedFulfilmentTime,
+						) <= now)));
 		const orderId = await ctx.db.insert("orders", {
 			retailerId: retailer._id,
 			shortId,

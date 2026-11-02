@@ -157,6 +157,7 @@ import {
 	generateShortId,
 	generateTrackingToken,
 	isCollectionGateClosed,
+	isDefaultedCounterDate,
 	isMockupGateClosed,
 	orderExtras,
 	revenueExcludingDeposit,
@@ -5693,8 +5694,12 @@ export const setDeliveryFee = mutation({
  * never reaches dispatch: both providers refuse `not_delivery` before reading
  * it.
  *
- * Refused on counter sales, bookings (their dates ARE the check-in and
- * check-out) and while a claim link's payment window is live.
+ * Refused on bookings (their dates ARE the check-in and check-out), while a
+ * claim link's payment window is live, and on a counter sale whose date is
+ * only the checkout default (`isDefaultedCounterDate`) — that sale happened
+ * at the counter, there's nothing to move. A counter order the seller DATED
+ * (a preorder, a 3:00 PM session — `z8r3fdkugx`) is a promise like any
+ * other and moves the same way.
  *
  * All-tier: this is a correctness escape hatch, not a feature to upsell.
  */
@@ -5722,11 +5727,17 @@ export const rescheduleFulfilment = mutation({
 		await assertOrderCreditAvailable(ctx, order);
 		if (order.status === "cancelled")
 			throw new ConvexError("This order was cancelled");
+		// A counter sale is born `delivered` when handed over at the counter —
+		// "on its way" would misdescribe it.
+		if (order.source === "counter" && order.status === "delivered")
+			throw new ConvexError(
+				"This counter order was already handed over — there's no date to move",
+			);
 		if (order.status === "shipped" || order.status === "delivered")
 			throw new ConvexError(
 				"This order is already on its way — the fulfilment date can't change now",
 			);
-		if (order.source === "counter")
+		if (isDefaultedCounterDate(order))
 			throw new ConvexError(
 				"Counter orders are fulfilled on the spot — there's no date to move",
 			);

@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
@@ -1853,5 +1853,120 @@ describe("counterCheckout — a sale handed over now is born completed", () => {
 		expect(order?.status).toBe("delivered");
 		expect(order?.confirmationPushStatus).toBeUndefined();
 		expect(order?.seenAt).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// A time on a counter order (`z8r3fdkugx`) — "Tue 14 Oct, 3:00 PM" keyed at
+// the counter lands on the order like a storefront time, never without a
+// date, and a time still ahead TODAY means the sale hasn't happened yet.
+// ---------------------------------------------------------------------------
+describe("counterCheckout — a time on the order (z8r3fdkugx)", () => {
+	const HOUR_MS = 60 * 60 * 1000;
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+	/** Pin the clock to MYT noon today, so "later today" is deterministic. */
+	function atMytNoon() {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(todayMytMidnight() + 12 * HOUR_MS);
+	}
+	async function ringUp(
+		t: ReturnType<typeof setup>,
+		extra: { fulfilmentDate?: number; fulfilmentTimeMinutes?: number },
+	) {
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id, { price: 1500 });
+		const sessionId = await boundSession(t, retailer._id);
+		return t.withIdentity({ subject: USER_A }).mutation(
+			api.counterCheckout.createOrderFromSession,
+			{
+				sessionId,
+				items: [{ variantId, quantity: 1 }],
+				paidInPerson: true,
+				paymentMethod: "cash",
+				...extra,
+			},
+		);
+	}
+
+	test("a later day + a time is stored on the order and stays confirmed", async () => {
+		const t = setup();
+		const day = todayMytMidnight() + 2 * DAY_MS;
+		const { orderId, completed } = await ringUp(t, {
+			fulfilmentDate: day,
+			fulfilmentTimeMinutes: 15 * 60,
+		});
+		expect(completed).toBe(false);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.fulfilmentDate).toBe(day);
+		expect(order?.fulfilmentTimeMinutes).toBe(15 * 60);
+		expect(order?.status).toBe("confirmed");
+	});
+
+	test("a time later TODAY is not handed over yet — confirmed, not born completed", async () => {
+		atMytNoon();
+		const t = setup();
+		const { orderId, completed } = await ringUp(t, {
+			fulfilmentDate: todayMytMidnight(),
+			fulfilmentTimeMinutes: 15 * 60, // 3:00 PM, keyed at noon
+		});
+		expect(completed).toBe(false);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("confirmed");
+		expect(order?.fulfilmentTimeMinutes).toBe(15 * 60);
+	});
+
+	test("a time already past today is a backfill — still handed over now", async () => {
+		atMytNoon();
+		const t = setup();
+		const { orderId, completed } = await ringUp(t, {
+			fulfilmentDate: todayMytMidnight(),
+			fulfilmentTimeMinutes: 10 * 60, // the 10 AM sale, keyed at noon
+		});
+		expect(completed).toBe(true);
+		const order = await t.run((ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("delivered");
+		expect(order?.fulfilmentTimeMinutes).toBe(10 * 60);
+	});
+
+	test("a time without a date is refused — a clock needs a day", async () => {
+		const t = setup();
+		await expect(ringUp(t, { fulfilmentTimeMinutes: 15 * 60 })).rejects.toThrow(
+			/Pick a collection date before setting a time/,
+		);
+	});
+
+	test("a time outside the day is refused", async () => {
+		const day = todayMytMidnight() + DAY_MS;
+		for (const bad of [-1, 1440, 90.5]) {
+			await expect(
+				ringUp(setup(), { fulfilmentDate: day, fulfilmentTimeMinutes: bad }),
+			).rejects.toThrow(/time of day/);
+		}
+	});
+
+	test("the draft keeps the time beside its date and drops an orphan or junk clock", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t, USER_A);
+		const variantId = await seedVariant(t, USER_A, retailer._id);
+		const sessionId = await boundSession(t, retailer._id);
+		const asA = t.withIdentity({ subject: USER_A });
+		const day = todayMytMidnight() + DAY_MS;
+		const save = (draft: { fulfilmentDate?: number; fulfilmentTimeMinutes?: number }) =>
+			asA.mutation(api.counterCheckout.saveSessionDraft, {
+				sessionId,
+				draft: { items: [{ variantId, quantity: 1 }], ...draft },
+			});
+		const saved = async () =>
+			(await t.run((ctx) => ctx.db.get(sessionId)))?.draft
+				?.fulfilmentTimeMinutes;
+
+		await save({ fulfilmentDate: day, fulfilmentTimeMinutes: 15 * 60 });
+		expect(await saved()).toBe(15 * 60);
+		await save({ fulfilmentTimeMinutes: 15 * 60 }); // date cleared
+		expect(await saved()).toBeUndefined();
+		await save({ fulfilmentDate: day, fulfilmentTimeMinutes: 1440 });
+		expect(await saved()).toBeUndefined();
 	});
 });

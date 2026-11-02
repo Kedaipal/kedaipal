@@ -839,6 +839,73 @@ when a sale uses the last credit; and the app-wide credits banner stands down
 on this page so the till's own banner is the one message. Full rule:
 [`credits.md`](./credits.md#the-counter-needs-a-credit-in-hand-z8r3fdwbbb).
 
+## Time on a counter order (`z8r3fdkugx`)
+
+The Collection panel carries an optional **time** beside the date — "Tue 14 Oct,
+3:00 PM" for a mentoring session, "10:00 AM" for a cake collection — so a timed
+appointment no longer needs a throwaway event product per session.
+
+- **Server:** `createOrderFromSession` takes `fulfilmentTimeMinutes` (minutes
+  past MYT midnight, `assertValidFulfilmentTime`) and stores it on the order.
+  **Refused without a date** — the storefront rule: a clock needs a day. The
+  session draft keeps it beside its date (`draft.fulfilmentTimeMinutes`, the one
+  schema widen) and `saveSessionDraft` drops an orphan or junk clock rather than
+  failing a debounced autosave.
+- **Born Completed vs Confirmed:** a sale handed over now is born Completed. A
+  time **still ahead today** is not handed over yet (a 3:00 PM session keyed at
+  10 AM), so it is born **Confirmed** and the Done screen offers "Mark as
+  completed" — the panel says so under the picker before the tap. A time
+  already past today (backfilling the 10 AM sale at 11) is still handed over.
+- **The panel:** the house `DatePicker` + `TimePicker` pair (15-min steps),
+  replacing the raw `<input type="date">` the panel used — side by side from
+  `sm` with the time a fixed 10rem column, **stacked on a phone** (side by side
+  at 390px the date truncated to "Mon, 2…"; the voucher dialog's layout). The
+  Done screen says the hour: "collecting Mon, 2 Nov at 3:00 PM".
+- **RSVPs:** the event forces its own date **and** time, so the panel hides the
+  time field for an RSVP and the server ignores a stale tab's clock.
+- **Rules that don't bind it:** opening hours and a product's prep floor
+  (`products.prepMinutes`) are buyer-side rules; the seller is keying this in
+  person, the same posture as the counter's date.
+- **Where it shows:** the order's "Collect on" row and inbox badge (a set time
+  is never treated as the defaulted date — `isDefaultedCounterDate`), the
+  calendar view and the Google Calendar feed (a timed event, not all-day).
+- **Editable later:** a dated counter order is now inside the reschedule window
+  ([`fulfilment-date.md`](./fulfilment-date.md#seller-reschedule-19-aug-2026-clickup-86eyp5qd1));
+  a defaulted or handed-over one is not. For a **no-contact cash sale** the
+  dialog stops promising a buyer page and a chat that don't exist ("This order
+  will show …", "tell the buyer the new time yourself") — the cash-sale receipt
+  carries no tracking link, so that buyer has no page to update.
+- **Claim links don't take it, on purpose.** A claim link never carried the
+  counter's date either: the buyer picks day and time on `/claim` under the
+  storefront's rules (notice, hours, prep), and `orderClaims.commit` keeps that
+  time. The Collection panel only shows on a pay-now/pay-later sale, never on a
+  link, so there is no seller-keyed time for a claim to drop.
+
+## Catalog filters (`z8r3fdkugx`)
+
+A chip row under the catalog search narrows the list in one tap: **All,
+Products, Services, Events, Hidden** — one at a time, composing with the text
+search. The logic is one pure module, `src/lib/counter-catalog-filter.ts`.
+
+- **Two axes.** Products / Services / Events partition the catalog (their
+  counts add up to All): an event is an Event whatever kind it was created as,
+  because at the counter what matters is its own date and seat cap. Hidden is a
+  second axis — a hidden product is also in its kind's chip. Bookings never
+  reach the counter, so there's no Bookings chip.
+- **Counts on every chip;** a chip with nothing in it stays visible at 0,
+  disabled, with the reason as its label ("No services yet"), so a kind reads
+  as a choice rather than vanishing.
+- **Shown only where it narrows something.** A store of nothing but physical
+  goods gets no row — every live chip would show exactly what All shows.
+- **Empty result names both:** "No services match “wash”.", with a "Search all
+  products" button that drops the chip and keeps the search.
+- **Lasts the checkout,** never across logins: local state, reset for the next
+  buyer. A chosen chip whose last item leaves the catalog (un-hidden in another
+  tab) falls back to All rather than stranding the seller on an empty list.
+- Counter catalog access rides the **orders** grant, so a front-desk member
+  without the products grant already sees hidden rows here; the chip only
+  filters.
+
 ## Pending
 
 - ~~**Resend from order detail**~~ — moot: nothing sends the document any more
