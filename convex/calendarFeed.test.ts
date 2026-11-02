@@ -298,6 +298,30 @@ describe("calendarFeed — every order, not just bookings", () => {
 		expect(feed).toContain("SUMMARY:Farah — Chocolate Cake");
 	});
 
+	test("a counter order with a seller-keyed time is TIMED too (z8r3fdkugx)", async () => {
+		const ctx = await seedPlainStore(setup());
+		const { sessionId } = await ctx.asOwner.mutation(
+			api.counterCheckout.bindSessionManualPhone,
+			{ waPhone: "60123456783", name: "Dr Niki" },
+		);
+		await ctx.asOwner.mutation(api.counterCheckout.createOrderFromSession, {
+			sessionId,
+			items: [{ variantId: ctx.variantId, quantity: 1 }],
+			paidInPerson: true,
+			fulfilmentDate: day(2),
+			// 15:00 MYT — 07:00 UTC.
+			fulfilmentTimeMinutes: 15 * 60,
+		});
+		const token = await ctx.asOwner.mutation(
+			api.calendarFeed.ensureCalendarFeedToken,
+			{ retailerId: ctx.retailer._id },
+		);
+		const feed = await ctx.t.query(internal.calendarFeed.feedByToken, { token });
+		if (feed === null) throw new Error("feed missing");
+		expect(feed).toMatch(/DTSTART:\d{8}T070000Z/);
+		expect(feed).toContain("SUMMARY:Dr Niki — Chocolate Cake");
+	});
+
 	test("cancelled orders are off the calendar", async () => {
 		const ctx = await seedPlainStore(setup());
 		const { shortId } = await ctx.t.mutation(api.orders.create, {

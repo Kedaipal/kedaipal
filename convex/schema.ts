@@ -3069,6 +3069,10 @@ export default defineSchema({
 					}),
 				),
 				fulfilmentDate: v.optional(v.number()),
+				// Minutes past MYT midnight on `fulfilmentDate` (`z8r3fdkugx`) —
+				// the seller-keyed collection or session time. Never present
+				// without the date (saveSessionDraft drops an orphan clock).
+				fulfilmentTimeMinutes: v.optional(v.number()),
 				paidInPerson: v.optional(v.boolean()),
 				paymentMethod: v.optional(orderPaymentMethodValidator),
 				// Voucher code the seller keyed off the buyer's QR or read out

@@ -148,6 +148,17 @@ describe("isDefaultedCounterDate (`z8r3fdff9u` follow-up)", () => {
 		).toBe(false);
 	});
 
+	test("a TIME on the creation day is never the default — the seller keyed it (z8r3fdkugx)", () => {
+		expect(
+			isDefaultedCounterDate({
+				source: "counter",
+				fulfilmentDate: sameDay,
+				fulfilmentTimeMinutes: 15 * 60,
+				createdAt,
+			}),
+		).toBe(false);
+	});
+
 	test("never fires for non-counter orders — their date is buyer-chosen", () => {
 		expect(
 			isDefaultedCounterDate({

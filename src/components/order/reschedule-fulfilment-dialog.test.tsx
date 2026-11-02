@@ -53,6 +53,7 @@ function threeAmOrder(overrides: Record<string, unknown> = {}) {
 		status: "confirmed",
 		deliveryMethod: "delivery",
 		currency: "MYR",
+		customer: { name: "Aina", waPhone: "60123456789" },
 		source: undefined,
 		collectedAt: undefined,
 		fulfilmentDate: todayMytMidnight() + 2 * DAY_MS,
@@ -79,12 +80,27 @@ describe("RescheduleFulfilmentDialog — trigger window", () => {
 		expect(screen.getByText("Set date")).toBeTruthy();
 	});
 
-	it("renders nothing once shipped, on counter orders, and after collection", () => {
+	it("renders nothing once shipped, on a defaulted counter date, and after collection", () => {
+		const now = Date.now();
 		for (const overrides of [
 			{ status: "shipped" },
 			{ status: "delivered" },
 			{ status: "cancelled" },
-			{ source: "counter" },
+			// A counter sale with no date, or only the same-day default
+			// (z8r3fdkugx narrows the old blanket counter refusal to these).
+			{
+				source: "counter",
+				deliveryMethod: "self_collect",
+				fulfilmentDate: undefined,
+				fulfilmentTimeMinutes: undefined,
+			},
+			{
+				source: "counter",
+				deliveryMethod: "self_collect",
+				createdAt: now,
+				fulfilmentDate: todayMytMidnight(now),
+				fulfilmentTimeMinutes: undefined,
+			},
 			{ collectedAt: Date.now() },
 			// A booking's dates are its check-in and check-out (z8r3fdff97 adds
 			// the server backstop).
@@ -96,6 +112,55 @@ describe("RescheduleFulfilmentDialog — trigger window", () => {
 			expect(screen.queryByText("Reschedule")).toBeNull();
 			unmount();
 		}
+	});
+});
+
+describe("RescheduleFulfilmentDialog — a counter order the seller dated (z8r3fdkugx)", () => {
+	it("offers Reschedule on a later-day or timed counter order", () => {
+		const now = Date.now();
+		for (const overrides of [
+			{ fulfilmentDate: todayMytMidnight(now) + 2 * DAY_MS },
+			{ fulfilmentDate: todayMytMidnight(now), fulfilmentTimeMinutes: 15 * 60 },
+		]) {
+			const { unmount } = render(
+				<RescheduleFulfilmentDialog
+					order={threeAmOrder({
+						source: "counter",
+						deliveryMethod: "self_collect",
+						createdAt: now,
+						fulfilmentTimeMinutes: undefined,
+						...overrides,
+					})}
+				/>,
+			);
+			expect(screen.getByText("Reschedule")).toBeTruthy();
+			unmount();
+		}
+	});
+});
+
+describe("RescheduleFulfilmentDialog — a no-contact cash sale (z8r3fdkugx)", () => {
+	it("never promises a buyer page or a chat the walk-in doesn't have", () => {
+		render(
+			<RescheduleFulfilmentDialog
+				order={threeAmOrder({
+					source: "counter",
+					deliveryMethod: "self_collect",
+					customer: { name: undefined, waPhone: undefined },
+					createdAt: Date.now(),
+					fulfilmentTimeMinutes: 15 * 60,
+				})}
+			/>,
+		);
+		fireEvent.click(screen.getByText("Reschedule"));
+		expect(
+			screen.getByText("Change when this order is collected."),
+		).toBeTruthy();
+		expect(screen.getByText(/This order will show/)).toBeTruthy();
+		expect(
+			screen.getByText(/tell the buyer the new time yourself/),
+		).toBeTruthy();
+		expect(screen.queryByText(/buyer.s order page/)).toBeNull();
 	});
 });
 

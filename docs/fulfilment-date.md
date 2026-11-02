@@ -63,7 +63,7 @@ as `assertValidAddress`).
 | Surface | What shows |
 | --- | --- |
 | Storefront checkout (`checkout-form.tsx`) | Required native date picker below the address/pickup block, above the optional note. Bounds from the retailer's notice setting. |
-| Counter Checkout (`app.checkout.tsx`) | "Collection date" input **defaulted to today** (the walk-in case); seller adjusts for pre-orders. The order is always created `confirmed`; when it was **paid in person**, the success screen offers an **optional "Mark as completed"** button (one tap → `delivered` via `orders.updateStatus`) so the seller can close out a hand-over sale without clicking through the status pipeline — a choice, not automatic (a paid deposit on an unready item stays confirmed). |
+| Counter Checkout (`app.checkout.tsx`) | "Collection" panel: date **defaulted to today** (the walk-in case) plus an optional **time** (`z8r3fdkugx`); the seller adjusts both for preorders and appointments. A sale handed over now is born **Completed**; one dated later, or timed later today, is born **Confirmed** and the success screen offers "Mark as completed". See [`counter-checkout.md`](./counter-checkout.md#time-on-a-counter-order-z8r3fdkugx). |
 | Buyer's WhatsApp order message | `🗓️ Collect/Deliver on: Sat, 28 Jun 2026` line, so the seller sees it in-chat immediately. |
 | New-order / order-confirmed email | "📅 Needed by: …" line (en + ms). |
 | Order inbox (`searchOrders`) | **Default sort = fulfilment date ascending** (soonest first; dateless orders sink to the bottom, then newest-created). **Due: Today / Tomorrow / This week** chip filters. Per-card urgency badge. |
@@ -87,10 +87,12 @@ went red the morning after, since counter defaults `fulfilmentDate = today`):
    (`FulfilmentDateBadge muted`). The gate lives at the badge **call sites**
    (`OrderContextBadge`, order-detail header) — `relativeFulfilmentLabel` stays a
    pure date→label function, status-unaware.
-2. **Counter orders show no date badge at all.** A counter order's date is
-   defaulted-to-today, not buyer-chosen, so it carries no "promised by" signal —
-   `OrderContextBadge` and the detail header hide it entirely for
-   `source === "counter"`. They are also excluded from the `dueToday` count in
+2. **A counter order's DEFAULTED date shows no badge.** The date the counter
+   fills in (today) is not buyer-chosen, so it carries no "promised by" signal —
+   `OrderContextBadge` and the detail header hide it via
+   `isDefaultedCounterDate` (`convex/lib/order.ts`). A later day, an event's
+   date, or **any set time** (`z8r3fdkugx`) is a promise and shows like a
+   storefront date. They are also excluded from the `dueToday` count in
    `searchOrders` (which the Home "due today" strip reads), so completed walk-in
    sales never inflate the nudge. See `docs/counter-checkout.md` for `orders.source`.
 
@@ -790,10 +792,16 @@ chat and records it on the order.
   never silently drop the clock. `null` clears a self-collect time (see the
   update below). A dateless legacy order may be *given* a date (`from unset`).
 - **Window**: `pending`/`confirmed`/`packed` only; refused on
-  shipped/delivered/cancelled, on counter orders (fulfilled on the spot), on
+  shipped/delivered/cancelled (a handed-over counter sale says so in its own
+  words), on a counter order whose date is only the checkout default
+  (`isDefaultedCounterDate` — no date, or today with no time: the sale
+  happened at the counter, there's nothing to move), on
   bookings (their fulfilment date IS the check-in — server backstop added in
   `z8r3fdff97`; the order page never showed the trigger), and once a collection
-  order's goods have arrived (`collectedAt`).
+  order's goods have arrived (`collectedAt`). A counter order the seller
+  **dated** — a later-day preorder, or a timed session (`z8r3fdkugx`) — moves
+  like any self-collect order, date and time; the dialog asks the same
+  predicate, so the trigger and the server can't disagree.
 - **The hard guard is the ACTIVE Lalamove job**: a booking is frozen against
   its `quotationId` and will NOT follow the order, so rescheduling under it
   would desync the buyer's promise from the trip. Server throws; the dialog

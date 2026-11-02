@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
 	counterPrimaryAction,
 	showsSellerPaymentControls,
+	timeAfterDateChange,
 } from "./counter-panel";
 
 /**
@@ -160,5 +161,15 @@ describe("counterPrimaryAction", () => {
 			expect(a.reason).toBe(closed);
 			expect(a.helper).toBe(closed);
 		}
+	});
+});
+
+describe("timeAfterDateChange (z8r3fdkugx)", () => {
+	test("clearing the date clears the time — no orphan clock to reappear later", () => {
+		expect(timeAfterDateChange("", "15:00")).toBe("");
+	});
+	test("moving to another day keeps the time — often only the day moves", () => {
+		expect(timeAfterDateChange("2026-11-04", "15:00")).toBe("15:00");
+		expect(timeAfterDateChange("2026-11-04", "")).toBe("");
 	});
 });
