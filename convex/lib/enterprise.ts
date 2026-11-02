@@ -43,6 +43,10 @@ export function contractForAdmin<T extends { setBy: string }>(
 export const ENTERPRISE_FEE_MAX_MINOR = 100_000_000;
 export const ENTERPRISE_BLOCK_MAX = 1_000_000;
 export const ENTERPRISE_CONTACT_MAX = 80;
+/** A repeat "Talk to Arif" inside this window is the same lead, so
+ * `enterprise.markInterest` skips the write (it patches `retailers`, which
+ * re-runs every open storefront tab). The admin reads the stamp by the day. */
+export const ENTERPRISE_INTEREST_RESTAMP_MS = 60 * 60 * 1000;
 export const ENTERPRISE_NOTES_MAX = 500;
 /** A deal with more than this many teammates, or this many broadcasts, is a
  * slipped zero — same posture as the fee and block guards above. */
@@ -182,12 +186,23 @@ export const ENTERPRISE_SELF_SERVE_REFUSAL =
  */
 export function enterpriseTermChangeBlocker(args: {
 	pending:
-		| { invoiceNumber: string; plan: Plan; billingCycle: BillingCycle }
+		| {
+				invoiceNumber: string;
+				plan: Plan;
+				billingCycle: BillingCycle;
+				/** An Off-Season Hold bill carries the sub's plan, so without
+				 * this it read as "it bills Pro". Reachable: a held store whose
+				 * hold bill went overdue sits `past_due`, not `on_hold`, and
+				 * `setContract` only refuses `on_hold` up front. */
+				kind?: "plan" | "hold";
+		  }
 		| undefined;
 	billingCycle: BillingCycle;
 }): string | null {
 	const bill = args.pending;
 	if (!bill) return null;
+	if (bill.kind === "hold")
+		return `Settle or void ${bill.invoiceNumber} first — it's an Off-Season Hold bill, not the contract.`;
 	if (bill.plan !== "enterprise")
 		return `Settle or void ${bill.invoiceNumber} first — it bills ${bill.plan === "pro" ? "Pro" : "Starter"}, not the contract.`;
 	if (bill.billingCycle !== args.billingCycle)
