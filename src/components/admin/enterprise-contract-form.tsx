@@ -80,6 +80,7 @@ export type EnterpriseContractSubject = {
 		invoiceNumber: string;
 		plan: Doc<"subscriptions">["plan"];
 		billingCycle: BillingCycle;
+		kind: "plan" | "hold";
 	};
 };
 
@@ -266,6 +267,7 @@ export function EnterpriseContractForm({
 											invoiceNumber: subject.pendingInvoice.invoiceNumber,
 											plan: subject.pendingInvoice.plan,
 											billingCycle: subject.pendingInvoice.billingCycle,
+											kind: subject.pendingInvoice.kind,
 										}
 									: undefined,
 								billingCycle: cycle,

@@ -324,6 +324,70 @@ describe("directory — chips, sort, search", () => {
 		expect(screen.getByText("Showing 1 of 4")).toBeTruthy();
 	});
 
+	// z8r3fdzn6r: the chips are an OR, so an admin can see a whole collection
+	// of states at once ("Past due or Trialing") instead of one bucket at a time.
+	it("chips combine: two picked shows stores in either, the line names them, Clear all (N) undoes it", () => {
+		renderDirectory();
+		expect(screen.getByText(/Tap chips to combine them/)).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /^Clear all/ })).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: /^Past due/ }));
+		fireEvent.click(screen.getByRole("button", { name: /^Trialing/ }));
+		for (const name of [/^Past due/, /^Trialing/]) {
+			expect(
+				screen.getByRole("button", { name }).getAttribute("aria-pressed"),
+			).toBe("true");
+		}
+		expect(
+			screen.getByRole("button", { name: /^All/ }).getAttribute("aria-pressed"),
+		).toBe("false");
+		// header + Lekor (past due) + Waa Daa (trialing)
+		expect(screen.getAllByRole("row")).toHaveLength(3);
+		expect(screen.getByText("Past due or Trialing")).toBeTruthy();
+		expect(screen.getByText("Showing 2 of 4")).toBeTruthy();
+
+		// Tapping a lit chip takes it back out of the union.
+		fireEvent.click(screen.getByRole("button", { name: /^Past due/ }));
+		expect(screen.getAllByRole("row")).toHaveLength(2);
+
+		fireEvent.click(screen.getByRole("button", { name: /^Past due/ }));
+		fireEvent.click(screen.getByRole("button", { name: "Clear all (2)" }));
+		expect(screen.getAllByRole("row")).toHaveLength(5);
+		expect(
+			screen.getByRole("button", { name: /^All/ }).getAttribute("aria-pressed"),
+		).toBe("true");
+	});
+
+	it("All is the empty selection: tapping it clears every chip", () => {
+		renderDirectory({ status: ["past_due", "active"] });
+		expect(screen.getAllByRole("row")).toHaveLength(3);
+		fireEvent.click(screen.getByRole("button", { name: /^All/ }));
+		expect(screen.getAllByRole("row")).toHaveLength(5);
+		expect(screen.queryByRole("button", { name: /^Clear all/ })).toBeNull();
+	});
+
+	it("an empty union names every chip in it", () => {
+		renderDirectory({ status: ["on_hold", "cancelled"] });
+		expect(screen.getByText("Nothing in On hold or Cancelled")).toBeTruthy();
+	});
+
+	it("?status= reads a list, an older single value, and drops junk", () => {
+		const validate = (
+			Route as unknown as {
+				validateSearch: (s: Record<string, unknown>) => SellersSearch;
+			}
+		).validateSearch;
+		// Row order, de-duplicated, whatever order the link was clicked in.
+		expect(
+			validate({ status: ["cancelled", "past_due", "cancelled"] }).status,
+		).toEqual(["past_due", "cancelled"]);
+		// Links written before the chips combined (Acquisition, bookmarks).
+		expect(validate({ status: "untagged_payers" }).status).toEqual([
+			"untagged_payers",
+		]);
+		expect(validate({ status: ["all", "bogus", 3] }).status).toBeUndefined();
+	});
+
 	it("sort by expiry puts the soonest deadline first and dateless rows last", () => {
 		renderDirectory();
 		openMenu(/^Sort: Founding rank/);
@@ -404,19 +468,21 @@ describe("directory — chips, sort, search", () => {
 	});
 
 	it("no matches names the filter that is hiding the rest and clears it in one tap", () => {
-		renderDirectory({ status: "past_due", q: "kuih" });
+		renderDirectory({ status: ["past_due"], q: "kuih" });
 		expect(screen.getByText("No past due sellers match “kuih”")).toBeTruthy();
-		fireEvent.click(
-			screen.getByRole("button", { name: "Clear search and filters" }),
-		);
+		// One chip + the search box: the count says what the tap undoes.
+		fireEvent.click(screen.getByRole("button", { name: "Clear all (2)" }));
 		expect(screen.getAllByRole("row")).toHaveLength(5);
+		expect(
+			(screen.getByLabelText("Search sellers") as HTMLInputElement).value,
+		).toBe("");
 		expect(
 			screen.getByRole("button", { name: /^All/ }).getAttribute("aria-pressed"),
 		).toBe("true");
 	});
 
 	it("Export CSV writes the visible rows and is disabled-with-reason when nothing matches", () => {
-		renderDirectory({ status: "active" });
+		renderDirectory({ status: ["active"] });
 		fireEvent.click(screen.getByRole("button", { name: /Export CSV/ }));
 		expect(downloadCsvSpy).toHaveBeenCalledTimes(1);
 		const [filename, csv] = downloadCsvSpy.mock.calls[0] as [string, string];
@@ -426,7 +492,7 @@ describe("directory — chips, sort, search", () => {
 		expect(csv).not.toContain("lekor@example.com");
 
 		cleanup();
-		renderDirectory({ status: "cancelled" });
+		renderDirectory({ status: ["cancelled"] });
 		const button = screen.getByRole("button", { name: /Export CSV/ });
 		expect(button.hasAttribute("disabled")).toBe(true);
 		expect(button.getAttribute("title")).toMatch(/no rows match/);
@@ -550,7 +616,7 @@ describe("directory — detail sheet", () => {
 			],
 		});
 		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), false);
-		render(<Harness initial={{ status: "wants_enterprise" }} />);
+		render(<Harness initial={{ status: ["wants_enterprise"] }} />);
 
 		// The chip carries its count and the filter shows only the ask.
 		expect(

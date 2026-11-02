@@ -139,7 +139,10 @@ export type AccessState = {
 	 * means the seller started authorisation but no method attached yet. */
 	autoRenew?: {
 		method: string;
-		methodLabel: string;
+		/** "Visa ·· 4242" — the owner's card. ABSENT for a member without
+		 * `billing` read (`redactBillingDetail` in convex/retailers.ts): only
+		 * billing-tab cards print it, and that tab is area-gated. */
+		methodLabel?: string;
 		failedAttempts: number;
 		failing: boolean;
 		stopped: boolean;

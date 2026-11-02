@@ -100,6 +100,7 @@ describe("docs/release-checklist.md", () => {
 			"Schema + indexes",
 			"Crons",
 			"HTTP routes / auth",
+			"Cloudflare zone settings",
 			"Outbound messaging",
 			"Third-party setup",
 			"Privacy policy",

@@ -27,10 +27,12 @@ import {
 	sellerReason,
 	sellerSeatsLabel,
 	sellerSeatsPhrase,
+	sellerSelectionLabel,
 	sellerSummaryText,
 	sellersToCsv,
 	sellerUnmeteredNote,
 	sortSellers,
+	toggleSellerStatus,
 } from "./admin-seller-view";
 import { formatShortDate } from "./format";
 
@@ -121,9 +123,9 @@ describe("sellerBucket / counts", () => {
 		const counts = countSellerBuckets([lead, contracted]);
 		expect(counts.wants_enterprise).toBe(1);
 		expect(counts.trialing).toBe(1); // the lead still counts in its bucket
-		expect(filterSellers([lead, contracted], "wants_enterprise", "")).toEqual([
-			lead,
-		]);
+		expect(filterSellers([lead, contracted], ["wants_enterprise"], "")).toEqual(
+			[lead],
+		);
 		// Owes-action group order: All, Past due, Unclaimed, then the leads.
 		expect(SELLER_FILTERS.slice(0, 4)).toEqual([
 			"all",
@@ -542,14 +544,14 @@ describe("search + filter", () => {
 	});
 
 	it("filters by bucket and search together", () => {
-		expect(filterSellers(rows, "all", "").map((r) => r.slug)).toEqual([
+		expect(filterSellers(rows, [], "").map((r) => r.slug)).toEqual([
 			"bearcamp-malaysia",
 			"kuih-mak-su",
 		]);
-		expect(filterSellers(rows, "cancelled", "").map((r) => r.slug)).toEqual([
+		expect(filterSellers(rows, ["cancelled"], "").map((r) => r.slug)).toEqual([
 			"kuih-mak-su",
 		]);
-		expect(filterSellers(rows, "active", "kuih")).toEqual([]);
+		expect(filterSellers(rows, ["active"], "kuih")).toEqual([]);
 	});
 });
 
@@ -598,7 +600,7 @@ describe("untagged payers (86eye3eyp)", () => {
 		];
 		expect(countSellerBuckets(rows).untagged_payers).toBe(2);
 		expect(
-			filterSellers(rows, "untagged_payers", "").map((r) => r._id),
+			filterSellers(rows, ["untagged_payers"], "").map((r) => r._id),
 		).toEqual(["r1", "r2"]);
 		expect(isSellerFilter("untagged_payers")).toBe(true);
 		expect(sellerFilterEmptyNoun("untagged_payers")).toBe("untagged payers");
@@ -730,7 +732,7 @@ describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.
 
 	it("filters to only the unclaimed rows", () => {
 		expect(
-			filterSellers([waiting, row(), nameless], "unclaimed", "").map(
+			filterSellers([waiting, row(), nameless], ["unclaimed"], "").map(
 				(r) => r.unclaimed,
 			),
 		).toEqual([true, true]);
@@ -969,7 +971,7 @@ describe("store availability in the directory (z8r3fdudf7)", () => {
 	it("'Paused / offline' counts and filters across every billing status", () => {
 		const rows = [paused, offline, open];
 		expect(countSellerBuckets(rows).unavailable).toBe(2);
-		expect(filterSellers(rows, "unavailable", "").map((r) => r._id)).toEqual([
+		expect(filterSellers(rows, ["unavailable"], "").map((r) => r._id)).toEqual([
 			paused._id,
 			offline._id,
 		]);
@@ -989,5 +991,62 @@ describe("reopenedToast — from the resolver's answer, never a status proxy (PR
 		expect(
 			reopenedToast("Corks Out", { state: "paused", by: "seller", note: "x" }),
 		).toMatch(/the seller's own pause\.$/);
+	});
+});
+
+// z8r3fdzn6r: the chips combine with OR.
+describe("multi-select chips — an OR over the row", () => {
+	const pastDueLead = row({
+		_id: "r_pd_lead" as AdminSellerRow["_id"],
+		subscriptionStatus: "past_due",
+		enterpriseInterestAt: 1,
+	});
+	const cancelled = row({
+		_id: "r_cancelled" as AdminSellerRow["_id"],
+		subscriptionStatus: "cancelled",
+	});
+	const active = row({
+		_id: "r_active" as AdminSellerRow["_id"],
+		subscriptionStatus: "active",
+	});
+	const rows = [pastDueLead, cancelled, active];
+
+	it("a store in either chip shows once, and an empty selection is All", () => {
+		// The lead is in BOTH chips and still lands once: a union, not a sum.
+		expect(
+			filterSellers(
+				rows,
+				["past_due", "wants_enterprise", "cancelled"],
+				"",
+			).map((r) => r._id),
+		).toEqual([pastDueLead._id, cancelled._id]);
+		expect(filterSellers(rows, [], "")).toHaveLength(3);
+	});
+
+	it("toggling adds and removes in row order; All clears", () => {
+		expect(toggleSellerStatus([], "cancelled", SELLER_FILTERS)).toEqual([
+			"cancelled",
+		]);
+		expect(
+			toggleSellerStatus(["cancelled"], "past_due", SELLER_FILTERS),
+		).toEqual(["past_due", "cancelled"]);
+		expect(
+			toggleSellerStatus(["past_due", "cancelled"], "past_due", SELLER_FILTERS),
+		).toEqual(["cancelled"]);
+		expect(toggleSellerStatus(["past_due"], "all", SELLER_FILTERS)).toEqual([]);
+	});
+
+	it("picking every offered chip collapses back to All", () => {
+		const offered = ["all", "past_due", "active"] as const;
+		expect(toggleSellerStatus(["past_due"], "active", offered)).toEqual([]);
+	});
+
+	it("names the selection the way the chips read", () => {
+		expect(sellerSelectionLabel(["cancelled", "unclaimed"])).toBe(
+			"Unclaimed or Cancelled",
+		);
+		expect(sellerSelectionLabel(["past_due", "unclaimed", "active"])).toBe(
+			"Past due, Unclaimed or Active",
+		);
 	});
 });

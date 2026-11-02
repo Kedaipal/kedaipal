@@ -14,6 +14,7 @@ import { mutation, query } from "./_generated/server";
 import { ADMIN_CREDIT_LIMIT, writeGrantOverride } from "./credits";
 import { logAdminAction, requireAdmin } from "./lib/auth";
 import {
+	ENTERPRISE_INTEREST_RESTAMP_MS,
 	contractForAdmin,
 	type EnterpriseEntry,
 	enterpriseContractCaps,
@@ -73,6 +74,8 @@ export const getContractContext = query({
 			invoiceNumber: string;
 			plan: Doc<"subscriptions">["plan"];
 			billingCycle: BillingCycle;
+			/** So the form's refusal names a hold bill as one. */
+			kind: "plan" | "hold";
 		};
 	} | null> => {
 		await requireAdmin(ctx);
@@ -113,6 +116,7 @@ export const getContractContext = query({
 						plan: pending.plan ?? sub?.plan ?? "pro",
 						billingCycle:
 							pending.billingCycle ?? sub?.billingCycle ?? "monthly",
+						kind: pending.kind ?? "plan",
 					}
 				: undefined,
 		};
@@ -198,6 +202,7 @@ export const setContract = mutation({
 						invoiceNumber: pending.invoiceNumber,
 						plan: pending.plan ?? sub.plan,
 						billingCycle: pending.billingCycle ?? sub.billingCycle,
+						kind: pending.kind,
 					}
 				: undefined,
 			billingCycle: args.billingCycle,
@@ -309,7 +314,21 @@ export const markInterest = mutation({
 			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
 			.first();
 		if (!retailer) throw new ConvexError("No store found for your account");
-		await ctx.db.patch(retailer._id, { enterpriseInterestAt: Date.now() });
+		// No write if the store already asked within the window. Not a rate
+		// limiter on purpose: this is a best-effort stamp beside a chat, so a
+		// repeat tap must succeed quietly, never throw. And the write is the
+		// real cost — `retailers` is the row every open storefront tab
+		// subscribes to, so each patch re-runs the whole store's buyer tabs.
+		// The admin reads the stamp at day precision ("asked 3 days ago"), so
+		// an ask an hour later is the same lead; a genuinely later ask still
+		// restamps.
+		const now = Date.now();
+		if (
+			retailer.enterpriseInterestAt !== undefined &&
+			now - retailer.enterpriseInterestAt < ENTERPRISE_INTEREST_RESTAMP_MS
+		)
+			return null;
+		await ctx.db.patch(retailer._id, { enterpriseInterestAt: now });
 		return null;
 	},
 });

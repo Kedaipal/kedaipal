@@ -1272,9 +1272,10 @@ async function buildRetailerPublic(
 		onboardingGreetingSetup: row.onboardingGreetingSetup,
 		activatedAt: row.activatedAt,
 		linkSharedAt: row.linkSharedAt,
-		subscription: resolveAccess(sub, {
-			adminFullAccess: opts?.adminFullAccess,
-		}),
+		subscription: billingDetailFor(
+			resolveAccess(sub, { adminFullAccess: opts?.adminFullAccess }),
+			opts,
+		),
 		claimLinkWindowMinutes: row.claimLinkWindowMinutes,
 		claimLinkSource: row.claimLinkSource,
 		isFoundingMember: row.isFoundingMember,
@@ -1292,6 +1293,39 @@ async function buildRetailerPublic(
 		role: opts?.role,
 		permissions: opts?.permissions,
 		creditGate: await resolveCreditGate(ctx, row, Date.now()),
+	};
+}
+
+/**
+ * The subscription as THIS viewer may see it. The store payload reaches every
+ * member, and two of its fields are the owner's money, not the shop's state:
+ * the Enterprise contract's terms (fee, overage rate, block — commercially
+ * confidential per deal) and the saved card's label ("Visa ·· 4242").
+ * A member without `billing` READ never receives either. Everything that
+ * drives the shared chrome stays — plan, status, caps, features, and the
+ * auto-renewal state booleans the app-wide banner reads — so no visible
+ * surface changes: both fields are read only inside the Billing tab, which
+ * is `AreaGate`d on the same grant. Owner, admin and a billing-read member
+ * get the full view. (PR #326 review FYI; the comment on `orderingPaused`
+ * above already promised "the subscription itself stays owner-only".)
+ */
+function billingDetailFor(
+	access: AccessState,
+	opts: { role?: RetailerRole; permissions?: MemberPermissions } | undefined,
+): AccessState {
+	if (opts?.role !== "member") return access;
+	if (hasPermission(opts.permissions ?? {}, "billing", "read")) return access;
+	return redactBillingDetail(access);
+}
+
+/** Strip the owner's money from a subscription view — see `billingDetailFor`. */
+export function redactBillingDetail(access: AccessState): AccessState {
+	return {
+		...access,
+		enterprise: undefined,
+		autoRenew: access.autoRenew
+			? { ...access.autoRenew, methodLabel: undefined }
+			: undefined,
 	};
 }
 

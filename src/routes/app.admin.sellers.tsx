@@ -40,16 +40,19 @@ import { useIsDesktop } from "../hooks/useIsDesktop";
 import {
 	countSellerBuckets,
 	filterSellers,
-	isSellerFilter,
 	isSellerSort,
+	parseSellerStatuses,
 	SELLER_FILTER_LABEL,
 	SELLER_FILTERS,
 	SELLER_SORTS,
 	type SellerFilter,
 	type SellerSort,
+	type SellerStatusFilter,
 	sellerFilterEmptyNoun,
+	sellerSelectionLabel,
 	sellersToCsv,
 	sortSellers,
+	toggleSellerStatus,
 } from "../lib/admin-seller-view";
 import { downloadCsv } from "../lib/download";
 import { searchText } from "../lib/search-params";
@@ -58,7 +61,8 @@ import { storefrontOrigin } from "../lib/storefront-url";
 /** The directory's URL state. Defaults are omitted from the URL so the plain
  * route stays `/app/admin/sellers`. */
 export interface SellersSearch {
-	status?: Exclude<SellerFilter, "all">;
+	/** The selected chips, ORed together (z8r3fdzn6r). Absent = "All". */
+	status?: SellerStatusFilter[];
 	sort?: Exclude<SellerSort, "founding">;
 	q?: string;
 }
@@ -68,10 +72,9 @@ export const Route = createFileRoute("/app/admin/sellers")({
 	// lets the raw parsed value through, and `?q=9981` parses as a NUMBER that
 	// crashed the page on `q.trim()` (z8r3fdtk87, src/lib/search-params.ts).
 	validateSearch: (search: Record<string, unknown>): SellersSearch => ({
-		status:
-			isSellerFilter(search.status) && search.status !== "all"
-				? search.status
-				: undefined,
+		// A list, or a single value from links written before the chips
+		// combined — both read as a selection.
+		status: parseSellerStatuses(search.status),
 		sort:
 			isSellerSort(search.sort) && search.sort !== "founding"
 				? search.sort
@@ -172,7 +175,7 @@ export function SellerDirectory({
 	const isDesktop = useIsDesktop();
 	const [detailId, setDetailId] = useState<AdminSellerRow["_id"] | null>(null);
 
-	const filter: SellerFilter = search.status ?? "all";
+	const selected: readonly SellerStatusFilter[] = search.status ?? [];
 	const sort: SellerSort = search.sort ?? "founding";
 	const q = search.q ?? "";
 	// One clock per render so every row's "in N days" agrees.
@@ -180,19 +183,30 @@ export function SellerDirectory({
 
 	const all = sellers ?? [];
 	const counts = countSellerBuckets(all);
-	const visible = sortSellers(filterSellers(all, filter, q), sort, now);
+	const visible = sortSellers(filterSellers(all, selected, q), sort, now);
 	const detailSeller = all.find((s) => s._id === detailId) ?? null;
 	// Live contracts the open store could be modelled on — built from the list
 	// already on screen, so the "start from" picker costs no second query. The
 	// store being edited is never its own template. Same helper the billing
 	// card's sheet uses (z8r3fdpm2p), so the two pickers can't drift.
 	const contractTemplates = contractTemplatesFrom(all, detailId);
-	const filtered = filter !== "all" || q.trim().length > 0;
+	const searching = q.trim().length > 0;
+	// What "Clear all (N)" undoes: each chip, plus the search box.
+	const activeCount = selected.length + (searching ? 1 : 0);
+	const filtered = activeCount > 0;
+	// "No subscription" only shows while a store sits in it. The offered row
+	// is what "every chip selected ⇒ All" is judged against.
+	const offeredFilters = SELLER_FILTERS.filter(
+		(f) => f !== "none" || counts.none > 0,
+	);
+	// The only single chip with copy of its own in the empty state.
+	const onlyFilter = selected.length === 1 ? selected[0] : undefined;
 
-	function setFilter(next: SellerFilter) {
+	function toggleFilter(chip: SellerFilter) {
+		const next = toggleSellerStatus(selected, chip, offeredFilters);
 		onSearchChange({
 			...search,
-			status: next === "all" ? undefined : next,
+			status: next.length > 0 ? next : undefined,
 		});
 	}
 	function setSort(next: SellerSort) {
@@ -348,24 +362,52 @@ export function SellerDirectory({
 			</div>
 
 			<FilterChipRow>
-				{SELLER_FILTERS.filter((f) => f !== "none" || counts.none > 0).map(
-					(f) => (
-						<FilterChip
-							key={f}
-							selected={filter === f}
-							count={counts[f]}
-							countTone={
-								(f === "past_due" || f === "untagged_payers") && counts[f] > 0
-									? "attention"
-									: "muted"
-							}
-							onClick={() => setFilter(f)}
-						>
-							{SELLER_FILTER_LABEL[f]}
-						</FilterChip>
-					),
-				)}
+				{offeredFilters.map((f) => (
+					<FilterChip
+						key={f}
+						selected={
+							f === "all" ? selected.length === 0 : selected.includes(f)
+						}
+						count={counts[f]}
+						countTone={
+							(f === "past_due" || f === "untagged_payers") && counts[f] > 0
+								? "attention"
+								: "muted"
+						}
+						onClick={() => toggleFilter(f)}
+					>
+						{SELLER_FILTER_LABEL[f]}
+					</FilterChip>
+				))}
 			</FilterChipRow>
+
+			{/* What is on, and the one control that undoes all of it. Without
+			    this line the OR is invisible: nothing on the row says two chips
+			    add up rather than narrow. */}
+			<div className="-mt-2 flex min-h-11 items-center justify-between gap-3">
+				<p className="min-w-0 text-[13px] text-muted-foreground">
+					{selected.length === 0 ? (
+						"Tap chips to combine them — picking two shows stores in either."
+					) : (
+						<>
+							Filtered to{" "}
+							<span className="font-medium text-foreground">
+								{sellerSelectionLabel(selected)}
+							</span>
+							{searching ? <> matching “{q.trim()}”</> : null}
+						</>
+					)}
+				</p>
+				{filtered ? (
+					<Button
+						variant="ghost"
+						onClick={clearAll}
+						className="h-11 shrink-0 rounded-xl px-3 lg:h-9"
+					>
+						Clear all ({activeCount})
+					</Button>
+				) : null}
+			</div>
 
 			{sellers === undefined ? (
 				<div className="flex flex-col gap-2">
@@ -379,30 +421,26 @@ export function SellerDirectory({
 					<p className="font-medium">
 						{all.length === 0
 							? "No sellers yet"
-							: filter !== "all"
-								? `No ${sellerFilterEmptyNoun(filter)}${q.trim() ? ` match “${q.trim()}”` : ""}`
-								: `No sellers match “${q.trim()}”`}
+							: selected.length > 1
+								? `Nothing in ${sellerSelectionLabel(selected)}${searching ? ` matches “${q.trim()}”` : ""}`
+								: onlyFilter
+									? `No ${sellerFilterEmptyNoun(onlyFilter)}${searching ? ` match “${q.trim()}”` : ""}`
+									: `No sellers match “${q.trim()}”`}
 					</p>
 					<p className="max-w-xs text-sm text-muted-foreground">
 						{all.length === 0
 							? "Stores appear here once a seller finishes onboarding."
-							: filter === "wants_enterprise"
+							: onlyFilter === "wants_enterprise"
 								? "Nobody's waiting. Sellers land here when they tap “Talk to Arif” in the app, and leave when a contract lands or you dismiss the ask."
-								: filter === "untagged_payers" && !q.trim()
+								: onlyFilter === "untagged_payers" && !searching
 									? "Every paying store has a channel. New payers land here until you tag how they arrived."
-									: filter !== "all"
-										? "They may be in another status — clear the filter to search every store."
+									: selected.length > 0
+										? "They may be in another status — clear the filters to search every store."
 										: "Try the store name, its slug, the owner's email or their phone."}
 					</p>
-					{filtered ? (
-						<Button
-							variant="outline"
-							onClick={clearAll}
-							className="mt-2 h-10 rounded-xl px-4"
-						>
-							Clear search and filters
-						</Button>
-					) : null}
+					{/* No second Clear here: "Clear all (N)" sits on the line just
+					    above, and two identical controls a few pixels apart read as
+					    two different things. */}
 				</div>
 			) : isDesktop ? (
 				<SellerTable
