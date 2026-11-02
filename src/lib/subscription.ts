@@ -41,12 +41,14 @@ export type SubscriptionView = {
 	currentPeriodEnd?: number;
 	caps?: { orderCap: number; userCap: number; broadcastQuota: number };
 	features?: Record<PlanFeature, boolean>;
-	/** Saved-method auto-renewal summary (86eyb6z4r) — owner payload only.
+	/** Saved-method auto-renewal summary (86eyb6z4r). Every viewer gets the
+	 * state booleans (the app-wide banner reads them); only the owner, an
+	 * admin, or a member with `billing` read gets `methodLabel` — the card.
 	 * `stopped`: auto-charging is stopped over a stranded charge — nothing
 	 * charges until a bill is settled (docs/hitpay-recurring.md). */
 	autoRenew?: {
 		method: string;
-		methodLabel: string;
+		methodLabel?: string;
 		failedAttempts: number;
 		failing: boolean;
 		stopped: boolean;
