@@ -882,3 +882,90 @@ describe("cross-currency quotes are never presented as comparable", () => {
 		expect(container.textContent).not.toContain("aren't directly comparable");
 	});
 });
+
+describe("the tracking link lands at collection (z8r3fe0t4e)", () => {
+	const bookedJob = {
+		status: "assigning",
+		providerOrderId: "delyva-1",
+		costActual: 500,
+		serviceCode: "JNTMY-PN-B200",
+		serviceName: "J&T Express",
+		itemType: "PARCEL",
+		awb: "632195694574",
+		createdAt: Date.now(),
+	};
+
+	it("booked with the number but no link yet: says when the link comes, offers no Track parcel", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: bookedJob,
+		});
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={{ ...order, trackingNo: "632195694574" } as Doc<"orders">}
+			/>,
+		);
+		expect(screen.getByText("632195694574")).toBeTruthy();
+		expect(container.textContent).toContain(
+			"J&T Express's tracking page goes live once the parcel is collected",
+		);
+		expect(screen.queryByText(/track parcel/i)).toBeNull();
+	});
+
+	it("a booking from before the link moved keeps the link it was born with", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: bookedJob,
+		});
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={
+					{
+						...order,
+						trackingNo: "632195694574",
+						carrierTrackingUrl:
+							"https://www.jtexpress.my/tracking/632195694574",
+					} as Doc<"orders">
+				}
+			/>,
+		);
+		expect(screen.getByText(/track parcel/i)).toBeTruthy();
+		expect(container.textContent).not.toContain("goes live once");
+	});
+
+	it("a seller's own number on the order is never promised a link on the booking's behalf", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: bookedJob,
+		});
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={{ ...order, trackingNo: "MANUAL-1" } as Doc<"orders">}
+			/>,
+		);
+		expect(container.textContent).not.toContain("goes live once");
+		expect(screen.queryByText(/track parcel/i)).toBeNull();
+	});
+
+	it("once collected, the link shows and the pre-collection line is gone", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: { ...bookedJob, status: "picked_up" },
+		});
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={
+					{
+						...order,
+						status: "shipped",
+						trackingNo: "632195694574",
+						carrierTrackingUrl:
+							"https://www.jtexpress.my/tracking/632195694574",
+					} as Doc<"orders">
+				}
+			/>,
+		);
+		expect(screen.getByText(/track parcel/i)).toBeTruthy();
+		expect(container.textContent).not.toContain("goes live once");
+	});
+});

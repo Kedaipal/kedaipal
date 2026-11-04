@@ -495,6 +495,25 @@ export function isFailedDeliveryAttempt(statusCode: number): boolean {
 	return statusCode === 650;
 }
 
+/**
+ * Has the courier physically got the parcel? The one author of "the courier's
+ * tracking page is live now" (z8r3fe0t4e). Delyva issues the consignment
+ * number at booking (100/200), but J&T — and every parcel courier — indexes a
+ * waybill only at its first scan, so a tracking link written at booking is a
+ * dead "information not found" page for the ~24 h until collection (seen live
+ * on DapoGo's first booking, 3 Nov 2026). Judged by the NORMALISED status,
+ * never by `code >= 500`: a failure code above 500 that means "never
+ * collected" (a courier-cancelled pickup) must not promise a page that isn't
+ * there. 650 (failed delivery attempt) is collected — the parcel is with the
+ * courier; 900 (cancelled) is not.
+ */
+export function isCollectedStatus(statusCode: number | undefined): boolean {
+	if (statusCode === undefined) return false;
+	if (isFailedDeliveryAttempt(statusCode)) return true;
+	const status = normalizeDelyvaStatus(statusCode);
+	return status === "picked_up" || status === "completed";
+}
+
 export type DelyvaWebhookEvent = {
 	/** Delyva's order id — the correlation key (data.id on order.created,
 	 * data.orderId on tracking events). */

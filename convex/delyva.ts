@@ -36,6 +36,7 @@ import {
 	type DelyvaInventoryLine,
 	type DelyvaItemType,
 	type DelyvaService,
+	isCollectedStatus,
 	isFailedDeliveryAttempt,
 	normalizeDelyvaStatus,
 	parseDelyvaErrorMessage,
@@ -46,7 +47,7 @@ import {
 	parseOrderResponse,
 	resolveDelyvaCredentials,
 } from "./lib/delyva";
-import { isActiveJobStatus } from "./lib/deliveryJobs";
+import { isActiveJobStatus, isCollectedJobStatus } from "./lib/deliveryJobs";
 import { encryptSecret } from "./lib/credentialCrypto";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { isColdItemType } from "./lib/liveQuote";
@@ -1676,33 +1677,57 @@ export const commitBooking = internalMutation({
 			failureReason: undefined,
 			updatedAt: now,
 		});
-		if (args.awb) await mirrorAwbOntoOrder(ctx, job, args.awb);
+		// The process response can already say "collected" on a replayed
+		// confirm; the link follows the same rule as the webhook path.
+		if (args.awb)
+			await mirrorAwbOntoOrder(ctx, job, args.awb, {
+				collected: isCollectedStatus(args.statusCode),
+			});
 	},
 });
 
-/** Write the AWB into the buyer-visible manual-courier fields (86eyehvk4) —
- * fill-if-unset, so a seller's own manual entry is never overwritten. The
- * tracking URL comes from the courier registry when the service name matches
- * a known courier, else Delyva's own public tracking page. */
+/**
+ * Write the AWB into the buyer-visible manual-courier fields (86eyehvk4):
+ * courier name + number the moment the AWB is known, the tracking LINK only
+ * once the parcel is collected (z8r3fe0t4e). J&T answered "information not
+ * found" for a waybill booked but not yet scanned — every parcel courier
+ * indexes at the first scan — so a link written at booking sent seller and
+ * buyer to a dead page for a day, with nothing saying why.
+ *
+ * Fill-if-unset throughout: a seller's own manual entry (a DIFFERENT number)
+ * is never touched; the same AWB with no link yet is ours to complete, so the
+ * write is idempotent and a replayed or stale collection event is a no-op.
+ * The link is the courier registry's deep link when the service name matches
+ * a known courier, else Delyva's own public tracking page — which renders a
+ * consignment from "Order created" on (checked in a browser, 4 Nov 2026), so
+ * the fallback is safe at collection and would even have been safe earlier.
+ */
 async function mirrorAwbOntoOrder(
 	ctx: MutationCtx,
 	job: Doc<"deliveryJobs">,
 	awb: string,
+	{ collected }: { collected: boolean },
 ): Promise<void> {
 	const order = await ctx.db.get(job.orderId);
 	if (!order) return;
-	if (order.trackingNo) return; // seller already recorded a shipment by hand
-	const courierName = job.serviceName ?? "Delyva";
-	const registry = findCourier(courierName);
-	const trackingUrl = registry?.buildTrackingUrl
-		? registry.buildTrackingUrl(awb)
-		: `https://my.delyva.app/customer/strack?trackingNo=${encodeURIComponent(awb)}`;
-	await ctx.db.patch(order._id, {
-		courierName,
-		trackingNo: awb,
-		...(order.carrierTrackingUrl ? {} : { carrierTrackingUrl: trackingUrl }),
-		updatedAt: Date.now(),
-	});
+	if (order.trackingNo && order.trackingNo !== awb) return; // seller's own entry
+	const patch: {
+		courierName?: string;
+		trackingNo?: string;
+		carrierTrackingUrl?: string;
+	} = {};
+	if (!order.trackingNo) {
+		patch.courierName = job.serviceName ?? "Delyva";
+		patch.trackingNo = awb;
+	}
+	if (collected && !order.carrierTrackingUrl) {
+		const registry = findCourier(job.serviceName ?? "Delyva");
+		patch.carrierTrackingUrl = registry?.buildTrackingUrl
+			? registry.buildTrackingUrl(awb)
+			: `https://my.delyva.app/customer/strack?trackingNo=${encodeURIComponent(awb)}`;
+	}
+	if (Object.keys(patch).length === 0) return;
+	await ctx.db.patch(order._id, { ...patch, updatedAt: Date.now() });
 }
 
 export const releaseReservation = internalMutation({
@@ -2039,7 +2064,20 @@ export const applyWebhookEvent = internalMutation({
 		// (a gap-filling write, mirroring the Lalamove shareLink posture).
 		if (consignmentNo && !job.awb) {
 			await ctx.db.patch(jobId, { awb: consignmentNo, updatedAt: now });
-			await mirrorAwbOntoOrder(ctx, job, consignmentNo);
+		}
+		// The order's courier fields follow on every event that knows the AWB,
+		// not only the first: the number lands at booking, the LINK at
+		// collection (z8r3fe0t4e) — judged on this event OR the job's own
+		// status, so a 500 that arrives before `order.created` (or carries the
+		// AWB itself) and a stale `order.created` replayed after the 500 both
+		// land it. Fill-if-unset, so a replayed 500 after a 700 is a no-op, and
+		// the shipped transition below reads the link off the order itself.
+		const awb = job.awb ?? consignmentNo;
+		if (awb) {
+			await mirrorAwbOntoOrder(ctx, job, awb, {
+				collected:
+					isCollectedStatus(statusCode) || isCollectedJobStatus(job.status),
+			});
 		}
 
 		if (statusCode === undefined) return;
@@ -2112,7 +2150,6 @@ export const applyWebhookEvent = internalMutation({
 		// direction (v1) — every job is a standard delivery to the buyer.
 		const order = await ctx.db.get(job.orderId);
 		if (!order || order.status === "cancelled") return;
-		const awb = job.awb ?? consignmentNo;
 		if (status === "picked_up" && SHIPPABLE_FROM.has(order.status)) {
 			await applyStatusTransition(ctx, order, "shipped", {
 				courierName: order.courierName ?? job.serviceName ?? "Delyva",

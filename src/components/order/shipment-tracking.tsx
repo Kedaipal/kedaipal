@@ -1,5 +1,5 @@
 import { useMutation } from "convex/react";
-import { CircleAlert, ExternalLink, Truck } from "lucide-react";
+import { CircleAlert, Clock, ExternalLink, Truck } from "lucide-react";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
@@ -12,6 +12,7 @@ import {
 } from "../../../convex/lib/couriers";
 import { dispatchBlockCopy } from "../../lib/dispatch-block";
 import { convexErrorMessage } from "../../lib/format";
+import { COURIER_LINK_PENDING_SELLER_LINE } from "../../lib/parcel-courier-copy";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
 import {
@@ -362,6 +363,10 @@ export function ShipmentTrackingCard({
 		courierName?: string;
 		trackingNo?: string;
 		carrierTrackingUrl?: string;
+		/** The booking's number is on the order, its link lands at
+		 * collection (z8r3fe0t4e) — from `orders.get`, so this card and the
+		 * buyer's page read the same answer. */
+		courierLinkPending?: boolean;
 	};
 	readOnly?: boolean;
 	/** Set while the STORE can't record tracking right now (out of credits,
@@ -492,6 +497,11 @@ export function ShipmentTrackingCard({
 							<ExternalLink className="size-3.5 shrink-0" />
 							<span className="truncate">Track with courier</span>
 						</a>
+					) : order.courierLinkPending ? (
+						<p className="flex items-start gap-2 text-xs text-muted-foreground">
+							<Clock className="mt-0.5 size-3.5 shrink-0" />
+							{COURIER_LINK_PENDING_SELLER_LINE}
+						</p>
 					) : null}
 				</div>
 			) : (

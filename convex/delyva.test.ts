@@ -990,3 +990,189 @@ describe("overseas buyer numbers (z8r3fdh274) — the courier calls the store", 
 		}
 	});
 });
+
+describe("the tracking link lands at collection, never at booking (z8r3fe0t4e)", () => {
+	// J&T answered "information not found" for DapoGo's waybill for the day
+	// between booking and the first scan — the number is right, the page is
+	// not live yet. So the NUMBER mirrors at booking and the LINK at 500.
+	const TOKEN = "trk0t4eabcdefghijklmnopqrstuvwxyz0123456789";
+
+	test("order.created (100) puts the number on the order and holds the link; 500 lands it and ships", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { trackingToken: TOKEN });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			quotationId: "JNTMY-PN-B200",
+			vehicleType: "JNTMY-PN-B200",
+			serviceName: "J&T Express",
+			itemType: "PARCEL",
+		});
+
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 100,
+			consignmentNo: "632195694574",
+			eventAt: T1,
+		});
+		let order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.courierName).toBe("J&T Express");
+		expect(order?.trackingNo).toBe("632195694574");
+		expect(order?.carrierTrackingUrl).toBeUndefined();
+		expect(order?.status).toBe("confirmed");
+		// The buyer's read says so — the page words the wait instead of
+		// rendering a link slot with nothing in it.
+		let buyerView = await t.query(api.orders.get, { token: TOKEN });
+		expect(buyerView?.courierLinkPending).toBe(true);
+
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 500,
+			eventAt: T2,
+		});
+		order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.status).toBe("shipped");
+		// The registry deep link, because the service name is a known courier.
+		expect(order?.carrierTrackingUrl).toBe(
+			"https://www.jtexpress.my/tracking/632195694574",
+		);
+		buyerView = await t.query(api.orders.get, { token: TOKEN });
+		expect(buyerView?.courierLinkPending).toBeUndefined();
+	});
+
+	test("a collection event that carries the AWB itself lands number and link in one go", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await seedJob(t, retailer._id, orderId);
+
+		// No order.created ever applied — the 500 is the first event we see.
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 500,
+			consignmentNo: "MY0099",
+			eventAt: T2,
+		});
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.trackingNo).toBe("MY0099");
+		// Ninja Cold isn't in the courier registry → Delyva's own page.
+		expect(order?.carrierTrackingUrl).toBe(
+			"https://my.delyva.app/customer/strack?trackingNo=MY0099",
+		);
+		expect(order?.status).toBe("shipped");
+	});
+
+	test("a stale order.created replayed after the 500 still lands the link — the job knows it was collected", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { status: "shipped" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "picked_up",
+			lastEventAt: T2,
+		});
+
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 100,
+			consignmentNo: "MY0100",
+			eventAt: T1, // older than the applied 500
+		});
+		const { order, job } = await t.run(async (ctx) => ({
+			order: await ctx.db.get(orderId),
+			job: await ctx.db.get(jobId),
+		}));
+		expect(job?.status).toBe("picked_up"); // never regressed
+		expect(job?.awb).toBe("MY0100");
+		expect(order?.trackingNo).toBe("MY0100");
+		expect(order?.carrierTrackingUrl).toContain("MY0100");
+	});
+
+	test("a link the seller added by hand before collection is kept — the mirror only ever fills", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			courierName: "Ninja Cold",
+			trackingNo: "MY0012345678",
+			carrierTrackingUrl: "https://seller.example/track/MY0012345678",
+		});
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			awb: "MY0012345678",
+		});
+
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 500,
+			eventAt: T2,
+		});
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.carrierTrackingUrl).toBe(
+			"https://seller.example/track/MY0012345678",
+		);
+		expect(order?.status).toBe("shipped");
+	});
+
+	test("cancelled (900) with the number on the order never writes a link", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			courierName: "Ninja Cold",
+			trackingNo: "MY0012345678",
+		});
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			awb: "MY0012345678",
+		});
+
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 900,
+			eventAt: T2,
+		});
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.carrierTrackingUrl).toBeUndefined();
+		expect(order?.trackingNo).toBe("MY0012345678");
+	});
+
+	test("commitBooking follows the same rule: a booked response mirrors the number, a collected one the link too", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			providerOrderId: undefined,
+		});
+
+		await t.mutation(internal.delyva.commitBooking, {
+			jobId,
+			providerOrderId: "DLV-COMMIT",
+			costActual: 500,
+			awb: "MY0200",
+			statusCode: 100,
+		});
+		let order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.trackingNo).toBe("MY0200");
+		expect(order?.carrierTrackingUrl).toBeUndefined();
+
+		// A replayed confirm whose process response already says collected.
+		await t.mutation(internal.delyva.commitBooking, {
+			jobId,
+			providerOrderId: "DLV-COMMIT",
+			costActual: 500,
+			awb: "MY0200",
+			statusCode: 500,
+		});
+		order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.carrierTrackingUrl).toContain("MY0200");
+	});
+
+	test("the buyer read never promises a link for a seller's own manual entry", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			trackingToken: TOKEN,
+			courierName: "Ninja Cold",
+			trackingNo: "MANUAL-7",
+		});
+		await seedJob(t, retailer._id, orderId, { awb: "MY0300" });
+
+		const buyerView = await t.query(api.orders.get, { token: TOKEN });
+		expect(buyerView?.courierLinkPending).toBeUndefined();
+	});
+});

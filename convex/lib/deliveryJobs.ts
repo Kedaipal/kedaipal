@@ -38,6 +38,35 @@ export function isActiveJobStatus(status: DeliveryJobStatus): boolean {
 	return !TERMINAL_JOB_STATUSES.has(status);
 }
 
+/** The courier has the parcel (or had it): the job-status half of the
+ * "tracking page is live" rule (z8r3fe0t4e), for an AWB that arrives AFTER
+ * the collection event did — a stale `order.created` replayed after the 500
+ * must still land the link, since the job already knows it was collected. */
+export function isCollectedJobStatus(status: DeliveryJobStatus): boolean {
+	return status === "picked_up" || status === "completed";
+}
+
+/**
+ * "The number is on the order, the courier's page isn't live yet"
+ * (z8r3fe0t4e) — the one state every surface words the same way: the
+ * seller's dispatch card, the Shipment tracking card and the buyer's /track
+ * page. True only while a booked job that already has its AWB is still
+ * waiting for collection, the order's number IS that AWB (a seller's own
+ * manual entry is theirs — no link is ever promised on its behalf, which is
+ * what keeps a name-only cold-chain courier honest), and no link exists yet.
+ * A booking from before the link moved to collection keeps the link it was
+ * born with and never reads as pending.
+ */
+export function isCourierLinkPending(
+	job: { status: DeliveryJobStatus; awb?: string } | null | undefined,
+	order: { trackingNo?: string; carrierTrackingUrl?: string },
+): boolean {
+	if (!job?.awb) return false;
+	if (job.status !== "assigning" && job.status !== "ongoing") return false;
+	if (order.trackingNo !== job.awb) return false;
+	return !order.carrierTrackingUrl;
+}
+
 /**
  * Whether the courier (via webhook) currently drives the order's canonical
  * status — an ACTIVE job whose webhook has demonstrably delivered events

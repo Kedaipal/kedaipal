@@ -32,7 +32,10 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { walletVerdict } from "../../../convex/lib/courierWallet";
-import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
+import {
+	isActiveJobStatus,
+	isCourierLinkPending,
+} from "../../../convex/lib/deliveryJobs";
 import type { DelyvaItemType, DelyvaService } from "../../../convex/lib/delyva";
 import { courierMargin } from "../../lib/courier-margin";
 import {
@@ -42,7 +45,10 @@ import {
 } from "../../lib/delyva-dispatch-block";
 import { delyvaSurface } from "../../lib/dispatch-surface";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
-import { parcelDeliveredCopy } from "../../lib/parcel-courier-copy";
+import {
+	courierLinkPendingSellerCopy,
+	parcelDeliveredCopy,
+} from "../../lib/parcel-courier-copy";
 import { ProBadge } from "../app/pro-gate";
 import { DispatchWalletLine } from "../deliveries/dispatch-wallet-line";
 import { Button } from "../ui/button";
@@ -348,10 +354,17 @@ export function DelyvaDispatchCard({
 						</p>
 					)}
 
+					{/* Booked with a number but no link yet (z8r3fe0t4e): the
+						link is written at collection, so the line says when
+						it comes and "Track parcel" below stays absent until
+						`order.carrierTrackingUrl` exists — a parcel courier
+						answers "not found" for an unscanned waybill. */}
 					<p className="text-muted-foreground">
 						{completedJob
 							? parcelDeliveredCopy(!!order.carrierTrackingUrl)
-							: "Your buyer already has this — the tracking number is on their order page. The order marks itself Shipped at collection and Delivered on arrival."}
+							: isCourierLinkPending(job, order)
+								? courierLinkPendingSellerCopy(job.serviceName)
+								: "Your buyer already has this — the tracking number is on their order page. The order marks itself Shipped at collection and Delivered on arrival."}
 					</p>
 
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
