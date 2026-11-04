@@ -40,7 +40,6 @@ import {
 	sanitizeHiddenNote,
 } from "./lib/marketplaceListing";
 import { storeIsInternal } from "./marketplace";
-import { listAllSellersForAdmin } from "./adminSellers";
 import {
 	cleanAvailabilityNote,
 	type StoreAvailability,
@@ -52,19 +51,6 @@ import { loadSubscription } from "./subscriptions";
 const AUDIT_LIMIT = 50;
 
 export type { AdminSellerRow } from "./adminSellers";
-
-/**
- * Every seller, for the admin act-as directory — the legacy whole-book read.
- * The directory page itself is paginated now (`adminSellers.listSellersPage`);
- * this stays for the showcase store picker (`showcase-store-picker.tsx`),
- * which filters the book by country on the client. Founding Members first (by
- * rank), then newest store first. Capped at `ADMIN_STORE_LIST_LIMIT`, shared
- * with the billing picker so two lists of the same stores never disagree.
- */
-export const listSellersForAdmin = query({
-	args: {},
-	handler: listAllSellersForAdmin,
-});
 
 /**
  * Start or move a store's marketplace "Store highlights" sponsorship window

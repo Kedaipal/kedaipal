@@ -1,8 +1,9 @@
-// How much of the store book an admin console surface pulls (ClickUp
-// z8r3fdpm2p). Shared because two surfaces list the SAME stores and must not
-// disagree about which ones exist: the sellers directory
-// (`admin.listSellersForAdmin`) and the billing picker
-// (`invoices.listRetailersForAdmin`).
+// How much of the store book an admin console surface pulls as FULL rows
+// (ClickUp z8r3fdpm2p). Born shared because two surfaces listed the SAME
+// stores and must not disagree about which ones exist: the sellers directory
+// (`admin.listSellersForAdmin`, retired 4 Nov 2026 — the directory is
+// cursor-paginated and reaches every store) and the billing picker
+// (`invoices.listRetailersForAdmin`), which still takes it.
 //
 // They did disagree — 500 against a bare `200` — and the billing picker is
 // ordered NEWEST FIRST, so past 200 stores the oldest simply vanished from
@@ -18,10 +19,12 @@
 // instead of typing its own.
 export const ADMIN_STORE_LIST_LIMIT = 500;
 
-// How many stores the paginated directory's COUNTS query scans
-// (`adminSellers.countSellerBuckets`). The list itself is cursor-paginated and
-// reaches every store; only the numbers on the Status menu need the whole
-// book in one read, at one retailer + one subscription read per store. Against
+// How many stores a SLIM whole-book scan reads: the paginated directory's
+// counts (`adminSellers.countSellerBuckets`) and the showcase store picker's
+// country list (`adminSellers.listPickerStores`). The directory list itself is
+// cursor-paginated and reaches every store; only the numbers on the Status
+// menu and "every store in this region" need the whole book in one read, at
+// one retailer + one subscription read per store. Against
 // Convex's 16,384-documents-per-query limit that is a ~3,000-store ceiling, so
 // the scan stops here and says so (`capped`) rather than under-counting
 // silently. Past it the honest fix is the Aggregate component with per-bucket

@@ -6,6 +6,7 @@ import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { settleScheduled } from "./lib/convexTestSettle";
 import schema from "./schema";
+import { allSellerRows } from "./lib/sellerDirectoryWalk";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -455,9 +456,7 @@ describe("admin seller row", () => {
 			referralSlug: "siti-kitchen",
 		});
 
-		const rows = await t
-			.withIdentity({ subject: ADMIN })
-			.query(api.admin.listSellersForAdmin, {}).then((r) => r.sellers);
+		const rows = await allSellerRows(t.withIdentity({subject:ADMIN}));
 		const row = rows.find((r) => r._id === refereeId);
 		expect(row?.referral).toMatchObject({
 			referrer: { slug: "siti-kitchen", storeName: "Store siti-kitchen" },
@@ -468,9 +467,7 @@ describe("admin seller row", () => {
 		expect(referrerRow?.referral).toBeUndefined();
 
 		await insertPaidInvoice(t, refereeId);
-		const after = await t
-			.withIdentity({ subject: ADMIN })
-			.query(api.admin.listSellersForAdmin, {}).then((r) => r.sellers);
+		const after = await allSellerRows(t.withIdentity({subject:ADMIN}));
 		expect(after.find((r) => r._id === refereeId)?.referralEditable).toBe(
 			false,
 		);
