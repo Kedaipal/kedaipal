@@ -10,7 +10,7 @@ import { Wordmark } from "../ui/wordmark";
 
 /**
  * /stores' compact header (z8r3fdr6mv): once the hero scrolls past, a
- * frosted bar takes over with the logo and a floating search — on desktop the filter chips too, and the seller CTA. The hero's
+ * frosted bar takes over with the logo and a floating search — on wide desktop the filter chips too, and the seller CTA. The hero's
  * own search and chips are the same STATE; this bar is a second view of it,
  * not a second control, so typing in either moves the other.
  *
@@ -106,7 +106,7 @@ export function StoresCompactHeader({
 								onClick={() => onChip("all")}
 								tabIndex={shown ? undefined : -1}
 								aria-label={`Clear the ${activeChip.label} filter`}
-								className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-primary pl-2.5 pr-1.5 text-[11.5px] font-bold text-primary-foreground lg:hidden"
+								className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-primary pl-2.5 pr-1.5 text-[11.5px] font-bold text-primary-foreground xl:hidden"
 							>
 								{activeChip.label}
 								<span className="flex size-5 items-center justify-center rounded-full bg-primary-foreground/20">
@@ -117,7 +117,11 @@ export function StoresCompactHeader({
 					</div>
 				</form>
 
-				<div className="hidden gap-1.5 lg:flex">
+				{/* shrink-0: the chips never squeeze (that overlapped the theme toggle);
+					    the search pill gives way instead. They show from xl, where four
+					    chips plus the toggle and CTA fit; between lg and xl an active
+					    filter rides inside the search pill, as on a phone. */}
+				<div className="hidden shrink-0 gap-1.5 xl:flex">
 					{chips.map((c) => {
 						const active = chip === c.id;
 						return (

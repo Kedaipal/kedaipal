@@ -54,9 +54,13 @@ import {
 } from "../../convex/lib/buyerQuestions";
 import type { Country } from "../../convex/lib/country";
 import {
-	formatFulfilmentDate,
+	composeFulfilmentMoment,
+	formatFulfilmentDateTime,
+	formatFulfilmentTime,
 	fulfilmentDateBounds,
+	hhmmFromMinutes,
 	mytMidnightFromYmd,
+	timeMinutesFromHhmm,
 	ymdFromEpoch,
 } from "../../convex/lib/fulfilmentDate";
 import {
@@ -81,6 +85,7 @@ import { BuyerQuestionsFields } from "../components/order/buyer-questions-fields
 import { AppImage } from "../components/ui/app-image";
 import { Button } from "../components/ui/button";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import { DatePicker } from "../components/ui/date-picker";
 import {
 	Dialog,
 	DialogContent,
@@ -96,8 +101,10 @@ import {
 	DropdownMenuLabel,
 	DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
+import { FilterChip, FilterChipRow } from "../components/ui/filter-chip";
 import { Input } from "../components/ui/input";
 import { Select } from "../components/ui/select";
+import { TimePicker } from "../components/ui/time-picker";
 import {
 	type AppliedVoucher,
 	previewDiscount,
@@ -117,8 +124,18 @@ import {
 import { useDebounce } from "../hooks/useDebounce";
 import { MASK_PII } from "../lib/analytics-privacy";
 import {
+	COUNTER_CATALOG_FILTERS,
+	type CounterCatalogFilter,
+	counterFilterCounts,
+	counterFilterEmptyMessage,
+	counterFilterIsUseful,
+	effectiveCounterFilter,
+	matchesCounterFilter,
+} from "../lib/counter-catalog-filter";
+import {
 	counterPrimaryAction,
 	showsSellerPaymentControls,
+	timeAfterDateChange,
 } from "../lib/counter-panel";
 import { centsToRm, rmToCents } from "../lib/counter-price";
 import { newWalkInSince, walkInSessionIds } from "../lib/counter-scan";
@@ -973,6 +990,8 @@ type SessionDraft = {
 		answers?: ItemAnswerInput[];
 	}>;
 	fulfilmentDate?: number;
+	/** Minutes past MYT midnight on that date (`z8r3fdkugx`). */
+	fulfilmentTimeMinutes?: number;
 	paidInPerson?: boolean;
 	paymentMethod?: OrderPaymentMethod;
 	/** Canonical voucher code (`z8r3fdr617`) — a scratchpad value like the
@@ -1497,10 +1516,30 @@ function BuildOrderScreen({
 	const [fulfilmentDate, setFulfilmentDate] = useState(
 		draft?.fulfilmentDate != null ? ymdFromEpoch(draft.fulfilmentDate) : minYmd,
 	);
-	const [dateOpen, setDateOpen] = useState(
-		draft?.fulfilmentDate != null &&
-			ymdFromEpoch(draft.fulfilmentDate) !== minYmd,
+	// The time on that date (`z8r3fdkugx`) — "" = none, the walk-in default.
+	// Lives and dies with the date: clearing the date clears it (no orphan
+	// clock), and an RSVP hides it because the event forces its own.
+	const [fulfilmentTime, setFulfilmentTime] = useState(
+		draft?.fulfilmentTimeMinutes != null
+			? hhmmFromMinutes(draft.fulfilmentTimeMinutes)
+			: "",
 	);
+	const [dateOpen, setDateOpen] = useState(
+		(draft?.fulfilmentDate != null &&
+			ymdFromEpoch(draft.fulfilmentDate) !== minYmd) ||
+			draft?.fulfilmentTimeMinutes != null,
+	);
+	// The one reading of the panel both doors send — a time only rides beside
+	// a real date.
+	const fulfilmentEpoch = mytMidnightFromYmd(fulfilmentDate);
+	const fulfilmentMinutes = timeMinutesFromHhmm(fulfilmentTime);
+	const sentFulfilmentDate = Number.isNaN(fulfilmentEpoch)
+		? undefined
+		: fulfilmentEpoch;
+	const sentFulfilmentTime =
+		sentFulfilmentDate === undefined || Number.isNaN(fulfilmentMinutes)
+			? undefined
+			: fulfilmentMinutes;
 
 	// One-time cart hydration from the draft, once the catalog is available to
 	// resolve each saved variant's name/label/price. Guarded so subsequent draft
@@ -1562,9 +1601,10 @@ function BuildOrderScreen({
 	}, [products, draft]);
 
 	const isSearching = query.trim().length > 0;
-	const filtered = useMemo(() => {
+	// What the counter can sell at all — the base the chips count and both
+	// filters narrow.
+	const sellable = useMemo(() => {
 		if (!products) return [];
-		const q = query.trim().toLowerCase();
 		return products
 			.map((p) => ({
 				...p,
@@ -1574,7 +1614,18 @@ function BuildOrderScreen({
 				// (quote) line just needs the vendor to type the agreed price below.
 				variants: p.variants.filter((vr) => vr.active),
 			}))
-			.filter((p) => p.variants.length > 0)
+			.filter((p) => p.variants.length > 0);
+	}, [products]);
+	// One-tap kind filter (`z8r3fdkugx`). Local state: it lasts the checkout
+	// and resets for the next buyer, never across logins.
+	const [pickedFilter, setPickedFilter] = useState<CounterCatalogFilter>("all");
+	const filterCounts = useMemo(() => counterFilterCounts(sellable), [sellable]);
+	const catalogFilter = effectiveCounterFilter(pickedFilter, filterCounts);
+	const showFilterChips = counterFilterIsUseful(filterCounts);
+	const filtered = useMemo(() => {
+		const q = query.trim().toLowerCase();
+		return sellable
+			.filter((p) => matchesCounterFilter(p, catalogFilter))
 			.filter((p) => {
 				if (!q) return true;
 				if (p.name.toLowerCase().includes(q)) return true;
@@ -1583,7 +1634,7 @@ function BuildOrderScreen({
 					vr.optionValues.join(" / ").toLowerCase().includes(q),
 				);
 			});
-	}, [products, query]);
+	}, [sellable, catalogFilter, query]);
 
 	// The product whose variant modal is open (grid view). Resolved from the live
 	// catalog with active variants only — mirrors what the cards show.
@@ -1644,7 +1695,6 @@ function BuildOrderScreen({
 	// never drift.
 	const buildDraftPayload = useCallback(
 		(fromCart: Map<string, CartLine>): SessionDraft => {
-			const epoch = mytMidnightFromYmd(fulfilmentDate);
 			return {
 				items: [...fromCart.entries()].map(([variantId, l]) => ({
 					variantId: variantId as Id<"productVariants">,
@@ -1654,7 +1704,8 @@ function BuildOrderScreen({
 					unitPrice: l.isCustom || isAdjusted(l) ? l.price : undefined,
 					answers: lineAnswers(variantId, l),
 				})),
-				fulfilmentDate: Number.isNaN(epoch) ? undefined : epoch,
+				fulfilmentDate: sentFulfilmentDate,
+				fulfilmentTimeMinutes: sentFulfilmentTime,
 				paidInPerson: paid,
 				paymentMethod: paid ? method : undefined,
 				// The draft only restores the FIELD after a refresh, so it keeps
@@ -1662,7 +1713,14 @@ function BuildOrderScreen({
 				voucherCode: voucher?.code,
 			};
 		},
-		[fulfilmentDate, paid, method, lineAnswers, voucher],
+		[
+			sentFulfilmentDate,
+			sentFulfilmentTime,
+			paid,
+			method,
+			lineAnswers,
+			voucher,
+		],
 	);
 	const draftPayload = useMemo<SessionDraft>(
 		() => buildDraftPayload(cart),
@@ -1685,7 +1743,6 @@ function BuildOrderScreen({
 		if (cartEntries.length === 0) return;
 		setSubmitting(true);
 		try {
-			const fulfilmentEpoch = mytMidnightFromYmd(fulfilmentDate);
 			// A FREE order records no payment — the server enforces the same rule,
 			// this just keeps the client's story identical.
 			const effectivePaid = paid && total > 0;
@@ -1703,9 +1760,10 @@ function BuildOrderScreen({
 				voucherCode: voucherCodeForOrder(voucher, itemsTotal),
 				paidInPerson: effectivePaid,
 				paymentMethod: effectivePaid ? method : undefined,
-				fulfilmentDate: Number.isNaN(fulfilmentEpoch)
-					? undefined
-					: fulfilmentEpoch,
+				fulfilmentDate: sentFulfilmentDate,
+				// An RSVP's time is the event's — the server forces it, so the
+				// panel's (hidden) clock is never sent for one.
+				fulfilmentTimeMinutes: cartEvent ? undefined : sentFulfilmentTime,
 			});
 			onCreated({
 				shortId,
@@ -1788,12 +1846,23 @@ function BuildOrderScreen({
 			return "An RSVP is its own order — finish this one first, or clear the cart to ring up the event.";
 		return undefined;
 	};
-	const collectionEpoch = mytMidnightFromYmd(fulfilmentDate);
 	const collectionLabel = cartEvent
 		? formatEventMoment(cartEvent)
-		: Number.isNaN(collectionEpoch) || fulfilmentDate === minYmd
-			? "Today / now"
-			: formatFulfilmentDate(collectionEpoch);
+		: sentFulfilmentDate === undefined || fulfilmentDate === minYmd
+			? sentFulfilmentTime === undefined
+				? "Today / now"
+				: `Today · ${formatFulfilmentTime(sentFulfilmentTime)}`
+			: formatFulfilmentDateTime(sentFulfilmentDate, sentFulfilmentTime);
+	// A time still ahead today means the sale happens LATER — the server
+	// leaves it Confirmed instead of born Completed (`z8r3fdkugx`). Said in the
+	// panel, so "why isn't it completed?" never needs asking.
+	const collectsLaterToday =
+		cartEvent === undefined &&
+		fulfilmentDate === minYmd &&
+		sentFulfilmentDate !== undefined &&
+		sentFulfilmentTime !== undefined &&
+		composeFulfilmentMoment(sentFulfilmentDate, sentFulfilmentTime) >
+			Date.now();
 
 	return (
 		// `grid-cols-[minmax(0,1fr)]` on the mobile track is load-bearing, not
@@ -1874,15 +1943,54 @@ function BuildOrderScreen({
 							className="h-12 pl-9"
 						/>
 					</div>
+					{/* One tap by kind (`z8r3fdkugx`), composing with the search.
+					    Only where it narrows something — a store of nothing but
+					    physical goods would get a row whose every chip says "All".
+					    An empty chip stays visible at 0, disabled, so the seller
+					    sees the kind exists as a choice rather than wondering
+					    where it went. */}
+					{showFilterChips ? (
+						<FilterChipRow className="mt-3 -mx-3 px-3 lg:mx-0 lg:px-0">
+							{COUNTER_CATALOG_FILTERS.map((f) => {
+								const count = filterCounts[f.id];
+								const empty = f.id !== "all" && count === 0;
+								return (
+									<FilterChip
+										key={f.id}
+										selected={catalogFilter === f.id}
+										count={count}
+										disabled={empty}
+										title={empty ? f.emptyReason : undefined}
+										aria-label={
+											empty ? `${f.label}: ${f.emptyReason}` : undefined
+										}
+										onClick={() => setPickedFilter(f.id)}
+										className="h-11 disabled:cursor-not-allowed disabled:opacity-50"
+									>
+										{f.label}
+									</FilterChip>
+								);
+							})}
+						</FilterChipRow>
+					) : null}
 				</div>
 
 				<div className="flex flex-col gap-3">
 					{products === undefined ? (
 						<p className="text-sm text-muted-foreground">Loading catalog…</p>
 					) : filtered.length === 0 ? (
-						<p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
-							No matching products.
-						</p>
+						<div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+							<p>{counterFilterEmptyMessage(catalogFilter, query)}</p>
+							{catalogFilter !== "all" ? (
+								<Button
+									variant="outline"
+									className="h-11"
+									onClick={() => setPickedFilter("all")}
+								>
+									Search all products
+								</Button>
+							) : null}
+						</div>
 					) : view === "grid" ? (
 						<div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
 							{filtered.map((p) => {
@@ -2228,8 +2336,8 @@ function BuildOrderScreen({
 													{collectionLabel}
 												</span>
 												<span className="block text-xs text-muted-foreground">
-													Optional: open this only for preorder or later
-													collection.
+													Optional: set a later day or a time for a preorder or
+													an appointment.
 												</span>
 											</span>
 											<ChevronDown
@@ -2241,21 +2349,66 @@ function BuildOrderScreen({
 										</button>
 										{dateOpen ? (
 											<div className="mt-3 border-t border-border pt-3">
-												<label
-													htmlFor="counter-fulfilment-date"
-													className="text-xs font-medium text-muted-foreground"
-												>
-													Change collection date
-												</label>
-												<input
-													id="counter-fulfilment-date"
-													type="date"
-													value={fulfilmentDate}
-													min={minYmd}
-													max={maxYmd}
-													onChange={(e) => setFulfilmentDate(e.target.value)}
-													className="mt-1 h-11 w-full rounded-xl border border-input bg-background px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-												/>
+												{/* The house date + time pair, laid out like the voucher
+												    dialog's: one field recipe for both; stacked on a phone
+												    (side by side, the date truncated to "Mon, 2…"), and from
+												    sm up the time takes a fixed column so "Pick a time" never
+												    truncates in the 380px desktop panel. */}
+												<div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,10rem)]">
+													<div className="min-w-0">
+														<label
+															htmlFor="counter-fulfilment-date"
+															className="text-xs font-medium text-muted-foreground"
+														>
+															Date
+														</label>
+														<div className="mt-1">
+															<DatePicker
+																id="counter-fulfilment-date"
+																label="Collection date"
+																value={fulfilmentDate}
+																onChange={(ymd) => {
+																	setFulfilmentDate(ymd);
+																	setFulfilmentTime((t) =>
+																		timeAfterDateChange(ymd, t),
+																	);
+																}}
+																min={minYmd}
+																max={maxYmd}
+															/>
+														</div>
+													</div>
+													<div className="min-w-0">
+														<span className="text-xs font-medium text-muted-foreground">
+															Time (optional)
+														</span>
+														<TimePicker
+															aria-label="Collection time"
+															value={fulfilmentTime}
+															onChange={setFulfilmentTime}
+															stepMinutes={15}
+															includeEndOfDay={false}
+															showIcon={false}
+															className="mt-1"
+														/>
+													</div>
+												</div>
+												{sentFulfilmentTime !== undefined ? (
+													<div className="mt-2 flex items-start justify-between gap-3">
+														<p className="text-xs text-muted-foreground">
+															{collectsLaterToday
+																? "Later today, so it's saved as upcoming. Mark it completed once it's handed over."
+																: "Shows on your calendar at this time."}
+														</p>
+														<button
+															type="button"
+															onClick={() => setFulfilmentTime("")}
+															className="-my-2 shrink-0 px-1 py-2 text-xs font-medium text-accent-emphasis hover:underline"
+														>
+															Clear time
+														</button>
+													</div>
+												) : null}
 											</div>
 										) : null}
 									</div>
@@ -2644,8 +2797,9 @@ function BuildOrderScreen({
 					// The review the seller reads to the buyer must state the date the
 					// ORDER will carry — for an RSVP that's the event's, not the panel's.
 					if (cartEvent) return formatEventMoment(cartEvent);
-					const e = mytMidnightFromYmd(fulfilmentDate);
-					return Number.isNaN(e) ? "—" : formatFulfilmentDate(e);
+					return sentFulfilmentDate === undefined
+						? "—"
+						: formatFulfilmentDateTime(sentFulfilmentDate, sentFulfilmentTime);
 				})()}
 				paymentLabel={
 					total <= 0

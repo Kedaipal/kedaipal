@@ -17,6 +17,7 @@ import {
 	ymdFromEpoch,
 } from "../../../convex/lib/fulfilmentDate";
 import { isActiveJobStatus } from "../../../convex/lib/lalamove";
+import { isDefaultedCounterDate } from "../../../convex/lib/order";
 import { isPaymentWindowLocked } from "../../../convex/lib/orderClaims";
 import { convexErrorMessage, formatPrice } from "../../lib/format";
 import { cn } from "../../lib/utils";
@@ -41,7 +42,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * instantly; deliberately NO WhatsApp send (one-msg-per-order posture).
  *
  * Renders its own trigger, only inside the reschedule window (pre-shipped,
- * not counter, not already collected) — outside it the moment is history and
+ * not a counter sale's defaulted date, not already collected — a counter
+ * order the seller DATED moves like any other, `z8r3fdkugx`, through the
+ * server's own predicate) — outside it the moment is history and
  * a dead disabled button would be noise. While a Lalamove booking is ACTIVE
  * the dialog opens onto an explanation instead of the form (the booking is
  * frozen against its quotationId and won't follow the order), mirroring the
@@ -170,12 +173,17 @@ export function RescheduleFulfilmentDialog({
 		(order.status === "pending" ||
 			order.status === "confirmed" ||
 			order.status === "packed") &&
-		order.source !== "counter" &&
+		!isDefaultedCounterDate(order) &&
 		method !== "booking" &&
 		order.collectedAt === undefined;
 	if (!inWindow) return null;
 
 	const collection = order.deliveryDirection === "collection";
+	// A walk-in cash sale with no contact (z8r3fdkugx made dated counter orders
+	// reschedulable): no phone means no link ever reached them, so there is no
+	// "buyer's order page" to update and no chat to agree it in. The copy says
+	// what is actually true — the seller tells them in person.
+	const noContact = !order.customer?.waPhone;
 	const dropOff = order.pickupSnapshot?.locationType === "drop_off";
 	const dateLabel = isDelivery
 		? collection
@@ -310,13 +318,16 @@ export function RescheduleFulfilmentDialog({
 				fulfilmentDate: date,
 				fulfilmentTimeMinutes: timeMinutes,
 			});
+			const moment = formatFulfilmentDateTime(
+				date,
+				timeMinutes === null
+					? undefined
+					: (timeMinutes ?? order.fulfilmentTimeMinutes),
+			);
 			toast.success(
-				`Updated — the buyer's order page now shows ${formatFulfilmentDateTime(
-					date,
-					timeMinutes === null
-						? undefined
-						: (timeMinutes ?? order.fulfilmentTimeMinutes),
-				)}.`,
+				noContact
+					? `Updated — this order now shows ${moment}.`
+					: `Updated — the buyer's order page now shows ${moment}.`,
 			);
 			setOpen(false);
 		} catch (err) {
@@ -375,7 +386,9 @@ export function RescheduleFulfilmentDialog({
 											: "Change when this order should be delivered."
 										: dropOff
 											? "Change when you meet the buyer at the drop-off point."
-											: "Change when the buyer picks this order up."}
+											: noContact
+												? "Change when this order is collected."
+												: "Change when the buyer picks this order up."}
 						</DialogDescription>
 					</DialogHeader>
 					{storeLocked ? (
@@ -495,7 +508,9 @@ export function RescheduleFulfilmentDialog({
 							) : null}
 							{previewLabel && !scheduleIssue ? (
 								<p className="text-sm text-muted-foreground">
-									The buyer&apos;s order page will show{" "}
+									{noContact
+										? "This order will show"
+										: "The buyer’s order page will show"}{" "}
 									<span className="font-medium text-foreground">
 										{previewLabel}
 									</span>
@@ -545,8 +560,9 @@ export function RescheduleFulfilmentDialog({
 								</div>
 							) : null}
 							<p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-								Updates the buyer&apos;s order page instantly — no WhatsApp
-								message is sent, so agree the new time with them in chat first.
+								{noContact
+									? "No contact on file for this sale, so nothing is sent — tell the buyer the new time yourself."
+									: "Updates the buyer’s order page instantly — no WhatsApp message is sent, so agree the new time with them in chat first."}
 							</p>
 							<DialogFooter>
 								<Button

@@ -156,6 +156,30 @@ describe("event RSVP — the date lock", () => {
 		expect(order?.fulfilmentTimeMinutes).toBe(EVENT_TIME);
 	});
 
+	test("at the counter too: a stale tab's date AND time lose to the event's (z8r3fdkugx)", async () => {
+		const t = setup();
+		const { asUser, retailer } = await seedStore(t);
+		const productId = await seedEventProduct(t, retailer._id);
+		const { sessionId } = await asUser.mutation(
+			api.counterCheckout.bindSessionManualPhone,
+			{ waPhone: "60123456789", name: "Aina Hamzah" },
+		);
+		// The panel hides its time field for an RSVP; a stale tab still sends one.
+		const { shortId } = await asUser.mutation(
+			api.counterCheckout.createOrderFromSession,
+			{
+				sessionId,
+				items: [{ variantId: await variantFor(t, productId, "A"), quantity: 1 }],
+				paidInPerson: false,
+				fulfilmentDate: todayMytMidnight() + DAY_MS,
+				fulfilmentTimeMinutes: 15 * 60,
+			},
+		);
+		const order = await orderByShortId(t, shortId);
+		expect(order?.fulfilmentDate).toBe(EVENT_DATE);
+		expect(order?.fulfilmentTimeMinutes).toBe(EVENT_TIME);
+	});
+
 	test("an RSVP with no date at all still lands on the event", async () => {
 		const t = setup();
 		const { retailer, pickupLocationId } = await seedStore(t);

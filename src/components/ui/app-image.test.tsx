@@ -6,6 +6,8 @@ import {
 	render,
 	screen,
 } from "@testing-library/react";
+import { hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppImage, MAX_LOAD_RETRIES } from "./app-image";
 
@@ -563,6 +565,53 @@ describe("AppImage — retry (86eypxgff) composed with the proxy (86eypxght)", (
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe("AppImage — server-rendered images show before hydration (z8r3fdue6f)", () => {
+	const SRC = "https://example.com/cover.jpg";
+
+	it("the server render paints the photo opaque, above the skeleton", () => {
+		const host = document.createElement("div");
+		host.innerHTML = renderToString(<AppImage src={SRC} alt="Cover" />);
+		const img = imgIn(host);
+
+		// No onLoad exists until React runs, so an opacity-0 photo in the HTML
+		// would stay invisible until the bundle hydrates — never with JS off.
+		expect(img?.className).toContain("opacity-100");
+		expect(img?.className).not.toContain("opacity-0");
+		// The skeleton still sits beneath it until the bytes decode; `relative`
+		// is what puts the later-in-DOM photo on top of the absolute skeleton.
+		expect(skeletonIn(host)).not.toBeNull();
+		expect(img?.className).toContain("relative");
+	});
+
+	it("hydration keeps the server markup, then a still-loading photo hands over to the fade-in", async () => {
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		host.innerHTML = renderToString(<AppImage src={SRC} alt="Cover" />);
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await act(async () => {
+			hydrateRoot(host, <AppImage src={SRC} alt="Cover" />);
+		});
+
+		// No hydration mismatch, and after hydration an image that hasn't
+		// loaded is back on the fade-in path…
+		expect(errors).not.toHaveBeenCalled();
+		const img = imgIn(host);
+		expect(img?.className).toContain("opacity-0");
+		// …which onLoad completes exactly as before.
+		await act(async () => {
+			if (img) fireEvent.load(img);
+		});
+		expect(imgIn(host)?.className).toContain("opacity-100");
+		host.remove();
+	});
+
+	it("a client-side mount (no hydration) still fades in — dashboard and SPA navs unchanged", () => {
+		const { container } = render(<AppImage src={SRC} alt="Cover" />);
+		expect(imgIn(container)?.className).toContain("opacity-0");
 	});
 });
 

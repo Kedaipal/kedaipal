@@ -54,7 +54,11 @@ import {
 	resolveCreditGate,
 } from "./creditLock";
 import { effectivePrice, isPromoActive, promoUnitsLeft } from "./lib/promo";
-import { promoUnitsRequested, tallyPromoUnits } from "./lib/promoTally";
+import {
+	promoUnitsRequested,
+	promoUnitsTaken,
+	releasePromoUnits,
+} from "./lib/promoTally";
 import {
 	assertPlanFeature,
 	assertSubscriptionActive,
@@ -153,6 +157,7 @@ import {
 	generateShortId,
 	generateTrackingToken,
 	isCollectionGateClosed,
+	isDefaultedCounterDate,
 	isMockupGateClosed,
 	orderExtras,
 	revenueExcludingDeposit,
@@ -1422,14 +1427,15 @@ export const create = mutation({
 						flashApplies && promo.unitCap !== undefined
 							? promoUnitsLeft(
 									promo.unitCap,
-									await tallyPromoUnits(ctx, {
+									// The run's units counter (86eyjv002) — one point
+									// read, not a collect of the sale window's orders.
+									// Racing carts both read the row and both write it,
+									// so OCC serialises them exactly as the range read
+									// used to.
+									await promoUnitsTaken(ctx, {
+										_id: variant.productId,
 										retailerId: args.retailerId,
-										productId: variant.productId,
-										runId: promo.runId,
-										// sanitizePromo guarantees a capped run has a
-										// concrete start; 0 is a never-reached fallback.
-										startsAt: promo.startsAt ?? 0,
-										endsAt: promo.endsAt,
+										promo,
 									}),
 								)
 							: undefined;
@@ -5688,8 +5694,12 @@ export const setDeliveryFee = mutation({
  * never reaches dispatch: both providers refuse `not_delivery` before reading
  * it.
  *
- * Refused on counter sales, bookings (their dates ARE the check-in and
- * check-out) and while a claim link's payment window is live.
+ * Refused on bookings (their dates ARE the check-in and check-out), while a
+ * claim link's payment window is live, and on a counter sale whose date is
+ * only the checkout default (`isDefaultedCounterDate`) — that sale happened
+ * at the counter, there's nothing to move. A counter order the seller DATED
+ * (a preorder, a 3:00 PM session — `z8r3fdkugx`) is a promise like any
+ * other and moves the same way.
  *
  * All-tier: this is a correctness escape hatch, not a feature to upsell.
  */
@@ -5717,11 +5727,17 @@ export const rescheduleFulfilment = mutation({
 		await assertOrderCreditAvailable(ctx, order);
 		if (order.status === "cancelled")
 			throw new ConvexError("This order was cancelled");
+		// A counter sale is born `delivered` when handed over at the counter —
+		// "on its way" would misdescribe it.
+		if (order.source === "counter" && order.status === "delivered")
+			throw new ConvexError(
+				"This counter order was already handed over — there's no date to move",
+			);
 		if (order.status === "shipped" || order.status === "delivered")
 			throw new ConvexError(
 				"This order is already on its way — the fulfilment date can't change now",
 			);
-		if (order.source === "counter")
+		if (isDefaultedCounterDate(order))
 			throw new ConvexError(
 				"Counter orders are fulfilled on the spot — there's no date to move",
 			);
@@ -7023,6 +7039,10 @@ export const declineMockupItem = mutation({
 				delta: total - order.total,
 			});
 		await voidStaleGatewayRequest(ctx, order, total);
+		// The only path that drops a line WITHOUT cancelling the order, so the
+		// only one that has to hand that line's flash units back itself (the
+		// cancel above does it through `recordOrderCancelled`).
+		await releasePromoUnits(ctx, order, dropped, now);
 		await ctx.db.patch(order._id, {
 			items: kept,
 			subtotal,

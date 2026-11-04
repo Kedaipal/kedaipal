@@ -38,23 +38,94 @@ login or screen-share, neither of which scales.
    the period still runs (early plan change) leaves *Renews …* as is. Admin-gated server-side by `requireAdmin` and hidden
    client-side behind `billing.amIAdmin`.
    - **Shape:** a table at `lg+` (`useIsDesktop`, a JS gate so a phone never
-     carries 500 rows of hidden table DOM), cards below it — both render the
+     carries a page of hidden table DOM), cards below it — both render the
      same cells from `src/components/admin/seller-cells.tsx`, and every derived
      fact comes from one pure module, **`src/lib/admin-seller-view.ts`**
-     (`sellerExpiry`, `sellerReason`, `sellerRail`, `sellerBucket`, the sorts,
-     the search, the summary text, the CSV), so the table, the cards, the sheet
-     and the export cannot disagree.
-   - **Find:** search matches name, slug, email and both phones (a query with
-     three or more digits is matched against the stored digits, so "018-7" finds
-     `60187…`). **Status chips** (`FilterChip`, with counts) — All · Past due ·
-     Trialing · Active · On hold · Cancelled · Comped · Admin (· No subscription,
-     only when non-zero); Past due sits first after All because it is the urgent
-     bucket. **Sort:** Founding rank (default, unchanged), Expiry · soonest first,
-     Credits · lowest first (Credits T5 — a sort, not a chip, because "out of
-     credits" crosses every status bucket), Newest store, Name A–Z. Filter, sort and search ride the URL
-     (`?status=past_due&sort=expiry&q=…`, validated by `validateSearch`) so a
-     filtered view is a link; defaults are omitted so the plain route stays
-     `/app/admin/sellers`. A pasted `?q=9981` parses as a number: the
+     (`sellerExpiry`, `sellerReason`, `sellerRail`, the summary text, the CSV),
+     so the table, the cards, the sheet and the export cannot disagree. The
+     **filter language** — buckets, filters, their groups and labels, the
+     sorts, the search — lives one level down in
+     **`convex/lib/adminSellerFilters.ts`**, because the server applies it now
+     (below) and the page re-exports it rather than mirroring it.
+   - **Paginated (4 Nov 2026).** The list is a cursor-paginated read,
+     **`adminSellers.listSellersPage`** (`convex/adminSellers.ts`), consumed by
+     `usePaginatedQuery` 25 rows at a time and **infinite-scrolled**: a
+     `LoadMoreSentinel` (`src/components/ui/load-more-sentinel.tsx`,
+     `react-intersection-observer`) asks for the next page 400px before it
+     scrolls into view, keeps a real **Load more** button for keyboard and
+     reduced-motion users, and names the end ("That's every seller · 412",
+     "End of results for “kuih”"). It replaced `admin.listSellersForAdmin`,
+     which loaded the newest 500 stores as full rows in one call and did the
+     rest in the browser, so past the cap the oldest stores vanished
+     (z8r3fdpm2p). One `.paginate()` per call on an index order (creation
+     desc, or `retailers.by_storeNameKey` for Name A–Z); the Status filter and
+     the search are applied **server-side to each raw page before the full
+     row is built** — a cheap predicate (retailer doc + one subscription read,
+     plus one probe for `unavailable` / `untagged_payers`) decides, and only
+     survivors pay the row's ~10 reads. Pages can therefore come back **short
+     or empty with `isDone: false`**; `usePaginatedQuery` derives its status
+     from `isDone` alone, so the sentinel simply asks again, and the raw
+     window is widened (60 raw rows under a filter, 120 under a search) so a
+     sparse filter doesn't chain forever. The raw result's cursors pass
+     through untouched — a cursor is a position in the raw index, never in
+     the filtered output. A new filter, sort or search resets the list; the
+     last rows stay on screen **dimmed and inert** under a thin progress bar
+     until the new first page lands (never a blank table per keystroke), and
+     the search box debounces 250 ms before it reaches the query while the
+     URL updates per keystroke.
+   - **Find:** search matches name, slug, email, the handover email and both
+     phones as a substring (a query with three or more digits is matched
+     against the stored digits, so "018-7" finds `60187…`), on the server, with
+     zero extra reads per scanned store. **Status** and **Sort** are one
+     control, `OptionMenu` (`src/components/ui/option-menu.tsx`): a labelled
+     trigger reading `Status · All sellers` / `Sort · Founding rank`, opening
+     the house filter rows (`FilterOptionRow`, the inbox's filter language) in
+     a popover — checkbox rows for Status (multi), radio rows for Sort
+     (single). **The statuses combine with OR** (z8r3fdzn6r, 2 Nov 2026,
+     kept when the chips became a menu): ticking Unclaimed and Cancelled shows
+     stores in either, the orthogonal statuses (Wants Enterprise, Paused /
+     offline, Untagged payers) join the same union, a store in two ticked
+     statuses shows once, and the server does the OR
+     (`adminSellers.listSellersPage` takes `filters: SellerStatusFilter[]`,
+     `passesAnySellerFilter`). The panel stays open while you tick and says
+     "Tick several — a store shows when it matches any of them". **All
+     sellers** is the select-all parent: ticked when nothing is picked,
+     **mixed** (`aria-pressed="mixed"`) while some are, pressing it clears;
+     ticking every status folds back to All (`toggleSellerStatus`). One tick
+     reads `Status · Past due [3]` with the bucket's count as a pill; two or
+     more read the phrase (`sellerSelectionLabel`, "Past due or Trialing") and
+     the count line says "12+ in Past due or Trialing" — loaded so far, since
+     a union is never a sum of the buckets — settling to the exact number at
+     the end of the list. **Clear all (N)** sits beside the count line only
+     while something is on (N = ticked statuses + the search box) and is the
+     only clear control; a second one in the empty state was a duplicate a few
+     pixels away. Status groups **Needs your action** (Past due · Unclaimed ·
+     Wants Enterprise · Paused / offline · Untagged payers — buckets where
+     Kedaipal owes someone an action) above **By subscription** (Trialing ·
+     Active · On hold · Cancelled · Comped · Admin · No subscription); every
+     row carries its count over the **whole book** from
+     **`adminSellers.countSellerBuckets`** (one retailer + one subscription
+     read per store, bounded at `ADMIN_COUNT_SCAN_LIMIT` = 2,000 with a
+     `capped` flag the page names beside the count and above the list — past
+     that the Aggregate component is the honest fix, not a bigger number), an
+     attention count in amber, no option ever hidden at zero, and the active
+     filter visible closed as a count pill on the trigger. **Sort:** Founding
+     rank (default — founders by rank pinned to the FIRST page via
+     `retailers.by_foundingRank`, then newest, founders dropped from later
+     pages so none repeats), Newest store, Name A–Z. **Expiry and Credits
+     sorts were retired with pagination**: a cursor-paged list sorts only on
+     an index, and both were derived per row from the subscription and credit
+     tables; the Sort menu's note says so and points at the Past due /
+     Trialing filters. Name A–Z indexes **`retailers.storeNameKey`** (the name
+     lowercased + trimmed, `storeNameKeyOf`), written at every `storeName`
+     write and backfilled once by `migrations:backfillStoreNameKey`, because
+     an index orders bytes and would file "iKuih" after "Zed". Filter, sort
+     and search ride the URL (`?status=["past_due","trialing"]&sort=name&q=…`,
+     validated by `validateSearch`; `status` is a list, and
+     `parseSellerStatuses` still reads an older single value such as
+     Acquisition's `?status=untagged_payers`, sorts the list into menu order
+     and drops unknown values) so a filtered view is a link; defaults are omitted so
+     the plain route stays `/app/admin/sellers`. A pasted `?q=9981` parses as a number: the
      validator reads it back as text (`searchText`) and returns every key, so
      the URL's raw value can't reach the page. It used to crash the page
      ([`z8r3fdtk87`](https://app.clickup.com/t/z8r3fdtk87),
@@ -70,9 +141,12 @@ login or screen-share, neither of which scales.
      summary** writes a plain-text block — name, link, email, WhatsApp, plan,
      expiry — for a WhatsApp message. **Open store** in the sheet header is the
      same act-as door as the menu (`useOpenStore`).
-   - **Export CSV** (header action) writes the *visible* rows with every sheet
-     column (`sellersToCsv`, `downloadCsv`); disabled-with-reason when nothing
-     matches. **Invite seller** links to the Billing page's onboard card
+   - **Export CSV** (header action) **walks every page** of the current filter
+     and search through `useConvex().query` (100 rows a stride, "Exporting… N
+     so far" on the button) and writes them all with every sheet column
+     (`sellersToCsv`, `downloadCsv`) — never just the rows that happen to be
+     loaded; disabled-with-reason when nothing matches or the first page is
+     still loading. **Invite seller** links to the Billing page's onboard card
      (`/app/admin/billing#onboard`) — the form stays there because it needs the
      founding-spot count and the invoice picker beside it.
    - **One door per row** (owner decision, 20 Sep 2026): the **Manage menu**
@@ -84,7 +158,10 @@ login or screen-share, neither of which scales.
      opens the read-only sheet, the copy buttons copy, nothing on it enters
      act-as. The row used to BE the act-as button with two bare icons beside it
      — three targets, two unlabelled, and a mis-tap entered act-as.
-   - **The query** (`admin.listSellersForAdmin`) grew the contact + billing
+   - **The row** (`AdminSellerRow`, `convex/lib/adminSellerRow.ts`, built by
+     ONE author, `buildAdminSellerRow` in `convex/adminSellers.ts`, shared by
+     the paginated page and the legacy `admin.listSellersForAdmin` that the
+     showcase store picker still reads) carries the contact + billing
      fields: `ownerEmail` is `retailers.notifyEmail` (Clerk's identity email is
      never stored; `createRetailer` prefills it from Clerk and
      `ensureNotifyEmailFromIdentity` backfills), the two phones, country and
@@ -411,7 +488,13 @@ pause flow) is a sensible next step but not yet implemented.
 
 - `convex/lib/auth.ts` — `requireRetailerAccess`, `logAdminAction` (+ existing `isAdmin` /
   `requireAdmin`).
-- `convex/admin.ts` — `listSellersForAdmin` (`ownerIsAdmin` per row), `recentAuditForRetailer`.
+- `convex/adminSellers.ts` — `listSellersPage` (cursor-paginated, server-side filter + search),
+  `countSellerBuckets`, `buildAdminSellerRow` (the one row author), `listAllSellersForAdmin`;
+  `convex/lib/adminSellerFilters.ts` the filter language, `convex/lib/adminSellerRow.ts` the row type.
+- `convex/admin.ts` — `listSellersForAdmin` (the legacy whole-book read, for the showcase picker),
+  `recentAuditForRetailer`.
+- `src/components/ui/load-more-sentinel.tsx`, `src/components/ui/option-menu.tsx` — the
+  infinite-scroll tail and the Status / Sort control.
 - `convex/schema.ts` — `adminAuditLog` table (dev-only widen; no migration).
 - `convex/subscriptions.ts` — `assertPlanFeature` admin bypass; `resolveAccess(sub,
   { adminFullAccess })` highest-tier override.
@@ -567,7 +650,44 @@ kedaipal.com subdomains). The first is the blog's video upload page,
 e.g. `npx convex env set BLOG_EDITOR_USER_IDS user_…`. Unset = no editors (admins still hold
 every area). Ids differ between the dev and prod Clerk instances.
 
+## Admin → Billing: sections fold to one line (z8r3fdzn6r)
+
+The Invoices tab was a stack of full-height forms. Every section is now a
+`CollapsibleAdminCard` (`src/routes/app.admin.billing.tsx`). It follows the same
+rules as the Edit product form's `QuestionRow`, at card scale:
+
+- **When closed, the card shows its state.** Pending invoices shows "3 waiting · 1
+  overdue" (amber when anything is overdue). Auto-renewal shows how many stores
+  charge themselves. A form that holds input shows **"Draft in progress · {store}"**.
+  When the card is open, it shows the how-to description instead.
+- **The panel stays mounted while closed** (`hidden`), so folding a half-filled form
+  keeps the draft. The panel answers `REVEAL_EVENT` like every other disclosure.
+- **Order is by urgency.** Pending invoices leads and is open by default, because it
+  is the only section someone is waiting on. Onboard a client, Issue an invoice,
+  Auto-renewal and Founding members follow, all closed. The Payment details tab is a
+  single card and stays a plain `AdminCard`.
+- **`#onboard` opens its card.** Sellers → **Invite seller** links to
+  `/app/admin/billing#onboard`. The card opens, and **Pending invoices starts
+  folded** (its line still says how many are waiting). The card then stays in view
+  while the page loads. A single scroll on mount was not enough, and the
+  hands-on test caught it: the stat tiles, the gateway queue and the pending list
+  load after the card mounts and pushed it down, so the admin landed mid-list. A
+  `ResizeObserver` now re-scrolls on each layout shift until the page holds still
+  for `SETTLE_MS`, and stops at once if the admin scrolls, taps or types.
+- **The cards' two-column rows switch on the card's own width, not the
+  window's.** Below `lg` the app is a phone-width column, so `sm:` put a 1000px
+  window's 330px card into two columns. The result was "Balanc…", pills wrapping
+  one word per line, and invoice numbers broken mid-number. Each panel is an
+  `@container`, and its rows use `@md:`/`@lg:`/`@xl:`. Dialogs keep `sm:`
+  because they are sized against the window.
+
 ## Deliberate scope / follow-ups
+
+- **Admin lists are not paginated yet.** The seller directory, pending invoices,
+  auto-renewal, WABA vendors and the store pickers still load in one query. The
+  directory needs a server-indexed row first, because its chips filter on facts
+  derived across tables. Scoped in
+  [`z8r3fdzn6q`](https://app.clickup.com/t/z8r3fdzn6q).
 
 - Admin allowlist stays in `ADMIN_USER_IDS` env (graduates to a Clerk role later, same as
   billing).

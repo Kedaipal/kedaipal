@@ -90,7 +90,7 @@ Then follow the canonical setup in [`.env.local.example`](../.env.local.example)
 4. **Wire Clerk → Convex** — in the Convex dashboard → Settings → Authentication, add a provider with the Clerk Issuer URL + applicationID ([docs](https://docs.convex.dev/auth/clerk)).
 5. **Optional integrations** (only when working on those features):
    - WhatsApp Cloud API: `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_VERIFY_TOKEN`, plus `WHATSAPP_APP_SECRET` + `APP_URL` set on the Convex deployment (`npx convex env set KEY value`).
-   - Email: `RESEND_API_KEY`, `EMAIL_FROM` (verify the sender domain first).
+   - Email: `RESEND_API_KEY`, `EMAIL_FROM` (verify the sender domain first; anything new that sends as `@kedaipal.com` must be authorised before its first send, see [sender authentication](./email-notifications.md#sender-authentication--spf-dkim-dmarc-z8r3fdxrx5)).
    - Analytics: `VITE_GA_MEASUREMENT_ID`.
 
 > **Env var split:** `VITE_*` vars are frontend (`.env.local`); backend secrets live on the Convex deployment via `npx convex env set` (`--prod` for production). Validated at load in [`src/lib/env.ts`](../src/lib/env.ts).

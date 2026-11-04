@@ -13,6 +13,10 @@
 //  3. Start-when-you-sell (z8r3fday24): the store's first order ends its free
 //     period and fires the first invoice. See
 //     subscriptions.endFreePeriodOnFirstOrder.
+//  4. The flash-sale units counter (86eyjv002, `promoRunUnits`): an order's
+//     sale units join their run's counter here and are given back on cancel,
+//     so the public catalogue reads "N left" without scanning orders. See
+//     convex/lib/promoTally.ts.
 //
 // Invariants:
 //  - WRITE-ONLY from the order pipeline. They meter; they NEVER block —
@@ -27,6 +31,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { debitCreditForOrder, refundCreditForOrder } from "./credits";
 import type { CancelCause } from "./lib/credits";
+import { countPromoUnitsForNewOrder, releasePromoUnits } from "./lib/promoTally";
 import { monthStartMyt } from "./lib/usagePeriod";
 import { endFreePeriodOnFirstOrder } from "./subscriptions";
 
@@ -58,6 +63,11 @@ export async function recordOrderCreated(
 ): Promise<void> {
 	const { retailerId, createdAt } = args;
 	await endFreePeriodOnFirstOrder(ctx, retailerId, createdAt);
+	// The order is already inserted — its frozen lines say which runs it sold
+	// under. Unguarded on purpose: it's one cache in the same transaction, not
+	// a ledger whose fault should be swallowed.
+	const order = await ctx.db.get(args.orderId);
+	if (order) await countPromoUnitsForNewOrder(ctx, order, createdAt);
 	const monthStart = monthStartMyt(createdAt);
 	const row = await loadUsageRow(ctx, retailerId, monthStart);
 	if (row) {
@@ -94,8 +104,9 @@ export async function recordOrderCreated(
 
 /**
  * Reverse a cancelled order's contribution — keyed by the order's creation
- * time so the right month is decremented — and give its credit back when the
- * order never got going (`cancelRefundDecision`). `order` must be the doc as
+ * time so the right month is decremented — give its flash-sale units back to
+ * their runs' counters, and give its credit back when the order never got
+ * going (`cancelRefundDecision`). `order` must be the doc as
  * it was BEFORE the cancel (its status decides the refund). Missing row /
  * zero floor → no-op (pre-meter orders were never counted). Callers must hold
  * the same first-transition-into-cancelled guard as
@@ -107,6 +118,7 @@ export async function recordOrderCancelled(
 	args: { order: Doc<"orders">; cause: CancelCause; now: number },
 ): Promise<void> {
 	const { order } = args;
+	await releasePromoUnits(ctx, order, order.items, args.now);
 	const monthStart = monthStartMyt(order.createdAt);
 	const row = await loadUsageRow(ctx, order.retailerId, monthStart);
 	if (row && row.orders > 0) {

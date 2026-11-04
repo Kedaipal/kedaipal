@@ -58,6 +58,11 @@ export default defineSchema({
 		userId: v.string(), // Clerk subject (sub claim)
 		slug: v.string(),
 		storeName: v.string(),
+		// The "Name A–Z" sort key for the admin directory: `storeName` lowercased
+		// + trimmed (`storeNameKeyOf`), because an index orders strings by UTF-8
+		// bytes and would file "iKuih" after "Zed". Written with every storeName
+		// write; absent only on rows the one-off backfill has not reached.
+		storeNameKey: v.optional(v.string()),
 		// Public one-liner shown on the storefront header beneath the store name
 		// ("Home-based frozen food, Semenyih — DM for bulk orders"). Free text,
 		// trimmed + length-capped server-side (≤280 chars), rendered as escaped
@@ -986,6 +991,11 @@ export default defineSchema({
 	})
 		.index("by_user", ["userId"])
 		.index("by_slug", ["slug"])
+		// Admin directory sorts (adminSellers.listSellersPage): founders pinned
+		// first — `gte(0)` excludes rows without a rank, since undefined sorts
+		// below every number — and the case-folded name order.
+		.index("by_foundingRank", ["foundingMemberRank"])
+		.index("by_storeNameKey", ["storeNameKey"])
 		// Inbound `KPS-<token>` poster scans resolve the store by token.
 		.index("by_counterQrToken", ["counterQrToken"])
 		.index("by_calendarFeedToken", ["calendarFeedToken"])
@@ -3069,6 +3079,10 @@ export default defineSchema({
 					}),
 				),
 				fulfilmentDate: v.optional(v.number()),
+				// Minutes past MYT midnight on `fulfilmentDate` (`z8r3fdkugx`) —
+				// the seller-keyed collection or session time. Never present
+				// without the date (saveSessionDraft drops an orphan clock).
+				fulfilmentTimeMinutes: v.optional(v.number()),
 				paidInPerson: v.optional(v.boolean()),
 				paymentMethod: v.optional(orderPaymentMethodValidator),
 				// Voucher code the seller keyed off the buyer's QR or read out
@@ -3478,6 +3492,35 @@ export default defineSchema({
 		.index("by_promotion_state", ["promotionId", "state"])
 		.index("by_product", ["productId"])
 		.index("by_retailer", ["retailerId"]),
+
+	/**
+	 * Flash-sale units sold under ONE promo run (`86eyjv002`) — the O(1) answer
+	 * for "12 of 30 left", so no reader collects the store's orders: that made
+	 * every new order re-run every open storefront tab, and at volume took the
+	 * catalogue over the 16 MiB read limit and refused multi-item flash carts.
+	 *
+	 * What the order DOORS gate on too: every "how many are left" read is one
+	 * point read of this row, held equal to `tallyPromoUnits` (the definition).
+	 * The row is minted at promo save (or by the backfill), then kept equal by
+	 * the two order-lifecycle seams — `recordOrderCreated` adds a new order's
+	 * sale units, `recordOrderCancelled` gives them back — plus the one path
+	 * that drops a line without cancelling (a declined custom line). Absent
+	 * row = a run from before this table: readers fall back to the tally.
+	 * Rules + the equality proof: docs/promo-price.md#units-counter.
+	 */
+	promoRunUnits: defineTable({
+		retailerId: v.id("retailers"),
+		productId: v.id("products"),
+		// `products.promo.runId` — a re-run mints a new id, so a new row.
+		runId: v.string(),
+		// Sale units held by non-cancelled orders under this run.
+		units: v.number(),
+		updatedAt: v.number(),
+	})
+		// The only index: every reader asks for one (product, run). Account
+		// deletion reaches these rows through the products phase
+		// (`deleteProductCascade`), so no per-store index is needed.
+		.index("by_product_run", ["productId", "runId"]),
 
 	/**
 	 * Store availability (`z8r3fdudf7`) — the seller's "Accepting orders"

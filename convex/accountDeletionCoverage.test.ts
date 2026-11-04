@@ -71,13 +71,14 @@ const PHASE_TABLES: Record<string, readonly string[]> = {
 	// payment-claim row along with its proof screenshot.
 	orders: ["orders", "orderEvents", "paymentClaims"],
 	// `deleteProductCascade` (lib/productDelete.ts) takes each product's
-	// variants and category junctions with it. (`productCategories` also has
+	// variants, category junctions and flash-units counters with it. (`productCategories` also has
 	// its own leftovers-sweep phase.)
 	products: [
 		"products",
 		"productVariants",
 		"productCategories",
 		"promotionMembers",
+		"promoRunUnits",
 	],
 	// Members are swept before the promotions they point at (`z8r3fducfd`).
 	promotions: ["promotions", "promotionMembers"],

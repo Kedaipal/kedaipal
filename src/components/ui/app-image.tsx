@@ -1,5 +1,11 @@
 import { ImageOff } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import {
 	DEFAULT_IMAGE_WIDTH,
 	imageSrcSet,
@@ -21,11 +27,36 @@ import { Skeleton } from "./skeleton";
  * `MAX_LOAD_RETRIES`. An unset `src` renders the same fallback with zero
  * network request.
  *
+ * Server-rendered images are VISIBLE until hydration (z8r3fdue6f). The
+ * fade-in needs `onLoad`, which only exists once React runs; an `opacity-0`
+ * image in the SSR HTML stays invisible until the JS bundle has downloaded and
+ * hydrated — so the storefront's server-rendered catalog would show blank
+ * tiles, the cover image (the page's LCP element — Chrome doesn't count an
+ * invisible one) would wait on the bundle, and with JS off no photo would
+ * ever show. So the server render and the hydration pass paint the `<img>`
+ * opaque, layered ABOVE the skeleton: it shows the moment its bytes decode,
+ * and until then the skeleton beneath shows through. After hydration (and on
+ * every client-side mount, which never hydrates) the fade-in runs as before.
+ *
  * Deliberately NOT used by `store-poster.tsx` (a print/PDF-export surface —
  * a lazy or opacity-0 image can print blank).
  */
 
 type ImageStatus = "loading" | "loaded" | "error";
+
+/** `false` in the server render and through hydration, `true` after. */
+function useHydrated(): boolean {
+	return useSyncExternalStore(subscribeNever, hydratedOnClient, notHydrated);
+}
+function subscribeNever(): () => void {
+	return () => {};
+}
+function hydratedOnClient(): boolean {
+	return true;
+}
+function notHydrated(): boolean {
+	return false;
+}
 
 /** See `FRAME_WRAPPER` below for what each level is for. */
 export type ImageFrame = "hairline" | "raised";
@@ -242,6 +273,9 @@ export function AppImage({
 	const initialStatus: ImageStatus = isLocalPreview ? "loaded" : "loading";
 
 	const [status, setStatus] = useState<ImageStatus>(initialStatus);
+	// See the header: before hydration there is no onLoad to fade the image
+	// in, so it paints as soon as it decodes.
+	const hydrated = useHydrated();
 	// Bumped on each retry and folded into the <img> `key`, which remounts the
 	// element and issues a genuinely fresh request. Same URL on purpose: a
 	// failed load leaves no cache entry to bust, and a cache-busting param would
@@ -363,10 +397,14 @@ export function AppImage({
 				aria-hidden={alt === "" || undefined}
 				draggable={false}
 				className={cn(
+					// `relative` layers the photo above the absolutely positioned
+					// skeleton (DOM order then decides), which only matters while it
+					// is visible-before-hydration; it adds no offset.
+					"relative",
 					fill ? "h-full w-full" : aspect,
 					fill && (objectFit === "contain" ? "object-contain" : "object-cover"),
 					"transition-opacity duration-200 motion-reduce:transition-none",
-					status === "loaded" ? "opacity-100" : "opacity-0",
+					status === "loaded" || !hydrated ? "opacity-100" : "opacity-0",
 				)}
 				loading={eager ? "eager" : "lazy"}
 				decoding="async"

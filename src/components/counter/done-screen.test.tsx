@@ -48,6 +48,7 @@ type Order = {
 	confirmationPushStatus?: string;
 	confirmationPushFailureKind?: string;
 	fulfilmentDate?: number;
+	fulfilmentTimeMinutes?: number;
 	creditGated?: true;
 	creditsToUnlock?: number;
 };
@@ -186,6 +187,18 @@ describe("DoneScreen — the buyer's WhatsApp outcome is read, never assumed", (
 
 describe("DoneScreen — a sale that is NOT handed over yet stays open", () => {
 	const later = Date.UTC(2026, 9, 20) - 8 * 3600_000; // 20 Oct 2026, MYT midnight
+
+	it("a timed collection says the hour too (z8r3fdkugx)", () => {
+		renderDone(
+			order({
+				status: "confirmed",
+				fulfilmentDate: later,
+				fulfilmentTimeMinutes: 15 * 60,
+			}),
+			{ completed: false },
+		);
+		expect(screen.getByText(/collecting .*20 Oct at 3:00 PM\./)).toBeTruthy();
+	});
 
 	it("a collection dated for later: 'Order created', says when, keeps the one-tap close with its reason", async () => {
 		renderDone(order({ status: "confirmed", fulfilmentDate: later }), {

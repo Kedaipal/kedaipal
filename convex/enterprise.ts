@@ -7,6 +7,8 @@
 // contract when that first Pro bill settles (`settleInvoicePaid`). Every lever
 // is admin-only and audited.
 
+import { ADMIN_COUNT_SCAN_LIMIT } from "./lib/adminDirectory";
+import type { AdminSellerRow } from "./lib/adminSellerRow";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -14,6 +16,7 @@ import { mutation, query } from "./_generated/server";
 import { ADMIN_CREDIT_LIMIT, writeGrantOverride } from "./credits";
 import { logAdminAction, requireAdmin } from "./lib/auth";
 import {
+	ENTERPRISE_INTEREST_RESTAMP_MS,
 	contractForAdmin,
 	type EnterpriseEntry,
 	enterpriseContractCaps,
@@ -73,6 +76,8 @@ export const getContractContext = query({
 			invoiceNumber: string;
 			plan: Doc<"subscriptions">["plan"];
 			billingCycle: BillingCycle;
+			/** So the form's refusal names a hold bill as one. */
+			kind: "plan" | "hold";
 		};
 	} | null> => {
 		await requireAdmin(ctx);
@@ -113,6 +118,7 @@ export const getContractContext = query({
 						plan: pending.plan ?? sub?.plan ?? "pro",
 						billingCycle:
 							pending.billingCycle ?? sub?.billingCycle ?? "monthly",
+						kind: pending.kind ?? "plan",
 					}
 				: undefined,
 		};
@@ -198,6 +204,7 @@ export const setContract = mutation({
 						invoiceNumber: pending.invoiceNumber,
 						plan: pending.plan ?? sub.plan,
 						billingCycle: pending.billingCycle ?? sub.billingCycle,
+						kind: pending.kind,
 					}
 				: undefined,
 			billingCycle: args.billingCycle,
@@ -309,7 +316,21 @@ export const markInterest = mutation({
 			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
 			.first();
 		if (!retailer) throw new ConvexError("No store found for your account");
-		await ctx.db.patch(retailer._id, { enterpriseInterestAt: Date.now() });
+		// No write if the store already asked within the window. Not a rate
+		// limiter on purpose: this is a best-effort stamp beside a chat, so a
+		// repeat tap must succeed quietly, never throw. And the write is the
+		// real cost — `retailers` is the row every open storefront tab
+		// subscribes to, so each patch re-runs the whole store's buyer tabs.
+		// The admin reads the stamp at day precision ("asked 3 days ago"), so
+		// an ask an hour later is the same lead; a genuinely later ask still
+		// restamps.
+		const now = Date.now();
+		if (
+			retailer.enterpriseInterestAt !== undefined &&
+			now - retailer.enterpriseInterestAt < ENTERPRISE_INTEREST_RESTAMP_MS
+		)
+			return null;
+		await ctx.db.patch(retailer._id, { enterpriseInterestAt: now });
 		return null;
 	},
 });
@@ -433,5 +454,46 @@ export const cancelMoveToPro = mutation({
 			retailerId,
 		);
 		return { voidedInvoiceNumber: moveBill?.invoiceNumber ?? null };
+	},
+});
+
+/**
+ * Every OTHER store's live contract, as a starting point for a new deal — the
+ * "start from another contract" picker in the seller sheet. It used to be
+ * derived from the directory's loaded rows, which was every store while the
+ * directory loaded 500 at once; with the directory paginated the loaded rows
+ * are whatever has scrolled past, so the picker reads the book itself. Mounted
+ * only while a sheet is open. Bounded by the same scan limit as the counts.
+ */
+export const listContractTemplates = query({
+	args: { exclude: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ exclude },
+	): Promise<
+		Array<{
+			retailerId: Id<"retailers">;
+			storeName: string;
+			contract: NonNullable<AdminSellerRow["enterprise"]>;
+		}>
+	> => {
+		await requireAdmin(ctx);
+		const subs = await ctx.db.query("subscriptions").take(ADMIN_COUNT_SCAN_LIMIT);
+		const templates: Array<{
+			retailerId: Id<"retailers">;
+			storeName: string;
+			contract: NonNullable<AdminSellerRow["enterprise"]>;
+		}> = [];
+		for (const sub of subs) {
+			if (!sub.enterprise || sub.retailerId === exclude) continue;
+			const retailer = await ctx.db.get(sub.retailerId);
+			if (!retailer) continue;
+			templates.push({
+				retailerId: retailer._id,
+				storeName: retailer.storeName,
+				contract: contractForAdmin(sub.enterprise),
+			});
+		}
+		return templates;
 	},
 });

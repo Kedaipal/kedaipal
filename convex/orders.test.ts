@@ -8488,14 +8488,70 @@ describe("orders — seller reschedule (86eyp5qd1)", () => {
 				status === "cancelled" ? /cancelled/ : /already on its way/,
 			);
 		}
+		// A counter sale whose date is only the checkout default (z8r3fdkugx):
+		// nothing to move. A DATED counter order is covered by its own test.
 		await t.run(async (ctx) =>
-			ctx.db.patch(order._id, { status: "confirmed" as const, source: "counter" as const }),
+			ctx.db.patch(order._id, {
+				status: "confirmed" as const,
+				source: "counter" as const,
+				fulfilmentDate: todayMytMidnight(order.createdAt),
+				fulfilmentTimeMinutes: undefined,
+			}),
 		);
 		await expect(attempt()).rejects.toThrow(/Counter orders/);
 		await t.run(async (ctx) =>
 			ctx.db.patch(order._id, { source: undefined, collectedAt: Date.now() }),
 		);
 		await expect(attempt()).rejects.toThrow(/already collected/);
+	});
+
+	test("a counter order the seller DATED moves; a defaulted or handed-over one doesn't (z8r3fdkugx)", async () => {
+		const t = setup();
+		const { order, date } = await seedThreeAmOrder(t);
+		const asA = t.withIdentity({ subject: USER_A });
+		const today = todayMytMidnight(order.createdAt);
+		const asCounter = (patch: {
+			status: "confirmed" | "delivered";
+			fulfilmentDate?: number;
+			fulfilmentTimeMinutes?: number;
+		}) =>
+			t.run(async (ctx) =>
+				ctx.db.patch(order._id, {
+					source: "counter" as const,
+					deliveryMethod: "self_collect" as const,
+					deliveryAddress: undefined,
+					...patch,
+				}),
+			);
+		const move = (fulfilmentTimeMinutes?: number | null) =>
+			asA.mutation(api.orders.rescheduleFulfilment, {
+				orderId: order._id,
+				fulfilmentDate: date + DAY_MS,
+				fulfilmentTimeMinutes,
+			});
+
+		// Legacy counter sale with no date, and a same-day default: refused.
+		await asCounter({ status: "confirmed", fulfilmentDate: undefined, fulfilmentTimeMinutes: undefined });
+		await expect(move()).rejects.toThrow(/Counter orders are fulfilled on the spot/);
+		await asCounter({ status: "confirmed", fulfilmentDate: today, fulfilmentTimeMinutes: undefined });
+		await expect(move()).rejects.toThrow(/Counter orders are fulfilled on the spot/);
+		// Handed over at the counter: its own words, never "on its way".
+		await asCounter({ status: "delivered", fulfilmentDate: date, fulfilmentTimeMinutes: 15 * 60 });
+		await expect(move()).rejects.toThrow(/already handed over/);
+
+		// A same-day order with a TIME is a promise — it moves, clock and all.
+		await asCounter({ status: "confirmed", fulfilmentDate: today, fulfilmentTimeMinutes: 15 * 60 });
+		await move(16 * 60);
+		let after = await t.run((ctx) => ctx.db.get(order._id));
+		expect(after?.fulfilmentDate).toBe(date + DAY_MS);
+		expect(after?.fulfilmentTimeMinutes).toBe(16 * 60);
+
+		// A later-day preorder moves too, and a self-collect time can be cleared.
+		await asCounter({ status: "confirmed", fulfilmentDate: date, fulfilmentTimeMinutes: 15 * 60 });
+		await move(null);
+		after = await t.run((ctx) => ctx.db.get(order._id));
+		expect(after?.fulfilmentDate).toBe(date + DAY_MS);
+		expect(after?.fulfilmentTimeMinutes).toBeUndefined();
 	});
 
 	test("an ACTIVE rider booking blocks the reschedule; a settled one doesn't", async () => {

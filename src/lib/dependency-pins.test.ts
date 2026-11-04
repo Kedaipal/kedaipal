@@ -35,6 +35,9 @@ const EXACT_PINNED = [
 	"@tanstack/react-devtools",
 	"@tanstack/devtools-vite",
 	"@tanstack/router-plugin",
+	// The SSR query bridge (z8r3fdue6f) hooks the router's dehydrate/hydrate
+	// options and its redirect type, so it moves with the family, never alone.
+	"@tanstack/react-router-ssr-query",
 	"@clerk/tanstack-react-start",
 ];
 
