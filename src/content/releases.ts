@@ -183,17 +183,17 @@ export const RELEASES: Release[] = [
 	{
 		version: "2026.11.1",
 		date: "2026-11-04",
-		// Not notable (authored for Zaki's call): one counter enhancement a
-		// seller meets the next time they ring up a sale — nothing moved, no
-		// number a seller watches changes. The dot on More reaches the sellers
-		// who'd use it; the modal would interrupt every store for one panel.
+		// Not notable: one counter enhancement a seller meets the next time
+		// they ring up a sale — nothing moved, no number a seller watches
+		// changes. The dot on More reaches the sellers who'd use it; the modal
+		// would interrupt every store for one panel.
 		notable: false,
 		entries: [
 			{
 				kind: "feature",
 				title: { en: "Set a time on a counter order, and find items by kind" },
 				body: {
-					en: "Booking a 3 PM session or a 10 AM cake pickup at the counter? The Collection panel now takes a time beside the date, and it shows on the order, your calendar and your Google Calendar feed. A time still ahead today stays Confirmed until you mark it completed — the panel says so before you tap. The catalog also gets one-tap chips — Products, Services, Events, Hidden — with a count on each. On every plan.",
+					en: "Taking a 3 PM appointment or a 10 AM cake pickup at the counter? The Collection panel now takes a time beside the date, and it shows on the order, your calendar and your Google Calendar feed. A time still ahead today stays Confirmed until you mark it completed — the panel says so before you tap. The catalog also gets one-tap chips — Products, Services, Events, Hidden — with a count on each, wherever they narrow your list. On every plan.",
 				},
 				href: "/app/checkout",
 				hrefLabel: { en: "Open counter checkout" },
