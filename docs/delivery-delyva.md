@@ -386,15 +386,24 @@ card):
 
 **Print shipping label** calls `delyva.getLabel` →
 `GET /order/{providerOrderId}/label` with the seller's key through
-`callDelyvaRaw` (bytes + content type; `callDelyva` assumes JSON). The
-endpoint's live shape is **unconfirmed** — recording it is the ticket's T0
-spike, a production call with a live seller's key, left as operator work —
-so `parseDelyvaLabelResponse` handles both: a PDF body (by content type, or
-the `%PDF` magic under a generic type) is returned as bytes and saved with
-`downloadPdfBytes` like the despatch label (a `window.open` on a blob after
-an `await` is popup-blocked on iOS Safari); a JSON envelope's URL (`url` /
-`labelUrl` / `label` / `link` / `file`, wrapped in `data` or not, http(s)
-only) opens in a new tab. Anything else is a failure. Failures are a toast
+`callDelyvaRaw` (bytes + content type; `callDelyva` assumes JSON). **The
+endpoint answers with the PDF itself** — probed 4 Nov 2026 on a demo-account
+booking (dev store `herb`, `ORD-U6AN`, DHL eCommerce `NDD`), never on a
+seller's key: the API redirects to an S3 object (`server: AmazonS3`,
+`content-type: application/pdf`, 16.5 KB, `%PDF-1.7`, one A6-style label
+page) whose `last-modified` is the booking moment, so the label exists from
+the first `assigning` and the button's "Delyva hasn't confirmed this
+booking yet" is exactly the only wait; S3's `x-amz-expiration` rule
+**auto-deletes it after 90 days** (a stale booking's label 404s with
+Delyva's own message — no code handles that specially, the toast does).
+`parseDelyvaLabelResponse` still accepts the second shape it was built
+for, a JSON envelope carrying a URL (`url` / `labelUrl` / `label` / `link` /
+`file`, wrapped in `data` or not, http(s) only), as a **defensive fallback
+only** — not observed live. A PDF body (by content type, or the `%PDF` magic
+under a generic type) is returned as bytes and saved with `downloadPdfBytes`
+like the despatch label (a `window.open` on a blob after an `await` is
+popup-blocked on iOS Safari); a URL opens in a new tab. Anything else is a
+failure. Failures are a toast
 carrying Delyva's own message (`friendlyLabelError`), never silence. The
 button is **disabled with its reason** (`delyvaLabelAvailability`:
 *"Available once Delyva confirms the booking."* until `providerOrderId`
@@ -786,8 +795,10 @@ with those couriers on; until then it is one list, cheapest first.
 - **Scheduled pickups** — Delyva waypoints accept `scheduledAt`; v1 books
   immediate collection (parcel couriers collect on their own cadence).
   Revisit if sellers ask for date-bound pickups.
-- **Label printing** shipped (z8r3fe11x3, see "Pickup vs drop-off"); what
-  remains is recording the endpoint's live response shape (the T0 spike on
-  the DapoGo order, operator work) — both shapes are handled meanwhile.
+- **Label printing** shipped (z8r3fe11x3, see "Pickup vs drop-off"); the
+  endpoint's live shape was recorded on a demo booking (PDF from S3, 90-day
+  expiry), so the ticket's T0 spike on the DapoGo order is no longer needed.
+  What a real courier's label looks like (DHL demo vs J&T live) is the one
+  thing a demo account can't show — eyeball DapoGo's first printed label.
 - Operational (with Herrey, tracked on `86eyjprqw`): 1% payout mechanics,
   pickup-address activation lead time, partner agreement.
