@@ -6,7 +6,10 @@ import {
 	internalAction,
 	internalQuery,
 } from "./_generated/server";
-import { courierProviderValidator } from "./lib/courierProviders";
+import {
+	type CourierProviderId,
+	courierProviderValidator,
+} from "./lib/courierProviders";
 import { sendEmail } from "./lib/email";
 import {
 	type DeliveryMethod,
@@ -162,61 +165,99 @@ async function sendMockupSellerEmail(
  * expired / rejected). Scheduled from the webhook handler in
  * convex/lalamove.ts — fire-and-forget, same posture as the mockup alerts.
  */
-export const notifyDeliveryJobFailed = internalAction({
+/**
+ * One sender for the courier-job emails (failed / stale / returned —
+ * z8r3fe11y8 added the last two on the same shape): look the order up, bail
+ * quietly without an email address, render the locale's template, send.
+ * Errors are logged, never thrown — a courier event must never fail
+ * because of an outbound issue.
+ */
+async function sendCourierJobEmail(
+	ctx: ActionCtx,
+	key: "deliveryJobFailed" | "deliveryJobStale" | "deliveryJobReturned",
 	args: {
-		orderId: v.id("orders"),
-		reason: v.optional(v.string()),
-		// Which booking provider failed (86eyjpv6z). Absent = "lalamove", so
-		// pre-Delyva scheduled sends keep rendering unchanged.
-		provider: v.optional(courierProviderValidator),
+		orderId: Id<"orders">;
+		reason?: string;
+		provider?: CourierProviderId;
+		trackingNo?: string;
 	},
-	handler: async (ctx, { orderId, reason, provider }): Promise<void> => {
-		let meta: {
-			shortId: string;
-			itemCount: number;
-			total: number;
-			currency: string;
-			customerName: string;
-			deliveryMethod: DeliveryMethod;
-			deliveryDirection: "standard" | "collection" | undefined;
-			notifyEmail: string | undefined;
-			storeName: string;
-			locale: Locale;
-		} | null = null;
-		try {
-			meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
-				orderId,
-			});
-		} catch (err) {
-			console.error("Email deliveryJobFailed lookup failed", err);
-			return;
-		}
-		if (!meta || !meta.notifyEmail) return;
-		const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
-		const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
-		const { subject, html, text } = renderRetailerEmail(
-			meta.locale,
-			"deliveryJobFailed",
-			{
-				shortId: meta.shortId,
-				itemCount: meta.itemCount,
-				totalFormatted,
-				customerName: meta.customerName,
-				deliveryMethod: meta.deliveryMethod,
-				deliveryDirection: meta.deliveryDirection,
-				storeName: meta.storeName,
-				dashboardUrl,
-				jobFailureReason: reason,
-				deliveryProvider: provider,
-			},
+): Promise<void> {
+	let meta: {
+		shortId: string;
+		itemCount: number;
+		total: number;
+		currency: string;
+		customerName: string;
+		deliveryMethod: DeliveryMethod;
+		deliveryDirection: "standard" | "collection" | undefined;
+		notifyEmail: string | undefined;
+		storeName: string;
+		locale: Locale;
+	} | null = null;
+	try {
+		meta = await ctx.runQuery(internal.email.getOrderForRetailerEmail, {
+			orderId: args.orderId,
+		});
+	} catch (err) {
+		console.error(`Email ${key} lookup failed`, err);
+		return;
+	}
+	if (!meta || !meta.notifyEmail) return;
+	const totalFormatted = `${meta.currency} ${(meta.total / 100).toFixed(2)}`;
+	const dashboardUrl = `${process.env.SITE_URL ?? "https://kedaipal.com"}/app/orders/${meta.shortId}`;
+	const { subject, html, text } = renderRetailerEmail(meta.locale, key, {
+		shortId: meta.shortId,
+		itemCount: meta.itemCount,
+		totalFormatted,
+		customerName: meta.customerName,
+		deliveryMethod: meta.deliveryMethod,
+		deliveryDirection: meta.deliveryDirection,
+		storeName: meta.storeName,
+		dashboardUrl,
+		jobFailureReason: args.reason,
+		deliveryProvider: args.provider,
+		trackingNo: args.trackingNo,
+	});
+	try {
+		await sendEmail(meta.notifyEmail, subject, html, text);
+	} catch (err) {
+		console.error(
+			`Email ${key} failed (shortId=${meta.shortId}): ${err instanceof Error ? err.message : String(err)}`,
 		);
-		try {
-			await sendEmail(meta.notifyEmail, subject, html, text);
-		} catch (err) {
-			console.error(
-				`Email deliveryJobFailed failed (shortId=${meta.shortId}): ${err instanceof Error ? err.message : String(err)}`,
-			);
-		}
+	}
+}
+
+const courierJobEmailArgs = {
+	orderId: v.id("orders"),
+	reason: v.optional(v.string()),
+	// Which booking provider the job belonged to (86eyjpv6z). Absent =
+	// "lalamove", so pre-Delyva scheduled sends keep rendering unchanged.
+	provider: v.optional(courierProviderValidator),
+	// The courier's consignment number, where one exists (z8r3fe11y8).
+	trackingNo: v.optional(v.string()),
+};
+
+export const notifyDeliveryJobFailed = internalAction({
+	args: courierJobEmailArgs,
+	handler: async (ctx, args): Promise<void> => {
+		await sendCourierJobEmail(ctx, "deliveryJobFailed", args);
+	},
+});
+
+/** z8r3fe11y8 — once per quiet spell, when the hourly sweep flags a booking
+ * still unscanned a day on. The buyer is never emailed. */
+export const notifyDeliveryJobStale = internalAction({
+	args: courierJobEmailArgs,
+	handler: async (ctx, args): Promise<void> => {
+		await sendCourierJobEmail(ctx, "deliveryJobStale", args);
+	},
+});
+
+/** z8r3fe11y8 — the courier returned the parcel (701 / 663). */
+export const notifyDeliveryJobReturned = internalAction({
+	args: courierJobEmailArgs,
+	handler: async (ctx, args): Promise<void> => {
+		await sendCourierJobEmail(ctx, "deliveryJobReturned", args);
 	},
 });
 

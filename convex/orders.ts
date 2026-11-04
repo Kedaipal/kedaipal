@@ -2346,6 +2346,11 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	 * collection. Both doors: the buyer's page and the seller's Shipment
 	 * tracking card say so where the link will appear. Unset = no. */
 	courierLinkPending?: true;
+	/** The courier RETURNED the parcel to the seller (z8r3fe11y8): the order
+	 * still reads Shipped until the seller marks it, so both doors say the
+	 * parcel came back — the buyer's page under the courier card, the
+	 * seller's Shipment tracking card beside the dead number. Unset = no. */
+	courierReturned?: true;
 	// Booking capacity context (S3) — SELLER path only, for the approve card's
 	// "N of M sites already booked those nights" line. Never on the buyer/token
 	// path: per-night counts don't cross the public wire (locked).
@@ -2615,10 +2620,11 @@ export const get = query({
 		// order alone — a seller's own manual entry with no link is theirs,
 		// and must never be promised one.
 		let courierLinkPending: true | undefined;
+		let courierReturned: true | undefined;
 		if (
 			order.deliveryMethod === "delivery" &&
 			order.trackingNo &&
-			!order.carrierTrackingUrl
+			(!order.carrierTrackingUrl || order.status === "shipped")
 		) {
 			const jobs = await ctx.db
 				.query("deliveryJobs")
@@ -2627,6 +2633,16 @@ export const get = query({
 			const active = jobs.find((j) => isActiveJobStatus(j.status));
 			if (active && isCourierLinkPending(active, order)) {
 				courierLinkPending = true;
+			}
+			// Returned (z8r3fe11y8): the newest Delyva job came back and the
+			// order is still the shipped one it came back from — the same
+			// `by_order` read, so a shipped parcel pays one indexed read.
+			if (order.status === "shipped" && !active) {
+				const latest = [...jobs]
+					.filter((j) => j.provider === "delyva")
+					.sort((a, b) => b.createdAt - a.createdAt)[0];
+				if (latest?.returned && latest.awb === order.trackingNo)
+					courierReturned = true;
 			}
 		}
 		return {
@@ -2637,6 +2653,7 @@ export const get = query({
 			bookingMaxSkips,
 			bookingSkippable,
 			courierLinkPending,
+			courierReturned,
 			// RSVP (`z8r3fdff9u`) — both sides need it: the seller's Reschedule
 			// disables with the reason instead of erroring on submit, and the
 			// buyer's tracking page says the date is the event's, not theirs.

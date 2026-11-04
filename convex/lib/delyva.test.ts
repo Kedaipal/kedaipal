@@ -31,6 +31,13 @@ import {
 	resolveDelyvaCredentials,
 	roundKg,
 	verifyDelyvaWebhook,
+	DELYVA_STALE_AFTER_MS,
+	DELYVA_WEBHOOK_EVENTS_REQUIRED,
+	delyvaFailureReason,
+	inTransitNotice,
+	isDelyvaJobStale,
+	isReturnedStatus,
+	parseDelyvaOrderPull,
 } from "./delyva";
 
 describe("resolveDelyvaCredentials", () => {
@@ -490,12 +497,161 @@ describe("failure classification", () => {
 });
 
 describe("webhook subscription events", () => {
-	test("covers created + both tracking channels", () => {
+	test("covers created + both tracking channels, plus the two full-order events (z8r3fe11y8)", () => {
 		expect(DELYVA_WEBHOOK_EVENTS).toEqual([
 			"order.created",
 			"order_tracking.update",
 			"order_tracking.change",
+			"order.updated",
+			"order.failed",
 		]);
+	});
+	test("only the three documented events are required for a connect to count as subscribed", () => {
+		expect([...DELYVA_WEBHOOK_EVENTS_REQUIRED].sort()).toEqual(
+			["order.created", "order_tracking.change", "order_tracking.update"].sort(),
+		);
+		expect(DELYVA_WEBHOOK_EVENTS_REQUIRED.has("order.updated")).toBe(false);
+		expect(DELYVA_WEBHOOK_EVENTS_REQUIRED.has("order.failed")).toBe(false);
+	});
+});
+
+describe("failure and return codes (z8r3fe11y8 — Delyva's published status table)", () => {
+	test("a test row per code: what each one normalises to", () => {
+		// Failures that END the booking before the parcel left.
+		expect(normalizeDelyvaStatus(99)).toBe("rejected");
+		expect(normalizeDelyvaStatus(654)).toBe("rejected");
+		expect(normalizeDelyvaStatus(655)).toBe("rejected");
+		// Mid-flight notices: the parcel is with the courier.
+		expect(normalizeDelyvaStatus(651)).toBe("picked_up");
+		expect(normalizeDelyvaStatus(661)).toBe("picked_up");
+		// The trip ended with the parcel back at the seller.
+		expect(normalizeDelyvaStatus(663)).toBe("completed");
+		expect(normalizeDelyvaStatus(701)).toBe("completed");
+		// Informational steps from the same table, so lastEventAt moves on them.
+		expect(normalizeDelyvaStatus(450)).toBe("ongoing");
+		expect(normalizeDelyvaStatus(555)).toBe("picked_up");
+		expect(normalizeDelyvaStatus(556)).toBe("picked_up");
+		expect(normalizeDelyvaStatus(625)).toBe("picked_up");
+		// Pre-booking states stay unmapped.
+		expect(normalizeDelyvaStatus(0)).toBeUndefined();
+		expect(normalizeDelyvaStatus(10)).toBeUndefined();
+		expect(normalizeDelyvaStatus(11)).toBeUndefined();
+	});
+	test("returned is 663 and 701, nothing else", () => {
+		expect(isReturnedStatus(701)).toBe(true);
+		expect(isReturnedStatus(663)).toBe(true);
+		for (const code of [99, 475, 500, 650, 651, 654, 655, 661, 700, 900, 1000])
+			expect(isReturnedStatus(code)).toBe(false);
+		expect(isReturnedStatus(undefined)).toBe(false);
+	});
+	test("collected stays right for every new code: never for a failure, always once the parcel moved", () => {
+		for (const code of [99, 654, 655]) expect(isCollectedStatus(code)).toBe(false);
+		for (const code of [651, 661, 663, 701]) expect(isCollectedStatus(code)).toBe(true);
+	});
+	test("the mid-flight notices", () => {
+		expect(inTransitNotice(650)).toMatch(/retry or return/);
+		expect(inTransitNotice(651)).toBe("Lost or damaged, claim with Delyva");
+		expect(inTransitNotice(661)).toBe("Returning to sender");
+		expect(inTransitNotice(600)).toBeUndefined();
+		expect(inTransitNotice(701)).toBeUndefined();
+	});
+	test("one author for the reason: Delyva's words where they describe the event, ours where they don't", () => {
+		expect(delyvaFailureReason(99, undefined)).toBe("Delyva could not create the order");
+		expect(delyvaFailureReason(99, "Service unavailable for this route")).toBe(
+			"Delyva could not create the order — Service unavailable for this route",
+		);
+		expect(delyvaFailureReason(654, undefined)).toBe("Courier cancelled the pickup");
+		expect(delyvaFailureReason(654, "Failed - Driver cancel")).toBe("Failed - Driver cancel");
+		expect(delyvaFailureReason(655, undefined)).toBe("The courier reported the booking as failed");
+		expect(delyvaFailureReason(655, "  ")).toBe("The courier reported the booking as failed");
+		expect(delyvaFailureReason(475, undefined)).toBe("The courier couldn't collect the parcel");
+		expect(delyvaFailureReason(900, undefined)).toBe("Cancelled by Delyva");
+		expect(delyvaFailureReason(651, "Lost")).toBe("Lost or damaged, claim with Delyva");
+		expect(delyvaFailureReason(661, "x")).toBe("Returning to sender");
+		expect(delyvaFailureReason(701, "Item Returned")).toBe("Returned to you");
+		expect(delyvaFailureReason(663, undefined)).toMatch(/Failed to return/);
+		// Ordinary progress clears a reason.
+		expect(delyvaFailureReason(600, "In transit")).toBeUndefined();
+		expect(delyvaFailureReason(700, "Delivered")).toBeUndefined();
+	});
+});
+
+describe("the stale predicate (z8r3fe11y8)", () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const now = Date.parse("2026-11-05T00:00:00.000Z");
+	const base = {
+		status: "assigning" as const,
+		providerOrderId: "DLV-1",
+		createdAt: now - 25 * 60 * 60 * 1000,
+	};
+	test("booked a day ago with no event at all", () => {
+		expect(isDelyvaJobStale(base, now)).toBe(true);
+	});
+	test("…or with the last event a day ago", () => {
+		expect(isDelyvaJobStale({ ...base, lastEventAt: now - DAY - 1 }, now)).toBe(true);
+		expect(isDelyvaJobStale({ ...base, status: "ongoing", lastEventAt: now - DAY - 1 }, now)).toBe(true);
+	});
+	test("not while a recent event exists, not before a day has passed", () => {
+		expect(isDelyvaJobStale({ ...base, lastEventAt: now - 60_000 }, now)).toBe(false);
+		expect(isDelyvaJobStale({ ...base, createdAt: now - 60_000 }, now)).toBe(false);
+	});
+	test("never for a reservation Delyva hasn't confirmed, or a job past its first scan", () => {
+		expect(isDelyvaJobStale({ ...base, providerOrderId: undefined }, now)).toBe(false);
+		expect(isDelyvaJobStale({ ...base, status: "picked_up" }, now)).toBe(false);
+		expect(isDelyvaJobStale({ ...base, status: "completed" }, now)).toBe(false);
+		expect(isDelyvaJobStale({ ...base, status: "rejected" }, now)).toBe(false);
+	});
+	test("the window is one day", () => {
+		expect(DELYVA_STALE_AFTER_MS).toBe(DAY);
+	});
+});
+
+describe("the full-order payload (order.updated / order.failed / a pull)", () => {
+	const fullOrder = {
+		id: "delyva-9",
+		consignmentNo: "MY0099",
+		statusCode: 99,
+		status: "failed",
+		customerId: 128399,
+		failedReason: "Service not available",
+		cancelledReason: null,
+		updatedAt: "2026-11-05T01:00:00.000Z",
+		waypoint: [],
+	};
+	test("parses as an event keyed on `id`, with the reason from failedReason and never the bare status word", () => {
+		const event = parseDelyvaWebhookEvent(JSON.stringify(fullOrder));
+		expect(event?.delyvaOrderId).toBe("delyva-9");
+		expect(event?.statusCode).toBe(99);
+		expect(event?.consignmentNo).toBe("MY0099");
+		expect(event?.customerId).toBe(128399);
+		expect(event?.statusText).toBe("Service not available");
+		expect(event?.eventAt).toBe(Date.parse("2026-11-05T01:00:00.000Z"));
+	});
+	test("a full order with both reasons null carries no statusText — \"failed\" would read as a reason", () => {
+		const event = parseDelyvaWebhookEvent(
+			JSON.stringify({ ...fullOrder, failedReason: null, status: "failed" }),
+		);
+		expect(event?.statusText).toBeUndefined();
+	});
+	test("cancelledReason is the fallback", () => {
+		const event = parseDelyvaWebhookEvent(
+			JSON.stringify({ ...fullOrder, statusCode: 900, failedReason: "", cancelledReason: "Out of coverage" }),
+		);
+		expect(event?.statusText).toBe("Out of coverage");
+	});
+	test("a tracking row still prefers its own statusText over status", () => {
+		const event = parseDelyvaWebhookEvent(
+			JSON.stringify({ orderId: "delyva-2", statusCode: 654, statusText: "Failed - Driver cancel", status: "failed" }),
+		);
+		expect(event?.statusText).toBe("Failed - Driver cancel");
+	});
+	test("the pull unwraps Delyva's `{ data }` envelope (and a nested `order`)", () => {
+		expect(parseDelyvaOrderPull({ data: fullOrder })?.delyvaOrderId).toBe("delyva-9");
+		expect(parseDelyvaOrderPull({ order: fullOrder })?.statusCode).toBe(99);
+		expect(parseDelyvaOrderPull(fullOrder)?.statusCode).toBe(99);
+		expect(parseDelyvaOrderPull({ data: {} })).toBeNull();
+		expect(parseDelyvaOrderPull(null)).toBeNull();
+		expect(parseDelyvaOrderPull("nope")).toBeNull();
 	});
 });
 

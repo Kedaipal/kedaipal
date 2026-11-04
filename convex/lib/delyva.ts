@@ -613,43 +613,173 @@ export function parseDelyvaWalletBalance(json: unknown): number | null {
 }
 
 /**
- * Delyva's numeric status vocabulary → our normalized job status. Codes from
- * their own maintained WooCommerce plugin (Statuses mapping, verified against
- * the webhook docs):
+ * Delyva statusCode → our normalized job status. The table is Delyva's own
+ * (the "Order status codes" table in docs.api.delyva.com's published
+ * collection, read 5 Nov 2026, z8r3fe11y8), cross-checked against their
+ * maintained WooCommerce plugin for the codes it handles:
  *
- *   100/110  order created / ready to collect        → assigning
- *   200      courier accepted                        → ongoing
- *   400      start collecting (pickup pending)       → ongoing
- *   475      failed collection                       → rejected  (failure)
- *   500      collected (pickup complete)             → picked_up
- *   600      start delivery (out for delivery)       → picked_up
- *   650      failed delivery                         → picked_up (kept —
+ *   0 / 10 / 11  draft / payment pending / abandoned    → undefined (pre-booking)
+ *   99       create order failed, account not charged → rejected  (failure)
+ *   100/110  order created / ready (label printed)    → assigning
+ *   200      pending collection / assigned to driver  → ongoing
+ *   400      pickup start                             → ongoing
+ *   450      arrived for pick-up                      → ongoing
+ *   475      pick-up failed                           → rejected  (failure)
+ *   500      pickup success / collected               → picked_up
+ *   555/556  hub check-in / check-out                 → picked_up
+ *   600      delivery start (out for delivery)        → picked_up
+ *   625      arrived for delivery                     → picked_up
+ *   650      failed to deliver                        → picked_up (kept —
  *            the parcel is still WITH the courier: retry/return follows;
  *            surfaced via failureReason, never a terminal state)
- *   700/1000 completed                               → completed
- *   900      cancelled                               → canceled
+ *   651      failed delivery — lost / damaged         → picked_up (notice)
+ *   654      failed — driver cancelled                → rejected  (failure)
+ *   655      failed (generic / reason)                → rejected  (failure)
+ *   661      returning to sender                      → picked_up (notice)
+ *   663      failed to return                         → completed (RETURNED)
+ *   700/1000 delivered / completed                    → completed
+ *   701      item returned                            → completed (RETURNED)
+ *   900      cancelled                                → canceled
  *
- * Unknown codes → undefined (webhook vocab can grow; never throw).
+ * 663 and 701 are `completed` because the trip is over and the job must free
+ * the order's booking slot — but the ORDER is not delivered: callers read
+ * `isReturnedStatus` and leave the order where it is. Before z8r3fe11y8 the
+ * six failure/return codes were unmapped, so a lost parcel, a cancelled
+ * pickup and a returned parcel all left the job (and the seller) at
+ * "Booked" forever. Unknown codes → undefined (the vocabulary can grow;
+ * never throw).
  */
 export function normalizeDelyvaStatus(
 	statusCode: number | undefined,
 ): DeliveryJobStatus | undefined {
 	if (statusCode === undefined) return undefined;
 	if (statusCode === 100 || statusCode === 110) return "assigning";
-	if (statusCode === 200 || statusCode === 400) return "ongoing";
-	if (statusCode === 475) return "rejected";
-	if (statusCode === 500 || statusCode === 600 || statusCode === 650)
+	if (statusCode === 200 || statusCode === 400 || statusCode === 450)
+		return "ongoing";
+	if (statusCode === 99 || statusCode === 475 || statusCode === 654 || statusCode === 655)
+		return "rejected";
+	if (
+		statusCode === 500 ||
+		statusCode === 555 ||
+		statusCode === 556 ||
+		statusCode === 600 ||
+		statusCode === 625 ||
+		statusCode === 650 ||
+		statusCode === 651 ||
+		statusCode === 661
+	)
 		return "picked_up";
-	if (statusCode === 700 || statusCode === 1000) return "completed";
+	if (
+		statusCode === 700 ||
+		statusCode === 1000 ||
+		statusCode === 663 ||
+		statusCode === 701
+	)
+		return "completed";
 	if (statusCode === 900) return "canceled";
 	return undefined;
 }
 
-/** The one mid-flight failure that must NOT change job status: a failed
- * delivery attempt (courier retries or returns) — callers stamp
- * failureReason + notify, and the job stays picked_up. */
+/**
+ * The trip ended with the parcel back at (or lost on the way back to) the
+ * SELLER, not the buyer (z8r3fe11y8): 701 item returned, 663 failed to
+ * return. The job completes — the slot is free for a rebook — and the order
+ * is left alone: shipped stays shipped until the seller says what happens
+ * next (Mark order as returned, Book again, or cancel).
+ */
+export function isReturnedStatus(statusCode: number | undefined): boolean {
+	return statusCode === 663 || statusCode === 701;
+}
+
+/**
+ * Mid-flight notices (z8r3fe11y8): the parcel is with the courier and the
+ * job stays `picked_up`, but the seller must hear about it — a failed
+ * delivery attempt (650), a parcel reported lost or damaged (651), a parcel
+ * on its way back (661). `undefined` for every other code.
+ */
+export function inTransitNotice(statusCode: number): string | undefined {
+	if (statusCode === 650)
+		return "Delivery attempt failed — the courier will retry or return the parcel";
+	if (statusCode === 651) return "Lost or damaged, claim with Delyva";
+	if (statusCode === 661) return "Returning to sender";
+	return undefined;
+}
+
+/**
+ * The failureReason for a code that ends or interrupts a booking — ONE
+ * author, so the webhook path, the pull path and the email all tell the
+ * same story. Delyva's own words (`statusText`) win where they describe the
+ * event; the fixed lines are for codes whose statusText is a bare status
+ * word or absent. 99 keeps its own sentence even with a statusText, because
+ * the one Delyva sends on a create failure ("failed") says nothing.
+ */
+export function delyvaFailureReason(
+	statusCode: number,
+	statusText: string | undefined,
+): string | undefined {
+	const given = statusText?.trim() || undefined;
+	switch (statusCode) {
+		case 99:
+			return given
+				? `Delyva could not create the order — ${given}`
+				: "Delyva could not create the order";
+		case 475:
+			return given ?? "The courier couldn't collect the parcel";
+		case 654:
+			return given ?? "Courier cancelled the pickup";
+		case 655:
+			return given ?? "The courier reported the booking as failed";
+		case 900:
+			return given ?? "Cancelled by Delyva";
+		case 650:
+			return given ?? inTransitNotice(650);
+		case 651:
+		case 661:
+			return inTransitNotice(statusCode);
+		case 701:
+			return "Returned to you";
+		case 663:
+			return "Failed to return — ask Delyva where the parcel is";
+		default:
+			return undefined;
+	}
+}
+
+/** A failed delivery ATTEMPT (courier retries or returns) — the first of the
+ * mid-flight notices (`inTransitNotice`), kept by name because the collected
+ * rule below reads it: 650 is collected, whatever its normalised status. */
 export function isFailedDeliveryAttempt(statusCode: number): boolean {
 	return statusCode === 650;
+}
+
+/** How long a booked job may sit without a scan before it is flagged
+ * (z8r3fe11y8): parcel couriers collect within a day, so a booking with no
+ * event for 24 h is one worth checking, not one still in the queue. */
+export const DELYVA_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * "Booked, and nothing has happened for a day" — the ONE predicate the hourly
+ * sweep selects on and the pull re-checks after applying Delyva's answer.
+ * True only for a booking Delyva confirmed (a reservation without a
+ * providerOrderId expires on its own), still waiting for the first scan
+ * (`assigning` / `ongoing`), older than the window, with no event inside it.
+ */
+export function isDelyvaJobStale(
+	job: {
+		status: DeliveryJobStatus;
+		providerOrderId?: string;
+		createdAt: number;
+		lastEventAt?: number;
+	},
+	now: number,
+): boolean {
+	if (!job.providerOrderId) return false;
+	if (job.status !== "assigning" && job.status !== "ongoing") return false;
+	if (now - job.createdAt < DELYVA_STALE_AFTER_MS) return false;
+	return (
+		job.lastEventAt === undefined ||
+		now - job.lastEventAt >= DELYVA_STALE_AFTER_MS
+	);
 }
 
 /**
@@ -688,24 +818,65 @@ export type DelyvaWebhookEvent = {
 };
 
 /**
- * Parse one webhook delivery's JSON body. Two payload families share the
+ * Parse one webhook delivery's JSON body. Three payload families share the
  * shape rules of Delyva's own plugin:
  *  - order.created:            { id, consignmentNo, statusCode, customerId }
  *  - order_tracking.update /
  *    order_tracking.change:    { orderId, consignmentNo, statusCode, … }
+ *  - order.updated / order.failed (z8r3fe11y8): the FULL order object —
+ *    { id, statusCode, status, consignmentNo, failedReason, cancelledReason,
+ *    updatedAt, waypoint, … } — the same shape `GET /order/{id}` returns,
+ *    so the Refresh pull is parsed by the object parser below too.
  * Returns null when neither id is present (not an order event we act on).
  */
 export function parseDelyvaWebhookEvent(
 	body: string,
 ): DelyvaWebhookEvent | null {
-	let data: Record<string, unknown>;
+	let data: unknown;
 	try {
-		const parsed = JSON.parse(body) as unknown;
-		if (!parsed || typeof parsed !== "object") return null;
-		data = parsed as Record<string, unknown>;
+		data = JSON.parse(body) as unknown;
 	} catch {
 		return null;
 	}
+	return parseDelyvaEventObject(data);
+}
+
+/**
+ * The pulled order (`GET /order/{id}`) as the SAME event shape the webhook
+ * route hands to `applyWebhookEvent`, so a missed webhook heals through the
+ * one code path. Unwraps the `{ data }` envelope (and a `{ order }` one,
+ * which some responses nest). Null when no order id is present.
+ */
+export function parseDelyvaOrderPull(json: unknown): DelyvaWebhookEvent | null {
+	if (!json || typeof json !== "object") return null;
+	const outer = json as { data?: unknown; order?: unknown };
+	const inner =
+		outer.data && typeof outer.data === "object"
+			? outer.data
+			: outer.order && typeof outer.order === "object"
+				? outer.order
+				: json;
+	return parseDelyvaEventObject(inner);
+}
+
+/** Is this the full order object rather than a tracking row? The order
+ * carries the two reason fields (null when unset — Delyva never omits a
+ * field) and its waypoints; a tracking row has neither. */
+function isFullOrderShape(data: Record<string, unknown>): boolean {
+	return (
+		"failedReason" in data || "cancelledReason" in data || "waypoint" in data
+	);
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+export function parseDelyvaEventObject(
+	parsed: unknown,
+): DelyvaWebhookEvent | null {
+	if (!parsed || typeof parsed !== "object") return null;
+	const data = parsed as Record<string, unknown>;
 	const id =
 		typeof data.orderId === "string" && data.orderId
 			? data.orderId
@@ -744,8 +915,14 @@ export function parseDelyvaWebhookEvent(
 					? Number(data.customerId)
 					: undefined,
 		eventAt,
-		statusText:
-			typeof data.status === "string" && data.status ? data.status : undefined,
+		// A tracking row's `statusText` ("In transit for pick-up") or its
+		// `status` is Delyva's description of THIS event. On the full order
+		// object `status` is a bare state word ("failed", "ready") that would
+		// read as a reason, so only the two reason fields count there.
+		statusText: isFullOrderShape(data)
+			? (nonEmptyString(data.failedReason) ??
+				nonEmptyString(data.cancelledReason))
+			: (nonEmptyString(data.statusText) ?? nonEmptyString(data.status)),
 	};
 }
 
@@ -791,13 +968,30 @@ export async function verifyDelyvaWebhook(args: {
 	return diff === 0;
 }
 
-/** Webhook events we subscribe on connect. `order.created` carries the
- * consignment number (AWB); the tracking pair drives status. */
+/**
+ * Webhook events we subscribe on connect. `order.created` carries the
+ * consignment number (AWB); the tracking pair drives status. `order.updated`
+ * and `order.failed` (z8r3fe11y8) deliver the full order object — the second
+ * is how a create failure (statusCode 99) reaches us at all, since a draft
+ * that never processed emits no tracking rows. Only the first three are
+ * named in Delyva's published collection; the two newer names are subscribed
+ * best-effort (`subscribeWebhooks`), so a tenant that doesn't know them can
+ * never fail a connect.
+ */
 export const DELYVA_WEBHOOK_EVENTS = [
 	"order.created",
 	"order_tracking.update",
 	"order_tracking.change",
+	"order.updated",
+	"order.failed",
 ] as const;
+
+/** The events a connect must land, or the account is not subscribed. */
+export const DELYVA_WEBHOOK_EVENTS_REQUIRED: ReadonlySet<string> = new Set([
+	"order.created",
+	"order_tracking.update",
+	"order_tracking.change",
+]);
 
 /**
  * Why a BOOKING attempt failed, as a stable machine class (the Lalamove

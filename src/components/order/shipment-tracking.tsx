@@ -12,7 +12,10 @@ import {
 } from "../../../convex/lib/couriers";
 import { dispatchBlockCopy } from "../../lib/dispatch-block";
 import { convexErrorMessage } from "../../lib/format";
-import { COURIER_LINK_PENDING_SELLER_LINE } from "../../lib/parcel-courier-copy";
+import {
+	COURIER_LINK_PENDING_SELLER_LINE,
+	COURIER_RETURNED_SELLER_LINE,
+} from "../../lib/parcel-courier-copy";
 import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
 import {
@@ -367,6 +370,8 @@ export function ShipmentTrackingCard({
 		 * collection (z8r3fe0t4e) — from `orders.get`, so this card and the
 		 * buyer's page read the same answer. */
 		courierLinkPending?: boolean;
+		/** The courier returned the parcel (z8r3fe11y8) — from `orders.get`. */
+		courierReturned?: boolean;
 	};
 	readOnly?: boolean;
 	/** Set while the STORE can't record tracking right now (out of credits,
@@ -487,7 +492,12 @@ export function ShipmentTrackingCard({
 					) : null}
 					{/* Scheme-checked like the buyer's page — a pre-sanitize row could
 					    hold a non-http(s) URL, and this anchor would run it. */}
-					{isSafeTrackingUrl(order.carrierTrackingUrl) ? (
+					{order.courierReturned ? (
+						<p className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-300">
+							<CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+							{COURIER_RETURNED_SELLER_LINE}
+						</p>
+					) : isSafeTrackingUrl(order.carrierTrackingUrl) ? (
 						<a
 							href={order.carrierTrackingUrl}
 							target="_blank"

@@ -8,6 +8,7 @@ import {
 	CalendarCheck,
 	CalendarDays,
 	CheckCircle,
+	CircleAlert,
 	Clock,
 	ExternalLink,
 	HandCoins,
@@ -99,6 +100,7 @@ import {
 import {
 	COURIER_LINK_PENDING_BUYER_LINE,
 	courierLinkPendingBuyerButton,
+	courierReturnedBuyerLine,
 } from "../lib/parcel-courier-copy";
 import { ssrRead } from "../lib/ssr-read";
 import { TONE_PANEL, type Tone } from "../lib/tone";
@@ -1399,7 +1401,17 @@ function TrackingRoute() {
 							) : null}
 						</div>
 					) : null}
-					{isSafeTrackingUrl(order.carrierTrackingUrl) ? (
+					{order.courierReturned ? (
+						/* The courier brought the parcel back (z8r3fe11y8): the
+						   order still reads Shipped until the seller marks it, so
+						   the tracking button would open a page that ends in
+						   "returned to sender". Say what happened instead; the
+						   seller's reason stays on the seller's side. */
+						<p className="flex items-start gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+							<CircleAlert className="mt-0.5 size-4 shrink-0" />
+							<span>{courierReturnedBuyerLine(order.storeName)}</span>
+						</p>
+					) : isSafeTrackingUrl(order.carrierTrackingUrl) ? (
 						<a
 							href={order.carrierTrackingUrl}
 							target="_blank"

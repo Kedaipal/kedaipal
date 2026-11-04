@@ -34,6 +34,7 @@ import type * as customers from "../customers.js";
 import type * as deliveries from "../deliveries.js";
 import type * as delivery from "../delivery.js";
 import type * as delyva from "../delyva.js";
+import type * as delyvaProbe from "../delyvaProbe.js";
 import type * as easyparcel from "../easyparcel.js";
 import type * as email from "../email.js";
 import type * as enterprise from "../enterprise.js";
@@ -260,6 +261,7 @@ declare const fullApi: ApiFromModules<{
   deliveries: typeof deliveries;
   delivery: typeof delivery;
   delyva: typeof delyva;
+  delyvaProbe: typeof delyvaProbe;
   easyparcel: typeof easyparcel;
   email: typeof email;
   enterprise: typeof enterprise;

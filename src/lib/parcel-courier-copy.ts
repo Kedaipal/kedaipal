@@ -79,6 +79,83 @@ export function courierLinkPendingBuyerButton(
 }
 
 // ---------------------------------------------------------------------------
+// Not scanned, pickup failed, returned (z8r3fe11y8)
+// ---------------------------------------------------------------------------
+
+/** The amber pill on a booking the hourly sweep flagged. */
+export const NOT_SCANNED_PILL = "Not scanned yet";
+
+/** The stale card's explainer: what has (not) happened, in hours, and what
+ * to check — worded by the handoff, because the two kinds have different
+ * fixes. The waybill rides along so the seller can quote it to the branch
+ * or to Delyva without hunting for it. */
+export function notScannedCopy(args: {
+	serviceName: string | undefined;
+	awb: string | undefined;
+	handoff: CourierHandoff | undefined;
+	hoursSinceBooking: number;
+}): { headline: string; detail: string } {
+	const courier = args.serviceName ?? "The courier";
+	const since =
+		args.hoursSinceBooking >= 48
+			? `${Math.floor(args.hoursSinceBooking / 24)} days`
+			: `${Math.max(24, Math.floor(args.hoursSinceBooking))} hours`;
+	const headline = args.awb
+		? `No scan from ${courier} in ${since} — waybill ${args.awb} is still unscanned.`
+		: `No scan from ${courier} in ${since}, and no tracking number has been issued.`;
+	const detail =
+		args.handoff === "dropoff"
+			? "If you haven't dropped the parcel off yet, take it to a branch with the shipping label on. If you have, ask that branch to scan it in — tracking only starts at the scan."
+			: args.handoff === "pickup"
+				? `If no courier has come, check your Delyva app that a pickup is scheduled, or ask Delyva. Keep the parcel labelled and ready.`
+				: "If the parcel has left you, ask the courier to scan it; if it hasn't, check your Delyva app that the booking is live. Tracking only starts at the first scan.";
+	return { headline, detail };
+}
+
+/** "Last checked with Delyva 12m ago" / never. */
+export function lastCheckedCopy(relative: string | null): string {
+	return relative
+		? `Last checked with Delyva ${relative}`
+		: "Not checked with Delyva yet — Refresh asks them now";
+}
+
+/** Where a seller gets a human at Delyva: live chat sits inside their app. */
+export const DELYVA_SUPPORT_URL = "https://my.delyva.app";
+
+/** A rejected booking that Delyva had CONFIRMED (a providerOrderId exists)
+ * is a pickup that failed, not a booking that never went through. */
+export const PICKUP_FAILED_TITLE = "Pickup failed";
+
+/** The returned card's pill and explainer. */
+export const RETURNED_PILL = "Returned to you";
+export function returnedCopy(
+	serviceName: string | undefined,
+	failureReason: string | undefined,
+): string {
+	const courier = serviceName ?? "The courier";
+	const why =
+		failureReason && failureReason !== "Returned to you"
+			? ` (${failureReason})`
+			: "";
+	return `${courier} brought this parcel back instead of delivering it${why}. The order still reads Shipped until you mark it returned.`;
+}
+
+/** What "Mark order as returned" does — said under the button, because a
+ * status move the seller can't predict is a button they won't press. */
+export const MARK_RETURNED_HELP =
+	"Puts the order back to Packed with a note, clears the dead tracking number, and unlocks Book again.";
+
+/** The buyer's page, under the courier card, while the order still reads
+ * Shipped after a return. Names the store, never the courier's reason. */
+export function courierReturnedBuyerLine(storeName: string): string {
+	return `The courier returned this parcel to ${storeName}. They'll be in touch about sending it again.`;
+}
+
+/** The seller's Shipment tracking card, beside the number that came back. */
+export const COURIER_RETURNED_SELLER_LINE =
+	"The courier returned this parcel — see the Delyva card to message your buyer or book again.";
+
+// ---------------------------------------------------------------------------
 // Pickup vs drop-off (z8r3fe11x3)
 // ---------------------------------------------------------------------------
 

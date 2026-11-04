@@ -101,6 +101,9 @@ const GATED_FUNCTIONS = [
 	"delyva.confirmBooking",
 	// The courier's label is despatch work on THIS order, like awb.generateAwbPdf.
 	"delyva.getLabel",
+	// Puts a returned order back to Packed (z8r3fe11y8) — a move of THIS
+	// order, gated exactly like orders.updateStatus.
+	"delyva.markOrderReturned",
 	"easyparcel.prepareBooking",
 	"easyparcel.confirmBooking",
 	// Chasing and documents.
@@ -189,6 +192,8 @@ const OPEN_FUNCTIONS: Record<string, string> = {
 	"delyva.refreshBalance": "settings: re-reads the prepaid wallet balance",
 	"easyparcel.cancelBooking": "cancelling a courier releases the order",
 	"easyparcel.refreshJobStatus": "status poll: reads provider truth, moves nothing the webhooks wouldn't",
+	"delyva.refreshJob":
+		"status poll: reads provider truth, moves nothing the webhooks wouldn't",
 	"delyva.resubscribeWebhooks": "settings: re-registers the courier webhooks",
 	"lalamove.registerWebhook": "settings: registers the rider webhook",
 	"lalamove.verifyKeys":

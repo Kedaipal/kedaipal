@@ -2994,6 +2994,23 @@ export default defineSchema({
 		// out-of-order guard (events older than this only fill gaps, never
 		// regress fields).
 		lastEventAt: v.optional(v.number()),
+		// Delyva only (z8r3fe11y8). When the hourly sweep found this booking
+		// still waiting for its first scan after 24 h with no event — and a
+		// pull from Delyva changed nothing. Set once per quiet spell (the
+		// seller's stale email rides the same write); cleared by the next
+		// applied event, so a 500 that finally lands turns the card back.
+		staleSince: v.optional(v.number()),
+		// Delyva only (z8r3fe11y8). The trip ended with the parcel back with
+		// the SELLER (701 returned / 663 failed to return): the job is
+		// `completed` so the order's booking slot is free, but the order was
+		// never delivered and is left where it was. The card reads this to
+		// show "Returned to you" instead of "Delivered".
+		returned: v.optional(v.boolean()),
+		// Delyva only (z8r3fe11y8). When we last READ this booking from Delyva
+		// (`GET /order/{id}`), by the card's Refresh or the hourly sweep —
+		// "Last checked with Delyva N min ago". Distinct from lastEventAt: a
+		// pull that found nothing new is still a check.
+		lastPulledAt: v.optional(v.number()),
 		// The pickup moment this booking was SCHEDULED for (86eyg0n8e
 		// follow-up): the `scheduleAt` sent to Lalamove, from the order's
 		// fulfilment date+time when that moment was still ahead at dispatch.
