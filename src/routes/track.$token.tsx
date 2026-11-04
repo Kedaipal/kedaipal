@@ -96,7 +96,10 @@ import {
 	stageDescription,
 	stageLabel,
 } from "../lib/orderStatus";
-import { COURIER_LINK_PENDING_BUYER_LINE } from "../lib/parcel-courier-copy";
+import {
+	COURIER_LINK_PENDING_BUYER_LINE,
+	courierLinkPendingBuyerButton,
+} from "../lib/parcel-courier-copy";
 import { ssrRead } from "../lib/ssr-read";
 import { TONE_PANEL, type Tone } from "../lib/tone";
 import { confirmationSentBody } from "../lib/track-confirmation-copy";
@@ -1409,18 +1412,20 @@ function TrackingRoute() {
 						</a>
 					) : order.courierLinkPending ? (
 						/* Number on the order, link not yet (z8r3fe0t4e): the
-						   courier indexes the waybill at its first scan, so the
-						   button's slot holds a disabled-with-reason stand-in
-						   rather than nothing, and one line says what to do
-						   with the number meanwhile. */
+						   courier indexes the waybill at its first scan — at
+						   collection, or at the branch counter for a parcel the
+						   seller dropped off (z8r3fe11x3) — so the button's slot
+						   holds a disabled-with-reason stand-in rather than
+						   nothing, and one line says what to do with the number
+						   meanwhile. */
 						<div className="flex flex-col gap-2">
 							<div
 								aria-disabled="true"
 								className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-border px-4 py-3 text-sm font-semibold text-muted-foreground"
 							>
 								<Clock className="size-4 shrink-0" />
-								<span className="truncate">
-									Track with {order.courierName ?? "carrier"} · after collection
+								<span className="text-center">
+									{courierLinkPendingBuyerButton(order.courierName)}
 								</span>
 							</div>
 							<p className="px-1 text-center text-xs text-muted-foreground">

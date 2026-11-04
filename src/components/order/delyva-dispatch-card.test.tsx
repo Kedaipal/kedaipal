@@ -63,11 +63,15 @@ vi.mock("../../hooks/usePermission", () => ({
 vi.mock("sonner", () => ({
 	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
+vi.mock("../../lib/download", () => ({
+	downloadPdfBytes: vi.fn(),
+}));
 
 const NAME = {
 	prepare: getFunctionName(api.delyva.prepareBooking),
 	confirm: getFunctionName(api.delyva.confirmBooking),
 	cancel: getFunctionName(api.delyva.cancelBooking),
+	label: getFunctionName(api.delyva.getLabel),
 };
 
 const order = {
@@ -320,6 +324,7 @@ describe("quote → pick → book", () => {
 			shortId: "ORD-1234",
 			serviceCode: "DDEX",
 			serviceName: "DD Express Chilled",
+			serviceType: "NDD",
 			itemType: "CHILLED",
 			weightKgOverride: 2.5,
 		});
@@ -906,8 +911,10 @@ describe("the tracking link lands at collection (z8r3fe0t4e)", () => {
 			/>,
 		);
 		expect(screen.getByText("632195694574")).toBeTruthy();
+		// No handoff on record (a booking from before z8r3fe11x3): the moment
+		// is the first scan, which is true of both kinds.
 		expect(container.textContent).toContain(
-			"J&T Express's tracking page goes live once the parcel is collected",
+			"J&T Express's tracking page goes live at the courier's first scan",
 		);
 		expect(screen.queryByText(/track parcel/i)).toBeNull();
 	});
@@ -967,5 +974,337 @@ describe("the tracking link lands at collection (z8r3fe0t4e)", () => {
 		);
 		expect(screen.getByText(/track parcel/i)).toBeTruthy();
 		expect(container.textContent).not.toContain("goes live once");
+	});
+});
+
+describe("pickup vs drop-off, logos and the courier's label (z8r3fe11x3)", () => {
+	const MIXED_SERVICES = [
+		{
+			code: "JNTMY-PN-B200",
+			name: "J&T Express Drop-off Nationwide Economy Service",
+			companyName: "J&T Express",
+			logoPath: "servicecompany/jnt.png",
+			price: 500,
+			currency: "MYR",
+			serviceType: "NDD-DROP",
+			itemTypes: ["PARCEL"],
+		},
+		{
+			code: "DHLEC-MY",
+			name: "DHL eCommerce",
+			companyName: "DHL Ecommerce",
+			logoPath: "servicecompany/562.png",
+			price: 600,
+			currency: "MYR",
+			serviceType: "NDD",
+			itemTypes: ["PARCEL"],
+		},
+		{
+			code: "MYSTERY",
+			name: "Mystery Courier",
+			companyName: "Mystery Logistics",
+			price: 700,
+			currency: "MYR",
+			itemTypes: ["PARCEL"],
+		},
+	];
+
+	async function quoted() {
+		state.actions.set(
+			NAME.prepare,
+			vi.fn().mockResolvedValue({
+				ok: true,
+				services: MIXED_SERVICES,
+				weightKg: 2.5,
+				itemType: "PARCEL",
+				buyerPaidFee: 1200,
+			}),
+		);
+		const confirm = vi
+			.fn()
+			.mockResolvedValue({ ok: true, providerOrderId: "d1" });
+		state.actions.set(NAME.confirm, confirm);
+		const view = render(<DelyvaDispatchCard order={order} />);
+		fireEvent.click(
+			screen.getByRole("button", { name: /get courier prices/i }),
+		);
+		await waitFor(() => expect(screen.getByText("DHL eCommerce")).toBeTruthy());
+		return { ...view, confirm };
+	}
+
+	it("every row wears a pill: drop-off amber, pickup navy, a missing class as pickup with a warn", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const { container } = await quoted();
+		const pills = [...container.querySelectorAll("[data-handoff]")];
+		expect(pills.map((p) => p.getAttribute("data-handoff"))).toEqual([
+			"dropoff",
+			"pickup",
+			"pickup",
+		]);
+		expect(pills[0].textContent).toContain("You drop off");
+		expect(pills[1].textContent).toBe("Courier picks up");
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("without a serviceType"),
+			expect.objectContaining({ codes: ["MYSTERY"] }),
+		);
+		// Speed is read from the base class — a drop-off is still next-day.
+		expect(container.textContent).toContain("Next-day · J&T Express");
+		// The note under the list says what the two kinds mean.
+		expect(container.textContent).toContain(
+			"You drop off means you take the parcel to one of their branches",
+		);
+		warn.mockRestore();
+	});
+
+	it("nothing in a row truncates, and the price column is fixed", async () => {
+		const { container } = await quoted();
+		// The Book CTA repeats the name and the parcel-type pills are pressed
+		// too, so pick the selected COURIER row: the pressed grid.
+		const row = [...container.querySelectorAll('[aria-pressed="true"]')].find(
+			(el) => el.className.includes("grid"),
+		) as HTMLElement;
+		expect(row.textContent).toContain(
+			"J&T Express Drop-off Nationwide Economy Service",
+		);
+		expect(row.className).toContain("grid-cols-[44px_minmax(0,1fr)_92px]");
+		expect(row.className).toContain("@md:grid-cols-[48px_minmax(0,1fr)_104px]");
+		expect(row.querySelector(".truncate")).toBeNull();
+		// Exactly one courier row is selected (the parcel-type pill is pressed too).
+		expect(
+			[...container.querySelectorAll('[aria-pressed="true"]')].filter((el) =>
+				el.className.includes("grid"),
+			),
+		).toHaveLength(1);
+	});
+
+	it("shows the courier's logo from Delyva's CDN, initials when there is none, and initials again when it fails to load", async () => {
+		const { container } = await quoted();
+		const logos = [...container.querySelectorAll("img")];
+		expect(logos.map((img) => img.getAttribute("src"))).toEqual([
+			"https://cdn.delyva.app/servicecompany/jnt.png",
+			"https://cdn.delyva.app/servicecompany/562.png",
+		]);
+		// No path on the quote → initials in the same box.
+		expect(screen.getByText("ML").getAttribute("data-logo")).toBe("initials");
+		fireEvent.error(logos[0]);
+		await waitFor(() => expect(screen.getByText("JE")).toBeTruthy());
+		expect(container.querySelectorAll("img")).toHaveLength(1);
+	});
+
+	it("books with the picked service's class so the booked card knows what was bought", async () => {
+		const { confirm } = await quoted();
+		fireEvent.click(screen.getByRole("button", { name: /^Book J&T Express/i }));
+		await waitFor(() => expect(confirm).toHaveBeenCalled());
+		expect(confirm.mock.calls[0][0]).toMatchObject({
+			serviceCode: "JNTMY-PN-B200",
+			serviceType: "NDD-DROP",
+		});
+	});
+
+	const dropoffJob = {
+		status: "assigning",
+		providerOrderId: "delyva-drop-1",
+		costActual: 500,
+		serviceCode: "JNTMY-PN-B200",
+		serviceName: "J&T Express",
+		serviceType: "NDD-DROP",
+		itemType: "PARCEL",
+		awb: "632195694574",
+		createdAt: Date.now(),
+	};
+	const pickupJob = {
+		...dropoffJob,
+		serviceCode: "DHLEC-MY",
+		serviceName: "DHL eCommerce",
+		serviceType: "NDD",
+	};
+
+	it("booked drop-off: the three steps lead, Print shipping label is primary, the copy names the branch scan", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: dropoffJob,
+			pickupSummary: "12 Jalan Ampang, 50450 Kuala Lumpur",
+		});
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={{ ...order, trackingNo: "632195694574" } as Doc<"orders">}
+			/>,
+		);
+		const steps = screen.getByRole("list", { name: /what to do next/i });
+		expect(
+			[...steps.querySelectorAll("li")].map((li) => li.textContent),
+		).toEqual([
+			expect.stringContaining("Print the shipping label"),
+			expect.stringContaining("Take it to any J&T Express branch"),
+			expect.stringContaining("The order ships itself"),
+		]);
+		const print = screen.getByRole("button", { name: /print shipping label/i });
+		expect(print.getAttribute("data-variant")).toBe("default");
+		expect(print.hasAttribute("disabled")).toBe(false);
+		expect(
+			container.querySelector("[data-handoff]")?.getAttribute("data-handoff"),
+		).toBe("dropoff");
+		expect(container.textContent).toContain(
+			"J&T Express's tracking page goes live once the branch scans the parcel in",
+		);
+		// No collection line on a drop-off — the courier isn't coming.
+		expect(container.textContent).not.toContain("collects from");
+	});
+
+	it("booked pickup: the collection line names the pickup address and the label stays secondary", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: pickupJob,
+			pickupSummary: "12 Jalan Ampang, 50450 Kuala Lumpur",
+		});
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={{ ...order, trackingNo: "632195694574" } as Doc<"orders">}
+			/>,
+		);
+		expect(container.textContent).toContain(
+			"DHL eCommerce collects from 12 Jalan Ampang, 50450 Kuala Lumpur",
+		);
+		expect(screen.queryByRole("list", { name: /what to do next/i })).toBeNull();
+		const print = screen.getByRole("button", { name: /print shipping label/i });
+		expect(print.getAttribute("data-variant")).toBe("outline");
+		expect(
+			container.querySelector("[data-handoff]")?.getAttribute("data-handoff"),
+		).toBe("pickup");
+		expect(container.textContent).toContain(
+			"DHL eCommerce's tracking page goes live once the parcel is collected",
+		);
+	});
+
+	it("a booking from before the handoff was stored claims neither kind", () => {
+		const { serviceType: _dropped, ...legacy } = dropoffJob;
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: legacy,
+		});
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={
+					{
+						...order,
+						trackingNo: "632195694574",
+						carrierTrackingUrl:
+							"https://www.jtexpress.my/tracking/632195694574",
+					} as Doc<"orders">
+				}
+			/>,
+		);
+		expect(container.querySelector("[data-handoff]")).toBeNull();
+		expect(container.textContent).toContain(
+			"Delyva will update this order when the courier scans the parcel.",
+		);
+		expect(container.textContent).not.toContain("collects from");
+		// The label is still offered — secondary, like any pickup.
+		expect(
+			screen
+				.getByRole("button", { name: /print shipping label/i })
+				.getAttribute("data-variant"),
+		).toBe("outline");
+	});
+
+	it("Print shipping label is disabled with its reason until Delyva confirms the booking", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: { ...dropoffJob, providerOrderId: undefined, awb: undefined },
+		});
+		render(<DelyvaDispatchCard order={order} />);
+		const print = screen.getByRole("button", { name: /print shipping label/i });
+		expect(print.hasAttribute("disabled")).toBe(true);
+		expect(
+			screen.getByText("Available once Delyva confirms the booking."),
+		).toBeTruthy();
+	});
+
+	it("once the parcel is scanned the steps and the label are gone — the label is on the parcel", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: { ...dropoffJob, status: "picked_up" },
+		});
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={
+					{
+						...order,
+						status: "shipped",
+						trackingNo: "632195694574",
+						carrierTrackingUrl:
+							"https://www.jtexpress.my/tracking/632195694574",
+					} as Doc<"orders">
+				}
+			/>,
+		);
+		expect(
+			screen.queryByRole("button", { name: /print shipping label/i }),
+		).toBeNull();
+		expect(screen.queryByRole("list", { name: /what to do next/i })).toBeNull();
+		expect(
+			container.querySelector("[data-handoff]")?.getAttribute("data-handoff"),
+		).toBe("dropoff");
+		expect(screen.getByText(/track parcel/i)).toBeTruthy();
+	});
+
+	it("tapping Print saves PDF bytes, opens a URL in a new tab, and toasts Delyva's message on failure", async () => {
+		const { downloadPdfBytes } = await import("../../lib/download");
+		const { toast } = await import("sonner");
+		const open = vi.spyOn(window, "open").mockImplementation(() => null);
+		const getLabel = vi.fn();
+		state.actions.set(NAME.label, getLabel);
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: dropoffJob,
+		});
+		render(<DelyvaDispatchCard order={order} />);
+		const print = () =>
+			fireEvent.click(
+				screen.getByRole("button", { name: /print shipping label/i }),
+			);
+
+		const pdf = new ArrayBuffer(4);
+		getLabel.mockResolvedValueOnce({
+			ok: true,
+			kind: "pdf",
+			pdf,
+			filename: "shipping-label-ORD-1234.pdf",
+		});
+		print();
+		await waitFor(() =>
+			expect(downloadPdfBytes).toHaveBeenCalledWith(
+				"shipping-label-ORD-1234.pdf",
+				pdf,
+			),
+		);
+		expect(getLabel).toHaveBeenCalledWith({ shortId: "ORD-1234" });
+
+		getLabel.mockResolvedValueOnce({
+			ok: true,
+			kind: "url",
+			url: "https://cdn.delyva.app/labels/1.pdf",
+			filename: "shipping-label-ORD-1234.pdf",
+		});
+		print();
+		await waitFor(() =>
+			expect(open).toHaveBeenCalledWith(
+				"https://cdn.delyva.app/labels/1.pdf",
+				"_blank",
+				"noopener",
+			),
+		);
+
+		getLabel.mockResolvedValueOnce({
+			ok: false,
+			message: "Delyva couldn't provide the label: Label not generated yet",
+		});
+		print();
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith(
+				"Delyva couldn't provide the label: Label not generated yet",
+			),
+		);
+		open.mockRestore();
 	});
 });

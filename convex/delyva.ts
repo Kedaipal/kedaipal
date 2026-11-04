@@ -35,7 +35,9 @@ import {
 	type DelyvaCredentials,
 	type DelyvaInventoryLine,
 	type DelyvaItemType,
+	type DelyvaLabel,
 	type DelyvaService,
+	delyvaLabelAvailability,
 	isCollectedStatus,
 	isFailedDeliveryAttempt,
 	normalizeDelyvaStatus,
@@ -43,6 +45,7 @@ import {
 	parseCompanyResponse,
 	countActiveDelyvaServices,
 	parseDelyvaWalletBalance,
+	parseDelyvaLabelResponse,
 	parseInstantQuoteResponse,
 	parseOrderResponse,
 	resolveDelyvaCredentials,
@@ -117,6 +120,31 @@ async function callDelyva(
 	const text = await res.text();
 	if (!res.ok) throw new DelyvaApiError(res.status, text);
 	return text ? JSON.parse(text) : {};
+}
+
+/**
+ * The same authenticated fetch, returning the body as BYTES with its content
+ * type instead of parsing JSON — for `GET /order/{id}/label` (z8r3fe11x3),
+ * which may answer with the PDF itself. A failed response still surfaces as
+ * `DelyvaApiError` with the body text, so the card can show Delyva's message.
+ */
+async function callDelyvaRaw(
+	credentials: DelyvaCredentials,
+	path: string,
+): Promise<{ contentType: string | null; body: ArrayBuffer }> {
+	const live = await decryptDelyvaCredentials(credentials);
+	const res = await fetch(`${DELYVA_BASE_URL}${path}`, {
+		method: "GET",
+		headers: {
+			"X-Delyvax-Access-Token": live.apiKey,
+			Accept: "application/pdf, application/json",
+		},
+	});
+	if (!res.ok) throw new DelyvaApiError(res.status, await res.text());
+	return {
+		contentType: res.headers.get("content-type"),
+		body: await res.arrayBuffer(),
+	};
 }
 
 /** Bare-key client for the connect probe — before any credentials exist. */
@@ -1620,6 +1648,12 @@ export const reserveBooking = internalMutation({
 		retailerId: v.id("retailers"),
 		serviceCode: v.string(),
 		serviceName: v.string(),
+		// The service CLASS verbatim from the quote (`NDD-DROP` = the seller
+		// drops the parcel at a branch) — stored here, where the chosen
+		// service's name and type already land, so the booked card can say
+		// which kind was bought (z8r3fe11x3). Optional: a quote row without
+		// one stores nothing rather than a guess.
+		serviceType: v.optional(v.string()),
 		itemType: itemTypeValidator,
 	},
 	handler: async (ctx, args): Promise<Id<"deliveryJobs">> => {
@@ -1642,6 +1676,7 @@ export const reserveBooking = internalMutation({
 			quotationId: args.serviceCode,
 			vehicleType: args.serviceCode,
 			serviceName: args.serviceName,
+			serviceType: args.serviceType,
 			itemType: args.itemType,
 			createdAt: now,
 			updatedAt: now,
@@ -1770,6 +1805,9 @@ export const confirmBooking = action({
 		shortId: v.string(),
 		serviceCode: v.string(),
 		serviceName: v.string(),
+		/** The picked service's class, verbatim from the quote list the card
+		 * holds (`DelyvaService.serviceType`) — see reserveBooking. */
+		serviceType: v.optional(v.string()),
 		itemType: v.optional(itemTypeValidator),
 		weightKgOverride: v.optional(v.number()),
 	},
@@ -1810,6 +1848,7 @@ export const confirmBooking = action({
 				retailerId: context.retailerId,
 				serviceCode: args.serviceCode,
 				serviceName: args.serviceName,
+				serviceType: args.serviceType,
 				itemType,
 			});
 		} catch {
@@ -1954,6 +1993,129 @@ export const cancelBooking = action({
 			jobId: target.jobId,
 		});
 		return { ok: true };
+	},
+});
+
+/**
+ * The courier's own label for a booked Delyva order (z8r3fe11x3) —
+ * `GET /order/{providerOrderId}/label` with the seller's key. The label is
+ * what a courier branch SCANS: a drop-off seller has nothing else J&T will
+ * accept (DapoGo's parcel went in with only our despatch label and sat on
+ * "Order created" for a day). It is offered beside Kedaipal's own despatch
+ * label, never instead of it.
+ *
+ * The response's live shape is unconfirmed (recording it is the ticket's T0
+ * spike, a production call), so both shapes are handled: PDF bytes are
+ * returned for the card to save, a JSON envelope's URL is returned to open.
+ * Failure returns Delyva's own message — never a silent nothing.
+ */
+export const getLabel = action({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<
+		| ({ ok: true; filename: string } & DelyvaLabel)
+		| { ok: false; message: string }
+	> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId,
+		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+			shortId,
+		});
+		const target = await ctx.runQuery(internal.delyva.getLabelContext, {
+			shortId,
+		});
+		if (!target) {
+			return {
+				ok: false,
+				message: "No Delyva booking on this order to print a label for.",
+			};
+		}
+		const availability = delyvaLabelAvailability(target.job);
+		if (!availability.ok) {
+			return { ok: false, message: LABEL_UNAVAILABLE_COPY[availability.reason] };
+		}
+		try {
+			const response = await callDelyvaRaw(
+				target.credentials,
+				`/order/${encodeURIComponent(target.job.providerOrderId ?? "")}/label`,
+			);
+			const label = parseDelyvaLabelResponse(response);
+			return {
+				ok: true,
+				filename: `shipping-label-${shortId}.pdf`,
+				...label,
+			};
+		} catch (err) {
+			console.warn("[delyva] label fetch failed", {
+				shortId,
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return { ok: false, message: friendlyLabelError(err) };
+		}
+	},
+});
+
+/** Why the label can't be fetched right now — the same sentences the card's
+ * disabled button shows, so a stale tab gets the reason it would have seen. */
+const LABEL_UNAVAILABLE_COPY: Record<
+	Exclude<ReturnType<typeof delyvaLabelAvailability>, { ok: true }>["reason"],
+	string
+> = {
+	not_booked: "Delyva hasn't confirmed this booking yet — try again in a moment.",
+	collected:
+		"The courier already has this parcel, so the label isn't needed any more.",
+	ended: "This booking has ended, so there is no label to print.",
+};
+
+/** Delyva's own message when it gave one, otherwise one honest line. */
+function friendlyLabelError(err: unknown): string {
+	if (err instanceof DelyvaApiError) {
+		const message = parseDelyvaErrorMessage(err.body);
+		if (message) return `Delyva couldn't provide the label: ${message}`;
+		if (err.status === 404)
+			return "Delyva has no label for this booking yet — try again in a moment, or print it from your Delyva app.";
+		return `Delyva couldn't provide the label (HTTP ${err.status}). Try again, or print it from your Delyva app.`;
+	}
+	return "Delyva's label couldn't be read. Try again, or print it from your Delyva app.";
+}
+
+export const getLabelContext = internalQuery({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<{
+		job: {
+			status: Doc<"deliveryJobs">["status"];
+			providerOrderId?: string;
+		};
+		credentials: DelyvaCredentials;
+	} | null> => {
+		const order = await resolveSharedOrder(ctx, { shortId });
+		if (!order) return null;
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.collect();
+		// The live Delyva booking, else the newest one — a card showing a
+		// completed booking still asks, and gets the "ended" reason back.
+		const delyvaJobs = jobs.filter((j) => j.provider === "delyva");
+		const job =
+			delyvaJobs.find((j) => isActiveJobStatus(j.status)) ??
+			[...delyvaJobs].sort((a, b) => b.createdAt - a.createdAt)[0];
+		if (!job) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		const credentials = resolveDelyvaCredentials(
+			retailer?.delyva as DelyvaConfig | undefined,
+		);
+		if (!credentials) return null;
+		return {
+			job: { status: job.status, providerOrderId: job.providerOrderId },
+			credentials,
+		};
 	},
 });
 
@@ -2173,6 +2335,10 @@ export type DelyvaJobView = {
 	costActual: number;
 	serviceCode: string;
 	serviceName?: string;
+	/** The service class the booking was made on (`NDD` / `NDD-DROP`), for
+	 * the pickup-vs-drop-off branch of the booked card. Absent on jobs from
+	 * before z8r3fe11x3 — the card then claims neither. */
+	serviceType?: string;
 	itemType?: string;
 	awb?: string;
 	failureReason?: string;
@@ -2267,6 +2433,7 @@ export const getDispatchState = query({
 						costActual: latest.costActual,
 						serviceCode: latest.quotationId,
 						serviceName: latest.serviceName,
+						serviceType: latest.serviceType,
 						itemType: latest.itemType,
 						awb: latest.awb,
 						failureReason: latest.failureReason,
@@ -2318,6 +2485,9 @@ export type DelyvaCheckoutQuote =
 			currency: string;
 			serviceCode: string;
 			serviceName: string;
+			/** The winning service's class (`NDD-DROP` = seller drop-off),
+			 * recorded on the quote row for the audit trail (z8r3fe11x3). */
+			serviceType?: string;
 	  }
 	| {
 			status:
@@ -2379,6 +2549,7 @@ export async function fetchDelyvaCheckoutQuote(args: {
 				currency: cheapest.currency,
 				serviceCode: cheapest.code,
 				serviceName: cheapest.name,
+				serviceType: cheapest.serviceType,
 			};
 		}
 

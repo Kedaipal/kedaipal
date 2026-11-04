@@ -99,6 +99,8 @@ const GATED_FUNCTIONS = [
 	"lalamove.addPriorityFee",
 	"delyva.prepareBooking",
 	"delyva.confirmBooking",
+	// The courier's label is despatch work on THIS order, like awb.generateAwbPdf.
+	"delyva.getLabel",
 	"easyparcel.prepareBooking",
 	"easyparcel.confirmBooking",
 	// Chasing and documents.

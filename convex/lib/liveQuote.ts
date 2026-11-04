@@ -48,6 +48,8 @@ export type ProviderQuote =
 			/** Delyva only: which service in its list produced this price. */
 			serviceCode?: string;
 			serviceName?: string;
+			/** Delyva only: that service's class (`NDD-DROP` = seller drop-off). */
+			serviceType?: string;
 	  }
 	| {
 			provider: LiveQuoteProvider;
@@ -88,6 +90,7 @@ export type LiveQuoteOutcome =
 			vehicleType?: string;
 			serviceCode?: string;
 			serviceName?: string;
+			serviceType?: string;
 			/** Audit trail: every quote that was considered, winner included.
 			 * "Why was I charged RM5.70" has to be answerable months later. */
 			considered: Array<{
@@ -279,6 +282,7 @@ export function chooseLiveQuote(args: {
 			vehicleType: winner.vehicleType,
 			serviceCode: winner.serviceCode,
 			serviceName: winner.serviceName,
+			serviceType: winner.serviceType,
 			considered: priced.map((q) => ({
 				provider: q.provider,
 				fee: q.fee,

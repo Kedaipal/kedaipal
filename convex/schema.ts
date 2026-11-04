@@ -2680,6 +2680,13 @@ export default defineSchema({
 		// Delyva only: which service in its returned list set this price.
 		serviceCode: v.optional(v.string()),
 		serviceName: v.optional(v.string()),
+		// Delyva only — the service CLASS verbatim from the quote (`NDD`,
+		// `NDD-DROP`, `INSTANT`), z8r3fe11x3. A `-DROP` suffix means the SELLER
+		// takes the parcel to a branch; without it the courier collects. Kept
+		// so the cheapest service the buyer was priced on can be audited for
+		// which kind it was (DapoGo's 268 quotes all landed on one RM5 J&T
+		// service and nothing recorded whether it was a drop-off).
+		serviceType: v.optional(v.string()),
 		// The cart this quote priced (PR #253 review): Delyva's bid depends on
 		// the summed variant weight, so a quote minted for one cart must not be
 		// redeemable against another — an emptier cart at quote time buys a
@@ -2934,6 +2941,13 @@ export default defineSchema({
 		// Delyva only — the courier service actually booked ("DHL eCommerce",
 		// "Ninja Cold"), for the dispatch card + orders.courierName mirror.
 		serviceName: v.optional(v.string()),
+		// Delyva only — the service class verbatim from the quote the seller
+		// picked (`NDD` / `NDD-DROP` / `INSTANT`), z8r3fe11x3. `-DROP` = the
+		// seller drops the parcel at a branch, so the booked card must say so
+		// and offer the courier's label; anything else = the courier collects.
+		// Absent on jobs from before this shipped: the card then claims
+		// neither (neutral copy), never guesses pickup.
+		serviceType: v.optional(v.string()),
 		// Delyva + EasyParcel — the consignment number (AWB) the buyer can track
 		// with. Delyva: arrives via the order.created webhook (or the
 		// post-process fetch); EasyParcel: returned by EPPayOrderBulk. Mirrored
