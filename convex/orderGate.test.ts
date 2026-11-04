@@ -26,6 +26,7 @@ import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ensureCreditAccount } from "./credits";
 import { isOrderGated } from "./creditLock";
+import { todayMytMidnight } from "./lib/fulfilmentDate";
 import { isCustomerGated } from "./lib/orderGate";
 import schema from "./schema";
 
@@ -475,9 +476,10 @@ describe("a gated order is invisible to the seller, on every surface", () => {
  */
 describe("a gated BOOKING never shows the guest on the seller's calendar", () => {
 	const DAY = 24 * 60 * 60 * 1000;
-	/** MYT midnight, n days out — the alignment every booking date must hold. */
-	const day = (n: number) =>
-		Date.parse("2026-11-01T00:00:00+08:00") + n * DAY;
+	/** MYT midnight, n days out from TODAY — the alignment every booking date
+	 * must hold. Anchored to the clock, not a date: a fixed 1 Nov 2026 anchor
+	 * went red on 3 Nov when the guard read its check-ins as the past. */
+	const day = (n: number) => todayMytMidnight() + n * DAY;
 
 	async function bookingStore(t: T) {
 		const asOwner = t.withIdentity({ subject: OWNER });
