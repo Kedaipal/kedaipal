@@ -99,8 +99,15 @@ describe("an offline store's public catalogue answers empty (PR #369 review)", (
 
 describe("the hold stamp is only read through the resolver", () => {
 	// Files allowed to touch `orderingPausedAt`: the resolver's feeders (they
-	// pass it in as `holdPausedAt`) and the hold's own writer.
-	const ALLOWED = new Set(["storeAvailability.ts", "admin.ts", "subscriptions.ts", "schema.ts"]);
+	// pass it in as `holdPausedAt`) and the hold's own writer. `adminSellers.ts`
+	// is the directory's row builder, moved out of `admin.ts` with pagination.
+	const ALLOWED = new Set([
+		"storeAvailability.ts",
+		"admin.ts",
+		"adminSellers.ts",
+		"subscriptions.ts",
+		"schema.ts",
+	]);
 	for (const { file, text } of sources) {
 		if (ALLOWED.has(file)) continue;
 		test(`${file} never reads orderingPausedAt directly`, () => {

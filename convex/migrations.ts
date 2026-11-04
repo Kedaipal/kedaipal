@@ -12,6 +12,7 @@
  *
  * Run: `npx convex run migrations:backfillDefaultVariants`
  */
+import { storeNameKeyOf } from "./lib/adminDirectory";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -846,5 +847,37 @@ export const purgeUnmeteredCreditData = internalMutation({
 			stores,
 		});
 		return { applied: apply === true, done, stores };
+	},
+});
+
+/**
+ * Backfill `retailers.storeNameKey` — the admin directory's "Name A–Z" index
+ * key (adminSellers.listSellersPage). Every write of `storeName` now sets it;
+ * this fills the rows from before. Idempotent: a row with the right key is
+ * skipped. Batched + self-scheduling.
+ *
+ * Run: `npx convex run migrations:backfillStoreNameKey`
+ */
+export const backfillStoreNameKey = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const page = await ctx.db
+			.query("retailers")
+			.paginate({ numItems: BATCH_SIZE, cursor: cursor ?? null });
+		let patched = 0;
+		for (const r of page.page) {
+			const key = storeNameKeyOf(r.storeName);
+			if (r.storeNameKey === key) continue;
+			await ctx.db.patch(r._id, { storeNameKey: key });
+			patched++;
+		}
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.migrations.backfillStoreNameKey,
+				{ cursor: page.continueCursor },
+			);
+		}
+		return { patched, isDone: page.isDone };
 	},
 });

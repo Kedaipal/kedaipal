@@ -7,6 +7,8 @@
 // contract when that first Pro bill settles (`settleInvoicePaid`). Every lever
 // is admin-only and audited.
 
+import { ADMIN_COUNT_SCAN_LIMIT } from "./lib/adminDirectory";
+import type { AdminSellerRow } from "./lib/adminSellerRow";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -452,5 +454,46 @@ export const cancelMoveToPro = mutation({
 			retailerId,
 		);
 		return { voidedInvoiceNumber: moveBill?.invoiceNumber ?? null };
+	},
+});
+
+/**
+ * Every OTHER store's live contract, as a starting point for a new deal — the
+ * "start from another contract" picker in the seller sheet. It used to be
+ * derived from the directory's loaded rows, which was every store while the
+ * directory loaded 500 at once; with the directory paginated the loaded rows
+ * are whatever has scrolled past, so the picker reads the book itself. Mounted
+ * only while a sheet is open. Bounded by the same scan limit as the counts.
+ */
+export const listContractTemplates = query({
+	args: { exclude: v.optional(v.id("retailers")) },
+	handler: async (
+		ctx,
+		{ exclude },
+	): Promise<
+		Array<{
+			retailerId: Id<"retailers">;
+			storeName: string;
+			contract: NonNullable<AdminSellerRow["enterprise"]>;
+		}>
+	> => {
+		await requireAdmin(ctx);
+		const subs = await ctx.db.query("subscriptions").take(ADMIN_COUNT_SCAN_LIMIT);
+		const templates: Array<{
+			retailerId: Id<"retailers">;
+			storeName: string;
+			contract: NonNullable<AdminSellerRow["enterprise"]>;
+		}> = [];
+		for (const sub of subs) {
+			if (!sub.enterprise || sub.retailerId === exclude) continue;
+			const retailer = await ctx.db.get(sub.retailerId);
+			if (!retailer) continue;
+			templates.push({
+				retailerId: retailer._id,
+				storeName: retailer.storeName,
+				contract: contractForAdmin(sub.enterprise),
+			});
+		}
+		return templates;
 	},
 });

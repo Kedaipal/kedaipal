@@ -1,4 +1,4 @@
-import { Check } from "lucide-react";
+import { Check, Minus } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 /**
@@ -38,6 +38,20 @@ export interface FilterOptionRowProps {
 	 * tint would only be noise.
 	 */
 	tintSelected?: boolean;
+	/** `attention` draws a NON-ZERO count in amber — a to-do for the reader
+	 * (an overdue bill, an untagged payer), not a state. Zero stays quiet. */
+	countTone?: "muted" | "attention";
+	/** The noun the accessible name gives a count ("3 sellers"). The inbox
+	 * filters, where this was born, count orders. */
+	countNoun?: string;
+	/**
+	 * A parent row that summarises children is TRI-STATE: ticked when every
+	 * child is, clear when none is, and `mixed` in between — drawn as a dash
+	 * and announced as `aria-pressed="mixed"`, because a parent that reads
+	 * unticked while three children are on is telling the reader something
+	 * false. Pressing a mixed row is the host's call (the menus clear to it).
+	 */
+	mixed?: boolean;
 }
 
 export function FilterOptionRow({
@@ -48,20 +62,25 @@ export function FilterOptionRow({
 	shape = "checkbox",
 	muted,
 	tintSelected = true,
+	countTone = "muted",
+	countNoun = "order",
+	mixed = false,
 }: FilterOptionRowProps) {
+	const attention = countTone === "attention" && (count ?? 0) > 0;
+	const marked = selected || mixed;
 	return (
 		<button
 			type="button"
 			// A toggle button, not a `menuitemcheckbox`: neither host is a menu, and
 			// a menu-item role outside a menu is a lie assistive tech works around.
-			aria-pressed={selected}
+			aria-pressed={mixed && !selected ? "mixed" : selected}
 			// Spelled out rather than left to name concatenation — the label and
 			// count sit in adjacent spans with no whitespace, so the computed name
 			// would otherwise run together as "Delivered0".
 			aria-label={
 				count === undefined
 					? label
-					: `${label}, ${count} ${count === 1 ? "order" : "orders"}`
+					: `${label}, ${count} ${count === 1 ? countNoun : `${countNoun}s`}`
 			}
 			onClick={onToggle}
 			className={cn(
@@ -78,12 +97,16 @@ export function FilterOptionRow({
 				className={cn(
 					"flex size-[17px] shrink-0 items-center justify-center border transition-colors",
 					shape === "radio" ? "rounded-full" : "rounded-[5px]",
-					selected
+					marked
 						? "border-accent bg-accent text-accent-foreground"
 						: "border-border bg-background",
 				)}
 			>
-				{selected ? <Check className="size-3" /> : null}
+				{selected ? (
+					<Check className="size-3" />
+				) : mixed ? (
+					<Minus className="size-3" />
+				) : null}
 			</span>
 			<span
 				className={cn(
@@ -100,9 +123,11 @@ export function FilterOptionRow({
 						"shrink-0 tabular-nums text-[11.5px]",
 						count === 0
 							? "text-muted-foreground/40"
-							: selected
-								? "text-foreground"
-								: "text-muted-foreground",
+							: attention
+								? "font-semibold text-amber-700 dark:text-amber-400"
+								: selected
+									? "text-foreground"
+									: "text-muted-foreground",
 					)}
 				>
 					{count}

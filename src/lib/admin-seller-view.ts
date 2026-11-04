@@ -4,6 +4,21 @@
 // surfaces cannot disagree on what "expires" means for a given row.
 
 import type { AdminSellerRow } from "../../convex/admin";
+import {
+	sellerBucket as bucketOf,
+	emptySellerBucketCounts,
+	isEnterpriseLead as enterpriseLead,
+	matchesSellerSearch as matchesSearchFields,
+	passesAnySellerFilter,
+	type SellerBucket,
+	type SellerBucketCounts,
+	type SellerFacts,
+	type SellerSearchFields,
+	type SellerSort,
+	type SellerStatusFilter,
+	tallySellerFacts,
+	isUntaggedPayer as untaggedPayer,
+} from "../../convex/lib/adminSellerFilters";
 import { COMP_KIND_LABEL } from "../../convex/lib/comp";
 import {
 	compHighlightEligible,
@@ -15,230 +30,74 @@ import { formatMobile, formatPrice, formatShortDate } from "./format";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// --- Buckets: the status chips ------------------------------------------
+// --- Buckets, filters, sorts, search ------------------------------------
+//
+// The filter LANGUAGE lives in `convex/lib/adminSellerFilters.ts` — the
+// paginated query applies it server-side and tallies the counts there, so the
+// page re-exports the one definition rather than keeping a mirror. What stays
+// here is the row-shaped face of it: `AdminSellerRow` → `SellerFacts`, and the
+// row-typed helpers the cells, the sheet and the CSV already call.
 
-/** One chip per bucket. `none` = a store with no subscription row at all
- * (pre-billing stores); it only shows a chip when the count is non-zero.
- * `unclaimed` = a pre-built store waiting for its vendor
- * (docs/prebuilt-stores.md) — a store, but not yet a seller. */
-export type SellerBucket =
-	| "unclaimed"
-	| "past_due"
-	| "trialing"
-	| "active"
-	| "on_hold"
-	| "cancelled"
-	| "comped"
-	| "admin"
-	| "none";
+export {
+	ATTENTION_FILTERS,
+	DEFAULT_SELLER_SORT,
+	isSellerFilter,
+	isSellerSort,
+	isSellerStatusFilter,
+	parseSellerStatuses,
+	passesAnySellerFilter,
+	SELLER_FILTER_GROUPS,
+	SELLER_FILTER_LABEL,
+	SELLER_FILTERS,
+	SELLER_SORTS,
+	SELLER_STATUS_FILTERS,
+	type SellerBucket,
+	type SellerBucketCounts,
+	type SellerFacts,
+	type SellerFilter,
+	type SellerSort,
+	type SellerStatusFilter,
+	sellerFilterEmptyNoun,
+	sellerSelectionLabel,
+	toggleSellerStatus,
+} from "../../convex/lib/adminSellerFilters";
 
-export type SellerFilter =
-	| "all"
-	| SellerBucket
-	| "wants_enterprise"
-	| "unavailable"
-	| "untagged_payers";
-
-/** Chip order. Past due sits first after All — it is the urgent bucket, and
- * an urgent filter never sits last (CLAUDE.md, "own the structure"). Unclaimed
- * sits straight after it for the same reason: both are buckets where KEDAIPAL
- * owes someone an action (chase a payment, finish a handover), unlike the rest,
- * which describe a seller's own state. "Wants Enterprise" joins that front
- * group (z8r3fdkp8h follow-up): an open lead is money on the table, and the
- * whole point of stamping it is that it can't be forgotten at the back of a
- * chip row. Unlike the others it is NOT a bucket — a trialing store can want
- * Enterprise — so it filters on the lead stamp, orthogonal to status. */
-export const SELLER_FILTERS: readonly SellerFilter[] = [
-	"all",
-	"past_due",
-	"unclaimed",
-	"wants_enterprise",
-	// Paused / offline (z8r3fdudf7) — orthogonal to billing status like the
-	// lead filter, and in the front group: a store not taking orders is
-	// either something Kedaipal did or something to check on.
-	"unavailable",
-	// Paying stores with no confirmed acquisition channel (86eye3eyp) — the
-	// backfill to-do, so it sits in the front group with the other things
-	// Kedaipal owes an action. Orthogonal to status: churned payers count,
-	// because churn by channel is half the point.
-	"untagged_payers",
-	"trialing",
-	"active",
-	"on_hold",
-	"cancelled",
-	"comped",
-	"admin",
-	"none",
-];
-
-export const SELLER_FILTER_LABEL: Record<SellerFilter, string> = {
-	all: "All",
-	past_due: "Past due",
-	unclaimed: "Unclaimed",
-	trialing: "Trialing",
-	active: "Active",
-	on_hold: "On hold",
-	cancelled: "Cancelled",
-	comped: "Comped",
-	admin: "Admin",
-	none: "No subscription",
-	wants_enterprise: "Wants Enterprise",
-	unavailable: "Paused / offline",
-	untagged_payers: "Untagged payers",
-};
-
-/** The empty state's noun for a filter — "No {noun}{ match …}". The chip
- * label lowercased works for the status buckets ("past due sellers") and
- * falls apart for the lead filter ("wants enterprise sellers"), so the
- * phrase is owned here beside the labels. */
-export function sellerFilterEmptyNoun(filter: SellerFilter): string {
-	if (filter === "wants_enterprise") return "open Enterprise asks";
-	if (filter === "unavailable") return "paused or offline stores";
-	if (filter === "untagged_payers") return "untagged payers";
-	return `${SELLER_FILTER_LABEL[filter].toLowerCase()} sellers`;
+/** The narrow facts the shared filter predicates read, off a full row. */
+export function sellerFactsOf(row: AdminSellerRow): SellerFacts {
+	return {
+		unclaimed: row.unclaimed,
+		ownerIsAdmin: row.ownerIsAdmin,
+		comped: row.comped,
+		subscriptionStatus: row.subscriptionStatus,
+		enterpriseInterestAt: row.enterpriseInterestAt,
+		hasEnterpriseContract: row.enterprise !== undefined,
+		availabilityState: row.availability.state,
+		hasPaidInvoice: row.hasPaidInvoice,
+		acquisitionSetBy: row.acquisition.setBy,
+	};
 }
 
-/** A chip that narrows — everything but "All", which is the empty selection. */
-export type SellerStatusFilter = Exclude<SellerFilter, "all">;
-
-/**
- * `?status=` as a selection. Accepts the list the chip row writes AND the
- * single value older links carry (`?status=past_due` from Acquisition, a
- * pasted bookmark), drops anything unknown, de-duplicates, and returns the
- * chips in ROW order — so a link reads the same however it was clicked
- * together. `undefined` when nothing survives, keeping "All" out of the URL.
- */
-export function parseSellerStatuses(
-	raw: unknown,
-): SellerStatusFilter[] | undefined {
-	const given = Array.isArray(raw) ? raw : raw != null ? [raw] : [];
-	const picked = SELLER_FILTERS.filter(
-		(f): f is SellerStatusFilter => f !== "all" && given.includes(f),
-	);
-	return picked.length > 0 ? picked : undefined;
-}
-
-/** The selection as a phrase — "Unclaimed or Cancelled". Row order, so it
- * matches the chips left to right. */
-export function sellerSelectionLabel(
-	filters: readonly SellerStatusFilter[],
-): string {
-	const labels = SELLER_FILTERS.filter(
-		(f): f is SellerStatusFilter =>
-			f !== "all" && filters.includes(f as SellerStatusFilter),
-	).map((f) => SELLER_FILTER_LABEL[f]);
-	if (labels.length <= 2) return labels.join(" or ");
-	return `${labels.slice(0, -1).join(", ")} or ${labels[labels.length - 1]}`;
-}
-
-/**
- * Tap a chip. "All" clears the selection; any other chip toggles. Selecting
- * every chip the row OFFERS collapses back to "All" — the union of every
- * bucket is the whole book, and a lit row with a dark "All" beside it would
- * say otherwise (the inbox's rule, `inbox-status-chips.ts`).
- */
-export function toggleSellerStatus(
-	selected: readonly SellerStatusFilter[],
-	chip: SellerFilter,
-	offered: readonly SellerFilter[],
-): SellerStatusFilter[] {
-	if (chip === "all") return [];
-	const next = selected.includes(chip)
-		? selected.filter((f) => f !== chip)
-		: [...selected, chip];
-	const offeredChips = offered.filter(
-		(f): f is SellerStatusFilter => f !== "all",
-	);
-	if (offeredChips.every((f) => next.includes(f))) return [];
-	// Row order, for the same reason `parseSellerStatuses` sorts.
-	return SELLER_FILTERS.filter(
-		(f): f is SellerStatusFilter =>
-			f !== "all" && next.includes(f as SellerStatusFilter),
-	);
-}
-
-export function isSellerFilter(value: unknown): value is SellerFilter {
-	return (
-		typeof value === "string" &&
-		(SELLER_FILTERS as readonly string[]).includes(value)
-	);
-}
-
-/** Which chip a row belongs to. Admin and comped outrank the raw status —
- * both are "never billed", so their subscription status is not the story.
- *
- * Unclaimed outranks BOTH, and must: a pre-built store runs on an `internal`
- * comp while it is being built, so filing it under "Comped" would hide every
- * half-finished handover inside the sponsored-deals bucket and show the admin
- * a store that reads as live. "Nobody owns this yet" is the only fact about it
- * that matters. */
 export function sellerBucket(row: AdminSellerRow): SellerBucket {
-	if (row.unclaimed) return "unclaimed";
-	if (row.ownerIsAdmin) return "admin";
-	if (row.comped) return "comped";
-	return row.subscriptionStatus ?? "none";
+	return bucketOf(sellerFactsOf(row));
 }
 
-/** A store that has paid Kedaipal and has no admin-confirmed acquisition
- * channel (86eye3eyp) — CAC can't count it. A seller's own onboarding answer
- * doesn't clear it: it's a claim until confirmed. Admin stores never pay. */
 export function isUntaggedPayer(row: AdminSellerRow): boolean {
-	return (
-		row.hasPaidInvoice && !row.ownerIsAdmin && row.acquisition.setBy !== "admin"
-	);
+	return untaggedPayer(sellerFactsOf(row));
 }
 
+export function isEnterpriseLead(row: AdminSellerRow): boolean {
+	return enterpriseLead(sellerFactsOf(row));
+}
+
+/** Client-side tally over rows already in hand — the fixture/design-pass path
+ * and the tests. The live page reads `adminSellers.countSellerBuckets`. */
 export function countSellerBuckets(
 	rows: readonly AdminSellerRow[],
-): Record<SellerFilter, number> {
-	const counts: Record<SellerFilter, number> = {
-		all: rows.length,
-		past_due: 0,
-		unclaimed: 0,
-		trialing: 0,
-		active: 0,
-		on_hold: 0,
-		cancelled: 0,
-		comped: 0,
-		admin: 0,
-		none: 0,
-		wants_enterprise: 0,
-		unavailable: 0,
-		untagged_payers: 0,
-	};
-	for (const row of rows) {
-		counts[sellerBucket(row)] += 1;
-		if (isEnterpriseLead(row)) counts.wants_enterprise += 1;
-		if (row.availability.state !== "open") counts.unavailable += 1;
-		if (isUntaggedPayer(row)) counts.untagged_payers += 1;
-	}
-	return counts;
-}
-
-/** An OPEN Enterprise lead: the owner asked and nobody has answered — no
- * contract attached, not dismissed. A store already on a contract never
- * counts, whatever stale stamp a row might carry. */
-export function isEnterpriseLead(row: AdminSellerRow): boolean {
-	return row.enterpriseInterestAt !== undefined && row.enterprise === undefined;
-}
-
-// --- Sort ---------------------------------------------------------------
-
-export type SellerSort = "founding" | "expiry" | "credits" | "newest" | "name";
-
-export const SELLER_SORTS: ReadonlyArray<{ key: SellerSort; label: string }> = [
-	{ key: "founding", label: "Founding rank" },
-	{ key: "expiry", label: "Expiry · soonest first" },
-	// Credits T5: out-of-credits stores float to the top — a sort, not a
-	// status chip, because "out of credits" crosses every status bucket (an
-	// active store and a trialing one can both be at zero).
-	{ key: "credits", label: "Credits · lowest first" },
-	{ key: "newest", label: "Newest store" },
-	{ key: "name", label: "Name A–Z" },
-];
-
-export function isSellerSort(value: unknown): value is SellerSort {
-	return SELLER_SORTS.some((s) => s.key === value);
+): SellerBucketCounts {
+	return rows.reduce(
+		(counts, row) => tallySellerFacts(counts, sellerFactsOf(row)),
+		emptySellerBucketCounts(),
+	);
 }
 
 /** Founding Members first by rank, then newest — the server's own order,
@@ -252,10 +111,11 @@ function compareFounding(a: AdminSellerRow, b: AdminSellerRow): number {
 	return b.createdAt - a.createdAt;
 }
 
+/** The client-side twin of the server's index orders, for rows already in
+ * hand (fixtures, tests). The live list arrives in server order. */
 export function sortSellers(
 	rows: readonly AdminSellerRow[],
 	sort: SellerSort,
-	now: number,
 ): AdminSellerRow[] {
 	const sorted = [...rows];
 	switch (sort) {
@@ -269,78 +129,28 @@ export function sortSellers(
 					sensitivity: "base",
 				}),
 			);
-		case "expiry":
-			// Rows with no date (admin, comped, no subscription) go last, then
-			// by name so the order is stable across renders.
-			return sorted.sort((a, b) => {
-				const ea = sellerExpiry(a, now).at ?? Number.POSITIVE_INFINITY;
-				const eb = sellerExpiry(b, now).at ?? Number.POSITIVE_INFINITY;
-				if (ea !== eb) return ea - eb;
-				return a.storeName.localeCompare(b.storeName);
-			});
-		case "credits":
-			// Lowest total first, so a store owing orders tops the list; stores
-			// with no credit account yet go last, then by name.
-			return sorted.sort((a, b) => {
-				const ta = sellerCredits(a).total ?? Number.POSITIVE_INFINITY;
-				const tb = sellerCredits(b).total ?? Number.POSITIVE_INFINITY;
-				if (ta !== tb) return ta - tb;
-				return a.storeName.localeCompare(b.storeName);
-			});
 	}
 }
 
-// --- Search -------------------------------------------------------------
+export function sellerSearchFieldsOf(row: AdminSellerRow): SellerSearchFields {
+	return {
+		storeName: row.storeName,
+		slug: row.slug,
+		emails: [row.ownerEmail, row.pendingOwnerEmail],
+		phones: [row.waPhone, row.notifyWaPhone],
+	};
+}
 
-/** Name, slug, email, the handover email, and both phones. A query with three
- * or more digits is also matched against the stored phone digits, so "0123" or
- * "+60 12" finds the number however it was typed.
- *
- * The HANDOVER email is searched as well as the owner's: a pre-built store has
- * no owner email at all, so searching the address an admin was given — the only
- * address that store has — has to find it. Without it, typing the vendor's email
- * would return nothing for exactly the store you are setting up for them. */
 export function matchesSellerSearch(
 	row: AdminSellerRow,
 	query: string,
 ): boolean {
-	const needle = query.trim().toLowerCase();
-	if (!needle) return true;
-	const text = [
-		row.storeName,
-		row.slug,
-		row.ownerEmail ?? "",
-		row.pendingOwnerEmail ?? "",
-	]
-		.join(" ")
-		.toLowerCase();
-	if (text.includes(needle)) return true;
-	const digits = needle.replace(/\D/g, "");
-	if (digits.length < 3) return false;
-	return [row.waPhone, row.notifyWaPhone].some(
-		(p) => p?.replace(/\D/g, "").includes(digits) === true,
-	);
+	return matchesSearchFields(sellerSearchFieldsOf(row), query);
 }
 
-/** One chip's test. Each orthogonal filter (the lead stamp, availability, the
- * acquisition backfill) reads its own fact; every other chip is a bucket. */
-export function matchesSellerFilter(
-	row: AdminSellerRow,
-	filter: SellerStatusFilter,
-): boolean {
-	if (filter === "wants_enterprise") return isEnterpriseLead(row);
-	if (filter === "unavailable") return row.availability.state !== "open";
-	if (filter === "untagged_payers") return isUntaggedPayer(row);
-	return sellerBucket(row) === filter;
-}
-
-/**
- * The chips are an OR: a store shows when it matches ANY selected chip, and an
- * empty selection is "All" (Zaki, 2 Nov — z8r3fdzn6r). A union, so the result
- * is never the sum of the chip counts: a past-due store with an open
- * Enterprise ask lands once under "Past due or Wants Enterprise". Search
- * still narrows whatever the chips let through.
- */
+/** The statuses are an OR and an empty list is "All" (z8r3fdzn6r) — the
+ * same rule the paginated query applies server-side, here for the fixtures
+ * and the route test's stand-in server. */
 export function filterSellers(
 	rows: readonly AdminSellerRow[],
 	filters: readonly SellerStatusFilter[],
@@ -348,8 +158,7 @@ export function filterSellers(
 ): AdminSellerRow[] {
 	return rows.filter(
 		(row) =>
-			(filters.length === 0 ||
-				filters.some((f) => matchesSellerFilter(row, f))) &&
+			passesAnySellerFilter(sellerFactsOf(row), filters) &&
 			matchesSellerSearch(row, query),
 	);
 }
