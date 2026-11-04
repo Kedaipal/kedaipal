@@ -43,7 +43,12 @@ ran lint).
 Steps: checkout → pnpm → Node → `pnpm install --frozen-lockfile` → paraglide
 compile (`src/paraglide/` is gitignored; typecheck and tests need it) →
 `pnpm check` → `pnpm typecheck` → `pnpm test` → `pnpm build`. Budget:
-`timeout-minutes: 10` (~45 s locally; a couple of minutes on a runner).
+`timeout-minutes: 20`. The suite has grown to ~9–10 minutes on a runner (test
+alone ~8 min, build ~40 s), and the old 10-minute cap cancelled the v2026.11.1
+production deploy mid-build with every step green (4 Nov 2026). Because the
+deploy pipeline calls this job, a too-tight budget doesn't fail a PR, it
+blocks a release. Raise it again before runs get within a couple of minutes of
+it; don't trim the gate to fit.
 
 The job's **`name:` is the required status check** in the `PR gate` ruleset, so
 it deliberately still reads `Typecheck, lint & test` even though the first step
@@ -345,7 +350,7 @@ test, and almost nothing about failure reporting changes:
 - an async test whose promise never settles still trips Testing Library's own
   `waitFor` budget — **5 s**, six times tighter than the test timeout on
   purpose (see the next section);
-- anything genuinely stuck is caught by `timeout-minutes: 10` on the CI job;
+- anything genuinely stuck is caught by `timeout-minutes: 20` on the CI job;
 - `hookTimeout` stays at its 10 s default — our hooks do no rendering. Raise it
   the day one does, for the same reason.
 
