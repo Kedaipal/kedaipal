@@ -9,6 +9,7 @@
  * Idempotent — skips if the seed retailer slug already exists.
  * Never run against a production deployment.
  */
+import { storeNameKeyOf } from "./lib/adminDirectory";
 import type { Id } from "./_generated/dataModel";
 import { internalMutation, type MutationCtx } from "./_generated/server";
 import { slugify } from "./lib/slug";
@@ -81,6 +82,7 @@ export const run = internalMutation({
 			userId: "seed:dev",
 			slug: SEED_SLUG,
 			storeName: "TrailGear Malaysia",
+			storeNameKey: storeNameKeyOf("TrailGear Malaysia"),
 			waPhone: "601234567890",
 			currency: "MYR",
 			channel: "whatsapp",

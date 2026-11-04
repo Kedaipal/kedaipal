@@ -58,6 +58,11 @@ export default defineSchema({
 		userId: v.string(), // Clerk subject (sub claim)
 		slug: v.string(),
 		storeName: v.string(),
+		// The "Name A–Z" sort key for the admin directory: `storeName` lowercased
+		// + trimmed (`storeNameKeyOf`), because an index orders strings by UTF-8
+		// bytes and would file "iKuih" after "Zed". Written with every storeName
+		// write; absent only on rows the one-off backfill has not reached.
+		storeNameKey: v.optional(v.string()),
 		// Public one-liner shown on the storefront header beneath the store name
 		// ("Home-based frozen food, Semenyih — DM for bulk orders"). Free text,
 		// trimmed + length-capped server-side (≤280 chars), rendered as escaped
@@ -986,6 +991,11 @@ export default defineSchema({
 	})
 		.index("by_user", ["userId"])
 		.index("by_slug", ["slug"])
+		// Admin directory sorts (adminSellers.listSellersPage): founders pinned
+		// first — `gte(0)` excludes rows without a rank, since undefined sorts
+		// below every number — and the case-folded name order.
+		.index("by_foundingRank", ["foundingMemberRank"])
+		.index("by_storeNameKey", ["storeNameKey"])
 		// Inbound `KPS-<token>` poster scans resolve the store by token.
 		.index("by_counterQrToken", ["counterQrToken"])
 		.index("by_calendarFeedToken", ["calendarFeedToken"])
