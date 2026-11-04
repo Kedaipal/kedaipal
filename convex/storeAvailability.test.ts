@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
+import { allSellerRows } from "./lib/sellerDirectoryWalk";
 
 /**
  * Store availability end to end (`z8r3fdudf7`): the seller's switch, Kedaipal's
@@ -264,7 +265,7 @@ describe("Kedaipal's switch", () => {
 			mode: "paused",
 			note: "Pulled out of Campfest",
 		});
-		const { sellers } = await admin.query(api.admin.listSellersForAdmin, {});
+		const sellers = await allSellerRows(admin);
 		const row = sellers.find((s) => s._id === retailerId);
 		expect(row?.availability).toMatchObject({ state: "paused", by: "admin" });
 		expect(row?.adminAvailability?.note).toBe("Pulled out of Campfest");

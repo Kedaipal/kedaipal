@@ -23,9 +23,14 @@
 // - `countSellerBuckets` feeds the Status menu's numbers from the whole book in
 //   one bounded scan (`ADMIN_COUNT_SCAN_LIMIT`), and says so when capped.
 //
-// Every row is still the same `AdminSellerRow` the table, cards, sheet and CSV
-// already render; `buildAdminSellerRow` is the one author, shared with the
-// legacy `admin.listSellersForAdmin` that the showcase picker still reads.
+// - `listPickerStores` is the showcase store picker's read: one country's
+//   stores as SLIM rows (name, slug, three listing flags) A–Z, over the same
+//   bounded scan the counts use. The picker used to read the whole-book
+//   `admin.listSellersForAdmin` (retired 4 Nov 2026) and filter by country in
+//   the browser — ten reads per row for four fields it drew.
+//
+// Every directory row is still the same `AdminSellerRow` the table, cards,
+// sheet and CSV already render; `buildAdminSellerRow` is its one author.
 // Every function is `requireAdmin`-gated. See docs/admin-console.md.
 
 import { paginationOptsValidator } from "convex/server";
@@ -33,10 +38,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type QueryCtx, query } from "./_generated/server";
 import { loadCreditAccount } from "./credits";
-import {
-	ADMIN_COUNT_SCAN_LIMIT,
-	ADMIN_STORE_LIST_LIMIT,
-} from "./lib/adminDirectory";
+import { ADMIN_COUNT_SCAN_LIMIT, storeNameKeyOf } from "./lib/adminDirectory";
 import {
 	DEFAULT_SELLER_SORT,
 	emptySellerBucketCounts,
@@ -50,7 +52,11 @@ import {
 } from "./lib/adminSellerFilters";
 import type { AdminSellerRow } from "./lib/adminSellerRow";
 import { adminUserIds, requireAdmin } from "./lib/auth";
-import { DEFAULT_COUNTRY, storeCurrencyOf } from "./lib/country";
+import {
+	countryValidator,
+	DEFAULT_COUNTRY,
+	storeCurrencyOf,
+} from "./lib/country";
 import { contractForAdmin } from "./lib/enterprise";
 import { suggestChannel } from "./lib/metrics";
 import { isUnlimited, storeBillingCurrency } from "./lib/plans";
@@ -601,35 +607,69 @@ export const countSellerBuckets = query({
 });
 
 /**
- * The legacy whole-book read behind `admin.listSellersForAdmin`: the newest
- * `ADMIN_STORE_LIST_LIMIT` stores as full rows, founders first by rank then
- * newest. Still served for the showcase store picker, which filters by
- * country on the client; the directory page no longer reads it.
+ * One store as the showcase picker draws it (`showcase-store-picker.tsx`):
+ * a name, a slug and the three facts that decide its row state. `internal`
+ * (a Kedaipal / test / unclaimed store — `storeIsInternal`, the same rule
+ * `showcases.setMembers` refuses on) is greyed out with the reason;
+ * `hidden` (by Kedaipal) and `unlisted` (by the seller) are warnings on a
+ * store that is still addable, because it can come back.
  */
-export async function listAllSellersForAdmin(
-	ctx: QueryCtx,
-): Promise<{ sellers: AdminSellerRow[]; capped: boolean }> {
-	await requireAdmin(ctx);
-	const deps = await sellerRowDeps(ctx);
-	// +1 to learn whether the book runs past the cap, the same shape
-	// `BUSINESS_REPORT_ORDER_SCAN_CAP` uses. The extra row never returns.
-	const scanned = await ctx.db
-		.query("retailers")
-		.order("desc")
-		.take(ADMIN_STORE_LIST_LIMIT + 1);
-	const capped = scanned.length > ADMIN_STORE_LIST_LIMIT;
-	const rows: AdminSellerRow[] = [];
-	for (const r of scanned.slice(0, ADMIN_STORE_LIST_LIMIT)) {
-		rows.push(await buildAdminSellerRow(ctx, r, deps));
-	}
-	rows.sort((a, b) => {
-		// Founding Members first, ordered by rank; everyone else by newest.
-		const ra = a.foundingMemberRank;
-		const rb = b.foundingMemberRank;
-		if (ra !== undefined && rb !== undefined) return ra - rb;
-		if (ra !== undefined) return -1;
-		if (rb !== undefined) return 1;
-		return b.createdAt - a.createdAt;
-	});
-	return { sellers: rows, capped };
-}
+export type AdminPickerStore = {
+	_id: Id<"retailers">;
+	storeName: string;
+	slug: string;
+	internal: boolean;
+	hidden: boolean;
+	unlisted: boolean;
+};
+
+/**
+ * The showcase store picker's read: every store in ONE country, A–Z by name,
+ * as slim rows. Not the paginated directory, on purpose — the picker's
+ * select-all is over "every store in the region", which a page can't promise,
+ * and it draws four fields, which a full `AdminSellerRow` (~10 reads) would
+ * overpay for. One retailer read per store scanned, one subscription read per
+ * store in the country that isn't already internal for a cheaper reason.
+ * Scans the newest `ADMIN_COUNT_SCAN_LIMIT` stores like the counts do and
+ * says so (`capped`); the sheet names it beside the match count.
+ */
+export const listPickerStores = query({
+	args: { country: countryValidator },
+	handler: async (
+		ctx,
+		{ country },
+	): Promise<{ stores: AdminPickerStore[]; capped: boolean }> => {
+		await requireAdmin(ctx);
+		const adminIds = adminUserIds();
+		const scanned = await ctx.db
+			.query("retailers")
+			.order("desc")
+			.take(ADMIN_COUNT_SCAN_LIMIT + 1);
+		const capped = scanned.length > ADMIN_COUNT_SCAN_LIMIT;
+		const stores: AdminPickerStore[] = [];
+		for (const r of scanned.slice(0, ADMIN_COUNT_SCAN_LIMIT)) {
+			if ((r.country ?? DEFAULT_COUNTRY) !== country) continue;
+			// Unclaimed and admin-owned stores are internal before any
+			// subscription is read; only the rest pay for the comp check.
+			const internal =
+				storeIsInternal(r, null, adminIds) ||
+				storeIsInternal(r, await loadSubscription(ctx, r._id), adminIds);
+			stores.push({
+				_id: r._id,
+				storeName: r.storeName,
+				slug: r.slug,
+				internal,
+				hidden: r.marketplaceHidden !== undefined,
+				unlisted: r.marketplaceUnlistedAt !== undefined,
+			});
+		}
+		// A–Z on the same key the directory's Name sort indexes, derived here
+		// so the order never depends on the `storeNameKey` backfill.
+		stores.sort(
+			(a, b) =>
+				storeNameKeyOf(a.storeName).localeCompare(storeNameKeyOf(b.storeName)) ||
+				a.slug.localeCompare(b.slug),
+		);
+		return { stores, capped };
+	},
+});

@@ -804,7 +804,7 @@ describe("a pre-built store reads as unclaimed everywhere (docs/prebuilt-stores.
 
 	it("counts nobody, because there is nobody — not '1/3 seats' against an empty store", () => {
 		// Caught by RENDERING the directory card, not by reading the code: the
-		// owner is an implicit +1 in `listSellersForAdmin`, and an unclaimed
+		// owner is an implicit +1 in `buildAdminSellerRow`, and an unclaimed
 		// store has no owner to count.
 		// The COLUMN value is short — it lands under a "Seats" header in a cell
 		// sized for "1/3", where "No team yet" wrapped to three lines.
