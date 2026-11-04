@@ -141,7 +141,10 @@ describe("sellerBucket / counts", () => {
 	it("validates URL values", () => {
 		expect(isSellerFilter("past_due")).toBe(true);
 		expect(isSellerFilter("bogus")).toBe(false);
-		expect(isSellerSort("expiry")).toBe(true);
+		// Retired with pagination: only an index-backed sort can be paged.
+		expect(isSellerSort("expiry")).toBe(false);
+		expect(isSellerSort("credits")).toBe(false);
+		expect(isSellerSort("name")).toBe(true);
 		expect(isSellerSort(42)).toBe(false);
 	});
 });
@@ -629,24 +632,27 @@ describe("sortSellers", () => {
 		ownerIsAdmin: true,
 	});
 
-	it("founding rank first then newest; expiry soonest with dateless rows last; newest; name", () => {
-		expect(
-			sortSellers([a, b, c], "founding", NOW).map((r) => r.storeName),
-		).toEqual(["Mid", "Zed", "Alpha"]);
-		expect(
-			sortSellers([a, b, c], "expiry", NOW).map((r) => r.storeName),
-		).toEqual(["Alpha", "Zed", "Mid"]);
-		expect(
-			sortSellers([a, b, c], "newest", NOW).map((r) => r.storeName),
-		).toEqual(["Alpha", "Zed", "Mid"]);
-		expect(sortSellers([a, b, c], "name", NOW).map((r) => r.storeName)).toEqual(
-			["Alpha", "Mid", "Zed"],
-		);
+	it("founding rank first then newest; newest; name (case-insensitive)", () => {
+		expect(sortSellers([a, b, c], "founding").map((r) => r.storeName)).toEqual([
+			"Mid",
+			"Zed",
+			"Alpha",
+		]);
+		expect(sortSellers([a, b, c], "newest").map((r) => r.storeName)).toEqual([
+			"Alpha",
+			"Zed",
+			"Mid",
+		]);
+		expect(sortSellers([a, b, c], "name").map((r) => r.storeName)).toEqual([
+			"Alpha",
+			"Mid",
+			"Zed",
+		]);
 	});
 
 	it("never mutates the input", () => {
 		const input = [a, b, c];
-		sortSellers(input, "name", NOW);
+		sortSellers(input, "name");
 		expect(input.map((r) => r.storeName)).toEqual(["Zed", "Alpha", "Mid"]);
 	});
 });

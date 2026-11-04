@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
-// The admin seller directory (z8r3fdh37c): status chips that filter and
-// count, a sort menu, search across contact facts, the desktop table vs the
-// phone cards, the read-only detail sheet with its copy controls, the CSV
-// export, and the one-door Manage menu (owner decision, 20 Sep 2026).
+// The admin seller directory (z8r3fdh37c, paginated 4 Nov 2026): a Status
+// menu that filters and counts, a Sort menu, search across contact facts — all
+// three applied by the SERVER, which the mock below stands in for — infinite
+// scroll through the pages with a Load more fallback and a named end, rows
+// kept on screen while a new first page loads, the desktop table vs the phone
+// cards, the read-only detail sheet, the CSV that walks every page, and the
+// one-door Manage menu (owner decision, 20 Sep 2026).
 import {
 	cleanup,
 	fireEvent,
@@ -17,14 +20,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../convex/_generated/api";
 import type { AdminSellerRow } from "../../convex/admin";
 
-const { navigateSpy, setActAsSpy, downloadCsvSpy, desktop } = vi.hoisted(
-	() => ({
-		navigateSpy: vi.fn(),
-		setActAsSpy: vi.fn(),
-		downloadCsvSpy: vi.fn(),
-		desktop: { value: true },
-	}),
-);
+const {
+	navigateSpy,
+	setActAsSpy,
+	downloadCsvSpy,
+	desktop,
+	paged,
+	convexQuerySpy,
+} = vi.hoisted(() => ({
+	navigateSpy: vi.fn(),
+	setActAsSpy: vi.fn(),
+	downloadCsvSpy: vi.fn(),
+	desktop: { value: true },
+	/** The stand-in server: the whole book plus the pagination status the
+	 * page should see. The `usePaginatedQuery` mock filters, searches and
+	 * sorts `rows` from the args the page passes, exactly as
+	 * `adminSellers.listSellersPage` does, so a test that picks a filter
+	 * proves the ARGS reached the query, not that the page filtered. */
+	paged: {
+		rows: [] as unknown[],
+		status: "Exhausted" as
+			| "LoadingFirstPage"
+			| "CanLoadMore"
+			| "LoadingMore"
+			| "Exhausted",
+		loadMore: vi.fn(),
+		lastArgs: null as unknown,
+	},
+	convexQuerySpy: vi.fn(),
+}));
 vi.mock("@tanstack/react-router", () => ({
 	createFileRoute: () => (opts: unknown) => opts,
 	useNavigate: () => navigateSpy,
@@ -47,11 +71,29 @@ vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: (fn: unknown, args: unknown) => ({ __fn: fn, args }),
 }));
 const queryData = new Map<string, unknown>();
-vi.mock("@tanstack/react-query", () => ({
-	useQuery: (q: { __fn: FunctionReference<"query"> }) => ({
-		data: queryData.get(getFunctionName(q.__fn)),
-	}),
-}));
+vi.mock("@tanstack/react-query", async () => {
+	const { countSellerBuckets } = await import("../lib/admin-seller-view");
+	const { api } = await import("../../convex/_generated/api");
+	return {
+		useQuery: (q: { __fn: FunctionReference<"query">; args: unknown }) => {
+			const name = getFunctionName(q.__fn);
+			if (queryData.has(name)) return { data: queryData.get(name) };
+			// The counts query tallies the same book the list mock serves.
+			if (name === getFunctionName(api.adminSellers.countSellerBuckets)) {
+				return {
+					data: {
+						counts: countSellerBuckets(paged.rows as AdminSellerRow[]),
+						capped: false,
+					},
+				};
+			}
+			if (name === getFunctionName(api.enterprise.listContractTemplates)) {
+				return { data: q.args === "skip" ? undefined : [] };
+			}
+			return { data: undefined };
+		},
+	};
+});
 vi.mock("../hooks/useActAs", () => ({
 	useActAs: () => ({ setActAs: setActAsSpy }),
 }));
@@ -59,6 +101,19 @@ vi.mock("../hooks/useIsDesktop", () => ({
 	useIsDesktop: () => desktop.value,
 }));
 vi.mock("../lib/download", () => ({ downloadCsv: downloadCsvSpy }));
+
+// The load-more sentinel observes its zone; jsdom ships no IntersectionObserver.
+vi.stubGlobal(
+	"IntersectionObserver",
+	class {
+		observe() {}
+		unobserve() {}
+		disconnect() {}
+		takeRecords() {
+			return [];
+		}
+	},
+);
 
 // Radix positions menus with floating-ui, which watches the trigger with a
 // ResizeObserver jsdom doesn't ship.
@@ -72,26 +127,69 @@ vi.stubGlobal(
 );
 
 const mutationSpies = new Map<string, ReturnType<typeof vi.fn>>();
-vi.mock("convex/react", () => ({
-	useMutation: (ref: FunctionReference<"mutation">) => {
-		const name = getFunctionName(ref);
-		if (!mutationSpies.has(name)) {
-			mutationSpies.set(name, vi.fn().mockResolvedValue({ ok: true }));
-		}
-		return mutationSpies.get(name);
-	},
-	// The credit ledger drawer's paginated read (Credits T5).
-	usePaginatedQuery: () => ({
-		results: [],
-		status: "Exhausted",
-		loadMore: () => {},
-	}),
-}));
+type PageArgs = {
+	filter?: SellerFilter;
+	sort?: SellerSort;
+	q?: string;
+	paginationOpts?: { numItems: number; cursor: string | null };
+};
+vi.mock("convex/react", async () => {
+	const { filterSellers, sortSellers } = await import(
+		"../lib/admin-seller-view"
+	);
+	const serve = (args: PageArgs) =>
+		sortSellers(
+			filterSellers(
+				paged.rows as AdminSellerRow[],
+				args.filter ?? "all",
+				args.q ?? "",
+			),
+			args.sort ?? "founding",
+		);
+	return {
+		useMutation: (ref: FunctionReference<"mutation">) => {
+			const name = getFunctionName(ref);
+			if (!mutationSpies.has(name)) {
+				mutationSpies.set(name, vi.fn().mockResolvedValue({ ok: true }));
+			}
+			return mutationSpies.get(name);
+		},
+		useConvex: () => ({ query: convexQuerySpy }),
+		usePaginatedQuery: (
+			ref: FunctionReference<"query">,
+			args: PageArgs | "skip",
+		) => {
+			// The credit ledger drawer's paginated read (Credits T5) stays empty.
+			if (getFunctionName(ref) !== "adminSellers:listSellersPage") {
+				return { results: [], status: "Exhausted", loadMore: () => {} };
+			}
+			paged.lastArgs = args;
+			const results =
+				args === "skip" || paged.status === "LoadingFirstPage"
+					? []
+					: serve(args);
+			return {
+				results,
+				status: paged.status,
+				loadMore: paged.loadMore,
+				isLoading:
+					paged.status === "LoadingFirstPage" || paged.status === "LoadingMore",
+			};
+		},
+	};
+});
 
 import { SellerCard } from "../components/admin/seller-card";
+import {
+	filterSellers,
+	type SellerFilter,
+	type SellerSort,
+	sortSellers,
+} from "../lib/admin-seller-view";
 import { formatShortDate } from "../lib/format";
 import {
 	AdminSellersContent,
+	PAGE_SIZE,
 	Route,
 	type SellersSearch,
 } from "./app.admin.sellers";
@@ -205,13 +303,18 @@ function Harness({ initial = {} }: { initial?: SellersSearch }) {
 	return <AdminSellersContent search={search} onSearchChange={setSearch} />;
 }
 
-function renderDirectory(initial?: SellersSearch) {
-	queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
-		sellers: ROWS,
-		capped: false,
-	});
+function renderDirectory(
+	initial?: SellersSearch,
+	rows: AdminSellerRow[] = ROWS,
+) {
+	paged.rows = rows;
 	queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), true);
 	return render(<Harness initial={initial} />);
+}
+
+/** Open an `OptionMenu` by its closed name ("Status: All sellers"). */
+function openOptionMenu(name: RegExp | string) {
+	fireEvent.click(screen.getByRole("button", { name }));
 }
 
 /** Radix opens the menu on pointerdown alone — firing Enter as well would
@@ -228,6 +331,31 @@ beforeEach(() => {
 	setActAsSpy.mockClear();
 	downloadCsvSpy.mockClear();
 	queryData.clear();
+	paged.rows = [];
+	paged.status = "Exhausted";
+	paged.loadMore.mockClear();
+	paged.lastArgs = null;
+	// The CSV walks the book through `useConvex().query`; the stand-in hands
+	// back TWO rows per call whatever was asked, so a four-row export proves
+	// the walk followed the cursor rather than taking the first page.
+	convexQuerySpy
+		.mockReset()
+		.mockImplementation(async (_ref: unknown, args: PageArgs) => {
+			const all = sortSellers(
+				filterSellers(
+					paged.rows as AdminSellerRow[],
+					args.filter ?? "all",
+					args.q ?? "",
+				),
+				args.sort ?? "founding",
+			);
+			const start = args.paginationOpts?.cursor
+				? Number(args.paginationOpts.cursor)
+				: 0;
+			const page = all.slice(start, start + 2);
+			const end = start + page.length;
+			return { page, isDone: end >= all.length, continueCursor: String(end) };
+		});
 	desktop.value = true;
 	vi.spyOn(Date, "now").mockReturnValue(NOW);
 });
@@ -300,57 +428,72 @@ describe("directory — desktop table", () => {
 	});
 });
 
-describe("directory — chips, sort, search", () => {
-	it("chips carry counts, Past due sits first after All, and picking one filters the rows", () => {
+describe("directory — Status menu, Sort menu, search", () => {
+	it("the Status menu carries counts over the book, Past due first in the action group, and picking one sends the filter to the query", () => {
 		renderDirectory();
-		const chips = Array.from(
-			document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]"),
-		);
-		const labels = chips.map((b) => b.textContent);
-		expect(labels[0]).toBe("All4");
-		expect(labels[1]).toBe("Past due1");
-		expect(chips[0].getAttribute("aria-pressed")).toBe("true");
+		openOptionMenu("Status: All sellers");
+		const rows = within(screen.getByRole("dialog"))
+			.getAllByRole("button")
+			.filter((b) => b.hasAttribute("aria-pressed"));
+		const names = rows.map((b) => b.getAttribute("aria-label"));
+		expect(names[0]).toBe("All sellers, 4 sellers");
+		expect(screen.getByText("Needs your action")).toBeTruthy();
+		expect(names[1]).toBe("Past due, 1 seller");
+		// No option vanishes at zero — a 0 is the answer to "why is it empty?".
 		expect(
-			screen.queryByRole("button", { name: /No subscription/ }),
-		).toBeNull();
+			screen.getByRole("button", { name: "No subscription, 0 sellers" }),
+		).toBeTruthy();
 
-		fireEvent.click(screen.getByRole("button", { name: /^Past due/ }));
-		expect(
-			screen
-				.getByRole("button", { name: /^Past due/ })
-				.getAttribute("aria-pressed"),
-		).toBe("true");
+		fireEvent.click(screen.getByRole("button", { name: "Past due, 1 seller" }));
+		expect((paged.lastArgs as PageArgs).filter).toBe("past_due");
 		expect(screen.getAllByRole("row")).toHaveLength(2); // header + Lekor
-		expect(screen.getByText("Showing 1 of 4")).toBeTruthy();
+		expect(
+			screen.getByRole("button", { name: "Status: Past due, 1 seller" }),
+		).toBeTruthy();
+		expect(screen.getByText("1 past due seller")).toBeTruthy();
 	});
 
-	it("sort by expiry puts the soonest deadline first and dateless rows last", () => {
+	it("the Sort menu offers exactly the three index-backed sorts and sends the pick to the query", () => {
 		renderDirectory();
-		openMenu(/^Sort: Founding rank/);
-		fireEvent.click(screen.getByRole("menuitemradio", { name: /Expiry/ }));
+		openOptionMenu("Sort: Founding rank");
+		const options = ["Founding rank", "Newest store", "Name A–Z"];
+		for (const name of options) {
+			expect(screen.getByRole("button", { name })).toBeTruthy();
+		}
+		expect(screen.queryByRole("button", { name: /Expiry/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /Credits/ })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Name A–Z" }));
+		expect((paged.lastArgs as PageArgs).sort).toBe("name");
 		const names = screen
 			.getAllByRole("row")
 			.slice(1)
 			.map((r) => r.getAttribute("data-seller"));
-		// Lekor's bill was due 19 days ago, Fish's trial ends in 6, Bearcamp
-		// renews in 22, the admin store has no date.
 		expect(names).toEqual([
-			"lekor-mr-ganu",
-			"waadaafish",
 			"bearcamp-malaysia",
 			"kp-demo",
+			"lekor-mr-ganu",
+			"waadaafish",
 		]);
-		expect(screen.getByRole("button", { name: /^Sort: Expiry/ })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Sort: Name A–Z" })).toBeTruthy();
 	});
 
-	it("search reaches the email and the phone, not just the name", () => {
+	it("search reaches the email and the phone through the query, after the typing pauses", async () => {
 		renderDirectory();
 		const box = screen.getByLabelText("Search sellers");
 		fireEvent.change(box, { target: { value: "hello@bearcamp" } });
+		// The URL has it at once; the query waits for the debounce.
+		expect((paged.lastArgs as PageArgs).q).toBe("");
+		expect(screen.getByText("Searching…")).toBeTruthy();
+		await waitFor(() =>
+			expect((paged.lastArgs as PageArgs).q).toBe("hello@bearcamp"),
+		);
 		expect(screen.getAllByRole("row")).toHaveLength(2);
 		expect(screen.getByRole("row", { name: /Bearcamp/ })).toBeTruthy();
+		expect(screen.getByText("1 match")).toBeTruthy();
 		fireEvent.change(box, { target: { value: "+60 19-876" } });
-		expect(screen.getByRole("row", { name: /Waa Daa Fish/ })).toBeTruthy();
+		await waitFor(() =>
+			expect(screen.getByRole("row", { name: /Waa Daa Fish/ })).toBeTruthy(),
+		);
 		expect(screen.getAllByRole("row")).toHaveLength(2);
 	});
 
@@ -371,9 +514,12 @@ describe("directory — chips, sort, search", () => {
 		for (const key of ["q", "status", "sort"]) {
 			expect(Object.hasOwn(junk, key)).toBe(true);
 		}
+		// The two retired sorts in an old link fall back to the default.
+		expect(validate({ sort: "expiry" })).toEqual({});
+		expect(validate({ sort: "credits" })).toEqual({});
 	});
 
-	it("an all-digit query finds the slug, the name and the phone that carry it", () => {
+	it("an all-digit query from a link is sent at once and finds the slug, the name and the phone that carry it", () => {
 		const yuzu = seller({
 			_id: "r_yuzu" as AdminSellerRow["_id"],
 			storeName: "Yuzu Bakes",
@@ -390,39 +536,62 @@ describe("directory — chips, sort, search", () => {
 			slug: "pak-ali",
 			notifyWaPhone: "60129981234",
 		});
-		queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
-			sellers: [...ROWS, yuzu, named, phoned],
-			capped: false,
-		});
-		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), true);
-		render(<Harness initial={{ q: "9981" }} />);
+		renderDirectory({ q: "9981" }, [...ROWS, yuzu, named, phoned]);
+		expect((paged.lastArgs as PageArgs).q).toBe("9981");
 		// Header row + the three matches; nothing else carries 9981.
 		expect(screen.getAllByRole("row")).toHaveLength(4);
 		for (const name of [/Yuzu Bakes/, /Kedai 9981/, /Pak Ali Satay/]) {
 			expect(screen.getByRole("row", { name })).toBeTruthy();
 		}
+		expect(screen.getByText("End of results for “9981”")).toBeTruthy();
 	});
 
-	it("no matches names the filter that is hiding the rest and clears it in one tap", () => {
+	it("no matches names the filter that is hiding the rest and clears it in one tap", async () => {
 		renderDirectory({ status: "past_due", q: "kuih" });
 		expect(screen.getByText("No past due sellers match “kuih”")).toBeTruthy();
 		fireEvent.click(
 			screen.getByRole("button", { name: "Clear search and filters" }),
 		);
-		expect(screen.getAllByRole("row")).toHaveLength(5);
+		// The filter clears at once; the search clears when the debounce fires.
+		await waitFor(() => expect(screen.getAllByRole("row")).toHaveLength(5));
 		expect(
-			screen.getByRole("button", { name: /^All/ }).getAttribute("aria-pressed"),
-		).toBe("true");
+			screen.getByRole("button", { name: "Status: All sellers" }),
+		).toBeTruthy();
 	});
 
-	it("Export CSV writes the visible rows and is disabled-with-reason when nothing matches", () => {
-		renderDirectory({ status: "active" });
+	it("Export CSV walks EVERY page of the current filter, and is disabled-with-reason when nothing matches", async () => {
+		renderDirectory({ status: "active" }, [
+			...ROWS,
+			seller({
+				_id: "r_a2" as AdminSellerRow["_id"],
+				storeName: "Second Active",
+				slug: "second-active",
+				subscriptionStatus: "active",
+				ownerEmail: "second@active.example",
+			}),
+			seller({
+				_id: "r_a3" as AdminSellerRow["_id"],
+				storeName: "Third Active",
+				slug: "third-active",
+				subscriptionStatus: "active",
+				ownerEmail: "third@active.example",
+			}),
+		]);
 		fireEvent.click(screen.getByRole("button", { name: /Export CSV/ }));
-		expect(downloadCsvSpy).toHaveBeenCalledTimes(1);
+		await waitFor(() => expect(downloadCsvSpy).toHaveBeenCalledTimes(1));
+		// Three active rows at two per server page = two calls, cursor threaded.
+		expect(convexQuerySpy).toHaveBeenCalledTimes(2);
+		expect(
+			(convexQuerySpy.mock.calls[1]?.[1] as PageArgs).paginationOpts?.cursor,
+		).toBe("2");
+		expect((convexQuerySpy.mock.calls[0]?.[1] as PageArgs).filter).toBe(
+			"active",
+		);
 		const [filename, csv] = downloadCsvSpy.mock.calls[0] as [string, string];
 		expect(filename).toBe("kedaipal-sellers-2026-09-22.csv");
-		expect(csv.split("\r\n")).toHaveLength(2);
+		expect(csv.split("\r\n")).toHaveLength(4);
 		expect(csv).toContain("hello@bearcamp.example");
+		expect(csv).toContain("third@active.example");
 		expect(csv).not.toContain("lekor@example.com");
 
 		cleanup();
@@ -430,6 +599,65 @@ describe("directory — chips, sort, search", () => {
 		const button = screen.getByRole("button", { name: /Export CSV/ });
 		expect(button.hasAttribute("disabled")).toBe(true);
 		expect(button.getAttribute("title")).toMatch(/no rows match/);
+	});
+});
+
+describe("directory — infinite scroll", () => {
+	it("a page that can load more shows the Load more fallback, which asks for the next page", () => {
+		paged.status = "CanLoadMore";
+		renderDirectory();
+		const button = screen.getByRole("button", { name: "Load more" });
+		expect(
+			screen.getByText(`Scroll or press to load the next ${PAGE_SIZE}`),
+		).toBeTruthy();
+		fireEvent.click(button);
+		expect(paged.loadMore).toHaveBeenCalledWith(PAGE_SIZE);
+	});
+
+	it("while the next page loads the rows stay and skeletons follow them; at the end the list says so with the count", () => {
+		paged.status = "LoadingMore";
+		renderDirectory();
+		expect(screen.getAllByRole("row")).toHaveLength(5);
+		expect(screen.getByRole("status").getAttribute("aria-busy")).toBe("true");
+		expect(
+			screen.getByText(`Loading the next ${PAGE_SIZE} sellers…`),
+		).toBeTruthy();
+		cleanup();
+		paged.status = "Exhausted";
+		renderDirectory();
+		expect(screen.getByText("That’s every seller · 4")).toBeTruthy();
+		cleanup();
+		renderDirectory({ status: "past_due" });
+		expect(screen.getByText("That’s every past due sellers · 1")).toBeTruthy();
+	});
+
+	it("a new search keeps the last rows on screen, dimmed and busy, instead of blanking to skeletons", async () => {
+		renderDirectory();
+		expect(screen.getAllByRole("row")).toHaveLength(5);
+		// The server is now answering a new first page.
+		paged.status = "LoadingFirstPage";
+		fireEvent.change(screen.getByLabelText("Search sellers"), {
+			target: { value: "bear" },
+		});
+		await waitFor(() => expect((paged.lastArgs as PageArgs).q).toBe("bear"));
+		const table = screen.getByRole("table");
+		expect(screen.getAllByRole("row")).toHaveLength(5);
+		expect(table.closest("[aria-busy='true']")).not.toBeNull();
+		expect(
+			screen.getByRole("progressbar", { name: "Loading sellers" }),
+		).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+	});
+
+	it("the very first load shows skeletons, never a false empty state", () => {
+		paged.status = "LoadingFirstPage";
+		renderDirectory();
+		expect(screen.queryByRole("table")).toBeNull();
+		expect(screen.queryByText(/No sellers/)).toBeNull();
+		expect(document.querySelector("[aria-busy='true']")).not.toBeNull();
+		expect(
+			screen.getByRole("button", { name: /Export CSV/ }).getAttribute("title"),
+		).toBe("Still loading");
 	});
 });
 
@@ -474,47 +702,44 @@ describe("directory — detail sheet", () => {
 	it("a contract's allowances read on the sheet, not only inside the edit form", async () => {
 		// A negotiated term the summary hides is a term the next admin
 		// discovers by hitting it (z8r3fdkp8h seats/broadcasts).
-		queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
-			capped: false,
-			sellers: [
-				seller({
-					_id: "r_hsl" as AdminSellerRow["_id"],
-					storeName: "Mama's Delights",
-					slug: "mamas-delights",
-					subscriptionStatus: "active",
-					plan: "enterprise",
-					billingCycle: "monthly",
-					enterprise: {
-						baseFeeMinor: 88_800,
-						currency: "MYR",
-						includedCredits: 1500,
-						overageRateMinor: 60,
-						blockSize: 5000,
-						teammates: 12,
-						broadcastQuota: 500,
-						contactName: "HSL Food GM",
-						setAt: at(-1),
-					},
-				}),
-				seller({
-					_id: "r_unl" as AdminSellerRow["_id"],
-					storeName: "Unlimited Deal",
-					slug: "unlimited-deal",
-					subscriptionStatus: "active",
-					plan: "enterprise",
-					billingCycle: "monthly",
-					enterprise: {
-						baseFeeMinor: 120_000,
-						currency: "MYR",
-						includedCredits: 2000,
-						overageRateMinor: 50,
-						blockSize: 5000,
-						contactName: "Someone",
-						setAt: at(-1),
-					},
-				}),
-			],
-		});
+		paged.rows = [
+			seller({
+				_id: "r_hsl" as AdminSellerRow["_id"],
+				storeName: "Mama's Delights",
+				slug: "mamas-delights",
+				subscriptionStatus: "active",
+				plan: "enterprise",
+				billingCycle: "monthly",
+				enterprise: {
+					baseFeeMinor: 88_800,
+					currency: "MYR",
+					includedCredits: 1500,
+					overageRateMinor: 60,
+					blockSize: 5000,
+					teammates: 12,
+					broadcastQuota: 500,
+					contactName: "HSL Food GM",
+					setAt: at(-1),
+				},
+			}),
+			seller({
+				_id: "r_unl" as AdminSellerRow["_id"],
+				storeName: "Unlimited Deal",
+				slug: "unlimited-deal",
+				subscriptionStatus: "active",
+				plan: "enterprise",
+				billingCycle: "monthly",
+				enterprise: {
+					baseFeeMinor: 120_000,
+					currency: "MYR",
+					includedCredits: 2000,
+					overageRateMinor: 50,
+					blockSize: 5000,
+					contactName: "Someone",
+					setAt: at(-1),
+				},
+			}),
+		];
 		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), false);
 		render(<Harness />);
 
@@ -536,26 +761,25 @@ describe("directory — detail sheet", () => {
 		// The lead exists so an ask can't be forgotten (z8r3fdkp8h follow-up):
 		// a chip in the owes-action front group, and the answer (contract or
 		// dismiss) right where the admin already works.
-		queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
-			capped: false,
-			sellers: [
-				ROWS[0],
-				seller({
-					_id: "r_lead" as AdminSellerRow["_id"],
-					storeName: "Mama's Delights",
-					slug: "mamas-delights",
-					subscriptionStatus: "trialing",
-					enterpriseInterestAt: at(-3),
-				}),
-			],
-		});
+		paged.rows = [
+			ROWS[0],
+			seller({
+				_id: "r_lead" as AdminSellerRow["_id"],
+				storeName: "Mama's Delights",
+				slug: "mamas-delights",
+				subscriptionStatus: "trialing",
+				enterpriseInterestAt: at(-3),
+			}),
+		];
 		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), false);
 		render(<Harness initial={{ status: "wants_enterprise" }} />);
 
-		// The chip carries its count and the filter shows only the ask.
+		// The Status trigger carries the count and the filter shows only the ask.
 		expect(
-			screen.getByRole("button", { name: /Wants Enterprise/ }).textContent,
-		).toContain("1");
+			screen.getByRole("button", {
+				name: "Status: Wants Enterprise, 1 seller",
+			}),
+		).toBeTruthy();
 		expect(screen.getByText("Mama's Delights")).toBeTruthy();
 		expect(screen.queryByText("Bearcamp Malaysia")).toBeNull();
 
@@ -834,23 +1058,6 @@ describe("directory — credits", () => {
 		).toBeTruthy();
 	});
 
-	it("sort by credits puts the store owing orders first and account-less rows last", () => {
-		renderDirectory();
-		openMenu(/^Sort: Founding rank/);
-		fireEvent.click(screen.getByRole("menuitemradio", { name: /Credits/ }));
-		const names = screen
-			.getAllByRole("row")
-			.slice(1)
-			.map((r) => r.getAttribute("data-seller"));
-		expect(names).toEqual([
-			"lekor-mr-ganu",
-			"bearcamp-malaysia",
-			// No credit account: by name after everything with a number.
-			"kp-demo",
-			"waadaafish",
-		]);
-	});
-
 	it("the sheet's Credits section names the custom grant and opens the ledger as a page of the same drawer", async () => {
 		renderDirectory();
 		fireEvent.click(screen.getByRole("button", { name: "Lekor Mr.Ganu" }));
@@ -877,10 +1084,11 @@ describe("directory — credits", () => {
 		expect(document.activeElement).toBe(reopen);
 	});
 
-	it("the CSV carries the credit columns", () => {
+	it("the CSV carries the credit columns", async () => {
 		renderDirectory();
 		fireEvent.click(screen.getByRole("button", { name: /Export CSV/ }));
-		const csv = downloadCsvSpy.mock.calls[0][1] as string;
+		await waitFor(() => expect(downloadCsvSpy).toHaveBeenCalledTimes(1));
+		const csv = downloadCsvSpy.mock.calls[0]?.[1] as string;
 		const [header] = csv.split("\r\n");
 		for (const column of [
 			"Credits left",
@@ -893,23 +1101,55 @@ describe("directory — credits", () => {
 	});
 });
 
-describe("the directory's count never claims the whole book (z8r3fdpm2p)", () => {
-	it("says 'of the newest N' when the book runs past the cap", () => {
-		// `Showing 500 of 500` read as the whole book while the oldest stores
-		// were simply not in the list. Same silent truncation the billing
-		// picker had, one surface over.
-		queryData.set(getFunctionName(api.admin.listSellersForAdmin), {
-			sellers: ROWS,
-			capped: true,
-		});
-		queryData.set(getFunctionName(api.admin.devStorePurgeEnabled), false);
-		render(<Harness />);
-		expect(screen.getByText(/of the newest \d+/)).toBeTruthy();
+describe("the directory's count reads the whole book, and says when it couldn't", () => {
+	it("counts plainly from the counts query", () => {
+		renderDirectory();
+		expect(screen.getByText("4 sellers")).toBeTruthy();
+		expect(screen.queryByText(/counted over the newest/)).toBeNull();
 	});
 
-	it("counts plainly when the whole book fits", () => {
+	it("names the scan ceiling beside the count and above the list when the counts are capped", () => {
+		queryData.set(getFunctionName(api.adminSellers.countSellerBuckets), {
+			counts: {
+				...Object.fromEntries(
+					[
+						"all",
+						"past_due",
+						"unclaimed",
+						"trialing",
+						"active",
+						"on_hold",
+						"cancelled",
+						"comped",
+						"admin",
+						"none",
+						"wants_enterprise",
+						"unavailable",
+						"untagged_payers",
+					].map((k) => [k, 0]),
+				),
+				all: 2000,
+				trialing: 2000,
+			},
+			capped: true,
+		});
 		renderDirectory();
-		expect(screen.queryByText(/of the newest/)).toBeNull();
-		expect(screen.getByText(/Showing \d+ of \d+/)).toBeTruthy();
+		expect(
+			screen.getByText(/2,000 sellers · counted over the newest 2,000/),
+		).toBeTruthy();
+		expect(
+			screen.getByText(/Counts cover the newest 2,000 stores/),
+		).toBeTruthy();
+	});
+
+	it("says Counting… while the counts are still on their way, never a zero", () => {
+		queryData.set(
+			getFunctionName(api.adminSellers.countSellerBuckets),
+			undefined,
+		);
+		renderDirectory();
+		expect(screen.getByText("Counting…")).toBeTruthy();
+		openOptionMenu("Status: All sellers");
+		expect(screen.getByRole("button", { name: "All sellers" })).toBeTruthy();
 	});
 });

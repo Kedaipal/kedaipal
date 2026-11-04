@@ -96,7 +96,10 @@ place a failed store read must become a screen, not a skeleton — reads the sib
 - **Mutations / actions** — `useMutation`, `useAction` are unaffected everywhere.
 - **Imperative client** — `useConvex` (e.g. the orders/products CSV export paths).
 - **Pagination** — `usePaginatedQuery` has no adapter wrapper, so the customer
-  list's paginated read in `src/routes/app.customers.index.tsx` stays native.
+  list's paginated read in `src/routes/app.customers.index.tsx` stays native,
+  as does the admin seller directory's (`src/routes/app.admin.sellers.tsx`,
+  `adminSellers.listSellersPage`, 4 Nov 2026) — whose counts, purge flag and
+  contract templates in the same file go through the adapter.
 
 > **Corrected 2026-08-24 (86eyqgxe1).** This bullet used to say that route
 > "stays fully native", and that overstatement caused a real miss: the file also

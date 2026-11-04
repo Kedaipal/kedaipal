@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { storeNameKeyOf } from "./lib/adminDirectory";
 import { subscriptionCoversWaAlerts } from "./lib/sellerAlerts";
 import {
 	takesBuyerOrders,
@@ -1853,6 +1854,7 @@ export const createRetailer = mutation({
 			userId,
 			slug,
 			storeName,
+			storeNameKey: storeNameKeyOf(storeName),
 			waPhone,
 			notifyEmail,
 			// Currency is born from the country (SG → SGD) so the first product a
@@ -1979,6 +1981,7 @@ export const createUnclaimedStore = mutation({
 			userId: mintUnclaimedOwnerId(),
 			slug,
 			storeName,
+			storeNameKey: storeNameKeyOf(storeName),
 			waPhone,
 			// notifyEmail is left UNSET, not pointed at the admin. Order and
 			// billing email for a store in setup would otherwise land in a founder
@@ -2800,6 +2803,7 @@ export const updateSettings = mutation({
 
 		const patch: Partial<{
 			storeName: string;
+			storeNameKey: string;
 			storeDescription: string | undefined;
 			storeArea: string | undefined;
 			marketplaceUnlistedAt: number | undefined;
@@ -2845,6 +2849,9 @@ export const updateSettings = mutation({
 
 		if (args.storeName !== undefined) {
 			try { patch.storeName = assertValidStoreName(args.storeName); } catch (err) { throw new ConvexError((err as Error).message); }
+			// The admin directory's name index keys on the folded name, so the key
+			// travels with every rename (adminSellers.listSellersPage).
+			patch.storeNameKey = storeNameKeyOf(patch.storeName);
 		}
 		if (args.storeDescription !== undefined) {
 			patch.storeDescription = sanitizeStoreDescription(args.storeDescription);

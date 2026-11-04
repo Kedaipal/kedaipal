@@ -2445,7 +2445,7 @@ describe("the billing picker and the sellers directory list the same book (z8r3f
 		// source-level fact, so it is guarded at source level — the house
 		// precedent is `src/lib/convex-read-pattern.test.ts`.
 		const root = join(__dirname);
-		for (const file of ["invoices.ts", "admin.ts"]) {
+		for (const file of ["invoices.ts", "admin.ts", "adminSellers.ts"]) {
 			const src = readFileSync(join(root, file), "utf8");
 			for (const [i, line] of src.split("\n").entries()) {
 				// A `.take(<number>)` on the retailers table is the shape that

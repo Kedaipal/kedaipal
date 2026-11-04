@@ -38,6 +38,12 @@ export interface FilterOptionRowProps {
 	 * tint would only be noise.
 	 */
 	tintSelected?: boolean;
+	/** `attention` draws a NON-ZERO count in amber — a to-do for the reader
+	 * (an overdue bill, an untagged payer), not a state. Zero stays quiet. */
+	countTone?: "muted" | "attention";
+	/** The noun the accessible name gives a count ("3 sellers"). The inbox
+	 * filters, where this was born, count orders. */
+	countNoun?: string;
 }
 
 export function FilterOptionRow({
@@ -48,7 +54,10 @@ export function FilterOptionRow({
 	shape = "checkbox",
 	muted,
 	tintSelected = true,
+	countTone = "muted",
+	countNoun = "order",
 }: FilterOptionRowProps) {
+	const attention = countTone === "attention" && (count ?? 0) > 0;
 	return (
 		<button
 			type="button"
@@ -61,7 +70,7 @@ export function FilterOptionRow({
 			aria-label={
 				count === undefined
 					? label
-					: `${label}, ${count} ${count === 1 ? "order" : "orders"}`
+					: `${label}, ${count} ${count === 1 ? countNoun : `${countNoun}s`}`
 			}
 			onClick={onToggle}
 			className={cn(
@@ -100,9 +109,11 @@ export function FilterOptionRow({
 						"shrink-0 tabular-nums text-[11.5px]",
 						count === 0
 							? "text-muted-foreground/40"
-							: selected
-								? "text-foreground"
-								: "text-muted-foreground",
+							: attention
+								? "font-semibold text-amber-700 dark:text-amber-400"
+								: selected
+									? "text-foreground"
+									: "text-muted-foreground",
 					)}
 				>
 					{count}

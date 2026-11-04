@@ -10,6 +10,7 @@
 
 import type * as admin from "../admin.js";
 import type * as adminAccess from "../adminAccess.js";
+import type * as adminSellers from "../adminSellers.js";
 import type * as analytics from "../analytics.js";
 import type * as awb from "../awb.js";
 import type * as billing from "../billing.js";
@@ -48,6 +49,8 @@ import type * as lib_activation from "../lib/activation.js";
 import type * as lib_address from "../lib/address.js";
 import type * as lib_adminAreas from "../lib/adminAreas.js";
 import type * as lib_adminDirectory from "../lib/adminDirectory.js";
+import type * as lib_adminSellerFilters from "../lib/adminSellerFilters.js";
+import type * as lib_adminSellerRow from "../lib/adminSellerRow.js";
 import type * as lib_appVersion from "../lib/appVersion.js";
 import type * as lib_attribution from "../lib/attribution.js";
 import type * as lib_auth from "../lib/auth.js";
@@ -232,6 +235,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   admin: typeof admin;
   adminAccess: typeof adminAccess;
+  adminSellers: typeof adminSellers;
   analytics: typeof analytics;
   awb: typeof awb;
   billing: typeof billing;
@@ -270,6 +274,8 @@ declare const fullApi: ApiFromModules<{
   "lib/address": typeof lib_address;
   "lib/adminAreas": typeof lib_adminAreas;
   "lib/adminDirectory": typeof lib_adminDirectory;
+  "lib/adminSellerFilters": typeof lib_adminSellerFilters;
+  "lib/adminSellerRow": typeof lib_adminSellerRow;
   "lib/appVersion": typeof lib_appVersion;
   "lib/attribution": typeof lib_attribution;
   "lib/auth": typeof lib_auth;
