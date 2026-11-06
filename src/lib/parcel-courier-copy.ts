@@ -24,3 +24,28 @@ export function parcelDeliveredCopy(hasTrackingLink: boolean): string {
 		hasTrackingLink ? "Track parcel" : "the courier's tracking page"
 	} shows it.`;
 }
+
+/**
+ * Pre-collection (z8r3fe0t4e): the tracking NUMBER is on the order, the
+ * courier's page isn't live yet. A parcel courier indexes a waybill at its
+ * first scan, so the link is written at collection, not at booking — and
+ * until then every surface says in one line when it comes, instead of
+ * showing a link that answers "information not found". Three audiences, one
+ * vocabulary, so the seller's dispatch card, the Shipment tracking card and
+ * the buyer's page never disagree about the moment.
+ */
+
+/** The dispatch card's line under the tracking number while booked. */
+export function courierLinkPendingSellerCopy(
+	serviceName: string | undefined,
+): string {
+	return `Your buyer already has this number. ${serviceName ?? "The courier"}'s tracking page goes live once the parcel is collected; the order marks itself Shipped then.`;
+}
+
+/** The Shipment tracking card's line, where the link will appear. */
+export const COURIER_LINK_PENDING_SELLER_LINE =
+	"Tracking link appears once the courier collects the parcel";
+
+/** The buyer's page, under the courier/number card. */
+export const COURIER_LINK_PENDING_BUYER_LINE =
+	"Use this number on the courier's app once your parcel is collected. We'll add the tracking link here then.";

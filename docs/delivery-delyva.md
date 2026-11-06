@@ -126,9 +126,11 @@ account, and it is the SG twin of the cold-chain gap below.
   uses `.unique()`, so a provider-blind index would let a cross-provider
   collision throw inside a webhook handler.
 - AWB mirrors into the existing `orders.courierName` / `orders.trackingNo`
-  (86eyehvk4) + `carrierTrackingUrl` — **fill-if-unset**, so a seller's
-  manual shipment entry is never overwritten, and the buyer's track page +
-  shipped WhatsApp carry the tracking number with zero new plumbing.
+  (86eyehvk4) the moment it is known, and `carrierTrackingUrl` **only once
+  the parcel is collected** (z8r3fe0t4e, see "The tracking link lands at
+  collection" below) — **fill-if-unset**, so a seller's manual shipment entry
+  is never overwritten, and the buyer's track page + shipped WhatsApp carry
+  the tracking number with zero new plumbing.
 
 ## Dispatch flow (two-tap, mirrored on Lalamove's invariant)
 
@@ -245,11 +247,11 @@ Status codes (verified against Delyva's own maintained WooCommerce plugin):
 
 | Delyva | Meaning              | Job status  | Order effect                        |
 | ------ | -------------------- | ----------- | ----------------------------------- |
-| 100/110| created / ready      | `assigning` | AWB fills → courier fields mirror   |
+| 100/110| created / ready      | `assigning` | AWB fills → courier name + number mirror (**no link yet**, z8r3fe0t4e) |
 | 200    | courier accepted     | `ongoing`   | —                                   |
 | 400    | start collecting     | `ongoing`   | —                                   |
 | 475    | failed collection    | `rejected`  | failure email, order untouched      |
-| 500    | collected            | `picked_up` | → **shipped** (from confirmed/packed) |
+| 500    | collected            | `picked_up` | `carrierTrackingUrl` fills (registry deep link, else Delyva's page) → **shipped** (from confirmed/packed), carrying the link |
 | 600    | out for delivery     | `picked_up` | —                                   |
 | 650    | failed delivery      | *(kept)*    | failureReason + email — the parcel is still WITH the courier (retry/return follows), so the job never goes terminal |
 | 700/1000| completed           | `completed` | → **delivered** (from confirmed/packed/shipped) |
@@ -262,6 +264,73 @@ guards as Lalamove — **the order never regresses**, and a cancelled order is
 never touched. The manual-advance rider gate (`riderOwnsTransition` in
 `convex/orders.ts`) now returns the owning **provider** and words the block
 accordingly.
+
+### The tracking link lands at collection, never at booking (z8r3fe0t4e)
+
+Seen live on DapoGo's first booking (J&T, waybill `632195694574`, 3 Nov
+2026): the seller card read **Booked**, offered **Track parcel**, and J&T
+answered *"Sorry, information not found"* — as did the buyer's page and the
+Shipment tracking card, all pointing at the same link. The number was right;
+the timing was wrong. Delyva issues the consignment number at booking
+(status 100/200), but J&T — and every parcel courier — indexes a waybill only
+at its first scan, so a link written at booking is dead for the day until
+collection, and nothing told either side why.
+
+**The rule has one author:** `isCollectedStatus(code)` in
+`convex/lib/delyva.ts` (judged by the *normalised* status — `picked_up` /
+`completed`, plus 650 — never by `code >= 500`, so a future failure code above
+500 that means "never collected" can't promise a page that isn't there), with
+`isCollectedJobStatus(job.status)` in `convex/lib/deliveryJobs.ts` as the
+job-side half. `mirrorAwbOntoOrder(ctx, job, awb, { collected })` writes the
+courier name + number whenever the AWB is known and the link only when
+`collected`; it runs on **every** webhook event that knows the AWB (not only
+the first), fill-if-unset, so the shapes that matter all land the link:
+
+- 100 with the AWB, then 500 → number at booking, link at 500 (the shipped
+  transition reads it off the order in the same mutation).
+- A 500 that arrives first, or carries the AWB itself → number + link in one
+  write.
+- A stale `order.created` replayed **after** the 500 → the job already knows
+  it was collected, so the link lands with the number.
+- A replayed 500 after a 700, or a link the seller typed by hand before
+  collection → no-op. A different number typed by hand → the mirror skips
+  entirely, as before.
+- 900 (cancelled) or a seller cancel → number stays, no link is ever written.
+
+**What each side sees meanwhile** is one state, `isCourierLinkPending(job,
+order)` (`convex/lib/deliveryJobs.ts`): a booked job whose AWB is the order's
+number with no link yet. `orders.get` exposes it as `courierLinkPending` on
+both doors (one indexed read, only on the number-without-link shape), and the
+vocabulary lives in `src/lib/parcel-courier-copy.ts`. The flag is read off
+the live job row for ANY provider, so the rule is gated by
+`LINK_LANDS_AT_COLLECTION` (Delyva only): "appears once the courier collects"
+is a promise, and only a provider whose collection path writes a link
+unconditionally may make it. EasyParcel writes whatever link it has at
+booking — none when EasyParcel sends no `tracking_url` and the courier has no
+registry deep link — and its pickup sync may still have none, so an EasyParcel
+number without a link stays a plain number. A provider joins the set when its
+collection path guarantees the link.
+
+- **Seller dispatch card** — under the number: *"Your buyer already has this
+  number. J&T Express's tracking page goes live once the parcel is collected;
+  the order marks itself Shipped then."* No **Track parcel** until the link
+  exists.
+- **Seller Shipment tracking card** — in the link's place: *"Tracking link
+  appears once the courier collects the parcel"*.
+- **Buyer `/track`** — a dashed, disabled-with-reason stand-in in the button's
+  slot (*"Track with J&T Express · after collection"*) and *"Use this number
+  on the courier's app once your parcel is collected. We'll add the tracking
+  link here then."* The copy button stays.
+
+A seller's own manual entry (a different number, or a name-only cold-chain
+courier) is never promised a link; a booking from before this shipped keeps
+the link it was born with and never reads as pending — no backfill, those
+links resolve on their own once collected.
+
+**Fallback page verified:** Delyva's own `my.delyva.app/customer/strack`
+page renders a consignment from "Order created" on (checked in a browser on
+the DapoGo waybill, 4 Nov 2026), so for a courier outside the registry the
+link written at collection is live.
 
 ## Shared machinery
 
@@ -622,7 +691,8 @@ with those couriers on; until then it is one list, cheapest first.
   failure copy against the production account before the frozen-seller pilot.
 - **`carrierTrackingUrl` fallback** (`my.delyva.app/customer/strack?trackingNo=…`)
   — used only when the courier isn't in our registry
-  (`convex/lib/couriers.ts`); confirm the page is public during E2E.
+  (`convex/lib/couriers.ts`). Confirmed public and rendering pre-scan (4 Nov
+  2026); written at collection like every other link (z8r3fe0t4e).
 - **Scheduled pickups** — Delyva waypoints accept `scheduledAt`; v1 books
   immediate collection (parcel couriers collect on their own cadence).
   Revisit if sellers ask for date-bound pickups.

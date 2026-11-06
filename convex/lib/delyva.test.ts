@@ -15,6 +15,7 @@ import {
 	delyvaAmountToSen,
 	DELYVA_WEBHOOK_EVENTS,
 	isFailedDeliveryAttempt,
+	isCollectedStatus,
 	normalizeDelyvaStatus,
 	parseDelyvaErrorMessage,
 	parseDelyvaWebhookEvent,
@@ -569,3 +570,23 @@ describe("parseDelyvaWalletBalance — the wallet on Delyva's customer profile",
 	});
 });
 
+
+describe("isCollectedStatus — the tracking link's one gate (z8r3fe0t4e)", () => {
+	test("every collected-or-later code is collected", () => {
+		for (const code of [500, 600, 650, 700, 1000]) {
+			expect(isCollectedStatus(code), String(code)).toBe(true);
+		}
+	});
+
+	test("booked, accepted, collecting, failed collection and cancelled are not", () => {
+		for (const code of [100, 110, 200, 400, 475, 900]) {
+			expect(isCollectedStatus(code), String(code)).toBe(false);
+		}
+		expect(isCollectedStatus(undefined)).toBe(false);
+	});
+
+	test("an unknown code never counts as collected — a link needs a scan", () => {
+		expect(isCollectedStatus(654)).toBe(false);
+		expect(isCollectedStatus(999)).toBe(false);
+	});
+});
