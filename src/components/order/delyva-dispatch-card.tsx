@@ -1278,8 +1278,7 @@ function StalePanel({
 		hoursSinceBooking: (now - job.createdAt) / 3_600_000,
 	});
 	return (
-		<div
-			role="status"
+		<output
 			aria-label={`Not scanned yet — order ${order.shortId}`}
 			className={`flex flex-col gap-2.5 rounded-xl border px-3 py-3 ${TONE_PANEL.warn}`}
 		>
@@ -1306,7 +1305,7 @@ function StalePanel({
 					<ExternalLink className="size-3" />
 				</a>
 			</div>
-		</div>
+		</output>
 	);
 }
 
@@ -1337,8 +1336,7 @@ function ReturnedState({
 		: null;
 	return (
 		<div className="flex flex-col gap-2.5 text-sm">
-			<div
-				role="status"
+			<output
 				aria-label={`Returned to you — order ${order.shortId}`}
 				className={`flex flex-col gap-2.5 rounded-xl border px-3 py-3 ${TONE_PANEL.warn}`}
 			>
@@ -1364,7 +1362,7 @@ function ReturnedState({
 						) : null}
 					</p>
 				) : null}
-			</div>
+			</output>
 
 			<div className="flex flex-col gap-2">
 				{buyerChatUrl ? (
