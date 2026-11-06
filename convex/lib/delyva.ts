@@ -265,12 +265,17 @@ export type DelyvaHandoff = "pickup" | "dropoff";
 export const DELYVA_CDN_BASE_URL = "https://cdn.delyva.app/";
 
 /**
- * Who moves the parcel to the courier, read from the service class. Delyva's
- * developer guide suffixes a service with `-DROP` when the SELLER takes the
- * parcel to a branch (`NDD-DROP`); the bare class (`NDD`, `SDD`, `INSTANT`)
- * means the courier collects from the pickup address. DapoGo's first live
- * booking (J&T `JNTMY-PN-B200`, 3 Nov 2026) sat on "Order created" for a day
- * because nothing told the seller which kind she had bought.
+ * Who moves the parcel to the courier, read from the service class. Delyva
+ * suffixes a service with `-DROP` when the SELLER takes the parcel to a
+ * branch (`NDD-DROP`); the bare class (`NDD`, `SDD`, `INSTANT`) means the
+ * courier collects from the pickup address. The convention is OBSERVED, not
+ * documented: Delyva's published API reference (the Postman collection
+ * behind docs.api.delyva.com, checked 6 Nov 2026) never enumerates service
+ * classes at all, so the one hard datum is DapoGo's first live booking (J&T
+ * `JNTMY-PN-B200` = `NDD-DROP`, 3 Nov 2026), which sat on "Order created"
+ * for a day because nothing told the seller which kind she had bought. A
+ * drop-off service spelled any other way would read as a pickup here — the
+ * first non-J&T drop-off booking is where to look.
  *
  * `undefined` for a missing class — the caller decides what to claim (the
  * picker shows the pickup pill and warns, a booked card claims neither), it

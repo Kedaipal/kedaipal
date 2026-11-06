@@ -1274,6 +1274,71 @@ describe("pickup vs drop-off, and the courier's label (z8r3fe11x3)", () => {
 		);
 	});
 
+	test("getLabel: the S3 redirect is followed by hand, and the seller's key never leaves Delyva's origin", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId, {
+			providerOrderId: "delyva-drop-2",
+			serviceType: "NDD-DROP",
+		});
+		const s3 =
+			"https://delyva-labels.s3.ap-southeast-1.amazonaws.com/l.pdf?X-Amz-Signature=abc";
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = String(input instanceof Request ? input.url : input);
+			if (/\/order\/[^/]+\/label$/.test(url))
+				return new Response(null, { status: 302, headers: { location: s3 } });
+			if (url === s3)
+				return new Response(new TextEncoder().encode("%PDF-1.7 s3"), {
+					status: 200,
+					headers: { "content-type": "application/pdf" },
+				});
+			throw new Error(`unmocked fetch ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const result = await t
+			.withIdentity({ subject: USER })
+			.action(api.delyva.getLabel, { shortId: await shortIdOf(t, orderId) });
+		expect(result.ok).toBe(true);
+		if (!result.ok || result.kind !== "pdf") throw new Error("expected pdf");
+		expect(new TextDecoder().decode(result.pdf)).toContain("%PDF-1.7 s3");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		const [, first] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+		const [, second] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+		// The runtime must not follow for us — that is what forwards the header.
+		expect(first.redirect).toBe("manual");
+		expect(second.redirect).toBe("manual");
+		expect((first.headers as Record<string, string>)["X-Delyvax-Access-Token"]).toBe(
+			"dx-test-key",
+		);
+		expect(second.headers as Record<string, string>).not.toHaveProperty(
+			"X-Delyvax-Access-Token",
+		);
+	});
+
+	test("getLabel: a redirect loop ends in a failure, not a hang", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId, {
+			providerOrderId: "delyva-drop-3",
+			serviceType: "NDD-DROP",
+		});
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(null, {
+					status: 302,
+					headers: { location: "https://api.delyva.app/v1.0/loop" },
+				}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const result = await t
+			.withIdentity({ subject: USER })
+			.action(api.delyva.getLabel, { shortId: await shortIdOf(t, orderId) });
+		expect(result.ok).toBe(false);
+		expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(5);
+	});
+
 	test("getLabel: a JSON envelope's URL comes back to open", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);

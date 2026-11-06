@@ -133,18 +133,47 @@ async function callDelyvaRaw(
 	path: string,
 ): Promise<{ contentType: string | null; body: ArrayBuffer }> {
 	const live = await decryptDelyvaCredentials(credentials);
-	const res = await fetch(`${DELYVA_BASE_URL}${path}`, {
-		method: "GET",
-		headers: {
-			"X-Delyvax-Access-Token": live.apiKey,
-			Accept: "application/pdf, application/json",
-		},
-	});
+	const res = await fetchFollowingRedirects(
+		`${DELYVA_BASE_URL}${path}`,
+		live.apiKey,
+	);
 	if (!res.ok) throw new DelyvaApiError(res.status, await res.text());
 	return {
 		contentType: res.headers.get("content-type"),
 		body: await res.arrayBuffer(),
 	};
+}
+
+/** The label endpoint redirects to an S3 object (PR #458 review). A fetch
+ * that follows on its own forwards every custom header to the new origin —
+ * the WHATWG spec strips only `Authorization` on a cross-origin hop — so the
+ * seller's key would ride along to amazonaws.com. Redirects are followed by
+ * hand instead, and the key is sent ONLY to Delyva's own origin. */
+const MAX_LABEL_REDIRECTS = 3;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+async function fetchFollowingRedirects(
+	startUrl: string,
+	apiKey: string,
+): Promise<Response> {
+	const apiOrigin = new URL(DELYVA_BASE_URL).origin;
+	let url = startUrl;
+	for (let hop = 0; ; hop++) {
+		const sameOrigin = new URL(url).origin === apiOrigin;
+		const res = await fetch(url, {
+			method: "GET",
+			redirect: "manual",
+			headers: {
+				Accept: "application/pdf, application/json",
+				...(sameOrigin ? { "X-Delyvax-Access-Token": apiKey } : {}),
+			},
+		});
+		const location = res.headers.get("location");
+		if (!REDIRECT_STATUSES.has(res.status) || !location) return res;
+		if (hop >= MAX_LABEL_REDIRECTS)
+			throw new DelyvaApiError(res.status, "Too many redirects");
+		url = new URL(location, url).toString();
+	}
 }
 
 /** Bare-key client for the connect probe — before any credentials exist. */

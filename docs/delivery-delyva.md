@@ -334,11 +334,17 @@ The other half of the DapoGo incident: the parcel went to a J&T counter
 with only our despatch label, and sat on "Order created". Two things were
 missing, and both were visible in data we already parsed.
 
-**Who moves the parcel is in the service class.** Delyva's developer guide
-suffixes a service with `-DROP` when the *seller* takes the parcel to a
-branch (`NDD-DROP`); the bare class (`NDD`, `SDD`, `INSTANT`) means the
-courier collects from the pickup address. `parseInstantQuoteResponse` had
-carried `serviceType` since day one and nothing read it. Now:
+**Who moves the parcel is in the service class.** Delyva suffixes a
+service with `-DROP` when the *seller* takes the parcel to a branch
+(`NDD-DROP`); the bare class (`NDD`, `SDD`, `INSTANT`) means the courier
+collects from the pickup address. **The convention is observed, not
+documented** (PR #458 review, 6 Nov 2026): the Postman collection behind
+`docs.api.delyva.com` never enumerates service classes — it documents
+`serviceCode` as "from instant quote" and nothing more — so the one hard
+datum is DapoGo's `JNTMY-PN-B200` = `NDD-DROP`. A drop-off spelled any
+other way would wear the pickup pill; the first non-J&T drop-off booking is
+where to check. `parseInstantQuoteResponse` had carried `serviceType` since
+day one and nothing read it. Now:
 
 - **One author:** `delyvaHandoff(serviceType)` in `convex/lib/delyva.ts` →
   `"pickup" | "dropoff" | undefined`. A missing class is `undefined`, never a
@@ -386,7 +392,12 @@ card):
 
 **Print shipping label** calls `delyva.getLabel` →
 `GET /order/{providerOrderId}/label` with the seller's key through
-`callDelyvaRaw` (bytes + content type; `callDelyva` assumes JSON). **The
+`callDelyvaRaw` (bytes + content type; `callDelyva` assumes JSON).
+`callDelyvaRaw` follows redirects **by hand** (`redirect: "manual"`, which
+the Convex runtime honours — probed 6 Nov 2026 — up to three hops) and sends
+the seller's key **only to `api.delyva.app`**: a fetch that follows on its
+own forwards every custom header to the new origin (the spec strips only
+`Authorization`), so the key would otherwise ride along to S3. **The
 endpoint answers with the PDF itself** — probed 4 Nov 2026 on a demo-account
 booking (dev store `herb`, `ORD-U6AN`, DHL eCommerce `NDD`), never on a
 seller's key: the API redirects to an S3 object (`server: AmazonS3`,
