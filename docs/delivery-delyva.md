@@ -333,7 +333,7 @@ pieces, all through the ONE event path (`applyWebhookEvent`):
   take it to a branch / ask the branch to scan it; pickup → check the Delyva
   app for the scheduled pickup), **Refresh status** + the existing **Print
   shipping label** (one label button per card — it moves into the panel
-  while stale), "Last checked with Delyva N min ago", and a link to Delyva
+  while stale), "Last checked with Delyva N min ago" (or "Last update from Delyva N min ago" when a webhook is the newer word — `latestDelyvaContact`), and a link to Delyva
   (live chat lives inside their app). A live booking that is NOT flagged
   keeps a small Refresh status text button with the same last-checked line —
   the impatient path between sweeps, EasyParcel's posture. The cooldown

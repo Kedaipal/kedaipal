@@ -72,6 +72,7 @@ import {
 	LABEL_UNAVAILABLE_COPY,
 	LEGACY_BOOKED_COPY,
 	lastCheckedCopy,
+	latestDelyvaContact,
 	MARK_RETURNED_HELP,
 	NOT_SCANNED_PILL,
 	notScannedCopy,
@@ -1056,9 +1057,10 @@ function BookedState({
 	const label = delyvaLabelAvailability(job);
 	const courier = job.serviceName ?? "Delyva";
 	const now = Date.now();
+	const contact = latestDelyvaContact(job);
 	const lastChecked = lastCheckedCopy(
-		job.lastPulledAt !== undefined
-			? formatRelativeTime(job.lastPulledAt, now)
+		contact
+			? { kind: contact.kind, relative: formatRelativeTime(contact.at, now) }
 			: null,
 	);
 

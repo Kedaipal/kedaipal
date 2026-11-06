@@ -1432,6 +1432,26 @@ describe("not scanned, pickup failed, returned (z8r3fe11y8)", () => {
 		).toBe("https://demo.delyva.app");
 	});
 
+	it("a job every webhook has moved says when Delyva last updated it — never 'not checked' (6 Nov hands-on finding)", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: {
+				...booked,
+				status: "picked_up",
+				lastEventAt: Date.now() - 2 * 60_000,
+				lastPulledAt: Date.now() - 50 * 60_000, // an older pull loses to the newer event
+			},
+		});
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={{ ...order, status: "shipped" } as Doc<"orders">}
+			/>,
+		);
+		expect(container.textContent).toContain("Last update from Delyva 2m ago");
+		expect(container.textContent).not.toContain("Not checked with Delyva yet");
+		expect(container.textContent).not.toContain("Last checked with Delyva");
+	});
+
 	it("a live booking that isn't flagged still offers Refresh status as the small path, with when it was last checked", () => {
 		state.dispatch = dispatchState({
 			blockReason: "job_active",

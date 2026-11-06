@@ -112,11 +112,36 @@ export function notScannedCopy(args: {
 	return { headline, detail };
 }
 
-/** "Last checked with Delyva 12m ago" / never. */
-export function lastCheckedCopy(relative: string | null): string {
-	return relative
-		? `Last checked with Delyva ${relative}`
-		: "Not checked with Delyva yet — Refresh asks them now";
+/** The newest word from Delyva, whichever way it came: "Last checked with
+ * Delyva 12m ago" after a pull, "Last update from Delyva 2m ago" after a
+ * webhook, and "Not checked" only when neither has ever happened. Keyed on
+ * the pull alone it read "Not checked with Delyva yet" beside "In transit"
+ * on a job every webhook had just moved (hands-on test, 6 Nov 2026) — the
+ * pull is how WE ask, but a webhook is Delyva answering unasked, and the
+ * seller only cares when Delyva last said anything. */
+export function lastCheckedCopy(
+	latest: { kind: "pull" | "event"; relative: string } | null,
+): string {
+	if (!latest) return "Not checked with Delyva yet — Refresh asks them now";
+	return latest.kind === "pull"
+		? `Last checked with Delyva ${latest.relative}`
+		: `Last update from Delyva ${latest.relative} — Refresh asks them now`;
+}
+
+/** Which of a job's two contact stamps is newer: the pull we made
+ * (`lastPulledAt`) or the event Delyva pushed (`lastEventAt`). Null when
+ * neither has ever happened. */
+export function latestDelyvaContact(job: {
+	lastPulledAt?: number;
+	lastEventAt?: number;
+}): { kind: "pull" | "event"; at: number } | null {
+	const pull = job.lastPulledAt;
+	const event = job.lastEventAt;
+	if (pull !== undefined && (event === undefined || pull >= event)) {
+		return { kind: "pull", at: pull };
+	}
+	if (event !== undefined) return { kind: "event", at: event };
+	return null;
 }
 
 /** Where a seller gets a human at Delyva: live chat sits inside their app —
