@@ -378,12 +378,14 @@ function labelUrlFromJson(json: unknown): string | undefined {
 }
 
 /**
- * Normalise a label response. The endpoint's live shape is unconfirmed (the
- * T0 spike on the DapoGo order is operator work — a production call with a
- * live seller's key), so both plausible shapes are handled: a PDF body
- * (content type, or the `%PDF` magic when the type is generic) and a JSON
- * envelope carrying a URL to the file. Anything else throws, so the card
- * shows a failure rather than opening an empty tab.
+ * Normalise a label response. Probed live on a demo-account booking (4 Nov
+ * 2026): the endpoint redirects to an S3 object served as
+ * `application/pdf` (`%PDF-1.7`, ~16 KB), generated at booking and deleted
+ * by S3 after 90 days. The PDF branch is therefore the real one — by content
+ * type, or the `%PDF` magic should the type ever come back generic. The JSON
+ * envelope carrying a URL stays as a defensive fallback that was never
+ * observed. Anything else throws, so the card shows a failure rather than
+ * opening an empty tab.
  */
 export function parseDelyvaLabelResponse(args: {
 	contentType: string | null;

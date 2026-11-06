@@ -2040,10 +2040,11 @@ export const cancelBooking = action({
  * "Order created" for a day). It is offered beside Kedaipal's own despatch
  * label, never instead of it.
  *
- * The response's live shape is unconfirmed (recording it is the ticket's T0
- * spike, a production call), so both shapes are handled: PDF bytes are
- * returned for the card to save, a JSON envelope's URL is returned to open.
- * Failure returns Delyva's own message — never a silent nothing.
+ * The response is the PDF itself (probed on a demo booking, 4 Nov 2026: a
+ * redirect to an S3 object, `application/pdf`, generated at booking and
+ * deleted after 90 days), returned as bytes for the card to save; a JSON
+ * envelope's URL is still handled as a never-observed fallback. Failure
+ * returns Delyva's own message — never a silent nothing.
  */
 export const getLabel = action({
 	args: { shortId: v.string() },
