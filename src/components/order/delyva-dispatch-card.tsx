@@ -66,7 +66,7 @@ import {
 import {
 	type CourierHandoff,
 	courierLinkPendingSellerCopy,
-	DELYVA_SUPPORT_URL,
+	delyvaSupportUrl,
 	dropoffSteps,
 	HANDOFF_PICKER_NOTE,
 	LABEL_UNAVAILABLE_COPY,
@@ -351,7 +351,9 @@ export function DelyvaDispatchCard({
 		try {
 			const result = await refreshJob({ shortId: order.shortId });
 			if (!result.ok) {
-				toast.error(result.message);
+				// A cooldown is a wait, not a failure — Delyva wasn't even asked.
+				if (result.cooldown) toast.info(result.message);
+				else toast.error(result.message);
 				return;
 			}
 			if (result.changed) toast.success("Updated from Delyva");
@@ -400,10 +402,10 @@ export function DelyvaDispatchCard({
 				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 					Delyva Courier
 				</p>
-				{job && !failedJob ? (
+				{job && (!failedJob || pickupFailed) ? (
 					<span
 						className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
-							stale || returnedJob
+							stale || returnedJob || pickupFailed
 								? TONE_CHIP.warn
 								: completedJob
 									? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
@@ -414,7 +416,9 @@ export function DelyvaDispatchCard({
 							? NOT_SCANNED_PILL
 							: returnedJob
 								? RETURNED_PILL
-								: delyvaStatusLabel(job.status)}
+								: pickupFailed
+									? PICKUP_FAILED_TITLE
+									: delyvaStatusLabel(job.status)}
 					</span>
 				) : null}
 			</div>
@@ -500,6 +504,7 @@ export function DelyvaDispatchCard({
 					completed={completedJob !== null}
 					active={activeJob !== null}
 					stale={stale}
+					isDemo={dispatch.isDemo === true}
 					pickupSummary={dispatch.pickupSummary}
 					printingLabel={printingLabel}
 					refreshing={refreshing}
@@ -518,15 +523,22 @@ export function DelyvaDispatchCard({
 							Collecting from{" "}
 							<span className="font-medium text-foreground">
 								{dispatch.pickupSummary}
-							</span>{" "}
-							·{" "}
-							<Link
-								to="/app/settings"
-								search={{ tab: "integrations" }}
-								className="font-medium text-accent hover:underline"
-							>
-								Edit
-							</Link>
+							</span>
+							{/* The failed-pickup banner above already carries the
+							    edit link; one control per idea. */}
+							{pickupFailed ? null : (
+								<>
+									{" "}
+									·{" "}
+									<Link
+										to="/app/settings"
+										search={{ tab: "integrations" }}
+										className="font-medium text-accent hover:underline"
+									>
+										Edit
+									</Link>
+								</>
+							)}
 						</p>
 					) : null}
 
@@ -1014,6 +1026,7 @@ function BookedState({
 	completed,
 	active,
 	stale,
+	isDemo,
 	pickupSummary,
 	printingLabel,
 	refreshing,
@@ -1027,6 +1040,8 @@ function BookedState({
 	active: boolean;
 	/** Flagged by the hourly sweep: booked a day ago, no scan since. */
 	stale: boolean;
+	/** A demo-key account: its Delyva app is the demo tenant's. */
+	isDemo: boolean;
 	pickupSummary?: string;
 	printingLabel: boolean;
 	refreshing: boolean;
@@ -1123,6 +1138,7 @@ function BookedState({
 					handoff={handoff}
 					now={now}
 					lastChecked={lastChecked}
+					isDemo={isDemo}
 					refreshButton={refreshButton("default")}
 					printButton={printButton("outline")}
 				/>
@@ -1260,6 +1276,7 @@ function StalePanel({
 	handoff,
 	now,
 	lastChecked,
+	isDemo,
 	refreshButton,
 	printButton,
 }: {
@@ -1268,6 +1285,7 @@ function StalePanel({
 	handoff: CourierHandoff | undefined;
 	now: number;
 	lastChecked: string;
+	isDemo: boolean;
 	refreshButton: ReactNode;
 	printButton: ReactNode;
 }) {
@@ -1296,7 +1314,7 @@ function StalePanel({
 			<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
 				<span>{lastChecked}</span>
 				<a
-					href={DELYVA_SUPPORT_URL}
+					href={delyvaSupportUrl(isDemo)}
 					target="_blank"
 					rel="noopener noreferrer"
 					className="inline-flex min-h-9 items-center gap-1 font-medium underline underline-offset-2"
@@ -1342,7 +1360,9 @@ function ReturnedState({
 			>
 				<p className="flex items-start gap-2">
 					<PackageX className="mt-0.5 size-4 shrink-0" />
-					<span>{returnedCopy(job.serviceName, job.failureReason)}</span>
+					<span>
+						{returnedCopy(job.serviceName, job.failureReason, !stillShipped)}
+					</span>
 				</p>
 				{job.awb ? (
 					<p className="pl-6 text-xs">

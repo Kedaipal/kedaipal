@@ -2709,7 +2709,10 @@ export const refreshJob = action({
 	handler: async (
 		ctx,
 		{ shortId },
-	): Promise<{ ok: true; changed: boolean } | { ok: false; message: string }> => {
+	): Promise<
+		| { ok: true; changed: boolean }
+		| { ok: false; message: string; cooldown?: true }
+	> => {
 		const target = await ctx.runQuery(internal.delyva.getRefreshTarget, {
 			shortId,
 		});
@@ -2719,8 +2722,11 @@ export const refreshJob = action({
 		});
 		if (!slot.ok) {
 			const seconds = Math.max(1, Math.ceil(slot.retryAfterMs / 1000));
+			// `cooldown` tells the card this is a wait, not a failure — the
+			// seller did nothing wrong and Delyva was not even asked.
 			return {
 				ok: false,
+				cooldown: true,
 				message: `Checked with Delyva less than a minute ago — try again in ${seconds}s.`,
 			};
 		}

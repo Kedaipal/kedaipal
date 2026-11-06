@@ -64,7 +64,7 @@ vi.mock("../../hooks/usePermission", () => ({
 	useStoreRole: () => "owner",
 }));
 vi.mock("sonner", () => ({
-	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
+	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
 vi.mock("../../lib/download", () => ({
 	downloadPdfBytes: vi.fn(),
@@ -1379,8 +1379,13 @@ describe("not scanned, pickup failed, returned (z8r3fe11y8)", () => {
 			.mockResolvedValueOnce({ ok: true, changed: false })
 			.mockResolvedValueOnce({
 				ok: false,
+				cooldown: true,
 				message:
 					"Checked with Delyva less than a minute ago — try again in 48s.",
+			})
+			.mockResolvedValueOnce({
+				ok: false,
+				message: "Delyva couldn't answer: 502 Bad Gateway",
 			});
 		state.actions.set(NAME.refresh, refresh);
 		state.dispatch = dispatchState({
@@ -1398,12 +1403,33 @@ describe("not scanned, pickup failed, returned (z8r3fe11y8)", () => {
 				expect.anything(),
 			),
 		);
+		// A cooldown is a wait, not a failure — it must never read as an error.
 		fireEvent.click(screen.getByRole("button", { name: /refresh status/i }));
 		await waitFor(() =>
-			expect(toast.error).toHaveBeenCalledWith(
+			expect(toast.info).toHaveBeenCalledWith(
 				expect.stringMatching(/less than a minute ago/),
 			),
 		);
+		expect(toast.error).not.toHaveBeenCalled();
+		// Delyva not answering IS a failure.
+		fireEvent.click(screen.getByRole("button", { name: /refresh status/i }));
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith(
+				expect.stringMatching(/couldn't answer/),
+			),
+		);
+	});
+
+	it("the Ask Delyva link lands on the demo tenant for a demo key", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			isDemo: true,
+			job: { ...booked, staleSince: Date.now() - HOUR },
+		});
+		render(<DelyvaDispatchCard order={order} />);
+		expect(
+			screen.getByRole("link", { name: /ask delyva/i }).getAttribute("href"),
+		).toBe("https://demo.delyva.app");
 	});
 
 	it("a live booking that isn't flagged still offers Refresh status as the small path, with when it was last checked", () => {
@@ -1424,6 +1450,7 @@ describe("not scanned, pickup failed, returned (z8r3fe11y8)", () => {
 
 	it("pickup failed (board 5): named as such, Edit pickup address beside it, Book again as the CTA", () => {
 		state.dispatch = dispatchState({
+			pickupSummary: "55 Jln Eco Majestic, 43500 Semenyih",
 			job: {
 				...booked,
 				status: "rejected",
@@ -1440,6 +1467,12 @@ describe("not scanned, pickup failed, returned (z8r3fe11y8)", () => {
 		).toBeTruthy();
 		expect(screen.getByRole("button", { name: /book again/i })).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+		// The header pill names the state like the other amber states do, and
+		// the pickup address has ONE edit control: the banner's, not also the
+		// "Collecting from … · Edit" line of the rebook form.
+		expect(screen.getAllByText("Pickup failed").length).toBeGreaterThan(0);
+		expect(container.textContent).toContain("Collecting from");
+		expect(screen.queryByRole("link", { name: /^edit$/i })).toBeNull();
 	});
 
 	it("a create failure (99) is still a booking that didn't go through, with Try again", () => {
@@ -1536,6 +1569,10 @@ describe("not scanned, pickup failed, returned (z8r3fe11y8)", () => {
 		const packed = { ...order, status: "packed" } as Doc<"orders">;
 		const { container } = render(<DelyvaDispatchCard order={packed} />);
 		expect(container.textContent).toContain("brought this parcel back");
+		// The explainer follows the order: no "still reads Shipped" once the
+		// button it pointed at has gone.
+		expect(container.textContent).not.toContain("still reads Shipped");
+		expect(container.textContent).toContain("back at Packed");
 		expect(
 			screen.queryByRole("button", { name: /mark order as returned/i }),
 		).toBeNull();

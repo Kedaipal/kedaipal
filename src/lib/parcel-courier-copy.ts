@@ -119,8 +119,12 @@ export function lastCheckedCopy(relative: string | null): string {
 		: "Not checked with Delyva yet — Refresh asks them now";
 }
 
-/** Where a seller gets a human at Delyva: live chat sits inside their app. */
-export const DELYVA_SUPPORT_URL = "https://my.delyva.app";
+/** Where a seller gets a human at Delyva: live chat sits inside their app —
+ * the demo tenant's app for a demo key, so the link lands on the account
+ * that holds the booking. */
+export function delyvaSupportUrl(isDemo: boolean): string {
+	return isDemo ? "https://demo.delyva.app" : "https://my.delyva.app";
+}
 
 /** A rejected booking that Delyva had CONFIRMED (a providerOrderId exists)
  * is a pickup that failed, not a booking that never went through. */
@@ -131,13 +135,20 @@ export const RETURNED_PILL = "Returned to you";
 export function returnedCopy(
 	serviceName: string | undefined,
 	failureReason: string | undefined,
+	/** Has the seller already marked the order returned (it is back at
+	 * Packed)? The second sentence must follow the order, or it lies the
+	 * moment the button it points at has gone. */
+	orderMarked = false,
 ): string {
 	const courier = serviceName ?? "The courier";
 	const why =
 		failureReason && failureReason !== "Returned to you"
 			? ` (${failureReason})`
 			: "";
-	return `${courier} brought this parcel back instead of delivering it${why}. The order still reads Shipped until you mark it returned.`;
+	const next = orderMarked
+		? "The order is back at Packed — book a courier again below, or cancel it."
+		: "The order still reads Shipped until you mark it returned.";
+	return `${courier} brought this parcel back instead of delivering it${why}. ${next}`;
 }
 
 /** What "Mark order as returned" does — said under the button, because a
@@ -149,6 +160,14 @@ export const MARK_RETURNED_HELP =
  * Shipped after a return. Names the store, never the courier's reason. */
 export function courierReturnedBuyerLine(storeName: string): string {
 	return `The courier returned this parcel to ${storeName}. They'll be in touch about sending it again.`;
+}
+
+/** The buyer's Status card while the parcel is back with the store: the
+ * order's own status (Shipped until the seller marks it, Packed after) would
+ * read "On the Way" above a line saying the parcel came back, or "Packed"
+ * with no reason for the step backwards. One word that is true in both. */
+export function courierReturnedBuyerStatus(storeName: string): string {
+	return `Returned to ${storeName}`;
 }
 
 /** The seller's Shipment tracking card, beside the number that came back. */

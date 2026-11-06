@@ -2621,27 +2621,37 @@ export const get = query({
 		// and must never be promised one.
 		let courierLinkPending: true | undefined;
 		let courierReturned: true | undefined;
-		if (
+		// Returned (z8r3fe11y8) is read on two shapes: the shipped order the
+		// parcel came back from (number still on it), AND the packed order
+		// the seller marked returned (number gone) — the buyer saw "On the
+		// Way" turn into "Packed" and must be told why until the seller books
+		// again, adds a number of their own, or cancels. A packed delivery
+		// order with no number is the only extra shape that pays the read.
+		const readsJobs =
 			order.deliveryMethod === "delivery" &&
-			order.trackingNo &&
-			(!order.carrierTrackingUrl || order.status === "shipped")
-		) {
+			(order.trackingNo
+				? !order.carrierTrackingUrl || order.status === "shipped"
+				: order.status === "packed");
+		if (readsJobs) {
 			const jobs = await ctx.db
 				.query("deliveryJobs")
 				.withIndex("by_order", (q) => q.eq("orderId", order._id))
 				.collect();
 			const active = jobs.find((j) => isActiveJobStatus(j.status));
-			if (active && isCourierLinkPending(active, order)) {
+			if (active && order.trackingNo && isCourierLinkPending(active, order)) {
 				courierLinkPending = true;
 			}
-			// Returned (z8r3fe11y8): the newest Delyva job came back and the
-			// order is still the shipped one it came back from — the same
-			// `by_order` read, so a shipped parcel pays one indexed read.
-			if (order.status === "shipped" && !active) {
+			// The newest Delyva job came back, nothing newer is carrying the
+			// parcel, and the order's number (if any) is still that job's —
+			// a seller's own manual number means they sent it another way.
+			if (!active && (order.status === "shipped" || order.status === "packed")) {
 				const latest = [...jobs]
 					.filter((j) => j.provider === "delyva")
 					.sort((a, b) => b.createdAt - a.createdAt)[0];
-				if (latest?.returned && latest.awb === order.trackingNo)
+				if (
+					latest?.returned &&
+					(order.trackingNo === undefined || latest.awb === order.trackingNo)
+				)
 					courierReturned = true;
 			}
 		}

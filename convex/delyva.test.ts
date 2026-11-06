@@ -1998,18 +1998,48 @@ describe("failure codes, the refresh pull and the stale sweep (z8r3fe11y8)", () 
 		expect(order?.courierReturned).toBe(true);
 	});
 
-	test("orders.get says nothing about a return once the seller has marked it (the number is gone)", async () => {
+	test("orders.get keeps telling the buyer about the return after the seller marked it (Packed, number gone) — until something newer carries the parcel", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);
-		const orderId = await seedOrder(t, retailer._id, { status: "packed" });
-		await seedJob(t, retailer._id, orderId, {
+		const asUser = t.withIdentity({ subject: USER });
+		const read = async (orderId: Id<"orders">) => {
+			const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.shortId as string;
+			return (await asUser.query(api.orders.get, { shortId }))?.courierReturned;
+		};
+		// Marked returned: the buyer saw "On the Way" become "Packed" and is
+		// owed the reason.
+		const marked = await seedOrder(t, retailer._id, { status: "packed" });
+		await seedJob(t, retailer._id, marked, {
 			status: "completed",
 			returned: true,
 			awb: "632195694574",
 		});
-		const asUser = t.withIdentity({ subject: USER });
-		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))?.shortId as string;
-		const order = await asUser.query(api.orders.get, { shortId });
-		expect(order?.courierReturned).toBeUndefined();
+		expect(await read(marked)).toBe(true);
+		// Booked again: a live job is carrying it now.
+		const rebooked = await seedOrder(t, retailer._id, { status: "packed" });
+		await seedJob(t, retailer._id, rebooked, {
+			status: "completed",
+			returned: true,
+			awb: "632195694574",
+			createdAt: Date.now() - 60_000,
+		});
+		await seedJob(t, retailer._id, rebooked, { status: "assigning" });
+		expect(await read(rebooked)).toBeUndefined();
+		// The seller sent it another way: their own number on the order.
+		const manual = await seedOrder(t, retailer._id, {
+			status: "packed",
+			trackingNo: "MY-OWN-123",
+		});
+		await seedJob(t, retailer._id, manual, {
+			status: "completed",
+			returned: true,
+			awb: "632195694574",
+		});
+		expect(await read(manual)).toBeUndefined();
+		// A packed delivery order with no booking history pays the read and
+		// says nothing — the ordinary case.
+		const plain = await seedOrder(t, retailer._id, { status: "packed" });
+		expect(await read(plain)).toBeUndefined();
 	});
 });

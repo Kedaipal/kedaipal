@@ -101,6 +101,7 @@ import {
 	COURIER_LINK_PENDING_BUYER_LINE,
 	courierLinkPendingBuyerButton,
 	courierReturnedBuyerLine,
+	courierReturnedBuyerStatus,
 } from "../lib/parcel-courier-copy";
 import { ssrRead } from "../lib/ssr-read";
 import { TONE_PANEL, type Tone } from "../lib/tone";
@@ -709,6 +710,19 @@ function TrackingRoute() {
 			isCurrent: pos === currentPos,
 		});
 	}
+	if (order.courierReturned && order.status === "shipped" && currentPos >= 1) {
+		// The parcel came back (z8r3fe11y8): "On the Way" is no longer true, so
+		// the timeline rests on the step before it until the seller marks the
+		// order returned (which moves the order itself back to Packed).
+		const shipped = timelineNodes[currentPos];
+		const before = timelineNodes[currentPos - 1];
+		if (shipped && before) {
+			shipped.isCurrent = false;
+			shipped.isDone = false;
+			shipped.description = undefined;
+			before.isCurrent = true;
+		}
+	}
 	if (order.mockupStatus !== undefined) {
 		// While the gate is closed the mockup is the active step, not the stage.
 		if (mockupGateClosed && currentPos >= 1 && timelineNodes[currentPos]) {
@@ -942,20 +956,37 @@ function TrackingRoute() {
 				</div>
 			) : null}
 
-			{/* Current status card */}
+			{/* Current status card. A parcel the courier brought back
+			    (z8r3fe11y8) overrides the status word: the order reads Shipped
+			    until the seller marks it and Packed after, and neither is what
+			    the buyer needs to hear — the one line under the card says why. */}
 			<div className="mt-6 flex items-center gap-3 rounded-2xl border border-border bg-card p-4">
-				<span className={config?.color}>{config?.icon}</span>
+				{order.courierReturned ? (
+					<span className="text-amber-600 dark:text-amber-400">
+						<CircleAlert className="size-5" />
+					</span>
+				) : (
+					<span className={config?.color}>{config?.icon}</span>
+				)}
 				<div>
 					<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 						Status
 					</p>
 					<p className="font-semibold">
-						{currentStage
-							? stageLabel(currentStage, stageLocale)
-							: (config?.label ?? order.status)}
+						{order.courierReturned
+							? courierReturnedBuyerStatus(order.storeName)
+							: currentStage
+								? stageLabel(currentStage, stageLocale)
+								: (config?.label ?? order.status)}
 					</p>
 				</div>
 			</div>
+			{order.courierReturned ? (
+				<p className="mt-2 flex items-start gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+					<CircleAlert className="mt-0.5 size-4 shrink-0" />
+					<span>{courierReturnedBuyerLine(order.storeName)}</span>
+				</p>
+			) : null}
 
 			{/* Payment deadline (86eyq0epn) — the claim timer continuing until real
 			    money. Rendered only while the clock is LIVE: unpaid (a `claimed`
@@ -1401,17 +1432,14 @@ function TrackingRoute() {
 							) : null}
 						</div>
 					) : null}
-					{order.courierReturned ? (
+					{order.courierReturned ? null : isSafeTrackingUrl(
+							order.carrierTrackingUrl,
+						) ? (
 						/* The courier brought the parcel back (z8r3fe11y8): the
-						   order still reads Shipped until the seller marks it, so
-						   the tracking button would open a page that ends in
-						   "returned to sender". Say what happened instead; the
-						   seller's reason stays on the seller's side. */
-						<p className="flex items-start gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-							<CircleAlert className="mt-0.5 size-4 shrink-0" />
-							<span>{courierReturnedBuyerLine(order.storeName)}</span>
-						</p>
-					) : isSafeTrackingUrl(order.carrierTrackingUrl) ? (
+						   tracking button would open a page that ends in
+						   "returned to sender", so its slot stays empty — the
+						   notice sits under the Status card, where the status
+						   word it explains is. */
 						<a
 							href={order.carrierTrackingUrl}
 							target="_blank"

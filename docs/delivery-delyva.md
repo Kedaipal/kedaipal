@@ -336,7 +336,35 @@ pieces, all through the ONE event path (`applyWebhookEvent`):
   while stale), "Last checked with Delyva N min ago", and a link to Delyva
   (live chat lives inside their app). A live booking that is NOT flagged
   keeps a small Refresh status text button with the same last-checked line —
-  the impatient path between sweeps, EasyParcel's posture.
+  the impatient path between sweeps, EasyParcel's posture. The cooldown
+  refusal comes back with `cooldown: true` and the card shows it as an
+  **info** toast — a wait is not a failure; only "Delyva couldn't answer" is.
+- **The two states reach every surface that names a booking** (found by
+  the hands-on test, 6 Nov 2026 — the harness renders the card alone):
+  the **Deliveries list** carried the job's `completed` status straight to a
+  green **Delivered** on a parcel the courier had brought BACK, and plain
+  **Booked** on a flagged one. `DeliveryJobRow` now carries `returned` and
+  `stale`; `jobStatusLabel` / `jobStatusTone` (the one author for what a
+  booking is called) read them — **Returned** / **Not scanned yet**, in a
+  `warn` tone that is the failure amber *with the cost kept*, since a
+  returned booking was charged and a failed one never is. A returned job
+  becomes **rebookable** (and counts under "to rebook") the moment the
+  seller marks the order returned: the order drops out of `orderSettled`,
+  which is the same rule a failed booking follows. The **buyer's page**
+  keyed its notice on `status === "shipped"`, which was both too early
+  (hero and timeline still read "On the Way" above "the courier returned
+  this parcel") and too late (after Mark returned the order silently read
+  Packed). `orders.get` now reads the `by_order` jobs on the packed-with-no-
+  number shape too, and `courierReturned` holds while the newest Delyva job
+  is returned, nothing newer carries the parcel, and the order's number (if
+  any) is still that job's. The Status card says **Returned to {store}**
+  with the notice under it, and a still-Shipped order's timeline rests on
+  the step before On the Way. The card's own explainer follows the order:
+  "still reads Shipped until you mark it" before the mark, "back at Packed —
+  book again below, or cancel" after. Also from the test: the failed
+  booking gets the header pill the other amber states have; the pickup
+  address has ONE edit control while the failed banner carries it; the
+  Ask Delyva link lands on `demo.delyva.app` for a demo key.
 
 **Webhook events.** `DELYVA_WEBHOOK_EVENTS` now also subscribes
 `order.updated` and `order.failed` — the full order object, the same shape

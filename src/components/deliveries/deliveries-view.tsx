@@ -378,7 +378,10 @@ function BookingLine({
 	job: DeliveryJobRow;
 	currency: string;
 }) {
-	const tone = jobStatusTone(job.status);
+	const tone = jobStatusTone(job.status, {
+		returned: job.returned,
+		stale: job.stale,
+	});
 	const carrier =
 		[job.carrier, job.vehicle].filter(Boolean).join(" · ") ||
 		(job.provider === "delyva"
@@ -397,6 +400,8 @@ function BookingLine({
 			{jobStatusLabel(job.status, {
 				provider: job.provider,
 				collection: job.direction === "collection",
+				returned: job.returned,
+				stale: job.stale,
 			})}
 			{job.tippable ? ` · ${waitedFor(job.createdAt)}` : null}
 		</span>
@@ -461,6 +466,10 @@ function BookingAction({
 	);
 	if (job.group === "failed")
 		return job.rebookable ? toOrder("Rebook", true) : null;
+	// A returned parcel (z8r3fe11y8): once the seller marked the order
+	// returned it books again; until then the order page has the marking.
+	if (job.returned)
+		return job.rebookable ? toOrder("Rebook", true) : toOrder("View");
 	// Still no rider: the lever is a tip (86eye9xd4), right where it's seen.
 	if (job.tippable && canTipMore(currency, job.priorityFee ?? 0))
 		return (
