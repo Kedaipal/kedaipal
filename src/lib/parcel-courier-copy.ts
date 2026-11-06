@@ -79,6 +79,127 @@ export function courierLinkPendingBuyerButton(
 }
 
 // ---------------------------------------------------------------------------
+// Not scanned, pickup failed, returned (z8r3fe11y8)
+// ---------------------------------------------------------------------------
+
+/** The amber pill on a booking the hourly sweep flagged. */
+export const NOT_SCANNED_PILL = "Not scanned yet";
+
+/** The stale card's explainer: what has (not) happened, in hours, and what
+ * to check — worded by the handoff, because the two kinds have different
+ * fixes. The waybill rides along so the seller can quote it to the branch
+ * or to Delyva without hunting for it. */
+export function notScannedCopy(args: {
+	serviceName: string | undefined;
+	awb: string | undefined;
+	handoff: CourierHandoff | undefined;
+	hoursSinceBooking: number;
+}): { headline: string; detail: string } {
+	const courier = args.serviceName ?? "The courier";
+	const since =
+		args.hoursSinceBooking >= 48
+			? `${Math.floor(args.hoursSinceBooking / 24)} days`
+			: `${Math.max(24, Math.floor(args.hoursSinceBooking))} hours`;
+	const headline = args.awb
+		? `No scan from ${courier} in ${since} — waybill ${args.awb} is still unscanned.`
+		: `No scan from ${courier} in ${since}, and no tracking number has been issued.`;
+	const detail =
+		args.handoff === "dropoff"
+			? "If you haven't dropped the parcel off yet, take it to a branch with the shipping label on. If you have, ask that branch to scan it in — tracking only starts at the scan."
+			: args.handoff === "pickup"
+				? `If no courier has come, check your Delyva app that a pickup is scheduled, or ask Delyva. Keep the parcel labelled and ready.`
+				: "If the parcel has left you, ask the courier to scan it; if it hasn't, check your Delyva app that the booking is live. Tracking only starts at the first scan.";
+	return { headline, detail };
+}
+
+/** The newest word from Delyva, whichever way it came: "Last checked with
+ * Delyva 12m ago" after a pull, "Last update from Delyva 2m ago" after a
+ * webhook, and "Not checked" only when neither has ever happened. Keyed on
+ * the pull alone it read "Not checked with Delyva yet" beside "In transit"
+ * on a job every webhook had just moved (hands-on test, 6 Nov 2026) — the
+ * pull is how WE ask, but a webhook is Delyva answering unasked, and the
+ * seller only cares when Delyva last said anything. */
+export function lastCheckedCopy(
+	latest: { kind: "pull" | "event"; relative: string } | null,
+): string {
+	if (!latest) return "Not checked with Delyva yet — Refresh asks them now";
+	return latest.kind === "pull"
+		? `Last checked with Delyva ${latest.relative}`
+		: `Last update from Delyva ${latest.relative} — Refresh asks them now`;
+}
+
+/** Which of a job's two contact stamps is newer: the pull we made
+ * (`lastPulledAt`) or the event Delyva pushed (`lastEventAt`). Null when
+ * neither has ever happened. */
+export function latestDelyvaContact(job: {
+	lastPulledAt?: number;
+	lastEventAt?: number;
+}): { kind: "pull" | "event"; at: number } | null {
+	const pull = job.lastPulledAt;
+	const event = job.lastEventAt;
+	if (pull !== undefined && (event === undefined || pull >= event)) {
+		return { kind: "pull", at: pull };
+	}
+	if (event !== undefined) return { kind: "event", at: event };
+	return null;
+}
+
+/** Where a seller gets a human at Delyva: live chat sits inside their app —
+ * the demo tenant's app for a demo key, so the link lands on the account
+ * that holds the booking. */
+export function delyvaSupportUrl(isDemo: boolean): string {
+	return isDemo ? "https://demo.delyva.app" : "https://my.delyva.app";
+}
+
+/** A rejected booking that Delyva had CONFIRMED (a providerOrderId exists)
+ * is a pickup that failed, not a booking that never went through. */
+export const PICKUP_FAILED_TITLE = "Pickup failed";
+
+/** The returned card's pill and explainer. */
+export const RETURNED_PILL = "Returned to you";
+export function returnedCopy(
+	serviceName: string | undefined,
+	failureReason: string | undefined,
+	/** Has the seller already marked the order returned (it is back at
+	 * Packed)? The second sentence must follow the order, or it lies the
+	 * moment the button it points at has gone. */
+	orderMarked = false,
+): string {
+	const courier = serviceName ?? "The courier";
+	const why =
+		failureReason && failureReason !== "Returned to you"
+			? ` (${failureReason})`
+			: "";
+	const next = orderMarked
+		? "The order is back at Packed — book a courier again below, or cancel it."
+		: "The order still reads Shipped until you mark it returned.";
+	return `${courier} brought this parcel back instead of delivering it${why}. ${next}`;
+}
+
+/** What "Mark order as returned" does — said under the button, because a
+ * status move the seller can't predict is a button they won't press. */
+export const MARK_RETURNED_HELP =
+	"Puts the order back to Packed with a note, clears the dead tracking number, and unlocks Book again.";
+
+/** The buyer's page, under the courier card, while the order still reads
+ * Shipped after a return. Names the store, never the courier's reason. */
+export function courierReturnedBuyerLine(storeName: string): string {
+	return `The courier returned this parcel to ${storeName}. They'll be in touch about sending it again.`;
+}
+
+/** The buyer's Status card while the parcel is back with the store: the
+ * order's own status (Shipped until the seller marks it, Packed after) would
+ * read "On the Way" above a line saying the parcel came back, or "Packed"
+ * with no reason for the step backwards. One word that is true in both. */
+export function courierReturnedBuyerStatus(storeName: string): string {
+	return `Returned to ${storeName}`;
+}
+
+/** The seller's Shipment tracking card, beside the number that came back. */
+export const COURIER_RETURNED_SELLER_LINE =
+	"The courier returned this parcel — see the Delyva card to message your buyer or book again.";
+
+// ---------------------------------------------------------------------------
 // Pickup vs drop-off (z8r3fe11x3)
 // ---------------------------------------------------------------------------
 

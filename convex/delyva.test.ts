@@ -1110,7 +1110,7 @@ describe("the tracking link lands at collection, never at booking (z8r3fe0t4e)",
 		expect(order?.status).toBe("shipped");
 	});
 
-	test("cancelled (900) with the number on the order never writes a link", async () => {
+	test("cancelled (900) with the number on the order never writes a link — and takes the dead number back off (z8r3fe11y8)", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);
 		const orderId = await seedOrder(t, retailer._id, {
@@ -1128,7 +1128,30 @@ describe("the tracking link lands at collection, never at booking (z8r3fe0t4e)",
 		});
 		const order = await t.run(async (ctx) => ctx.db.get(orderId));
 		expect(order?.carrierTrackingUrl).toBeUndefined();
-		expect(order?.trackingNo).toBe("MY0012345678");
+		// The mirror is fill-if-unset, so a dead number left on the order
+		// would block the NEXT booking's AWB from ever reaching the buyer.
+		expect(order?.trackingNo).toBeUndefined();
+		expect(order?.courierName).toBeUndefined();
+	});
+
+	test("a seller's own manual number survives a cancelled booking (not ours to take)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			courierName: "Pos Laju",
+			trackingNo: "MANUAL-9",
+		});
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			awb: "MY0012345678",
+		});
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 900,
+			eventAt: T2,
+		});
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		expect(order?.trackingNo).toBe("MANUAL-9");
+		expect(order?.courierName).toBe("Pos Laju");
 	});
 
 	test("commitBooking follows the same rule: a booked response mirrors the number, a collected one the link too", async () => {
@@ -1451,5 +1474,754 @@ describe("pickup vs drop-off, and the courier's label (z8r3fe11x3)", () => {
 		});
 		const row = await t.run(async (ctx) => ctx.db.get(quoteId));
 		expect(row?.serviceType).toBe("NDD-DROP");
+	});
+});
+
+describe("failure codes, the refresh pull and the stale sweep (z8r3fe11y8)", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	const HOUR = 60 * 60 * 1000;
+
+	async function scheduledNames(t: ReturnType<typeof setup>) {
+		return t.run(async (ctx) =>
+			(await ctx.db.system.query("_scheduled_functions").collect()).map(
+				(j) => j.name,
+			),
+		);
+	}
+
+	function mockOrderPull(respond: (url: string) => Response) {
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = String(input instanceof Request ? input.url : input);
+			if (/\/order\/[^/]+$/.test(url)) return respond(url);
+			throw new Error(`unmocked fetch ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		return fetchMock;
+	}
+
+	function fullOrder(over: Record<string, unknown>) {
+		return {
+			data: {
+				id: "DLV-1",
+				consignmentNo: "MY0012345678",
+				statusCode: 100,
+				status: "created",
+				customerId: 128399,
+				failedReason: null,
+				cancelledReason: null,
+				updatedAt: "2026-11-05T01:00:00.000Z",
+				waypoint: [],
+				...over,
+			},
+		};
+	}
+
+	test("99 (create failed) rejects the job with the one sentence, emails the seller, and takes the dead number off the order", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await seedJob(t, retailer._id, orderId);
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 100,
+			consignmentNo: "MY0099",
+			eventAt: T1,
+		});
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 99,
+			eventAt: T2,
+		});
+		const { job, order } = await t.run(async (ctx) => ({
+			job: await ctx.db.get(jobId),
+			order: await ctx.db.get(orderId),
+		}));
+		expect(job?.status).toBe("rejected");
+		expect(job?.failureReason).toBe("Delyva could not create the order");
+		expect(order?.status).toBe("confirmed");
+		expect(order?.trackingNo).toBeUndefined();
+		expect(order?.courierName).toBeUndefined();
+		expect(
+			(await scheduledNames(t)).filter((n) => n.includes("notifyDeliveryJobFailed")),
+		).toHaveLength(1);
+	});
+
+	test("654 / 655 reject with Delyva's words, or ours when they send none", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		for (const [code, text, expected] of [
+			[654, "Failed - Driver cancel", "Failed - Driver cancel"],
+			[654, undefined, "Courier cancelled the pickup"],
+			[655, undefined, "The courier reported the booking as failed"],
+		] as const) {
+			const orderId = await seedOrder(t, retailer._id);
+			const jobId = await seedJob(t, retailer._id, orderId, {
+				status: "ongoing",
+				lastEventAt: T1,
+			});
+			await t.mutation(internal.delyva.applyWebhookEvent, {
+				jobId,
+				statusCode: code,
+				statusText: text,
+				eventAt: T2,
+			});
+			const job = await t.run(async (ctx) => ctx.db.get(jobId));
+			expect(job?.status).toBe("rejected");
+			expect(job?.failureReason).toBe(expected);
+		}
+	});
+
+	test("651 (lost / damaged) keeps the job live with the claim line, and the order shipped", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { status: "shipped" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "picked_up",
+			lastEventAt: T1,
+		});
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 651,
+			statusText: "Failed delivery - Lost/Damage",
+			eventAt: T2,
+		});
+		const { job, order } = await t.run(async (ctx) => ({
+			job: await ctx.db.get(jobId),
+			order: await ctx.db.get(orderId),
+		}));
+		expect(job?.status).toBe("picked_up");
+		expect(job?.failureReason).toBe("Lost or damaged, claim with Delyva");
+		expect(order?.status).toBe("shipped");
+		expect(
+			(await scheduledNames(t)).filter((n) => n.includes("notifyDeliveryJobFailed")),
+		).toHaveLength(1);
+	});
+
+	test("661 then 701: returning keeps picked_up, returned completes the job as RETURNED and leaves the order shipped", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { status: "shipped" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "picked_up",
+			awb: "MY0012345678",
+			lastEventAt: T1,
+		});
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 661,
+			eventAt: T2,
+		});
+		let job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.status).toBe("picked_up");
+		expect(job?.failureReason).toBe("Returning to sender");
+		expect(job?.returned).toBeUndefined();
+
+		const T3 = T2 + HOUR;
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 701,
+			statusText: "Item Returned",
+			eventAt: T3,
+		});
+		// A replay changes nothing and emails nobody twice.
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 701,
+			statusText: "Item Returned",
+			eventAt: T3,
+		});
+		const order = await t.run(async (ctx) => ctx.db.get(orderId));
+		job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.status).toBe("completed");
+		expect(job?.returned).toBe(true);
+		expect(job?.failureReason).toBe("Returned to you");
+		expect(order?.status).toBe("shipped");
+		const names = await scheduledNames(t);
+		expect(names.filter((n) => n.includes("notifyDeliveryJobReturned"))).toHaveLength(1);
+		expect(names.filter((n) => n.includes("notifyDeliveryJobFailed"))).toHaveLength(1); // the 661 notice
+		// The slot is free: a rebook reserves.
+		await expect(
+			t.mutation(internal.delyva.reserveBooking, {
+				orderId,
+				retailerId: retailer._id,
+				serviceCode: "JNTMY-PN-B200",
+				serviceName: "J&T Express",
+				itemType: "PARCEL",
+			}),
+		).resolves.toBeTruthy();
+	});
+
+	test("663 (failed to return) is returned too, with its own line", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { status: "shipped" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "picked_up",
+			lastEventAt: T1,
+		});
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 663,
+			eventAt: T2,
+		});
+		const { job, order } = await t.run(async (ctx) => ({
+			job: await ctx.db.get(jobId),
+			order: await ctx.db.get(orderId),
+		}));
+		expect(job?.status).toBe("completed");
+		expect(job?.returned).toBe(true);
+		expect(job?.failureReason).toMatch(/Failed to return/);
+		expect(order?.status).toBe("shipped");
+	});
+
+	test("the out-of-order guard still holds the reverse: a 661 after a 701 is ignored", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { status: "shipped" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "completed",
+			returned: true,
+			failureReason: "Returned to you",
+			lastEventAt: T2,
+		});
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 661,
+			eventAt: T1,
+		});
+		const job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.status).toBe("completed");
+		expect(job?.failureReason).toBe("Returned to you");
+	});
+
+	test("a pull that finds the same state is a check, not an event: lastPulledAt moves, lastEventAt doesn't", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "ongoing",
+			lastEventAt: T1,
+		});
+		const now = T2 + HOUR;
+		const applied = await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 200,
+			eventAt: now,
+			pulledAt: now,
+		});
+		expect(applied?.changed).toBe(false);
+		let job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.lastEventAt).toBe(T1);
+		expect(job?.lastPulledAt).toBe(now);
+
+		// A pull that finds something new is the freshest truth and wins.
+		const later = now + HOUR;
+		const moved = await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 500,
+			eventAt: later,
+			pulledAt: later,
+		});
+		expect(moved?.changed).toBe(true);
+		job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.status).toBe("picked_up");
+		expect(job?.lastEventAt).toBe(later);
+	});
+
+	test("a Refresh after a failed attempt (650) is a check: no second email, Delyva's words kept (PR #461 review)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { status: "shipped" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "picked_up",
+			lastEventAt: T1,
+		});
+		// The webhook's tracking row carries Delyva's wording for the event.
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 650,
+			statusText: "Delivery failed - receiver not available",
+			eventAt: T2,
+		});
+		// The pulled order object carries only failedReason — null here — so
+		// the one author would word the same 650 differently.
+		const now = T2 + HOUR;
+		const applied = await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 650,
+			eventAt: now,
+			pulledAt: now,
+		});
+		expect(applied?.changed).toBe(false);
+		const job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.failureReason).toBe("Delivery failed - receiver not available");
+		expect(job?.lastEventAt).toBe(T2);
+		expect(job?.lastPulledAt).toBe(now);
+		expect(
+			(await scheduledNames(t)).filter((n) => n.includes("notifyDeliveryJobFailed")),
+		).toHaveLength(1);
+	});
+
+	test("the sweep's pull flags a booking still unchanged after it — once — and the next real event clears it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const now = Date.now();
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			createdAt: now - 25 * HOUR,
+			awb: "632195694574",
+		});
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 100,
+			eventAt: now,
+			pulledAt: now,
+			markStale: true,
+		});
+		let job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.staleSince).toBeTypeOf("number");
+		expect(job?.lastEventAt).toBeUndefined();
+		const first = job?.staleSince;
+
+		// The next sweep an hour later: still stale, still ONE email.
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 100,
+			eventAt: now + HOUR,
+			pulledAt: now + HOUR,
+			markStale: true,
+		});
+		job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.staleSince).toBe(first);
+		expect(
+			(await scheduledNames(t)).filter((n) => n.includes("notifyDeliveryJobStale")),
+		).toHaveLength(1);
+
+		// The parcel is finally scanned: amber ends.
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 500,
+			eventAt: now + 2 * HOUR,
+		});
+		job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.staleSince).toBeUndefined();
+		expect(job?.status).toBe("picked_up");
+	});
+
+	test("the card's Refresh is not the sweep: it never flags, it only applies what Delyva says", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			createdAt: Date.now() - 25 * HOUR,
+		});
+		mockOrderPull(() => Response.json(fullOrder({ statusCode: 100 })));
+		const asUser = t.withIdentity({ subject: USER });
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))?.shortId as string;
+		const result = await asUser.action(api.delyva.refreshJob, { shortId });
+		expect(result).toEqual({ ok: true, changed: false });
+		const job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.staleSince).toBeUndefined();
+		expect(job?.lastPulledAt).toBeTypeOf("number");
+	});
+
+	test("Refresh heals a missed webhook: the pulled 500 ships the order and lands the link, with the seller's key on the wire", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await seedJob(t, retailer._id, orderId);
+		const fetchMock = mockOrderPull(() =>
+			Response.json(fullOrder({ statusCode: 500, status: "collected" })),
+		);
+		const asUser = t.withIdentity({ subject: USER });
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))?.shortId as string;
+		const result = await asUser.action(api.delyva.refreshJob, { shortId });
+		expect(result).toEqual({ ok: true, changed: true });
+		const [url, init] = fetchMock.mock.calls[0] as unknown as [
+			string,
+			RequestInit,
+		];
+		expect(url).toBe("https://api.delyva.app/v1.0/order/DLV-1");
+		expect((init.headers as Record<string, string>)["X-Delyvax-Access-Token"]).toBe("dx-test-key");
+		const { job, order } = await t.run(async (ctx) => ({
+			job: await ctx.db.get(jobId),
+			order: await ctx.db.get(orderId),
+		}));
+		expect(job?.status).toBe("picked_up");
+		expect(job?.awb).toBe("MY0012345678");
+		expect(order?.status).toBe("shipped");
+		expect(order?.carrierTrackingUrl).toContain("MY0012345678");
+	});
+
+	test("Refresh is one call per job per minute, and says so", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId);
+		const fetchMock = mockOrderPull(() => Response.json(fullOrder({})));
+		const asUser = t.withIdentity({ subject: USER });
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))?.shortId as string;
+		await asUser.action(api.delyva.refreshJob, { shortId });
+		const second = await asUser.action(api.delyva.refreshJob, { shortId });
+		expect(second.ok).toBe(false);
+		if (!second.ok) expect(second.message).toMatch(/less than a minute ago/);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	test("Refresh on a booking Delyva no longer knows (404) rejects it with the honest reason and frees the slot", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			awb: "MY0012345678",
+			staleSince: Date.now() - HOUR,
+		});
+		await t.run(async (ctx) =>
+			ctx.db.patch(orderId, { courierName: "Ninja Cold", trackingNo: "MY0012345678" }),
+		);
+		mockOrderPull(
+			() => new Response(JSON.stringify({ error: { message: "Not found" } }), { status: 404 }),
+		);
+		const asUser = t.withIdentity({ subject: USER });
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))?.shortId as string;
+		const result = await asUser.action(api.delyva.refreshJob, { shortId });
+		expect(result).toEqual({ ok: true, changed: true });
+		const { job, order } = await t.run(async (ctx) => ({
+			job: await ctx.db.get(jobId),
+			order: await ctx.db.get(orderId),
+		}));
+		expect(job?.status).toBe("rejected");
+		expect(job?.failureReason).toBe("Delyva has no record of this booking");
+		expect(job?.staleSince).toBeUndefined();
+		expect(order?.trackingNo).toBeUndefined();
+		await expect(
+			t.mutation(internal.delyva.reserveBooking, {
+				orderId,
+				retailerId: retailer._id,
+				serviceCode: "NINJA-COLD",
+				serviceName: "Ninja Cold",
+				itemType: "CHILLED",
+			}),
+		).resolves.toBeTruthy();
+		// Nothing to refresh any more.
+		expect(await asUser.action(api.delyva.refreshJob, { shortId })).toEqual({
+			ok: false,
+			message: "No live Delyva booking to refresh.",
+		});
+	});
+
+	test("a Delyva outage is a sentence, not a stuck card", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await seedJob(t, retailer._id, orderId);
+		mockOrderPull(() => new Response("gateway timeout", { status: 502 }));
+		const asUser = t.withIdentity({ subject: USER });
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))?.shortId as string;
+		const result = await asUser.action(api.delyva.refreshJob, { shortId });
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.message).toMatch(/HTTP 502/);
+		const job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.status).toBe("assigning");
+		expect(job?.lastPulledAt).toBeUndefined();
+	});
+
+	test("the hourly sweep selects only stale bookings: a day old, no event in a day, confirmed by Delyva, not a demo account", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const now = Date.now();
+		const stale = await seedJob(t, retailer._id, await seedOrder(t, retailer._id), {
+			createdAt: now - 25 * HOUR,
+		});
+		const staleOngoing = await seedJob(t, retailer._id, await seedOrder(t, retailer._id), {
+			status: "ongoing",
+			createdAt: now - 30 * HOUR,
+			lastEventAt: now - 26 * HOUR,
+		});
+		await seedJob(t, retailer._id, await seedOrder(t, retailer._id), {
+			createdAt: now - HOUR, // fresh booking
+		});
+		await seedJob(t, retailer._id, await seedOrder(t, retailer._id), {
+			createdAt: now - 30 * HOUR,
+			lastEventAt: now - HOUR, // moving
+		});
+		await seedJob(t, retailer._id, await seedOrder(t, retailer._id), {
+			createdAt: now - 30 * HOUR,
+			providerOrderId: undefined, // never confirmed — expires on its own
+		});
+		await seedJob(t, retailer._id, await seedOrder(t, retailer._id), {
+			status: "picked_up",
+			createdAt: now - 30 * HOUR, // past its first scan
+		});
+		const result = await t.mutation(internal.delyva.sweepStaleJobs, {});
+		expect(result.scheduled).toBe(2);
+		const scheduled = await t.run(async (ctx) =>
+			(await ctx.db.system.query("_scheduled_functions").collect()).filter((j) =>
+				j.name.includes("delyva:syncJob"),
+			),
+		);
+		expect(scheduled.map((j) => (j.args[0] as { jobId: string }).jobId).sort()).toEqual(
+			[stale, staleOngoing].sort(),
+		);
+	});
+
+	test("the sweep skips demo accounts — no courier ever comes there", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		await t.run(async (ctx) => {
+			const r = await ctx.db.get(retailer._id);
+			await ctx.db.patch(retailer._id, { delyva: { ...r?.delyva, isDemo: true } as never });
+		});
+		await seedJob(t, retailer._id, await seedOrder(t, retailer._id), {
+			createdAt: Date.now() - 25 * HOUR,
+		});
+		expect(await t.mutation(internal.delyva.sweepStaleJobs, {})).toMatchObject({ scheduled: 0 });
+	});
+
+	test("a flagged booking is pulled once a day, not every hour — the next day's pull still runs", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const now = Date.now();
+		const flaggedRecently = await seedJob(t, retailer._id, await seedOrder(t, retailer._id), {
+			createdAt: now - 3 * 24 * HOUR,
+		});
+		const flaggedYesterday = await seedJob(t, retailer._id, await seedOrder(t, retailer._id), {
+			createdAt: now - 3 * 24 * HOUR,
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(flaggedRecently, { staleSince: now - 2 * 24 * HOUR, lastPulledAt: now - HOUR });
+			await ctx.db.patch(flaggedYesterday, { staleSince: now - 2 * 24 * HOUR, lastPulledAt: now - 24 * HOUR });
+		});
+		expect(await t.mutation(internal.delyva.sweepStaleJobs, {})).toMatchObject({ scheduled: 1 });
+		const scheduled = await t.run(async (ctx) =>
+			(await ctx.db.system.query("_scheduled_functions").collect()).filter((j) =>
+				j.name.includes("delyva:syncJob"),
+			),
+		);
+		expect((scheduled[0]?.args[0] as { jobId: string }).jobId).toBe(flaggedYesterday);
+	});
+
+	test("rows that never leave the index (demo bookings) don't hide a newer live booking that went stale (PR #461 review)", async () => {
+		const t = setup();
+		const live = await seedRetailer(t);
+		const now = Date.now();
+		// A demo account whose bookings sit at `assigning` forever — and are
+		// OLDER than the live one, so they come first on the index.
+		const demoId = await t.run(async (ctx) => {
+			const r = await ctx.db.get(live._id);
+			if (!r) throw new Error("seed");
+			const { _id, _creationTime, ...rest } = r;
+			return ctx.db.insert("retailers", {
+				...rest,
+				slug: "kedai-demo-delyva",
+				delyva: { ...(rest.delyva as object), isDemo: true } as never,
+			});
+		});
+		await t.run(async (ctx) => {
+			for (let i = 0; i < 450; i++) {
+				const orderId = await ctx.db.insert("orders", {
+					retailerId: demoId,
+					shortId: `ORD-D${String(i).padStart(3, "0")}`,
+					items: [],
+					subtotal: 1000,
+					total: 1000,
+					currency: "MYR",
+					status: "confirmed",
+					channel: "whatsapp",
+					customer: { name: "A", waPhone: "60123456789" },
+					deliveryMethod: "delivery",
+					createdAt: now,
+					updatedAt: now,
+				});
+				await ctx.db.insert("deliveryJobs", {
+					orderId,
+					retailerId: demoId,
+					provider: "delyva",
+					providerOrderId: `DLV-D${i}`,
+					status: "assigning",
+					costActual: 500,
+					quotationId: "X",
+					vehicleType: "X",
+					createdAt: now - 40 * 24 * HOUR,
+					updatedAt: now,
+				});
+			}
+		});
+		const liveStale = await seedJob(t, live._id, await seedOrder(t, live._id), {
+			createdAt: now - 25 * HOUR,
+		});
+		const result = await t.mutation(internal.delyva.sweepStaleJobs, {});
+		expect(result.scheduled).toBe(1);
+		expect(result.read).toBe(451);
+		const scheduled = await t.run(async (ctx) =>
+			(await ctx.db.system.query("_scheduled_functions").collect()).filter((j) =>
+				j.name.includes("delyva:syncJob"),
+			),
+		);
+		expect((scheduled[0]?.args[0] as { jobId: string }).jobId).toBe(liveStale);
+	});
+
+	test("the sweep caps at 200 pulls per run", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const now = Date.now();
+		await t.run(async (ctx) => {
+			for (let i = 0; i < 203; i++) {
+				const orderId = await ctx.db.insert("orders", {
+					retailerId: retailer._id,
+					shortId: `ORD-C${String(i).padStart(3, "0")}`,
+					items: [],
+					subtotal: 1000,
+					total: 1000,
+					currency: "MYR",
+					status: "confirmed",
+					channel: "whatsapp",
+					customer: { name: "A", waPhone: "60123456789" },
+					deliveryMethod: "delivery",
+					createdAt: now,
+					updatedAt: now,
+				});
+				await ctx.db.insert("deliveryJobs", {
+					orderId,
+					retailerId: retailer._id,
+					provider: "delyva",
+					providerOrderId: `DLV-C${i}`,
+					status: "assigning",
+					costActual: 500,
+					quotationId: "X",
+					vehicleType: "X",
+					createdAt: now - 25 * HOUR,
+					updatedAt: now,
+				});
+			}
+		});
+		expect(await t.mutation(internal.delyva.sweepStaleJobs, {})).toMatchObject({ scheduled: 200 });
+	});
+
+	test("Mark order as returned: the order goes back to Packed with a note, the dead number comes off, and the card can book again", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			status: "shipped",
+			courierName: "J&T Express",
+			trackingNo: "632195694574",
+			carrierTrackingUrl: "https://jtexpress.my/track/632195694574",
+		});
+		await seedJob(t, retailer._id, orderId, {
+			status: "completed",
+			returned: true,
+			failureReason: "Returned to you",
+			serviceName: "J&T Express",
+			awb: "632195694574",
+		});
+		const asUser = t.withIdentity({ subject: USER });
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))?.shortId as string;
+		await asUser.mutation(api.delyva.markOrderReturned, { shortId });
+		const { order, events, state } = await t.run(async (ctx) => ({
+			order: await ctx.db.get(orderId),
+			events: await ctx.db
+				.query("orderEvents")
+				.withIndex("by_order", (q) => q.eq("orderId", orderId))
+				.collect(),
+			state: null,
+		}));
+		expect(order?.status).toBe("packed");
+		expect(order?.trackingNo).toBeUndefined();
+		expect(order?.courierName).toBeUndefined();
+		expect(order?.carrierTrackingUrl).toBeUndefined();
+		expect(events.at(-1)?.note).toContain("632195694574");
+		expect(events.at(-1)?.note).toMatch(/returned by J&T Express/);
+		void state;
+		// Book again is open: the dispatch state no longer blocks on status.
+		const dispatch = await asUser.query(api.delyva.getDispatchState, { shortId });
+		expect(dispatch?.blockReason).toBeNull();
+		expect(dispatch?.job?.returned).toBe(true);
+	});
+
+	test("Mark order as returned refuses when Delyva hasn't reported a return", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { status: "shipped" });
+		await seedJob(t, retailer._id, orderId, { status: "picked_up" });
+		const asUser = t.withIdentity({ subject: USER });
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))?.shortId as string;
+		await expect(
+			asUser.mutation(api.delyva.markOrderReturned, { shortId }),
+		).rejects.toThrow(/hasn't reported this parcel as returned/);
+	});
+
+	test("getDispatchState carries the three new fields, and orders.get tells both doors about a return", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, {
+			status: "shipped",
+			courierName: "J&T Express",
+			trackingNo: "632195694574",
+			carrierTrackingUrl: "https://jtexpress.my/track/632195694574",
+		});
+		const now = Date.now();
+		await seedJob(t, retailer._id, orderId, {
+			status: "completed",
+			returned: true,
+			awb: "632195694574",
+			staleSince: now - HOUR,
+			lastPulledAt: now,
+		});
+		const asUser = t.withIdentity({ subject: USER });
+		const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))?.shortId as string;
+		const state = await asUser.query(api.delyva.getDispatchState, { shortId });
+		expect(state?.job?.returned).toBe(true);
+		expect(state?.job?.staleSince).toBe(now - HOUR);
+		expect(state?.job?.lastPulledAt).toBe(now);
+		const order = await asUser.query(api.orders.get, { shortId });
+		expect(order?.courierReturned).toBe(true);
+	});
+
+	test("orders.get keeps telling the buyer about the return after the seller marked it (Packed, number gone) — until something newer carries the parcel", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const asUser = t.withIdentity({ subject: USER });
+		const read = async (orderId: Id<"orders">) => {
+			const shortId = (await t.run(async (ctx) => ctx.db.get(orderId)))
+				?.shortId as string;
+			return (await asUser.query(api.orders.get, { shortId }))?.courierReturned;
+		};
+		// Marked returned: the buyer saw "On the Way" become "Packed" and is
+		// owed the reason.
+		const marked = await seedOrder(t, retailer._id, { status: "packed" });
+		await seedJob(t, retailer._id, marked, {
+			status: "completed",
+			returned: true,
+			awb: "632195694574",
+		});
+		expect(await read(marked)).toBe(true);
+		// Booked again: a live job is carrying it now.
+		const rebooked = await seedOrder(t, retailer._id, { status: "packed" });
+		await seedJob(t, retailer._id, rebooked, {
+			status: "completed",
+			returned: true,
+			awb: "632195694574",
+			createdAt: Date.now() - 60_000,
+		});
+		await seedJob(t, retailer._id, rebooked, { status: "assigning" });
+		expect(await read(rebooked)).toBeUndefined();
+		// The seller sent it another way: their own number on the order.
+		const manual = await seedOrder(t, retailer._id, {
+			status: "packed",
+			trackingNo: "MY-OWN-123",
+		});
+		await seedJob(t, retailer._id, manual, {
+			status: "completed",
+			returned: true,
+			awb: "632195694574",
+		});
+		expect(await read(manual)).toBeUndefined();
+		// A packed delivery order with no booking history pays the read and
+		// says nothing — the ordinary case.
+		const plain = await seedOrder(t, retailer._id, { status: "packed" });
+		expect(await read(plain)).toBeUndefined();
 	});
 });

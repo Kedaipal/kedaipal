@@ -75,6 +75,13 @@ export type DeliveryJobRow = {
 	tippable: boolean;
 	/** Tips already on it — inside `cost`. */
 	priorityFee?: number;
+	/** A Delyva parcel the courier brought BACK (z8r3fe11y8): the job is
+	 * `completed` for the courier but not for the seller, so the list must
+	 * never read it as Delivered. Needs attention like a failed booking. */
+	returned?: true;
+	/** Flagged by the hourly sweep: no scan for a day. The order page carries
+	 * the full panel; the list carries the pill so the state is findable. */
+	stale?: true;
 	gated: boolean;
 };
 
@@ -190,7 +197,13 @@ export const overview = query({
 			// that was then rebooked needs nothing.
 			const newestForOrder = !seenOrders.has(job.orderId);
 			seenOrders.add(job.orderId);
-			const rebookable = group === "failed" && newestForOrder && !orderSettled;
+			// A returned parcel is a completed job the seller still has to act
+			// on (z8r3fe11y8): once marked returned (order back at Packed, no
+			// longer settled) it is rebookable exactly like a failed booking.
+			const rebookable =
+				(group === "failed" || job.returned === true) &&
+				newestForOrder &&
+				!orderSettled;
 			if (rebookable) needsAttention++;
 			if (jobRows.length >= JOB_ROWS || !order) continue;
 			const gated = isOrderGated(gate, order);
@@ -224,6 +237,8 @@ export const overview = query({
 					job.providerOrderId !== undefined &&
 					!(job.scheduledAt !== undefined && job.scheduledAt > now),
 				priorityFee: job.priorityFee,
+				returned: job.returned === true ? true : undefined,
+				stale: job.staleSince !== undefined ? true : undefined,
 				gated,
 			});
 		}

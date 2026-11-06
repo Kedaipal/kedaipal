@@ -45,6 +45,21 @@ crons.interval(
 	{},
 );
 
+// Delyva (z8r3fe11y8): status arrives by webhook, and Delyva stops retrying
+// one after 10 failures — so a booking can sit at "Booked" forever with the
+// seller none the wiser (DapoGo's first J&T booking, 3 Nov 2026). Hourly:
+// every booking still waiting for its first scan after 24 h with no event is
+// re-read from Delyva (`GET /order/{id}`), which heals a missed webhook; one
+// that is STILL unchanged after the pull is flagged `staleSince` so the card
+// turns amber and the seller gets one email. Demo accounts are skipped (no
+// courier ever comes). Capped at 200 jobs per run. See docs/delivery-delyva.md.
+crons.interval(
+	"flag stale delyva bookings",
+	{ hours: 1 },
+	internal.delyva.sweepStaleJobs,
+	{},
+);
+
 // Connect attempts (`courierOAuthStates`) only matter for minutes — the
 // settings card reads the latest one. Drop anything older than a week.
 crons.daily(

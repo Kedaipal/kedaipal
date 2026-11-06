@@ -11,6 +11,7 @@ import {
 	waitFor,
 } from "@testing-library/react";
 import { getFunctionName } from "convex/server";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
@@ -25,6 +26,8 @@ vi.mock("convex/react", async () => {
 	const { getFunctionName: name } = await import("convex/server");
 	return {
 		useAction: (ref: unknown) =>
+			state.actions.get(name(ref as never)) ?? vi.fn(),
+		useMutation: (ref: unknown) =>
 			state.actions.get(name(ref as never)) ?? vi.fn(),
 	};
 });
@@ -61,7 +64,7 @@ vi.mock("../../hooks/usePermission", () => ({
 	useStoreRole: () => "owner",
 }));
 vi.mock("sonner", () => ({
-	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
+	toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
 vi.mock("../../lib/download", () => ({
 	downloadPdfBytes: vi.fn(),
@@ -72,6 +75,8 @@ const NAME = {
 	confirm: getFunctionName(api.delyva.confirmBooking),
 	cancel: getFunctionName(api.delyva.cancelBooking),
 	label: getFunctionName(api.delyva.getLabel),
+	refresh: getFunctionName(api.delyva.refreshJob),
+	markReturned: getFunctionName(api.delyva.markOrderReturned),
 };
 
 const order = {
@@ -1306,5 +1311,319 @@ describe("pickup vs drop-off, logos and the courier's label (z8r3fe11x3)", () =>
 			),
 		);
 		open.mockRestore();
+	});
+});
+
+describe("not scanned, pickup failed, returned (z8r3fe11y8)", () => {
+	const HOUR = 60 * 60 * 1000;
+	const booked = {
+		status: "assigning",
+		providerOrderId: "delyva-1",
+		costActual: 500,
+		serviceCode: "JNTMY-PN-B200",
+		serviceName: "J&T Express",
+		serviceType: "NDD-DROP",
+		awb: "632195694574",
+		createdAt: Date.now() - 26 * HOUR,
+	};
+
+	it("a flagged booking turns amber: the pill, the waybill in the explainer, the drop-off fix, Refresh + Print, last checked, and the way to Delyva", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: {
+				...booked,
+				staleSince: Date.now() - HOUR,
+				lastPulledAt: Date.now() - 12 * 60_000,
+			},
+		});
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		expect(screen.getByText("Not scanned yet")).toBeTruthy();
+		expect(container.querySelector("section")?.className).toContain(
+			"border-amber-300",
+		);
+		const panel = screen.getByRole("status", { name: /Not scanned yet/ });
+		expect(panel.textContent).toContain(
+			"waybill 632195694574 is still unscanned",
+		);
+		expect(panel.textContent).toContain("ask that branch to scan it in");
+		expect(panel.textContent).toContain("Last checked with Delyva 12m ago");
+		expect(
+			screen.getByRole("button", { name: /refresh status/i }),
+		).toBeTruthy();
+		// ONE label button on the card, inside the panel.
+		expect(
+			screen.getAllByRole("button", { name: /print shipping label/i }),
+		).toHaveLength(1);
+		expect(
+			screen.getByRole("link", { name: /Ask Delyva/ }).getAttribute("href"),
+		).toBe("https://my.delyva.app");
+		// The drop-off steps still show — the seller may not have done them.
+		expect(screen.getByRole("list", { name: /what to do next/i })).toBeTruthy();
+	});
+
+	it("a pickup booking's stale panel points at the Delyva app, and a never-checked job says so", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: { ...booked, serviceType: "NDD", staleSince: Date.now() - HOUR },
+		});
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		expect(container.textContent).toContain(
+			"check your Delyva app that a pickup is scheduled",
+		);
+		expect(container.textContent).toContain("Not checked with Delyva yet");
+	});
+
+	it("Refresh status pulls from Delyva and reports the answer either way", async () => {
+		const refresh = vi
+			.fn()
+			.mockResolvedValueOnce({ ok: true, changed: false })
+			.mockResolvedValueOnce({
+				ok: false,
+				cooldown: true,
+				message:
+					"Checked with Delyva less than a minute ago — try again in 48s.",
+			})
+			.mockResolvedValueOnce({
+				ok: false,
+				message: "Delyva couldn't answer: 502 Bad Gateway",
+			});
+		state.actions.set(NAME.refresh, refresh);
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: { ...booked, staleSince: Date.now() - HOUR },
+		});
+		render(<DelyvaDispatchCard order={order} />);
+		fireEvent.click(screen.getByRole("button", { name: /refresh status/i }));
+		await waitFor(() =>
+			expect(refresh).toHaveBeenCalledWith({ shortId: "ORD-1234" }),
+		);
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(
+				"Checked with Delyva — nothing new",
+				expect.anything(),
+			),
+		);
+		// A cooldown is a wait, not a failure — it must never read as an error.
+		fireEvent.click(screen.getByRole("button", { name: /refresh status/i }));
+		await waitFor(() =>
+			expect(toast.info).toHaveBeenCalledWith(
+				expect.stringMatching(/less than a minute ago/),
+			),
+		);
+		expect(toast.error).not.toHaveBeenCalled();
+		// Delyva not answering IS a failure.
+		fireEvent.click(screen.getByRole("button", { name: /refresh status/i }));
+		await waitFor(() =>
+			expect(toast.error).toHaveBeenCalledWith(
+				expect.stringMatching(/couldn't answer/),
+			),
+		);
+	});
+
+	it("the Ask Delyva link lands on the demo tenant for a demo key", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			isDemo: true,
+			job: { ...booked, staleSince: Date.now() - HOUR },
+		});
+		render(<DelyvaDispatchCard order={order} />);
+		expect(
+			screen.getByRole("link", { name: /ask delyva/i }).getAttribute("href"),
+		).toBe("https://demo.delyva.app");
+	});
+
+	it("a job every webhook has moved says when Delyva last updated it — never 'not checked' (6 Nov hands-on finding)", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: {
+				...booked,
+				status: "picked_up",
+				lastEventAt: Date.now() - 2 * 60_000,
+				lastPulledAt: Date.now() - 50 * 60_000, // an older pull loses to the newer event
+			},
+		});
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={{ ...order, status: "shipped" } as Doc<"orders">}
+			/>,
+		);
+		expect(container.textContent).toContain("Last update from Delyva 2m ago");
+		expect(container.textContent).not.toContain("Not checked with Delyva yet");
+		expect(container.textContent).not.toContain("Last checked with Delyva");
+	});
+
+	it("a live booking that isn't flagged still offers Refresh status as the small path, with when it was last checked", () => {
+		state.dispatch = dispatchState({
+			blockReason: "job_active",
+			job: { ...booked, createdAt: Date.now() - HOUR },
+		});
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		expect(screen.queryByText("Not scanned yet")).toBeNull();
+		expect(
+			screen.getByRole("button", { name: /refresh status/i }),
+		).toBeTruthy();
+		expect(container.textContent).toContain("Not checked with Delyva yet");
+		expect(container.querySelector("section")?.className).toContain(
+			"border-border",
+		);
+	});
+
+	it("pickup failed (board 5): named as such, Edit pickup address beside it, Book again as the CTA", () => {
+		state.dispatch = dispatchState({
+			pickupSummary: "55 Jln Eco Majestic, 43500 Semenyih",
+			job: {
+				...booked,
+				status: "rejected",
+				failureReason: "Courier cancelled the pickup",
+			},
+		});
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		expect(container.textContent).toContain(
+			"Pickup failed — Courier cancelled the pickup",
+		);
+		expect(container.textContent).toContain("Waybill 632195694574");
+		expect(
+			screen.getByRole("link", { name: /edit pickup address/i }),
+		).toBeTruthy();
+		expect(screen.getByRole("button", { name: /book again/i })).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+		// The header pill names the state like the other amber states do, and
+		// the pickup address has ONE edit control: the banner's, not also the
+		// "Collecting from … · Edit" line of the rebook form.
+		expect(screen.getAllByText("Pickup failed").length).toBeGreaterThan(0);
+		expect(container.textContent).toContain("Collecting from");
+		expect(screen.queryByRole("link", { name: /^edit$/i })).toBeNull();
+	});
+
+	it("a create failure (99) is still a booking that didn't go through, with Try again", () => {
+		state.dispatch = dispatchState({
+			job: {
+				...booked,
+				providerOrderId: undefined,
+				awb: undefined,
+				status: "rejected",
+				failureReason: "Delyva could not create the order",
+			},
+		});
+		const { container } = render(<DelyvaDispatchCard order={order} />);
+		expect(container.textContent).toContain(
+			"Booking didn't go through — Delyva could not create the order",
+		);
+		expect(
+			screen.queryByRole("link", { name: /edit pickup address/i }),
+		).toBeNull();
+		expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
+	});
+
+	it("returned to you (board 5): Message buyer, Mark order as returned with what it does, Book again disabled with its reason", async () => {
+		const markReturned = vi.fn().mockResolvedValue(undefined);
+		state.actions.set(NAME.markReturned, markReturned);
+		state.dispatch = dispatchState({
+			blockReason: "bad_status",
+			job: {
+				...booked,
+				status: "completed",
+				returned: true,
+				failureReason: "Returned to you",
+			},
+		});
+		const shipped = {
+			...order,
+			status: "shipped",
+			customer: { name: "Aisha", waPhone: "60123456789" },
+			carrierTrackingUrl: "https://jtexpress.my/track/632195694574",
+		} as Doc<"orders">;
+		const { container } = render(<DelyvaDispatchCard order={shipped} />);
+		expect(screen.getByText("Returned to you")).toBeTruthy();
+		expect(container.querySelector("section")?.className).toContain(
+			"border-amber-300",
+		);
+		expect(container.textContent).toContain(
+			"J&T Express brought this parcel back",
+		);
+		expect(container.textContent).toContain("still reads Shipped");
+		expect(container.textContent).not.toContain("Delivered");
+		const message = screen.getByRole("link", { name: /message buyer/i });
+		expect(message.getAttribute("href")).toContain(
+			"https://wa.me/60123456789?text=",
+		);
+		expect(decodeURIComponent(message.getAttribute("href") ?? "")).toContain(
+			"ORD-1234",
+		);
+		const rebook = screen.getByRole("button", { name: /book again/i });
+		expect(rebook.hasAttribute("disabled")).toBe(true);
+		expect(container.textContent).toContain("Mark the order as returned first");
+		expect(container.textContent).toContain("Puts the order back to Packed");
+		expect(
+			screen.queryByRole("button", { name: /cancel booking/i }),
+		).toBeNull();
+
+		fireEvent.click(
+			screen.getByRole("button", { name: /mark order as returned/i }),
+		);
+		const dialog = await screen.findByRole("dialog");
+		expect(dialog.textContent).toContain("goes back to Packed");
+		fireEvent.click(
+			screen.getByRole("button", { name: /^mark as returned$/i }),
+		);
+		await waitFor(() =>
+			expect(markReturned).toHaveBeenCalledWith({ shortId: "ORD-1234" }),
+		);
+		await waitFor(() =>
+			expect(toast.success).toHaveBeenCalledWith(
+				"Order back to Packed",
+				expect.anything(),
+			),
+		);
+	});
+
+	it("once marked (the order is Packed again) the returned panel stays as history and the picker offers Book again", () => {
+		state.dispatch = dispatchState({
+			job: {
+				...booked,
+				status: "completed",
+				returned: true,
+				failureReason: "Returned to you",
+			},
+		});
+		const packed = { ...order, status: "packed" } as Doc<"orders">;
+		const { container } = render(<DelyvaDispatchCard order={packed} />);
+		expect(container.textContent).toContain("brought this parcel back");
+		// The explainer follows the order: no "still reads Shipped" once the
+		// button it pointed at has gone.
+		expect(container.textContent).not.toContain("still reads Shipped");
+		expect(container.textContent).toContain("back at Packed");
+		expect(
+			screen.queryByRole("button", { name: /mark order as returned/i }),
+		).toBeNull();
+		expect(
+			screen
+				.getByRole("button", { name: /book again/i })
+				.hasAttribute("disabled"),
+		).toBe(false);
+	});
+
+	it("a counter order with no phone has no Message buyer, and the store lock disables Mark returned with its reason", () => {
+		state.dispatch = dispatchState({
+			blockReason: "bad_status",
+			job: { ...booked, status: "completed", returned: true },
+		});
+		const shipped = {
+			...order,
+			status: "shipped",
+			customer: { name: "Walk-in" },
+		} as Doc<"orders">;
+		const { container } = render(
+			<DelyvaDispatchCard
+				order={shipped}
+				lockedReason="Out of credits — top up to work this order."
+			/>,
+		);
+		expect(screen.queryByRole("link", { name: /message buyer/i })).toBeNull();
+		const mark = screen.getByRole("button", {
+			name: /mark order as returned/i,
+		});
+		expect(mark.hasAttribute("disabled")).toBe(true);
+		expect(container.textContent).toContain("Out of credits");
 	});
 });

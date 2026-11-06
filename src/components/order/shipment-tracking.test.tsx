@@ -204,6 +204,29 @@ describe("a booking's link lands at collection (z8r3fe0t4e)", () => {
 		).toBeNull();
 	});
 
+	it("a returned parcel (z8r3fe11y8) says so beside the number and offers no dead link", () => {
+		render(
+			<ShipmentTrackingCard
+				order={{
+					_id: ORDER_ID,
+					courierName: "J&T Express",
+					trackingNo: "632195694574",
+					carrierTrackingUrl: "https://jtexpress.my/tracking/632195694574",
+					courierReturned: true,
+				}}
+			/>,
+		);
+		expect(screen.getByText("632195694574")).toBeTruthy();
+		expect(
+			screen.getByText(
+				/The courier returned this parcel — see the Delyva card/,
+			),
+		).toBeTruthy();
+		expect(
+			screen.queryByRole("link", { name: /Track with courier/ }),
+		).toBeNull();
+	});
+
 	it("a name-only courier entered by hand makes no link promise", () => {
 		render(
 			<ShipmentTrackingCard

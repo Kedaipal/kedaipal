@@ -147,6 +147,16 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 		period: MINUTE,
 		capacity: 4,
 	},
+	// The Delyva card's "Refresh status" (z8r3fe11y8): one `GET /order/{id}`
+	// on the seller's own key per job per minute. A fixed window, not a
+	// bucket — the point is "not twice in a minute", and the card tells the
+	// seller when the next check is allowed. The hourly sweep runs on its own
+	// cadence and does not spend this.
+	delyvaJobRefresh: {
+		kind: "fixed window",
+		rate: 1,
+		period: MINUTE,
+	},
 	// Buyer's "Pay now" tap (86eyb6z3a) — mints (or reuses) a HitPay payment
 	// request. Keyed by tracking token. Each fresh mint is an outbound API call
 	// on the SELLER's HitPay account, so sized like paymentClaim: a burst of

@@ -110,6 +110,55 @@ describe("deliveries.overview", () => {
 		]);
 	});
 
+	test("a returned Delyva parcel carries the flag, and asks for a rebook once the order is back at Packed (z8r3fe11y8)", async () => {
+		const t = setup();
+		const { asUser, retailerId } = await seedStore(t);
+		// Still Shipped: the seller has not marked it yet — it is the order
+		// page's job to offer Mark returned, so the list only names the state.
+		const unmarked = await order(t, retailerId, { status: "shipped" });
+		await job(t, retailerId, unmarked, {
+			provider: "delyva",
+			status: "completed",
+			returned: true,
+			createdAt: 1,
+		});
+		// Marked: back at Packed, nothing newer carrying it → rebook.
+		const marked = await order(t, retailerId);
+		await job(t, retailerId, marked, {
+			provider: "delyva",
+			status: "completed",
+			returned: true,
+			createdAt: 2,
+		});
+		// Flagged by the sweep: the pill, not the panel.
+		const flagged = await order(t, retailerId);
+		await job(t, retailerId, flagged, {
+			provider: "delyva",
+			status: "assigning",
+			providerOrderId: "d-3",
+			staleSince: Date.now(),
+			createdAt: 3,
+		});
+
+		const o = await asUser.query(api.deliveries.overview, { retailerId });
+		const row = (id: Id<"orders">) => o.jobs.find((j) => j.orderId === id);
+		expect(row(unmarked)).toMatchObject({
+			returned: true,
+			group: "completed",
+			orderSettled: true,
+			rebookable: false,
+		});
+		expect(row(marked)).toMatchObject({
+			returned: true,
+			group: "completed",
+			orderSettled: false,
+			rebookable: true,
+		});
+		expect(row(flagged)).toMatchObject({ stale: true, rebookable: false });
+		expect(row(flagged)?.returned).toBeUndefined();
+		expect(o.counts.needsAttention).toBe(1);
+	});
+
 	test("the parcel queue: packed, by courier, no number yet, nothing else carrying it", async () => {
 		const t = setup();
 		const { asUser, retailerId } = await seedStore(t);
