@@ -196,7 +196,7 @@ describe("a booking's link lands at collection (z8r3fe0t4e)", () => {
 		expect(screen.getByText("632195694574")).toBeTruthy();
 		expect(
 			screen.getByText(
-				"Tracking link appears once the courier collects the parcel",
+				"Tracking link appears once the courier scans the parcel in",
 			),
 		).toBeTruthy();
 		expect(

@@ -6,6 +6,12 @@ import { describe, expect, test } from "vitest";
 import {
 	parseDelyvaWalletBalance,
 	buildCreateOrderBody,
+	delyvaBaseServiceType,
+	delyvaHandoff,
+	delyvaLabelAvailability,
+	delyvaLogoUrl,
+	delyvaSpeedLabel,
+	parseDelyvaLabelResponse,
 	buildDelyvaHeaders,
 	buildInstantQuoteBody,
 	classifyDelyvaFailure,
@@ -588,5 +594,160 @@ describe("isCollectedStatus — the tracking link's one gate (z8r3fe0t4e)", () =
 	test("an unknown code never counts as collected — a link needs a scan", () => {
 		expect(isCollectedStatus(654)).toBe(false);
 		expect(isCollectedStatus(999)).toBe(false);
+	});
+});
+
+describe("pickup vs drop-off — the service class says who moves the parcel (z8r3fe11x3)", () => {
+	test("a -DROP service parses with its serviceType and logoPath verbatim", () => {
+		const services = parseInstantQuoteResponse({
+			data: {
+				services: [
+					{
+						price: { amount: 5, currency: "MYR" },
+						service: {
+							name: "J&T Express",
+							code: "JNTMY-PN-B200",
+							serviceType: "NDD-DROP",
+							serviceCompany: {
+								name: "J&T Express",
+								logo: "servicecompany/jnt.png",
+							},
+						},
+						itemType: ["PARCEL"],
+					},
+				],
+			},
+		});
+		expect(services[0]).toMatchObject({
+			code: "JNTMY-PN-B200",
+			serviceType: "NDD-DROP",
+			logoPath: "servicecompany/jnt.png",
+			companyName: "J&T Express",
+		});
+	});
+
+	test("the handoff is read from the suffix, case-insensitively", () => {
+		expect(delyvaHandoff("NDD")).toBe("pickup");
+		expect(delyvaHandoff("SDD")).toBe("pickup");
+		expect(delyvaHandoff("INSTANT")).toBe("pickup");
+		expect(delyvaHandoff("NDD-DROP")).toBe("dropoff");
+		expect(delyvaHandoff("sdd-drop")).toBe("dropoff");
+		expect(delyvaHandoff("SOMETHING-NEW")).toBe("pickup");
+	});
+
+	test("a missing class is UNDEFINED — never guessed here", () => {
+		expect(delyvaHandoff(undefined)).toBeUndefined();
+		expect(delyvaHandoff("")).toBeUndefined();
+		expect(delyvaHandoff("  ")).toBeUndefined();
+	});
+
+	test("speed is judged on the base class, so NDD-DROP still reads Next-day", () => {
+		expect(delyvaBaseServiceType("NDD-DROP")).toBe("NDD");
+		expect(delyvaBaseServiceType("ndd")).toBe("NDD");
+		expect(delyvaSpeedLabel("NDD-DROP")).toBe("Next-day");
+		expect(delyvaSpeedLabel("NDD")).toBe("Next-day");
+		expect(delyvaSpeedLabel("SDD-DROP")).toBe("Same-day");
+		expect(delyvaSpeedLabel("INSTANT")).toBe("Same-day");
+		expect(delyvaSpeedLabel("ECONOMY")).toBeUndefined();
+		expect(delyvaSpeedLabel(undefined)).toBeUndefined();
+	});
+
+	test("the logo URL is the CDN root plus the quote's path, or nothing", () => {
+		expect(delyvaLogoUrl("servicecompany/562.png")).toBe(
+			"https://cdn.delyva.app/servicecompany/562.png",
+		);
+		expect(delyvaLogoUrl("/servicecompany/562.png")).toBe(
+			"https://cdn.delyva.app/servicecompany/562.png",
+		);
+		expect(delyvaLogoUrl(undefined)).toBeUndefined();
+		expect(delyvaLogoUrl("")).toBeUndefined();
+	});
+});
+
+describe("the courier's label — GET /order/{id}/label (z8r3fe11x3)", () => {
+	test("available only once Delyva confirmed the booking and before the first scan", () => {
+		expect(
+			delyvaLabelAvailability({ status: "assigning", providerOrderId: "DLV-1" }),
+		).toEqual({ ok: true });
+		expect(
+			delyvaLabelAvailability({ status: "ongoing", providerOrderId: "DLV-1" }),
+		).toEqual({ ok: true });
+		expect(delyvaLabelAvailability({ status: "assigning" })).toEqual({
+			ok: false,
+			reason: "not_booked",
+		});
+		expect(
+			delyvaLabelAvailability({ status: "picked_up", providerOrderId: "DLV-1" }),
+		).toEqual({ ok: false, reason: "collected" });
+		for (const status of ["completed", "canceled", "expired", "rejected"] as const) {
+			expect(
+				delyvaLabelAvailability({ status, providerOrderId: "DLV-1" }),
+				status,
+			).toEqual({ ok: false, reason: "ended" });
+		}
+	});
+
+	const pdfBytes = () => new TextEncoder().encode("%PDF-1.4 label").buffer;
+	const jsonBytes = (value: unknown) =>
+		new TextEncoder().encode(JSON.stringify(value)).buffer;
+
+	test("a PDF body is returned as bytes — by content type, or by its magic when the type is generic", () => {
+		const typed = parseDelyvaLabelResponse({
+			contentType: "application/pdf",
+			body: pdfBytes(),
+		});
+		expect(typed.kind).toBe("pdf");
+		const untyped = parseDelyvaLabelResponse({
+			contentType: "application/octet-stream",
+			body: pdfBytes(),
+		});
+		expect(untyped.kind).toBe("pdf");
+		if (untyped.kind === "pdf")
+			expect(new TextDecoder().decode(untyped.pdf)).toContain("%PDF");
+	});
+
+	test("a JSON envelope's URL is returned to open, whichever field and wrapper Delyva uses", () => {
+		for (const body of [
+			{ data: { url: "https://cdn.delyva.app/labels/1.pdf" } },
+			{ url: "https://cdn.delyva.app/labels/1.pdf" },
+			{ data: { labelUrl: "https://cdn.delyva.app/labels/1.pdf" } },
+			{ data: "https://cdn.delyva.app/labels/1.pdf" },
+			{ data: { link: " https://cdn.delyva.app/labels/1.pdf " } },
+		]) {
+			expect(
+				parseDelyvaLabelResponse({
+					contentType: "application/json; charset=utf-8",
+					body: jsonBytes(body),
+				}),
+			).toEqual({ kind: "url", url: "https://cdn.delyva.app/labels/1.pdf" });
+		}
+	});
+
+	test("anything else throws, so the card shows a failure instead of an empty tab", () => {
+		expect(() =>
+			parseDelyvaLabelResponse({
+				contentType: "application/json",
+				body: jsonBytes({ data: { id: "DLV-1" } }),
+			}),
+		).toThrow(/no label URL/);
+		// A non-http "url" is not a link we'd open.
+		expect(() =>
+			parseDelyvaLabelResponse({
+				contentType: "application/json",
+				body: jsonBytes({ url: "javascript:alert(1)" }),
+			}),
+		).toThrow(/no label URL/);
+		expect(() =>
+			parseDelyvaLabelResponse({
+				contentType: "text/html",
+				body: new TextEncoder().encode("<html>login</html>").buffer,
+			}),
+		).toThrow(/not a PDF or JSON/);
+		expect(() =>
+			parseDelyvaLabelResponse({
+				contentType: null,
+				body: new ArrayBuffer(0),
+			}),
+		).toThrow(/empty/);
 	});
 });

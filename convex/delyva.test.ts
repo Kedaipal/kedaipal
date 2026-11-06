@@ -5,7 +5,7 @@
 // mechanics are covered in convex/lib/delyva.test.ts.
 import { register as registerRateLimiter } from "@convex-dev/rate-limiter/test";
 import { convexTest } from "convex-test";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { COUNTRY_COURIER_BOOKING } from "./lib/courierProviders";
@@ -1174,5 +1174,282 @@ describe("the tracking link lands at collection, never at booking (z8r3fe0t4e)",
 
 		const buyerView = await t.query(api.orders.get, { token: TOKEN });
 		expect(buyerView?.courierLinkPending).toBeUndefined();
+	});
+});
+
+describe("pickup vs drop-off, and the courier's label (z8r3fe11x3)", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	function mockLabelFetch(
+		respond: () => Response,
+	): ReturnType<typeof vi.fn> {
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = String(input instanceof Request ? input.url : input);
+			if (/\/order\/[^/]+\/label$/.test(url)) return respond();
+			throw new Error(`unmocked fetch ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		return fetchMock;
+	}
+
+	async function shortIdOf(t: ReturnType<typeof setup>, orderId: Id<"orders">) {
+		return (await t.run(async (ctx) => ctx.db.get(orderId)))?.shortId as string;
+	}
+
+	test("the reservation stores the picked service's class verbatim, and the card reads it", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await t.mutation(internal.delyva.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			serviceCode: "JNTMY-PN-B200",
+			serviceName: "J&T Express",
+			serviceType: "NDD-DROP",
+			itemType: "PARCEL",
+		});
+		await t.mutation(internal.delyva.commitBooking, {
+			jobId,
+			providerOrderId: "delyva-drop-1",
+			costActual: 500,
+			awb: "632195694574",
+			statusCode: 100,
+		});
+		const job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.serviceType).toBe("NDD-DROP");
+
+		const asUser = t.withIdentity({ subject: USER });
+		const state = await asUser.query(api.delyva.getDispatchState, {
+			shortId: await shortIdOf(t, orderId),
+		});
+		expect(state?.job?.serviceType).toBe("NDD-DROP");
+	});
+
+	test("a quote row with no class stores nothing — never a guessed pickup", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		const jobId = await t.mutation(internal.delyva.reserveBooking, {
+			orderId,
+			retailerId: retailer._id,
+			serviceCode: "NINJA-COLD",
+			serviceName: "Ninja Cold",
+			itemType: "CHILLED",
+		});
+		const job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.serviceType).toBeUndefined();
+	});
+
+	test("getLabel: a PDF body comes back as bytes with a filename, fetched with the seller's key", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId, {
+			providerOrderId: "delyva-drop-1",
+			serviceType: "NDD-DROP",
+		});
+		const fetchMock = mockLabelFetch(
+			() =>
+				new Response(new TextEncoder().encode("%PDF-1.4 label"), {
+					status: 200,
+					headers: { "content-type": "application/pdf" },
+				}),
+		);
+		const shortId = await shortIdOf(t, orderId);
+		const result = await t
+			.withIdentity({ subject: USER })
+			.action(api.delyva.getLabel, { shortId });
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("expected ok");
+		expect(result.kind).toBe("pdf");
+		expect(result.filename).toBe(`shipping-label-${shortId}.pdf`);
+		if (result.kind === "pdf")
+			expect(new TextDecoder().decode(result.pdf)).toContain("%PDF");
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toBe("https://api.delyva.app/v1.0/order/delyva-drop-1/label");
+		expect((init.headers as Record<string, string>)["X-Delyvax-Access-Token"]).toBe(
+			"dx-test-key",
+		);
+	});
+
+	test("getLabel: the S3 redirect is followed by hand, and the seller's key never leaves Delyva's origin", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId, {
+			providerOrderId: "delyva-drop-2",
+			serviceType: "NDD-DROP",
+		});
+		const s3 =
+			"https://delyva-labels.s3.ap-southeast-1.amazonaws.com/l.pdf?X-Amz-Signature=abc";
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = String(input instanceof Request ? input.url : input);
+			if (/\/order\/[^/]+\/label$/.test(url))
+				return new Response(null, { status: 302, headers: { location: s3 } });
+			if (url === s3)
+				return new Response(new TextEncoder().encode("%PDF-1.7 s3"), {
+					status: 200,
+					headers: { "content-type": "application/pdf" },
+				});
+			throw new Error(`unmocked fetch ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const result = await t
+			.withIdentity({ subject: USER })
+			.action(api.delyva.getLabel, { shortId: await shortIdOf(t, orderId) });
+		expect(result.ok).toBe(true);
+		if (!result.ok || result.kind !== "pdf") throw new Error("expected pdf");
+		expect(new TextDecoder().decode(result.pdf)).toContain("%PDF-1.7 s3");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		const [, first] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+		const [, second] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+		// The runtime must not follow for us — that is what forwards the header.
+		expect(first.redirect).toBe("manual");
+		expect(second.redirect).toBe("manual");
+		expect((first.headers as Record<string, string>)["X-Delyvax-Access-Token"]).toBe(
+			"dx-test-key",
+		);
+		expect(second.headers as Record<string, string>).not.toHaveProperty(
+			"X-Delyvax-Access-Token",
+		);
+	});
+
+	test("getLabel: a redirect loop ends in a failure, not a hang", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId, {
+			providerOrderId: "delyva-drop-3",
+			serviceType: "NDD-DROP",
+		});
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(null, {
+					status: 302,
+					headers: { location: "https://api.delyva.app/v1.0/loop" },
+				}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const result = await t
+			.withIdentity({ subject: USER })
+			.action(api.delyva.getLabel, { shortId: await shortIdOf(t, orderId) });
+		expect(result.ok).toBe(false);
+		expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(5);
+	});
+
+	test("getLabel: a JSON envelope's URL comes back to open", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId, { providerOrderId: "delyva-1" });
+		mockLabelFetch(
+			() =>
+				new Response(
+					JSON.stringify({ data: { url: "https://cdn.delyva.app/labels/1.pdf" } }),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+		);
+		const result = await t
+			.withIdentity({ subject: USER })
+			.action(api.delyva.getLabel, { shortId: await shortIdOf(t, orderId) });
+		expect(result).toMatchObject({
+			ok: true,
+			kind: "url",
+			url: "https://cdn.delyva.app/labels/1.pdf",
+		});
+	});
+
+	test("getLabel: a refusal surfaces Delyva's own message, never silence", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId, { providerOrderId: "delyva-1" });
+		mockLabelFetch(
+			() =>
+				new Response(
+					JSON.stringify({ error: { message: "Label not generated yet" } }),
+					{ status: 422, headers: { "content-type": "application/json" } },
+				),
+		);
+		const result = await t
+			.withIdentity({ subject: USER })
+			.action(api.delyva.getLabel, { shortId: await shortIdOf(t, orderId) });
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("expected failure");
+		expect(result.message).toContain("Label not generated yet");
+	});
+
+	test("getLabel: a body that is neither PDF nor a URL is a failure, not an empty tab", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, orderId, { providerOrderId: "delyva-1" });
+		mockLabelFetch(
+			() =>
+				new Response("<html>sign in</html>", {
+					status: 200,
+					headers: { "content-type": "text/html" },
+				}),
+		);
+		const result = await t
+			.withIdentity({ subject: USER })
+			.action(api.delyva.getLabel, { shortId: await shortIdOf(t, orderId) });
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("expected failure");
+		expect(result.message).toMatch(/couldn't be read/);
+	});
+
+	test("getLabel: before Delyva confirms, and after the first scan, it refuses with the reason and never calls out", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const asUser = t.withIdentity({ subject: USER });
+		const fetchMock = mockLabelFetch(() => new Response("", { status: 200 }));
+
+		const reservedOrder = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, reservedOrder, { providerOrderId: undefined });
+		const reserved = await asUser.action(api.delyva.getLabel, {
+			shortId: await shortIdOf(t, reservedOrder),
+		});
+		expect(reserved).toMatchObject({ ok: false });
+		if (!reserved.ok) expect(reserved.message).toMatch(/hasn't confirmed/);
+
+		const collectedOrder = await seedOrder(t, retailer._id);
+		await seedJob(t, retailer._id, collectedOrder, {
+			providerOrderId: "delyva-2",
+			status: "picked_up",
+		});
+		const collected = await asUser.action(api.delyva.getLabel, {
+			shortId: await shortIdOf(t, collectedOrder),
+		});
+		expect(collected).toMatchObject({ ok: false });
+		if (!collected.ok) expect(collected.message).toMatch(/already has this parcel/);
+
+		const bareOrder = await seedOrder(t, retailer._id);
+		const bare = await asUser.action(api.delyva.getLabel, {
+			shortId: await shortIdOf(t, bareOrder),
+		});
+		expect(bare).toMatchObject({ ok: false });
+		if (!bare.ok) expect(bare.message).toMatch(/No Delyva booking/);
+
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	test("the checkout quote carries the cheapest service's class onto the deliveryQuotes row", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const quoteId = await t.mutation(internal.lalamove.saveCheckoutQuote, {
+			retailerId: retailer._id,
+			provider: "delyva",
+			fee: 500,
+			currency: "MYR",
+			serviceCode: "JNTMY-PN-B200",
+			serviceName: "J&T Express",
+			serviceType: "NDD-DROP",
+			postcode: "55100",
+		});
+		const row = await t.run(async (ctx) => ctx.db.get(quoteId));
+		expect(row?.serviceType).toBe("NDD-DROP");
 	});
 });

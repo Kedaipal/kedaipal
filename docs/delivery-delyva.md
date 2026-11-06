@@ -118,9 +118,13 @@ account, and it is the SG twin of the cold-chain gap below.
   deliberate address is part of the setup story. Booking blocks with reason
   `no_pickup_address` until it's set.
 - `deliveryJobs.provider` widened to `"lalamove" | "delyva"`; Delyva rows
-  add `serviceName` (courier display name), `awb` (consignment number) and
-  `itemType`. `quotationId`/`vehicleType` carry the **service code** (their
-  quotes are indicative, not id-bound — see Dispatch below).
+  add `serviceName` (courier display name), `awb` (consignment number),
+  `itemType` and, since z8r3fe11x3, `serviceType` (the service class
+  verbatim — `NDD` / `NDD-DROP`; absent on older jobs, see "Pickup vs
+  drop-off" below). `quotationId`/`vehicleType` carry the **service code**
+  (their quotes are indicative, not id-bound — see Dispatch below).
+  `deliveryQuotes` carries the same `serviceType` for the cheapest service a
+  checkout quote was priced on.
 - `by_provider_order` index widened to `["provider", "providerOrderId"]` —
   two providers' order ids are both opaque strings, and the webhook lookup
   uses `.unique()`, so a provider-blind index would let a cross-provider
@@ -331,6 +335,118 @@ links resolve on their own once collected.
 page renders a consignment from "Order created" on (checked in a browser on
 the DapoGo waybill, 4 Nov 2026), so for a courier outside the registry the
 link written at collection is live.
+
+### Pickup vs drop-off, and the courier's own label (z8r3fe11x3)
+
+The other half of the DapoGo incident: the parcel went to a J&T counter
+with only our despatch label, and sat on "Order created". Two things were
+missing, and both were visible in data we already parsed.
+
+**Who moves the parcel is in the service class.** Delyva suffixes a
+service with `-DROP` when the *seller* takes the parcel to a branch
+(`NDD-DROP`); the bare class (`NDD`, `SDD`, `INSTANT`) means the courier
+collects from the pickup address. **The convention is observed, not
+documented** (PR #458 review, 6 Nov 2026): the Postman collection behind
+`docs.api.delyva.com` never enumerates service classes — it documents
+`serviceCode` as "from instant quote" and nothing more — so the one hard
+datum is DapoGo's `JNTMY-PN-B200` = `NDD-DROP`. A drop-off spelled any
+other way would wear the pickup pill; the first non-J&T drop-off booking is
+where to check. `parseInstantQuoteResponse` had carried `serviceType` since
+day one and nothing read it. Now:
+
+- **One author:** `delyvaHandoff(serviceType)` in `convex/lib/delyva.ts` →
+  `"pickup" | "dropoff" | undefined`. A missing class is `undefined`, never a
+  guess: the picker renders it as pickup (Delyva's convention is that only
+  drop-off carries a suffix) and `console.warn`s the codes at quote time, and
+  a booked job with no class on record **claims neither** — *"Delyva will
+  update this order when the courier scans the parcel."*
+- **Stored at reserve** (`deliveryJobs.serviceType`, verbatim), where the
+  chosen service's name and item type already land — the ticket said
+  `commitBooking`, but commit doesn't know the service, and reserve is the
+  same row. `deliveryQuotes.serviceType` records the class of the cheapest
+  service a checkout quote was priced on, through `fetchDelyvaCheckoutQuote`
+  → `chooseLiveQuote` → `saveCheckoutQuote`. Both are optional (widen only;
+  no backfill — an old row simply reads as "unknown").
+- **Speed is judged on the base class** (`delyvaSpeedLabel`, via
+  `delyvaBaseServiceType`), so `NDD-DROP` still reads *Next-day*.
+
+**The picker says it on every row.** `HandoffPill`
+(`src/components/order/handoff-pill.tsx`) — navy **Courier picks up**,
+amber **You drop off** (phone) / **You drop off at a branch** (from `sm:`) —
+is the one control for this idea, on the row and on the booked card. The row
+is a fixed grid (`44px | 1fr | 92px`, `48 | 1fr | 104` from `sm:`): the
+price column can't be pushed by a long name, and **nothing truncates** — a
+seller comparing couriers reads whole names. The logo slot is `CourierLogo`
+(`courier-logo.tsx`): `https://cdn.delyva.app/` + the quote's
+`serviceCompany.logo` (`delyvaLogoUrl`), with the company initials in the
+same box on error or when the quote carries no path — never a bundled brand
+asset. One note under the list (`HANDOFF_PICKER_NOTE`) says what the two
+pills mean and that tracking starts at the first scan either way.
+
+**The booked card branches on the handoff** (`BookedState` in the dispatch
+card):
+
+- **Drop-off:** a three-step card leads (`dropoffSteps`: print the label →
+  take it to any *J&T Express* branch and have it scanned → the order ships
+  itself), with **Print shipping label** as the primary button, then the
+  tracking number, then the pre-scan line worded for the branch.
+- **Pickup:** the tracking number, a collection line naming the stored pickup
+  address (`pickupCollectionCopy` — a *place*, never a time: Delyva schedules
+  the pickup on the courier's cadence), and the label as a secondary button.
+- **Legacy (no class):** the pickup layout with neutral copy and no pill.
+- Steps, collection line and label show only **before the first scan**
+  (`assigning` / `ongoing`); once `picked_up` the label is on the parcel.
+- The demo-account banner stays above all of it, in the parent.
+
+**Print shipping label** calls `delyva.getLabel` →
+`GET /order/{providerOrderId}/label` with the seller's key through
+`callDelyvaRaw` (bytes + content type; `callDelyva` assumes JSON).
+`callDelyvaRaw` follows redirects **by hand** (`redirect: "manual"`, which
+the Convex runtime honours — probed 6 Nov 2026 — up to three hops) and sends
+the seller's key **only to `api.delyva.app`**: a fetch that follows on its
+own forwards every custom header to the new origin (the spec strips only
+`Authorization`), so the key would otherwise ride along to S3. **The
+endpoint answers with the PDF itself** — probed 4 Nov 2026 on a demo-account
+booking (dev store `herb`, `ORD-U6AN`, DHL eCommerce `NDD`), never on a
+seller's key: the API redirects to an S3 object (`server: AmazonS3`,
+`content-type: application/pdf`, 16.5 KB, `%PDF-1.7`, one A6-style label
+page) whose `last-modified` is the booking moment, so the label exists from
+the first `assigning` and the button's "Delyva hasn't confirmed this
+booking yet" is exactly the only wait; S3's `x-amz-expiration` rule
+**auto-deletes it after 90 days** (a stale booking's label 404s with
+Delyva's own message — no code handles that specially, the toast does).
+`parseDelyvaLabelResponse` still accepts the second shape it was built
+for, a JSON envelope carrying a URL (`url` / `labelUrl` / `label` / `link` /
+`file`, wrapped in `data` or not, http(s) only), as a **defensive fallback
+only** — not observed live. A PDF body (by content type, or the `%PDF` magic
+under a generic type) is returned as bytes and saved with `downloadPdfBytes`
+like the despatch label (a `window.open` on a blob after an `await` is
+popup-blocked on iOS Safari); a URL opens in a new tab. Anything else is a
+failure. Failures are a toast
+carrying Delyva's own message (`friendlyLabelError`), never silence. The
+button is **disabled with its reason** (`delyvaLabelAvailability`:
+*"Available once Delyva confirms the booking."* until `providerOrderId`
+exists; gone after the first scan), and the action re-checks the same rule
+so a stale tab gets the sentence it would have seen. It is gated like
+`awb.generateAwbPdf` (despatch work on this order) in
+`creditLockCoverage.test.ts`. The courier's label sits **beside** Kedaipal's
+own despatch label, never instead of it — the same posture as EasyParcel's
+`labelUrl`.
+
+**One voice across the two tickets.** z8r3fe0t4e worded the pre-scan moment
+as "collected", which is wrong for a parcel the seller walked to a counter.
+The rule now: a surface that *knows* the handoff names it — the dispatch
+card says *"once the parcel is collected"* / *"once the branch scans the
+parcel in"* / *"at the courier's first scan"* (legacy) — and the surfaces
+that don't (the Shipment tracking card, the buyer's `/track` page) say
+**first scan**, true of both kinds: *"Tracking link appears once the courier
+scans the parcel in"*, *"Track with J&T Express · after first scan"*, *"Use
+this number on the courier's app once your parcel has been scanned in."*
+
+**Not built here:** the EasyParcel picker still says *You drop off* as text
+in its meta line rather than wearing `HandoffPill` (its rows already carry
+other chips); folding it onto the same pill is a follow-up. The Delyva
+failure codes, the refresh pull and the stale state are z8r3fe11y8.
 
 ## Shared machinery
 
@@ -657,7 +773,9 @@ with those couriers on; until then it is one list, cheapest first.
   `(provider, providerOrderId)`.
 - `src/components/order/delyva-dispatch-card.test.tsx` — the picker flow plus
   every state that must not be a dead end: no couriers, an unweighable cart, a
-  failed booking, each blocked reason.
+  failed booking, each blocked reason; the pickup/drop-off pills, the logo
+  and its initials fallback, both booked layouts, the legacy neutral copy and
+  the label button's three outcomes (z8r3fe11x3).
 - `src/components/settings/delyva-card.test.tsx` — one-key connect, the Pro
   gate (and that it never traps a downgraded seller), the postcode rule, the
   missing-address and unregistered-webhook warnings.
@@ -696,7 +814,10 @@ with those couriers on; until then it is one list, cheapest first.
 - **Scheduled pickups** — Delyva waypoints accept `scheduledAt`; v1 books
   immediate collection (parcel couriers collect on their own cadence).
   Revisit if sellers ask for date-bound pickups.
-- **Label printing** (`GET /order/{id}/label`) — the booked state's "Print
-  shipping label" in the mockups; wire in PR2.
+- **Label printing** shipped (z8r3fe11x3, see "Pickup vs drop-off"); the
+  endpoint's live shape was recorded on a demo booking (PDF from S3, 90-day
+  expiry), so the ticket's T0 spike on the DapoGo order is no longer needed.
+  What a real courier's label looks like (DHL demo vs J&T live) is the one
+  thing a demo account can't show — eyeball DapoGo's first printed label.
 - Operational (with Herrey, tracked on `86eyjprqw`): 1% payout mechanics,
   pickup-address activation lead time, partner agreement.

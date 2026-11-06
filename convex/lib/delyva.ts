@@ -158,8 +158,9 @@ export type DelyvaService = {
 	/** Total price in sen. */
 	price: number;
 	currency: string;
-	/** Delyva's service class — INSTANT / SDD / NDD etc. Opaque to us beyond
-	 * display; kept verbatim. */
+	/** Delyva's service class — INSTANT / SDD / NDD, with a `-DROP` suffix
+	 * when the SELLER takes the parcel to a branch (`delyvaHandoff`). Kept
+	 * verbatim: it is stored on the booking and judged, never rewritten. */
 	serviceType?: string;
 	/** Item types this service accepts, when the response says. */
 	itemTypes?: string[];
@@ -249,6 +250,169 @@ export function parseInstantQuoteResponse(json: unknown): DelyvaService[] {
 		});
 	}
 	return parsed;
+}
+
+// ---------------------------------------------------------------------------
+// Service class → what the SELLER has to do (z8r3fe11x3)
+// ---------------------------------------------------------------------------
+
+/** How a parcel leaves the seller for one Delyva service. */
+export type DelyvaHandoff = "pickup" | "dropoff";
+
+/** Delyva's logo CDN — `serviceCompany.logo` on the quote is a path under it.
+ * Courier brand assets are never bundled in the repo: they are the courier's
+ * to change, and the CDN is where Delyva's own app reads them from. */
+export const DELYVA_CDN_BASE_URL = "https://cdn.delyva.app/";
+
+/**
+ * Who moves the parcel to the courier, read from the service class. Delyva
+ * suffixes a service with `-DROP` when the SELLER takes the parcel to a
+ * branch (`NDD-DROP`); the bare class (`NDD`, `SDD`, `INSTANT`) means the
+ * courier collects from the pickup address. The convention is OBSERVED, not
+ * documented: Delyva's published API reference (the Postman collection
+ * behind docs.api.delyva.com, checked 6 Nov 2026) never enumerates service
+ * classes at all, so the one hard datum is DapoGo's first live booking (J&T
+ * `JNTMY-PN-B200` = `NDD-DROP`, 3 Nov 2026), which sat on "Order created"
+ * for a day because nothing told the seller which kind she had bought. A
+ * drop-off service spelled any other way would read as a pickup here — the
+ * first non-J&T drop-off booking is where to look.
+ *
+ * `undefined` for a missing class — the caller decides what to claim (the
+ * picker shows the pickup pill and warns, a booked card claims neither), it
+ * is never guessed here. Case-insensitive, because the value is Delyva's and
+ * verbatim.
+ */
+export function delyvaHandoff(
+	serviceType: string | undefined,
+): DelyvaHandoff | undefined {
+	const type = serviceType?.trim();
+	if (!type) return undefined;
+	return /-DROP$/i.test(type) ? "dropoff" : "pickup";
+}
+
+/** The service class without its handoff suffix — `NDD-DROP` → `NDD`, so a
+ * drop-off service still reads as next-day wherever speed is judged. */
+export function delyvaBaseServiceType(
+	serviceType: string | undefined,
+): string | undefined {
+	const type = serviceType?.trim();
+	if (!type) return undefined;
+	return type.replace(/-DROP$/i, "").toUpperCase();
+}
+
+/** Delyva's speed vocabulary in plain words, judged on the BASE class so a
+ * drop-off variant keeps its speed. Unknown classes say nothing — a wrong
+ * "Same-day" is worse than no line. */
+export function delyvaSpeedLabel(
+	serviceType: string | undefined,
+): "Same-day" | "Next-day" | undefined {
+	const base = delyvaBaseServiceType(serviceType);
+	if (base === "INSTANT" || base === "SDD") return "Same-day";
+	if (base === "NDD") return "Next-day";
+	return undefined;
+}
+
+/** The absolute logo URL for a quote row, or undefined when the quote carried
+ * no path. A leading slash on the path is tolerated — the CDN root is ours. */
+export function delyvaLogoUrl(logoPath: string | undefined): string | undefined {
+	const path = logoPath?.trim().replace(/^\/+/, "");
+	if (!path) return undefined;
+	return `${DELYVA_CDN_BASE_URL}${path}`;
+}
+
+// ---------------------------------------------------------------------------
+// The courier's own label — GET /order/{id}/label (z8r3fe11x3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether the label can be fetched for a booked job, and if not, why — the
+ * dispatch card's Print shipping label disables with the reason rather than
+ * failing on tap. Delyva mints the label once the order is PROCESSED (there
+ * is a provider order id) and it is only useful until the courier has the
+ * parcel: after collection the label is on the parcel already, and a
+ * terminal job has nothing to label.
+ */
+export type DelyvaLabelAvailability =
+	| { ok: true }
+	| { ok: false; reason: "not_booked" | "collected" | "ended" };
+
+export function delyvaLabelAvailability(job: {
+	status: DeliveryJobStatus;
+	providerOrderId?: string;
+}): DelyvaLabelAvailability {
+	if (job.status === "picked_up") return { ok: false, reason: "collected" };
+	if (job.status !== "assigning" && job.status !== "ongoing")
+		return { ok: false, reason: "ended" };
+	if (!job.providerOrderId) return { ok: false, reason: "not_booked" };
+	return { ok: true };
+}
+
+/** What `GET /order/{id}/label` handed back, normalised to the two shapes the
+ * card can act on: bytes to save, or a URL to open. */
+export type DelyvaLabel =
+	| { kind: "pdf"; pdf: ArrayBuffer }
+	| { kind: "url"; url: string };
+
+const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46]; // "%PDF"
+
+function looksLikePdf(bytes: ArrayBuffer): boolean {
+	const head = new Uint8Array(bytes.slice(0, 4));
+	return PDF_MAGIC.every((b, i) => head[i] === b);
+}
+
+/** Pull a label URL out of a JSON body, tolerating the wrappers Delyva uses
+ * elsewhere (`{data: …}`) and the field names seen across their API
+ * (`url`, `labelUrl`, `label`, `link`, `file`). Only http(s) counts. */
+function labelUrlFromJson(json: unknown): string | undefined {
+	const record = ((json as { data?: unknown })?.data ?? json) as
+		| Record<string, unknown>
+		| string
+		| null
+		| undefined;
+	const candidates =
+		typeof record === "string"
+			? [record]
+			: record && typeof record === "object"
+				? [record.url, record.labelUrl, record.label, record.link, record.file]
+				: [];
+	for (const candidate of candidates) {
+		if (typeof candidate === "string" && /^https?:\/\//i.test(candidate.trim()))
+			return candidate.trim();
+	}
+	return undefined;
+}
+
+/**
+ * Normalise a label response. Probed live on a demo-account booking (4 Nov
+ * 2026): the endpoint redirects to an S3 object served as
+ * `application/pdf` (`%PDF-1.7`, ~16 KB), generated at booking and deleted
+ * by S3 after 90 days. The PDF branch is therefore the real one — by content
+ * type, or the `%PDF` magic should the type ever come back generic. The JSON
+ * envelope carrying a URL stays as a defensive fallback that was never
+ * observed. Anything else throws, so the card shows a failure rather than
+ * opening an empty tab.
+ */
+export function parseDelyvaLabelResponse(args: {
+	contentType: string | null;
+	body: ArrayBuffer;
+}): DelyvaLabel {
+	const type = (args.contentType ?? "").toLowerCase();
+	if (type.includes("application/pdf") || looksLikePdf(args.body)) {
+		return { kind: "pdf", pdf: args.body };
+	}
+	const text = new TextDecoder().decode(args.body).trim();
+	if (!text) throw new Error("Delyva label response was empty");
+	let json: unknown;
+	try {
+		json = JSON.parse(text);
+	} catch {
+		throw new Error(
+			`Delyva label response was not a PDF or JSON (${type || "no content type"})`,
+		);
+	}
+	const url = labelUrlFromJson(json);
+	if (!url) throw new Error("Delyva label response carried no label URL");
+	return { kind: "url", url };
 }
 
 /** One parcel line for a waypoint's inventory declaration. */
