@@ -201,6 +201,7 @@ import {
 	isActiveJobStatus,
 	isRiderManagedTransition,
 } from "./lib/lalamove";
+import { isCourierLinkPending } from "./lib/deliveryJobs";
 import { resolveShipmentFields } from "./lib/couriers";
 import {
 	anchorOrdinal,
@@ -2340,6 +2341,16 @@ export type OrderWithStatusLabels = Doc<"orders"> & {
 	 * frozen `bookingOpenDays`), so the buyer's page never stays silent on a
 	 * plan the seller can skip. Unset = no. */
 	bookingSkippable?: true;
+	/** A courier booking put its tracking NUMBER on the order but the
+	 * courier's page isn't live yet (z8r3fe0t4e) — the link lands at
+	 * collection. Both doors: the buyer's page and the seller's Shipment
+	 * tracking card say so where the link will appear. Unset = no. */
+	courierLinkPending?: true;
+	/** The courier RETURNED the parcel to the seller (z8r3fe11y8): the order
+	 * still reads Shipped until the seller marks it, so both doors say the
+	 * parcel came back — the buyer's page under the courier card, the
+	 * seller's Shipment tracking card beside the dead number. Unset = no. */
+	courierReturned?: true;
 	// Booking capacity context (S3) — SELLER path only, for the approve card's
 	// "N of M sites already booked those nights" line. Never on the buyer/token
 	// path: per-night counts don't cross the public wire (locked).
@@ -2602,6 +2613,48 @@ export const get = query({
 				bookingSkippable = true;
 			}
 		}
+		// Number on the order, link not yet (z8r3fe0t4e): one indexed read,
+		// and only on the rare number-without-link shape, so the hot tracking
+		// path pays nothing. Read from the live job row (the only thing that
+		// knows the booking is still pre-collection), never inferred from the
+		// order alone — a seller's own manual entry with no link is theirs,
+		// and must never be promised one.
+		let courierLinkPending: true | undefined;
+		let courierReturned: true | undefined;
+		// Returned (z8r3fe11y8) is read on two shapes: the shipped order the
+		// parcel came back from (number still on it), AND the packed order
+		// the seller marked returned (number gone) — the buyer saw "On the
+		// Way" turn into "Packed" and must be told why until the seller books
+		// again, adds a number of their own, or cancels. A packed delivery
+		// order with no number is the only extra shape that pays the read.
+		const readsJobs =
+			order.deliveryMethod === "delivery" &&
+			(order.trackingNo
+				? !order.carrierTrackingUrl || order.status === "shipped"
+				: order.status === "packed");
+		if (readsJobs) {
+			const jobs = await ctx.db
+				.query("deliveryJobs")
+				.withIndex("by_order", (q) => q.eq("orderId", order._id))
+				.collect();
+			const active = jobs.find((j) => isActiveJobStatus(j.status));
+			if (active && order.trackingNo && isCourierLinkPending(active, order)) {
+				courierLinkPending = true;
+			}
+			// The newest Delyva job came back, nothing newer is carrying the
+			// parcel, and the order's number (if any) is still that job's —
+			// a seller's own manual number means they sent it another way.
+			if (!active && (order.status === "shipped" || order.status === "packed")) {
+				const latest = [...jobs]
+					.filter((j) => j.provider === "delyva")
+					.sort((a, b) => b.createdAt - a.createdAt)[0];
+				if (
+					latest?.returned &&
+					(order.trackingNo === undefined || latest.awb === order.trackingNo)
+				)
+					courierReturned = true;
+			}
+		}
 		return {
 			...order,
 			podImageUrls,
@@ -2609,6 +2662,8 @@ export const get = query({
 			bookingContext,
 			bookingMaxSkips,
 			bookingSkippable,
+			courierLinkPending,
+			courierReturned,
 			// RSVP (`z8r3fdff9u`) — both sides need it: the seller's Reschedule
 			// disables with the reason instead of erroring on submit, and the
 			// buyer's tracking page says the date is the event's, not theirs.

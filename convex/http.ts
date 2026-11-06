@@ -369,12 +369,18 @@ http.route({
 	method: "POST",
 	handler: httpAction(async (ctx, req) => {
 		const rawBody = await req.text();
+		// Delyva names the event in a header; our routing is by payload SHAPE
+		// (`order.created` / tracking rows / the full order object that
+		// `order.updated` and `order.failed` carry, z8r3fe11y8), so the name
+		// is logged for the support thread, never branched on.
+		const eventName = req.headers.get("X-Delyvax-Event");
 		const event = parseDelyvaWebhookEvent(rawBody);
 		if (!event) {
 			// Subscription pings / non-order payloads: ack so Delyva keeps the
 			// URL healthy.
 			console.log("Delyva webhook: non-order body, acking", {
 				bytes: rawBody.length,
+				eventName,
 			});
 			return new Response("ok", { status: 200 });
 		}
@@ -419,6 +425,11 @@ http.route({
 			});
 			return new Response("ok", { status: 200 });
 		}
+		console.log("Delyva webhook: applying", {
+			delyvaOrderId: event.delyvaOrderId,
+			statusCode: event.statusCode,
+			eventName,
+		});
 		await ctx.runMutation(internal.delyva.applyWebhookEvent, {
 			jobId: context.jobId,
 			statusCode: event.statusCode,

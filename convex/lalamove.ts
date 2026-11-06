@@ -453,6 +453,8 @@ export const saveCheckoutQuote = internalMutation({
 		vehicleType: v.optional(v.string()),
 		serviceCode: v.optional(v.string()),
 		serviceName: v.optional(v.string()),
+		// Delyva only — the winning service's class (z8r3fe11x3).
+		serviceType: v.optional(v.string()),
 		considered: v.optional(
 			v.array(
 				v.object({

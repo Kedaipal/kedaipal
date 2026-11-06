@@ -1,6 +1,12 @@
 /**
- * "Print label" on the seller's order detail (86eyp63mp) — one despatch label
- * for this order, rendered on demand by `awb.generateAwbPdf`.
+ * "Print despatch label" on the seller's order detail (86eyp63mp) — one
+ * despatch label for this order, rendered on demand by `awb.generateAwbPdf`.
+ *
+ * Named for WHAT it prints, not just that it prints (z8r3fe11x3 hands-on
+ * test): a Delyva booking puts a second label on the same page — the
+ * courier's "Print shipping label", the one a branch scans — and DapoGo's
+ * parcel went out wearing ours because both read "Print label". The despatch
+ * label is Kedaipal's address slip; the shipping label is the courier's.
  *
  * Sits BEFORE the receipt download in the actions row: the label is the
  * operational step (do it now, the parcel is going out), the receipt is
@@ -41,7 +47,7 @@ export function PrintLabelButton({
 	variant,
 	size,
 	className,
-	label = "Print label",
+	label = "Print despatch label",
 	lockedReason,
 }: {
 	shortId: string;

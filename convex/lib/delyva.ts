@@ -158,8 +158,9 @@ export type DelyvaService = {
 	/** Total price in sen. */
 	price: number;
 	currency: string;
-	/** Delyva's service class — INSTANT / SDD / NDD etc. Opaque to us beyond
-	 * display; kept verbatim. */
+	/** Delyva's service class — INSTANT / SDD / NDD, with a `-DROP` suffix
+	 * when the SELLER takes the parcel to a branch (`delyvaHandoff`). Kept
+	 * verbatim: it is stored on the booking and judged, never rewritten. */
 	serviceType?: string;
 	/** Item types this service accepts, when the response says. */
 	itemTypes?: string[];
@@ -249,6 +250,169 @@ export function parseInstantQuoteResponse(json: unknown): DelyvaService[] {
 		});
 	}
 	return parsed;
+}
+
+// ---------------------------------------------------------------------------
+// Service class → what the SELLER has to do (z8r3fe11x3)
+// ---------------------------------------------------------------------------
+
+/** How a parcel leaves the seller for one Delyva service. */
+export type DelyvaHandoff = "pickup" | "dropoff";
+
+/** Delyva's logo CDN — `serviceCompany.logo` on the quote is a path under it.
+ * Courier brand assets are never bundled in the repo: they are the courier's
+ * to change, and the CDN is where Delyva's own app reads them from. */
+export const DELYVA_CDN_BASE_URL = "https://cdn.delyva.app/";
+
+/**
+ * Who moves the parcel to the courier, read from the service class. Delyva
+ * suffixes a service with `-DROP` when the SELLER takes the parcel to a
+ * branch (`NDD-DROP`); the bare class (`NDD`, `SDD`, `INSTANT`) means the
+ * courier collects from the pickup address. The convention is OBSERVED, not
+ * documented: Delyva's published API reference (the Postman collection
+ * behind docs.api.delyva.com, checked 6 Nov 2026) never enumerates service
+ * classes at all, so the one hard datum is DapoGo's first live booking (J&T
+ * `JNTMY-PN-B200` = `NDD-DROP`, 3 Nov 2026), which sat on "Order created"
+ * for a day because nothing told the seller which kind she had bought. A
+ * drop-off service spelled any other way would read as a pickup here — the
+ * first non-J&T drop-off booking is where to look.
+ *
+ * `undefined` for a missing class — the caller decides what to claim (the
+ * picker shows the pickup pill and warns, a booked card claims neither), it
+ * is never guessed here. Case-insensitive, because the value is Delyva's and
+ * verbatim.
+ */
+export function delyvaHandoff(
+	serviceType: string | undefined,
+): DelyvaHandoff | undefined {
+	const type = serviceType?.trim();
+	if (!type) return undefined;
+	return /-DROP$/i.test(type) ? "dropoff" : "pickup";
+}
+
+/** The service class without its handoff suffix — `NDD-DROP` → `NDD`, so a
+ * drop-off service still reads as next-day wherever speed is judged. */
+export function delyvaBaseServiceType(
+	serviceType: string | undefined,
+): string | undefined {
+	const type = serviceType?.trim();
+	if (!type) return undefined;
+	return type.replace(/-DROP$/i, "").toUpperCase();
+}
+
+/** Delyva's speed vocabulary in plain words, judged on the BASE class so a
+ * drop-off variant keeps its speed. Unknown classes say nothing — a wrong
+ * "Same-day" is worse than no line. */
+export function delyvaSpeedLabel(
+	serviceType: string | undefined,
+): "Same-day" | "Next-day" | undefined {
+	const base = delyvaBaseServiceType(serviceType);
+	if (base === "INSTANT" || base === "SDD") return "Same-day";
+	if (base === "NDD") return "Next-day";
+	return undefined;
+}
+
+/** The absolute logo URL for a quote row, or undefined when the quote carried
+ * no path. A leading slash on the path is tolerated — the CDN root is ours. */
+export function delyvaLogoUrl(logoPath: string | undefined): string | undefined {
+	const path = logoPath?.trim().replace(/^\/+/, "");
+	if (!path) return undefined;
+	return `${DELYVA_CDN_BASE_URL}${path}`;
+}
+
+// ---------------------------------------------------------------------------
+// The courier's own label — GET /order/{id}/label (z8r3fe11x3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether the label can be fetched for a booked job, and if not, why — the
+ * dispatch card's Print shipping label disables with the reason rather than
+ * failing on tap. Delyva mints the label once the order is PROCESSED (there
+ * is a provider order id) and it is only useful until the courier has the
+ * parcel: after collection the label is on the parcel already, and a
+ * terminal job has nothing to label.
+ */
+export type DelyvaLabelAvailability =
+	| { ok: true }
+	| { ok: false; reason: "not_booked" | "collected" | "ended" };
+
+export function delyvaLabelAvailability(job: {
+	status: DeliveryJobStatus;
+	providerOrderId?: string;
+}): DelyvaLabelAvailability {
+	if (job.status === "picked_up") return { ok: false, reason: "collected" };
+	if (job.status !== "assigning" && job.status !== "ongoing")
+		return { ok: false, reason: "ended" };
+	if (!job.providerOrderId) return { ok: false, reason: "not_booked" };
+	return { ok: true };
+}
+
+/** What `GET /order/{id}/label` handed back, normalised to the two shapes the
+ * card can act on: bytes to save, or a URL to open. */
+export type DelyvaLabel =
+	| { kind: "pdf"; pdf: ArrayBuffer }
+	| { kind: "url"; url: string };
+
+const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46]; // "%PDF"
+
+function looksLikePdf(bytes: ArrayBuffer): boolean {
+	const head = new Uint8Array(bytes.slice(0, 4));
+	return PDF_MAGIC.every((b, i) => head[i] === b);
+}
+
+/** Pull a label URL out of a JSON body, tolerating the wrappers Delyva uses
+ * elsewhere (`{data: …}`) and the field names seen across their API
+ * (`url`, `labelUrl`, `label`, `link`, `file`). Only http(s) counts. */
+function labelUrlFromJson(json: unknown): string | undefined {
+	const record = ((json as { data?: unknown })?.data ?? json) as
+		| Record<string, unknown>
+		| string
+		| null
+		| undefined;
+	const candidates =
+		typeof record === "string"
+			? [record]
+			: record && typeof record === "object"
+				? [record.url, record.labelUrl, record.label, record.link, record.file]
+				: [];
+	for (const candidate of candidates) {
+		if (typeof candidate === "string" && /^https?:\/\//i.test(candidate.trim()))
+			return candidate.trim();
+	}
+	return undefined;
+}
+
+/**
+ * Normalise a label response. Probed live on a demo-account booking (4 Nov
+ * 2026): the endpoint redirects to an S3 object served as
+ * `application/pdf` (`%PDF-1.7`, ~16 KB), generated at booking and deleted
+ * by S3 after 90 days. The PDF branch is therefore the real one — by content
+ * type, or the `%PDF` magic should the type ever come back generic. The JSON
+ * envelope carrying a URL stays as a defensive fallback that was never
+ * observed. Anything else throws, so the card shows a failure rather than
+ * opening an empty tab.
+ */
+export function parseDelyvaLabelResponse(args: {
+	contentType: string | null;
+	body: ArrayBuffer;
+}): DelyvaLabel {
+	const type = (args.contentType ?? "").toLowerCase();
+	if (type.includes("application/pdf") || looksLikePdf(args.body)) {
+		return { kind: "pdf", pdf: args.body };
+	}
+	const text = new TextDecoder().decode(args.body).trim();
+	if (!text) throw new Error("Delyva label response was empty");
+	let json: unknown;
+	try {
+		json = JSON.parse(text);
+	} catch {
+		throw new Error(
+			`Delyva label response was not a PDF or JSON (${type || "no content type"})`,
+		);
+	}
+	const url = labelUrlFromJson(json);
+	if (!url) throw new Error("Delyva label response carried no label URL");
+	return { kind: "url", url };
 }
 
 /** One parcel line for a waypoint's inventory declaration. */
@@ -456,43 +620,219 @@ export function parseDelyvaWalletBalance(json: unknown): number | null {
 }
 
 /**
- * Delyva's numeric status vocabulary → our normalized job status. Codes from
- * their own maintained WooCommerce plugin (Statuses mapping, verified against
- * the webhook docs):
+ * Delyva statusCode → our normalized job status. The table is Delyva's own
+ * (the "Order status codes" table in docs.api.delyva.com's published
+ * collection, read 5 Nov 2026, z8r3fe11y8), cross-checked against their
+ * maintained WooCommerce plugin for the codes it handles:
  *
- *   100/110  order created / ready to collect        → assigning
- *   200      courier accepted                        → ongoing
- *   400      start collecting (pickup pending)       → ongoing
- *   475      failed collection                       → rejected  (failure)
- *   500      collected (pickup complete)             → picked_up
- *   600      start delivery (out for delivery)       → picked_up
- *   650      failed delivery                         → picked_up (kept —
+ *   0 / 10 / 11  draft / payment pending / abandoned    → undefined (pre-booking)
+ *   99       create order failed, account not charged → rejected  (failure)
+ *   100/110  order created / ready (label printed)    → assigning
+ *   200      pending collection / assigned to driver  → ongoing
+ *   400      pickup start                             → ongoing
+ *   450      arrived for pick-up                      → ongoing
+ *   475      pick-up failed                           → rejected  (failure)
+ *   500      pickup success / collected               → picked_up
+ *   555/556  hub check-in / check-out                 → picked_up
+ *   600      delivery start (out for delivery)        → picked_up
+ *   625      arrived for delivery                     → picked_up
+ *   650      failed to deliver                        → picked_up (kept —
  *            the parcel is still WITH the courier: retry/return follows;
  *            surfaced via failureReason, never a terminal state)
- *   700/1000 completed                               → completed
- *   900      cancelled                               → canceled
+ *   651      failed delivery — lost / damaged         → picked_up (notice)
+ *   654      failed — driver cancelled                → rejected  (failure)
+ *   655      failed (generic / reason)                → rejected  (failure)
+ *   661      returning to sender                      → picked_up (notice)
+ *   663      failed to return                         → completed (RETURNED)
+ *   700/1000 delivered / completed                    → completed
+ *   701      item returned                            → completed (RETURNED)
+ *   900      cancelled                                → canceled
  *
- * Unknown codes → undefined (webhook vocab can grow; never throw).
+ * 663 and 701 are `completed` because the trip is over and the job must free
+ * the order's booking slot — but the ORDER is not delivered: callers read
+ * `isReturnedStatus` and leave the order where it is. Before z8r3fe11y8 the
+ * six failure/return codes were unmapped, so a lost parcel, a cancelled
+ * pickup and a returned parcel all left the job (and the seller) at
+ * "Booked" forever. Unknown codes → undefined (the vocabulary can grow;
+ * never throw).
  */
 export function normalizeDelyvaStatus(
 	statusCode: number | undefined,
 ): DeliveryJobStatus | undefined {
 	if (statusCode === undefined) return undefined;
 	if (statusCode === 100 || statusCode === 110) return "assigning";
-	if (statusCode === 200 || statusCode === 400) return "ongoing";
-	if (statusCode === 475) return "rejected";
-	if (statusCode === 500 || statusCode === 600 || statusCode === 650)
+	if (statusCode === 200 || statusCode === 400 || statusCode === 450)
+		return "ongoing";
+	if (statusCode === 99 || statusCode === 475 || statusCode === 654 || statusCode === 655)
+		return "rejected";
+	if (
+		statusCode === 500 ||
+		statusCode === 555 ||
+		statusCode === 556 ||
+		statusCode === 600 ||
+		statusCode === 625 ||
+		statusCode === 650 ||
+		statusCode === 651 ||
+		statusCode === 661
+	)
 		return "picked_up";
-	if (statusCode === 700 || statusCode === 1000) return "completed";
+	if (
+		statusCode === 700 ||
+		statusCode === 1000 ||
+		statusCode === 663 ||
+		statusCode === 701
+	)
+		return "completed";
 	if (statusCode === 900) return "canceled";
 	return undefined;
 }
 
-/** The one mid-flight failure that must NOT change job status: a failed
- * delivery attempt (courier retries or returns) — callers stamp
- * failureReason + notify, and the job stays picked_up. */
+/**
+ * The trip ended with the parcel back at (or lost on the way back to) the
+ * SELLER, not the buyer (z8r3fe11y8): 701 item returned, 663 failed to
+ * return. The job completes — the slot is free for a rebook — and the order
+ * is left alone: shipped stays shipped until the seller says what happens
+ * next (Mark order as returned, Book again, or cancel).
+ */
+export function isReturnedStatus(statusCode: number | undefined): boolean {
+	return statusCode === 663 || statusCode === 701;
+}
+
+/**
+ * Mid-flight notices (z8r3fe11y8): the parcel is with the courier and the
+ * job stays `picked_up`, but the seller must hear about it — a failed
+ * delivery attempt (650), a parcel reported lost or damaged (651), a parcel
+ * on its way back (661). `undefined` for every other code.
+ */
+export function inTransitNotice(statusCode: number): string | undefined {
+	if (statusCode === 650)
+		return "Delivery attempt failed — the courier will retry or return the parcel";
+	if (statusCode === 651) return "Lost or damaged, claim with Delyva";
+	if (statusCode === 661) return "Returning to sender";
+	return undefined;
+}
+
+/**
+ * The failureReason for a code that ends or interrupts a booking — ONE
+ * author, so the webhook path, the pull path and the email all tell the
+ * same story. Delyva's own words (`statusText`) win where they describe the
+ * event; the fixed lines are for codes whose statusText is a bare status
+ * word or absent. 99 keeps its own sentence even with a statusText, because
+ * the one Delyva sends on a create failure ("failed") says nothing.
+ */
+export function delyvaFailureReason(
+	statusCode: number,
+	statusText: string | undefined,
+): string | undefined {
+	const given = statusText?.trim() || undefined;
+	switch (statusCode) {
+		case 99:
+			return given
+				? `Delyva could not create the order — ${given}`
+				: "Delyva could not create the order";
+		case 475:
+			return given ?? "The courier couldn't collect the parcel";
+		case 654:
+			return given ?? "Courier cancelled the pickup";
+		case 655:
+			return given ?? "The courier reported the booking as failed";
+		case 900:
+			return given ?? "Cancelled by Delyva";
+		case 650:
+			return given ?? inTransitNotice(650);
+		case 651:
+		case 661:
+			return inTransitNotice(statusCode);
+		case 701:
+			return "Returned to you";
+		case 663:
+			return "Failed to return — ask Delyva where the parcel is";
+		default:
+			return undefined;
+	}
+}
+
+/** A failed delivery ATTEMPT (courier retries or returns) — the first of the
+ * mid-flight notices (`inTransitNotice`), kept by name because the collected
+ * rule below reads it: 650 is collected, whatever its normalised status. */
 export function isFailedDeliveryAttempt(statusCode: number): boolean {
 	return statusCode === 650;
+}
+
+/** How long a booked job may sit without a scan before it is flagged
+ * (z8r3fe11y8): parcel couriers collect within a day, so a booking with no
+ * event for 24 h is one worth checking, not one still in the queue. */
+export const DELYVA_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * "Booked, and nothing has happened for a day" — the ONE predicate the hourly
+ * sweep selects on and the pull re-checks after applying Delyva's answer.
+ * True only for a booking Delyva confirmed (a reservation without a
+ * providerOrderId expires on its own), still waiting for the first scan
+ * (`assigning` / `ongoing`), older than the window, with no event inside it.
+ */
+export function isDelyvaJobStale(
+	job: {
+		status: DeliveryJobStatus;
+		providerOrderId?: string;
+		createdAt: number;
+		lastEventAt?: number;
+	},
+	now: number,
+): boolean {
+	if (!job.providerOrderId) return false;
+	if (job.status !== "assigning" && job.status !== "ongoing") return false;
+	if (now - job.createdAt < DELYVA_STALE_AFTER_MS) return false;
+	return (
+		job.lastEventAt === undefined ||
+		now - job.lastEventAt >= DELYVA_STALE_AFTER_MS
+	);
+}
+
+/** How long a FLAGGED booking waits between the sweep's pulls (z8r3fe11y8,
+ * PR #461 review): once `staleSince` is set there is nothing new to learn
+ * every hour, and a booking a seller abandons would otherwise cost one
+ * Delyva call an hour on their key for as long as it lives. A webhook, or
+ * the seller's own Refresh, still heals it the moment it moves. */
+export const DELYVA_FLAGGED_REPULL_MS = 23 * 60 * 60 * 1000;
+
+/**
+ * Should the hourly sweep pull this job NOW? Stale (`isDelyvaJobStale`) and
+ * either not yet flagged, or flagged and last pulled a day ago. The one
+ * predicate `sweepStaleJobs` selects on.
+ */
+export function isDueForSweepPull(
+	job: Parameters<typeof isDelyvaJobStale>[0] & {
+		staleSince?: number;
+		lastPulledAt?: number;
+	},
+	now: number,
+): boolean {
+	if (!isDelyvaJobStale(job, now)) return false;
+	if (job.staleSince === undefined) return true;
+	return (
+		job.lastPulledAt === undefined ||
+		now - job.lastPulledAt >= DELYVA_FLAGGED_REPULL_MS
+	);
+}
+
+/**
+ * Has the courier physically got the parcel? The one author of "the courier's
+ * tracking page is live now" (z8r3fe0t4e). Delyva issues the consignment
+ * number at booking (100/200), but J&T — and every parcel courier — indexes a
+ * waybill only at its first scan, so a tracking link written at booking is a
+ * dead "information not found" page for the ~24 h until collection (seen live
+ * on DapoGo's first booking, 3 Nov 2026). Judged by the NORMALISED status,
+ * never by `code >= 500`: a failure code above 500 that means "never
+ * collected" (a courier-cancelled pickup) must not promise a page that isn't
+ * there. 650 (failed delivery attempt) is collected — the parcel is with the
+ * courier; 900 (cancelled) is not.
+ */
+export function isCollectedStatus(statusCode: number | undefined): boolean {
+	if (statusCode === undefined) return false;
+	if (isFailedDeliveryAttempt(statusCode)) return true;
+	const status = normalizeDelyvaStatus(statusCode);
+	return status === "picked_up" || status === "completed";
 }
 
 export type DelyvaWebhookEvent = {
@@ -512,24 +852,65 @@ export type DelyvaWebhookEvent = {
 };
 
 /**
- * Parse one webhook delivery's JSON body. Two payload families share the
+ * Parse one webhook delivery's JSON body. Three payload families share the
  * shape rules of Delyva's own plugin:
  *  - order.created:            { id, consignmentNo, statusCode, customerId }
  *  - order_tracking.update /
  *    order_tracking.change:    { orderId, consignmentNo, statusCode, … }
+ *  - order.updated / order.failed (z8r3fe11y8): the FULL order object —
+ *    { id, statusCode, status, consignmentNo, failedReason, cancelledReason,
+ *    updatedAt, waypoint, … } — the same shape `GET /order/{id}` returns,
+ *    so the Refresh pull is parsed by the object parser below too.
  * Returns null when neither id is present (not an order event we act on).
  */
 export function parseDelyvaWebhookEvent(
 	body: string,
 ): DelyvaWebhookEvent | null {
-	let data: Record<string, unknown>;
+	let data: unknown;
 	try {
-		const parsed = JSON.parse(body) as unknown;
-		if (!parsed || typeof parsed !== "object") return null;
-		data = parsed as Record<string, unknown>;
+		data = JSON.parse(body) as unknown;
 	} catch {
 		return null;
 	}
+	return parseDelyvaEventObject(data);
+}
+
+/**
+ * The pulled order (`GET /order/{id}`) as the SAME event shape the webhook
+ * route hands to `applyWebhookEvent`, so a missed webhook heals through the
+ * one code path. Unwraps the `{ data }` envelope (and a `{ order }` one,
+ * which some responses nest). Null when no order id is present.
+ */
+export function parseDelyvaOrderPull(json: unknown): DelyvaWebhookEvent | null {
+	if (!json || typeof json !== "object") return null;
+	const outer = json as { data?: unknown; order?: unknown };
+	const inner =
+		outer.data && typeof outer.data === "object"
+			? outer.data
+			: outer.order && typeof outer.order === "object"
+				? outer.order
+				: json;
+	return parseDelyvaEventObject(inner);
+}
+
+/** Is this the full order object rather than a tracking row? The order
+ * carries the two reason fields (null when unset — Delyva never omits a
+ * field) and its waypoints; a tracking row has neither. */
+function isFullOrderShape(data: Record<string, unknown>): boolean {
+	return (
+		"failedReason" in data || "cancelledReason" in data || "waypoint" in data
+	);
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+export function parseDelyvaEventObject(
+	parsed: unknown,
+): DelyvaWebhookEvent | null {
+	if (!parsed || typeof parsed !== "object") return null;
+	const data = parsed as Record<string, unknown>;
 	const id =
 		typeof data.orderId === "string" && data.orderId
 			? data.orderId
@@ -568,8 +949,14 @@ export function parseDelyvaWebhookEvent(
 					? Number(data.customerId)
 					: undefined,
 		eventAt,
-		statusText:
-			typeof data.status === "string" && data.status ? data.status : undefined,
+		// A tracking row's `statusText` ("In transit for pick-up") or its
+		// `status` is Delyva's description of THIS event. On the full order
+		// object `status` is a bare state word ("failed", "ready") that would
+		// read as a reason, so only the two reason fields count there.
+		statusText: isFullOrderShape(data)
+			? (nonEmptyString(data.failedReason) ??
+				nonEmptyString(data.cancelledReason))
+			: (nonEmptyString(data.statusText) ?? nonEmptyString(data.status)),
 	};
 }
 
@@ -615,13 +1002,30 @@ export async function verifyDelyvaWebhook(args: {
 	return diff === 0;
 }
 
-/** Webhook events we subscribe on connect. `order.created` carries the
- * consignment number (AWB); the tracking pair drives status. */
+/**
+ * Webhook events we subscribe on connect. `order.created` carries the
+ * consignment number (AWB); the tracking pair drives status. `order.updated`
+ * and `order.failed` (z8r3fe11y8) deliver the full order object — the second
+ * is how a create failure (statusCode 99) reaches us at all, since a draft
+ * that never processed emits no tracking rows. Only the first three are
+ * named in Delyva's published collection; the two newer names are subscribed
+ * best-effort (`subscribeWebhooks`), so a tenant that doesn't know them can
+ * never fail a connect.
+ */
 export const DELYVA_WEBHOOK_EVENTS = [
 	"order.created",
 	"order_tracking.update",
 	"order_tracking.change",
+	"order.updated",
+	"order.failed",
 ] as const;
+
+/** The events a connect must land, or the account is not subscribed. */
+export const DELYVA_WEBHOOK_EVENTS_REQUIRED: ReadonlySet<string> = new Set([
+	"order.created",
+	"order_tracking.update",
+	"order_tracking.change",
+]);
 
 /**
  * Why a BOOKING attempt failed, as a stable machine class (the Lalamove

@@ -15,10 +15,21 @@ import type { DeliveryJobStatus } from "../../convex/lib/deliveryJobs";
  */
 export function jobStatusLabel(
 	status: DeliveryJobStatus,
-	opts: { provider: CourierProviderId; collection: boolean },
+	opts: {
+		provider: CourierProviderId;
+		collection: boolean;
+		/** The courier brought the parcel back (z8r3fe11y8): `completed` for
+		 * the courier, never "Delivered" for the seller. */
+		returned?: boolean;
+		/** Flagged by the hourly sweep: booked a day ago, never scanned. */
+		stale?: boolean;
+	},
 ): string {
 	const { provider, collection } = opts;
 	const rider = provider === "lalamove";
+	if (status === "completed" && opts.returned) return "Returned";
+	if ((status === "assigning" || status === "ongoing") && opts.stale)
+		return "Not scanned yet";
 	switch (status) {
 		case "assigning":
 			return rider ? "Finding rider" : "Booked";
@@ -39,18 +50,27 @@ export function jobStatusLabel(
 	}
 }
 
-/** The status's colour family: settled green, in-progress mint, failed amber. */
+export type JobStatusTone = "done" | "active" | "failed" | "warn";
+
+/** The status's colour family: settled green, in-progress mint, failed
+ * amber — and `warn`, the same amber for a booking that is NOT failed but
+ * needs the seller (returned to them, or never scanned): it keeps its cost,
+ * which a failed booking never charged. */
 export function jobStatusTone(
 	status: DeliveryJobStatus,
-): "done" | "active" | "failed" {
-	if (status === "completed") return "done";
+	flags: { returned?: boolean; stale?: boolean } = {},
+): JobStatusTone {
+	if (status === "completed") return flags.returned ? "warn" : "done";
 	if (status === "canceled" || status === "expired" || status === "rejected")
 		return "failed";
+	if ((status === "assigning" || status === "ongoing") && flags.stale)
+		return "warn";
 	return "active";
 }
 
-export const JOB_TONE_CLASS: Record<"done" | "active" | "failed", string> = {
+export const JOB_TONE_CLASS: Record<JobStatusTone, string> = {
 	done: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200",
 	active: "bg-accent/15 text-accent-emphasis",
 	failed: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+	warn: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
 };

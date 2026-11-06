@@ -21,4 +21,22 @@ describe("jobStatusLabel", () => {
 		expect(jobStatusTone("rejected")).toBe("failed");
 		expect(jobStatusTone("ongoing")).toBe("active");
 	});
+
+	it("a returned parcel is never Delivered, and a flagged booking says it was never scanned (z8r3fe11y8)", () => {
+		const courier = { provider: "delyva" as const, collection: false };
+		expect(jobStatusLabel("completed", { ...courier, returned: true })).toBe(
+			"Returned",
+		);
+		expect(jobStatusTone("completed", { returned: true })).toBe("warn");
+		expect(jobStatusLabel("assigning", { ...courier, stale: true })).toBe(
+			"Not scanned yet",
+		);
+		expect(jobStatusTone("ongoing", { stale: true })).toBe("warn");
+		// The flags mean nothing on any other status.
+		expect(jobStatusLabel("picked_up", { ...courier, stale: true })).toBe(
+			"In transit",
+		);
+		expect(jobStatusTone("rejected", { returned: true })).toBe("failed");
+		expect(jobStatusLabel("completed", courier)).toBe("Delivered");
+	});
 });

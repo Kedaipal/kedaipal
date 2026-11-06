@@ -257,6 +257,53 @@ describe("DeliveriesView", () => {
 		expect(screen.getAllByText("Rider on the way").length).toBeGreaterThan(0);
 	});
 
+	it("a returned parcel reads Returned, never Delivered, and rebooks once marked; a flagged booking reads Not scanned yet (z8r3fe11y8)", () => {
+		renderView(
+			overview({
+				booksCouriers: true,
+				jobs: [
+					job({
+						shortId: "ORD-7",
+						provider: "delyva",
+						carrier: "J&T Express",
+						status: "completed",
+						group: "completed",
+						returned: true,
+						orderSettled: true,
+					}),
+					job({
+						shortId: "ORD-8",
+						provider: "delyva",
+						carrier: "J&T Express",
+						status: "completed",
+						group: "completed",
+						returned: true,
+						rebookable: true,
+					}),
+					job({
+						shortId: "ORD-9",
+						provider: "delyva",
+						carrier: "DHL eCommerce",
+						status: "assigning",
+						group: "active",
+						stale: true,
+					}),
+				],
+			}),
+		);
+		expect(screen.queryByText("Delivered")).toBeNull();
+		expect(screen.getAllByText("Returned").length).toBeGreaterThan(0);
+		expect(screen.getAllByText("Not scanned yet").length).toBeGreaterThan(0);
+		// Unmarked: the order page holds Mark returned, so the list only views.
+		// Marked: the order is back at Packed, so the list offers the rebook.
+		expect(screen.getAllByRole("link", { name: "Rebook" })).toHaveLength(1);
+		expect(
+			screen.getAllByRole("link", { name: "View" }).length,
+		).toBeGreaterThan(0);
+		// A returned booking was charged: its cost stays, unlike a failure's.
+		expect(screen.queryAllByText("—")).toHaveLength(0);
+	});
+
 	it("a booking still finding a rider says how long, and offers a tip", () => {
 		renderView(
 			overview({

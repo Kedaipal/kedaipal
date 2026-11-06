@@ -79,8 +79,48 @@ describe("renderRetailerEmail — pickup kind + detail", () => {
 			"mockupChangesRequested",
 			"mockupDeclined",
 			"deliveryJobFailed",
+			"deliveryJobStale",
+			"deliveryJobReturned",
 		] as const) {
 			expect(() => renderRetailerEmail("zh", key, base)).not.toThrow();
 		}
+	});
+});
+
+describe("courier job emails (z8r3fe11y8)", () => {
+	const delivery = {
+		...base,
+		deliveryMethod: "delivery" as const,
+		deliveryProvider: "delyva" as const,
+	};
+	test("stale: names the waybill, the first-scan rule, Refresh, and that the buyer wasn't messaged — in all three locales", () => {
+		for (const locale of ["en", "ms", "zh"] as const) {
+			const { subject, html, text } = renderRetailerEmail(locale, "deliveryJobStale", {
+				...delivery,
+				trackingNo: "632195694574",
+			});
+			expect(subject).toContain("ORD-AB12");
+			expect(html).toContain("632195694574");
+			expect(text).toContain("632195694574");
+			expect(text).toContain(base.dashboardUrl);
+		}
+		const en = renderRetailerEmail("en", "deliveryJobStale", delivery);
+		expect(en.text).toContain("No tracking number has been issued yet.");
+		expect(en.text).toContain("Refresh status");
+		expect(en.text).toContain("Your buyer has not been messaged.");
+	});
+	test("returned: carries Delyva's reason and the waybill, says the order still reads Shipped", () => {
+		const { subject, text, html } = renderRetailerEmail("en", "deliveryJobReturned", {
+			...delivery,
+			jobFailureReason: "Returned to you",
+			trackingNo: "632195694574",
+		});
+		expect(subject).toContain("on its way back to you");
+		expect(text).toContain("Delyva says: Returned to you.");
+		expect(text).toContain("Waybill 632195694574");
+		expect(text).toContain("still reads Shipped");
+		expect(html).toContain("mark it returned");
+		const bare = renderRetailerEmail("ms", "deliveryJobReturned", delivery);
+		expect(bare.text).toContain("Kurier memulangkan bungkusan.");
 	});
 });

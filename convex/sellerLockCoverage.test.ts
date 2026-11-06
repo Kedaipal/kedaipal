@@ -78,6 +78,8 @@ const UNLOCKED: Record<string, string> = {
 	// nothing a view-only store could spend or change.
 	"easyparcel.refreshBalance": "read: re-snapshots the prepaid wallet balance",
 	"delyva.refreshBalance": "read: re-reads the prepaid wallet balance",
+	"delyva.refreshJob":
+		"read: pulls the live booking from Delyva and applies it as a webhook would (z8r3fe11y8) — a locked store still gets its courier updates",
 	"easyparcel.refreshJobStatus":
 		"read: polls one booking's status — the cron does the same unasked",
 	"liveQuote.quoteForCheckout": "buyer: priced at checkout",

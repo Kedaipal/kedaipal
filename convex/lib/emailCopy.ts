@@ -27,6 +27,8 @@ export type RetailerEmailKey =
 	| "mockupChangesRequested"
 	| "mockupDeclined"
 	| "deliveryJobFailed"
+	| "deliveryJobStale"
+	| "deliveryJobReturned"
 	| "gatewayMismatch"
 	| "gatewayPaidCancelled";
 
@@ -71,6 +73,10 @@ export type RetailerEmailVars = {
 	// "lalamove" (every pre-Delyva caller), so old scheduled sends render
 	// unchanged.
 	deliveryProvider?: CourierProviderId;
+	// The courier's consignment number, on "deliveryJobStale" /
+	// "deliveryJobReturned" (z8r3fe11y8) — the one thing the seller quotes
+	// to the courier or to Delyva support.
+	trackingNo?: string;
 	// True when the order has a made-to-order custom item that needs a mockup
 	// approved before it can be packed (and before the buyer is asked to pay).
 	// Surfaced on the newOrder / orderConfirmed alerts so the seller knows to act.
@@ -416,6 +422,34 @@ const en = {
 		const text = `🚨 Delivery booking failed for ${v.shortId}\n${reasonLine}\nYour buyer has not been notified and the order is unchanged — open the order to ${rebook}.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
+	deliveryJobStale: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `⚠️ ${v.shortId} hasn't been scanned by the courier yet`;
+		const waybill = v.trackingNo ? `Waybill ${v.trackingNo}.` : "";
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — the Delyva booking was placed over a day ago and the courier hasn't scanned the parcel.`,
+			escapeHtml(waybill || "No tracking number has been issued yet."),
+			`If you dropped it off, ask the branch to scan it in; if a pickup was booked, check your Delyva app that a courier is on the way. Tracking only starts at the first scan.`,
+			`Open the order to <strong>Refresh status</strong> or print the courier's label again. Your buyer has not been messaged.`,
+		];
+		const html = wrapHtml("⚠️", `Not scanned yet — ${v.shortId}`, lines, v.dashboardUrl, "Open the order");
+		const text = `⚠️ ${v.shortId} hasn't been scanned by the courier yet\n${waybill || "No tracking number has been issued yet."}\nIf you dropped it off, ask the branch to scan it in; if a pickup was booked, check your Delyva app that a courier is on the way. Tracking only starts at the first scan.\nOpen the order to Refresh status or print the courier's label again. Your buyer has not been messaged.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	deliveryJobReturned: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `↩️ ${v.shortId} is on its way back to you`;
+		const reasonLine = v.jobFailureReason
+			? `Delyva says: ${v.jobFailureReason}.`
+			: `The courier returned the parcel.`;
+		const waybill = v.trackingNo ? ` Waybill ${v.trackingNo}.` : "";
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — the Delyva courier returned this parcel instead of delivering it.`,
+			escapeHtml(`${reasonLine}${waybill}`),
+			`The order still reads Shipped. Open it to message your buyer, mark it returned and book again, or cancel it.`,
+		];
+		const html = wrapHtml("↩️", `Parcel returned — ${v.shortId}`, lines, v.dashboardUrl, "Open the order");
+		const text = `↩️ ${v.shortId} is on its way back to you\n${reasonLine}${waybill}\nThe order still reads Shipped. Open it to message your buyer, mark it returned and book again, or cancel it.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
 	gatewayMismatch: (v: RetailerEmailVars): RenderedEmail => {
 		const subject = `⚠️ Online payment doesn't match ${v.shortId}'s total`;
 		const paid = v.gatewayPaidFormatted ?? "an unknown amount";
@@ -623,6 +657,34 @@ const ms = {
 		const text = `🚨 Tempahan penghantaran gagal untuk ${v.shortId}\n${reasonLine}\nPembeli anda tidak dimaklumkan dan pesanan tidak berubah — buka pesanan untuk ${rebook}.\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
+	deliveryJobStale: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `⚠️ ${v.shortId} belum diimbas oleh kurier`;
+		const waybill = v.trackingNo ? `Nombor penghantaran ${v.trackingNo}.` : "";
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — tempahan Delyva dibuat lebih sehari lalu dan kurier belum mengimbas bungkusan.`,
+			escapeHtml(waybill || "Nombor penghantaran belum dikeluarkan."),
+			`Jika anda hantar ke cawangan, minta mereka imbas masuk; jika pikap ditempah, semak aplikasi Delyva anda bahawa kurier sedang datang. Penjejakan hanya bermula pada imbasan pertama.`,
+			`Buka pesanan untuk <strong>Segarkan status</strong> atau cetak semula label kurier. Pembeli anda belum dihubungi.`,
+		];
+		const html = wrapHtml("⚠️", `Belum diimbas — ${v.shortId}`, lines, v.dashboardUrl, "Buka pesanan");
+		const text = `⚠️ ${v.shortId} belum diimbas oleh kurier\n${waybill || "Nombor penghantaran belum dikeluarkan."}\nJika anda hantar ke cawangan, minta mereka imbas masuk; jika pikap ditempah, semak aplikasi Delyva anda bahawa kurier sedang datang. Penjejakan hanya bermula pada imbasan pertama.\nBuka pesanan untuk Segarkan status atau cetak semula label kurier. Pembeli anda belum dihubungi.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	deliveryJobReturned: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `↩️ ${v.shortId} sedang dipulangkan kepada anda`;
+		const reasonLine = v.jobFailureReason
+			? `Delyva berkata: ${v.jobFailureReason}.`
+			: `Kurier memulangkan bungkusan.`;
+		const waybill = v.trackingNo ? ` Nombor penghantaran ${v.trackingNo}.` : "";
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> — kurier Delyva memulangkan bungkusan ini dan tidak menghantarnya.`,
+			escapeHtml(`${reasonLine}${waybill}`),
+			`Pesanan masih bertaraf Dihantar. Buka untuk mesej pembeli, tandakan sebagai dipulangkan dan tempah semula, atau batalkan.`,
+		];
+		const html = wrapHtml("↩️", `Bungkusan dipulangkan — ${v.shortId}`, lines, v.dashboardUrl, "Buka pesanan");
+		const text = `↩️ ${v.shortId} sedang dipulangkan kepada anda\n${reasonLine}${waybill}\nPesanan masih bertaraf Dihantar. Buka untuk mesej pembeli, tandakan sebagai dipulangkan dan tempah semula, atau batalkan.\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
 	gatewayMismatch: (v: RetailerEmailVars): RenderedEmail => {
 		const subject = `⚠️ Bayaran online tidak sepadan dengan jumlah ${v.shortId}`;
 		const paid = v.gatewayPaidFormatted ?? "jumlah tidak diketahui";
@@ -828,6 +890,34 @@ const zh = {
 		];
 		const html = wrapHtml("🚨", `配送预订失败 —— ${v.shortId}`, lines, v.dashboardUrl, "重新预订");
 		const text = `🚨 ${v.shortId} 的配送预订失败\n${reasonLine}\n顾客还没有收到通知，订单也没有变化 —— 请打开订单${rebook}。\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	deliveryJobStale: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `⚠️ ${v.shortId} 快递还没有扫描`;
+		const waybill = v.trackingNo ? `运单号 ${v.trackingNo}。` : "";
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> —— Delyva 预订已超过一天，快递还没有扫描包裹。`,
+			escapeHtml(waybill || "运单号还没有发出。"),
+			`如果您已送到网点，请网点扫描入库；如果预订了上门取件，请在 Delyva 应用确认快递员在路上。追踪从第一次扫描开始。`,
+			`打开订单<strong>刷新状态</strong>或重新打印快递面单。顾客还没有收到消息。`,
+		];
+		const html = wrapHtml("⚠️", `还没有扫描 —— ${v.shortId}`, lines, v.dashboardUrl, "打开订单");
+		const text = `⚠️ ${v.shortId} 快递还没有扫描\n${waybill || "运单号还没有发出。"}\n如果您已送到网点，请网点扫描入库；如果预订了上门取件，请在 Delyva 应用确认快递员在路上。追踪从第一次扫描开始。\n打开订单刷新状态或重新打印快递面单。顾客还没有收到消息。\n${v.dashboardUrl}`;
+		return { subject, html, text };
+	},
+	deliveryJobReturned: (v: RetailerEmailVars): RenderedEmail => {
+		const subject = `↩️ ${v.shortId} 正在退回给您`;
+		const reasonLine = v.jobFailureReason
+			? `Delyva 说明：${v.jobFailureReason}。`
+			: `快递把包裹退回了。`;
+		const waybill = v.trackingNo ? ` 运单号 ${v.trackingNo}。` : "";
+		const lines = [
+			`<strong>${escapeHtml(v.shortId)}</strong> —— Delyva 快递把这个包裹退回，没有送达。`,
+			escapeHtml(`${reasonLine}${waybill}`),
+			`订单仍显示已发货。打开订单联系顾客、标记为已退回后重新预订，或取消订单。`,
+		];
+		const html = wrapHtml("↩️", `包裹已退回 —— ${v.shortId}`, lines, v.dashboardUrl, "打开订单");
+		const text = `↩️ ${v.shortId} 正在退回给您\n${reasonLine}${waybill}\n订单仍显示已发货。打开订单联系顾客、标记为已退回后重新预订，或取消订单。\n${v.dashboardUrl}`;
 		return { subject, html, text };
 	},
 	gatewayMismatch: (v: RetailerEmailVars): RenderedEmail => {
