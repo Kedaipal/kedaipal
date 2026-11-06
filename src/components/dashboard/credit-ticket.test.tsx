@@ -162,10 +162,31 @@ describe("CreditTicket", () => {
 		expect(screen.queryByTestId("credit-ticket")).toBeNull();
 	});
 
-	it("an unmetered store gets no ticket — the menu still says 'On us'", () => {
-		const { container } = render(
-			<CreditTicket stub={stub({ balance: null })} variant="rail" />,
+	it("an unmetered store gets an ∞ ticket in all three sizes, every dot filled, no stamp", () => {
+		const unmetered = stub({ balance: null });
+		const rail = render(
+			<CreditTicket
+				stub={unmetered}
+				variant="rail"
+				plan={<a href="/app/admin/sellers">Admin</a>}
+			/>,
 		);
-		expect(container.innerHTML).toBe("");
+		const t = screen.getByTestId("credit-ticket");
+		expect(t.textContent).toBe("∞ orders");
+		expect(t.getAttribute("aria-label")).toBe(
+			"Kedaipal credits: unlimited orders, on us. Open billing.",
+		);
+		expect(t.querySelectorAll("i.bg-accent")).toHaveLength(STUB_DOTS);
+		expect(screen.queryByTestId("credit-ticket-stamp")).toBeNull();
+		// The plan pill still rides the tear, so the loading frame lands on
+		// the same shape instead of tearing away to a bare pill.
+		expect(screen.getByTestId("credit-ticket-plan").textContent).toBe("Admin");
+		rail.unmount();
+
+		render(<CreditTicket stub={unmetered} variant="collapsed" />);
+		expect(screen.getByTestId("credit-ticket").textContent).toBe("∞free");
+		cleanup();
+		render(<CreditTicket stub={unmetered} variant="phone" />);
+		expect(screen.getByTestId("credit-ticket").textContent).toBe("∞ orders");
 	});
 });

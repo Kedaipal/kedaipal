@@ -1335,8 +1335,8 @@ Billing, is never dismissable (a fact, not a nag), and comes in three sizes:
 | Where | Shows | Torn |
 | --- | --- | --- |
 | Rail, the top band | the stub's headline + its row of 20 dots, with the **plan pill riding the top tear** | top and bottom (`.kp-credit-ticket`) |
-| Collapsed 68px rail, under the logo | the figure + one word: `254 LEFT`, `18 LOW`, `4 OWED`, `3 WAIT` | top and bottom, 44px wide |
-| Phone header, beside the plan pill | `254 left` / `3 waiting` | left and right (`.kp-credit-ticket-side`), 18px drawn, 44px to tap |
+| Collapsed 68px rail, under the logo | the figure + one word: `254 LEFT`, `18 LOW`, `4 OWED`, `3 WAIT`, `∞ FREE` | top and bottom, 44px wide |
+| Phone header, beside the plan pill | `254 left` / `3 waiting` / `∞ orders` | left and right (`.kp-credit-ticket-side`), 18px drawn, 44px to tap |
 
 Healthy is plain ink; **low is amber with a LOW stamp and orders waiting red
 with a WAITING stamp**, so the state never rests on colour alone. On the rail
@@ -1352,9 +1352,13 @@ balance reads "owed", never a negative number. The collapsed figure caps at
 `999+` (orders waiting at `99+`) so it fits 44px; the phone line keeps the
 whole count. Words come from `creditStub(...).ticket`; colours from
 `credit-stub-tones.ts`, shared with the menu stub so the two can't drift.
-**No ticket** for a teammate without the credits grant, nor for an
-**unmetered** store: a permanent "∞" in the chrome says nothing the menu's
-"On us" doesn't. The torn edges use `background-repeat: round`, so they end
+**No ticket** for a teammate without the credits grant. An **unmetered**
+store (admin-owned or comped) gets one reading **∞** — `∞ orders` with every
+dot filled on the rail, `∞ FREE` collapsed, `∞ orders` on the phone, no stamp
+(Zaki, 6 Nov 2026). It first had none, on the reasoning that a permanent "∞"
+says nothing the menu's "On us" doesn't; in practice the loading frame then
+tore away to a bare pill on every admin login, and the band changed shape by
+plan. The torn edges use `background-repeat: round`, so they end
 on a whole tooth at any width (the menu stub now does too).
 
 The ticket **replaced** the first build's balance line on the avatar row and

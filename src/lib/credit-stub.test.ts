@@ -142,10 +142,22 @@ describe("creditStub", () => {
 			filled: STUB_DOTS,
 			leader: { label: "Plan", value: "Sponsored" },
 			button: null,
-			// A permanent "∞" in the chrome says nothing the menu doesn't.
-			ticket: null,
+			// The rail and phone header carry "∞" too, so an admin's or a
+			// sponsored store's loading frame lands on a ticket instead of
+			// tearing away to a bare pill (Zaki, 6 Nov).
+			ticket: {
+				figure: "∞",
+				word: "free",
+				short: "∞ orders",
+				stamp: null,
+				label: "Kedaipal credits: unlimited orders, sponsored. Open billing.",
+			},
 		});
-		expect(creditStub(input({ balance: null })).leader.value).toBe("Unlimited");
+		const own = creditStub(input({ balance: null }));
+		expect(own.leader.value).toBe("Unlimited");
+		expect(own.ticket?.label).toBe(
+			"Kedaipal credits: unlimited orders, on us. Open billing.",
+		);
 	});
 
 	it("the ticket never prints a negative: an owed balance reads 'owed'", () => {

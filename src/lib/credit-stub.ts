@@ -55,16 +55,17 @@ export type StubButton = {
 };
 
 /**
- * The always-on ticket: the stub torn down to its number. `null` for an
- * unmetered store — a permanent "∞" in the chrome says nothing the menu's
- * "On us" doesn't, and a fact that never changes isn't worth the pixels.
+ * The always-on ticket: the stub torn down to its number. An unmetered store
+ * gets one too, reading "∞" (Zaki, 6 Nov): without it the rail's loading
+ * frame tore away to a bare pill on every admin and sponsored login, and the
+ * same chrome on every store keeps the band from changing shape by plan.
  */
 export type CreditTicket = {
 	/** The collapsed rail's figure: "254", "3", "999+". */
 	figure: string;
 	/** The one word under it — what the figure counts. */
-	word: "left" | "low" | "owed" | "wait";
-	/** The phone header's line: "254 left", "3 waiting". */
+	word: "left" | "low" | "owed" | "wait" | "free";
+	/** The phone header's line: "254 left", "3 waiting", "∞ orders". */
 	short: string;
 	/** Low and waiting carry a stamp so the state never rests on colour
 	 * alone; healthy and owed say it in words. */
@@ -124,7 +125,13 @@ export function creditStub(input: CreditStubInput): CreditStub {
 				? { label: "Plan", value: "Sponsored" }
 				: { label: "Orders", value: "Unlimited" },
 			button: null,
-			ticket: null,
+			ticket: {
+				figure: "∞",
+				word: "free",
+				short: "∞ orders",
+				stamp: null,
+				label: `Kedaipal credits: unlimited orders, ${input.sponsored ? "sponsored" : "on us"}. Open billing.`,
+			},
 		};
 	}
 
