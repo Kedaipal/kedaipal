@@ -35,6 +35,7 @@ import {
 	delyvaFailureReason,
 	inTransitNotice,
 	isDelyvaJobStale,
+	isDueForSweepPull,
 	isReturnedStatus,
 	parseDelyvaOrderPull,
 	type DelyvaAddress,
@@ -2355,10 +2356,18 @@ async function applyDelyvaEvent(
 	const reason = delyvaFailureReason(statusCode, statusText);
 	// An exact replay of the newest event, or a pull that found the same
 	// state — nothing to apply, nothing to stamp, nobody to email twice.
+	// On a PULL "same status" IS "same state": the webhook row carried
+	// Delyva's wording for the event (`statusText`) while the full order
+	// object carries only `failedReason`/`cancelledReason`, so the two paths
+	// word the same 650 differently — letting the wording decide `changed`
+	// re-sent the notice email and overwrote Delyva's words on every Refresh
+	// (PR #461 review). A reason-only difference is never news.
 	const unchanged =
 		status === job.status &&
-		(reason === undefined || reason === job.failureReason) &&
-		(pulled || (job.lastEventAt !== undefined && eventAt === job.lastEventAt));
+		(pulled ||
+			((reason === undefined || reason === job.failureReason) &&
+				job.lastEventAt !== undefined &&
+				eventAt === job.lastEventAt));
 
 	const enteringFailure =
 		(status === "canceled" || status === "rejected") &&
@@ -2479,10 +2488,16 @@ async function flagIfStillStale(
 // Refresh pull + the hourly stale sweep (z8r3fe11y8)
 // ---------------------------------------------------------------------------
 
-/** How many candidate rows one sweep reads per active status, and how many
- * pulls it schedules in all. Reads are indexed and oldest-first, so the
- * stale ones come first. */
-const STALE_SWEEP_SCAN = 400;
+/** How many rows one sweep may read in all (across both statuses), how many
+ * it reads per page, and how many pulls it schedules. The index is
+ * oldest-first, and the OLDEST `assigning` rows are the ones that never
+ * leave it — demo bookings, abandoned orders, flagged jobs Delyva keeps
+ * answering "unchanged" for — so a fixed window of 400 (PR #461 review)
+ * would fill with them and a new live booking going stale would never be
+ * read again. The budget is sized well past any plausible forever-set; the
+ * live set is small. */
+const STALE_SWEEP_READ_BUDGET = 4000;
+const STALE_SWEEP_PAGE = 400;
 const STALE_SWEEP_CAP = 200;
 
 export const getJobPullContext = internalQuery({
@@ -2617,43 +2632,55 @@ export const syncJob = internalAction({
 /**
  * Hourly (convex/crons.ts): every Delyva booking still waiting for its first
  * scan a day on with no event gets a pull; one still unchanged after it is
- * flagged. Indexed reads only (`by_provider_status`, oldest first), demo
- * accounts skipped (no courier ever comes, so "not scanned" is the normal
- * state there), 200 pulls per run at most.
+ * flagged. Indexed reads only (`by_provider_status`, oldest first, paged
+ * under one read budget), demo accounts skipped (no courier ever comes, so
+ * "not scanned" is the normal state there), a job already flagged pulled
+ * once a DAY rather than hourly (`isDueForSweepPull` — a webhook or the
+ * seller's own Refresh still heals it instantly), 200 pulls per run at most.
  */
 export const sweepStaleJobs = internalMutation({
 	args: {},
-	handler: async (ctx): Promise<{ scheduled: number }> => {
+	handler: async (ctx): Promise<{ scheduled: number; read: number }> => {
 		const now = Date.now();
 		const demoByRetailer = new Map<Id<"retailers">, boolean>();
 		let scheduled = 0;
+		let read = 0;
 		let delay = 0;
 		for (const status of ["assigning", "ongoing"] as const) {
-			const rows = await ctx.db
-				.query("deliveryJobs")
-				.withIndex("by_provider_status", (q) =>
-					q.eq("provider", "delyva").eq("status", status),
-				)
-				.take(STALE_SWEEP_SCAN);
-			for (const job of rows) {
-				if (scheduled >= STALE_SWEEP_CAP) return { scheduled };
-				if (!isDelyvaJobStale(job, now)) continue;
-				let demo = demoByRetailer.get(job.retailerId);
-				if (demo === undefined) {
-					const retailer = await ctx.db.get(job.retailerId);
-					demo =
-						(retailer?.delyva as DelyvaConfig | undefined)?.isDemo === true;
-					demoByRetailer.set(job.retailerId, demo);
+			let cursor: string | null = null;
+			while (read < STALE_SWEEP_READ_BUDGET && scheduled < STALE_SWEEP_CAP) {
+				const page = await ctx.db
+					.query("deliveryJobs")
+					.withIndex("by_provider_status", (q) =>
+						q.eq("provider", "delyva").eq("status", status),
+					)
+					.paginate({
+						cursor,
+						numItems: Math.min(STALE_SWEEP_PAGE, STALE_SWEEP_READ_BUDGET - read),
+					});
+				read += page.page.length;
+				for (const job of page.page) {
+					if (scheduled >= STALE_SWEEP_CAP) break;
+					if (!isDueForSweepPull(job, now)) continue;
+					let demo = demoByRetailer.get(job.retailerId);
+					if (demo === undefined) {
+						const retailer = await ctx.db.get(job.retailerId);
+						demo =
+							(retailer?.delyva as DelyvaConfig | undefined)?.isDemo === true;
+						demoByRetailer.set(job.retailerId, demo);
+					}
+					if (demo) continue;
+					await ctx.scheduler.runAfter(delay, internal.delyva.syncJob, {
+						jobId: job._id,
+					});
+					delay += 1000;
+					scheduled += 1;
 				}
-				if (demo) continue;
-				await ctx.scheduler.runAfter(delay, internal.delyva.syncJob, {
-					jobId: job._id,
-				});
-				delay += 1000;
-				scheduled += 1;
+				if (page.isDone) break;
+				cursor = page.continueCursor;
 			}
 		}
-		return { scheduled };
+		return { scheduled, read };
 	},
 });
 

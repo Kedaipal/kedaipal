@@ -1666,6 +1666,40 @@ describe("failure codes, the refresh pull and the stale sweep (z8r3fe11y8)", () 
 		expect(job?.lastEventAt).toBe(later);
 	});
 
+	test("a Refresh after a failed attempt (650) is a check: no second email, Delyva's words kept (PR #461 review)", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const orderId = await seedOrder(t, retailer._id, { status: "shipped" });
+		const jobId = await seedJob(t, retailer._id, orderId, {
+			status: "picked_up",
+			lastEventAt: T1,
+		});
+		// The webhook's tracking row carries Delyva's wording for the event.
+		await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 650,
+			statusText: "Delivery failed - receiver not available",
+			eventAt: T2,
+		});
+		// The pulled order object carries only failedReason — null here — so
+		// the one author would word the same 650 differently.
+		const now = T2 + HOUR;
+		const applied = await t.mutation(internal.delyva.applyWebhookEvent, {
+			jobId,
+			statusCode: 650,
+			eventAt: now,
+			pulledAt: now,
+		});
+		expect(applied?.changed).toBe(false);
+		const job = await t.run(async (ctx) => ctx.db.get(jobId));
+		expect(job?.failureReason).toBe("Delivery failed - receiver not available");
+		expect(job?.lastEventAt).toBe(T2);
+		expect(job?.lastPulledAt).toBe(now);
+		expect(
+			(await scheduledNames(t)).filter((n) => n.includes("notifyDeliveryJobFailed")),
+		).toHaveLength(1);
+	});
+
 	test("the sweep's pull flags a booking still unchanged after it — once — and the next real event clears it", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t);
@@ -1879,7 +1913,90 @@ describe("failure codes, the refresh pull and the stale sweep (z8r3fe11y8)", () 
 		await seedJob(t, retailer._id, await seedOrder(t, retailer._id), {
 			createdAt: Date.now() - 25 * HOUR,
 		});
-		expect(await t.mutation(internal.delyva.sweepStaleJobs, {})).toEqual({ scheduled: 0 });
+		expect(await t.mutation(internal.delyva.sweepStaleJobs, {})).toMatchObject({ scheduled: 0 });
+	});
+
+	test("a flagged booking is pulled once a day, not every hour — the next day's pull still runs", async () => {
+		const t = setup();
+		const retailer = await seedRetailer(t);
+		const now = Date.now();
+		const flaggedRecently = await seedJob(t, retailer._id, await seedOrder(t, retailer._id), {
+			createdAt: now - 3 * 24 * HOUR,
+		});
+		const flaggedYesterday = await seedJob(t, retailer._id, await seedOrder(t, retailer._id), {
+			createdAt: now - 3 * 24 * HOUR,
+		});
+		await t.run(async (ctx) => {
+			await ctx.db.patch(flaggedRecently, { staleSince: now - 2 * 24 * HOUR, lastPulledAt: now - HOUR });
+			await ctx.db.patch(flaggedYesterday, { staleSince: now - 2 * 24 * HOUR, lastPulledAt: now - 24 * HOUR });
+		});
+		expect(await t.mutation(internal.delyva.sweepStaleJobs, {})).toMatchObject({ scheduled: 1 });
+		const scheduled = await t.run(async (ctx) =>
+			(await ctx.db.system.query("_scheduled_functions").collect()).filter((j) =>
+				j.name.includes("delyva:syncJob"),
+			),
+		);
+		expect((scheduled[0]?.args[0] as { jobId: string }).jobId).toBe(flaggedYesterday);
+	});
+
+	test("rows that never leave the index (demo bookings) don't hide a newer live booking that went stale (PR #461 review)", async () => {
+		const t = setup();
+		const live = await seedRetailer(t);
+		const now = Date.now();
+		// A demo account whose bookings sit at `assigning` forever — and are
+		// OLDER than the live one, so they come first on the index.
+		const demoId = await t.run(async (ctx) => {
+			const r = await ctx.db.get(live._id);
+			if (!r) throw new Error("seed");
+			const { _id, _creationTime, ...rest } = r;
+			return ctx.db.insert("retailers", {
+				...rest,
+				slug: "kedai-demo-delyva",
+				delyva: { ...(rest.delyva as object), isDemo: true } as never,
+			});
+		});
+		await t.run(async (ctx) => {
+			for (let i = 0; i < 450; i++) {
+				const orderId = await ctx.db.insert("orders", {
+					retailerId: demoId,
+					shortId: `ORD-D${String(i).padStart(3, "0")}`,
+					items: [],
+					subtotal: 1000,
+					total: 1000,
+					currency: "MYR",
+					status: "confirmed",
+					channel: "whatsapp",
+					customer: { name: "A", waPhone: "60123456789" },
+					deliveryMethod: "delivery",
+					createdAt: now,
+					updatedAt: now,
+				});
+				await ctx.db.insert("deliveryJobs", {
+					orderId,
+					retailerId: demoId,
+					provider: "delyva",
+					providerOrderId: `DLV-D${i}`,
+					status: "assigning",
+					costActual: 500,
+					quotationId: "X",
+					vehicleType: "X",
+					createdAt: now - 40 * 24 * HOUR,
+					updatedAt: now,
+				});
+			}
+		});
+		const liveStale = await seedJob(t, live._id, await seedOrder(t, live._id), {
+			createdAt: now - 25 * HOUR,
+		});
+		const result = await t.mutation(internal.delyva.sweepStaleJobs, {});
+		expect(result.scheduled).toBe(1);
+		expect(result.read).toBe(451);
+		const scheduled = await t.run(async (ctx) =>
+			(await ctx.db.system.query("_scheduled_functions").collect()).filter((j) =>
+				j.name.includes("delyva:syncJob"),
+			),
+		);
+		expect((scheduled[0]?.args[0] as { jobId: string }).jobId).toBe(liveStale);
 	});
 
 	test("the sweep caps at 200 pulls per run", async () => {
@@ -1916,7 +2033,7 @@ describe("failure codes, the refresh pull and the stale sweep (z8r3fe11y8)", () 
 				});
 			}
 		});
-		expect(await t.mutation(internal.delyva.sweepStaleJobs, {})).toEqual({ scheduled: 200 });
+		expect(await t.mutation(internal.delyva.sweepStaleJobs, {})).toMatchObject({ scheduled: 200 });
 	});
 
 	test("Mark order as returned: the order goes back to Packed with a note, the dead number comes off, and the card can book again", async () => {

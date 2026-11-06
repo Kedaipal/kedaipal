@@ -36,6 +36,7 @@ import {
 	delyvaFailureReason,
 	inTransitNotice,
 	isDelyvaJobStale,
+	isDueForSweepPull,
 	isReturnedStatus,
 	parseDelyvaOrderPull,
 } from "./delyva";
@@ -600,6 +601,16 @@ describe("the stale predicate (z8r3fe11y8)", () => {
 		expect(isDelyvaJobStale({ ...base, status: "picked_up" }, now)).toBe(false);
 		expect(isDelyvaJobStale({ ...base, status: "completed" }, now)).toBe(false);
 		expect(isDelyvaJobStale({ ...base, status: "rejected" }, now)).toBe(false);
+	});
+	test("the sweep pulls a stale job every hour until it is flagged, then once a day (PR #461 review)", () => {
+		expect(isDueForSweepPull(base, now)).toBe(true);
+		expect(isDueForSweepPull({ ...base, lastPulledAt: now - 60_000 }, now)).toBe(true);
+		const flagged = { ...base, staleSince: now - 2 * DAY };
+		expect(isDueForSweepPull(flagged, now)).toBe(true); // never pulled since
+		expect(isDueForSweepPull({ ...flagged, lastPulledAt: now - 60 * 60 * 1000 }, now)).toBe(false);
+		expect(isDueForSweepPull({ ...flagged, lastPulledAt: now - DAY }, now)).toBe(true);
+		// Never for a job that isn't stale at all.
+		expect(isDueForSweepPull({ ...base, lastEventAt: now - 60_000 }, now)).toBe(false);
 	});
 	test("the window is one day", () => {
 		expect(DELYVA_STALE_AFTER_MS).toBe(DAY);

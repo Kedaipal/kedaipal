@@ -784,6 +784,33 @@ export function isDelyvaJobStale(
 	);
 }
 
+/** How long a FLAGGED booking waits between the sweep's pulls (z8r3fe11y8,
+ * PR #461 review): once `staleSince` is set there is nothing new to learn
+ * every hour, and a booking a seller abandons would otherwise cost one
+ * Delyva call an hour on their key for as long as it lives. A webhook, or
+ * the seller's own Refresh, still heals it the moment it moves. */
+export const DELYVA_FLAGGED_REPULL_MS = 23 * 60 * 60 * 1000;
+
+/**
+ * Should the hourly sweep pull this job NOW? Stale (`isDelyvaJobStale`) and
+ * either not yet flagged, or flagged and last pulled a day ago. The one
+ * predicate `sweepStaleJobs` selects on.
+ */
+export function isDueForSweepPull(
+	job: Parameters<typeof isDelyvaJobStale>[0] & {
+		staleSince?: number;
+		lastPulledAt?: number;
+	},
+	now: number,
+): boolean {
+	if (!isDelyvaJobStale(job, now)) return false;
+	if (job.staleSince === undefined) return true;
+	return (
+		job.lastPulledAt === undefined ||
+		now - job.lastPulledAt >= DELYVA_FLAGGED_REPULL_MS
+	);
+}
+
 /**
  * Has the courier physically got the parcel? The one author of "the courier's
  * tracking page is live now" (z8r3fe0t4e). Delyva issues the consignment

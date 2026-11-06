@@ -310,7 +310,12 @@ pieces, all through the ONE event path (`applyWebhookEvent`):
   out-of-order guard — but **a pull that finds the same state is a check,
   not an event**: it stamps `lastPulledAt` ("Last checked with Delyva N min
   ago") and leaves `lastEventAt` alone, so "nothing has happened for 24 h"
-  stays true. Rate-limited **one call per job per 60 s**
+  stays true. On a pull **same status IS same state**: the webhook row
+  carries Delyva's wording for the event (`statusText`) while the full order
+  object carries only `failedReason`/`cancelledReason`, so the two paths word
+  the same 650 differently — a reason-only difference never counts as
+  `changed` on a pull, or every Refresh after a failed attempt re-sent the
+  notice email and overwrote Delyva's words (PR #461 review). Rate-limited **one call per job per 60 s**
   (`delyvaJobRefresh`, lib/rateLimiter — spent from `claimRefreshSlot`,
   because the limiter can only be spent from a mutation); the card toasts the
   wait. A **404** is an answer: `markJobLost` rejects the job with "Delyva
@@ -319,15 +324,23 @@ pieces, all through the ONE event path (`applyWebhookEvent`):
   moves nothing a webhook wouldn't) — classified OPEN in
   `creditLockCoverage.test.ts`.
 - **Hourly cron `flag stale delyva bookings`** (`sweepStaleJobs`): walks
-  `by_provider_status` for `assigning` and `ongoing` (oldest first, 400 rows
-  each, indexed only), keeps the ones `isDelyvaJobStale` admits — confirmed
-  by Delyva (`providerOrderId`), older than **24 h**, with `lastEventAt`
-  absent or older than 24 h — skips **demo accounts** (no courier ever
-  comes, so "not scanned" is their normal state), and schedules `syncJob` a
-  second apart, **200 per run**. The sweep's pull runs with `markStale`: a
-  job still stale after it is stamped `staleSince` (once per quiet spell)
-  and the seller gets ONE `deliveryJobStale` email. The next applied event
-  clears `staleSince` — a 500 that finally lands turns the card back.
+  `by_provider_status` for `assigning` and `ongoing` (oldest first, indexed
+  only, **paged under one 4 000-row read budget** — not a fixed window: the
+  oldest `assigning` rows are the ones that never leave the index, demo
+  bookings, abandoned orders, flagged jobs Delyva keeps answering
+  "unchanged" for, and a window of 400 filled with them would have hidden
+  every newer live booking that went stale — PR #461 review), keeps the ones
+  `isDueForSweepPull` admits — `isDelyvaJobStale` (confirmed by Delyva via
+  `providerOrderId`, older than **24 h**, `lastEventAt` absent or older than
+  24 h) **and**, once flagged, last pulled **a day ago** rather than an hour
+  (`DELYVA_FLAGGED_REPULL_MS`: a flagged job has nothing new to tell the
+  sweep hourly, and a webhook or the seller's Refresh heals it the moment it
+  moves) — skips **demo accounts** (no courier ever comes, so "not scanned"
+  is their normal state), and schedules `syncJob` a second apart, **200 per
+  run**. The sweep's pull runs with `markStale`: a job still stale after it
+  is stamped `staleSince` (once per quiet spell) and the seller gets ONE
+  `deliveryJobStale` email. The next applied event clears `staleSince` — a
+  500 that finally lands turns the card back.
 - **Board 4 on the card:** amber border, **Not scanned yet** pill, the
   explainer with the waybill and the fix worded by the handoff (drop-off →
   take it to a branch / ask the branch to scan it; pickup → check the Delyva
