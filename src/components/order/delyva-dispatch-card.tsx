@@ -1000,7 +1000,7 @@ function BookedState({
 			<p className="text-muted-foreground">
 				{completed
 					? parcelDeliveredCopy(!!order.carrierTrackingUrl)
-					: isCourierLinkPending(job, order)
+					: isCourierLinkPending({ ...job, provider: "delyva" }, order)
 						? courierLinkPendingSellerCopy(job.serviceName, handoff)
 						: handoff === undefined
 							? LEGACY_BOOKED_COPY

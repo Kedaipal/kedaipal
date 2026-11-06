@@ -18,7 +18,10 @@ jobs:
     # merge waiting on a check that no longer reports — change the ruleset first.
     name: Typecheck, lint & test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 20, not 10: the full gate now runs ~9-10 min on a runner (test alone
+    # ~8 min), so a 10-min cap cancelled the v2026.11.1 prod deploy mid-build
+    # with every step green. Still catches a genuinely hung job. docs/ci.md.
+    timeout-minutes: 20
     # Cancel superseded runs on the same PR; queue (never cancel) branch runs,
     # including workflow_call runs from the deploy pipeline.
     concurrency:
