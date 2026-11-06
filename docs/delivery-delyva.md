@@ -301,7 +301,15 @@ the first), fill-if-unset, so the shapes that matter all land the link:
 order)` (`convex/lib/deliveryJobs.ts`): a booked job whose AWB is the order's
 number with no link yet. `orders.get` exposes it as `courierLinkPending` on
 both doors (one indexed read, only on the number-without-link shape), and the
-vocabulary lives in `src/lib/parcel-courier-copy.ts`:
+vocabulary lives in `src/lib/parcel-courier-copy.ts`. The flag is read off
+the live job row for ANY provider, so the rule is gated by
+`LINK_LANDS_AT_COLLECTION` (Delyva only): "appears once the courier collects"
+is a promise, and only a provider whose collection path writes a link
+unconditionally may make it. EasyParcel writes whatever link it has at
+booking — none when EasyParcel sends no `tracking_url` and the courier has no
+registry deep link — and its pickup sync may still have none, so an EasyParcel
+number without a link stays a plain number. A provider joins the set when its
+collection path guarantees the link.
 
 - **Seller dispatch card** — under the number: *"Your buyer already has this
   number. J&T Express's tracking page goes live once the parcel is collected;

@@ -362,7 +362,7 @@ export function DelyvaDispatchCard({
 					<p className="text-muted-foreground">
 						{completedJob
 							? parcelDeliveredCopy(!!order.carrierTrackingUrl)
-							: isCourierLinkPending(job, order)
+							: isCourierLinkPending({ ...job, provider: "delyva" }, order)
 								? courierLinkPendingSellerCopy(job.serviceName)
 								: "Your buyer already has this — the tracking number is on their order page. The order marks itself Shipped at collection and Delivered on arrival."}
 					</p>

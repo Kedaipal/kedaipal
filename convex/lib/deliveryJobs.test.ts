@@ -5,6 +5,7 @@ import {
 	isActiveJobStatus,
 	isCollectedJobStatus,
 	isCourierLinkPending,
+	LINK_LANDS_AT_COLLECTION,
 	TERMINAL_JOB_STATUSES,
 } from "./deliveryJobs";
 
@@ -38,7 +39,11 @@ describe("deliveryJobs status sets", () => {
 });
 
 describe("isCourierLinkPending — number on the order, link at collection (z8r3fe0t4e)", () => {
-	const booked = { status: "assigning" as const, awb: "632195694574" };
+	const booked = {
+		provider: "delyva" as const,
+		status: "assigning" as const,
+		awb: "632195694574",
+	};
 	const mirrored = { trackingNo: "632195694574" };
 
 	test("pending while a booked job's own number is on the order with no link", () => {
@@ -66,6 +71,19 @@ describe("isCourierLinkPending — number on the order, link at collection (z8r3
 		expect(isCourierLinkPending(null, { trackingNo: "MANUAL-1" })).toBe(false);
 	});
 
+	test("only a provider that guarantees the link at collection may promise it", () => {
+		// Same shape as a Delyva booking, but EasyParcel writes whatever link
+		// it has at booking and may still have none at pickup — a number
+		// without a link is its honest state, not a dated promise.
+		expect(isCourierLinkPending({ ...booked, provider: "easyparcel" }, mirrored)).toBe(
+			false,
+		);
+		expect(isCourierLinkPending({ ...booked, provider: "lalamove" }, mirrored)).toBe(
+			false,
+		);
+		expect(LINK_LANDS_AT_COLLECTION.has("delyva")).toBe(true);
+	});
+
 	test("a booking that already carries a link, or no number yet, is not pending", () => {
 		expect(
 			isCourierLinkPending(booked, {
@@ -73,7 +91,9 @@ describe("isCourierLinkPending — number on the order, link at collection (z8r3
 				carrierTrackingUrl: "https://www.jtexpress.my/tracking/632195694574",
 			}),
 		).toBe(false);
-		expect(isCourierLinkPending({ status: "assigning" }, {})).toBe(false);
+		expect(
+			isCourierLinkPending({ provider: "delyva", status: "assigning" }, {}),
+		).toBe(false);
 	});
 
 	test("isCollectedJobStatus is exactly picked_up and completed", () => {
