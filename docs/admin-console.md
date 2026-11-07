@@ -159,9 +159,9 @@ login or screen-share, neither of which scales.
      act-as. The row used to BE the act-as button with two bare icons beside it
      — three targets, two unlabelled, and a mis-tap entered act-as.
    - **The row** (`AdminSellerRow`, `convex/lib/adminSellerRow.ts`, built by
-     ONE author, `buildAdminSellerRow` in `convex/adminSellers.ts`, shared by
-     the paginated page and the legacy `admin.listSellersForAdmin` that the
-     showcase store picker still reads) carries the contact + billing
+     ONE author, `buildAdminSellerRow` in `convex/adminSellers.ts`; the
+     legacy whole-book `admin.listSellersForAdmin` is retired — the showcase
+     store picker reads the slim `listPickerStores` instead) carries the contact + billing
      fields: `ownerEmail` is `retailers.notifyEmail` (Clerk's identity email is
      never stored; `createRetailer` prefills it from Clerk and
      `ensureNotifyEmailFromIdentity` backfills), the two phones, country and
@@ -489,10 +489,12 @@ pause flow) is a sensible next step but not yet implemented.
 - `convex/lib/auth.ts` — `requireRetailerAccess`, `logAdminAction` (+ existing `isAdmin` /
   `requireAdmin`).
 - `convex/adminSellers.ts` — `listSellersPage` (cursor-paginated, server-side filter + search),
-  `countSellerBuckets`, `buildAdminSellerRow` (the one row author), `listAllSellersForAdmin`;
-  `convex/lib/adminSellerFilters.ts` the filter language, `convex/lib/adminSellerRow.ts` the row type.
-- `convex/admin.ts` — `listSellersForAdmin` (the legacy whole-book read, for the showcase picker),
-  `recentAuditForRetailer`.
+  `countSellerBuckets`, `buildAdminSellerRow` (the one row author), `listPickerStores` (the
+  showcase store picker's slim country list — `admin.listSellersForAdmin`, the whole-book read, is
+  retired); `convex/lib/adminSellerFilters.ts` the filter language, `convex/lib/adminSellerRow.ts`
+  the row type, `convex/lib/sellerDirectoryWalk.ts` the test-only page walker (`allSellerRows`) a
+  test reads a directory row through.
+- `convex/admin.ts` — `recentAuditForRetailer` and the act-as / marketplace / availability writes.
 - `src/components/ui/load-more-sentinel.tsx`, `src/components/ui/option-menu.tsx` — the
   infinite-scroll tail and the Status / Sort control.
 - `convex/schema.ts` — `adminAuditLog` table (dev-only widen; no migration).

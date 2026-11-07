@@ -179,6 +179,7 @@ import type * as lib_scheduleRows from "../lib/scheduleRows.js";
 import type * as lib_seasonalHold from "../lib/seasonalHold.js";
 import type * as lib_seats from "../lib/seats.js";
 import type * as lib_sellerAlerts from "../lib/sellerAlerts.js";
+import type * as lib_sellerDirectoryWalk from "../lib/sellerDirectoryWalk.js";
 import type * as lib_sha256 from "../lib/sha256.js";
 import type * as lib_showcase from "../lib/showcase.js";
 import type * as lib_showcaseFeatured from "../lib/showcaseFeatured.js";
@@ -405,6 +406,7 @@ declare const fullApi: ApiFromModules<{
   "lib/seasonalHold": typeof lib_seasonalHold;
   "lib/seats": typeof lib_seats;
   "lib/sellerAlerts": typeof lib_sellerAlerts;
+  "lib/sellerDirectoryWalk": typeof lib_sellerDirectoryWalk;
   "lib/sha256": typeof lib_sha256;
   "lib/showcase": typeof lib_showcase;
   "lib/showcaseFeatured": typeof lib_showcaseFeatured;

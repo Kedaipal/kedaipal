@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ADMIN_STORE_LIST_LIMIT } from "./lib/adminDirectory";
 import schema from "./schema";
+import { allSellerRows } from "./lib/sellerDirectoryWalk";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -2402,12 +2403,13 @@ describe("replace + the dunning ladder (review finding, 7 Oct)", () => {
 });
 
 describe("the billing picker and the sellers directory list the same book (z8r3fdpm2p)", () => {
-	test("both surfaces take the SAME cap — no second hardcoded number", async () => {
+	test("every store the directory reaches, the billing picker reaches", async () => {
 		// They disagreed: 500 in the directory against a bare 200 here. The
 		// picker is newest-first, so past 200 the OLDEST stores vanished from
 		// it while the seller sheet still reached them — and the Enterprise
 		// contract is reachable from both, so one door could not see a store
-		// the other could.
+		// the other could. The directory is cursor-paginated now and reaches
+		// every store; the picker's cap is the one that remains.
 		const t = setup();
 		const made: string[] = [];
 		for (let i = 0; i < 3; i++) {
@@ -2424,16 +2426,11 @@ describe("the billing picker and the sellers directory list the same book (z8r3f
 			api.invoices.listRetailersForAdmin,
 			{},
 		);
-		const directory = await asAdmin(t).query(
-			api.admin.listSellersForAdmin,
-			{},
-		);
+		const directory = await allSellerRows(asAdmin(t));
 		// Every store the directory can reach, the picker can reach.
 		const pickerSlugs = new Set(picker.stores.map((r) => r.slug));
 		for (const s of made) expect(pickerSlugs.has(s)).toBe(true);
-		expect(picker.stores.length).toBe(directory.sellers.length);
-		// Neither surface claims truncation at this size.
-		expect(directory.capped).toBe(false);
+		expect(picker.stores.length).toBe(directory.length);
 		// Well under the cap, so the picker must not claim to be truncated.
 		expect(picker.capped).toBe(false);
 	});

@@ -4,7 +4,8 @@ import { Search } from "lucide-react";
 import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
-import type { AdminSellerRow } from "../../../convex/admin";
+import type { AdminPickerStore } from "../../../convex/adminSellers";
+import { ADMIN_COUNT_SCAN_LIMIT } from "../../../convex/lib/adminDirectory";
 import type { Country } from "../../../convex/lib/country";
 import { SHOWCASE_MEMBER_CAP } from "../../../convex/lib/showcase";
 import { cn } from "../../lib/utils";
@@ -29,16 +30,19 @@ export type PickedStore = {
 };
 
 /**
- * "Add stores" for a showcase (z8r3fdr6mv): the admin seller directory,
- * narrowed to the showcase's region, with search, a tri-state select-all
- * over the matches (the editor's own `BulkSelectRow` — one idea, one control)
- * and one "Add N stores" button. A store hidden by Kedaipal or opted out is
- * still addable — it can come back, and the admin may be lining up a booth
- * that opens tomorrow — but its row says so. A Kedaipal or test store is
- * NOT: it never lists, so it is greyed out with that reason, left out of
- * select-all, and refused by `setMembers` too. Stores already in the showcase are shown ticked and
- * disabled rather than hidden: "why can't I find Rimba Gear?" is answered
- * by seeing it. Booth labels are set after adding, in the editor row.
+ * "Add stores" for a showcase (z8r3fdr6mv): every store in the showcase's
+ * region (`adminSellers.listPickerStores` — slim rows, A–Z, the server does
+ * the country), with search, a tri-state select-all over the matches (the
+ * editor's own `BulkSelectRow` — one idea, one control) and one "Add N
+ * stores" button. It read the whole seller directory and filtered by country
+ * here until 4 Nov 2026; that read is retired. A store hidden by Kedaipal or
+ * opted out is still addable — it can come back, and the admin may be lining
+ * up a booth that opens tomorrow — but its row says so. A Kedaipal or test
+ * store is NOT: it never lists, so it is greyed out with that reason, left
+ * out of select-all, and refused by `setMembers` too. Stores already in the
+ * showcase are shown ticked and disabled rather than hidden: "why can't I
+ * find Rimba Gear?" is answered by seeing it. Booth labels are set after
+ * adding, in the editor row.
  */
 export function ShowcaseStorePicker({
 	open,
@@ -59,22 +63,21 @@ export function ShowcaseStorePicker({
 	 * the store from the moment they're added, not "New store" until a save. */
 	onAdd: (stores: PickedStore[]) => void;
 }) {
-	const sellerList = useQuery(
-		convexQuery(api.admin.listSellersForAdmin, open ? {} : "skip"),
+	const pickerList = useQuery(
+		convexQuery(api.adminSellers.listPickerStores, open ? { country } : "skip"),
 	).data;
 	const [query, setQuery] = useState("");
 	const [picked, setPicked] = useState<Set<Id<"retailers">>>(() => new Set());
 
 	const q = query.trim().toLowerCase();
-	const candidates = (sellerList?.sellers ?? []).filter(
+	const candidates = (pickerList?.stores ?? []).filter(
 		(s) =>
-			s.country === country &&
-			(q.length === 0 ||
-				s.storeName.toLowerCase().includes(q) ||
-				s.slug.toLowerCase().includes(q)),
+			q.length === 0 ||
+			s.storeName.toLowerCase().includes(q) ||
+			s.slug.toLowerCase().includes(q),
 	);
 	const addable = candidates.filter(
-		(s) => !alreadyIn.has(s._id) && !s.marketplace.internal,
+		(s) => !alreadyIn.has(s._id) && !s.internal,
 	);
 	const pickedHere = addable.filter((s) => picked.has(s._id)).length;
 	const inCount = candidates.filter((s) => alreadyIn.has(s._id)).length;
@@ -101,7 +104,7 @@ export function ShowcaseStorePicker({
 	}
 	function commit() {
 		onAdd(
-			(sellerList?.sellers ?? [])
+			(pickerList?.stores ?? [])
 				.filter((s) => picked.has(s._id))
 				.map((s) => ({
 					retailerId: s._id,
@@ -138,12 +141,18 @@ export function ShowcaseStorePicker({
 						/>
 					</div>
 					<p className="mt-1 text-xs text-muted-foreground">
-						{sellerList === undefined
+						{pickerList === undefined
 							? "Loading…"
 							: [
 									`${candidates.length} ${candidates.length === 1 ? "match" : "matches"}`,
 									inCount > 0 ? `${inCount} already in` : null,
 									blockedCount > 0 ? `${blockedCount} can't be added` : null,
+									// The same bound the directory's counts name: past it the
+									// oldest stores are not in this list, and the admin is told
+									// rather than left to wonder where a store went.
+									pickerList.capped
+										? `scanned the newest ${ADMIN_COUNT_SCAN_LIMIT.toLocaleString("en-MY")} stores`
+										: null,
 								]
 									.filter(Boolean)
 									.join(" · ")}
@@ -165,7 +174,7 @@ export function ShowcaseStorePicker({
 				</SheetHeader>
 
 				<ul className="min-h-0 grow overflow-y-auto">
-					{sellerList === undefined ? (
+					{pickerList === undefined ? (
 						<li className="flex flex-col gap-3 p-4">
 							<Skeleton className="h-12 w-full" />
 							<Skeleton className="h-12 w-full" />
@@ -219,17 +228,17 @@ function PickerRow({
 	checked,
 	onToggle,
 }: {
-	seller: AdminSellerRow;
+	seller: AdminPickerStore;
 	inShowcase: boolean;
 	checked: boolean;
 	onToggle: () => void;
 }) {
-	const blocked = !inShowcase && seller.marketplace.internal;
-	const warning = seller.marketplace.internal
+	const blocked = !inShowcase && seller.internal;
+	const warning = seller.internal
 		? "Kedaipal or test store — can't be added"
-		: seller.marketplace.hidden
+		: seller.hidden
 			? "Hidden from /stores by Kedaipal — won't show"
-			: seller.marketplace.unlistedAt !== undefined
+			: seller.unlisted
 				? "Seller turned off their /stores listing — won't show"
 				: null;
 	return (

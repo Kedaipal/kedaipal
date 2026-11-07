@@ -11,6 +11,7 @@ import { ensureCreditAccount } from "./credits";
 import { isUnlimited, PLAN_CAPS, planChangeCarryoverDays, UNLIMITED } from "./lib/plans";
 import { ENTERPRISE_INTEREST_RESTAMP_MS } from "./lib/enterprise";
 import schema from "./schema";
+import { allSellerRows } from "./lib/sellerDirectoryWalk";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -299,7 +300,7 @@ describe("putting a store on a contract — the review round (1 Oct)", () => {
 				createdAt: Date.now() - 20 * DAY,
 			}),
 		);
-		const { sellers: rows } = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
+		const rows = await allSellerRows(asAdmin(t));
 		const row = rows.find((r) => r._id === s.retailerId);
 		expect(row?.billingCurrency).toBe("SGD");
 		await asAdmin(t).mutation(api.enterprise.setContract, {
@@ -986,7 +987,7 @@ describe("the contract's own allowances (seats + broadcasts)", () => {
 			broadcastQuota: 500,
 			notes: "Signed 2 Oct",
 		});
-		const { sellers: rows } = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
+		const rows = await allSellerRows(asAdmin(t));
 		const row = rows.find((r) => r._id === s.retailerId);
 		expect(row?.enterprise).toMatchObject({
 			baseFeeMinor: HSL.baseFeeMinor,
@@ -1110,7 +1111,7 @@ describe("enterprise leads — who asked, so nobody forgets (z8r3fdkp8h follow-u
 		await t
 			.withIdentity({ subject: OWNER })
 			.mutation(api.enterprise.markInterest, {});
-		const { sellers: rows } = await asAdmin(t).query(api.admin.listSellersForAdmin, {});
+		const rows = await allSellerRows(asAdmin(t));
 		const row = rows.find((r) => r._id === s.retailerId);
 		expect(row?.enterpriseInterestAt).toBeDefined();
 	});

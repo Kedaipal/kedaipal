@@ -321,3 +321,67 @@ describe("enterprise.listContractTemplates", () => {
 		).rejects.toThrow(/Not authorized/);
 	});
 });
+
+describe("listPickerStores — the showcase picker's slim read", () => {
+	const pick = (t: T, country: "MY" | "SG") =>
+		admin(t).query(api.adminSellers.listPickerStores, { country });
+
+	test("rejects a non-admin", async () => {
+		const t = setup();
+		await seedStore(t, "user_x", "Mine", "mine");
+		await expect(
+			t.withIdentity({ subject: "user_x" }).query(api.adminSellers.listPickerStores, {
+				country: "MY",
+			}),
+		).rejects.toThrow(/Not authorized/);
+	});
+
+	test("returns the country's stores only, A–Z by name, with a country-less store read as MY", async () => {
+		const t = setup();
+		const zed = await seedStore(t, "u1", "Zed Outdoor", "zed");
+		await seedStore(t, "u2", "iKuih by Mak", "ikuih");
+		await seedStore(t, "u3", "Haji Catering", "haji");
+		const sg = await seedStore(t, "u4", "Lion City Bakes", "lion-city");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(sg._id, { country: "SG" });
+			// An older store never stamped with a country belongs to MY.
+			await ctx.db.patch(zed._id, { country: undefined });
+		});
+		const my = await pick(t, "MY");
+		expect(my.stores.map((s) => s.storeName)).toEqual([
+			"Haji Catering",
+			"iKuih by Mak",
+			"Zed Outdoor",
+		]);
+		expect(my.capped).toBe(false);
+		expect((await pick(t, "SG")).stores.map((s) => s.slug)).toEqual(["lion-city"]);
+	});
+
+	test("carries only what the picker draws: the internal, hidden and unlisted flags", async () => {
+		const t = setup();
+		const plain = await seedStore(t, "u1", "Plain Store", "plain");
+		const hidden = await seedStore(t, "u2", "Hidden Store", "hidden");
+		const unlisted = await seedStore(t, "u3", "Unlisted Store", "unlisted");
+		await seedStore(t, ADMIN, "Admin Test Store", "admin-test-store");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(hidden._id, {
+				marketplaceHidden: { at: Date.now(), note: "Spam listing" },
+			});
+			await ctx.db.patch(unlisted._id, { marketplaceUnlistedAt: Date.now() });
+		});
+		const { stores } = await pick(t, "MY");
+		const by = (slug: string) => stores.find((s) => s.slug === slug);
+		expect(by("plain")).toEqual({
+			_id: plain._id,
+			storeName: "Plain Store",
+			slug: "plain",
+			internal: false,
+			hidden: false,
+			unlisted: false,
+		});
+		expect(by("hidden")?.hidden).toBe(true);
+		expect(by("unlisted")?.unlisted).toBe(true);
+		// An admin-owned store never lists on /stores, so the picker refuses it.
+		expect(by("admin-test-store")?.internal).toBe(true);
+	});
+});

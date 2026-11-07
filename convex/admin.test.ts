@@ -6,6 +6,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { devStorePurgeAllowed } from "./admin";
 import schema from "./schema";
+import { allSellerRows } from "./lib/sellerDirectoryWalk";
 
 // Admin Console act-as (ClickUp 86ey25er1). Proves the owner-OR-admin access
 // seam (requireRetailerAccess), the subscription bypass for act-as writes, the
@@ -259,28 +260,22 @@ describe("admin console reads", () => {
 		).rejects.toThrow(/Not authorized/);
 	});
 
-	test("listSellersForAdmin lists sellers for an admin and rejects others", async () => {
+	test("the directory lists sellers for an admin and rejects others", async () => {
 		const t = setup();
 		await seedRetailer(t, OWNER);
-		const { sellers: rows } = await t
-			.withIdentity({ subject: ADMIN })
-			.query(api.admin.listSellersForAdmin, {});
+		const rows = await allSellerRows(t.withIdentity({subject:ADMIN}));
 		expect(rows.some((r) => r.ownerUserId === OWNER)).toBe(true);
 
 		await expect(
-			t.withIdentity({ subject: STRANGER }).query(api.admin.listSellersForAdmin, {}),
+			allSellerRows(t.withIdentity({ subject: STRANGER })),
 		).rejects.toThrow(/Not authorized/);
 	});
 
-	test("listSellersForAdmin carries each store's cached credits — balances, period, out-since, custom grant (Credits T5)", async () => {
+	test("the directory row carries each store's cached credits — balances, period, out-since, custom grant (Credits T5)", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
 		const find = async () =>
-			(
-				await t
-					.withIdentity({ subject: ADMIN })
-					.query(api.admin.listSellersForAdmin, {})
-			).sellers.find((r) => r.ownerUserId === OWNER);
+			(await allSellerRows(t.withIdentity({subject:ADMIN}))).find((r) => r.ownerUserId === OWNER);
 		// A new store opens with the trial allowance at signup (T1).
 		const fresh = await find();
 		expect(fresh?.credits).toMatchObject({ plan: 200, purchased: 0 });
@@ -319,28 +314,26 @@ describe("admin console reads", () => {
 		expect((await find())?.credits).toBeUndefined();
 	});
 
-	test("listSellersForAdmin carries signupSource so acquisition is checkable in the console", async () => {
+	test("the directory row carries signupSource so acquisition is checkable in the console", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
 		await t.run(async (ctx) => {
 			await ctx.db.patch(retailer._id, { signupSource: "spotlight-thg" });
 		});
-		const { sellers: rows } = await t
-			.withIdentity({ subject: ADMIN })
-			.query(api.admin.listSellersForAdmin, {});
+		const rows = await allSellerRows(t.withIdentity({subject:ADMIN}));
 		expect(rows.find((r) => r.ownerUserId === OWNER)?.signupSource).toBe(
 			"spotlight-thg",
 		);
 	});
 
-	test("listSellersForAdmin carries the acquisition channel and a suggestion from the tag (86eye3eyp)", async () => {
+	test("the directory row carries the acquisition channel and a suggestion from the tag (86eye3eyp)", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
 		await t.run(async (ctx) => {
 			await ctx.db.patch(retailer._id, { signupSource: "spotlight-thg" });
 		});
 		const admin = t.withIdentity({ subject: ADMIN });
-		const before = (await admin.query(api.admin.listSellersForAdmin, {})).sellers.find(
+		const before = (await allSellerRows(admin)).find(
 			(r) => r.ownerUserId === OWNER,
 		);
 		expect(before?.acquisition).toEqual({ suggested: "talk_event" });
@@ -351,7 +344,7 @@ describe("admin console reads", () => {
 			source: "talk_event",
 			note: "Great Day Club talk",
 		});
-		const after = (await admin.query(api.admin.listSellersForAdmin, {})).sellers.find(
+		const after = (await allSellerRows(admin)).find(
 			(r) => r.ownerUserId === OWNER,
 		);
 		expect(after?.acquisition).toMatchObject({
@@ -363,7 +356,7 @@ describe("admin console reads", () => {
 		expect(after?.acquisition.at).toBeTypeOf("number");
 	});
 
-	test("listSellersForAdmin resolves the powered-by referrer to its CURRENT slug + name (z8r3fdcwd0)", async () => {
+	test("the directory row resolves the powered-by referrer to its CURRENT slug + name (z8r3fdcwd0)", async () => {
 		const t = setup();
 		const referrer = await seedRetailer(t, "user_referrer_owner");
 		const retailer = await seedRetailer(t, OWNER);
@@ -376,16 +369,14 @@ describe("admin console reads", () => {
 			// now, which is why the row stores an id and not the slug.
 			await ctx.db.patch(referrer._id, { storeName: "Hermoolah (renamed)" });
 		});
-		const { sellers: rows } = await t
-			.withIdentity({ subject: ADMIN })
-			.query(api.admin.listSellersForAdmin, {});
+		const rows = await allSellerRows(t.withIdentity({subject:ADMIN}));
 		expect(rows.find((r) => r.ownerUserId === OWNER)?.signupReferrer).toEqual({
 			slug: referrer.slug,
 			storeName: "Hermoolah (renamed)",
 		});
 	});
 
-	test("listSellersForAdmin reads a purged referrer as no referrer, never throws", async () => {
+	test("the directory row reads a purged referrer as no referrer, never throws", async () => {
 		const t = setup();
 		const referrer = await seedRetailer(t, "user_referrer_owner");
 		const retailer = await seedRetailer(t, OWNER);
@@ -393,27 +384,23 @@ describe("admin console reads", () => {
 			await ctx.db.patch(retailer._id, { signupReferrerId: referrer._id });
 			await ctx.db.delete(referrer._id);
 		});
-		const { sellers: rows } = await t
-			.withIdentity({ subject: ADMIN })
-			.query(api.admin.listSellersForAdmin, {});
+		const rows = await allSellerRows(t.withIdentity({subject:ADMIN}));
 		expect(
 			rows.find((r) => r.ownerUserId === OWNER)?.signupReferrer,
 		).toBeUndefined();
 	});
 
-	test("listSellersForAdmin flags admin-owned stores via ownerIsAdmin", async () => {
+	test("the directory row flags admin-owned stores via ownerIsAdmin", async () => {
 		const t = setup();
 		await seedRetailer(t, OWNER);
 		await seedRetailer(t, ADMIN);
-		const { sellers: rows } = await t
-			.withIdentity({ subject: ADMIN })
-			.query(api.admin.listSellersForAdmin, {});
+		const rows = await allSellerRows(t.withIdentity({subject:ADMIN}));
 		// The seller's store is not admin-owned; the admin's own store is.
 		expect(rows.find((r) => r.ownerUserId === OWNER)?.ownerIsAdmin).toBe(false);
 		expect(rows.find((r) => r.ownerUserId === ADMIN)?.ownerIsAdmin).toBe(true);
 	});
 
-	test("listSellersForAdmin carries the contact + billing facts the directory shows (z8r3fdh37c)", async () => {
+	test("the directory row carries the contact + billing facts the directory shows (z8r3fdh37c)", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
 		await t.run(async (ctx) => {
@@ -423,9 +410,7 @@ describe("admin console reads", () => {
 				notifyWaPhone: "60198765432",
 			});
 		});
-		const { sellers: rows } = await t
-			.withIdentity({ subject: ADMIN })
-			.query(api.admin.listSellersForAdmin, {});
+		const rows = await allSellerRows(t.withIdentity({subject:ADMIN}));
 		const mine = rows.find((r) => r.ownerUserId === OWNER);
 		expect(mine).toMatchObject({
 			ownerEmail: "owner@example.com",
@@ -442,7 +427,7 @@ describe("admin console reads", () => {
 		expect(mine?.lastActAsAt).toBeUndefined();
 	});
 
-	test("listSellersForAdmin surfaces the open bill, then the last settled one, and the last act-as entry", async () => {
+	test("the directory row surfaces the open bill, then the last settled one, and the last act-as entry", async () => {
 		const t = setup();
 		const retailer = await seedRetailer(t, OWNER);
 		const admin = t.withIdentity({ subject: ADMIN });
@@ -452,9 +437,7 @@ describe("admin console reads", () => {
 			billingCycle: "monthly",
 			founding: false,
 		});
-		const pending = (
-			await admin.query(api.admin.listSellersForAdmin, {})
-		).sellers.find((r) => r.ownerUserId === OWNER);
+		const pending = (await allSellerRows(admin)).find((r) => r.ownerUserId === OWNER);
 		expect(pending?.pendingInvoice).toMatchObject({
 			hasPayNowLink: false,
 			currency: "MYR",
@@ -464,9 +447,7 @@ describe("admin console reads", () => {
 
 		await admin.mutation(api.invoices.markPaid, { invoiceId });
 		await admin.mutation(api.admin.startActAsSession, { retailerId: retailer._id });
-		const paid = (
-			await admin.query(api.admin.listSellersForAdmin, {})
-		).sellers.find((r) => r.ownerUserId === OWNER);
+		const paid = (await allSellerRows(admin)).find((r) => r.ownerUserId === OWNER);
 		expect(paid?.pendingInvoice).toBeUndefined();
 		expect(paid?.lastPaidInvoice?.invoiceNumber).toBe(
 			pending?.pendingInvoice?.invoiceNumber,
@@ -670,7 +651,7 @@ describe("dev-only store purge", () => {
 				retailerId: retailer._id,
 			}),
 		).rejects.toThrow(/being purged/);
-		const { sellers: rows } = await admin.query(api.admin.listSellersForAdmin, {});
+		const rows = await allSellerRows(admin);
 		expect(rows.find((r) => r._id === retailer._id)?.purging).toBe(true);
 	});
 

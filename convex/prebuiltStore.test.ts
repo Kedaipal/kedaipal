@@ -13,6 +13,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { UNCLAIMED_OWNER_PREFIX } from "./lib/unclaimedStore";
 import schema from "./schema";
+import { allSellerRows } from "./lib/sellerDirectoryWalk";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -137,9 +138,7 @@ describe("createUnclaimedStore", () => {
 	test("the directory counts NO seats on it — there is no owner to count", async () => {
 		const t = setup();
 		const { retailerId } = await buildStore(t, { email: VENDOR.email });
-		const { sellers: before } = await t
-			.withIdentity(ADMIN)
-			.query(api.admin.listSellersForAdmin, {});
+		const before = await allSellerRows(t.withIdentity(ADMIN));
 		expect(before.find((r) => r._id === retailerId)).toMatchObject({
 			unclaimed: true,
 			pendingOwnerEmail: VENDOR.email,
@@ -149,9 +148,7 @@ describe("createUnclaimedStore", () => {
 		await t
 			.withIdentity(VENDOR)
 			.mutation(api.retailers.claimStore, { acceptedLegal: true });
-		const { sellers: after } = await t
-			.withIdentity(ADMIN)
-			.query(api.admin.listSellersForAdmin, {});
+		const after = await allSellerRows(t.withIdentity(ADMIN));
 		expect(after.find((r) => r._id === retailerId)).toMatchObject({
 			unclaimed: false,
 			seats: { active: 1 },
