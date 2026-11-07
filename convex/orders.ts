@@ -19,6 +19,8 @@ import {
 	moveOrderToPhone,
 } from "./customers";
 import { stampRetailerActivation } from "./lib/activation";
+import { captureServerEvent } from "./posthog";
+import { ANALYTICS_EVENTS, sanitizeDistinctId } from "./lib/posthog";
 import {
 	freezeLineAnswers,
 	type FrozenAnswer,
@@ -1102,6 +1104,11 @@ export const create = mutation({
 		// discount — the buyer is on the page and can fix or remove it, and
 		// quietly charging full price is the one outcome we never ship.
 		voucherCode: v.optional(v.string()),
+		// The buyer browser’s PostHog distinct id (86eyrayux), so the server-fired
+		// funnel events land on the same person as their anonymous storefront
+		// pageviews. Re-sanitized server-side; a bad value can never block the
+		// order — it is simply dropped. See convex/lib/posthog.ts.
+		analyticsDistinctId: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
@@ -2048,6 +2055,12 @@ export const create = mutation({
 			paymentDueAt =
 				paymentDueAt === undefined ? dueAt : Math.min(paymentDueAt, dueAt);
 		}
+		// Re-sanitized server-side (the client sends its own copy) for the same
+		// reason as attributionSource: a public mutation must never trust the
+		// shape of a client string, and a junk id would merge distinct buyers
+		// into one PostHog person.
+		const analyticsDistinctId = sanitizeDistinctId(args.analyticsDistinctId);
+		const attributionSource = sanitizeAttributionSource(args.attributionSource);
 
 		const orderId = await ctx.db.insert("orders", {
 			retailerId: args.retailerId,
@@ -2064,7 +2077,8 @@ export const create = mutation({
 					: "pending",
 			channel: args.channel,
 			source: "storefront",
-			attributionSource: sanitizeAttributionSource(args.attributionSource),
+			attributionSource,
+			analyticsDistinctId,
 			customer: sanitizedCustomer,
 			deliveryMethod: effectiveDeliveryMethod,
 			deliveryDirection,
@@ -2191,6 +2205,38 @@ export const create = mutation({
 				{ orderId },
 			);
 		}
+
+		// Product analytics (86eyrayux). Scheduled, never awaited into the
+		// critical path, and a no-op when the buyer carries no distinct id or
+		// POSTHOG_PROJECT_KEY is unset. Properties are deliberately scalar and
+		// PII-free — no name, phone, address, or note ever reaches PostHog.
+		await captureServerEvent(ctx, {
+			event: ANALYTICS_EVENTS.orderCreated,
+			distinctId: analyticsDistinctId,
+			timestamp: now,
+			properties: {
+				retailerId: args.retailerId,
+				currency: args.currency,
+				// MAJOR units (19.90, not 1990). Order money is stored in sen/cents,
+				// but a PostHog sum or revenue insight reads the number as-is — sen
+				// would make every revenue chart 100x too high. Same convention as
+				// GA4's subscribe_paid `value` (invoices.ts).
+				total: total / 100,
+				// Both, because they answer different questions: lineCount is how
+				// many distinct products the basket held, itemCount is how many
+				// units shipped.
+				lineCount: snapshotItems.length,
+				itemCount: snapshotItems.reduce((n, i) => n + i.quantity, 0),
+				deliveryMethod: effectiveDeliveryMethod,
+				// Absence means direct — spelled out here because a PostHog
+				// breakdown needs a value, not a missing property.
+				attributionSource: attributionSource ?? "direct",
+				// Whether the order committed straight to confirmed (phone captured
+				// at checkout) or still needs the buyer’s wa.me handoff — the single
+				// biggest branch in the funnel.
+				confirmedAtCreate,
+			},
+		});
 
 		return {
 			shortId,

@@ -5,7 +5,11 @@ import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import { useStoreRole } from "../../hooks/usePermission";
 import { convexErrorMessage } from "../../lib/format";
-import { type AcceptedLegalVersions, consentIsStale } from "../../lib/legal";
+import {
+	type AcceptedLegalVersions,
+	type LegalDocument,
+	staleLegalDocuments,
+} from "../../lib/legal";
 import { Button } from "../ui/button";
 
 /**
@@ -41,7 +45,8 @@ export function ConsentBanner({
 	const role = useStoreRole();
 
 	if (role !== "owner") return null;
-	if (!consentIsStale(versions)) return null;
+	const stale = staleLegalDocuments(versions);
+	if (stale.length === 0) return null;
 
 	async function handleAccept() {
 		setSubmitting(true);
@@ -56,23 +61,8 @@ export function ConsentBanner({
 	return (
 		<div className="flex flex-col gap-3 border-b border-border bg-accent/5 px-5 py-4 sm:flex-row sm:items-center sm:justify-between lg:px-8">
 			<p className="text-sm text-foreground/90">
-				We've updated our{" "}
-				<Link to="/terms" target="_blank" className="font-medium underline">
-					Terms
-				</Link>
-				,{" "}
-				<Link to="/privacy" target="_blank" className="font-medium underline">
-					Privacy Policy
-				</Link>
-				, and{" "}
-				<Link
-					to="/acceptable-use"
-					target="_blank"
-					className="font-medium underline"
-				>
-					Acceptable Use Policy
-				</Link>
-				. Please review and re-accept to continue.
+				We've updated our <StaleDocumentLinks documents={stale} />. Please
+				review and re-accept to continue.
 			</p>
 			<Button
 				type="button"
@@ -84,4 +74,34 @@ export function ConsentBanner({
 			</Button>
 		</div>
 	);
+}
+
+const DOCUMENT_LINKS: Record<
+	LegalDocument,
+	{ to: "/terms" | "/privacy" | "/acceptable-use"; label: string }
+> = {
+	terms: { to: "/terms", label: "Terms" },
+	privacy: { to: "/privacy", label: "Privacy Policy" },
+	aup: { to: "/acceptable-use", label: "Acceptable Use Policy" },
+};
+
+/**
+ * "Privacy Policy" / "Terms and Privacy Policy" / "Terms, Privacy Policy, and
+ * Acceptable Use Policy" — each a link, joined the way the sentence needs.
+ */
+function StaleDocumentLinks({ documents }: { documents: LegalDocument[] }) {
+	return documents.map((doc, i) => {
+		const { to, label } = DOCUMENT_LINKS[doc];
+		const last = i === documents.length - 1;
+		const separator =
+			i === 0 ? "" : last ? (documents.length > 2 ? ", and " : " and ") : ", ";
+		return (
+			<span key={doc}>
+				{separator}
+				<Link to={to} target="_blank" className="font-medium underline">
+					{label}
+				</Link>
+			</span>
+		);
+	});
 }

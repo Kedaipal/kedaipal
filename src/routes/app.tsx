@@ -13,6 +13,7 @@ import { api } from "../../convex/_generated/api";
 import { ActingAsBanner } from "../components/admin/acting-as-banner";
 import { ConsentBanner } from "../components/app/consent-banner";
 import { DashboardLoadError } from "../components/app/dashboard-load-error";
+import { usePostHogRetailer } from "../components/app/posthog-identity";
 import { RouteAreaGuard } from "../components/app/route-area-guard";
 import { SendingPausedBanner } from "../components/app/sending-paused-banner";
 import { StoreAvailabilityBanner } from "../components/app/store-availability-banner";
@@ -73,6 +74,7 @@ function AppShell() {
 	const exitActAs = useExitActAs();
 	const { retailer, error: retailerError } = useDashboardRetailerRead();
 	const actingAsAdmin = retailer?.actingAsAdmin === true;
+	usePostHogRetailer(retailer?._id, actingAsAdmin);
 	const counts = useQuery(
 		convexQuery(
 			api.orders.countActionable,

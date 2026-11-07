@@ -183,6 +183,17 @@ function PrivacyPage() {
 						<strong>Microsoft Clarity</strong> — session replays and heatmaps to
 						diagnose usability issues and improve the interface.
 					</li>
+					<li>
+						<strong>PostHog</strong> — product analytics: which storefront pages
+						lead to orders, measured per store. For shoppers, PostHog receives
+						an anonymous browser identifier, the pages visited, an approximate
+						location (city and country) inferred from the connection, and order
+						facts such as the total and item count — never a shopper's name,
+						phone number, or delivery address, and nothing from an order's
+						tracking page. For signed-in retailers, it also receives your
+						account and store identifiers, so we can see which dashboard
+						features are used.
+					</li>
 				</ul>
 				<p>
 					We may also disclose information if required by law, or to protect the
@@ -203,12 +214,12 @@ function PrivacyPage() {
 					up.
 				</p>
 				<p>
-					We also use analytics cookies set by Google Analytics and Microsoft
-					Clarity. These recognise a returning browser so we can measure usage
-					and replay sessions to diagnose usability problems; Microsoft
-					Clarity's identifiers persist for up to one year. They are not
-					strictly necessary, and we do not use advertising or cross-site
-					tracking cookies.
+					We also use analytics cookies set by Google Analytics, Microsoft
+					Clarity, and PostHog. These recognise a returning browser so we can
+					measure usage and replay sessions to diagnose usability problems;
+					Microsoft Clarity's and PostHog's identifiers persist for up to one
+					year. They are not strictly necessary, and we do not use advertising
+					or cross-site tracking cookies.
 				</p>
 				<p>
 					Your browser also stores some data locally on your device, which is

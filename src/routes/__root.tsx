@@ -12,8 +12,10 @@ import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { useMemo } from "react";
 import { Toaster } from "sonner";
 import type { Country } from "../../convex/lib/country";
+import { PostHogIdentity } from "../components/app/posthog-identity";
 import { useClarity } from "../hooks/useClarity";
 import { useGoogleAnalytics } from "../hooks/useGoogleAnalytics";
+import { usePostHog } from "../hooks/usePostHog";
 import { useTheme, useThemeSync } from "../hooks/useTheme";
 import { isBuyerRouteId } from "../lib/buyer-routes";
 import { clerkAppearance } from "../lib/clerk-appearance";
@@ -151,6 +153,7 @@ function Providers({ children }: { children: React.ReactNode }) {
 			signUpUrl="/sign-up"
 		>
 			<ConvexProviderWithClerk client={convex} useAuth={useAuth}>
+				<PostHogIdentity />
 				{children}
 			</ConvexProviderWithClerk>
 		</ClerkProvider>
@@ -186,6 +189,7 @@ function SetupNotice() {
 function RootDocument({ children }: { children: React.ReactNode }) {
 	useGoogleAnalytics();
 	useClarity();
+	usePostHog();
 	// `resolved` is handed to sonner, which renders its own surfaces outside our
 	// token tree and would otherwise be light-on-light in dark mode.
 	const { resolved } = useThemeSync();

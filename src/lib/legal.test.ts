@@ -5,6 +5,7 @@ import {
 	consentIsStale,
 	LEGAL_CONTACT_EMAIL,
 	PRIVACY_VERSION,
+	staleLegalDocuments,
 	TERMS_VERSION,
 } from "./legal";
 
@@ -64,5 +65,29 @@ describe("consentIsStale", () => {
 				privacyVersion: PRIVACY_VERSION,
 			}),
 		).toBe(true);
+	});
+});
+
+describe("staleLegalDocuments", () => {
+	const current = {
+		termsVersion: TERMS_VERSION,
+		privacyVersion: PRIVACY_VERSION,
+		aupVersion: AUP_VERSION,
+	};
+
+	test("is empty when every document is current", () => {
+		expect(staleLegalDocuments(current)).toEqual([]);
+	});
+
+	// The banner names exactly these. A Privacy-only bump must not tell every
+	// seller that their Terms and AUP changed too.
+	test("names only the document that was bumped", () => {
+		expect(
+			staleLegalDocuments({ ...current, privacyVersion: "2020-01-01" }),
+		).toEqual(["privacy"]);
+	});
+
+	test("names all three, in display order, when nothing was ever accepted", () => {
+		expect(staleLegalDocuments({})).toEqual(["terms", "privacy", "aup"]);
 	});
 });
