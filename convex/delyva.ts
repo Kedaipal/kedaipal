@@ -19,6 +19,7 @@ import {
 	internalQuery,
 	mutation,
 	query,
+	type ActionCtx,
 	type MutationCtx,
 	type QueryCtx,
 } from "./_generated/server";
@@ -30,23 +31,33 @@ import {
 	decryptDelyvaCredentials,
 	DELYVA_BASE_URL,
 	DELYVA_WEBHOOK_EVENTS,
+	DELYVA_WEBHOOK_EVENTS_REQUIRED,
+	delyvaFailureReason,
+	inTransitNotice,
+	isDelyvaJobStale,
+	isDueForSweepPull,
+	isReturnedStatus,
+	parseDelyvaOrderPull,
 	type DelyvaAddress,
 	type DelyvaContact,
 	type DelyvaCredentials,
 	type DelyvaInventoryLine,
 	type DelyvaItemType,
+	type DelyvaLabel,
 	type DelyvaService,
-	isFailedDeliveryAttempt,
+	delyvaLabelAvailability,
+	isCollectedStatus,
 	normalizeDelyvaStatus,
 	parseDelyvaErrorMessage,
 	parseCompanyResponse,
 	countActiveDelyvaServices,
 	parseDelyvaWalletBalance,
+	parseDelyvaLabelResponse,
 	parseInstantQuoteResponse,
 	parseOrderResponse,
 	resolveDelyvaCredentials,
 } from "./lib/delyva";
-import { isActiveJobStatus } from "./lib/deliveryJobs";
+import { isActiveJobStatus, isCollectedJobStatus } from "./lib/deliveryJobs";
 import { encryptSecret } from "./lib/credentialCrypto";
 import { postcodeRule, SG_STATE_LABEL } from "./lib/address";
 import { isColdItemType } from "./lib/liveQuote";
@@ -75,7 +86,13 @@ import {
 } from "./lib/auth";
 import type { RetailerAccess } from "./lib/auth";
 import type { PermissionLevel } from "./lib/permissions";
-import { applyStatusTransition, resolveSharedOrder } from "./orders";
+import {
+	applyStatusTransition,
+	requireOrderAccess,
+	resolveSharedOrder,
+} from "./orders";
+import { assertOrderCreditAvailable } from "./creditLock";
+import { rateLimiter } from "./lib/rateLimiter";
 import {
 	assertPlanFeature,
 	assertSubscriptionActive,
@@ -116,6 +133,60 @@ async function callDelyva(
 	const text = await res.text();
 	if (!res.ok) throw new DelyvaApiError(res.status, text);
 	return text ? JSON.parse(text) : {};
+}
+
+/**
+ * The same authenticated fetch, returning the body as BYTES with its content
+ * type instead of parsing JSON — for `GET /order/{id}/label` (z8r3fe11x3),
+ * which may answer with the PDF itself. A failed response still surfaces as
+ * `DelyvaApiError` with the body text, so the card can show Delyva's message.
+ */
+async function callDelyvaRaw(
+	credentials: DelyvaCredentials,
+	path: string,
+): Promise<{ contentType: string | null; body: ArrayBuffer }> {
+	const live = await decryptDelyvaCredentials(credentials);
+	const res = await fetchFollowingRedirects(
+		`${DELYVA_BASE_URL}${path}`,
+		live.apiKey,
+	);
+	if (!res.ok) throw new DelyvaApiError(res.status, await res.text());
+	return {
+		contentType: res.headers.get("content-type"),
+		body: await res.arrayBuffer(),
+	};
+}
+
+/** The label endpoint redirects to an S3 object (PR #458 review). A fetch
+ * that follows on its own forwards every custom header to the new origin —
+ * the WHATWG spec strips only `Authorization` on a cross-origin hop — so the
+ * seller's key would ride along to amazonaws.com. Redirects are followed by
+ * hand instead, and the key is sent ONLY to Delyva's own origin. */
+const MAX_LABEL_REDIRECTS = 3;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+async function fetchFollowingRedirects(
+	startUrl: string,
+	apiKey: string,
+): Promise<Response> {
+	const apiOrigin = new URL(DELYVA_BASE_URL).origin;
+	let url = startUrl;
+	for (let hop = 0; ; hop++) {
+		const sameOrigin = new URL(url).origin === apiOrigin;
+		const res = await fetch(url, {
+			method: "GET",
+			redirect: "manual",
+			headers: {
+				Accept: "application/pdf, application/json",
+				...(sameOrigin ? { "X-Delyvax-Access-Token": apiKey } : {}),
+			},
+		});
+		const location = res.headers.get("location");
+		if (!REDIRECT_STATUSES.has(res.status) || !location) return res;
+		if (hop >= MAX_LABEL_REDIRECTS)
+			throw new DelyvaApiError(res.status, "Too many redirects");
+		url = new URL(location, url).toString();
+	}
 }
 
 /** Bare-key client for the connect probe — before any credentials exist. */
@@ -308,13 +379,21 @@ export const markWebhooksSubscribed = internalMutation({
 	},
 });
 
+/** What one subscribe pass did: the events it registered now, and the
+ * optional ones Delyva refused. Already-registered events are in neither. */
+interface WebhookSubscribeReport {
+	added: string[];
+	refused: string[];
+}
+
 /** Register our webhook URL for every event we consume — idempotent (lists
  * first, creates only what's missing). Throws on failure; callers decide how
  * loud to be. */
 async function subscribeWebhooks(
 	plainApiKey: string,
 	siteUrl: string,
-): Promise<void> {
+): Promise<WebhookSubscribeReport> {
+	const report: WebhookSubscribeReport = { added: [], refused: [] };
 	const url = `${siteUrl}/webhook/delyva`;
 	const listing = (await callDelyvaWithKey(plainApiKey, "GET", "/webhook")) as {
 		data?: Array<{ id?: string; event?: string; url?: string }>;
@@ -326,8 +405,24 @@ async function subscribeWebhooks(
 	);
 	for (const event of DELYVA_WEBHOOK_EVENTS) {
 		if (existing.has(event)) continue;
-		await callDelyvaWithKey(plainApiKey, "POST", "/webhook", { event, url });
+		try {
+			await callDelyvaWithKey(plainApiKey, "POST", "/webhook", { event, url });
+			report.added.push(event);
+		} catch (err) {
+			// The three documented events must land or the account isn't
+			// subscribed. `order.updated` / `order.failed` (z8r3fe11y8) are not
+			// in Delyva's published collection, so a tenant that refuses the
+			// name costs a log line, never the connect — the tracking pair
+			// still drives status, and the hourly pull covers a create failure.
+			if (DELYVA_WEBHOOK_EVENTS_REQUIRED.has(event)) throw err;
+			report.refused.push(event);
+			console.warn("[delyva] optional webhook event not accepted", {
+				event,
+				message: err instanceof Error ? err.message : String(err),
+			});
+		}
 	}
+	return report;
 }
 
 /**
@@ -685,6 +780,117 @@ export const resubscribeWebhooks = action({
 				message: "Couldn't register the webhook with Delyva. Try again shortly.",
 			};
 		}
+	},
+});
+
+/** One page of connected Delyva accounts for `resubscribeAllWebhooks`. */
+export const listResubscribeTargets = internalQuery({
+	args: { cursor: v.union(v.string(), v.null()) },
+	handler: async (
+		ctx,
+		{ cursor },
+	): Promise<{
+		targets: Array<{
+			retailerId: Id<"retailers">;
+			credentials: DelyvaCredentials;
+		}>;
+		continueCursor: string;
+		isDone: boolean;
+	}> => {
+		const page = await ctx.db
+			.query("retailers")
+			.paginate({ numItems: 50, cursor });
+		const targets = [];
+		for (const retailer of page.page) {
+			const credentials = resolveDelyvaCredentials(
+				retailer.delyva as DelyvaConfig | undefined,
+			);
+			if (credentials) targets.push({ retailerId: retailer._id, credentials });
+		}
+		return {
+			targets,
+			continueCursor: page.continueCursor,
+			isDone: page.isDone,
+		};
+	},
+});
+
+/**
+ * Re-run the webhook subscription for EVERY connected Delyva account
+ * (z8r3fe11y8 follow-up). `order.updated` / `order.failed` are only
+ * subscribed at connect or by the card's retry, and the retry shows only
+ * while `webhooksSubscribedAt` is unset — so an account connected before
+ * they existed never gets them on its own. Idempotent (`subscribeWebhooks`
+ * lists first), never gated by subscription (it registers our URL, it moves
+ * nothing), and it heals an account whose original subscribe failed too.
+ * One account failing never stops the rest; the result names each one.
+ *
+ * Operator step, once per deployment, AFTER the deploy:
+ * `npx convex run delyva:resubscribeAllWebhooks --prod`
+ */
+export const resubscribeAllWebhooks = internalAction({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<{
+		accounts: number;
+		subscribed: number;
+		failed: Array<{ retailerId: Id<"retailers">; message: string }>;
+		/** Optional events Delyva refused, per account — the answer to "does a
+		 * live tenant accept `order.failed`?". */
+		refused: Array<{ retailerId: Id<"retailers">; events: string[] }>;
+	}> => {
+		const siteUrl = process.env.CONVEX_SITE_URL;
+		if (!siteUrl) {
+			throw new Error("CONVEX_SITE_URL unset — cannot subscribe webhooks");
+		}
+		const result = {
+			accounts: 0,
+			subscribed: 0,
+			failed: [] as Array<{ retailerId: Id<"retailers">; message: string }>,
+			refused: [] as Array<{ retailerId: Id<"retailers">; events: string[] }>,
+		};
+		let cursor: string | null = null;
+		for (;;) {
+			const page: {
+				targets: Array<{
+					retailerId: Id<"retailers">;
+					credentials: DelyvaCredentials;
+				}>;
+				continueCursor: string;
+				isDone: boolean;
+			} = await ctx.runQuery(internal.delyva.listResubscribeTargets, {
+				cursor,
+			});
+			for (const { retailerId, credentials } of page.targets) {
+				result.accounts += 1;
+				try {
+					const live = await decryptDelyvaCredentials(credentials);
+					const report = await subscribeWebhooks(live.apiKey, siteUrl);
+					await ctx.runMutation(internal.delyva.markWebhooksSubscribed, {
+						retailerId,
+					});
+					result.subscribed += 1;
+					if (report.refused.length > 0) {
+						result.refused.push({ retailerId, events: report.refused });
+					}
+				} catch (err) {
+					result.failed.push({
+						retailerId,
+						message: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
+			if (page.isDone) break;
+			cursor = page.continueCursor;
+		}
+		console.log("[delyva] resubscribeAllWebhooks", {
+			accounts: result.accounts,
+			subscribed: result.subscribed,
+			failed: result.failed.length,
+			refused: result.refused.length,
+		});
+		return result;
 	},
 });
 
@@ -1619,6 +1825,12 @@ export const reserveBooking = internalMutation({
 		retailerId: v.id("retailers"),
 		serviceCode: v.string(),
 		serviceName: v.string(),
+		// The service CLASS verbatim from the quote (`NDD-DROP` = the seller
+		// drops the parcel at a branch) — stored here, where the chosen
+		// service's name and type already land, so the booked card can say
+		// which kind was bought (z8r3fe11x3). Optional: a quote row without
+		// one stores nothing rather than a guess.
+		serviceType: v.optional(v.string()),
 		itemType: itemTypeValidator,
 	},
 	handler: async (ctx, args): Promise<Id<"deliveryJobs">> => {
@@ -1641,6 +1853,7 @@ export const reserveBooking = internalMutation({
 			quotationId: args.serviceCode,
 			vehicleType: args.serviceCode,
 			serviceName: args.serviceName,
+			serviceType: args.serviceType,
 			itemType: args.itemType,
 			createdAt: now,
 			updatedAt: now,
@@ -1676,33 +1889,57 @@ export const commitBooking = internalMutation({
 			failureReason: undefined,
 			updatedAt: now,
 		});
-		if (args.awb) await mirrorAwbOntoOrder(ctx, job, args.awb);
+		// The process response can already say "collected" on a replayed
+		// confirm; the link follows the same rule as the webhook path.
+		if (args.awb)
+			await mirrorAwbOntoOrder(ctx, job, args.awb, {
+				collected: isCollectedStatus(args.statusCode),
+			});
 	},
 });
 
-/** Write the AWB into the buyer-visible manual-courier fields (86eyehvk4) —
- * fill-if-unset, so a seller's own manual entry is never overwritten. The
- * tracking URL comes from the courier registry when the service name matches
- * a known courier, else Delyva's own public tracking page. */
+/**
+ * Write the AWB into the buyer-visible manual-courier fields (86eyehvk4):
+ * courier name + number the moment the AWB is known, the tracking LINK only
+ * once the parcel is collected (z8r3fe0t4e). J&T answered "information not
+ * found" for a waybill booked but not yet scanned — every parcel courier
+ * indexes at the first scan — so a link written at booking sent seller and
+ * buyer to a dead page for a day, with nothing saying why.
+ *
+ * Fill-if-unset throughout: a seller's own manual entry (a DIFFERENT number)
+ * is never touched; the same AWB with no link yet is ours to complete, so the
+ * write is idempotent and a replayed or stale collection event is a no-op.
+ * The link is the courier registry's deep link when the service name matches
+ * a known courier, else Delyva's own public tracking page — which renders a
+ * consignment from "Order created" on (checked in a browser, 4 Nov 2026), so
+ * the fallback is safe at collection and would even have been safe earlier.
+ */
 async function mirrorAwbOntoOrder(
 	ctx: MutationCtx,
 	job: Doc<"deliveryJobs">,
 	awb: string,
+	{ collected }: { collected: boolean },
 ): Promise<void> {
 	const order = await ctx.db.get(job.orderId);
 	if (!order) return;
-	if (order.trackingNo) return; // seller already recorded a shipment by hand
-	const courierName = job.serviceName ?? "Delyva";
-	const registry = findCourier(courierName);
-	const trackingUrl = registry?.buildTrackingUrl
-		? registry.buildTrackingUrl(awb)
-		: `https://my.delyva.app/customer/strack?trackingNo=${encodeURIComponent(awb)}`;
-	await ctx.db.patch(order._id, {
-		courierName,
-		trackingNo: awb,
-		...(order.carrierTrackingUrl ? {} : { carrierTrackingUrl: trackingUrl }),
-		updatedAt: Date.now(),
-	});
+	if (order.trackingNo && order.trackingNo !== awb) return; // seller's own entry
+	const patch: {
+		courierName?: string;
+		trackingNo?: string;
+		carrierTrackingUrl?: string;
+	} = {};
+	if (!order.trackingNo) {
+		patch.courierName = job.serviceName ?? "Delyva";
+		patch.trackingNo = awb;
+	}
+	if (collected && !order.carrierTrackingUrl) {
+		const registry = findCourier(job.serviceName ?? "Delyva");
+		patch.carrierTrackingUrl = registry?.buildTrackingUrl
+			? registry.buildTrackingUrl(awb)
+			: `https://my.delyva.app/customer/strack?trackingNo=${encodeURIComponent(awb)}`;
+	}
+	if (Object.keys(patch).length === 0) return;
+	await ctx.db.patch(order._id, { ...patch, updatedAt: Date.now() });
 }
 
 export const releaseReservation = internalMutation({
@@ -1745,6 +1982,9 @@ export const confirmBooking = action({
 		shortId: v.string(),
 		serviceCode: v.string(),
 		serviceName: v.string(),
+		/** The picked service's class, verbatim from the quote list the card
+		 * holds (`DelyvaService.serviceType`) — see reserveBooking. */
+		serviceType: v.optional(v.string()),
 		itemType: v.optional(itemTypeValidator),
 		weightKgOverride: v.optional(v.number()),
 	},
@@ -1785,6 +2025,7 @@ export const confirmBooking = action({
 				retailerId: context.retailerId,
 				serviceCode: args.serviceCode,
 				serviceName: args.serviceName,
+				serviceType: args.serviceType,
 				itemType,
 			});
 		} catch {
@@ -1815,11 +2056,22 @@ export const confirmBooking = action({
 				`kp-${jobId}`,
 			);
 			delyvaOrderId = parseOrderResponse(created).delyvaOrderId;
+			// The documented shape (`POST /order/{id}/process`, z8r3fe11y8) —
+			// WITH `skipQueue`, which Delyva's docs don't list but their plugin
+			// sends. Measured on the demo account (5 Nov 2026, twice each): the
+			// documented call without it answers 200 in ~280 ms but leaves the
+			// order a DRAFT (statusCode 0, no consignment number, price 0 —
+			// still 0 on a GET 260 ms later), so the card would show no AWB and
+			// a RM0 cost until a webhook arrived; with it the same call answers
+			// statusCode 100 + AWB + price in ~750 ms, like the legacy
+			// `/order/process` (~900 ms). The ticket's rule was "keep skipQueue
+			// only if the documented call is measurably slower" — it isn't
+			// slower, it isn't DONE.
 			const processed = await callDelyva(
 				context.credentials,
 				"POST",
-				"/order/process",
-				{ orderId: delyvaOrderId, serviceCode: args.serviceCode, skipQueue: true },
+				`/order/${encodeURIComponent(delyvaOrderId)}/process`,
+				{ serviceCode: args.serviceCode, skipQueue: true },
 			);
 			// Price + consignment number: prefer the process response; fetch the
 			// order when it doesn't carry them (their response shapes vary).
@@ -1932,6 +2184,130 @@ export const cancelBooking = action({
 	},
 });
 
+/**
+ * The courier's own label for a booked Delyva order (z8r3fe11x3) —
+ * `GET /order/{providerOrderId}/label` with the seller's key. The label is
+ * what a courier branch SCANS: a drop-off seller has nothing else J&T will
+ * accept (DapoGo's parcel went in with only our despatch label and sat on
+ * "Order created" for a day). It is offered beside Kedaipal's own despatch
+ * label, never instead of it.
+ *
+ * The response is the PDF itself (probed on a demo booking, 4 Nov 2026: a
+ * redirect to an S3 object, `application/pdf`, generated at booking and
+ * deleted after 90 days), returned as bytes for the card to save; a JSON
+ * envelope's URL is still handled as a never-observed fallback. Failure
+ * returns Delyva's own message — never a silent nothing.
+ */
+export const getLabel = action({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<
+		| ({ ok: true; filename: string } & DelyvaLabel)
+		| { ok: false; message: string }
+	> => {
+		await ctx.runQuery(internal.subscriptions.assertWritableForOrder, {
+			shortId,
+		});
+		await ctx.runQuery(internal.creditLock.assertCreditsForOrder, {
+			shortId,
+		});
+		const target = await ctx.runQuery(internal.delyva.getLabelContext, {
+			shortId,
+		});
+		if (!target) {
+			return {
+				ok: false,
+				message: "No Delyva booking on this order to print a label for.",
+			};
+		}
+		const availability = delyvaLabelAvailability(target.job);
+		if (!availability.ok) {
+			return { ok: false, message: LABEL_UNAVAILABLE_COPY[availability.reason] };
+		}
+		try {
+			const response = await callDelyvaRaw(
+				target.credentials,
+				`/order/${encodeURIComponent(target.job.providerOrderId ?? "")}/label`,
+			);
+			const label = parseDelyvaLabelResponse(response);
+			return {
+				ok: true,
+				filename: `shipping-label-${shortId}.pdf`,
+				...label,
+			};
+		} catch (err) {
+			console.warn("[delyva] label fetch failed", {
+				shortId,
+				message: err instanceof Error ? err.message : String(err),
+			});
+			return { ok: false, message: friendlyLabelError(err) };
+		}
+	},
+});
+
+/** Why the label can't be fetched right now — the same sentences the card's
+ * disabled button shows, so a stale tab gets the reason it would have seen. */
+const LABEL_UNAVAILABLE_COPY: Record<
+	Exclude<ReturnType<typeof delyvaLabelAvailability>, { ok: true }>["reason"],
+	string
+> = {
+	not_booked: "Delyva hasn't confirmed this booking yet — try again in a moment.",
+	collected:
+		"The courier already has this parcel, so the label isn't needed any more.",
+	ended: "This booking has ended, so there is no label to print.",
+};
+
+/** Delyva's own message when it gave one, otherwise one honest line. */
+function friendlyLabelError(err: unknown): string {
+	if (err instanceof DelyvaApiError) {
+		const message = parseDelyvaErrorMessage(err.body);
+		if (message) return `Delyva couldn't provide the label: ${message}`;
+		if (err.status === 404)
+			return "Delyva has no label for this booking yet — try again in a moment, or print it from your Delyva app.";
+		return `Delyva couldn't provide the label (HTTP ${err.status}). Try again, or print it from your Delyva app.`;
+	}
+	return "Delyva's label couldn't be read. Try again, or print it from your Delyva app.";
+}
+
+export const getLabelContext = internalQuery({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<{
+		job: {
+			status: Doc<"deliveryJobs">["status"];
+			providerOrderId?: string;
+		};
+		credentials: DelyvaCredentials;
+	} | null> => {
+		const order = await resolveSharedOrder(ctx, { shortId });
+		if (!order) return null;
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.collect();
+		// The live Delyva booking, else the newest one — a card showing a
+		// completed booking still asks, and gets the "ended" reason back.
+		const delyvaJobs = jobs.filter((j) => j.provider === "delyva");
+		const job =
+			delyvaJobs.find((j) => isActiveJobStatus(j.status)) ??
+			[...delyvaJobs].sort((a, b) => b.createdAt - a.createdAt)[0];
+		if (!job) return null;
+		const retailer = await ctx.db.get(order.retailerId);
+		const credentials = resolveDelyvaCredentials(
+			retailer?.delyva as DelyvaConfig | undefined,
+		);
+		if (!credentials) return null;
+		return {
+			job: { status: job.status, providerOrderId: job.providerOrderId },
+			credentials,
+		};
+	},
+});
+
 export const getCancelContext = internalQuery({
 	args: { shortId: v.string() },
 	handler: async (
@@ -2016,10 +2392,27 @@ export const getWebhookContext = internalQuery({
 const SHIPPABLE_FROM = new Set(["confirmed", "packed"]);
 const DELIVERABLE_FROM = new Set(["confirmed", "packed", "shipped"]);
 
+/** What one applied event did to the job — the pull path reads it to tell
+ * the seller whether the Refresh found anything new. */
+type AppliedEvent = {
+	status: Doc<"deliveryJobs">["status"];
+	/** The event moved the job (status or reason) — false for an out-of-order
+	 * event, an exact replay, or a pull that found the same state. */
+	changed: boolean;
+};
+
 /**
- * Apply one verified webhook event to its job (and possibly its order).
- * Same contract as the Lalamove handler: idempotent, out-of-order safe via
- * `lastEventAt`, job follows provider truth, ORDER never regresses.
+ * Apply one verified webhook event — or one PULLED order state (z8r3fe11y8,
+ * `pulledAt` set) — to its job (and possibly its order). Same contract as
+ * the Lalamove handler: idempotent, out-of-order safe via `lastEventAt`, job
+ * follows provider truth, ORDER never regresses.
+ *
+ * A pull rides the same path so a missed webhook heals through exactly the
+ * webhook code, with two differences: the state Delyva answers with is the
+ * freshest truth, so it carries `eventAt = now` and wins the out-of-order
+ * guard; and a pull that finds the SAME state is a check, not an event — it
+ * stamps `lastPulledAt` only, never `lastEventAt`, so "nothing has happened
+ * for 24 h" stays true and the sweep can flag the job (`markStale`).
  */
 export const applyWebhookEvent = internalMutation({
 	args: {
@@ -2028,99 +2421,545 @@ export const applyWebhookEvent = internalMutation({
 		consignmentNo: v.optional(v.string()),
 		statusText: v.optional(v.string()),
 		eventAt: v.number(),
+		/** Set when this is a pull from `GET /order/{id}`, not a webhook. */
+		pulledAt: v.optional(v.number()),
+		/** Hourly sweep only: a job still stale after this pull is flagged
+		 * `staleSince` (once per quiet spell) and the seller is emailed. */
+		markStale: v.optional(v.boolean()),
 	},
-	handler: async (ctx, { jobId, statusCode, consignmentNo, statusText, eventAt }) => {
+	handler: async (
+		ctx,
+		{ jobId, statusCode, consignmentNo, statusText, eventAt, pulledAt, markStale },
+	): Promise<AppliedEvent | null> => {
+		const job = await ctx.db.get(jobId);
+		if (!job) return null;
+		const now = Date.now();
+		if (pulledAt !== undefined) {
+			await ctx.db.patch(jobId, { lastPulledAt: pulledAt, updatedAt: now });
+		}
+		const applied = await applyDelyvaEvent(ctx, job, {
+			statusCode,
+			consignmentNo,
+			statusText,
+			eventAt,
+			pulled: pulledAt !== undefined,
+			now,
+		});
+		if (markStale) await flagIfStillStale(ctx, jobId, now);
+		return applied;
+	},
+});
+
+async function applyDelyvaEvent(
+	ctx: MutationCtx,
+	job: Doc<"deliveryJobs">,
+	event: {
+		statusCode: number | undefined;
+		consignmentNo: string | undefined;
+		statusText: string | undefined;
+		eventAt: number;
+		pulled: boolean;
+		now: number;
+	},
+): Promise<AppliedEvent> {
+	const { statusCode, consignmentNo, statusText, eventAt, pulled, now } = event;
+	const jobId = job._id;
+	const stale = job.lastEventAt !== undefined && eventAt < job.lastEventAt;
+
+	// The AWB fills in whenever we first see it — even from a stale event
+	// (a gap-filling write, mirroring the Lalamove shareLink posture).
+	if (consignmentNo && !job.awb) {
+		await ctx.db.patch(jobId, { awb: consignmentNo, updatedAt: now });
+	}
+	// The order's courier fields follow on every event that knows the AWB,
+	// not only the first: the number lands at booking, the LINK at
+	// collection (z8r3fe0t4e) — judged on this event OR the job's own
+	// status, so a 500 that arrives before `order.created` (or carries the
+	// AWB itself) and a stale `order.created` replayed after the 500 both
+	// land it. Fill-if-unset, so a replayed 500 after a 700 is a no-op, and
+	// the shipped transition below reads the link off the order itself.
+	const awb = job.awb ?? consignmentNo;
+	if (awb) {
+		await mirrorAwbOntoOrder(ctx, job, awb, {
+			collected:
+				isCollectedStatus(statusCode) || isCollectedJobStatus(job.status),
+		});
+	}
+
+	if (statusCode === undefined) return { status: job.status, changed: false };
+
+	const status = normalizeDelyvaStatus(statusCode);
+	if (!status) {
+		console.warn("[delyva] webhook: unknown statusCode", {
+			providerOrderId: job.providerOrderId,
+			statusCode,
+		});
+		return { status: job.status, changed: false };
+	}
+
+	const returned = isReturnedStatus(statusCode);
+	const notice = inTransitNotice(statusCode);
+	const sellerCancelled =
+		job.status === "canceled" && job.failureReason === "Cancelled by you";
+	// ONE author for the reason (lib): Delyva's words where they describe the
+	// event, our line where they don't; undefined clears an earlier notice
+	// once the parcel moves on (a 600 after a 650, a 700 at the end).
+	const reason = delyvaFailureReason(statusCode, statusText);
+	// An exact replay of the newest event, or a pull that found the same
+	// state — nothing to apply, nothing to stamp, nobody to email twice.
+	// On a PULL "same status" IS "same state": the webhook row carried
+	// Delyva's wording for the event (`statusText`) while the full order
+	// object carries only `failedReason`/`cancelledReason`, so the two paths
+	// word the same 650 differently — letting the wording decide `changed`
+	// re-sent the notice email and overwrote Delyva's words on every Refresh
+	// (PR #461 review). A reason-only difference is never news.
+	const unchanged =
+		status === job.status &&
+		(pulled ||
+			((reason === undefined || reason === job.failureReason) &&
+				job.lastEventAt !== undefined &&
+				eventAt === job.lastEventAt));
+
+	const enteringFailure =
+		(status === "canceled" || status === "rejected") &&
+		isActiveJobStatus(job.status);
+	const enteringReturn = returned && job.returned !== true;
+	const changed = !stale && !unchanged;
+
+	if (changed) {
+		await ctx.db.patch(jobId, {
+			status,
+			lastEventAt: eventAt,
+			updatedAt: now,
+			// Any applied event answers "is anything happening?" — the amber
+			// not-scanned state ends with it (z8r3fe11y8).
+			staleSince: undefined,
+			...(returned ? { returned: true } : {}),
+			...(sellerCancelled ? {} : { failureReason: reason }),
+		});
+		if (enteringFailure) {
+			await ctx.scheduler.runAfter(0, internal.email.notifyDeliveryJobFailed, {
+				orderId: job.orderId,
+				reason: sellerCancelled ? job.failureReason : reason,
+				provider: "delyva",
+			});
+		} else if (notice) {
+			// Mid-flight (650/651/661): the parcel is still with the courier, so
+			// the job stays live — but the seller must hear about it.
+			await ctx.scheduler.runAfter(0, internal.email.notifyDeliveryJobFailed, {
+				orderId: job.orderId,
+				reason: `${reason ?? notice}. Check the tracking page.`,
+				provider: "delyva",
+			});
+		} else if (enteringReturn) {
+			await ctx.scheduler.runAfter(
+				0,
+				internal.email.notifyDeliveryJobReturned,
+				{
+					orderId: job.orderId,
+					reason,
+					provider: "delyva",
+					trackingNo: awb,
+				},
+			);
+		}
+	}
+
+	// Order auto-transitions ride order-status guards, so replayed / stale
+	// events are naturally idempotent here too. Delyva has no collection
+	// direction (v1) — every job is a standard delivery to the buyer.
+	const order = await ctx.db.get(job.orderId);
+	if (!order || order.status === "cancelled") return { status, changed };
+	if (changed && enteringFailure) {
+		// The booking died before the parcel left: a number that was already
+		// mirrored onto the order is dead, and leaving it there would make the
+		// buyer's page keep a courier that never came AND block the next
+		// booking's AWB (the mirror is fill-if-unset). Only the number this job
+		// put there, and never on an order that has shipped.
+		await unmirrorDeadAwb(ctx, order, awb);
+	}
+	if (returned) {
+		// The trip is over but the parcel is back with the seller: the job
+		// completes (slot free) and the order is NOT delivered — it stays
+		// where it is until the seller marks it returned (markOrderReturned).
+		return { status, changed };
+	}
+	if (status === "picked_up" && SHIPPABLE_FROM.has(order.status)) {
+		await applyStatusTransition(ctx, order, "shipped", {
+			courierName: order.courierName ?? job.serviceName ?? "Delyva",
+			trackingNo: order.trackingNo ?? awb,
+			carrierTrackingUrl: order.carrierTrackingUrl,
+		});
+	} else if (status === "completed" && DELIVERABLE_FROM.has(order.status)) {
+		await applyStatusTransition(ctx, order, "delivered");
+	}
+	return { status, changed };
+}
+
+/** Take a dead booking's number back off the order (fill-if-unset's twin):
+ * only when the order carries exactly this AWB and has not shipped. */
+async function unmirrorDeadAwb(
+	ctx: MutationCtx,
+	order: Doc<"orders">,
+	awb: string | undefined,
+): Promise<void> {
+	if (!awb || order.trackingNo !== awb) return;
+	if (order.status === "shipped" || order.status === "delivered") return;
+	await ctx.db.patch(order._id, {
+		courierName: undefined,
+		trackingNo: undefined,
+		carrierTrackingUrl: undefined,
+		updatedAt: Date.now(),
+	});
+}
+
+/**
+ * After a sweep's pull: a booking that is STILL waiting for its first scan a
+ * day on, with the pull having changed nothing, is flagged — once per quiet
+ * spell (`staleSince` is the guard; the next applied event clears it) — and
+ * the seller gets the one stale email. The buyer is never emailed.
+ */
+async function flagIfStillStale(
+	ctx: MutationCtx,
+	jobId: Id<"deliveryJobs">,
+	now: number,
+): Promise<void> {
+	const job = await ctx.db.get(jobId);
+	if (!job || job.staleSince !== undefined) return;
+	if (!isDelyvaJobStale(job, now)) return;
+	await ctx.db.patch(jobId, { staleSince: now, updatedAt: now });
+	await ctx.scheduler.runAfter(0, internal.email.notifyDeliveryJobStale, {
+		orderId: job.orderId,
+		provider: "delyva",
+		trackingNo: job.awb,
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Refresh pull + the hourly stale sweep (z8r3fe11y8)
+// ---------------------------------------------------------------------------
+
+/** How many rows one sweep may read in all (across both statuses), how many
+ * it reads per page, and how many pulls it schedules. The index is
+ * oldest-first, and the OLDEST `assigning` rows are the ones that never
+ * leave it — demo bookings, abandoned orders, flagged jobs Delyva keeps
+ * answering "unchanged" for — so a fixed window of 400 (PR #461 review)
+ * would fill with them and a new live booking going stale would never be
+ * read again. The budget is sized well past any plausible forever-set; the
+ * live set is small. */
+const STALE_SWEEP_READ_BUDGET = 4000;
+const STALE_SWEEP_PAGE = 400;
+const STALE_SWEEP_CAP = 200;
+
+export const getJobPullContext = internalQuery({
+	args: { jobId: v.id("deliveryJobs") },
+	handler: async (
+		ctx,
+		{ jobId },
+	): Promise<{
+		providerOrderId: string;
+		status: Doc<"deliveryJobs">["status"];
+		credentials: DelyvaCredentials;
+	} | null> => {
+		const job = await ctx.db.get(jobId);
+		if (!job || job.provider !== "delyva" || !job.providerOrderId) return null;
+		const retailer = await ctx.db.get(job.retailerId);
+		const credentials = resolveDelyvaCredentials(
+			retailer?.delyva as DelyvaConfig | undefined,
+		);
+		if (!credentials) return null;
+		return { providerOrderId: job.providerOrderId, status: job.status, credentials };
+	},
+});
+
+/**
+ * Refresh on a booking Delyva no longer knows (404): the booking is gone on
+ * their side — mark it rejected with the honest reason and free the order's
+ * one-active-job slot, so the seller can book again instead of waiting on a
+ * ghost. A terminal job just records the check.
+ */
+export const markJobLost = internalMutation({
+	args: { jobId: v.id("deliveryJobs"), pulledAt: v.number() },
+	handler: async (ctx, { jobId, pulledAt }) => {
 		const job = await ctx.db.get(jobId);
 		if (!job) return;
 		const now = Date.now();
-		const stale = job.lastEventAt !== undefined && eventAt < job.lastEventAt;
-
-		// The AWB fills in whenever we first see it — even from a stale event
-		// (a gap-filling write, mirroring the Lalamove shareLink posture).
-		if (consignmentNo && !job.awb) {
-			await ctx.db.patch(jobId, { awb: consignmentNo, updatedAt: now });
-			await mirrorAwbOntoOrder(ctx, job, consignmentNo);
-		}
-
-		if (statusCode === undefined) return;
-
-		// Failed delivery ATTEMPT (650): the parcel is still with the courier
-		// (retry or return follows) — surface it without changing job status,
-		// and never twice for the same event time.
-		if (isFailedDeliveryAttempt(statusCode)) {
-			if (!stale) {
-				await ctx.db.patch(jobId, {
-					failureReason:
-						statusText ?? "Delivery attempt failed — the courier will retry or return the parcel",
-					lastEventAt: eventAt,
-					updatedAt: now,
-				});
-				await ctx.scheduler.runAfter(0, internal.email.notifyDeliveryJobFailed, {
-					orderId: job.orderId,
-					reason: "Delivery attempt failed — the courier will retry or return the parcel. Check the tracking page.",
-					provider: "delyva",
-				});
-			}
+		if (!isActiveJobStatus(job.status)) {
+			await ctx.db.patch(jobId, { lastPulledAt: pulledAt, updatedAt: now });
 			return;
 		}
-
-		const status = normalizeDelyvaStatus(statusCode);
-		if (!status) {
-			console.warn("[delyva] webhook: unknown statusCode", {
-				providerOrderId: job.providerOrderId,
-				statusCode,
-			});
-			return;
-		}
-
-		if (!stale) {
-			const enteringFailure =
-				(status === "canceled" || status === "rejected") &&
-				isActiveJobStatus(job.status);
-			const sellerCancelled =
-				job.status === "canceled" && job.failureReason === "Cancelled by you";
-			await ctx.db.patch(jobId, {
-				status,
-				...(isActiveJobStatus(status) ? { failureReason: undefined } : {}),
-				lastEventAt: eventAt,
-				updatedAt: now,
-				...(status === "rejected"
-					? {
-							failureReason:
-								statusText ?? "The courier couldn't collect the parcel",
-						}
-					: sellerCancelled
-						? {} // keep "Cancelled by you"
-						: status === "canceled"
-							? { failureReason: statusText ?? "Cancelled by Delyva" }
-							: {}),
-			});
-			if (enteringFailure) {
-				await ctx.scheduler.runAfter(0, internal.email.notifyDeliveryJobFailed, {
-					orderId: job.orderId,
-					reason:
-						status === "rejected"
-							? (statusText ?? "The courier couldn't collect the parcel")
-							: (statusText ?? "Cancelled by Delyva"),
-					provider: "delyva",
-				});
-			}
-		}
-
-		// Order auto-transitions ride order-status guards, so replayed / stale
-		// events are naturally idempotent here too. Delyva has no collection
-		// direction (v1) — every job is a standard delivery to the buyer.
+		const reason = "Delyva has no record of this booking";
+		await ctx.db.patch(jobId, {
+			status: "rejected",
+			failureReason: reason,
+			lastEventAt: pulledAt,
+			lastPulledAt: pulledAt,
+			staleSince: undefined,
+			updatedAt: now,
+		});
+		await ctx.scheduler.runAfter(0, internal.email.notifyDeliveryJobFailed, {
+			orderId: job.orderId,
+			reason,
+			provider: "delyva",
+		});
 		const order = await ctx.db.get(job.orderId);
-		if (!order || order.status === "cancelled") return;
-		const awb = job.awb ?? consignmentNo;
-		if (status === "picked_up" && SHIPPABLE_FROM.has(order.status)) {
-			await applyStatusTransition(ctx, order, "shipped", {
-				courierName: order.courierName ?? job.serviceName ?? "Delyva",
-				trackingNo: order.trackingNo ?? awb,
-				carrierTrackingUrl: order.carrierTrackingUrl,
+		if (order && order.status !== "cancelled")
+			await unmirrorDeadAwb(ctx, order, job.awb);
+	},
+});
+
+/** Why a pull didn't go through, in one sentence the card can show. */
+function friendlyPullError(err: unknown): string {
+	if (err instanceof DelyvaApiError) {
+		const message = parseDelyvaErrorMessage(err.body);
+		return message
+			? `Delyva couldn't answer: ${message}`
+			: `Delyva couldn't answer (HTTP ${err.status}) — try again shortly.`;
+	}
+	return "Couldn't reach Delyva — try again shortly.";
+}
+
+/**
+ * Pull `GET /order/{id}` and apply it through the webhook path. The one
+ * helper under both the card's Refresh and the hourly sweep (an action never
+ * calls an action to share code). A 404 is an answer, not an error.
+ */
+async function pullDelyvaJob(
+	ctx: ActionCtx,
+	jobId: Id<"deliveryJobs">,
+	opts: { markStale: boolean },
+): Promise<{ ok: true; changed: boolean } | { ok: false; message: string }> {
+	const target = await ctx.runQuery(internal.delyva.getJobPullContext, { jobId });
+	if (!target) return { ok: false, message: "This booking can't be refreshed." };
+	const now = Date.now();
+	let json: unknown;
+	try {
+		json = await callDelyva(
+			target.credentials,
+			"GET",
+			`/order/${encodeURIComponent(target.providerOrderId)}`,
+		);
+	} catch (err) {
+		if (err instanceof DelyvaApiError && err.status === 404) {
+			await ctx.runMutation(internal.delyva.markJobLost, { jobId, pulledAt: now });
+			return { ok: true, changed: isActiveJobStatus(target.status) };
+		}
+		console.warn("[delyva] order pull failed", {
+			providerOrderId: target.providerOrderId,
+			message: err instanceof Error ? err.message : String(err),
+		});
+		return { ok: false, message: friendlyPullError(err) };
+	}
+	const event = parseDelyvaOrderPull(json);
+	if (!event) {
+		return {
+			ok: false,
+			message: "Delyva's answer couldn't be read — try again shortly.",
+		};
+	}
+	const applied: AppliedEvent | null = await ctx.runMutation(
+		internal.delyva.applyWebhookEvent,
+		{
+			jobId,
+			statusCode: event.statusCode,
+			consignmentNo: event.consignmentNo,
+			statusText: event.statusText,
+			eventAt: now,
+			pulledAt: now,
+			markStale: opts.markStale,
+		},
+	);
+	return { ok: true, changed: applied?.changed === true };
+}
+
+/** The sweep's per-job pull (scheduled a second apart). */
+export const syncJob = internalAction({
+	args: { jobId: v.id("deliveryJobs") },
+	handler: async (ctx, { jobId }): Promise<void> => {
+		await pullDelyvaJob(ctx, jobId, { markStale: true });
+	},
+});
+
+/**
+ * Hourly (convex/crons.ts): every Delyva booking still waiting for its first
+ * scan a day on with no event gets a pull; one still unchanged after it is
+ * flagged. Indexed reads only (`by_provider_status`, oldest first, paged
+ * under one read budget), demo accounts skipped (no courier ever comes, so
+ * "not scanned" is the normal state there), a job already flagged pulled
+ * once a DAY rather than hourly (`isDueForSweepPull` — a webhook or the
+ * seller's own Refresh still heals it instantly), 200 pulls per run at most.
+ */
+export const sweepStaleJobs = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<{ scheduled: number; read: number }> => {
+		const now = Date.now();
+		const demoByRetailer = new Map<Id<"retailers">, boolean>();
+		let scheduled = 0;
+		let read = 0;
+		let delay = 0;
+		for (const status of ["assigning", "ongoing"] as const) {
+			let cursor: string | null = null;
+			while (read < STALE_SWEEP_READ_BUDGET && scheduled < STALE_SWEEP_CAP) {
+				const page = await ctx.db
+					.query("deliveryJobs")
+					.withIndex("by_provider_status", (q) =>
+						q.eq("provider", "delyva").eq("status", status),
+					)
+					.paginate({
+						cursor,
+						numItems: Math.min(STALE_SWEEP_PAGE, STALE_SWEEP_READ_BUDGET - read),
+					});
+				read += page.page.length;
+				for (const job of page.page) {
+					if (scheduled >= STALE_SWEEP_CAP) break;
+					if (!isDueForSweepPull(job, now)) continue;
+					let demo = demoByRetailer.get(job.retailerId);
+					if (demo === undefined) {
+						const retailer = await ctx.db.get(job.retailerId);
+						demo =
+							(retailer?.delyva as DelyvaConfig | undefined)?.isDemo === true;
+						demoByRetailer.set(job.retailerId, demo);
+					}
+					if (demo) continue;
+					await ctx.scheduler.runAfter(delay, internal.delyva.syncJob, {
+						jobId: job._id,
+					});
+					delay += 1000;
+					scheduled += 1;
+				}
+				if (page.isDone) break;
+				cursor = page.continueCursor;
+			}
+		}
+		return { scheduled, read };
+	},
+});
+
+export const getRefreshTarget = internalQuery({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<{ jobId: Id<"deliveryJobs"> } | null> => {
+		const order = await resolveSharedOrder(ctx, { shortId });
+		if (!order) return null;
+		await requireRetailerAccess(ctx, order.retailerId, {
+			area: "orders",
+			level: "read",
+		});
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.collect();
+		const target = jobs.find(
+			(j) =>
+				j.provider === "delyva" &&
+				j.providerOrderId !== undefined &&
+				isActiveJobStatus(j.status),
+		);
+		return target ? { jobId: target._id } : null;
+	},
+});
+
+/** One Refresh per job per minute (lib/rateLimiter) — spent from a mutation,
+ * which is the only place the limiter can be spent. */
+export const claimRefreshSlot = internalMutation({
+	args: { jobId: v.id("deliveryJobs") },
+	handler: async (
+		ctx,
+		{ jobId },
+	): Promise<{ ok: true } | { ok: false; retryAfterMs: number }> => {
+		const result = await rateLimiter.limit(ctx, "delyvaJobRefresh", {
+			key: jobId,
+		});
+		return result.ok ? { ok: true } : { ok: false, retryAfterMs: result.retryAfter };
+	},
+});
+
+/**
+ * The card's "Refresh status" (z8r3fe11y8): pull the live booking from
+ * Delyva and apply it exactly as a webhook would — a missed webhook heals in
+ * one tap. Never gated by subscription or credits: it reads provider truth
+ * and moves nothing the webhooks wouldn't.
+ */
+export const refreshJob = action({
+	args: { shortId: v.string() },
+	handler: async (
+		ctx,
+		{ shortId },
+	): Promise<
+		| { ok: true; changed: boolean }
+		| { ok: false; message: string; cooldown?: true }
+	> => {
+		const target = await ctx.runQuery(internal.delyva.getRefreshTarget, {
+			shortId,
+		});
+		if (!target) return { ok: false, message: "No live Delyva booking to refresh." };
+		const slot = await ctx.runMutation(internal.delyva.claimRefreshSlot, {
+			jobId: target.jobId,
+		});
+		if (!slot.ok) {
+			const seconds = Math.max(1, Math.ceil(slot.retryAfterMs / 1000));
+			// `cooldown` tells the card this is a wait, not a failure — the
+			// seller did nothing wrong and Delyva was not even asked.
+			return {
+				ok: false,
+				cooldown: true,
+				message: `Checked with Delyva less than a minute ago — try again in ${seconds}s.`,
+			};
+		}
+		return pullDelyvaJob(ctx, target.jobId, { markStale: false });
+	},
+});
+
+/**
+ * "Mark order as returned" on the Returned-to-you card (z8r3fe11y8). The
+ * order has no `returned` status, and the ticket's "existing manual status
+ * override" is the stepper — so this is that move made honest: the order
+ * goes back to PACKED (the parcel is with the seller again; the buyer's page
+ * stops saying Shipped) with a timeline note naming the courier and waybill,
+ * and the dead number comes off the order so the next booking's AWB can land
+ * (the mirror is fill-if-unset) and Book again stops being blocked by
+ * `bad_status`. Gated like every other move of an order (updateStatus).
+ */
+export const markOrderReturned = mutation({
+	args: { shortId: v.string() },
+	handler: async (ctx, { shortId }): Promise<void> => {
+		const found = await resolveSharedOrder(ctx, { shortId });
+		if (!found) throw new ConvexError("Order not found");
+		const { order, access } = await requireOrderAccess(ctx, found._id, {
+			area: "orders",
+			level: "write",
+		});
+		await assertSubscriptionActive(ctx, order.retailerId);
+		await assertOrderCreditAvailable(ctx, order);
+		if (order.status === "cancelled")
+			throw new ConvexError("This order was cancelled — there is nothing to mark.");
+		const jobs = await ctx.db
+			.query("deliveryJobs")
+			.withIndex("by_order", (q) => q.eq("orderId", order._id))
+			.collect();
+		const job = jobs
+			.filter((j) => j.provider === "delyva")
+			.sort((a, b) => b.createdAt - a.createdAt)[0];
+		if (!job?.returned)
+			throw new ConvexError(
+				"Delyva hasn't reported this parcel as returned, so there is nothing to mark.",
+			);
+		const courier = job.serviceName ?? "the courier";
+		if (order.trackingNo && order.trackingNo === job.awb) {
+			await ctx.db.patch(order._id, {
+				courierName: undefined,
+				trackingNo: undefined,
+				carrierTrackingUrl: undefined,
+				updatedAt: Date.now(),
 			});
-		} else if (status === "completed" && DELIVERABLE_FROM.has(order.status)) {
-			await applyStatusTransition(ctx, order, "delivered");
+		}
+		if (order.status === "shipped" || order.status === "delivered") {
+			await applyStatusTransition(ctx, order, "packed", {
+				note: `Parcel returned by ${courier}${job.awb ? ` (${job.awb})` : ""} — back with you, ready to send again or cancel`,
+				actorUserId: access.role === "admin" ? undefined : access.userId,
+			});
 		}
 	},
 });
@@ -2136,11 +2975,22 @@ export type DelyvaJobView = {
 	costActual: number;
 	serviceCode: string;
 	serviceName?: string;
+	/** The service class the booking was made on (`NDD` / `NDD-DROP`), for
+	 * the pickup-vs-drop-off branch of the booked card. Absent on jobs from
+	 * before z8r3fe11x3 — the card then claims neither. */
+	serviceType?: string;
 	itemType?: string;
 	awb?: string;
 	failureReason?: string;
 	createdAt: number;
 	lastEventAt?: number;
+	/** z8r3fe11y8 — set while the hourly sweep found the booking waiting for
+	 * its first scan a day on: the card turns amber ("Not scanned yet"). */
+	staleSince?: number;
+	/** z8r3fe11y8 — the trip ended with the parcel back with the seller. */
+	returned?: boolean;
+	/** z8r3fe11y8 — when Delyva was last asked ("Last checked N min ago"). */
+	lastPulledAt?: number;
 };
 
 /**
@@ -2230,11 +3080,15 @@ export const getDispatchState = query({
 						costActual: latest.costActual,
 						serviceCode: latest.quotationId,
 						serviceName: latest.serviceName,
+						serviceType: latest.serviceType,
 						itemType: latest.itemType,
 						awb: latest.awb,
 						failureReason: latest.failureReason,
 						createdAt: latest.createdAt,
 						lastEventAt: latest.lastEventAt,
+						staleSince: latest.staleSince,
+						returned: latest.returned,
+						lastPulledAt: latest.lastPulledAt,
 					}
 				: null,
 			blockReason,
@@ -2281,6 +3135,9 @@ export type DelyvaCheckoutQuote =
 			currency: string;
 			serviceCode: string;
 			serviceName: string;
+			/** The winning service's class (`NDD-DROP` = seller drop-off),
+			 * recorded on the quote row for the audit trail (z8r3fe11x3). */
+			serviceType?: string;
 	  }
 	| {
 			status:
@@ -2342,6 +3199,7 @@ export async function fetchDelyvaCheckoutQuote(args: {
 				currency: cheapest.currency,
 				serviceCode: cheapest.code,
 				serviceName: cheapest.name,
+				serviceType: cheapest.serviceType,
 			};
 		}
 

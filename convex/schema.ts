@@ -2680,6 +2680,13 @@ export default defineSchema({
 		// Delyva only: which service in its returned list set this price.
 		serviceCode: v.optional(v.string()),
 		serviceName: v.optional(v.string()),
+		// Delyva only — the service CLASS verbatim from the quote (`NDD`,
+		// `NDD-DROP`, `INSTANT`), z8r3fe11x3. A `-DROP` suffix means the SELLER
+		// takes the parcel to a branch; without it the courier collects. Kept
+		// so the cheapest service the buyer was priced on can be audited for
+		// which kind it was (DapoGo's 268 quotes all landed on one RM5 J&T
+		// service and nothing recorded whether it was a drop-off).
+		serviceType: v.optional(v.string()),
 		// The cart this quote priced (PR #253 review): Delyva's bid depends on
 		// the summed variant weight, so a quote minted for one cart must not be
 		// redeemable against another — an emptier cart at quote time buys a
@@ -2934,6 +2941,13 @@ export default defineSchema({
 		// Delyva only — the courier service actually booked ("DHL eCommerce",
 		// "Ninja Cold"), for the dispatch card + orders.courierName mirror.
 		serviceName: v.optional(v.string()),
+		// Delyva only — the service class verbatim from the quote the seller
+		// picked (`NDD` / `NDD-DROP` / `INSTANT`), z8r3fe11x3. `-DROP` = the
+		// seller drops the parcel at a branch, so the booked card must say so
+		// and offer the courier's label; anything else = the courier collects.
+		// Absent on jobs from before this shipped: the card then claims
+		// neither (neutral copy), never guesses pickup.
+		serviceType: v.optional(v.string()),
 		// Delyva + EasyParcel — the consignment number (AWB) the buyer can track
 		// with. Delyva: arrives via the order.created webhook (or the
 		// post-process fetch); EasyParcel: returned by EPPayOrderBulk. Mirrored
@@ -2980,6 +2994,23 @@ export default defineSchema({
 		// out-of-order guard (events older than this only fill gaps, never
 		// regress fields).
 		lastEventAt: v.optional(v.number()),
+		// Delyva only (z8r3fe11y8). When the hourly sweep found this booking
+		// still waiting for its first scan after 24 h with no event — and a
+		// pull from Delyva changed nothing. Set once per quiet spell (the
+		// seller's stale email rides the same write); cleared by the next
+		// applied event, so a 500 that finally lands turns the card back.
+		staleSince: v.optional(v.number()),
+		// Delyva only (z8r3fe11y8). The trip ended with the parcel back with
+		// the SELLER (701 returned / 663 failed to return): the job is
+		// `completed` so the order's booking slot is free, but the order was
+		// never delivered and is left where it was. The card reads this to
+		// show "Returned to you" instead of "Delivered".
+		returned: v.optional(v.boolean()),
+		// Delyva only (z8r3fe11y8). When we last READ this booking from Delyva
+		// (`GET /order/{id}`), by the card's Refresh or the hourly sweep —
+		// "Last checked with Delyva N min ago". Distinct from lastEventAt: a
+		// pull that found nothing new is still a check.
+		lastPulledAt: v.optional(v.number()),
 		// The pickup moment this booking was SCHEDULED for (86eyg0n8e
 		// follow-up): the `scheduleAt` sent to Lalamove, from the order's
 		// fulfilment date+time when that moment was still ahead at dispatch.

@@ -18,22 +18,38 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useAction } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import {
 	CircleAlert,
 	ExternalLink,
 	FlaskConical,
+	MapPin,
+	MessageCircle,
+	PackageX,
+	Printer,
 	RefreshCw,
 	Snowflake,
 	Truck,
+	Undo2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
+import type { DelyvaJobView } from "../../../convex/delyva";
 import { walletVerdict } from "../../../convex/lib/courierWallet";
-import { isActiveJobStatus } from "../../../convex/lib/deliveryJobs";
-import type { DelyvaItemType, DelyvaService } from "../../../convex/lib/delyva";
+import {
+	isActiveJobStatus,
+	isCourierLinkPending,
+} from "../../../convex/lib/deliveryJobs";
+import {
+	type DelyvaItemType,
+	type DelyvaService,
+	delyvaHandoff,
+	delyvaLabelAvailability,
+	delyvaLogoUrl,
+	delyvaSpeedLabel,
+} from "../../../convex/lib/delyva";
 import { courierMargin } from "../../lib/courier-margin";
 import {
 	courierContactFallbackCopy,
@@ -41,14 +57,40 @@ import {
 	delyvaStatusLabel,
 } from "../../lib/delyva-dispatch-block";
 import { delyvaSurface } from "../../lib/dispatch-surface";
-import { convexErrorMessage, formatPrice } from "../../lib/format";
-import { parcelDeliveredCopy } from "../../lib/parcel-courier-copy";
+import { downloadPdfBytes } from "../../lib/download";
+import {
+	convexErrorMessage,
+	formatPrice,
+	formatRelativeTime,
+} from "../../lib/format";
+import {
+	type CourierHandoff,
+	courierLinkPendingSellerCopy,
+	delyvaSupportUrl,
+	dropoffSteps,
+	HANDOFF_PICKER_NOTE,
+	LABEL_UNAVAILABLE_COPY,
+	LEGACY_BOOKED_COPY,
+	lastCheckedCopy,
+	latestDelyvaContact,
+	MARK_RETURNED_HELP,
+	NOT_SCANNED_PILL,
+	notScannedCopy,
+	PICKUP_FAILED_TITLE,
+	parcelDeliveredCopy,
+	pickupCollectionCopy,
+	RETURNED_PILL,
+	returnedCopy,
+} from "../../lib/parcel-courier-copy";
+import { TONE_CHIP, TONE_PANEL } from "../../lib/tone";
 import { ProBadge } from "../app/pro-gate";
 import { DispatchWalletLine } from "../deliveries/dispatch-wallet-line";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 import { CopyButton } from "../ui/copy-button";
 import { Input } from "../ui/input";
+import { CourierLogo } from "./courier-logo";
+import { HandoffPill } from "./handoff-pill";
 import { pricedWithoutWeight, weightGapLine } from "./weight-gap-note";
 
 const ITEM_TYPES: ReadonlyArray<{ value: DelyvaItemType; label: string }> = [
@@ -81,6 +123,9 @@ export function DelyvaDispatchCard({
 	const prepareBooking = useAction(api.delyva.prepareBooking);
 	const confirmBooking = useAction(api.delyva.confirmBooking);
 	const cancelBooking = useAction(api.delyva.cancelBooking);
+	const getLabel = useAction(api.delyva.getLabel);
+	const refreshJob = useAction(api.delyva.refreshJob);
+	const markOrderReturned = useMutation(api.delyva.markOrderReturned);
 
 	const [itemType, setItemType] = useState<DelyvaItemType | null>(null);
 	const [weightInput, setWeightInput] = useState("");
@@ -102,6 +147,9 @@ export function DelyvaDispatchCard({
 	const [booking, setBooking] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [confirmingCancel, setConfirmingCancel] = useState(false);
+	const [printingLabel, setPrintingLabel] = useState(false);
+	const [refreshing, setRefreshing] = useState(false);
+	const [confirmingReturned, setConfirmingReturned] = useState(false);
 
 	// Seed the weight field from the order's own parcel weight ONCE, when the
 	// dispatch state first arrives. Keyed on a ref rather than `weightInput ===
@@ -130,7 +178,18 @@ export function DelyvaDispatchCard({
 			job.status === "rejected")
 			? job
 			: null;
-	const completedJob = job?.status === "completed" ? job : null;
+	// A completed job that RETURNED (z8r3fe11y8) is history to act on, like a
+	// failed one: the panel stays while it is the newest booking, and the
+	// picker underneath becomes "Book again" once the order is bookable.
+	const returnedJob = job?.status === "completed" && job.returned ? job : null;
+	const completedJob = job?.status === "completed" && !returnedJob ? job : null;
+	// Rejected AFTER Delyva confirmed the booking (a providerOrderId exists)
+	// is a pickup that failed; rejected before it is a booking that never
+	// went through. The two have different fixes, so they get different words.
+	const pickupFailed =
+		failedJob?.status === "rejected" && failedJob.providerOrderId !== undefined;
+	// Flagged by the hourly sweep: booked, and not a scan in a day.
+	const stale = activeJob !== null && activeJob.staleSince !== undefined;
 	const blockReason = dispatch.blockReason;
 	const bookable = blockReason === null;
 	const effectiveItemType = itemType ?? dispatch.defaultItemType;
@@ -201,6 +260,18 @@ export function DelyvaDispatchCard({
 				return;
 			}
 			setServices(result.services);
+			// A row with no service class is shown as pickup — Delyva's
+			// convention is that only drop-off services carry a suffix — but
+			// it is a guess, so it is logged where a support thread can find it.
+			const untyped = result.services.filter(
+				(s) => delyvaHandoff(s.serviceType) === undefined,
+			);
+			if (untyped.length > 0) {
+				console.warn(
+					"[delyva] quote rows without a serviceType, shown as pickup",
+					{ shortId: order.shortId, codes: untyped.map((s) => s.code) },
+				);
+			}
 			setNoCouriersOnAccount(result.accountHasNoCouriers === true);
 			setActiveCourierCount(result.activeCourierCount ?? null);
 			setColdChainGap(result.coldChainUnavailable === true);
@@ -223,6 +294,7 @@ export function DelyvaDispatchCard({
 				shortId: order.shortId,
 				serviceCode: service.code,
 				serviceName: service.name,
+				serviceType: service.serviceType,
 				itemType: effectiveItemType,
 				weightKgOverride: weightValid ? weightKg : undefined,
 			});
@@ -242,6 +314,61 @@ export function DelyvaDispatchCard({
 		}
 	}
 
+	/**
+	 * The courier's own label (z8r3fe11x3). PDF bytes are saved the way the
+	 * despatch label is (`downloadPdfBytes` — printing a saved PDF is one tap
+	 * on every platform, and a `window.open` on a blob after an await is
+	 * popup-blocked on iOS Safari); a URL opens in a new tab. A failure is a
+	 * toast carrying Delyva's own message, never silence.
+	 */
+	async function handlePrintLabel() {
+		setPrintingLabel(true);
+		try {
+			const result = await getLabel({ shortId: order.shortId });
+			if (!result.ok) {
+				toast.error(result.message);
+				return;
+			}
+			if (result.kind === "pdf") {
+				downloadPdfBytes(result.filename, result.pdf);
+			} else {
+				window.open(result.url, "_blank", "noopener");
+			}
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setPrintingLabel(false);
+		}
+	}
+
+	/**
+	 * Refresh status (z8r3fe11y8): pull the booking from Delyva and apply it
+	 * as a webhook would. The answer is a toast either way — "nothing new" is
+	 * an answer too, and a seller tapping twice in a minute is told when the
+	 * next check is allowed rather than left wondering.
+	 */
+	async function handleRefresh() {
+		setRefreshing(true);
+		try {
+			const result = await refreshJob({ shortId: order.shortId });
+			if (!result.ok) {
+				// A cooldown is a wait, not a failure — Delyva wasn't even asked.
+				if (result.cooldown) toast.info(result.message);
+				else toast.error(result.message);
+				return;
+			}
+			if (result.changed) toast.success("Updated from Delyva");
+			else
+				toast.success("Checked with Delyva — nothing new", {
+					description: "Delyva still shows this booking exactly as it is here.",
+				});
+		} catch (err) {
+			toast.error(convexErrorMessage(err));
+		} finally {
+			setRefreshing(false);
+		}
+	}
+
 	const selected = services?.find((s) => s.code === selectedCode) ?? null;
 	// Since 31 Oct the quote reads Delyva's balance too, so a wallet that
 	// can't pay is known before the tap: Book disables with the wallet line as
@@ -256,25 +383,43 @@ export function DelyvaDispatchCard({
 
 	return (
 		<section
+			// `@container`: the picker row and the handoff pill size by the CARD's
+			// width (`@md`), not the viewport — the order page is one phone-width
+			// column until `lg`, and the hub may narrow it further.
+			// Amber border while the booking needs the seller's eye (not scanned
+			// in a day, or returned) — the hub's shell owns the border when
+			// embedded, so the inner panel carries the tone there.
 			className={
 				embedded
-					? "flex flex-col gap-3"
-					: "flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
+					? "@container flex flex-col gap-3"
+					: `@container flex flex-col gap-3 rounded-2xl border bg-card p-4 ${
+							stale || returnedJob
+								? "border-amber-300 dark:border-amber-700"
+								: "border-border"
+						}`
 			}
 		>
 			<div className="flex items-center justify-between">
 				<p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
 					Delyva Courier
 				</p>
-				{job && !failedJob ? (
+				{job && (!failedJob || pickupFailed) ? (
 					<span
 						className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
-							completedJob
-								? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
-								: "bg-accent/15 text-accent-emphasis"
+							stale || returnedJob || pickupFailed
+								? TONE_CHIP.warn
+								: completedJob
+									? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+									: "bg-accent/15 text-accent-emphasis"
 						}`}
 					>
-						{delyvaStatusLabel(job.status)}
+						{stale
+							? NOT_SCANNED_PILL
+							: returnedJob
+								? RETURNED_PILL
+								: pickupFailed
+									? PICKUP_FAILED_TITLE
+									: delyvaStatusLabel(job.status)}
 					</span>
 				) : null}
 			</div>
@@ -303,85 +448,73 @@ export function DelyvaDispatchCard({
 				</p>
 			) : null}
 
-			{/* Failed booking — amber, with the one-tap rebook below it. */}
+			{/* Failed booking — amber, with the one-tap rebook below it. A pickup
+			    that failed after Delyva confirmed the booking (board 5) names
+			    itself and offers the address, since a courier that couldn't find
+			    the door is the usual cause. */}
 			{failedJob && !activeJob ? (
-				<p className="flex items-start gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-					<CircleAlert className="mt-0.5 size-4 shrink-0" />
-					<span>
-						<span className="font-medium">Booking didn&apos;t go through</span>
-						{failedJob.failureReason ? ` — ${failedJob.failureReason}` : ""}.
-						Your buyer was not notified; the order is unchanged.
-					</span>
-				</p>
+				<div className="flex flex-col gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+					<p className="flex items-start gap-2">
+						<CircleAlert className="mt-0.5 size-4 shrink-0" />
+						<span>
+							<span className="font-medium">
+								{pickupFailed
+									? PICKUP_FAILED_TITLE
+									: "Booking didn't go through"}
+							</span>
+							{failedJob.failureReason ? ` — ${failedJob.failureReason}` : ""}.
+							Your buyer was not notified; the order is unchanged.
+						</span>
+					</p>
+					{pickupFailed ? (
+						<p className="flex flex-wrap items-center gap-x-3 gap-y-1 pl-6 text-xs">
+							<Link
+								to="/app/settings"
+								search={{ tab: "integrations" }}
+								className="inline-flex min-h-9 items-center gap-1 font-medium underline underline-offset-2"
+							>
+								<MapPin className="size-3.5" /> Edit pickup address
+							</Link>
+							{failedJob.awb ? (
+								<span className="text-amber-800/80 dark:text-amber-200/80">
+									Waybill {failedJob.awb}
+								</span>
+							) : null}
+						</p>
+					) : null}
+				</div>
+			) : null}
+
+			{/* Returned (board 5): the panel carries its own disabled-with-reason
+			    Book again while the order still reads Shipped, so the generic
+			    blocked button below stays out — two disabled book buttons on one
+			    card would be the design failure, not a state. */}
+			{returnedJob && !activeJob ? (
+				<ReturnedState
+					job={returnedJob}
+					order={order}
+					lockedReason={lockedReason}
+					onMarkReturned={() => setConfirmingReturned(true)}
+				/>
 			) : null}
 
 			{job && (activeJob || completedJob) ? (
-				<div className="flex flex-col gap-2.5 text-sm">
-					<div className="flex items-center gap-2">
-						<Truck className="size-4 shrink-0 text-accent" />
-						<span className="font-medium">{job.serviceName ?? "Delyva"}</span>
-						{job.itemType && job.itemType !== "PARCEL" ? (
-							<span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium">
-								<Snowflake className="size-3" />
-								{job.itemType === "FROZEN" ? "Frozen" : "Chilled"}
-							</span>
-						) : null}
-					</div>
-
-					{job.awb ? (
-						<div className="flex items-center justify-between gap-2 rounded-xl border border-border px-3 py-2">
-							<span className="flex min-w-0 flex-col gap-0.5">
-								<span className="text-xs text-muted-foreground">
-									Tracking number
-								</span>
-								<span className="truncate font-mono text-sm font-semibold">
-									{job.awb}
-								</span>
-							</span>
-							<CopyButton value={job.awb} ariaLabel="Copy tracking number" />
-						</div>
-					) : (
-						<p className="text-muted-foreground">
-							Booked — waiting for {job.serviceName ?? "the courier"} to issue a
-							tracking number. It appears here and on your buyer&apos;s order
-							page by itself.
-						</p>
-					)}
-
-					<p className="text-muted-foreground">
-						{completedJob
-							? parcelDeliveredCopy(!!order.carrierTrackingUrl)
-							: "Your buyer already has this — the tracking number is on their order page. The order marks itself Shipped at collection and Delivered on arrival."}
-					</p>
-
-					<div className="flex items-center justify-between text-xs text-muted-foreground">
-						<span>
-							Booking cost {formatPrice(job.costActual, order.currency)}
-						</span>
-						{order.carrierTrackingUrl ? (
-							<a
-								href={order.carrierTrackingUrl}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="flex items-center gap-1 font-medium text-accent hover:underline"
-							>
-								Track parcel <ExternalLink className="size-3" />
-							</a>
-						) : null}
-					</div>
-
-					{activeJob ? (
-						<Button
-							type="button"
-							variant="ghost"
-							className="h-11 w-full text-destructive"
-							onClick={() => setConfirmingCancel(true)}
-						>
-							Cancel booking
-						</Button>
-					) : null}
-				</div>
-			) : bookable && !lockedReason ? (
+				<BookedState
+					job={job}
+					order={order}
+					completed={completedJob !== null}
+					active={activeJob !== null}
+					stale={stale}
+					isDemo={dispatch.isDemo === true}
+					pickupSummary={dispatch.pickupSummary}
+					printingLabel={printingLabel}
+					refreshing={refreshing}
+					onPrintLabel={() => void handlePrintLabel()}
+					onRefresh={() => void handleRefresh()}
+					onCancel={() => setConfirmingCancel(true)}
+				/>
+			) : returnedJob && !activeJob && !bookable ? null : bookable &&
+				!lockedReason ? (
 				<>
 					{/* Where the courier collects — surfaced BEFORE the first quote so a
 					    stale pickup address (imported from Delyva's profile at connect)
@@ -391,15 +524,22 @@ export function DelyvaDispatchCard({
 							Collecting from{" "}
 							<span className="font-medium text-foreground">
 								{dispatch.pickupSummary}
-							</span>{" "}
-							·{" "}
-							<Link
-								to="/app/settings"
-								search={{ tab: "integrations" }}
-								className="font-medium text-accent hover:underline"
-							>
-								Edit
-							</Link>
+							</span>
+							{/* The failed-pickup banner above already carries the
+							    edit link; one control per idea. */}
+							{pickupFailed ? null : (
+								<>
+									{" "}
+									·{" "}
+									<Link
+										to="/app/settings"
+										search={{ tab: "integrations" }}
+										className="font-medium text-accent hover:underline"
+									>
+										Edit
+									</Link>
+								</>
+							)}
 						</p>
 					) : null}
 
@@ -545,7 +685,11 @@ export function DelyvaDispatchCard({
 							) : (
 								<>
 									<Truck className="size-4" />
-									{failedJob ? "Try again" : "Get courier prices"}
+									{pickupFailed || returnedJob
+										? "Book again"
+										: failedJob
+											? "Try again"
+											: "Get courier prices"}
 								</>
 							)}
 						</Button>
@@ -660,6 +804,10 @@ export function DelyvaDispatchCard({
 							</div>
 							{services.map((service, index) => {
 								const active = service.code === selectedCode;
+								// A missing class renders as pickup (Delyva suffixes only
+								// drop-off services) — logged at quote time, never guessed
+								// silently.
+								const handoff = delyvaHandoff(service.serviceType) ?? "pickup";
 								return (
 									<button
 										key={service.code}
@@ -667,25 +815,32 @@ export function DelyvaDispatchCard({
 										aria-pressed={active}
 										disabled={booking}
 										onClick={() => setSelectedCode(service.code)}
-										className={`flex w-full items-center gap-2.5 rounded-2xl border-2 p-2.5 text-left transition-colors disabled:opacity-60 ${
+										// Board 1 grid: logo | name, meta, pill | price (44|1fr|92, then
+										// 48|1fr|104 once the card is `@md` wide). The price column is
+										// FIXED so a long service name wraps under itself instead of
+										// pushing the number, and nothing here truncates — a seller
+										// comparing couriers reads whole names.
+										className={`grid w-full grid-cols-[44px_minmax(0,1fr)_92px] items-start gap-x-2.5 rounded-2xl border-2 p-2.5 text-left transition-colors disabled:opacity-60 @md:grid-cols-[48px_minmax(0,1fr)_104px] ${
 											active
 												? "border-accent bg-accent/5"
 												: "border-border bg-card hover:border-accent/40"
 										}`}
 									>
-										<span className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-primary text-xs font-bold text-primary-foreground">
-											{initials(service.companyName || service.name)}
-										</span>
-										<span className="flex min-w-0 grow flex-col gap-0.5">
-											<span className="truncate text-sm font-semibold">
+										<CourierLogo
+											logoUrl={delyvaLogoUrl(service.logoPath)}
+											name={service.companyName || service.name}
+										/>
+										<span className="flex min-w-0 flex-col items-start gap-1">
+											<span className="text-sm font-semibold leading-snug break-words">
 												{service.name}
 											</span>
-											<span className="truncate text-xs text-muted-foreground">
+											<span className="text-xs leading-snug text-muted-foreground">
 												{serviceMeta(service)}
 											</span>
+											<HandoffPill handoff={handoff} />
 										</span>
-										<span className="flex shrink-0 flex-col items-end gap-1">
-											<span className="text-sm font-bold">
+										<span className="flex flex-col items-end gap-1 text-right">
+											<span className="text-sm font-bold tabular-nums">
 												{formatPrice(service.price, service.currency)}
 											</span>
 											{/* Against what the buyer paid — the buyer never chose
@@ -703,19 +858,15 @@ export function DelyvaDispatchCard({
 												</span>
 											) : null}
 										</span>
-										<span
-											aria-hidden="true"
-											className={`flex size-4 shrink-0 items-center justify-center rounded-full border-2 ${
-												active ? "border-accent" : "border-border"
-											}`}
-										>
-											{active ? (
-												<span className="size-2 rounded-full bg-accent" />
-											) : null}
-										</span>
 									</button>
 								);
 							})}
+							{/* What the two pills mean — said once, under the list, so a
+							    seller weighing a RM5 drop-off against a RM7 pickup knows the
+							    cheaper one is a trip to a branch (z8r3fe11x3). */}
+							<p className="text-xs text-muted-foreground">
+								{HANDOFF_PICKER_NOTE}
+							</p>
 
 							{dispatch.isDemo ? (
 								<p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
@@ -812,6 +963,29 @@ export function DelyvaDispatchCard({
 			)}
 
 			<ConfirmDialog
+				open={confirmingReturned}
+				onOpenChange={setConfirmingReturned}
+				title="Mark this order as returned?"
+				description={`The order goes back to Packed with a note on its timeline, the courier's tracking number comes off it, and you can book a courier again or cancel. Your buyer's order page stops saying Shipped.${
+					order.customer.waPhone
+						? " Your buyer isn't messaged — use Message buyer for that."
+						: ""
+				}`}
+				confirmLabel="Mark as returned"
+				onConfirm={async () => {
+					try {
+						await markOrderReturned({ shortId: order.shortId });
+						toast.success("Order back to Packed", {
+							description: "Book a courier again below, or cancel the order.",
+						});
+					} catch (err) {
+						toast.error(convexErrorMessage(err));
+						throw err;
+					}
+				}}
+			/>
+
+			<ConfirmDialog
 				open={confirmingCancel}
 				onOpenChange={setConfirmingCancel}
 				title="Cancel this courier booking?"
@@ -828,30 +1002,446 @@ export function DelyvaDispatchCard({
 	);
 }
 
-/** Two-letter mark for a courier with no logo of ours — deliberate over a
- * remote logo: the card must render identically offline and on a cold cache. */
-function initials(name: string): string {
-	const words = name.trim().split(/\s+/).filter(Boolean);
-	if (words.length === 0) return "??";
-	if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-	return (words[0][0] + words[1][0]).toUpperCase();
-}
-
 /** The one line under a courier's name: what kind of service it is, and what
- * the parcel is allowed to be. Delyva's own vocabulary, in plain words. */
+ * the parcel is allowed to be. Delyva's own vocabulary, in plain words. Speed
+ * is judged on the BASE class, so `NDD-DROP` still reads Next-day. */
 function serviceMeta(service: DelyvaService): string {
-	const speed =
-		service.serviceType === "INSTANT"
-			? "Same-day"
-			: service.serviceType === "SDD"
-				? "Same-day"
-				: service.serviceType === "NDD"
-					? "Next-day"
-					: null;
+	const speed = delyvaSpeedLabel(service.serviceType) ?? null;
 	const cold = service.itemTypes?.some((t) => t === "CHILLED" || t === "FROZEN")
 		? "Cold chain"
 		: null;
 	return [cold, speed, service.companyName].filter(Boolean).join(" · ");
+}
+
+/**
+ * The booked card (z8r3fe11x3). Branches on the HANDOFF the booking was made
+ * on: a drop-off service is a job the seller still has to do, so it leads
+ * with the three steps and a primary Print shipping label; a pickup service
+ * says where the courier collects from and keeps the label secondary; a
+ * booking from before the handoff was stored claims neither. The demo
+ * banner, when there is one, sits above all of this in the parent.
+ */
+function BookedState({
+	job,
+	order,
+	completed,
+	active,
+	stale,
+	isDemo,
+	pickupSummary,
+	printingLabel,
+	refreshing,
+	onPrintLabel,
+	onRefresh,
+	onCancel,
+}: {
+	job: DelyvaJobView;
+	order: Doc<"orders">;
+	completed: boolean;
+	active: boolean;
+	/** Flagged by the hourly sweep: booked a day ago, no scan since. */
+	stale: boolean;
+	/** A demo-key account: its Delyva app is the demo tenant's. */
+	isDemo: boolean;
+	pickupSummary?: string;
+	printingLabel: boolean;
+	refreshing: boolean;
+	onPrintLabel: () => void;
+	onRefresh: () => void;
+	onCancel: () => void;
+}) {
+	const handoff: CourierHandoff | undefined = delyvaHandoff(job.serviceType);
+	// Before the parcel's first scan: the steps / collection line and the
+	// label are owed only until then.
+	const awaitingScan = job.status === "assigning" || job.status === "ongoing";
+	const label = delyvaLabelAvailability(job);
+	const courier = job.serviceName ?? "Delyva";
+	const now = Date.now();
+	const contact = latestDelyvaContact(job);
+	const lastChecked = lastCheckedCopy(
+		contact
+			? { kind: contact.kind, relative: formatRelativeTime(contact.at, now) }
+			: null,
+	);
+
+	const refreshButton = (variant: "default" | "text") =>
+		variant === "default" ? (
+			<Button
+				type="button"
+				className="h-11 w-full"
+				isLoading={refreshing}
+				disabled={refreshing}
+				onClick={onRefresh}
+			>
+				<RefreshCw className="size-4" />
+				Refresh status
+			</Button>
+		) : (
+			<button
+				type="button"
+				disabled={refreshing}
+				className="flex min-h-9 items-center gap-1 self-start text-xs font-medium text-accent underline-offset-2 hover:underline disabled:opacity-60"
+				onClick={onRefresh}
+			>
+				<RefreshCw className={`size-3 ${refreshing ? "animate-spin" : ""}`} />
+				Refresh status
+			</button>
+		);
+
+	const printButton = (variant: "default" | "outline") => (
+		<div className="flex flex-col gap-1">
+			<Button
+				type="button"
+				variant={variant}
+				className="h-11 w-full"
+				isLoading={printingLabel}
+				disabled={printingLabel || !label.ok}
+				aria-describedby={
+					label.ok ? undefined : `delyva-label-why-${order.shortId}`
+				}
+				onClick={onPrintLabel}
+			>
+				<Printer className="size-4" />
+				Print shipping label
+			</Button>
+			{label.ok ? null : (
+				<p
+					id={`delyva-label-why-${order.shortId}`}
+					className="text-xs text-muted-foreground"
+				>
+					{LABEL_UNAVAILABLE_COPY[label.reason]}
+				</p>
+			)}
+		</div>
+	);
+
+	return (
+		<div className="flex flex-col gap-2.5 text-sm">
+			<div className="flex flex-wrap items-center gap-2">
+				<Truck className="size-4 shrink-0 text-accent" />
+				<span className="font-medium">{courier}</span>
+				{job.itemType && job.itemType !== "PARCEL" ? (
+					<span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium">
+						<Snowflake className="size-3" />
+						{job.itemType === "FROZEN" ? "Frozen" : "Chilled"}
+					</span>
+				) : null}
+				{handoff ? <HandoffPill handoff={handoff} className="ml-auto" /> : null}
+			</div>
+
+			{/* Not scanned in a day (board 4): what hasn't happened, what to
+			    check, and the two things that can move it — a pull from Delyva,
+			    and the label the branch needs. The label button lives HERE while
+			    stale, so it never appears twice on one card. */}
+			{stale ? (
+				<StalePanel
+					job={job}
+					order={order}
+					handoff={handoff}
+					now={now}
+					lastChecked={lastChecked}
+					isDemo={isDemo}
+					refreshButton={refreshButton("default")}
+					printButton={printButton("outline")}
+				/>
+			) : null}
+
+			{/* Drop-off: the seller's three steps lead, with the label — the one
+			    thing a branch will scan — as the primary action (board 2). */}
+			{awaitingScan && handoff === "dropoff" ? (
+				<>
+					<ol
+						aria-label="What to do next"
+						className={`flex flex-col gap-2.5 rounded-xl border px-3 py-3 ${TONE_PANEL.info}`}
+					>
+						{dropoffSteps(job.serviceName).map((step, index) => (
+							<li key={step.title} className="flex gap-2.5">
+								<span
+									aria-hidden="true"
+									className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-segment text-[11px] font-bold text-segment-foreground"
+								>
+									{index + 1}
+								</span>
+								<span className="flex min-w-0 flex-col gap-0.5">
+									<span className="font-medium">{step.title}</span>
+									<span className="text-xs">{step.detail}</span>
+								</span>
+							</li>
+						))}
+					</ol>
+					{stale ? null : printButton("default")}
+				</>
+			) : null}
+
+			{job.awb ? (
+				<div className="flex items-center justify-between gap-2 rounded-xl border border-border px-3 py-2">
+					<span className="flex min-w-0 flex-col gap-0.5">
+						<span className="text-xs text-muted-foreground">
+							Tracking number
+						</span>
+						<span className="truncate font-mono text-sm font-semibold">
+							{job.awb}
+						</span>
+					</span>
+					<CopyButton value={job.awb} ariaLabel="Copy tracking number" />
+				</div>
+			) : (
+				<p className="text-muted-foreground">
+					Booked — waiting for {courier} to issue a tracking number. It appears
+					here and on your buyer&apos;s order page by itself.
+				</p>
+			)}
+
+			{/* Pickup: where the courier collects from (board 3). A place, never
+			    a time — Delyva schedules the pickup on the courier's cadence. */}
+			{awaitingScan && handoff === "pickup" ? (
+				<p className="flex items-start gap-2 text-muted-foreground">
+					<MapPin className="mt-0.5 size-4 shrink-0" />
+					<span>{pickupCollectionCopy(job.serviceName, pickupSummary)}</span>
+				</p>
+			) : null}
+
+			{/* Booked with a number but no link yet (z8r3fe0t4e): the link is
+			    written at the first scan, so the line says when it comes and
+			    "Track parcel" below stays absent until `order.carrierTrackingUrl`
+			    exists. The moment is worded by the handoff; a legacy booking
+			    claims neither kind. */}
+			<p className="text-muted-foreground">
+				{completed
+					? parcelDeliveredCopy(!!order.carrierTrackingUrl)
+					: isCourierLinkPending({ ...job, provider: "delyva" }, order)
+						? courierLinkPendingSellerCopy(job.serviceName, handoff)
+						: handoff === undefined
+							? LEGACY_BOOKED_COPY
+							: `Your buyer already has this — the tracking number is on their order page. The order marks itself Shipped ${
+									handoff === "dropoff"
+										? "once the branch scans the parcel in"
+										: "at collection"
+								} and Delivered on arrival.`}
+			</p>
+
+			<div className="flex items-center justify-between text-xs text-muted-foreground">
+				<span>Booking cost {formatPrice(job.costActual, order.currency)}</span>
+				{order.carrierTrackingUrl ? (
+					<a
+						href={order.carrierTrackingUrl}
+						target="_blank"
+						rel="noopener noreferrer"
+						className="flex items-center gap-1 font-medium text-accent hover:underline"
+					>
+						Track parcel <ExternalLink className="size-3" />
+					</a>
+				) : null}
+			</div>
+
+			{/* Pickup and legacy bookings keep the label secondary: the courier
+			    brings their own, but a printed one speeds the handover. Gone once
+			    the parcel is scanned — it is on the parcel by then. */}
+			{active && awaitingScan && handoff !== "dropoff" && !stale
+				? printButton("outline")
+				: null}
+
+			{/* The impatient path between the hourly sweeps: ask Delyva now. On a
+			    flagged booking the panel above already holds the big button. */}
+			{active && !stale ? (
+				<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+					{refreshButton("text")}
+					<span className="text-[11px] text-muted-foreground">
+						{lastChecked}
+					</span>
+				</div>
+			) : null}
+
+			{active ? (
+				<Button
+					type="button"
+					variant="ghost"
+					className="h-11 w-full text-destructive"
+					onClick={onCancel}
+				>
+					Cancel booking
+				</Button>
+			) : null}
+		</div>
+	);
+}
+/**
+ * Board 4 — booked a day ago, no scan since (z8r3fe11y8). Amber, with the
+ * waybill in the headline (it is what the seller quotes to the branch or to
+ * Delyva), the fix worded by the handoff, Refresh status as the primary
+ * action and the courier's label beside it, when Delyva was last asked, and
+ * the way to a human at Delyva.
+ */
+function StalePanel({
+	job,
+	order,
+	handoff,
+	now,
+	lastChecked,
+	isDemo,
+	refreshButton,
+	printButton,
+}: {
+	job: DelyvaJobView;
+	order: Doc<"orders">;
+	handoff: CourierHandoff | undefined;
+	now: number;
+	lastChecked: string;
+	isDemo: boolean;
+	refreshButton: ReactNode;
+	printButton: ReactNode;
+}) {
+	const copy = notScannedCopy({
+		serviceName: job.serviceName,
+		awb: job.awb,
+		handoff,
+		hoursSinceBooking: (now - job.createdAt) / 3_600_000,
+	});
+	return (
+		<output
+			aria-label={`Not scanned yet — order ${order.shortId}`}
+			className={`flex flex-col gap-2.5 rounded-xl border px-3 py-3 ${TONE_PANEL.warn}`}
+		>
+			<p className="flex items-start gap-2">
+				<CircleAlert className="mt-0.5 size-4 shrink-0" />
+				<span className="flex min-w-0 flex-col gap-1">
+					<span className="font-medium">{copy.headline}</span>
+					<span className="text-xs">{copy.detail}</span>
+				</span>
+			</p>
+			<div className="grid gap-2 @md:grid-cols-2">
+				{refreshButton}
+				{printButton}
+			</div>
+			<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
+				<span>{lastChecked}</span>
+				<a
+					href={delyvaSupportUrl(isDemo)}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="inline-flex min-h-9 items-center gap-1 font-medium underline underline-offset-2"
+				>
+					Ask Delyva (live chat in your Delyva app)
+					<ExternalLink className="size-3" />
+				</a>
+			</div>
+		</output>
+	);
+}
+
+/**
+ * Board 5 — the courier brought the parcel back (701 / 663). The job is over
+ * (the slot is free) but the ORDER still reads Shipped, so the three things
+ * a seller does next sit here: tell the buyer, put the order back to Packed
+ * (which also unlocks Book again — a shipped order can't be rebooked), or
+ * book again once that's done (the picker under this panel).
+ */
+function ReturnedState({
+	job,
+	order,
+	lockedReason,
+	onMarkReturned,
+}: {
+	job: DelyvaJobView;
+	order: Doc<"orders">;
+	lockedReason?: string;
+	onMarkReturned: () => void;
+}) {
+	const stillShipped =
+		order.status === "shipped" || order.status === "delivered";
+	const buyerChatUrl = order.customer.waPhone
+		? `https://wa.me/${order.customer.waPhone}?text=${encodeURIComponent(
+				`Hi${order.customer.name ? ` ${order.customer.name}` : ""}, the courier couldn't deliver your parcel for ${order.shortId} and returned it to us. We'll send it again — could you confirm your delivery address and a good time?`,
+			)}`
+		: null;
+	return (
+		<div className="flex flex-col gap-2.5 text-sm">
+			<output
+				aria-label={`Returned to you — order ${order.shortId}`}
+				className={`flex flex-col gap-2.5 rounded-xl border px-3 py-3 ${TONE_PANEL.warn}`}
+			>
+				<p className="flex items-start gap-2">
+					<PackageX className="mt-0.5 size-4 shrink-0" />
+					<span>
+						{returnedCopy(job.serviceName, job.failureReason, !stillShipped)}
+					</span>
+				</p>
+				{job.awb ? (
+					<p className="pl-6 text-xs">
+						Waybill <span className="font-mono font-semibold">{job.awb}</span>
+						{order.carrierTrackingUrl ? (
+							<>
+								{" · "}
+								<a
+									href={order.carrierTrackingUrl}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="inline-flex items-center gap-1 font-medium underline underline-offset-2"
+								>
+									Track parcel <ExternalLink className="size-3" />
+								</a>
+							</>
+						) : null}
+					</p>
+				) : null}
+			</output>
+
+			<div className="flex flex-col gap-2">
+				{buyerChatUrl ? (
+					<Button asChild variant="outline" className="h-11 w-full">
+						<a href={buyerChatUrl} target="_blank" rel="noopener noreferrer">
+							<MessageCircle className="size-4" />
+							Message buyer
+						</a>
+					</Button>
+				) : null}
+				{stillShipped ? (
+					<>
+						<div className="flex flex-col gap-1">
+							<Button
+								type="button"
+								className="h-11 w-full"
+								disabled={lockedReason !== undefined}
+								aria-describedby={`delyva-returned-why-${order.shortId}`}
+								onClick={onMarkReturned}
+							>
+								<Undo2 className="size-4" />
+								Mark order as returned
+							</Button>
+							<p
+								id={`delyva-returned-why-${order.shortId}`}
+								className="text-xs text-muted-foreground"
+							>
+								{lockedReason ?? MARK_RETURNED_HELP}
+							</p>
+						</div>
+						<div className="flex flex-col gap-1">
+							<Button
+								type="button"
+								variant="outline"
+								className="h-11 w-full"
+								disabled
+								aria-describedby={`delyva-rebook-why-${order.shortId}`}
+							>
+								<Truck className="size-4" />
+								Book again
+							</Button>
+							<p
+								id={`delyva-rebook-why-${order.shortId}`}
+								className="text-xs text-muted-foreground"
+							>
+								Mark the order as returned first — a shipped order can&apos;t be
+								booked again.
+							</p>
+						</div>
+					</>
+				) : null}
+			</div>
+			<p className="text-xs text-muted-foreground">
+				Booking cost {formatPrice(job.costActual, order.currency)}
+			</p>
+		</div>
+	);
 }
 
 /** "+RM 0.80 kept" / "RM 3.40 from your margin" beside one courier's price. */

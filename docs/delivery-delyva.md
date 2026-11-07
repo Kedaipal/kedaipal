@@ -118,17 +118,23 @@ account, and it is the SG twin of the cold-chain gap below.
   deliberate address is part of the setup story. Booking blocks with reason
   `no_pickup_address` until it's set.
 - `deliveryJobs.provider` widened to `"lalamove" | "delyva"`; Delyva rows
-  add `serviceName` (courier display name), `awb` (consignment number) and
-  `itemType`. `quotationId`/`vehicleType` carry the **service code** (their
-  quotes are indicative, not id-bound — see Dispatch below).
+  add `serviceName` (courier display name), `awb` (consignment number),
+  `itemType` and, since z8r3fe11x3, `serviceType` (the service class
+  verbatim — `NDD` / `NDD-DROP`; absent on older jobs, see "Pickup vs
+  drop-off" below). `quotationId`/`vehicleType` carry the **service code**
+  (their quotes are indicative, not id-bound — see Dispatch below).
+  `deliveryQuotes` carries the same `serviceType` for the cheapest service a
+  checkout quote was priced on.
 - `by_provider_order` index widened to `["provider", "providerOrderId"]` —
   two providers' order ids are both opaque strings, and the webhook lookup
   uses `.unique()`, so a provider-blind index would let a cross-provider
   collision throw inside a webhook handler.
 - AWB mirrors into the existing `orders.courierName` / `orders.trackingNo`
-  (86eyehvk4) + `carrierTrackingUrl` — **fill-if-unset**, so a seller's
-  manual shipment entry is never overwritten, and the buyer's track page +
-  shipped WhatsApp carry the tracking number with zero new plumbing.
+  (86eyehvk4) the moment it is known, and `carrierTrackingUrl` **only once
+  the parcel is collected** (z8r3fe0t4e, see "The tracking link lands at
+  collection" below) — **fill-if-unset**, so a seller's manual shipment entry
+  is never overwritten, and the buyer's track page + shipped WhatsApp carry
+  the tracking number with zero new plumbing.
 
 ## Dispatch flow (two-tap, mirrored on Lalamove's invariant)
 
@@ -241,19 +247,172 @@ verify them and don't act); matching job but no stored secret → **500 fail
 closed**; bad signature → 401; signed but the payload's `customerId` doesn't
 match the job retailer's stored one → 200 + log (defense in depth).
 
-Status codes (verified against Delyva's own maintained WooCommerce plugin):
+Status codes — Delyva's own table (the "Order status codes" table in the
+published collection behind docs.api.delyva.com, read 5 Nov 2026 for
+z8r3fe11y8; the codes their WooCommerce plugin handles match it). One author
+for the mapping (`normalizeDelyvaStatus`) and one for the reason
+(`delyvaFailureReason`), both in `convex/lib/delyva.ts`:
 
-| Delyva | Meaning              | Job status  | Order effect                        |
-| ------ | -------------------- | ----------- | ----------------------------------- |
-| 100/110| created / ready      | `assigning` | AWB fills → courier fields mirror   |
-| 200    | courier accepted     | `ongoing`   | —                                   |
-| 400    | start collecting     | `ongoing`   | —                                   |
-| 475    | failed collection    | `rejected`  | failure email, order untouched      |
-| 500    | collected            | `picked_up` | → **shipped** (from confirmed/packed) |
-| 600    | out for delivery     | `picked_up` | —                                   |
-| 650    | failed delivery      | *(kept)*    | failureReason + email — the parcel is still WITH the courier (retry/return follows), so the job never goes terminal |
-| 700/1000| completed           | `completed` | → **delivered** (from confirmed/packed/shipped) |
-| 900    | cancelled            | `canceled`  | failure email if it was active      |
+| Delyva   | Meaning                             | Job status   | Order effect / seller surface                                   |
+| -------- | ----------------------------------- | ------------ | --------------------------------------------------------------- |
+| 0/10/11  | draft / payment pending / abandoned | *(unmapped)* | pre-booking — never reaches a job                               |
+| 99       | create order failed                 | `rejected`   | "Delyva could not create the order" (+ Delyva's `failedReason`); failure email; a mirrored number comes off the order |
+| 100/110  | created / ready (label printed)     | `assigning`  | AWB fills → courier name + number mirror (number only, z8r3fe0t4e) |
+| 200      | pending collection / assigned       | `ongoing`    | —                                                               |
+| 400/450  | pickup start / arrived for pickup   | `ongoing`    | —                                                               |
+| 475      | pick-up failed                      | `rejected`   | **Pickup failed** card (Edit pickup address, Book again); failure email; number comes off |
+| 500      | collected                           | `picked_up`  | → **shipped** (from confirmed/packed); `carrierTrackingUrl` fills (registry deep link, else Delyva's `strack` page) |
+| 555/556  | hub check-in / check-out            | `picked_up`  | — (moves `lastEventAt`, so a moving parcel is never "stale")    |
+| 600/625  | out for delivery / arrived          | `picked_up`  | —                                                               |
+| 650      | failed to deliver                   | `picked_up`  | notice + email — the parcel is still WITH the courier (retry/return follows), never terminal |
+| 651      | failed delivery — lost/damaged      | `picked_up`  | "Lost or damaged, claim with Delyva" + email                    |
+| 654      | failed — driver cancelled           | `rejected`   | Pickup failed card; reason = Delyva's text or "Courier cancelled the pickup" |
+| 655      | failed (generic / reason)           | `rejected`   | Pickup failed card; reason = Delyva's text or "The courier reported the booking as failed" |
+| 661      | returning to sender                 | `picked_up`  | "Returning to sender" + email; order stays shipped              |
+| 663      | failed to return                    | `completed` **returned** | **Returned to you** card; returned email; order NOT touched |
+| 700/1000 | delivered / completed               | `completed`  | → **delivered** (from confirmed/packed/shipped)                 |
+| 701      | item returned                       | `completed` **returned** | **Returned to you** card; returned email; order NOT touched |
+| 900      | cancelled                           | `canceled`   | failure email if it was active; a mirrored number comes off     |
+
+**Returned (701/663) completes the job but never the order** (z8r3fe11y8):
+`completed` frees the order's one-active-job slot so the seller can book
+again, `deliveryJobs.returned: true` tells every surface what kind of
+completed it was, and the order stays `shipped` until the seller acts. The
+ticket's "Mark order as returned is the existing manual status override" ran
+into a fact — `orders.status` has no `returned` value — so the button is that
+override made honest: `delyva.markOrderReturned` puts the order back to
+**Packed** with a timeline note naming the courier and waybill, takes the
+dead number off the order, and so unlocks **Book again** (a shipped order is
+`bad_status` for every courier card). Both doors say the parcel came back
+meanwhile: `orders.get().courierReturned` → the buyer's page replaces the
+tracking button with one line naming the store, the seller's Shipment
+tracking card says so beside the number.
+
+**A dead booking's number comes off the order.** The AWB mirror is
+fill-if-unset (a seller's own entry is never overwritten), which meant a
+number mirrored by a booking that then failed (475/654/655/99/900 before the
+parcel left) blocked the NEXT booking's AWB from ever reaching the buyer.
+`unmirrorDeadAwb` removes exactly that number — only when the order carries
+this job's AWB and has not shipped — on every failure entry and on the 404
+below.
+
+### Refresh status, the hourly sweep and "Not scanned yet" (z8r3fe11y8)
+
+Status moves on webhooks, and Delyva stops retrying one after 10 failures —
+so a missed delivery stranded a job at **Booked** forever (DapoGo's first
+J&T booking, 3 Nov 2026: 24 h at `assigning`, a calm card, no hint). Three
+pieces, all through the ONE event path (`applyWebhookEvent`):
+
+- **`delyva.refreshJob({ shortId })`** — the card's **Refresh status**:
+  `GET /order/{providerOrderId}`, parsed by `parseDelyvaOrderPull` into the
+  same event shape the route produces, applied with `eventAt = now` and
+  `pulledAt = now`. A pull is the freshest truth, so it wins the
+  out-of-order guard — but **a pull that finds the same state is a check,
+  not an event**: it stamps `lastPulledAt` ("Last checked with Delyva N min
+  ago") and leaves `lastEventAt` alone, so "nothing has happened for 24 h"
+  stays true. On a pull **same status IS same state**: the webhook row
+  carries Delyva's wording for the event (`statusText`) while the full order
+  object carries only `failedReason`/`cancelledReason`, so the two paths word
+  the same 650 differently — a reason-only difference never counts as
+  `changed` on a pull, or every Refresh after a failed attempt re-sent the
+  notice email and overwrote Delyva's words (PR #461 review). Rate-limited **one call per job per 60 s**
+  (`delyvaJobRefresh`, lib/rateLimiter — spent from `claimRefreshSlot`,
+  because the limiter can only be spent from a mutation); the card toasts the
+  wait. A **404** is an answer: `markJobLost` rejects the job with "Delyva
+  has no record of this booking", clears `staleSince`, emails, and frees the
+  slot. Never gated by subscription or credits (it reads provider truth and
+  moves nothing a webhook wouldn't) — classified OPEN in
+  `creditLockCoverage.test.ts`.
+- **Hourly cron `flag stale delyva bookings`** (`sweepStaleJobs`): walks
+  `by_provider_status` for `assigning` and `ongoing` (oldest first, indexed
+  only, **paged under one 4 000-row read budget** — not a fixed window: the
+  oldest `assigning` rows are the ones that never leave the index, demo
+  bookings, abandoned orders, flagged jobs Delyva keeps answering
+  "unchanged" for, and a window of 400 filled with them would have hidden
+  every newer live booking that went stale — PR #461 review), keeps the ones
+  `isDueForSweepPull` admits — `isDelyvaJobStale` (confirmed by Delyva via
+  `providerOrderId`, older than **24 h**, `lastEventAt` absent or older than
+  24 h) **and**, once flagged, last pulled **a day ago** rather than an hour
+  (`DELYVA_FLAGGED_REPULL_MS`: a flagged job has nothing new to tell the
+  sweep hourly, and a webhook or the seller's Refresh heals it the moment it
+  moves) — skips **demo accounts** (no courier ever comes, so "not scanned"
+  is their normal state), and schedules `syncJob` a second apart, **200 per
+  run**. The sweep's pull runs with `markStale`: a job still stale after it
+  is stamped `staleSince` (once per quiet spell) and the seller gets ONE
+  `deliveryJobStale` email. The next applied event clears `staleSince` — a
+  500 that finally lands turns the card back.
+- **Board 4 on the card:** amber border, **Not scanned yet** pill, the
+  explainer with the waybill and the fix worded by the handoff (drop-off →
+  take it to a branch / ask the branch to scan it; pickup → check the Delyva
+  app for the scheduled pickup), **Refresh status** + the existing **Print
+  shipping label** (one label button per card — it moves into the panel
+  while stale), "Last checked with Delyva N min ago" (or "Last update from Delyva N min ago" when a webhook is the newer word — `latestDelyvaContact`), and a link to Delyva
+  (live chat lives inside their app). A live booking that is NOT flagged
+  keeps a small Refresh status text button with the same last-checked line —
+  the impatient path between sweeps, EasyParcel's posture. The cooldown
+  refusal comes back with `cooldown: true` and the card shows it as an
+  **info** toast — a wait is not a failure; only "Delyva couldn't answer" is.
+- **The two states reach every surface that names a booking** (found by
+  the hands-on test, 6 Nov 2026 — the harness renders the card alone):
+  the **Deliveries list** carried the job's `completed` status straight to a
+  green **Delivered** on a parcel the courier had brought BACK, and plain
+  **Booked** on a flagged one. `DeliveryJobRow` now carries `returned` and
+  `stale`; `jobStatusLabel` / `jobStatusTone` (the one author for what a
+  booking is called) read them — **Returned** / **Not scanned yet**, in a
+  `warn` tone that is the failure amber *with the cost kept*, since a
+  returned booking was charged and a failed one never is. A returned job
+  becomes **rebookable** (and counts under "to rebook") the moment the
+  seller marks the order returned: the order drops out of `orderSettled`,
+  which is the same rule a failed booking follows. The **buyer's page**
+  keyed its notice on `status === "shipped"`, which was both too early
+  (hero and timeline still read "On the Way" above "the courier returned
+  this parcel") and too late (after Mark returned the order silently read
+  Packed). `orders.get` now reads the `by_order` jobs on the packed-with-no-
+  number shape too, and `courierReturned` holds while the newest Delyva job
+  is returned, nothing newer carries the parcel, and the order's number (if
+  any) is still that job's. The Status card says **Returned to {store}**
+  with the notice under it, and a still-Shipped order's timeline rests on
+  the step before On the Way. The card's own explainer follows the order:
+  "still reads Shipped until you mark it" before the mark, "back at Packed —
+  book again below, or cancel" after. Also from the test: the failed
+  booking gets the header pill the other amber states have; the pickup
+  address has ONE edit control while the failed banner carries it; the
+  Ask Delyva link lands on `demo.delyva.app` for a demo key.
+
+**Webhook events.** `DELYVA_WEBHOOK_EVENTS` now also subscribes
+`order.updated` and `order.failed` — the full order object, the same shape
+`GET /order/{id}` returns, so `parseDelyvaEventObject` reads one shape for
+both. `order.failed` is how a create failure (99) reaches us at all: a draft
+that never processed emits no tracking rows. The route stays shape-routed (a
+full order carries `failedReason` / `cancelledReason` / `waypoint`; on that
+shape only the two reason fields count as a reason, since its `status` is a
+bare word like "failed") and logs Delyva's `X-Delyvax-Event` header. **Only
+the three documented names are required** (`DELYVA_WEBHOOK_EVENTS_REQUIRED`):
+the two newer ones are not in Delyva's published collection, so
+`subscribeWebhooks` treats a refusal of either as a log line, never a failed
+connect. `resubscribeWebhooks` (the settings card's retry) adds them to an
+existing account — but the retry only shows while `webhooksSubscribedAt` is
+unset, so an account connected before these two existed never asks for them.
+**`resubscribeAllWebhooks`** (internal action) runs the same idempotent
+subscribe for every connected account, stamps each one it reaches (healing an
+account whose original subscribe failed), and returns `{ accounts, subscribed,
+failed[], refused[] }` — `refused` names any account whose tenant rejected an
+optional event, which is how we learn whether live Delyva accepts
+`order.failed`. One failing account never stops the rest. **Operator step,
+once, after the deploy that ships it:**
+`npx convex run delyva:resubscribeAllWebhooks --prod`.
+
+**Process call.** `confirmBooking` now uses Delyva's documented shape,
+`POST /order/{orderId}/process` with `{ serviceCode }` — **plus `skipQueue:
+true`**, which only their plugin sends. Measured on the demo account (5 Nov
+2026, twice each): the documented call *without* `skipQueue` answers 200 in
+~280 ms but leaves the order a draft (statusCode 0, no consignment number,
+price 0 — still 0 on a `GET /order/{id}` 260 ms later; processed by the
+queue ~2 min on), so the card would have shown no AWB and a RM 0 cost until
+a webhook arrived; *with* it the same call returns statusCode 100 + AWB +
+price in ~750 ms, the legacy `/order/process` in ~900 ms. The ticket's rule
+("keep `skipQueue` only if the documented call is measurably slower") is
+met the hard way: without it the call isn't slower, it isn't done.
 
 Idempotency + out-of-order: `lastEventAt` guard (older events only gap-fill
 the AWB, never regress status); order transitions ride
@@ -262,6 +421,185 @@ guards as Lalamove — **the order never regresses**, and a cancelled order is
 never touched. The manual-advance rider gate (`riderOwnsTransition` in
 `convex/orders.ts`) now returns the owning **provider** and words the block
 accordingly.
+
+### The tracking link lands at collection, never at booking (z8r3fe0t4e)
+
+Seen live on DapoGo's first booking (J&T, waybill `632195694574`, 3 Nov
+2026): the seller card read **Booked**, offered **Track parcel**, and J&T
+answered *"Sorry, information not found"* — as did the buyer's page and the
+Shipment tracking card, all pointing at the same link. The number was right;
+the timing was wrong. Delyva issues the consignment number at booking
+(status 100/200), but J&T — and every parcel courier — indexes a waybill only
+at its first scan, so a link written at booking is dead for the day until
+collection, and nothing told either side why.
+
+**The rule has one author:** `isCollectedStatus(code)` in
+`convex/lib/delyva.ts` (judged by the *normalised* status — `picked_up` /
+`completed`, plus 650 — never by `code >= 500`, so a future failure code above
+500 that means "never collected" can't promise a page that isn't there), with
+`isCollectedJobStatus(job.status)` in `convex/lib/deliveryJobs.ts` as the
+job-side half. `mirrorAwbOntoOrder(ctx, job, awb, { collected })` writes the
+courier name + number whenever the AWB is known and the link only when
+`collected`; it runs on **every** webhook event that knows the AWB (not only
+the first), fill-if-unset, so the shapes that matter all land the link:
+
+- 100 with the AWB, then 500 → number at booking, link at 500 (the shipped
+  transition reads it off the order in the same mutation).
+- A 500 that arrives first, or carries the AWB itself → number + link in one
+  write.
+- A stale `order.created` replayed **after** the 500 → the job already knows
+  it was collected, so the link lands with the number.
+- A replayed 500 after a 700, or a link the seller typed by hand before
+  collection → no-op. A different number typed by hand → the mirror skips
+  entirely, as before.
+- 900 (cancelled) or a seller cancel → number stays, no link is ever written.
+
+**What each side sees meanwhile** is one state, `isCourierLinkPending(job,
+order)` (`convex/lib/deliveryJobs.ts`): a booked job whose AWB is the order's
+number with no link yet. `orders.get` exposes it as `courierLinkPending` on
+both doors (one indexed read, only on the number-without-link shape), and the
+vocabulary lives in `src/lib/parcel-courier-copy.ts`. The flag is read off
+the live job row for ANY provider, so the rule is gated by
+`LINK_LANDS_AT_COLLECTION` (Delyva only): "appears once the courier collects"
+is a promise, and only a provider whose collection path writes a link
+unconditionally may make it. EasyParcel writes whatever link it has at
+booking — none when EasyParcel sends no `tracking_url` and the courier has no
+registry deep link — and its pickup sync may still have none, so an EasyParcel
+number without a link stays a plain number. A provider joins the set when its
+collection path guarantees the link.
+
+- **Seller dispatch card** — under the number: *"Your buyer already has this
+  number. J&T Express's tracking page goes live once the parcel is collected;
+  the order marks itself Shipped then."* No **Track parcel** until the link
+  exists.
+- **Seller Shipment tracking card** — in the link's place: *"Tracking link
+  appears once the courier collects the parcel"*.
+- **Buyer `/track`** — a dashed, disabled-with-reason stand-in in the button's
+  slot (*"Track with J&T Express · after collection"*) and *"Use this number
+  on the courier's app once your parcel is collected. We'll add the tracking
+  link here then."* The copy button stays.
+
+A seller's own manual entry (a different number, or a name-only cold-chain
+courier) is never promised a link; a booking from before this shipped keeps
+the link it was born with and never reads as pending — no backfill, those
+links resolve on their own once collected.
+
+**Fallback page verified:** Delyva's own `my.delyva.app/customer/strack`
+page renders a consignment from "Order created" on (checked in a browser on
+the DapoGo waybill, 4 Nov 2026), so for a courier outside the registry the
+link written at collection is live.
+
+### Pickup vs drop-off, and the courier's own label (z8r3fe11x3)
+
+The other half of the DapoGo incident: the parcel went to a J&T counter
+with only our despatch label, and sat on "Order created". Two things were
+missing, and both were visible in data we already parsed.
+
+**Who moves the parcel is in the service class.** Delyva suffixes a
+service with `-DROP` when the *seller* takes the parcel to a branch
+(`NDD-DROP`); the bare class (`NDD`, `SDD`, `INSTANT`) means the courier
+collects from the pickup address. **The convention is observed, not
+documented** (PR #458 review, 6 Nov 2026): the Postman collection behind
+`docs.api.delyva.com` never enumerates service classes — it documents
+`serviceCode` as "from instant quote" and nothing more — so the one hard
+datum is DapoGo's `JNTMY-PN-B200` = `NDD-DROP`. A drop-off spelled any
+other way would wear the pickup pill; the first non-J&T drop-off booking is
+where to check. `parseInstantQuoteResponse` had carried `serviceType` since
+day one and nothing read it. Now:
+
+- **One author:** `delyvaHandoff(serviceType)` in `convex/lib/delyva.ts` →
+  `"pickup" | "dropoff" | undefined`. A missing class is `undefined`, never a
+  guess: the picker renders it as pickup (Delyva's convention is that only
+  drop-off carries a suffix) and `console.warn`s the codes at quote time, and
+  a booked job with no class on record **claims neither** — *"Delyva will
+  update this order when the courier scans the parcel."*
+- **Stored at reserve** (`deliveryJobs.serviceType`, verbatim), where the
+  chosen service's name and item type already land — the ticket said
+  `commitBooking`, but commit doesn't know the service, and reserve is the
+  same row. `deliveryQuotes.serviceType` records the class of the cheapest
+  service a checkout quote was priced on, through `fetchDelyvaCheckoutQuote`
+  → `chooseLiveQuote` → `saveCheckoutQuote`. Both are optional (widen only;
+  no backfill — an old row simply reads as "unknown").
+- **Speed is judged on the base class** (`delyvaSpeedLabel`, via
+  `delyvaBaseServiceType`), so `NDD-DROP` still reads *Next-day*.
+
+**The picker says it on every row.** `HandoffPill`
+(`src/components/order/handoff-pill.tsx`) — navy **Courier picks up**,
+amber **You drop off** (phone) / **You drop off at a branch** (from `sm:`) —
+is the one control for this idea, on the row and on the booked card. The row
+is a fixed grid (`44px | 1fr | 92px`, `48 | 1fr | 104` from `sm:`): the
+price column can't be pushed by a long name, and **nothing truncates** — a
+seller comparing couriers reads whole names. The logo slot is `CourierLogo`
+(`courier-logo.tsx`): `https://cdn.delyva.app/` + the quote's
+`serviceCompany.logo` (`delyvaLogoUrl`), with the company initials in the
+same box on error or when the quote carries no path — never a bundled brand
+asset. One note under the list (`HANDOFF_PICKER_NOTE`) says what the two
+pills mean and that tracking starts at the first scan either way.
+
+**The booked card branches on the handoff** (`BookedState` in the dispatch
+card):
+
+- **Drop-off:** a three-step card leads (`dropoffSteps`: print the label →
+  take it to any *J&T Express* branch and have it scanned → the order ships
+  itself), with **Print shipping label** as the primary button, then the
+  tracking number, then the pre-scan line worded for the branch.
+- **Pickup:** the tracking number, a collection line naming the stored pickup
+  address (`pickupCollectionCopy` — a *place*, never a time: Delyva schedules
+  the pickup on the courier's cadence), and the label as a secondary button.
+- **Legacy (no class):** the pickup layout with neutral copy and no pill.
+- Steps, collection line and label show only **before the first scan**
+  (`assigning` / `ongoing`); once `picked_up` the label is on the parcel.
+- The demo-account banner stays above all of it, in the parent.
+
+**Print shipping label** calls `delyva.getLabel` →
+`GET /order/{providerOrderId}/label` with the seller's key through
+`callDelyvaRaw` (bytes + content type; `callDelyva` assumes JSON).
+`callDelyvaRaw` follows redirects **by hand** (`redirect: "manual"`, which
+the Convex runtime honours — probed 6 Nov 2026 — up to three hops) and sends
+the seller's key **only to `api.delyva.app`**: a fetch that follows on its
+own forwards every custom header to the new origin (the spec strips only
+`Authorization`), so the key would otherwise ride along to S3. **The
+endpoint answers with the PDF itself** — probed 4 Nov 2026 on a demo-account
+booking (dev store `herb`, `ORD-U6AN`, DHL eCommerce `NDD`), never on a
+seller's key: the API redirects to an S3 object (`server: AmazonS3`,
+`content-type: application/pdf`, 16.5 KB, `%PDF-1.7`, one A6-style label
+page) whose `last-modified` is the booking moment, so the label exists from
+the first `assigning` and the button's "Delyva hasn't confirmed this
+booking yet" is exactly the only wait; S3's `x-amz-expiration` rule
+**auto-deletes it after 90 days** (a stale booking's label 404s with
+Delyva's own message — no code handles that specially, the toast does).
+`parseDelyvaLabelResponse` still accepts the second shape it was built
+for, a JSON envelope carrying a URL (`url` / `labelUrl` / `label` / `link` /
+`file`, wrapped in `data` or not, http(s) only), as a **defensive fallback
+only** — not observed live. A PDF body (by content type, or the `%PDF` magic
+under a generic type) is returned as bytes and saved with `downloadPdfBytes`
+like the despatch label (a `window.open` on a blob after an `await` is
+popup-blocked on iOS Safari); a URL opens in a new tab. Anything else is a
+failure. Failures are a toast
+carrying Delyva's own message (`friendlyLabelError`), never silence. The
+button is **disabled with its reason** (`delyvaLabelAvailability`:
+*"Available once Delyva confirms the booking."* until `providerOrderId`
+exists; gone after the first scan), and the action re-checks the same rule
+so a stale tab gets the sentence it would have seen. It is gated like
+`awb.generateAwbPdf` (despatch work on this order) in
+`creditLockCoverage.test.ts`. The courier's label sits **beside** Kedaipal's
+own despatch label, never instead of it — the same posture as EasyParcel's
+`labelUrl`.
+
+**One voice across the two tickets.** z8r3fe0t4e worded the pre-scan moment
+as "collected", which is wrong for a parcel the seller walked to a counter.
+The rule now: a surface that *knows* the handoff names it — the dispatch
+card says *"once the parcel is collected"* / *"once the branch scans the
+parcel in"* / *"at the courier's first scan"* (legacy) — and the surfaces
+that don't (the Shipment tracking card, the buyer's `/track` page) say
+**first scan**, true of both kinds: *"Tracking link appears once the courier
+scans the parcel in"*, *"Track with J&T Express · after first scan"*, *"Use
+this number on the courier's app once your parcel has been scanned in."*
+
+**Not built here:** the EasyParcel picker still says *You drop off* as text
+in its meta line rather than wearing `HandoffPill` (its rows already carry
+other chips); folding it onto the same pill is a follow-up. The Delyva
+failure codes, the refresh pull and the stale state are z8r3fe11y8.
 
 ## Shared machinery
 
@@ -585,10 +923,15 @@ with those couriers on; until then it is one list, cheapest first.
 - `convex/delyva.test.ts` — `convexTest` integration: webhook idempotency /
   out-of-order / order transitions / AWB fill-if-unset mirroring, the
   cross-provider reservation invariant, webhook correlation by
-  `(provider, providerOrderId)`.
+  `(provider, providerOrderId)`; a row per failure/return code, the pull's
+  check-not-event rule, the stale flag set/once/clear, Refresh incl. the
+  404 and the rate limit, the sweep's selection, demo skip and 200 cap,
+  Mark order as returned (z8r3fe11y8).
 - `src/components/order/delyva-dispatch-card.test.tsx` — the picker flow plus
   every state that must not be a dead end: no couriers, an unweighable cart, a
-  failed booking, each blocked reason.
+  failed booking, each blocked reason; the pickup/drop-off pills, the logo
+  and its initials fallback, both booked layouts, the legacy neutral copy and
+  the label button's three outcomes (z8r3fe11x3).
 - `src/components/settings/delyva-card.test.tsx` — one-key connect, the Pro
   gate (and that it never traps a downgraded seller), the postcode rule, the
   missing-address and unregistered-webhook warnings.
@@ -622,11 +965,15 @@ with those couriers on; until then it is one list, cheapest first.
   failure copy against the production account before the frozen-seller pilot.
 - **`carrierTrackingUrl` fallback** (`my.delyva.app/customer/strack?trackingNo=…`)
   — used only when the courier isn't in our registry
-  (`convex/lib/couriers.ts`); confirm the page is public during E2E.
+  (`convex/lib/couriers.ts`). Confirmed public and rendering pre-scan (4 Nov
+  2026); written at collection like every other link (z8r3fe0t4e).
 - **Scheduled pickups** — Delyva waypoints accept `scheduledAt`; v1 books
   immediate collection (parcel couriers collect on their own cadence).
   Revisit if sellers ask for date-bound pickups.
-- **Label printing** (`GET /order/{id}/label`) — the booked state's "Print
-  shipping label" in the mockups; wire in PR2.
+- **Label printing** shipped (z8r3fe11x3, see "Pickup vs drop-off"); the
+  endpoint's live shape was recorded on a demo booking (PDF from S3, 90-day
+  expiry), so the ticket's T0 spike on the DapoGo order is no longer needed.
+  What a real courier's label looks like (DHL demo vs J&T live) is the one
+  thing a demo account can't show — eyeball DapoGo's first printed label.
 - Operational (with Herrey, tracked on `86eyjprqw`): 1% payout mechanics,
   pickup-address activation lead time, partner agreement.

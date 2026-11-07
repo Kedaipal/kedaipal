@@ -47,7 +47,7 @@ The ticket's three open questions were decided before the build:
 
 | | Where | Who | Plan |
 |---|---|---|---|
-| **One label** | Order detail — a `Print label` button *before* `Download receipt` (desktop header actions; mobile "More actions" panel) | Owner or admin act-as, by `shortId` | **All tier** |
+| **One label** | Order detail — a `Print despatch label` button *before* `Download receipt` (named for what it prints since z8r3fe11x3: a Delyva booking adds the courier's `Print shipping label` to the same page) (desktop header actions; mobile "More actions" panel) | Owner or admin act-as, by `shortId` | **All tier** |
 | **A selection** | Order inbox → select mode → the printer button on the bulk bar (carries the live count) → the print dialog | Owner or admin act-as | **Pro** (`orderInbox`) |
 | **Everything ready** | **Deliveries → To ship → Print labels** → the print-queue modal (no prior selection); the inbox's *Ready to ship* strip points there (86eye9xd4) | Owner or admin act-as | **Pro** (`orderInbox`) |
 

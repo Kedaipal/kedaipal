@@ -179,3 +179,64 @@ describe("ShipmentTrackingCard", () => {
 		expect(add.getAttribute("title")).toBe(reason);
 	});
 });
+
+describe("a booking's link lands at collection (z8r3fe0t4e)", () => {
+	it("says the link is coming where it will appear, with the number copyable meanwhile", () => {
+		render(
+			<ShipmentTrackingCard
+				readOnly
+				order={{
+					_id: ORDER_ID,
+					courierName: "J&T Express",
+					trackingNo: "632195694574",
+					courierLinkPending: true,
+				}}
+			/>,
+		);
+		expect(screen.getByText("632195694574")).toBeTruthy();
+		expect(
+			screen.getByText(
+				"Tracking link appears once the courier scans the parcel in",
+			),
+		).toBeTruthy();
+		expect(
+			screen.queryByRole("link", { name: /Track with courier/ }),
+		).toBeNull();
+	});
+
+	it("a returned parcel (z8r3fe11y8) says so beside the number and offers no dead link", () => {
+		render(
+			<ShipmentTrackingCard
+				order={{
+					_id: ORDER_ID,
+					courierName: "J&T Express",
+					trackingNo: "632195694574",
+					carrierTrackingUrl: "https://jtexpress.my/tracking/632195694574",
+					courierReturned: true,
+				}}
+			/>,
+		);
+		expect(screen.getByText("632195694574")).toBeTruthy();
+		expect(
+			screen.getByText(
+				/The courier returned this parcel — see the Delyva card/,
+			),
+		).toBeTruthy();
+		expect(
+			screen.queryByRole("link", { name: /Track with courier/ }),
+		).toBeNull();
+	});
+
+	it("a name-only courier entered by hand makes no link promise", () => {
+		render(
+			<ShipmentTrackingCard
+				order={{
+					_id: ORDER_ID,
+					courierName: "Ninja Cold",
+					trackingNo: "MY0012345678",
+				}}
+			/>,
+		);
+		expect(screen.queryByText(/Tracking link appears/)).toBeNull();
+	});
+});

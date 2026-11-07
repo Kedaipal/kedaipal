@@ -5,6 +5,8 @@
 // any provider's wire format — so both provider modules import them from here.
 // lib/lalamove.ts re-exports the lot, keeping its existing importers working.
 
+import type { CourierProviderId } from "./courierProviders";
+
 /** Our normalized job status (deliveryJobs.status). */
 export type DeliveryJobStatus =
 	| "assigning"
@@ -36,6 +38,54 @@ export const ACTIVE_JOB_STATUSES = [
  * slot; anything terminal frees it for a rebook. */
 export function isActiveJobStatus(status: DeliveryJobStatus): boolean {
 	return !TERMINAL_JOB_STATUSES.has(status);
+}
+
+/** The courier has the parcel (or had it): the job-status half of the
+ * "tracking page is live" rule (z8r3fe0t4e), for an AWB that arrives AFTER
+ * the collection event did — a stale `order.created` replayed after the 500
+ * must still land the link, since the job already knows it was collected. */
+export function isCollectedJobStatus(status: DeliveryJobStatus): boolean {
+	return status === "picked_up" || status === "completed";
+}
+
+/**
+ * "The number is on the order, the courier's page isn't live yet"
+ * (z8r3fe0t4e) — the one state every surface words the same way: the
+ * seller's dispatch card, the Shipment tracking card and the buyer's /track
+ * page. True only while a booked job that already has its AWB is still
+ * waiting for collection, the order's number IS that AWB (a seller's own
+ * manual entry is theirs — no link is ever promised on its behalf, which is
+ * what keeps a name-only cold-chain courier honest), and no link exists yet.
+ * A booking from before the link moved to collection keeps the link it was
+ * born with and never reads as pending.
+ *
+ * Only a provider that GUARANTEES the link at collection may say so
+ * (`LINK_LANDS_AT_COLLECTION`): "appears once the courier collects" is a
+ * promise, and a number without a link is the honest state wherever that
+ * promise can't be kept. Delyva always has a link to write (the registry's
+ * deep link, else Delyva's own tracking page). EasyParcel writes whatever
+ * link it has at booking — none when EasyParcel sends no `tracking_url` and
+ * the courier has no registry deep link — and its pickup sync may still
+ * have none, so an EasyParcel number-without-link stays a plain number
+ * rather than a dated promise. A provider joins the set when its collection
+ * path writes a link unconditionally.
+ */
+export const LINK_LANDS_AT_COLLECTION: ReadonlySet<CourierProviderId> = new Set([
+	"delyva",
+]);
+
+export function isCourierLinkPending(
+	job:
+		| { provider: CourierProviderId; status: DeliveryJobStatus; awb?: string }
+		| null
+		| undefined,
+	order: { trackingNo?: string; carrierTrackingUrl?: string },
+): boolean {
+	if (!job?.awb) return false;
+	if (!LINK_LANDS_AT_COLLECTION.has(job.provider)) return false;
+	if (job.status !== "assigning" && job.status !== "ongoing") return false;
+	if (order.trackingNo !== job.awb) return false;
+	return !order.carrierTrackingUrl;
 }
 
 /**

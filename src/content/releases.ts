@@ -181,6 +181,38 @@ export interface Release {
  */
 export const RELEASES: Release[] = [
 	{
+		version: "2026.11.2",
+		date: "2026-11-06",
+		// Not notable: both entries live on the Delyva dispatch card, which only
+		// Pro stores with Delyva connected ever see — and they meet it the next
+		// time they book. Nothing moved and no number a seller watches changes;
+		// the modal would interrupt every store for one courier's card.
+		notable: false,
+		entries: [
+			{
+				kind: "feature",
+				title: {
+					en: "Delyva couriers say pickup or drop-off — and print their own label",
+				},
+				body: {
+					en: "Some Delyva couriers come to you; others want you at their branch counter, and the list never said which. Now every courier wears a tag — Courier picks up or You drop off, often the cheaper one. Book a drop-off and the card lays out three steps: tap Print shipping label for the courier's own label (the branch won't scan ours), take the parcel to any of their branches, and the order turns Shipped at the first scan. Your buyer's tracking link waits for that scan too, so it never opens on \"not found\". Delyva is on Pro.",
+				},
+				href: "/app/orders",
+				hrefLabel: { en: "Book from an order" },
+				icon: "printer",
+			},
+			{
+				kind: "fix",
+				title: { en: "A Delyva parcel that goes wrong now says so" },
+				body: {
+					en: "A lost, refused or returned Delyva parcel used to sit at Booked forever. Now each outcome is a state with a next step: Pickup failed lets you fix the address and book again; Returned to you — never Delivered — lets you message the buyer, mark the order returned and rebook, and the buyer's order page says why it went back. A booking still unscanned after a day turns amber and emails you once, and Refresh status asks Delyva directly. Delyva is on Pro.",
+				},
+				href: "/app/deliveries",
+				hrefLabel: { en: "Open Deliveries" },
+			},
+		],
+	},
+	{
 		version: "2026.11.1",
 		date: "2026-11-04",
 		// Not notable: one counter enhancement a seller meets the next time

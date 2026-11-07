@@ -393,6 +393,7 @@ export const quoteForCheckout = action({
 				vehicleType: outcome.vehicleType,
 				serviceCode: outcome.serviceCode,
 				serviceName: outcome.serviceName,
+				serviceType: outcome.serviceType,
 				considered: outcome.considered,
 				// The cart this price belongs to — redemption refuses any other.
 				lines: args.items,
