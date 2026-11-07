@@ -391,7 +391,16 @@ the three documented names are required** (`DELYVA_WEBHOOK_EVENTS_REQUIRED`):
 the two newer ones are not in Delyva's published collection, so
 `subscribeWebhooks` treats a refusal of either as a log line, never a failed
 connect. `resubscribeWebhooks` (the settings card's retry) adds them to an
-existing account.
+existing account — but the retry only shows while `webhooksSubscribedAt` is
+unset, so an account connected before these two existed never asks for them.
+**`resubscribeAllWebhooks`** (internal action) runs the same idempotent
+subscribe for every connected account, stamps each one it reaches (healing an
+account whose original subscribe failed), and returns `{ accounts, subscribed,
+failed[], refused[] }` — `refused` names any account whose tenant rejected an
+optional event, which is how we learn whether live Delyva accepts
+`order.failed`. One failing account never stops the rest. **Operator step,
+once, after the deploy that ships it:**
+`npx convex run delyva:resubscribeAllWebhooks --prod`.
 
 **Process call.** `confirmBooking` now uses Delyva's documented shape,
 `POST /order/{orderId}/process` with `{ serviceCode }` — **plus `skipQueue:

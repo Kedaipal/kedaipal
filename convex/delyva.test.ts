@@ -2225,3 +2225,146 @@ describe("failure codes, the refresh pull and the stale sweep (z8r3fe11y8)", () 
 		expect(await read(plain)).toBeUndefined();
 	});
 });
+
+describe("resubscribeAllWebhooks — the two newer events reach existing accounts (z8r3fe11y8)", () => {
+	const SITE = "https://site.test";
+	const HOOK = `${SITE}/webhook/delyva`;
+	const ORIGINAL = ["order.created", "order_tracking.update", "order_tracking.change"];
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.unstubAllEnvs();
+	});
+
+	/** Delyva per API key: what GET /webhook lists, and how POST answers. */
+	function mockDelyva(
+		accounts: Record<
+			string,
+			{ listed?: string[]; listFails?: boolean; refuse?: string[] }
+		>,
+	) {
+		const posted: Array<{ key: string; event: string; url: string }> = [];
+		const fetchMock = vi.fn(
+			async (input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input instanceof Request ? input.url : input);
+				const headers = (init?.headers ?? {}) as Record<string, string>;
+				const key = headers["X-Delyvax-Access-Token"];
+				const account = accounts[key];
+				if (!account || !url.endsWith("/webhook"))
+					throw new Error(`unmocked fetch ${init?.method} ${url} (${key})`);
+				if (init?.method === "GET") {
+					if (account.listFails) return new Response("boom", { status: 500 });
+					return Response.json({
+						data: (account.listed ?? []).map((event) => ({ event, url: HOOK })),
+					});
+				}
+				const body = JSON.parse(String(init?.body)) as {
+					event: string;
+					url: string;
+				};
+				if (account.refuse?.includes(body.event))
+					return new Response("unknown event", { status: 422 });
+				posted.push({ key, ...body });
+				return Response.json({ data: { id: `wh-${posted.length}` } });
+			},
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		return { posted };
+	}
+
+	async function seedSecondAccount(
+		t: ReturnType<typeof setup>,
+		apiKey: string,
+		slug: string,
+	) {
+		const asOther = t.withIdentity({ subject: `user_${slug}` });
+		await asOther.mutation(api.retailers.createRetailer, {
+			storeName: slug,
+			slug,
+		});
+		const retailer = await asOther.query(api.retailers.getMyRetailer);
+		if (!retailer) throw new Error("seed failed");
+		await t.run(async (ctx) => {
+			await ctx.db.patch(retailer._id, {
+				delyva: {
+					enabled: true,
+					apiKey,
+					apiSecret: "dx-secret",
+					apiKeyHint: apiKey.slice(-4),
+					customerId: 555,
+					connectedAt: Date.now(),
+					// Its original subscribe failed — the card would say so.
+					webhooksSubscribedAt: undefined,
+				},
+			});
+		});
+		return retailer;
+	}
+
+	test("adds only the missing events to every connected account, and stamps each", async () => {
+		vi.stubEnv("CONVEX_SITE_URL", SITE);
+		const t = setup();
+		await seedRetailer(t);
+		const second = await seedSecondAccount(t, "dx-second-key", "kedai-kedua");
+		// A store with no Delyva at all is never called.
+		const asNone = t.withIdentity({ subject: "user_no_delyva" });
+		await asNone.mutation(api.retailers.createRetailer, {
+			storeName: "No courier",
+			slug: "no-courier-delyva",
+		});
+		const { posted } = mockDelyva({
+			"dx-test-key": { listed: ORIGINAL },
+			"dx-second-key": { listed: [] },
+		});
+
+		const result = await t.action(internal.delyva.resubscribeAllWebhooks, {});
+
+		expect(result).toMatchObject({ accounts: 2, subscribed: 2, failed: [] });
+		expect(result.refused).toEqual([]);
+		// The first account already had the original three: only the two new.
+		expect(
+			posted.filter((p) => p.key === "dx-test-key").map((p) => p.event),
+		).toEqual(["order.updated", "order.failed"]);
+		// The second had nothing: all five, and its missing stamp is healed.
+		expect(posted.filter((p) => p.key === "dx-second-key")).toHaveLength(5);
+		expect(posted.every((p) => p.url === HOOK)).toBe(true);
+		const stamped = await t.run(async (ctx) => ctx.db.get(second._id));
+		expect(stamped?.delyva?.webhooksSubscribedAt).toBeTypeOf("number");
+	});
+
+	test("an account Delyva refuses is named and the rest still run; a refused optional event is reported, not failed", async () => {
+		vi.stubEnv("CONVEX_SITE_URL", SITE);
+		const t = setup();
+		const first = await seedRetailer(t);
+		const second = await seedSecondAccount(t, "dx-broken-key", "kedai-rosak");
+		mockDelyva({
+			"dx-test-key": { listed: ORIGINAL, refuse: ["order.failed"] },
+			"dx-broken-key": { listFails: true },
+		});
+
+		const result = await t.action(internal.delyva.resubscribeAllWebhooks, {});
+
+		expect(result.accounts).toBe(2);
+		expect(result.subscribed).toBe(1);
+		expect(result.refused).toEqual([
+			{ retailerId: first._id, events: ["order.failed"] },
+		]);
+		expect(result.failed).toHaveLength(1);
+		expect(result.failed[0].retailerId).toBe(second._id);
+		expect(result.failed[0].message).toContain("500");
+		// A failed account keeps its honest unset stamp — the card still offers
+		// Register again.
+		const broken = await t.run(async (ctx) => ctx.db.get(second._id));
+		expect(broken?.delyva?.webhooksSubscribedAt).toBeUndefined();
+	});
+
+	test("refuses to run without a site URL rather than registering a broken one", async () => {
+		vi.stubEnv("CONVEX_SITE_URL", "");
+		const t = setup();
+		await seedRetailer(t);
+		mockDelyva({});
+		await expect(
+			t.action(internal.delyva.resubscribeAllWebhooks, {}),
+		).rejects.toThrow(/CONVEX_SITE_URL/);
+	});
+});

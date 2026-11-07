@@ -379,13 +379,21 @@ export const markWebhooksSubscribed = internalMutation({
 	},
 });
 
+/** What one subscribe pass did: the events it registered now, and the
+ * optional ones Delyva refused. Already-registered events are in neither. */
+interface WebhookSubscribeReport {
+	added: string[];
+	refused: string[];
+}
+
 /** Register our webhook URL for every event we consume — idempotent (lists
  * first, creates only what's missing). Throws on failure; callers decide how
  * loud to be. */
 async function subscribeWebhooks(
 	plainApiKey: string,
 	siteUrl: string,
-): Promise<void> {
+): Promise<WebhookSubscribeReport> {
+	const report: WebhookSubscribeReport = { added: [], refused: [] };
 	const url = `${siteUrl}/webhook/delyva`;
 	const listing = (await callDelyvaWithKey(plainApiKey, "GET", "/webhook")) as {
 		data?: Array<{ id?: string; event?: string; url?: string }>;
@@ -399,6 +407,7 @@ async function subscribeWebhooks(
 		if (existing.has(event)) continue;
 		try {
 			await callDelyvaWithKey(plainApiKey, "POST", "/webhook", { event, url });
+			report.added.push(event);
 		} catch (err) {
 			// The three documented events must land or the account isn't
 			// subscribed. `order.updated` / `order.failed` (z8r3fe11y8) are not
@@ -406,12 +415,14 @@ async function subscribeWebhooks(
 			// name costs a log line, never the connect — the tracking pair
 			// still drives status, and the hourly pull covers a create failure.
 			if (DELYVA_WEBHOOK_EVENTS_REQUIRED.has(event)) throw err;
+			report.refused.push(event);
 			console.warn("[delyva] optional webhook event not accepted", {
 				event,
 				message: err instanceof Error ? err.message : String(err),
 			});
 		}
 	}
+	return report;
 }
 
 /**
@@ -769,6 +780,117 @@ export const resubscribeWebhooks = action({
 				message: "Couldn't register the webhook with Delyva. Try again shortly.",
 			};
 		}
+	},
+});
+
+/** One page of connected Delyva accounts for `resubscribeAllWebhooks`. */
+export const listResubscribeTargets = internalQuery({
+	args: { cursor: v.union(v.string(), v.null()) },
+	handler: async (
+		ctx,
+		{ cursor },
+	): Promise<{
+		targets: Array<{
+			retailerId: Id<"retailers">;
+			credentials: DelyvaCredentials;
+		}>;
+		continueCursor: string;
+		isDone: boolean;
+	}> => {
+		const page = await ctx.db
+			.query("retailers")
+			.paginate({ numItems: 50, cursor });
+		const targets = [];
+		for (const retailer of page.page) {
+			const credentials = resolveDelyvaCredentials(
+				retailer.delyva as DelyvaConfig | undefined,
+			);
+			if (credentials) targets.push({ retailerId: retailer._id, credentials });
+		}
+		return {
+			targets,
+			continueCursor: page.continueCursor,
+			isDone: page.isDone,
+		};
+	},
+});
+
+/**
+ * Re-run the webhook subscription for EVERY connected Delyva account
+ * (z8r3fe11y8 follow-up). `order.updated` / `order.failed` are only
+ * subscribed at connect or by the card's retry, and the retry shows only
+ * while `webhooksSubscribedAt` is unset — so an account connected before
+ * they existed never gets them on its own. Idempotent (`subscribeWebhooks`
+ * lists first), never gated by subscription (it registers our URL, it moves
+ * nothing), and it heals an account whose original subscribe failed too.
+ * One account failing never stops the rest; the result names each one.
+ *
+ * Operator step, once per deployment, AFTER the deploy:
+ * `npx convex run delyva:resubscribeAllWebhooks --prod`
+ */
+export const resubscribeAllWebhooks = internalAction({
+	args: {},
+	handler: async (
+		ctx,
+	): Promise<{
+		accounts: number;
+		subscribed: number;
+		failed: Array<{ retailerId: Id<"retailers">; message: string }>;
+		/** Optional events Delyva refused, per account — the answer to "does a
+		 * live tenant accept `order.failed`?". */
+		refused: Array<{ retailerId: Id<"retailers">; events: string[] }>;
+	}> => {
+		const siteUrl = process.env.CONVEX_SITE_URL;
+		if (!siteUrl) {
+			throw new Error("CONVEX_SITE_URL unset — cannot subscribe webhooks");
+		}
+		const result = {
+			accounts: 0,
+			subscribed: 0,
+			failed: [] as Array<{ retailerId: Id<"retailers">; message: string }>,
+			refused: [] as Array<{ retailerId: Id<"retailers">; events: string[] }>,
+		};
+		let cursor: string | null = null;
+		for (;;) {
+			const page: {
+				targets: Array<{
+					retailerId: Id<"retailers">;
+					credentials: DelyvaCredentials;
+				}>;
+				continueCursor: string;
+				isDone: boolean;
+			} = await ctx.runQuery(internal.delyva.listResubscribeTargets, {
+				cursor,
+			});
+			for (const { retailerId, credentials } of page.targets) {
+				result.accounts += 1;
+				try {
+					const live = await decryptDelyvaCredentials(credentials);
+					const report = await subscribeWebhooks(live.apiKey, siteUrl);
+					await ctx.runMutation(internal.delyva.markWebhooksSubscribed, {
+						retailerId,
+					});
+					result.subscribed += 1;
+					if (report.refused.length > 0) {
+						result.refused.push({ retailerId, events: report.refused });
+					}
+				} catch (err) {
+					result.failed.push({
+						retailerId,
+						message: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
+			if (page.isDone) break;
+			cursor = page.continueCursor;
+		}
+		console.log("[delyva] resubscribeAllWebhooks", {
+			accounts: result.accounts,
+			subscribed: result.subscribed,
+			failed: result.failed.length,
+			refused: result.refused.length,
+		});
+		return result;
 	},
 });
 
